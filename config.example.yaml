@@ -1,0 +1,30 @@
+# flowManager Configuration
+# Place in: .flowManager/config.yaml (project-level) or ~/.flowManager/config.yaml (global)
+# Project-level config overrides global. Missing fields keep defaults.
+
+# AI client settings
+client:
+  # Command to run as the AI agent.
+  # Default: "claude"
+  command: claude
+
+  # Extra arguments appended to the command.
+  # Default: ["--print", "--output-format", "stream-json", "--dangerously-skip-permissions"]
+  # (auto-added for "claude", override here for custom commands)
+  # extra_args:
+  #   - --my-custom-flag
+
+# Execution parameters
+executor:
+  # Maximum idle time with no output from the agent before killing the process.
+  # Default: 30m
+  # idle_timeout: 30m
+
+  # Maximum number of stages running in parallel (0 = unlimited).
+  # Default: 0
+  # max_parallel: 4
+
+# Directory with custom prompt templates (overrides embedded defaults).
+# Files needed: planning.md, implementation.md, review.md, summary.md
+# Default: "" (use embedded prompts)
+# prompts_dir: .flowManager/prompts/

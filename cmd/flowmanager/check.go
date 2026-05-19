@@ -1,0 +1,121 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+)
+
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
+	colorGray   = "\033[90m"
+)
+
+func statusColor(s state.StageStatus) string {
+	switch s {
+	case state.StatusDone:
+		return colorGreen
+	case state.StatusFailed:
+		return colorRed
+	case state.StatusAwaitingApproval:
+		return colorYellow
+	case state.StatusRunning, state.StatusPlanning:
+		return colorBlue
+	case state.StatusRevising:
+		return colorCyan
+	default:
+		return colorGray
+	}
+}
+
+func newCheckCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "check",
+		Short: "Show status of the latest flow run",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			base := filepath.Join(".flowManager", "runs")
+			entries, err := os.ReadDir(base)
+			if err != nil {
+				return fmt.Errorf("no runs found in %s", base)
+			}
+
+			var dirs []string
+			for _, e := range entries {
+				if e.IsDir() {
+					dirs = append(dirs, filepath.Join(base, e.Name()))
+				}
+			}
+			if len(dirs) == 0 {
+				return errors.New("no runs found")
+			}
+			slices.Sort(dirs)
+			latest := dirs[len(dirs)-1]
+
+			rs, err := state.Load(filepath.Join(latest, "state.json"))
+			if err != nil {
+				return fmt.Errorf("load state: %w", err)
+			}
+
+			fmt.Printf("Run: %s\n\n", filepath.Base(latest))
+			fmt.Printf("%-20s  %-22s  %-10s  %s\n", "STAGE", "STATUS", "UPDATED", "LAST ACTION")
+			fmt.Printf("%-20s  %-22s  %-10s  %s\n", "-----", "------", "-------", "-----------")
+
+			type row struct{ id, status, updated, lastAction string }
+			var rows []row
+			for id, s := range rs.Stages {
+				action := lastLogAction(filepath.Join(latest, id))
+				rows = append(rows, row{
+					id:         id,
+					status:     string(s.Status),
+					updated:    s.UpdatedAt.Format("15:04:05"),
+					lastAction: action,
+				})
+			}
+			slices.SortFunc(rows, func(a, b row) int {
+				if a.id < b.id {
+					return -1
+				}
+				if a.id > b.id {
+					return 1
+				}
+				return 0
+			})
+			for _, r := range rows {
+				color := statusColor(state.StageStatus(r.status))
+				fmt.Printf("%-20s  %s%-22s%s  %-10s  %s\n",
+					r.id, color, r.status, colorReset, r.updated, r.lastAction)
+			}
+			return nil
+		},
+	}
+}
+
+func lastLogAction(stageDir string) string {
+	for _, name := range []string{"implementation.log", "planning.log"} {
+		data, err := os.ReadFile(filepath.Join(stageDir, name))
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) > 0 {
+			last := lines[len(lines)-1]
+			if len(last) > 60 {
+				last = last[:60] + "..."
+			}
+			return last
+		}
+	}
+	return ""
+}
