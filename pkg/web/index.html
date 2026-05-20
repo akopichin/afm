@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>flowManager Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header id="header">
+        <h1>flowManager</h1>
+        <div id="flow-name" class="flow-name"></div>
+        <div id="ws-status" class="ws-status disconnected" title="WebSocket">WS</div>
+    </header>
+
+    <main id="main">
+        <aside id="stages-panel">
+            <h2>Стадии</h2>
+            <ul id="stages-list"></ul>
+        </aside>
+
+        <section id="detail-panel">
+            <div id="detail-empty" class="detail-empty">
+                Выберите стадию для просмотра деталей
+            </div>
+            <div id="detail-content" class="detail-content hidden">
+                <div class="detail-header">
+                    <h2 id="detail-title"></h2>
+                    <span id="detail-status" class="status-badge"></span>
+                </div>
+
+                <div id="plan-section" class="section">
+                    <h3>План</h3>
+                    <div id="plan-content" class="markdown-body"></div>
+                    <div id="plan-empty" class="empty-hint">План пока не создан</div>
+                </div>
+
+                <div id="actions-section" class="section hidden">
+                    <div class="actions-row">
+                        <button id="btn-approve" class="btn btn-approve">Одобрить</button>
+                        <button id="btn-revise" class="btn btn-revise" disabled>Отправить правку</button>
+                    </div>
+                    <div id="comment-hint" class="comment-hint hidden">Нажмите на строку плана чтобы оставить комментарий</div>
+                </div>
+
+                <div id="retry-section" class="section hidden">
+                    <div class="actions-row">
+                        <button id="btn-retry" class="btn btn-retry">Попробовать ещё раз</button>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Лог</h3>
+                    <pre id="log-content" class="log-content"></pre>
+                    <div id="log-empty" class="empty-hint">Лог пока пуст</div>
+                </div>
+            </div>
+        </section>
+
+        <aside id="feed-panel">
+            <h2>Лента событий</h2>
+            <div id="feed-content"></div>
+        </aside>
+    </main>
+
+    <footer id="footer">
+        <div class="footer-item">
+            <span class="footer-label">Прогресс:</span>
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <span id="progress-text">0 / 0</span>
+        </div>
+        <div class="footer-item">
+            <span class="footer-label">Начало:</span>
+            <span id="started-at">--</span>
+        </div>
+        <div class="footer-item">
+            <span class="footer-label">Прошло:</span>
+            <span id="elapsed">--</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
