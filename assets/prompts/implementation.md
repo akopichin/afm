@@ -16,7 +16,9 @@ Commit after each completed task.
 When you have completed ALL work for this stage:
 1. Verify that all tasks from the plan are implemented
 2. Verify that all tests pass
-3. Create a `.done` file in the stage directory using the Write tool
-4. In the `.done` file, write a brief summary of what you accomplished
+3. If a "Required Artifacts" section appears below, verify that every listed file exists at the EXACT path shown. Paths there are absolute and authoritative — do not write to a different location.
+4. Create a `.done` file in the stage directory using the Write tool
+5. In the `.done` file, write a brief summary of what you accomplished
 
 The `.done` file is REQUIRED — the stage will not be marked as complete without it.
+Missing artifacts also fail the stage, regardless of whether all plan tasks are done.

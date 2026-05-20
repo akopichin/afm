@@ -684,8 +684,35 @@ func buildImplementationPrompt(template string, s flow.Stage, plan, dependencyCo
 	if s.Description != "" {
 		desc = "\n\n## Instructions\n\n" + s.Description
 	}
+	artifacts := buildArtifactInstructions(s, stageDir)
 	doneInstr := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
-	return fmt.Sprintf("%s\n\n## Stage: %s\n%s\n\n## Plan\n\n%s%s%s%s", template, s.Name, dependencyContext, plan, desc, extra, doneInstr)
+	return fmt.Sprintf("%s\n\n## Stage: %s\n%s\n\n## Plan\n\n%s%s%s%s%s", template, s.Name, dependencyContext, plan, desc, extra, artifacts, doneInstr)
+}
+
+// buildArtifactInstructions returns a prompt section listing each declared
+// artifact with its fully resolved path. Paths starting with "./" resolve
+// to the stage run directory (orchestrator convention) — agents have no way
+// to know that without being told, so the resolved path is shown explicitly.
+func buildArtifactInstructions(s flow.Stage, stageDir string) string {
+	if len(s.Artifacts) == 0 {
+		return ""
+	}
+	var buf strings.Builder
+	buf.WriteString("\n\n## Required Artifacts\n\n")
+	buf.WriteString("Each artifact below MUST exist at the EXACT path shown when this stage finishes. ")
+	buf.WriteString("The stage will be marked failed if any path is missing, even if all plan tasks are done.\n\n")
+	for _, art := range s.Artifacts {
+		dst := art.Path
+		if strings.HasPrefix(art.Path, "./") {
+			dst = filepath.Join(stageDir, art.Path[2:])
+		}
+		desc := ""
+		if art.Description != "" {
+			desc = " — " + art.Description
+		}
+		fmt.Fprintf(&buf, "- `%s`%s\n  Write to: `%s`\n", art.Name, desc, dst)
+	}
+	return buf.String()
 }
 
 func buildReviewPrompt(template string, s flow.Stage) string {
