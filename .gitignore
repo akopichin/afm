@@ -1,0 +1,8 @@
+.idea/*
+
+# works stuff
+.flowManager/runs/
+docs/plans/
+
+.DS_Store
+*/.DS_Store
