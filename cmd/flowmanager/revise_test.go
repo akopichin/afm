@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
+
+const flagFeedback = "--feedback"
 
 // chdirTemp switches the working directory to a temp dir and restores it after the test.
 func chdirTemp(t *testing.T) string {
@@ -46,10 +48,10 @@ func makeRunState(t *testing.T, runName, stageID string, status state.StageStatu
 func TestReviseSavesFeedback(t *testing.T) {
 	chdirTemp(t)
 
-	runDir := makeRunState(t, "flow-20260101-120000", "init", state.StatusAwaitingApproval)
+	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusAwaitingApproval)
 
 	// Create stage directory with a plan
-	stageDir := filepath.Join(runDir, "init")
+	stageDir := filepath.Join(runDir, cmdInit)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestReviseSavesFeedback(t *testing.T) {
 	cmd := newReviseCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-	cmd.SetArgs([]string{"--feedback", "add rollback section", "init"})
+	cmd.SetArgs([]string{flagFeedback, "add rollback section", cmdInit})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("revise: %v", err)
@@ -81,8 +83,8 @@ func TestReviseSavesFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	if rs.Stages["init"].Status != state.StatusRevising {
-		t.Errorf("expected status revising, got: %v", rs.Stages["init"].Status)
+	if rs.Stages[cmdInit].Status != state.StatusRevising {
+		t.Errorf("expected status revising, got: %v", rs.Stages[cmdInit].Status)
 	}
 }
 
@@ -91,12 +93,12 @@ func TestReviseSavesFeedback(t *testing.T) {
 func TestReviseRequiresAwaitingApproval(t *testing.T) {
 	chdirTemp(t)
 
-	makeRunState(t, "flow-20260101-120000", "init", state.StatusDone)
+	makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
 
 	cmd := newReviseCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-	cmd.SetArgs([]string{"--feedback", "fix it", "init"})
+	cmd.SetArgs([]string{flagFeedback, "fix it", cmdInit})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -112,12 +114,12 @@ func TestReviseRequiresAwaitingApproval(t *testing.T) {
 func TestReviseEmptyFeedbackReturnsError(t *testing.T) {
 	chdirTemp(t)
 
-	makeRunState(t, "flow-20260101-120000", "init", state.StatusAwaitingApproval)
+	makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusAwaitingApproval)
 
 	cmd := newReviseCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-	cmd.SetArgs([]string{"init"})
+	cmd.SetArgs([]string{cmdInit})
 
 	err := cmd.Execute()
 	if err == nil {

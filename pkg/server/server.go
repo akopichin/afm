@@ -8,47 +8,60 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/web"
+	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/web"
 )
 
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
-	runDir    string
-	stateFile string
-	bus       *orchestrator.EventBus
-	approveFn func(stageID string)
-	reviseFn  func(stageID, feedback string)
-	retryFn   func(stageID string)
-	httpSrv   *http.Server
+	runDir         string
+	stateFile      string
+	bus            *orchestrator.EventBus
+	approveFn      func(stageID string)
+	reviseFn       func(stageID, feedback string)
+	retryFn        func(stageID string)
+	mcpSrv         *mcp.Server
+	dialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
+	dialogCancelFn func(stageID string) error
+	httpSrv        *http.Server
 }
 
 // Config holds server settings.
 type Config struct {
-	Port      int
-	RunDir    string
-	StateFile string
-	Bus       *orchestrator.EventBus
-	ApproveFn func(stageID string)
-	ReviseFn  func(stageID, feedback string)
-	RetryFn   func(stageID string)
+	Port           int
+	RunDir         string
+	StateFile      string
+	Bus            *orchestrator.EventBus
+	ApproveFn      func(stageID string)
+	ReviseFn       func(stageID, feedback string)
+	RetryFn        func(stageID string)
+	McpServer      *mcp.Server
+	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
+	DialogCancelFn func(stageID string) error
 }
 
 // New creates a Server.
 func New(cfg Config) *Server {
 	s := &Server{
-		runDir:    cfg.RunDir,
-		stateFile: cfg.StateFile,
-		bus:       cfg.Bus,
-		approveFn: cfg.ApproveFn,
-		reviseFn:  cfg.ReviseFn,
-		retryFn:   cfg.RetryFn,
+		runDir:         cfg.RunDir,
+		stateFile:      cfg.StateFile,
+		bus:            cfg.Bus,
+		approveFn:      cfg.ApproveFn,
+		reviseFn:       cfg.ReviseFn,
+		retryFn:        cfg.RetryFn,
+		mcpSrv:         cfg.McpServer,
+		dialogAnswerFn: cfg.DialogAnswerFn,
+		dialogCancelFn: cfg.DialogCancelFn,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	if cfg.McpServer != nil {
+		mux.Handle("/mcp/", cfg.McpServer)
+	}
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 
 	s.httpSrv = &http.Server{
@@ -72,6 +85,12 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleRevise(w, r)
 	case strings.HasSuffix(path, "/retry") && r.Method == http.MethodPost:
 		s.handleRetry(w, r)
+	case strings.HasSuffix(path, "/dialog") && r.Method == http.MethodGet:
+		s.handleDialogGet(w, r)
+	case strings.HasSuffix(path, "/dialog/answer") && r.Method == http.MethodPost:
+		s.handleDialogAnswer(w, r)
+	case strings.HasSuffix(path, "/dialog/cancel") && r.Method == http.MethodPost:
+		s.handleDialogCancel(w, r)
 	default:
 		http.NotFound(w, r)
 	}

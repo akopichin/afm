@@ -1,6 +1,9 @@
 package orchestrator
 
-import "sync"
+import (
+	"log"
+	"sync"
+)
 
 // EventType is the type of an event.
 type EventType string
@@ -9,12 +12,13 @@ const (
 	EventStageStatusChanged EventType = "stage_status_changed"
 	EventAgentAction        EventType = "agent_action"
 	EventAgentCompleted     EventType = "agent_completed"
-	EventFeedbackReceived   EventType = "feedback_received"
 	EventApproved           EventType = "approved"
 	EventRevised            EventType = "revised"
 	EventRetryScheduled     EventType = "retry_scheduled"
 	EventRetryExhausted     EventType = "retry_exhausted"
 	EventManualRetry        EventType = "manual_retry"
+	EventAskUser            EventType = "ask_user"
+	EventUserAnswered       EventType = "user_answered"
 )
 
 // Event is an event in the system.
@@ -68,7 +72,7 @@ func (b *EventBus) Publish(ev Event) {
 		select {
 		case ch <- ev:
 		default:
-			// subscriber too slow — skip
+			log.Printf("eventbus: dropped %s event for slow subscriber", ev.Type)
 		}
 	}
 }

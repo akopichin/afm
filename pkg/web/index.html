@@ -7,14 +7,32 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="theme-novacorps">
     <header id="header">
+        <span class="logo" aria-hidden="true">
+            <span class="l-ring">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#6fd4cc" stroke-width="1">
+                    <polygon points="12,1 22,7 22,17 12,23 2,17 2,7"/>
+                </svg>
+            </span>
+            <span class="l-arc">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#e5d442" stroke-width="1" stroke-linecap="round">
+                    <path d="M 12 3 A 9 9 0 0 1 21 12"/>
+                </svg>
+            </span>
+            <span class="l-core">
+                <svg viewBox="0 0 24 24" fill="#6fd4cc" stroke="none">
+                    <circle cx="12" cy="12" r="2.4"/>
+                </svg>
+            </span>
+        </span>
         <h1>flowManager</h1>
         <div id="flow-name" class="flow-name"></div>
-        <div id="ws-status" class="ws-status disconnected" title="WebSocket">WS</div>
+        <div id="ws-status" class="ws-status disconnected" title="WebSocket">OFFLINE</div>
     </header>
 
     <main id="main">
+        <div class="ray" aria-hidden="true"></div>
         <aside id="stages-panel">
             <h2>Стадии</h2>
             <ul id="stages-list"></ul>
@@ -28,6 +46,15 @@
                 <div class="detail-header">
                     <h2 id="detail-title"></h2>
                     <span id="detail-status" class="status-badge"></span>
+                    <span class="ornament" aria-hidden="true">
+                        <svg viewBox="0 0 100 100" fill="none" stroke="#6fd4cc" stroke-width="1">
+                            <circle cx="50" cy="50" r="46"/>
+                            <circle cx="50" cy="50" r="32"/>
+                            <path d="M50 6 L52 50 L50 94 L48 50 Z" fill="#6fd4cc" stroke="none"/>
+                            <path d="M6 50 L50 48 L94 50 L50 52 Z" fill="#6fd4cc" stroke="none"/>
+                            <circle cx="50" cy="50" r="3" fill="#e5d442" stroke="none"/>
+                        </svg>
+                    </span>
                 </div>
 
                 <div id="plan-section" class="section">
@@ -48,6 +75,25 @@
                     <div class="actions-row">
                         <button id="btn-retry" class="btn btn-retry">Попробовать ещё раз</button>
                     </div>
+                </div>
+
+                <div id="dialog-section" class="section hidden">
+                    <h3><span class="sr-only">Канал связи</span></h3>
+
+                    <div id="dialog-history" class="dialog-history"></div>
+
+                    <div id="dialog-pending" class="dialog-pending hidden">
+                        <div class="dialog-question"></div>
+                        <div class="dialog-options"></div>
+                        <textarea class="dialog-custom" placeholder="Или вписать свой ответ…"></textarea>
+                        <div class="dialog-actions">
+                            <button class="btn btn-send">▸ ОТПРАВИТЬ</button>
+                            <button class="btn btn-cancel-dialog">ОТМЕНИТЬ СТЕЙДЖ</button>
+                            <span class="typing-indicator">AGENT IS WAITING <span class="blink"></span></span>
+                        </div>
+                    </div>
+
+                    <button id="dialog-toggle" class="dialog-toggle hidden">▴ СВЕРНУТЬ ИСТОРИЮ</button>
                 </div>
 
                 <div class="section">

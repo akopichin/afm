@@ -63,6 +63,45 @@ func TestEventBus_Unsubscribe(t *testing.T) {
 	}
 }
 
+func TestPublishAskUserEvent(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	ch := bus.Subscribe()
+
+	bus.Publish(Event{
+		Type:    EventAskUser,
+		StageID: testStageID,
+		Data: map[string]any{
+			dataID: "q1", "phase": phaseImplementation,
+			"question": "x?", "options": []string{"a", "b"}, "allow_custom": true,
+		},
+	})
+
+	ev := <-ch
+	if ev.Type != EventAskUser {
+		t.Errorf("type: got %q", ev.Type)
+	}
+}
+
+func TestPublishUserAnsweredEvent(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	ch := bus.Subscribe()
+
+	bus.Publish(Event{
+		Type:    EventUserAnswered,
+		StageID: testStageID,
+		Data: map[string]any{
+			dataID: "q1", "phase": phaseImplementation, "answer": "yes",
+		},
+	})
+
+	ev := <-ch
+	if ev.Type != EventUserAnswered {
+		t.Errorf("type: got %q", ev.Type)
+	}
+}
+
 func TestEventBus_ConcurrentPublish(t *testing.T) {
 	bus := NewEventBus()
 	defer bus.Close()

@@ -8,7 +8,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 func TestWebSocket_ReceivesEvents(t *testing.T) {

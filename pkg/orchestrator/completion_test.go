@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
+	"github.com/akopichin/afm/pkg/flow"
 )
+
+const testArtifactName = "output"
+const testArtifactPath = "out.txt"
 
 // writeFile is a test helper that writes a file or fails the test.
 func writeFile(t *testing.T, path string, data []byte) {
@@ -46,7 +49,7 @@ func TestCheckCompletion(t *testing.T) {
 	t.Run("done exists no artifacts", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("all done"))
-		stage := flow.Stage{ID: "s1"}
+		stage := flow.Stage{ID: testStageID}
 		if err := checkCompletion(dir, ".", stage); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
@@ -54,7 +57,7 @@ func TestCheckCompletion(t *testing.T) {
 
 	t.Run("done missing", func(t *testing.T) {
 		dir := t.TempDir()
-		stage := flow.Stage{ID: "s1"}
+		stage := flow.Stage{ID: testStageID}
 		err := checkCompletion(dir, ".", stage)
 		if err == nil {
 			t.Error("expected error for missing .done")
@@ -67,7 +70,7 @@ func TestCheckCompletion(t *testing.T) {
 	t.Run("done empty", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte(""))
-		stage := flow.Stage{ID: "s1"}
+		stage := flow.Stage{ID: testStageID}
 		err := checkCompletion(dir, ".", stage)
 		if err == nil {
 			t.Error("expected error for empty .done")
@@ -81,9 +84,9 @@ func TestCheckCompletion(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
 		stage := flow.Stage{
-			ID: "s1",
+			ID: testStageID,
 			Artifacts: []flow.Artifact{
-				{Name: "output", Path: "out.txt", Description: "output file"},
+				{Name: testArtifactName, Path: testArtifactPath, Description: "output file"},
 			},
 		}
 		err := checkCompletion(dir, t.TempDir(), stage)
@@ -99,11 +102,11 @@ func TestCheckCompletion(t *testing.T) {
 		projectDir := t.TempDir()
 		stageDir := t.TempDir()
 		writeFile(t, filepath.Join(stageDir, ".done"), []byte("done"))
-		writeFile(t, filepath.Join(projectDir, "out.txt"), []byte("data"))
+		writeFile(t, filepath.Join(projectDir, testArtifactPath), []byte("data"))
 		stage := flow.Stage{
-			ID: "s1",
+			ID: testStageID,
 			Artifacts: []flow.Artifact{
-				{Name: "output", Path: "out.txt", Description: "output file"},
+				{Name: testArtifactName, Path: testArtifactPath, Description: "output file"},
 			},
 		}
 		if err := checkCompletion(stageDir, projectDir, stage); err != nil {
@@ -113,14 +116,14 @@ func TestCheckCompletion(t *testing.T) {
 
 	t.Run("artifact with stage-relative path", func(t *testing.T) {
 		runDir := t.TempDir()
-		stageDir := filepath.Join(runDir, "s1")
+		stageDir := filepath.Join(runDir, testStageID)
 		if err := os.MkdirAll(stageDir, 0755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
 		writeFile(t, filepath.Join(stageDir, ".done"), []byte("done"))
 		writeFile(t, filepath.Join(stageDir, "schema.sql"), []byte("CREATE TABLE"))
 		stage := flow.Stage{
-			ID: "s1",
+			ID: testStageID,
 			Artifacts: []flow.Artifact{
 				{Name: "db", Path: "./schema.sql", Description: "migration"},
 			},
@@ -138,11 +141,11 @@ func TestIsRetryableError(t *testing.T) {
 	}{
 		{"You've hit your limit", true},
 		{"rate limit exceeded", true},
-		{"too many requests", true},
-		{"overloaded", true},
-		{"capacity", true},
+		{retryTooMany, true},
+		{retryOverloaded, true},
+		{retryCapacity, true},
 		{"500 Internal Server Error", true},
-		{"internal server error", true},
+		{retryInternalServerError, true},
 		{"something went wrong", false},
 		{"", false},
 	}

@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func TestFSM_ValidTransitions(t *testing.T) {
@@ -69,5 +69,29 @@ func TestFSM_IsTerminal(t *testing.T) {
 	}
 	if IsTerminal(state.StatusRetrying) {
 		t.Error("retrying should not be terminal")
+	}
+}
+
+func TestAwaitingUserInputTransitions(t *testing.T) {
+	cases := []struct {
+		from, to state.StageStatus
+		want     bool
+	}{
+		{state.StatusRunning, state.StatusAwaitingUserInput, true},
+		{state.StatusPlanning, state.StatusAwaitingUserInput, true},
+		{state.StatusAwaitingUserInput, state.StatusRunning, true},
+		{state.StatusAwaitingUserInput, state.StatusPlanning, true},
+		{state.StatusAwaitingUserInput, state.StatusFailed, true},
+		{state.StatusAwaitingUserInput, state.StatusDone, false},
+	}
+	for _, c := range cases {
+		got := ValidTransition(c.from, c.to)
+		if got != c.want {
+			t.Errorf("ValidTransition(%s, %s): got %v, want %v",
+				c.from, c.to, got, c.want)
+		}
+	}
+	if IsTerminal(state.StatusAwaitingUserInput) {
+		t.Error("awaiting_user_input must not be terminal")
 	}
 }

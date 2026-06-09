@@ -9,9 +9,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const cmdInit = "init"
+
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "init",
+		Use:   cmdInit,
 		Short: "Create a flow.yaml interactively",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanner := bufio.NewScanner(os.Stdin)

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // TestFindLatestStateFileCorrectFlow воспроизводит баг: findLatestStateFile

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
+	"github.com/akopichin/afm/pkg/flow"
 )
 
 const validYAML = `
@@ -290,6 +290,39 @@ stages:
 	_, err := flow.ParseFile(writeTemp(t, yaml))
 	if err == nil {
 		t.Fatal("expected error: input stage not in depends_on")
+	}
+}
+
+const interactiveYAML = `
+name: interactive-flow
+description: "test interactive"
+stages:
+  - id: discovery
+    name: "Discovery"
+    description: "ask user"
+    agents: [planning]
+    interactive: true
+`
+
+func TestParseInteractive(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, interactiveYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !f.Stages[0].Interactive {
+		t.Error("Interactive should be true")
+	}
+}
+
+func TestInteractiveDefaultsFalse(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, validYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, s := range f.Stages {
+		if s.Interactive {
+			t.Errorf("stage %q: Interactive should default to false", s.ID)
+		}
 	}
 }
 

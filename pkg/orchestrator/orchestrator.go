@@ -3,20 +3,27 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/executor"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // phasePlanning is the agent phase name used for planning agents.
 const phasePlanning = "planning"
+
+const phaseImplementation = "implementation"
+const phaseReview = "review"
 
 // semNop is a no-op semaphore used when MaxParallel is 0 (unlimited).
 type semNop struct{}
@@ -43,13 +50,14 @@ func DefaultPrompts() Prompts { return Prompts{} }
 
 // Options configures an Orchestrator.
 type Options struct {
-	RunDir    string
-	Stages    []flow.Stage
-	State     *state.RunState
-	StateFile string
-	Config    config.Config
-	Prompts   Prompts
-	Runner    executor.Runner // nil = real Executor
+	RunDir       string
+	Stages       []flow.Stage
+	State        *state.RunState
+	StateFile    string
+	Config       config.Config
+	Prompts      Prompts
+	Runner       executor.Runner // nil = real Executor
+	DashboardURL string          // e.g. "http://127.0.0.1:9876"
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -75,12 +83,7 @@ func New(opts Options) *Orchestrator {
 			Command:     opts.Config.Client.Command,
 			ExtraArgs:   opts.Config.Client.ExtraArgs,
 			IdleTimeout: opts.Config.Executor.IdleTimeout,
-			OnAction: func(tool, detail string) {
-				bus.Publish(Event{Type: EventAgentAction, Data: map[string]string{
-					"tool":   tool,
-					"detail": detail,
-				}})
-			},
+			OnAction:    actionPublisher(bus, ""),
 		})
 	}
 
@@ -121,22 +124,79 @@ func New(opts Options) *Orchestrator {
 // Bus returns the EventBus for external subscribers (server, WebSocket).
 func (o *Orchestrator) Bus() *EventBus { return o.bus }
 
-// runnerFor returns the appropriate Runner for a stage.
-// If the stage has a custom command, creates a dedicated executor.
-func (o *Orchestrator) runnerFor(s flow.Stage) executor.Runner {
+// SetDashboardURL sets the dashboard URL after the server starts listening.
+func (o *Orchestrator) SetDashboardURL(url string) { o.opts.DashboardURL = url }
+
+// FailStage marks a stage as failed with a reason.
+func (o *Orchestrator) FailStage(stageID, reason string) {
+	o.setStatus(stageID, state.StatusFailed)
+	o.failBlockedStages()
+}
+
+// runnerFor returns the appropriate Runner for a stage's phase.
+// For interactive stages, generates mcp.json and a session id, then
+// returns an executor configured with --mcp-config and --session-id (or --resume).
+func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
+	if !s.Interactive {
+		if s.Command == "" {
+			return o.runner
+		}
+		return executor.New(executor.Config{
+			Command:     s.Command,
+			IdleTimeout: o.opts.Config.Executor.IdleTimeout,
+			OnAction:    actionPublisher(o.bus, s.ID),
+		})
+	}
+
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	mcpPath, err := writeMcpConfig(stageDir, s.ID, phase, o.opts.DashboardURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: interactive stage %q: mcp config failed: %v; using non-interactive runner\n", s.ID, err)
+		return o.runnerForFallback(s)
+	}
+
+	resume := sessionExists(stageDir, phase)
+	sessionID, err := loadOrCreateSession(stageDir, phase)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: interactive stage %q: session failed: %v; using non-interactive runner\n", s.ID, err)
+		return o.runnerForFallback(s)
+	}
+
+	cmd := s.Command
+	if cmd == "" {
+		cmd = o.opts.Config.Client.Command
+	}
+	requiredArgs := []string{"--print", "--output-format", "stream-json", "--dangerously-skip-permissions"}
+	extraArgs := append(requiredArgs, o.opts.Config.Client.ExtraArgs...)
+	return executor.New(executor.Config{
+		Command:     cmd,
+		ExtraArgs:   extraArgs,
+		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
+		OnAction:    actionPublisher(o.bus, s.ID),
+		SessionID:   sessionID,
+		Resume:      resume,
+		McpConfig:   mcpPath,
+	})
+}
+
+func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 	if s.Command == "" {
 		return o.runner
 	}
 	return executor.New(executor.Config{
 		Command:     s.Command,
 		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		OnAction: func(tool, detail string) {
-			o.bus.Publish(Event{Type: EventAgentAction, StageID: s.ID, Data: map[string]string{
-				"tool":   tool,
-				"detail": detail,
-			}})
-		},
+		OnAction:    actionPublisher(o.bus, s.ID),
 	})
+}
+
+func actionPublisher(bus *EventBus, stageID string) func(string, string) {
+	return func(tool, detail string) {
+		bus.Publish(Event{Type: EventAgentAction, StageID: stageID, Data: map[string]string{
+			"tool":   tool,
+			"detail": detail,
+		}})
+	}
 }
 
 // semFor returns the semaphore for a stage's effective command.
@@ -205,18 +265,37 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev Event) error {
 		return o.onRevised(ctx, ev)
 	case EventManualRetry:
 		return o.onManualRetry(ctx, ev)
+	case EventUserAnswered:
+		return o.onUserAnswered(ctx, ev)
 	}
 	return nil
 }
 
 func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 	agentType, _ := ev.Data.(string)
+	current := o.currentStatus(ev.StageID)
+
+	// Open-question gate: if the agent finished but the user has not yet
+	// answered an ask_user question, hold the stage in awaiting_user_input.
+	// The stage resumes on EventUserAnswered.
+	if o.hasOpenQuestion(ev.StageID, agentType) {
+		o.setStatus(ev.StageID, state.StatusAwaitingUserInput)
+		return nil
+	}
 
 	switch agentType {
 	case phasePlanning:
+		// Ignore stale completion if stage already left planning state
+		// (e.g. approved, done, or restarted by onUserAnswered).
+		if current != state.StatusPlanning && current != state.StatusRetrying {
+			return nil
+		}
 		o.setStatus(ev.StageID, state.StatusAwaitingApproval)
 		o.tryActivatePrePlanned(ctx)
-	case "implementation":
+	case phaseImplementation:
+		if current != state.StatusRunning && current != state.StatusRetrying {
+			return nil
+		}
 		o.setStatus(ev.StageID, state.StatusDone)
 		o.failBlockedStages()
 		o.startReadyStages(ctx)
@@ -227,7 +306,77 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 	return nil
 }
 
+// hasOpenQuestion reports whether the dialog file for the given stage/phase
+// contains an ask_user question that has not yet been answered.
+func (o *Orchestrator) hasOpenQuestion(stageID, phase string) bool {
+	if phase == "" {
+		return false
+	}
+	dialogPath := filepath.Join(o.opts.RunDir, stageID, phase+".dialog.jsonl")
+	open, err := mcp.HasOpenQuestions(dialogPath)
+	if err != nil {
+		return false
+	}
+	return open
+}
+
+// onUserAnswered resumes a stage that was paused on awaiting_user_input
+// once the user's answer has been recorded. If a waiter inside the MCP
+// server already delivered the answer to a still-running agent, the
+// status will not be awaiting_user_input here and this is a no-op.
+func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
+	if o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
+		return nil
+	}
+
+	data, _ := ev.Data.(map[string]any)
+	phase, _ := data["phase"].(string)
+	if phase == "" {
+		return nil
+	}
+
+	if o.hasOpenQuestion(ev.StageID, phase) {
+		return nil
+	}
+
+	stage := o.graph.Stage(ev.StageID)
+	if stage == nil {
+		return nil
+	}
+
+	switch phase {
+	case phasePlanning:
+		o.setStatus(ev.StageID, state.StatusPlanning)
+		go func(st flow.Stage) {
+			sem := o.semFor(st)
+			sem.acquire()
+			defer sem.release()
+			o.runPlanningAgent(ctx, st)
+		}(*stage)
+	default:
+		o.setStatus(ev.StageID, state.StatusRunning)
+		go func(st flow.Stage) {
+			sem := o.semFor(st)
+			sem.acquire()
+			defer sem.release()
+			o.runImplementationAgent(ctx, st)
+		}(*stage)
+	}
+	return nil
+}
+
 func (o *Orchestrator) onApproved(ctx context.Context, ev Event) error {
+	if o.currentStatus(ev.StageID) != state.StatusAwaitingApproval {
+		return nil
+	}
+	stage := o.graph.Stage(ev.StageID)
+	if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
+		// Planning-only stage — nothing to implement, mark as done.
+		o.setStatus(ev.StageID, state.StatusDone)
+		o.startReadyStages(ctx)
+		o.tryActivatePrePlanned(ctx)
+		return nil
+	}
 	o.setStatus(ev.StageID, state.StatusReady)
 	o.startReadyStages(ctx)
 	o.tryActivatePrePlanned(ctx)
@@ -236,6 +385,11 @@ func (o *Orchestrator) onApproved(ctx context.Context, ev Event) error {
 
 func (o *Orchestrator) onRevised(ctx context.Context, ev Event) error {
 	stageID := ev.StageID
+
+	if o.currentStatus(stageID) != state.StatusAwaitingApproval {
+		return nil
+	}
+
 	feedback, _ := ev.Data.(string)
 
 	o.setStatus(stageID, state.StatusRevising)
@@ -266,9 +420,7 @@ func (o *Orchestrator) onRevised(ctx context.Context, ev Event) error {
 func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 	stageID := ev.StageID
 
-	o.mu.Lock()
-	current := o.opts.State.Stages[stageID].Status
-	o.mu.Unlock()
+	current := o.currentStatus(stageID)
 
 	if current != state.StatusFailed {
 		return nil
@@ -331,7 +483,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			switch current {
 			case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval:
 				continue
-			case state.StatusRunning, state.StatusReady:
+			case state.StatusRunning, state.StatusReady, state.StatusAwaitingUserInput:
 				// Let these fall through to the normal resume logic below.
 			case state.StatusRetrying:
 				// Interrupted retry for pre-planned stage — check .done or restart implementation
@@ -353,9 +505,16 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					continue
 				}
 				dst := filepath.Join(stageDir, "plan.md")
-				if err := copyFile(s.Plan, dst); err != nil {
-					o.setStatus(s.ID, state.StatusFailed)
-					continue
+				if s.Plan != "" {
+					if err := copyFile(s.Plan, dst); err != nil {
+						o.setStatus(s.ID, state.StatusFailed)
+						continue
+					}
+				} else if s.Interactive {
+					if err := os.WriteFile(dst, []byte(s.Description), 0644); err != nil {
+						o.setStatus(s.ID, state.StatusFailed)
+						continue
+					}
 				}
 				o.setStatus(s.ID, state.StatusReady)
 				continue
@@ -368,8 +527,14 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 
 		switch current {
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady:
-			// Terminal or waiting for user action — leave as is
 			continue
+		case state.StatusAwaitingUserInput:
+			go func(st flow.Stage) {
+				sem := o.semFor(st)
+				sem.acquire()
+				defer sem.release()
+				o.resumeInteractiveAgent(ctx, st)
+			}(s)
 		case state.StatusRetrying:
 			// Interrupted retry — check completion or restart
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -441,12 +606,50 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 	o.tryActivatePrePlanned(ctx)
 }
 
+// resumeInteractiveAgent re-runs the agent of the phase whose
+// session.json exists most recently. The phase is detected by looking at
+// mtimes of <phase>.session.json files in the stage directory.
+func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	phase := o.detectInterruptedPhase(stageDir)
+
+	switch phase {
+	case phasePlanning:
+		o.setStatus(s.ID, state.StatusPlanning)
+		o.runPlanningAgent(ctx, s)
+	case phaseReview:
+		// Review runs after implementation completes; if we see review session
+		// open, the stage was paused inside review. Fall through to implementation
+		// agent which will re-trigger review at the end.
+		fallthrough
+	default:
+		o.setStatus(s.ID, state.StatusRunning)
+		o.runImplementationAgent(ctx, s)
+	}
+}
+
+func (o *Orchestrator) detectInterruptedPhase(stageDir string) string {
+	var latestPhase string
+	var latestMtime time.Time
+	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
+		fi, err := os.Stat(sessionFile(stageDir, phase))
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().After(latestMtime) {
+			latestMtime = fi.ModTime()
+			latestPhase = phase
+		}
+	}
+	return latestPhase
+}
+
 // depsDone checks whether all dependencies of a stage are in StatusDone.
 func (o *Orchestrator) depsDone(s flow.Stage) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	for _, dep := range s.DependsOn {
-		o.mu.Lock()
 		st, ok := o.opts.State.Stages[dep]
-		o.mu.Unlock()
 		if !ok || st.Status != state.StatusDone {
 			return false
 		}
@@ -508,7 +711,7 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		}
 		o.setStatus(id, state.StatusRunning)
 		go func(st flow.Stage) {
-			sem := o.semFor(*stage)
+			sem := o.semFor(st)
 			sem.acquire()
 			defer sem.release()
 			o.runImplementationAgent(ctx, st)
@@ -531,7 +734,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, "planning.log")
 
-		r := o.runnerFor(s)
+		r := o.runnerFor(s, phasePlanning)
 		return r.RunPlanning(ctx, s.Name, prompt, outFile, logFile)
 	}, func() error {
 		return checkPlanCompletion(stageDir)
@@ -546,9 +749,17 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
 		feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 		var prevPlan string
+		planVersionRe := regexp.MustCompile(`^plan\.v(\d+)\.md$`)
+		var bestVer int
 		entries, _ := os.ReadDir(stageDir)
 		for _, e := range entries {
-			if matched, _ := filepath.Match("plan.v*.md", e.Name()); matched {
+			m := planVersionRe.FindStringSubmatch(e.Name())
+			if m == nil {
+				continue
+			}
+			v, _ := strconv.Atoi(m[1])
+			if v > bestVer {
+				bestVer = v
 				data, _ := os.ReadFile(filepath.Join(stageDir, e.Name()))
 				prevPlan = string(data)
 			}
@@ -559,7 +770,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, "planning-revision.log")
 
-		r := o.runnerFor(s)
+		r := o.runnerFor(s, phasePlanning)
 		return r.RunPlanning(ctx, s.Name, prompt, outFile, logFile)
 	}, func() error {
 		return checkPlanCompletion(stageDir)
@@ -569,7 +780,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 
-	o.runWithRetry(ctx, s, "implementation", func(retryContext string) error {
+	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
 		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 		if err != nil {
 			return err
@@ -579,7 +790,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		prompt := buildImplementationPrompt(o.opts.Prompts.Implementation, s, string(planData), depCtx+retryContext, stageDir)
 		logFile := filepath.Join(stageDir, "implementation.log")
 
-		r := o.runnerFor(s)
+		r := o.runnerFor(s, phaseImplementation)
 		if err := r.RunAgent(ctx, string(s.ImplAgent()), s.Name, prompt, logFile); err != nil {
 			return err
 		}
@@ -587,7 +798,8 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		if s.HasAgent(flow.AgentReview) {
 			reviewPrompt := buildReviewPrompt(o.opts.Prompts.Review, s)
 			reviewLog := filepath.Join(stageDir, "review.log")
-			if err := r.RunAgent(ctx, "review", s.Name, reviewPrompt, reviewLog); err != nil {
+			rr := o.runnerFor(s, phaseReview)
+			if err := rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog); err != nil {
 				return err
 			}
 		}
@@ -632,18 +844,32 @@ func (o *Orchestrator) failBlockedStages() {
 func (o *Orchestrator) allTerminal() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if len(o.opts.State.Stages) == 0 {
+		return true
+	}
 	for _, s := range o.opts.State.Stages {
 		if !IsTerminal(s.Status) {
 			return false
 		}
 	}
-	return len(o.opts.State.Stages) > 0
+	return true
+}
+
+func (o *Orchestrator) currentStatus(id string) state.StageStatus {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if s, ok := o.opts.State.Stages[id]; ok {
+		return s.Status
+	}
+	return state.StatusPending
 }
 
 func (o *Orchestrator) setStatus(id string, status state.StageStatus) {
 	o.mu.Lock()
 	o.opts.State.SetStageStatus(id, status)
-	_ = o.opts.State.Save(o.opts.StateFile) //nolint:errcheck // best-effort save in status update
+	if err := o.opts.State.Save(o.opts.StateFile); err != nil {
+		log.Printf("CRITICAL: failed to save state after setting %s to %s: %v", id, status, err)
+	}
 	o.mu.Unlock()
 
 	o.bus.Publish(Event{Type: EventStageStatusChanged, StageID: id, Data: string(status)})
@@ -661,8 +887,25 @@ func buildPlanningPrompt(template string, s flow.Stage, dependencyContext string
 	if len(s.Skills) > 0 {
 		extra = "\n\nUse these skills: " + joinStrings(s.Skills)
 	}
-	return fmt.Sprintf("%s\n\n## Stage: %s\n\n%s%s%s", template, s.Name, s.Description, extra, dependencyContext)
+	interactive := ""
+	if s.Interactive {
+		// Override the "do NOT ask questions" rule for interactive stages
+		template = interactivePlanningOverride + template
+		interactive = "\n\nThis stage is interactive. You can use the `ask_user` MCP tool to ask the user questions before finalizing the plan. Each question can include options for the user to choose from. Ask one question at a time."
+	}
+	return fmt.Sprintf("%s\n\n## Stage: %s\n\n%s%s%s%s", template, s.Name, s.Description, extra, interactive, dependencyContext)
 }
+
+const interactivePlanningOverride = `IMPORTANT: This is an interactive stage. The rules below that say "Do NOT ask questions" are OVERRIDDEN — you SHOULD ask the user questions using the ` + "`ask_user`" + ` MCP tool when you need clarification or decisions.
+
+Rules for ask_user:
+- Ask ONE question at a time using the mcp__flowmanager__ask_user tool.
+- The tool BLOCKS until the user answers — this is expected behavior. Do NOT cancel, retry, or move on.
+- If the tool appears to time out or return an error, WAIT and try calling it again with the SAME id. Do NOT proceed without the answer.
+- Never say "интерактивный инструмент не отвечает" or switch to autonomous mode. ALWAYS wait for the user's response.
+- After receiving the answer, incorporate it into your plan and continue.
+
+`
 
 func buildRevisionPrompt(template string, s flow.Stage, prevPlan, feedback, dependencyContext string) string {
 	extra := ""
@@ -684,9 +927,13 @@ func buildImplementationPrompt(template string, s flow.Stage, plan, dependencyCo
 	if s.Description != "" {
 		desc = "\n\n## Instructions\n\n" + s.Description
 	}
+	interactive := ""
+	if s.Interactive {
+		interactive = "\n\nThis stage is interactive. You can use the `ask_user` MCP tool to ask the user questions during implementation. Each question can include options for the user to choose from."
+	}
 	artifacts := buildArtifactInstructions(s, stageDir)
 	doneInstr := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
-	return fmt.Sprintf("%s\n\n## Stage: %s\n%s\n\n## Plan\n\n%s%s%s%s%s", template, s.Name, dependencyContext, plan, desc, extra, artifacts, doneInstr)
+	return fmt.Sprintf("%s\n\n## Stage: %s\n%s\n\n## Plan\n\n%s%s%s%s%s%s", template, s.Name, dependencyContext, plan, desc, extra, interactive, artifacts, doneInstr)
 }
 
 // buildArtifactInstructions returns a prompt section listing each declared
@@ -717,16 +964,6 @@ func buildArtifactInstructions(s flow.Stage, stageDir string) string {
 
 func buildReviewPrompt(template string, s flow.Stage) string {
 	return fmt.Sprintf("%s\n\n## Stage: %s\n\n%s", template, s.Name, s.Description)
-}
-
-// BuildSummaryPrompt builds the prompt for the summary agent.
-// Kept for future use when the summary agent runs as a post-completion step.
-func BuildSummaryPrompt(template, runDir string, stages []flow.Stage) string {
-	names := make([]string, len(stages))
-	for i, s := range stages {
-		names[i] = s.Name
-	}
-	return fmt.Sprintf("%s\n\nRun directory: %s\nStages: %s", template, runDir, joinStrings(names))
 }
 
 // CollectDependencyPlans reads plan.md from each stage in DependsOn
@@ -833,15 +1070,15 @@ func CollectArtifacts(projectDir, runDir string, stage flow.Stage, allStages []f
 }
 
 func joinStrings(ss []string) string {
-	result := ""
-	for i, s := range ss {
-		if i > 0 {
-			result += ", "
-		}
-		result += s
-	}
-	return result
+	return strings.Join(ss, ", ")
 }
+
+const (
+	retryTooMany             = "too many requests"
+	retryOverloaded          = "overloaded"
+	retryCapacity            = "capacity"
+	retryInternalServerError = "internal server error"
+)
 
 // isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
 func isRetryableError(err error) bool {
@@ -849,16 +1086,17 @@ func isRetryableError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	patterns := []string{
+	retryPatterns := []string{
 		"hit your limit",
 		"rate limit",
-		"too many requests",
-		"overloaded",
-		"capacity",
-		"500",
-		"internal server error",
+		retryTooMany,
+		retryOverloaded,
+		retryCapacity,
+		"http 500",
+		"status 500",
+		retryInternalServerError,
 	}
-	for _, p := range patterns {
+	for _, p := range retryPatterns {
 		if strings.Contains(msg, p) {
 			return true
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -13,12 +14,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/assets"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/server"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/assets"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/server"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func newRunCmd() *cobra.Command {
@@ -81,6 +83,18 @@ func newRunCmd() *cobra.Command {
 				Prompts:   prompts,
 			})
 
+			mcpSrv := mcp.NewServer(runDir, orchestrator.NewMcpNotifier(orch))
+
+			// Disable interactive flags when dashboard is not running
+			if cfg.Server.GetPort() == 0 {
+				for i := range f.Stages {
+					if f.Stages[i].Interactive {
+						f.Stages[i].Interactive = false
+						fmt.Fprintf(os.Stderr, "warning: stage %q: interactive requires dashboard (server port > 0); running as non-interactive\n", f.Stages[i].ID)
+					}
+				}
+			}
+
 			// Start HTTP server if port > 0
 			if cfg.Server.GetPort() > 0 {
 				srv := server.New(server.Config{
@@ -91,6 +105,17 @@ func newRunCmd() *cobra.Command {
 					ApproveFn: orch.Approve,
 					ReviseFn:  orch.Revise,
 					RetryFn:   orch.Retry,
+					McpServer: mcpSrv,
+					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
+						return mcpSrv.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
+					},
+					DialogCancelFn: func(stageID string) error {
+						if err := mcpSrv.CancelStage(stageID); err != nil {
+							return err
+						}
+						orch.FailStage(stageID, "cancelled by user")
+						return nil
+					},
 				})
 				addr, err := srv.Start()
 				if err != nil {
@@ -98,7 +123,11 @@ func newRunCmd() *cobra.Command {
 				}
 				defer func() { _ = srv.Shutdown(context.Background()) }()
 
-				dashURL := fmt.Sprintf("http://%s", addr) //nolint:revive // local dashboard is http
+				// Resolve listener address to localhost for client-facing URLs.
+				// ln.Addr() may return [::]:port which is not reachable as a client URL.
+				_, port, _ := net.SplitHostPort(addr)
+				dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
+				orch.SetDashboardURL(dashURL)
 				fmt.Printf("  dashboard: %s\n", dashURL)
 				if cfg.Server.IsOpenBrowser() {
 					openBrowser(dashURL)

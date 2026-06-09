@@ -1,0 +1,30 @@
+# Интерактивный demo-flow — проверка диалогового стейджа
+#
+# Использование:
+#   flowmanager run example-flow-interactive.yaml
+#   # открыть dashboard, ответить на вопросы в секции «Диалог»
+
+name: interactive-demo
+description: "Demo интерактивного стейджа"
+
+stages:
+  - id: discovery
+    name: "Сбор требований"
+    description: |
+      Спроси у пользователя:
+      1. Какой язык программирования предпочитает (предложи Go, Python, TypeScript).
+      2. Какой стиль архитектуры (предложи monolith, microservices, "не знаю").
+
+      После двух ответов запиши итог в ./summary.md в формате:
+        # Сводка
+        - Язык: <ответ>
+        - Архитектура: <ответ>
+
+      Используй tool ask_user с id вопросов q1, q2.
+      Когда summary.md записан — заверши работу.
+    agents: [implementation]
+    interactive: true
+    artifacts:
+      - name: summary
+        path: ./summary.md
+        description: "Сводка ответов"

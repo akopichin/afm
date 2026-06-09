@@ -13,15 +13,16 @@ import (
 type StageStatus string
 
 const (
-	StatusPending          StageStatus = "pending"
-	StatusPlanning         StageStatus = "planning"
-	StatusAwaitingApproval StageStatus = "awaiting_approval"
-	StatusRevising         StageStatus = "revising"
-	StatusReady            StageStatus = "ready"
-	StatusRunning          StageStatus = "running"
-	StatusRetrying         StageStatus = "retrying"
-	StatusDone             StageStatus = "done"
-	StatusFailed           StageStatus = "failed"
+	StatusPending           StageStatus = "pending"
+	StatusPlanning          StageStatus = "planning"
+	StatusAwaitingApproval  StageStatus = "awaiting_approval"
+	StatusRevising          StageStatus = "revising"
+	StatusReady             StageStatus = "ready"
+	StatusRunning           StageStatus = "running"
+	StatusRetrying          StageStatus = "retrying"
+	StatusAwaitingUserInput StageStatus = "awaiting_user_input"
+	StatusDone              StageStatus = "done"
+	StatusFailed            StageStatus = "failed"
 )
 
 // StageState holds persistent state for a single stage.

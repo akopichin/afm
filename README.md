@@ -1,4 +1,4 @@
-# Agentic Flow Manager
+# flowManager
 
 CLI-инструмент для оркестрации многостадийных AI-задач. Описываешь задачу в YAML-файле, разбиваешь на стадии — flowManager запускает AI-агентов последовательно или параллельно, ждёт твоего одобрения планов и автоматически выполняет реализацию.
 
@@ -147,6 +147,7 @@ stages:
 | `plan` | нет | Путь к готовому план-файлу (пропускает planning) |
 | `command` | нет | AI-команда для этой стадии (переопределяет config) |
 | `max_parallel` | нет | Лимит параллельных стадий для этой команды |
+| `interactive` | нет | `true` — включает MCP-tool `ask_user` для диалога с пользователем через dashboard |
 | `artifacts` | нет | Файлы, которые стадия производит для других стадий |
 | `inputs` | нет | Артефакты из зависимых стадий (`stage.artifact`) |
 
@@ -177,6 +178,26 @@ stages:
 - `inline: true` (по умолчанию) — содержимое файла вставляется в промпт
 - `inline: false` — в промпт передаётся путь к файлу
 - `optional: true` — если файл не найден, стадия запускается без него
+
+### Интерактивные стадии
+
+Стадия с `interactive: true` получает MCP-tool `ask_user` для диалога с пользователем через dashboard. Агент вызывает `ask_user` с вопросом и вариантами ответа — в dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия находится в статусе `awaiting_user_input`.
+
+```yaml
+stages:
+  - id: discovery
+    name: "Сбор требований"
+    description: |
+      Спроси у пользователя preferred language через ask_user (id: q1).
+      После ответа запиши итог в ./summary.md.
+    agents: [implementation]
+    interactive: true
+    artifacts:
+      - name: summary
+        path: ./summary.md
+```
+
+Полный пример: `example-flow-interactive.yaml`
 
 ## Конфигурация
 

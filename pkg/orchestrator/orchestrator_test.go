@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/executor"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func TestPlanningPhaseMarksPlanningStatus(t *testing.T) {
@@ -225,5 +225,120 @@ func TestCollectArtifacts_MissingOptional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("optional artifact should not cause error: %v", err)
 	}
-	_ = result
+	if result != "" {
+		t.Errorf("expected empty result for missing optional artifact, got: %q", result)
+	}
+}
+
+func TestResumeInteractiveAgent_PlanningPhase(t *testing.T) {
+	dir := t.TempDir()
+	stageDir := filepath.Join(dir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "planning.session.json"), []byte(`{"session_id":"x"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{
+		{ID: "s1", Name: "Stage 1", Description: "test resume", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	rs := state.NewRunState([]string{"s1"})
+	rs.SetStageStatus("s1", state.StatusAwaitingUserInput)
+	stateFile := filepath.Join(dir, "state.json")
+	if err := rs.Save(stateFile); err != nil {
+		t.Fatal(err)
+	}
+
+	base := executor.New(executor.Config{
+		Command:     bashCommand,
+		ExtraArgs:   []string{"-c", mockPlanningScript},
+		IdleTimeout: 10 * time.Second,
+	})
+	runner := &doneCreatingRunner{delegate: base}
+
+	cfg := config.Default()
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:    dir,
+		Stages:    stages,
+		State:     rs,
+		StateFile: stateFile,
+		Config:    cfg,
+		Prompts:   orchestrator.DefaultPrompts(),
+		Runner:    runner,
+	})
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ctxCancel()
+
+	if err := orch.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := state.Load(stateFile)
+	if final.Stages["s1"].Status != state.StatusDone {
+		t.Errorf("expected done, got %v", final.Stages["s1"].Status)
+	}
+}
+
+func TestResumeInteractiveAgent_ImplementationPhase(t *testing.T) {
+	dir := t.TempDir()
+	stageDir := filepath.Join(dir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Implementation session — detected as the interrupted phase
+	if err := os.WriteFile(filepath.Join(stageDir, "implementation.session.json"), []byte(`{"session_id":"y"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n\n- step 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{
+		{ID: "s1", Name: "Stage 1", Description: "test resume", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	rs := state.NewRunState([]string{"s1"})
+	rs.SetStageStatus("s1", state.StatusAwaitingUserInput)
+	stateFile := filepath.Join(dir, "state.json")
+	if err := rs.Save(stateFile); err != nil {
+		t.Fatal(err)
+	}
+
+	base := executor.New(executor.Config{
+		Command:     bashCommand,
+		ExtraArgs:   []string{"-c", mockImplementationScript},
+		IdleTimeout: 10 * time.Second,
+	})
+	runner := &doneCreatingRunner{delegate: base}
+
+	cfg := config.Default()
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:    dir,
+		Stages:    stages,
+		State:     rs,
+		StateFile: stateFile,
+		Config:    cfg,
+		Prompts:   orchestrator.DefaultPrompts(),
+		Runner:    runner,
+	})
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ctxCancel()
+
+	if err := orch.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := state.Load(stateFile)
+	if final.Stages["s1"].Status != state.StatusDone {
+		t.Errorf("expected done, got %v", final.Stages["s1"].Status)
+	}
 }

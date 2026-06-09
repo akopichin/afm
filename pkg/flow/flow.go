@@ -65,6 +65,7 @@ type Stage struct {
 	MaxParallel int        `yaml:"max_parallel"`
 	Artifacts   []Artifact `yaml:"artifacts"`
 	Inputs      []Input    `yaml:"inputs"`
+	Interactive bool       `yaml:"interactive"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -149,7 +150,7 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
-		if s.Plan == "" && !s.HasAgent(AgentPlanning) {
+		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive {
 			return fmt.Errorf("stage %q: must have planning agent or a plan path", s.ID)
 		}
 	}

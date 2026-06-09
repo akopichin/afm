@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/progress"
+	"github.com/akopichin/afm/pkg/progress"
 )
 
 // Config configures the executor.
@@ -19,6 +19,9 @@ type Config struct {
 	ExtraArgs   []string
 	IdleTimeout time.Duration
 	OnAction    func(tool, detail string) // called for each parsed agent action (may be nil)
+	SessionID   string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume      bool                      // if true, --resume <SessionID> is used instead of --session-id
+	McpConfig   string                    // path to mcp.json, passed via --mcp-config when non-empty
 }
 
 const defaultCommand = "claude"
@@ -284,7 +287,18 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls
 // lineCallback for each stdout line. Respects idle timeout.
 func (e *Executor) run(ctx context.Context, prompt string, lineCallback func(string)) error {
-	cmd := exec.CommandContext(ctx, e.cfg.Command, e.cfg.ExtraArgs...)
+	args := append([]string{}, e.cfg.ExtraArgs...)
+	if e.cfg.McpConfig != "" {
+		args = append(args, "--mcp-config", e.cfg.McpConfig)
+	}
+	if e.cfg.SessionID != "" {
+		if e.cfg.Resume {
+			args = append(args, "--resume", e.cfg.SessionID)
+		} else {
+			args = append(args, "--session-id", e.cfg.SessionID)
+		}
+	}
+	cmd := exec.CommandContext(ctx, e.cfg.Command, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
 	// Strip CLAUDECODE to allow nested sessions

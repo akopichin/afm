@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
+	"github.com/akopichin/afm/pkg/config"
 )
 
 func writeYAML(t *testing.T, dir, name, content string) string {

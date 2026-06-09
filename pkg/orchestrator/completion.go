@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
+	"github.com/akopichin/afm/pkg/flow"
 )
 
 // checkPlanCompletion verifies that plan.md exists and is not empty.

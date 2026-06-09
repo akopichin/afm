@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/progress"
+	"github.com/akopichin/afm/pkg/progress"
 )
 
 func TestLoggerWritesTimestamped(t *testing.T) {

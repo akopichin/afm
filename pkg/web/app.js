@@ -28,6 +28,10 @@
     var $feedContent = document.getElementById("feed-content");
     var $retrySection = document.getElementById("retry-section");
     var $btnRetry = document.getElementById("btn-retry");
+    var $dialogSection = document.getElementById("dialog-section");
+    var $dialogHistory = document.getElementById("dialog-history");
+    var $dialogPending = document.getElementById("dialog-pending");
+    var $dialogToggle = document.getElementById("dialog-toggle");
 
     // ---- State ----
     var state = null;          // RunState from API
@@ -36,11 +40,14 @@
     var reconnectDelay = 1000;
     var elapsedTimer = null;
     var logPollTimer = null;
-    var lastLogHash = "";
 
     // Inline comments: Map<lineNumber, commentText>
     var lineComments = {};
     var activeCommentLine = null;
+
+    // Dialog state
+    var dialogState = { pending: null };
+    var dialogEntries = [];
 
     // ---- Special section detection ----
     var SPECIAL_SECTIONS = {
@@ -70,7 +77,8 @@
         running: "Выполняется",
         done: "Завершено",
         failed: "Ошибка",
-        retrying: "Повтор"
+        retrying: "Повтор",
+        awaiting_user_input: "Ожидает ответ"
     };
 
     // ---- API helpers ----
@@ -105,6 +113,7 @@
 
     // ---- Markdown helpers ----
     function inlineFormat(text) {
+        text = escapeHTML(text);
         // checkboxes: [x] and [ ]
         text = text.replace(/\[x\]/g, '<span class="cb cb-done">&#10003;</span>');
         text = text.replace(/\[ \]/g, '<span class="cb cb-open">&#9744;</span>');
@@ -372,7 +381,7 @@
 
     function refreshPlanDisplay() {
         // Re-render plan with current comments
-        apiGet("/api/stages/" + selectedStageID + "/plan", function (err, text) {
+        apiGet("/api/stages/" + encodeURIComponent(selectedStageID) + "/plan", function (err, text) {
             renderPlanReview(err ? "" : text);
         });
     }
@@ -392,6 +401,152 @@
         }
         return parts.join("\n\n");
     }
+
+    // ---- Dialog ----
+    function loadDialog(stageID) {
+        apiGet("/api/stages/" + encodeURIComponent(stageID) + "/dialog", function (err, body) {
+            if (err) { dialogEntries = []; renderDialog(stageID); return; }
+            try { dialogEntries = JSON.parse(body); } catch (_) { dialogEntries = []; }
+            renderDialog(stageID);
+        });
+    }
+
+    function renderDialog(stageID) {
+        var stageStatus = state && state.stages && state.stages[stageID] ? state.stages[stageID].status : "";
+        var hasContent = dialogEntries.length > 0 || stageStatus === "awaiting_user_input";
+
+        if (!hasContent) {
+            $dialogSection.classList.add("hidden");
+            return;
+        }
+        $dialogSection.classList.remove("hidden");
+
+        // History: render Q/A pairs grouped by phase
+        $dialogHistory.innerHTML = "";
+        var currentPhase = "";
+        dialogEntries.forEach(function (e) {
+            if (e.phase !== currentPhase) {
+                var div = document.createElement("div");
+                div.className = "phase-divider";
+                div.textContent = e.phase;
+                $dialogHistory.appendChild(div);
+                currentPhase = e.phase;
+            }
+            if (e.answer !== undefined && e.answer !== null) {
+                var qa = document.createElement("div");
+                qa.className = "qa";
+                qa.innerHTML = "<div class='q'>" + escapeHTML(e.question) + "</div>" +
+                    "<div class='a'>→ " + escapeHTML(e.answer) + "</div>";
+                $dialogHistory.appendChild(qa);
+            }
+        });
+
+        // Toggle visibility for collapsed history
+        var closed = dialogEntries.filter(function (e) { return e.answer !== undefined && e.answer !== null; });
+        if (closed.length > 0) {
+            $dialogToggle.classList.remove("hidden");
+        } else {
+            $dialogToggle.classList.add("hidden");
+        }
+
+        // Pending: last open entry across all phases
+        var open = null;
+        for (var i = dialogEntries.length - 1; i >= 0; i--) {
+            if (dialogEntries[i].answer === undefined || dialogEntries[i].answer === null) {
+                open = dialogEntries[i];
+                break;
+            }
+        }
+        if (open) {
+            renderPendingQuestion(stageID, open);
+        } else {
+            $dialogPending.classList.add("hidden");
+            dialogState.pending = null;
+        }
+    }
+
+    function renderPendingQuestion(stageID, q) {
+        dialogState.pending = { stageID: stageID, id: q.id, phase: q.phase, allowCustom: q.allow_custom };
+
+        $dialogPending.classList.remove("hidden");
+        $dialogPending.querySelector(".dialog-question").textContent = q.question;
+
+        var $opts = $dialogPending.querySelector(".dialog-options");
+        $opts.innerHTML = "";
+        $opts.classList.remove("dimmed");
+        var selected = null;
+
+        (q.options || []).forEach(function (opt, idx) {
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = opt;
+            btn.style.animationDelay = (idx * 40) + "ms";
+            btn.onclick = function () {
+                selected = opt;
+                Array.from($opts.querySelectorAll("button")).forEach(function (b) { b.classList.remove("selected"); });
+                btn.classList.add("selected");
+                $opts.classList.remove("dimmed");
+                $dialogPending.querySelector(".dialog-custom").value = "";
+            };
+            $opts.appendChild(btn);
+        });
+
+        var $custom = $dialogPending.querySelector(".dialog-custom");
+        $custom.value = "";
+        $custom.disabled = !q.allow_custom;
+        $custom.oninput = function () {
+            if ($custom.value.length > 0) {
+                $opts.classList.add("dimmed");
+                Array.from($opts.querySelectorAll("button")).forEach(function (b) { b.classList.remove("selected"); });
+                selected = null;
+            } else {
+                $opts.classList.remove("dimmed");
+            }
+        };
+
+        $dialogPending.querySelector(".btn-send").onclick = function () {
+            var customText = $custom.value.trim();
+            var answer, fromOptions;
+            if (customText.length > 0) {
+                answer = customText;
+                fromOptions = false;
+            } else if (selected !== null) {
+                answer = selected;
+                fromOptions = true;
+            } else {
+                return;
+            }
+            sendAnswer(stageID, q.id, q.phase, answer, fromOptions);
+        };
+
+        $dialogPending.querySelector(".btn-cancel-dialog").onclick = function () {
+            if (!confirm("Отменить стейдж?")) return;
+            cancelDialog(stageID);
+        };
+    }
+
+    function sendAnswer(stageID, qID, phase, answer, fromOptions) {
+        apiPost("/api/stages/" + encodeURIComponent(stageID) + "/dialog/answer", {
+            id: qID, phase: phase, answer: answer, from_options: fromOptions
+        }, function (err) {
+            if (err) { alert("Ошибка отправки: " + err.message); return; }
+            $dialogPending.classList.add("hidden");
+            loadDialog(stageID);
+        });
+    }
+
+    function cancelDialog(stageID) {
+        apiPost("/api/stages/" + encodeURIComponent(stageID) + "/dialog/cancel", null, function (err) {
+            if (err) alert("Ошибка отмены: " + err.message);
+        });
+    }
+
+    $dialogToggle.onclick = function () {
+        $dialogHistory.classList.toggle("collapsed");
+        $dialogToggle.textContent = $dialogHistory.classList.contains("collapsed")
+            ? "▾ РАЗВЕРНУТЬ ИСТОРИЮ"
+            : "▴ СВЕРНУТЬ ИСТОРИЮ";
+    };
 
     // ---- Render stages list ----
     function renderStages() {
@@ -418,6 +573,14 @@
 
             li.appendChild(dot);
             li.appendChild(name);
+
+            if (st.status === "awaiting_user_input") {
+                var badge = document.createElement("span");
+                badge.className = "dialog-badge";
+                badge.textContent = "💬";
+                li.appendChild(badge);
+            }
+
             li.addEventListener("click", onStageClick);
             $stagesList.appendChild(li);
         }
@@ -474,7 +637,7 @@
         $planEmpty.classList.add("hidden");
         $planContent.classList.add("hidden");
 
-        apiGet("/api/stages/" + selectedStageID + "/plan", function (err, text) {
+        apiGet("/api/stages/" + encodeURIComponent(selectedStageID) + "/plan", function (err, text) {
             if (err || !text || !text.trim()) {
                 $planEmpty.classList.remove("hidden");
                 return;
@@ -569,7 +732,7 @@
         $logEmpty.classList.add("hidden");
         $logContent.classList.add("hidden");
 
-        apiGet("/api/stages/" + selectedStageID + "/log", function (err, text) {
+        apiGet("/api/stages/" + encodeURIComponent(selectedStageID) + "/log", function (err, text) {
             if (err || !text || !text.trim()) {
                 $logContent.textContent = "";
                 $logEmpty.classList.remove("hidden");
@@ -607,7 +770,7 @@
 
         if (!selectedStageID || !state) return;
         var st = state.stages[selectedStageID];
-        if (st && (st.status === "planning" || st.status === "running" || st.status === "revising" || st.status === "retrying")) {
+        if (st && (st.status === "planning" || st.status === "running" || st.status === "revising" || st.status === "retrying" || st.status === "awaiting_user_input")) {
             logPollTimer = setInterval(loadLog, 3000);
         }
     }
@@ -647,6 +810,14 @@
         return pad(m) + ":" + pad(s);
     }
 
+    function formatRelativeTime(unixMs) {
+        var diffSec = Math.max(0, Math.floor((Date.now() - unixMs) / 1000));
+        if (diffSec < 60)     return diffSec + "s";
+        if (diffSec < 3600)   return Math.floor(diffSec / 60) + "m";
+        if (diffSec < 86400)  return Math.floor(diffSec / 3600) + "h";
+        return Math.floor(diffSec / 86400) + "d";
+    }
+
     function updateElapsed() {
         if (!state || !state.started_at) {
             $elapsed.textContent = "--";
@@ -663,17 +834,27 @@
         selectedStageID = li.dataset.stageId;
         lineComments = {};
         activeCommentLine = null;
+        dialogEntries = [];
+        $dialogSection.classList.add("hidden");
         renderStages();
         renderDetail();
+        loadDialog(selectedStageID);
+    }
+
+    function reloadAfterAction() {
+        setTimeout(function () { loadState(); }, 300);
+        setTimeout(function () { loadState(); }, 1500);
     }
 
     $btnApprove.addEventListener("click", function () {
         if (!selectedStageID) return;
         $btnApprove.disabled = true;
-        apiPost("/api/stages/" + selectedStageID + "/approve", null, function (err) {
+        apiPost("/api/stages/" + encodeURIComponent(selectedStageID) + "/approve", null, function (err) {
             if (err) {
                 $btnApprove.disabled = false;
                 console.error("approve error:", err);
+            } else {
+                reloadAfterAction();
             }
         });
     });
@@ -684,7 +865,7 @@
         if (!feedback) return;
 
         $btnRevise.disabled = true;
-        apiPost("/api/stages/" + selectedStageID + "/revise", { feedback: feedback }, function (err) {
+        apiPost("/api/stages/" + encodeURIComponent(selectedStageID) + "/revise", { feedback: feedback }, function (err) {
             $btnRevise.disabled = false;
             if (err) {
                 console.error("revise error:", err);
@@ -692,16 +873,19 @@
             }
             lineComments = {};
             activeCommentLine = null;
+            reloadAfterAction();
         });
     });
 
     $btnRetry.addEventListener("click", function () {
         if (!selectedStageID) return;
         $btnRetry.disabled = true;
-        apiPost("/api/stages/" + selectedStageID + "/retry", null, function (err) {
+        apiPost("/api/stages/" + encodeURIComponent(selectedStageID) + "/retry", null, function (err) {
             $btnRetry.disabled = false;
             if (err) {
                 console.error("retry error:", err);
+            } else {
+                reloadAfterAction();
             }
         });
     });
@@ -714,13 +898,13 @@
         ws = new WebSocket(url);
 
         ws.onopen = function () {
-            $wsStatus.textContent = "WS";
+            $wsStatus.textContent = "LINK";
             $wsStatus.className = "ws-status connected";
             reconnectDelay = 1000;
         };
 
         ws.onclose = function () {
-            $wsStatus.textContent = "WS";
+            $wsStatus.textContent = "OFFLINE";
             $wsStatus.className = "ws-status disconnected";
             setTimeout(connectWS, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 2, 10000);
@@ -745,9 +929,8 @@
         var div = document.createElement("div");
         div.className = "feed-entry";
 
-        var now = new Date();
-        var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
-        var time = pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+        var ts = Date.now();
+        div.dataset.ts = ts;
 
         var stageID = ev.stage_id || "";
         var msg = "";
@@ -756,8 +939,9 @@
 
         switch (ev.type) {
             case "stage_status_changed":
-                msg = "\u2192 " + (ev.data || "");
-                statusClass = "status-" + (ev.data || "");
+                var statusStr = (typeof ev.data === "string") ? ev.data : ((ev.data && ev.data.status) || "");
+                msg = "\u2192 " + (statusStr || (typeof ev.data === "string" ? ev.data : ""));
+                statusClass = statusStr ? "status-" + statusStr.replace(/[^a-z0-9_]/gi, "") : "";
                 break;
             case "agent_completed":
                 msg = "\u0430\u0433\u0435\u043d\u0442 " + (ev.data || "") + " \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d";
@@ -791,15 +975,30 @@
                 msg = "\u0440\u0443\u0447\u043d\u043e\u0439 \u043f\u043e\u0432\u0442\u043e\u0440";
                 statusClass = "status-retrying";
                 break;
+            case "ask_user":
+                msg = "\u0432\u043e\u043f\u0440\u043e\u0441 \u0430\u0433\u0435\u043d\u0442\u0443";
+                statusClass = "status-awaiting_user_input";
+                break;
+            case "user_answered":
+                msg = "\u043e\u0442\u0432\u0435\u0442 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044e";
+                statusClass = "status-running";
+                break;
             default:
                 msg = ev.type;
         }
 
-        div.innerHTML = '<span class="feed-time">' + time + "</span>" +
-            '<span class="feed-stage-badge">' + escapeHTML(stageID) + "</span>" +
-            '<span class="' + msgClass + '">' + escapeHTML(msg) + "</span>";
+        var badgeHTML = stageID
+            ? '<span class="feed-stage-badge ' + statusClass + '">' + escapeHTML(stageID) + "</span>"
+            : "";
+
+        div.innerHTML =
+            '<span class="feed-time">' + formatRelativeTime(ts) + "</span>" +
+            '<span class="' + msgClass + '">' + badgeHTML + escapeHTML(msg) + "</span>";
 
         $feedContent.appendChild(div);
+        while ($feedContent.children.length > 200) {
+            $feedContent.removeChild($feedContent.firstChild);
+        }
         $feedContent.scrollTop = $feedContent.scrollHeight;
     }
 
@@ -809,10 +1008,15 @@
         if (ev.type === "stage_status_changed") {
             if (state && state.stages && ev.stage_id) {
                 var newStatus = (typeof ev.data === "string") ? ev.data : ((ev.data && ev.data.status) || "pending");
-                state.stages[ev.stage_id] = {
-                    status: newStatus,
-                    updated_at: new Date().toISOString()
-                };
+                if (state.stages[ev.stage_id]) {
+                    state.stages[ev.stage_id].status = newStatus;
+                    state.stages[ev.stage_id].updated_at = new Date().toISOString();
+                } else {
+                    state.stages[ev.stage_id] = {
+                        status: newStatus,
+                        updated_at: new Date().toISOString()
+                    };
+                }
             }
             renderStages();
             renderProgress();
@@ -829,6 +1033,14 @@
                     loadLog();
                 }
             }
+            return;
+        }
+
+        if (ev.type === "ask_user" || ev.type === "user_answered") {
+            if (ev.stage_id === selectedStageID) {
+                loadDialog(ev.stage_id);
+            }
+            loadState();
             return;
         }
 
@@ -862,4 +1074,15 @@
     connectWS();
 
     elapsedTimer = setInterval(updateElapsed, 1000);
+
+    setInterval(function () {
+        var nodes = $feedContent.querySelectorAll(".feed-entry");
+        for (var i = 0; i < nodes.length; i++) {
+            var ts = parseInt(nodes[i].dataset.ts, 10);
+            if (!isNaN(ts)) {
+                var t = nodes[i].querySelector(".feed-time");
+                if (t) t.textContent = formatRelativeTime(ts);
+            }
+        }
+    }, 5000);
 })();

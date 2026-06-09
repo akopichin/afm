@@ -9,7 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/executor"
+	"github.com/akopichin/afm/pkg/executor"
+)
+
+const (
+	testCmdShell    = "bash"
+	testFileAuthJWT = "pkg/auth/jwt.go"
+	testFlagC       = "-c"
+	testSeparator   = "--"
+	testToolBash    = "Bash"
+	testTypeText    = "text"
 )
 
 func TestParseToolAction(t *testing.T) {
@@ -24,13 +33,13 @@ func TestParseToolAction(t *testing.T) {
 			name:       "write tool",
 			line:       `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"pkg/auth/jwt.go","content":"..."}}]}}`,
 			wantTool:   "Write",
-			wantDetail: "pkg/auth/jwt.go",
+			wantDetail: testFileAuthJWT,
 			wantOK:     true,
 		},
 		{
 			name:       "bash tool",
 			line:       `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git commit -m \"feat: jwt\""}}]}}`,
-			wantTool:   "Bash",
+			wantTool:   testToolBash,
 			wantDetail: "git commit -m \"feat: jwt\"",
 			wantOK:     true,
 		},
@@ -44,7 +53,7 @@ func TestParseToolAction(t *testing.T) {
 		{
 			name:       "text content",
 			line:       `{"type":"assistant","message":{"content":[{"type":"text","text":"I will implement the auth module now"}]}}`,
-			wantTool:   "text",
+			wantTool:   testTypeText,
 			wantDetail: "I will implement the auth module now",
 			wantOK:     true,
 		},
@@ -62,7 +71,7 @@ func TestParseToolAction(t *testing.T) {
 			name:       "edit tool",
 			line:       `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"pkg/auth/jwt.go","old_string":"old","new_string":"new"}}]}}`,
 			wantTool:   "Edit",
-			wantDetail: "pkg/auth/jwt.go",
+			wantDetail: testFileAuthJWT,
 			wantOK:     true,
 		},
 		{
@@ -82,14 +91,14 @@ func TestParseToolAction(t *testing.T) {
 		{
 			name:       "text truncation over 100 chars",
 			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}`, strings.Repeat("x", 120)),
-			wantTool:   "text",
+			wantTool:   testTypeText,
 			wantDetail: strings.Repeat("x", 100) + "...",
 			wantOK:     true,
 		},
 		{
 			name:       "bash truncation over 80 chars",
 			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"%s"}}]}}`, strings.Repeat("echo ", 20)),
-			wantTool:   "Bash",
+			wantTool:   testToolBash,
 			wantDetail: strings.Repeat("echo ", 16), // 80 chars
 			wantOK:     true,
 		},
@@ -101,7 +110,7 @@ func TestParseToolAction(t *testing.T) {
 		{
 			name:       "multiple content blocks logs first action",
 			line:       `{"type":"assistant","message":{"content":[{"type":"text","text":"I will do X"},{"type":"tool_use","name":"Write","input":{"file_path":"pkg/main.go"}}]}}`,
-			wantTool:   "text",
+			wantTool:   testTypeText,
 			wantDetail: "I will do X",
 			wantOK:     true,
 		},
@@ -132,8 +141,8 @@ func TestRunPlanningCapturesOutput(t *testing.T) {
 	logFile := filepath.Join(dir, "planning.log")
 
 	ex := executor.New(executor.Config{
-		Command: "bash",
-		ExtraArgs: []string{"-c",
+		Command: testCmdShell,
+		ExtraArgs: []string{testFlagC,
 			`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"# Plan\n\nstep 1"}]}}'
 	echo '{"type":"result","subtype":"success"}'`},
 		IdleTimeout: 5 * time.Second,
@@ -185,8 +194,8 @@ func TestRunAgentLogsOutput(t *testing.T) {
 	logFile := filepath.Join(dir, "impl.log")
 
 	ex := executor.New(executor.Config{
-		Command: "bash",
-		ExtraArgs: []string{"-c",
+		Command: testCmdShell,
+		ExtraArgs: []string{testFlagC,
 			`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"pkg/foo.go"}}]}}'
 	echo '{"type":"result","subtype":"success"}'`},
 		IdleTimeout: 5 * time.Second,
@@ -252,8 +261,8 @@ func TestRunPlanningAgentWritesTool(t *testing.T) {
 	)
 
 	ex := executor.New(executor.Config{
-		Command:     "bash",
-		ExtraArgs:   []string{"-c", script},
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
 		IdleTimeout: 5 * time.Second,
 	})
 
@@ -272,13 +281,110 @@ func TestRunPlanningAgentWritesTool(t *testing.T) {
 	}
 }
 
+func TestSessionIDPassedAsArg(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "args.txt")
+
+	// Use bash -c 'echo "$@" > outFile' -- as the command so ExtraArgs become visible.
+	script := fmt.Sprintf(`echo "$@" > %s`, outFile)
+
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, script, testSeparator},
+		OnAction:  func(_, _ string) {},
+		SessionID: "test-uuid-123",
+		McpConfig: "/tmp/mcp-test.json",
+	})
+
+	err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile)
+	if err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read args output: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "--mcp-config") || !strings.Contains(got, "/tmp/mcp-test.json") {
+		t.Errorf("missing mcp-config in args: %q", got)
+	}
+	if !strings.Contains(got, "--session-id") || !strings.Contains(got, "test-uuid-123") {
+		t.Errorf("missing session-id in args: %q", got)
+	}
+	if strings.Contains(got, "--resume") {
+		t.Errorf("--resume should not appear when Resume=false: %q", got)
+	}
+}
+
+func TestResumeFlagPassedAsArg(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "args.txt")
+
+	script := fmt.Sprintf(`echo "$@" > %s`, outFile)
+
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, script, testSeparator},
+		OnAction:  func(_, _ string) {},
+		SessionID: "resume-uuid",
+		Resume:    true,
+	})
+
+	err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile)
+	if err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read args output: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "--resume") || !strings.Contains(got, "resume-uuid") {
+		t.Errorf("missing --resume in args: %q", got)
+	}
+	if strings.Contains(got, "--session-id") {
+		t.Errorf("--session-id should not appear when Resume=true: %q", got)
+	}
+}
+
+func TestNoExtraFlagsWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "args.txt")
+
+	script := fmt.Sprintf(`echo "$@" > %s`, outFile)
+
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, script, testSeparator},
+	})
+
+	err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile)
+	if err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read args output: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "--session-id") || strings.Contains(got, "--resume") || strings.Contains(got, "--mcp-config") {
+		t.Errorf("no extra flags expected when fields empty: %q", got)
+	}
+}
+
 func TestIdleTimeout(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")
 
 	ex := executor.New(executor.Config{
-		Command:     "bash",
-		ExtraArgs:   []string{"-c", "sleep 10"},
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, "sleep 10"},
 		IdleTimeout: 100 * time.Millisecond,
 	})
 

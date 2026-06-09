@@ -3,9 +3,9 @@ package orchestrator_test
 import (
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func makeStages(specs []struct {

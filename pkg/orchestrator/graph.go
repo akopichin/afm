@@ -1,8 +1,8 @@
 package orchestrator
 
 import (
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // Graph is a dependency graph of stages.

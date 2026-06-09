@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func TestSaveAndLoad(t *testing.T) {
@@ -85,6 +85,17 @@ func TestSaveFeedback(t *testing.T) {
 	}
 	if !strings.Contains(content, "revision 2") {
 		t.Errorf("missing revision separator: %q", content)
+	}
+}
+
+func TestAwaitingUserInputStatus(t *testing.T) {
+	s := state.NewRunState([]string{"a"})
+	s.SetStageStatus("a", state.StatusAwaitingUserInput)
+	if s.Stages["a"].Status != state.StatusAwaitingUserInput {
+		t.Errorf("expected awaiting_user_input, got %q", s.Stages["a"].Status)
+	}
+	if s.AllDone() {
+		t.Error("awaiting_user_input must not count as done")
 	}
 }
 

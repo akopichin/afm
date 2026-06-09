@@ -9,11 +9,13 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 const testStageID = "s1"
+const testQuestionID = "q1"
 
 func setupTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
@@ -162,5 +164,112 @@ func TestHandleRetryNotFailed(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for non-failed stage, got %d", w.Code)
+	}
+}
+
+func TestDialogGet(t *testing.T) {
+	runDir := t.TempDir()
+	stateFile := filepath.Join(runDir, "state.json")
+	stageDir := filepath.Join(runDir, testStageID)
+	os.MkdirAll(stageDir, 0755)
+	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
+	if err := mcp.AppendQuestion(dialogPath, mcp.Question{ID: testQuestionID, Question: "x?"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: testQuestionID, Answer: "yes"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := state.NewRunState([]string{testStageID})
+	if err := rs.Save(stateFile); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{
+		RunDir:    runDir,
+		StateFile: stateFile,
+		Bus:       orchestrator.NewEventBus(),
+	})
+
+	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/dialog", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status %d, body %s", w.Code, w.Body.String())
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 1 || got[0]["id"] != testQuestionID || got[0]["phase"] != "implementation" {
+		t.Errorf("dialog entries wrong: %+v", got)
+	}
+}
+
+func TestDialogAnswer(t *testing.T) {
+	runDir := t.TempDir()
+	stateFile := filepath.Join(runDir, "state.json")
+	stageDir := filepath.Join(runDir, testStageID)
+	os.MkdirAll(stageDir, 0755)
+
+	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
+	if err := mcp.AppendQuestion(dialogPath, mcp.Question{ID: testQuestionID, Question: "test?"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := state.NewRunState([]string{testStageID})
+	if err := rs.Save(stateFile); err != nil {
+		t.Fatal(err)
+	}
+
+	called := struct {
+		stage, phase, id, answer string
+		fromOptions              bool
+	}{}
+	srv := New(Config{
+		RunDir:    runDir,
+		StateFile: stateFile,
+		Bus:       orchestrator.NewEventBus(),
+		DialogAnswerFn: func(s, p, q, a string, fo bool) error {
+			called.stage, called.phase, called.id, called.answer, called.fromOptions = s, p, q, a, fo
+			return nil
+		},
+	})
+
+	body := `{"id":"` + testQuestionID + `","phase":"implementation","answer":"hello","from_options":false}`
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/answer", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status %d, body %s", w.Code, w.Body.String())
+	}
+	if called.stage != testStageID || called.id != testQuestionID || called.answer != "hello" {
+		t.Errorf("answerFn called with wrong args: %+v", called)
+	}
+}
+
+func TestDialogCancelRejectsNonAwaiting(t *testing.T) {
+	runDir := t.TempDir()
+	stateFile := filepath.Join(runDir, "state.json")
+	rs := state.NewRunState([]string{testStageID})
+	rs.SetStageStatus(testStageID, state.StatusRunning)
+	if err := rs.Save(stateFile); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{
+		RunDir:    runDir,
+		StateFile: stateFile,
+		Bus:       orchestrator.NewEventBus(),
+	})
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/cancel", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Errorf("expected 400 for non-awaiting stage, got %d", w.Code)
 	}
 }
