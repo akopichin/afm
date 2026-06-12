@@ -13,3 +13,4 @@
 .flowManager/runs/
 docs/plans/
 .DS_Store
+sync-upstream.sh
