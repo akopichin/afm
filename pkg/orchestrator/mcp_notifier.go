@@ -1,10 +1,6 @@
 package orchestrator
 
-import (
-	"log"
-
-	"github.com/akopichin/afm/pkg/state"
-)
+import "context"
 
 const (
 	dataID          = "id"
@@ -15,21 +11,22 @@ const (
 	dataAnswer      = "answer"
 )
 
-// McpNotifier bridges pkg/mcp to the orchestrator's EventBus and state.
+// McpNotifier bridges pkg/mcp to the orchestrator's buses and state.
 // It satisfies mcp.Notifier without pkg/mcp importing pkg/orchestrator.
 type McpNotifier struct {
-	bus *EventBus
-	o   *Orchestrator
+	ui       *UIBus
+	critical *CriticalBus
+	o        *Orchestrator
 }
 
-// NewMcpNotifier returns a Notifier that publishes events to bus and
+// NewMcpNotifier returns a Notifier that publishes events to the buses and
 // transitions stage status via the orchestrator.
 func NewMcpNotifier(o *Orchestrator) *McpNotifier {
-	return &McpNotifier{bus: o.bus, o: o}
+	return &McpNotifier{ui: o.ui, critical: o.critical, o: o}
 }
 
 func (n *McpNotifier) PublishAskUser(stageID, phase, qID, question string, options []string, allowCustom bool) {
-	n.bus.Publish(Event{
+	n.ui.Publish(Event{
 		Type:    EventAskUser,
 		StageID: stageID,
 		Data: map[string]any{
@@ -43,7 +40,7 @@ func (n *McpNotifier) PublishAskUser(stageID, phase, qID, question string, optio
 }
 
 func (n *McpNotifier) PublishUserAnswered(stageID, phase, qID, answer string) {
-	n.bus.Publish(Event{
+	_ = n.critical.Publish(context.Background(), Event{
 		Type:    EventUserAnswered,
 		StageID: stageID,
 		Data: map[string]any{
@@ -56,19 +53,9 @@ func (n *McpNotifier) PublishUserAnswered(stageID, phase, qID, answer string) {
 
 // SetStageStatus transitions a stage to/from awaiting_user_input.
 func (n *McpNotifier) SetStageStatus(stageID string, awaitingInput bool, phase string) {
-	var target state.StageStatus
 	if awaitingInput {
-		target = state.StatusAwaitingUserInput
-	} else if phase == phasePlanning {
-		target = state.StatusPlanning
+		n.o.Trigger(stageID, EvAskUser, GuardCtx{Phase: phase}, "")
 	} else {
-		target = state.StatusRunning
+		n.o.Trigger(stageID, EvUserAnswered, GuardCtx{Phase: phase}, "")
 	}
-
-	current := n.o.currentStatus(stageID)
-	if !ValidTransition(current, target) {
-		log.Printf("mcp_notifier: invalid transition %s -> %s for stage %s, skipping", current, target, stageID)
-		return
-	}
-	n.o.setStatus(stageID, target)
 }

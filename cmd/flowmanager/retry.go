@@ -15,24 +15,27 @@ func newRetryCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stageID := args[0]
-			stateFile, err := findLatestStateFile(stageID)
+			runDir, stageIDs, err := findLatestRunDir(stageID)
 			if err != nil {
 				return err
 			}
-			rs, err := state.Load(stateFile)
+			store, err := state.Open(runDir, stageIDs)
 			if err != nil {
-				return fmt.Errorf("load state: %w", err)
+				return fmt.Errorf("open store: %w", err)
 			}
-			st, ok := rs.Stages[stageID]
-			if !ok {
-				return fmt.Errorf("stage %q not found", stageID)
+			defer store.Close()
+
+			current := store.Get(stageID)
+			if current != state.StatusFailed {
+				return fmt.Errorf("stage %q is %v, not failed", stageID, current)
 			}
-			if st.Status != state.StatusFailed {
-				return fmt.Errorf("stage %q is %v, not failed", stageID, st.Status)
-			}
-			rs.SetStageStatus(stageID, state.StatusPending)
-			if err := rs.Save(stateFile); err != nil {
-				return fmt.Errorf("save state: %w", err)
+			if err := store.Apply(state.Transition{
+				StageID: stageID,
+				From:    state.StatusFailed,
+				To:      state.StatusPending,
+				Event:   "cli_retry",
+			}); err != nil {
+				return fmt.Errorf("retry: %w", err)
 			}
 			fmt.Printf("stage %q retried: run 'flowmanager run' to restart\n", stageID)
 			return nil

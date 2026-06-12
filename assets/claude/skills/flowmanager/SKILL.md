@@ -13,7 +13,7 @@ allowed-tools: [Bash, Read, AskUserQuestion]
 which flowmanager
 ```
 
-If not found: `go install gitlab.ae-rus.net/bx/ai-flow-manager/cmd/flowmanager@latest`
+If not found: `go install github.com/akopichin/afm/cmd/flowmanager@latest`
 
 ## Step 1: Select Flow
 

@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26 AS builder
 ARG BRANCH_NAME
 ARG COMMIT_SHA
 

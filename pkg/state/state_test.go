@@ -9,44 +9,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-func TestSaveAndLoad(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-
-	s := state.NewRunState([]string{"backend", "frontend"})
-	s.SetStageStatus("backend", state.StatusPlanning)
-
-	if err := s.Save(path); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	loaded, err := state.Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if loaded.Stages["backend"].Status != state.StatusPlanning {
-		t.Errorf("status not persisted: got %v", loaded.Stages["backend"].Status)
-	}
-	if loaded.Stages["frontend"].Status != state.StatusPending {
-		t.Errorf("other stage should be pending: got %v", loaded.Stages["frontend"].Status)
-	}
-}
-
-func TestAtomicSave(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-
-	s := state.NewRunState([]string{"a"})
-	for i := 0; i < 10; i++ {
-		if err := s.Save(path); err != nil {
-			t.Fatalf("Save iteration %d: %v", i, err)
-		}
-	}
-	if _, err := state.Load(path); err != nil {
-		t.Fatalf("final Load: %v", err)
-	}
-}
-
 func TestAllDone(t *testing.T) {
 	s := state.NewRunState([]string{"a", "b"})
 	if s.AllDone() {

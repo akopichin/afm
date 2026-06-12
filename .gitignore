@@ -1,8 +1,15 @@
+# ralphex progress logs
+.ralphex/progress/
+
+# brainstorm visual companion
+.superpowers/
+
+# binaries
+/flowmanager
+/bin/
 .idea/*
 
-# works stuff
+# рабочие данные
 .flowManager/runs/
 docs/plans/
-
 .DS_Store
-*/.DS_Store

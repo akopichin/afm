@@ -79,4 +79,14 @@ stages:
 #     description: "Обновить README и OpenAPI-спецификацию"
 #     agents: [planning, implementation]
 #
+# Пример стадии с verify-командой (гейт против ложного «done»):
+# команда выполняется в директории проекта после того, как агент записал .done;
+# exit-код != 0 — один ретрай агента с выводом команды, затем стадия failed.
+#
+#   - id: fix-tests
+#     name: "Fix Tests"
+#     description: "Починить падающие тесты"
+#     agents: [planning, implementation]
+#     verify: ".venv/bin/python -m pytest tests/ -q"
+#
 # ──────────────────────────────────────────────────────────────────────────────

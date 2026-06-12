@@ -123,9 +123,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/executor"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func newReviseCmd() *cobra.Command {

@@ -13,7 +13,7 @@ var upgrader = websocket.Upgrader{
 }
 
 // handleWebSocket upgrades an HTTP connection to WebSocket and streams
-// EventBus events to the client until the connection is closed.
+// UIBus events to the client until the connection is closed.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -22,10 +22,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	events := s.bus.Subscribe()
-	defer s.bus.Unsubscribe(events)
+	id, ch := s.uiBus.Subscribe(64)
+	defer s.uiBus.Unsubscribe(id)
 
-	for ev := range events {
+	prevDrops := uint64(0)
+	for ev := range ch {
+		if drops := s.uiBus.SubscriberDroppedCount(id); drops > prevDrops {
+			prevDrops = drops
+			if drops > 10 {
+				_ = conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(1008, "event queue overflow"))
+				return
+			}
+		}
 		data, err := json.Marshal(ev)
 		if err != nil {
 			continue

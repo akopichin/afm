@@ -1,0 +1,98 @@
+# More info on config here: https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
+run:
+  timeout: 60s
+  issues-exit-code: 1
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - revive
+    - govet
+    - errcheck
+    - unused
+    - ineffassign
+    - goconst
+    - gosec
+    - staticcheck
+    - copyloopvar
+  exclusions:
+    paths:
+      - bin
+      - vendor
+    rules:
+      - linters: [errcheck]
+        text: "Error return value of .*(Close|Write|WriteString|Kill|Flock|MkdirAll). is not checked"
+      - linters: [gosec]
+        text: "G104|G115|G703"
+      - linters: [goconst]
+        path: _test\.go
+      - linters: [staticcheck]
+        text: "SA1019"
+  settings:
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gosec:
+      excludes:
+        - G204  # Subprocess с переменными аргументами — намеренно
+        - G301  # Права директорий 0755 — допустимо для CLI-инструмента
+        - G302  # Права файлов 0644 — допустимо
+        - G304  # Чтение файла по переменному пути — намеренно
+        - G306  # WriteFile права 0644 — допустимо
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: line-length-limit
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: exported
+          disabled: true
+        - name: function-length
+          disabled: true
+        - name: add-constant
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+        - name: cyclomatic
+          disabled: true
+        - name: flag-parameter
+          disabled: true
+        - name: var-naming
+          disabled: true
+        - name: unused-receiver
+          disabled: true
+        - name: use-any
+          disabled: true
+        - name: max-public-structs
+          disabled: true
+        - name: unchecked-type-assertion
+          disabled: true
+        - name: function-result-limit
+          disabled: true
+        - name: unhandled-error
+          disabled: true
+        - name: bare-return
+          disabled: true
+        - name: use-errors-new
+          disabled: true
+        - name: comment-spacings
+          disabled: true
+        - name: argument-limit
+          disabled: true
+        - name: confusing-results
+          disabled: true
+        - name: unused-parameter
+          disabled: true
+
+formatters:
+  enable:
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - bin
+      - vendor

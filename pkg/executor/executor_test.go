@@ -281,6 +281,75 @@ func TestRunPlanningAgentWritesTool(t *testing.T) {
 	}
 }
 
+// TestRunPlanningKeepsAgentWrittenOutFile воспроизводит баг: агент записал план
+// в outFile через Write tool, а текстом вывел резюме («План сохранён…»).
+// RunPlanning не должен затирать файл плана текстом чата.
+func TestRunPlanningKeepsAgentWrittenOutFile(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "plan.md")
+	logFile := filepath.Join(dir, "planning.log")
+
+	planContent := "## Tasks\n\n- [ ] step 1\n"
+
+	script := fmt.Sprintf(
+		`printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"%s","content":"..."}}]}}\n'`+
+			"\nprintf '%%b' %q > %q"+
+			"\nprintf '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"plan saved to plan.md\"}]}}\n'"+
+			"\nprintf '{\"type\":\"result\",\"subtype\":\"success\"}\n'",
+		outFile, planContent, outFile,
+	)
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunPlanning(context.Background(), "init", "generate a plan", outFile, logFile); err != nil {
+		t.Fatalf("RunPlanning: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read plan.md: %v", err)
+	}
+	if !strings.Contains(string(data), "## Tasks") {
+		t.Errorf("plan.md overwritten with chat text: got %q", string(data))
+	}
+}
+
+func TestWrittenFiles(t *testing.T) {
+	dir := t.TempDir()
+	jsonl := filepath.Join(dir, "planning.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/a.md","content":"..."}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"note"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/b.md","content":"..."}}]}}`,
+		`{"type":"result","subtype":"success"}`,
+	}
+	if err := os.WriteFile(jsonl, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := executor.WrittenFiles(jsonl)
+	want := []string{"/tmp/a.md", "/tmp/b.md"}
+	if len(got) != len(want) {
+		t.Fatalf("WrittenFiles=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("WrittenFiles[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestWrittenFilesMissingLog(t *testing.T) {
+	if got := executor.WrittenFiles(filepath.Join(t.TempDir(), "nope.jsonl")); len(got) != 0 {
+		t.Errorf("expected empty result for missing log, got %v", got)
+	}
+}
+
 func TestSessionIDPassedAsArg(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")

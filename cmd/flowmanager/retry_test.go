@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/state"
@@ -21,11 +20,7 @@ func TestRetryFailedStage(t *testing.T) {
 		t.Fatalf("retry: %v", err)
 	}
 
-	sf := filepath.Join(runDir, "state.json")
-	rs, err := state.Load(sf)
-	if err != nil {
-		t.Fatalf("load state: %v", err)
-	}
+	rs := loadRunState(t, runDir)
 	if rs.Stages[cmdInit].Status != state.StatusPending {
 		t.Errorf("expected pending, got: %v", rs.Stages[cmdInit].Status)
 	}

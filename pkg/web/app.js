@@ -432,6 +432,13 @@
                 $dialogHistory.appendChild(div);
                 currentPhase = e.phase;
             }
+            if (e.type === "agent_text") {
+                var msg = document.createElement("div");
+                msg.className = "agent-msg";
+                msg.textContent = e.text || "";
+                $dialogHistory.appendChild(msg);
+                return;
+            }
             if (e.answer !== undefined && e.answer !== null) {
                 var qa = document.createElement("div");
                 qa.className = "qa";
@@ -440,6 +447,9 @@
                 $dialogHistory.appendChild(qa);
             }
         });
+        // Прокрутка к свежим сообщениям: длинные тексты агента (дизайн и т.п.)
+        // иначе прячут актуальный контекст над панелью вопроса.
+        $dialogHistory.scrollTop = $dialogHistory.scrollHeight;
 
         // Toggle visibility for collapsed history
         var closed = dialogEntries.filter(function (e) { return e.answer !== undefined && e.answer !== null; });
@@ -449,9 +459,10 @@
             $dialogToggle.classList.add("hidden");
         }
 
-        // Pending: last open entry across all phases
+        // Pending: last open entry across all phases (agent_text is not a question)
         var open = null;
         for (var i = dialogEntries.length - 1; i >= 0; i--) {
+            if (dialogEntries[i].type === "agent_text") continue;
             if (dialogEntries[i].answer === undefined || dialogEntries[i].answer === null) {
                 open = dialogEntries[i];
                 break;

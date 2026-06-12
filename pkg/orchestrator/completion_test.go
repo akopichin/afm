@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -11,6 +12,7 @@ import (
 
 const testArtifactName = "output"
 const testArtifactPath = "out.txt"
+const testStageID = "s1"
 
 // writeFile is a test helper that writes a file or fails the test.
 func writeFile(t *testing.T, path string, data []byte) {
@@ -140,12 +142,12 @@ func TestIsRetryableError(t *testing.T) {
 		want bool
 	}{
 		{"You've hit your limit", true},
-		{"rate limit exceeded", true},
-		{retryTooMany, true},
-		{retryOverloaded, true},
-		{retryCapacity, true},
+		{matchRateLimit + " exceeded", true},
+		{matchTooManyRequests, true},
+		{matchOverloaded, true},
+		{matchAtCapacity, true},
 		{"500 Internal Server Error", true},
-		{retryInternalServerError, true},
+		{matchInternalServerError, true},
 		{"something went wrong", false},
 		{"", false},
 	}
@@ -162,4 +164,51 @@ func TestIsRetryableError(t *testing.T) {
 	if isRetryableError(nil) {
 		t.Error("nil should not be retryable")
 	}
+}
+
+func TestCheckCompletion_Verify(t *testing.T) {
+	t.Run("verify passes", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
+		stage := flow.Stage{ID: testStageID, Verify: "true"}
+		if err := checkCompletion(dir, t.TempDir(), stage); err != nil {
+			t.Errorf("expected nil, got %v", err)
+		}
+	})
+
+	t.Run("verify fails with output in reason", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
+		stage := flow.Stage{ID: testStageID, Verify: "echo '3 tests failed'; exit 1"}
+		err := checkCompletion(dir, t.TempDir(), stage)
+		if err == nil {
+			t.Fatal("expected error for failing verify command")
+		}
+		if !isIncompleteWorkError(err) {
+			t.Errorf("verify failure should be incomplete work (one retry), got %v", err)
+		}
+		if !strings.Contains(err.Error(), "3 tests failed") {
+			t.Errorf("verify output should be in error, got %q", err.Error())
+		}
+	})
+
+	t.Run("verify runs in project dir", func(t *testing.T) {
+		dir := t.TempDir()
+		projectDir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
+		writeFile(t, filepath.Join(projectDir, "marker.txt"), []byte("x"))
+		stage := flow.Stage{ID: testStageID, Verify: "test -f marker.txt"}
+		if err := checkCompletion(dir, projectDir, stage); err != nil {
+			t.Errorf("verify should run in project dir, got %v", err)
+		}
+	})
+
+	t.Run("verify skipped when missing done", func(t *testing.T) {
+		dir := t.TempDir()
+		stage := flow.Stage{ID: testStageID, Verify: "true"}
+		err := checkCompletion(dir, t.TempDir(), stage)
+		if err == nil || !isIncompleteWorkError(err) {
+			t.Errorf("missing .done should still be incomplete work, got %v", err)
+		}
+	})
 }

@@ -66,21 +66,21 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
-			runDir, rs, stateFile, err := resolveRun(f)
+			runDir, store, err := resolveRun(f)
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 
 			fmt.Printf("flowmanager: running %q\n", f.Name)
 			fmt.Printf("  run dir: %s\n", runDir)
 
 			orch := orchestrator.New(orchestrator.Options{
-				RunDir:    runDir,
-				Stages:    f.Stages,
-				State:     rs,
-				StateFile: stateFile,
-				Config:    cfg,
-				Prompts:   prompts,
+				RunDir:  runDir,
+				Stages:  f.Stages,
+				Store:   store,
+				Config:  cfg,
+				Prompts: prompts,
 			})
 
 			mcpSrv := mcp.NewServer(runDir, orchestrator.NewMcpNotifier(orch))
@@ -100,8 +100,8 @@ func newRunCmd() *cobra.Command {
 				srv := server.New(server.Config{
 					Port:      cfg.Server.GetPort(),
 					RunDir:    runDir,
-					StateFile: stateFile,
-					Bus:       orch.Bus(),
+					Store:     store,
+					UIBus:     orch.UIBus(),
 					ApproveFn: orch.Approve,
 					ReviseFn:  orch.Revise,
 					RetryFn:   orch.Retry,
@@ -192,16 +192,28 @@ func resolveFlowPath(args []string) (string, error) {
 	return "", fmt.Errorf("multiple flow files found; specify one: %v", yamls)
 }
 
-func resolveRun(f *flow.Flow) (runDir string, rs *state.RunState, stateFile string, err error) {
+func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
 	base := filepath.Join(".flowManager", "runs")
+
+	stageIDs := make([]string, len(f.Stages))
+	for i, s := range f.Stages {
+		stageIDs[i] = s.ID
+	}
 
 	existing, lookErr := state.FindLatestRunDir(f.Name)
 	if lookErr == nil {
-		stateFile = filepath.Join(existing, "state.json")
-		rs, err = state.Load(stateFile)
-		if err == nil && !rs.AllDone() {
-			fmt.Printf("flowmanager: resuming run %s\n", filepath.Base(existing))
-			return existing, rs, stateFile, nil
+		store, err = state.Open(existing, stageIDs)
+		if err == nil {
+			snap := store.Snapshot()
+			if !snap.AllDone() {
+				fmt.Printf("flowmanager: resuming run %s\n", filepath.Base(existing))
+				return existing, store, nil
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: failed to open existing run %s: %v; starting new run\n", filepath.Base(existing), err)
+		}
+		if store != nil {
+			store.Close()
 		}
 	}
 
@@ -210,14 +222,7 @@ func resolveRun(f *flow.Flow) (runDir string, rs *state.RunState, stateFile stri
 	if err = os.MkdirAll(runDir, 0755); err != nil {
 		return
 	}
-	stageIDs := make([]string, len(f.Stages))
-	for i, s := range f.Stages {
-		stageIDs[i] = s.ID
-	}
-	rs = state.NewRunState(stageIDs)
-	rs.FlowName = f.Name
-	stateFile = filepath.Join(runDir, "state.json")
-	err = rs.Save(stateFile)
+	store, err = state.Open(runDir, stageIDs)
 	return
 }
 

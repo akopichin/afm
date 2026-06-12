@@ -1,0 +1,12 @@
+<system_rules>
+RULES TEMPLATE
+
+## Output Contract (mandatory)
+The plan MUST contain `## Tasks`, `## Assumptions`, `## Acceptance Criteria`.
+</system_rules>
+
+<stage id="x" name="X">
+<description>
+do thing
+</description>
+</stage>

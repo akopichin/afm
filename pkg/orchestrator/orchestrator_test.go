@@ -24,16 +24,16 @@ func TestPlanningPhaseMarksPlanningStatus(t *testing.T) {
 		},
 	}
 
-	rs := state.NewRunState([]string{"s1"})
-	statePath := filepath.Join(runDir, "state.json")
-	if err := rs.Save(statePath); err != nil {
+	store, err := state.Open(runDir, []string{"s1"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
 
 	runner := &doneCreatingRunner{delegate: executor.New(executor.Config{
 		Command: bashCommand,
 		ExtraArgs: []string{"-c",
-			`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"# Plan\n- step 1"}]}}'
+			`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\n- [ ] step 1\n## Assumptions\n- none\n## Acceptance Criteria\n- [ ] done"}]}}'
 echo '{"type":"result","subtype":"success"}'`},
 		IdleTimeout: 10 * time.Second,
 	})}
@@ -41,24 +41,23 @@ echo '{"type":"result","subtype":"success"}'`},
 	cfg := config.Default()
 
 	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: statePath,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  cfg,
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
 	})
 
 	// Subscribe to auto-approve
 	go func() {
-		events := orch.Bus().Subscribe()
-		defer orch.Bus().Unsubscribe(events)
+		subID, events := orch.UIBus().Subscribe(64)
+		defer orch.UIBus().Unsubscribe(subID)
 		for ev := range events {
 			if ev.Type == orchestrator.EventStageStatusChanged {
 				status, _ := ev.Data.(string)
 				if status == string(state.StatusAwaitingApproval) {
-					orch.Approve(ev.StageID)
+					_ = orch.Approve(context.Background(), ev.StageID)
 				}
 			}
 		}
@@ -68,7 +67,7 @@ echo '{"type":"result","subtype":"success"}'`},
 		t.Fatalf("Run: %v", err)
 	}
 
-	loaded, _ := state.Load(statePath)
+	loaded := loadStateJSON(t, filepath.Join(runDir, "state.json"))
 	if loaded.Stages["s1"].Status != state.StatusDone {
 		t.Errorf("stage should be done after run: got %v",
 			loaded.Stages["s1"].Status)
@@ -244,12 +243,15 @@ func TestResumeInteractiveAgent_PlanningPhase(t *testing.T) {
 		{ID: "s1", Name: "Stage 1", Description: "test resume", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 
-	rs := state.NewRunState([]string{"s1"})
-	rs.SetStageStatus("s1", state.StatusAwaitingUserInput)
-	stateFile := filepath.Join(dir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
+	store, err := state.Open(dir, []string{"s1"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(dir, "state.json")
 
 	base := executor.New(executor.Config{
 		Command:     bashCommand,
@@ -261,13 +263,12 @@ func TestResumeInteractiveAgent_PlanningPhase(t *testing.T) {
 	cfg := config.Default()
 
 	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    dir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  cfg,
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
 	})
 
 	cancel := autoApprove(orch)
@@ -280,7 +281,7 @@ func TestResumeInteractiveAgent_PlanningPhase(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	if final.Stages["s1"].Status != state.StatusDone {
 		t.Errorf("expected done, got %v", final.Stages["s1"].Status)
 	}
@@ -304,12 +305,15 @@ func TestResumeInteractiveAgent_ImplementationPhase(t *testing.T) {
 		{ID: "s1", Name: "Stage 1", Description: "test resume", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 
-	rs := state.NewRunState([]string{"s1"})
-	rs.SetStageStatus("s1", state.StatusAwaitingUserInput)
-	stateFile := filepath.Join(dir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
+	store, err := state.Open(dir, []string{"s1"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(dir, "state.json")
 
 	base := executor.New(executor.Config{
 		Command:     bashCommand,
@@ -321,13 +325,12 @@ func TestResumeInteractiveAgent_ImplementationPhase(t *testing.T) {
 	cfg := config.Default()
 
 	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    dir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  cfg,
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
 	})
 
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -337,7 +340,7 @@ func TestResumeInteractiveAgent_ImplementationPhase(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	if final.Stages["s1"].Status != state.StatusDone {
 		t.Errorf("expected done, got %v", final.Stages["s1"].Status)
 	}

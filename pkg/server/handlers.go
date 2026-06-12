@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -22,11 +23,7 @@ const (
 )
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	rs, err := state.Load(s.stateFile)
-	if err != nil {
-		http.Error(w, "failed to load state", http.StatusInternalServerError)
-		return
-	}
+	rs := s.store.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rs)
 }
@@ -76,11 +73,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid stage id", http.StatusBadRequest)
 		return
 	}
-	rs, err := state.Load(s.stateFile)
-	if err != nil {
-		http.Error(w, "failed to load state", http.StatusInternalServerError)
-		return
-	}
+	rs := s.store.Snapshot()
 	st, ok := rs.Stages[stageID]
 	if !ok {
 		http.Error(w, "stage not found", http.StatusNotFound)
@@ -90,7 +83,10 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval", st.Status), http.StatusBadRequest)
 		return
 	}
-	s.approveFn(stageID)
+	if err := s.approveFn(r.Context(), stageID); err != nil {
+		http.Error(w, "approve failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "approved", keyStageID: stageID})
 }
@@ -105,11 +101,7 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid stage id", http.StatusBadRequest)
 		return
 	}
-	rs, err := state.Load(s.stateFile)
-	if err != nil {
-		http.Error(w, "failed to load state", http.StatusInternalServerError)
-		return
-	}
+	rs := s.store.Snapshot()
 	st, ok := rs.Stages[stageID]
 	if !ok {
 		http.Error(w, "stage not found", http.StatusNotFound)
@@ -128,7 +120,10 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "feedback is required", http.StatusBadRequest)
 		return
 	}
-	s.reviseFn(stageID, req.Feedback)
+	if err := s.reviseFn(r.Context(), stageID, req.Feedback); err != nil {
+		http.Error(w, "revise failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "revised", keyStageID: stageID})
 }
@@ -140,11 +135,7 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rs, err := state.Load(s.stateFile)
-	if err != nil {
-		http.Error(w, "failed to load state", http.StatusInternalServerError)
-		return
-	}
+	rs := s.store.Snapshot()
 	st, ok := rs.Stages[stageID]
 	if !ok {
 		http.Error(w, "stage not found", http.StatusNotFound)
@@ -155,7 +146,10 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.retryFn(stageID)
+	if err := s.retryFn(r.Context(), stageID); err != nil {
+		http.Error(w, "retry failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "retried", keyStageID: stageID})
 }
@@ -167,34 +161,88 @@ func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stageDir := filepath.Join(s.runDir, stageID)
-	type uiEntry struct {
-		ID          string   `json:"id"`
-		Phase       string   `json:"phase"`
-		TS          string   `json:"ts"`
-		Question    string   `json:"question"`
-		Options     []string `json:"options,omitempty"`
-		AllowCustom bool     `json:"allow_custom"`
-		Answer      *string  `json:"answer,omitempty"`
-		AnswerTS    string   `json:"answer_ts,omitempty"`
-		FromOptions bool     `json:"from_options,omitempty"`
-	}
-	var out []uiEntry
-	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
-		path := filepath.Join(stageDir, phase+".dialog.jsonl")
-		entries, err := mcp.ReadDialog(path)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			out = append(out, uiEntry{
-				ID: e.ID, Phase: phase, TS: e.TS, Question: e.Question,
-				Options: e.Options, AllowCustom: e.AllowCustom,
-				Answer: e.Answer, AnswerTS: e.AnswerTS, FromOptions: e.FromOptions,
-			})
-		}
-	}
+	out := buildDialogEntries(stageDir)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// typeAgentText is the dialogUIEntry.Type value for agent text messages.
+const typeAgentText = "agent_text"
+
+// dialogUIEntry — элемент диалоговой ленты для UI. Type == typeAgentText
+// означает текстовое сообщение агента (заполнен Text); пустой Type —
+// вопрос/ответ из ask_user.
+type dialogUIEntry struct {
+	Type        string   `json:"type,omitempty"`
+	Text        string   `json:"text,omitempty"`
+	ID          string   `json:"id,omitempty"`
+	Phase       string   `json:"phase"`
+	TS          string   `json:"ts,omitempty"`
+	Question    string   `json:"question,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	AllowCustom bool     `json:"allow_custom"`
+	Answer      *string  `json:"answer,omitempty"`
+	AnswerTS    string   `json:"answer_ts,omitempty"`
+	FromOptions bool     `json:"from_options,omitempty"`
+}
+
+// phaseStreamLogs — stream-json логи каждой фазы в хронологическом порядке
+// запусков (см. имена logFile в orchestrator).
+var phaseStreamLogs = map[string][]string{
+	phasePlanning:       {"planning.jsonl", "planning-reprompt.jsonl", "planning-revision.jsonl"},
+	phaseImplementation: {"implementation.jsonl"},
+	phaseReview:         {"review.jsonl"},
+}
+
+// buildDialogEntries собирает диалоговую ленту стейджа: вопросы/ответы из
+// <phase>.dialog.jsonl, перемежённые текстовыми сообщениями агента из
+// stream-json логов. Порядок берётся из stream-лога — там и текст, и вызовы
+// ask_user идут в реальной последовательности. Тексты показываются только
+// для фаз, где есть диалог (интерактивные стейджи), чтобы не раздувать
+// панель на обычных стейджах.
+func buildDialogEntries(stageDir string) []dialogUIEntry {
+	var out []dialogUIEntry
+	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
+		entries, err := mcp.ReadDialog(filepath.Join(stageDir, phase+".dialog.jsonl"))
+		if err != nil || len(entries) == 0 {
+			continue
+		}
+		byID := make(map[string]mcp.Entry, len(entries))
+		for _, e := range entries {
+			byID[e.ID] = e
+		}
+		emitted := map[string]bool{}
+		for _, logName := range phaseStreamLogs[phase] {
+			for _, it := range executor.DialogTranscript(filepath.Join(stageDir, logName)) {
+				if it.Text != "" {
+					out = append(out, dialogUIEntry{Type: typeAgentText, Phase: phase, Text: it.Text})
+					continue
+				}
+				e, ok := byID[it.AskUserID]
+				if !ok {
+					continue // вопрос ещё не записан в dialog-файл
+				}
+				emitted[e.ID] = true
+				out = append(out, questionUIEntry(phase, e))
+			}
+		}
+		// Вопросы, не найденные в stream-логе (например, лог недоступен),
+		// добавляем в конце фазы — прежнее поведение без текстов агента.
+		for _, e := range entries {
+			if !emitted[e.ID] {
+				out = append(out, questionUIEntry(phase, e))
+			}
+		}
+	}
+	return out
+}
+
+func questionUIEntry(phase string, e mcp.Entry) dialogUIEntry {
+	return dialogUIEntry{
+		ID: e.ID, Phase: phase, TS: e.TS, Question: e.Question,
+		Options: e.Options, AllowCustom: e.AllowCustom,
+		Answer: e.Answer, AnswerTS: e.AnswerTS, FromOptions: e.FromOptions,
+	}
 }
 
 type dialogAnswerRequest struct {
@@ -260,11 +308,7 @@ func (s *Server) handleDialogCancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid stage id", http.StatusBadRequest)
 		return
 	}
-	rs, err := state.Load(s.stateFile)
-	if err != nil {
-		http.Error(w, "load state: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	rs := s.store.Snapshot()
 	st, ok := rs.Stages[stageID]
 	if !ok || st.Status != state.StatusAwaitingUserInput {
 		http.Error(w, "stage is not awaiting user input", http.StatusBadRequest)

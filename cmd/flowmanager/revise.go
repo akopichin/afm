@@ -34,23 +34,22 @@ func newReviseCmd() *cobra.Command {
 				return errors.New("feedback is required (use --feedback or stdin)")
 			}
 
-			stateFile, err := findLatestStateFile(stageID)
+			runDir, stageIDs, err := findLatestRunDir(stageID)
 			if err != nil {
 				return err
 			}
-			rs, err := state.Load(stateFile)
+
+			store, err := state.Open(runDir, stageIDs)
 			if err != nil {
-				return fmt.Errorf("load state: %w", err)
+				return fmt.Errorf("open store: %w", err)
 			}
-			st, ok := rs.Stages[stageID]
-			if !ok {
-				return fmt.Errorf("stage %q not found", stageID)
-			}
-			if st.Status != state.StatusAwaitingApproval {
-				return fmt.Errorf("stage %q is %v, not awaiting_approval", stageID, st.Status)
+			defer store.Close()
+
+			current := store.Get(stageID)
+			if current != state.StatusAwaitingApproval {
+				return fmt.Errorf("stage %q is %v, not awaiting_approval", stageID, current)
 			}
 
-			runDir := filepath.Dir(stateFile)
 			stageDir := filepath.Join(runDir, stageID)
 
 			// Version current plan
@@ -63,10 +62,15 @@ func newReviseCmd() *cobra.Command {
 				return fmt.Errorf("save feedback: %w", err)
 			}
 
-			// Update status
-			rs.SetStageStatus(stageID, state.StatusRevising)
-			if err := rs.Save(stateFile); err != nil {
-				return fmt.Errorf("save state: %w", err)
+			// Transition to revising
+			if err := store.Apply(state.Transition{
+				StageID: stageID,
+				From:    state.StatusAwaitingApproval,
+				To:      state.StatusRevising,
+				Event:   "cli_revise",
+				Reason:  feedback,
+			}); err != nil {
+				return fmt.Errorf("transition to revising: %w", err)
 			}
 
 			fmt.Printf("feedback saved for stage %q -- orchestrator will re-plan\n", stageID)

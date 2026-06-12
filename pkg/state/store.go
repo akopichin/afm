@@ -1,0 +1,272 @@
+package state
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+type Transition struct {
+	Seq     uint64      `json:"seq"`
+	Time    time.Time   `json:"time"`
+	StageID string      `json:"stage_id"`
+	From    StageStatus `json:"from"`
+	To      StageStatus `json:"to"`
+	Event   string      `json:"event"`
+	Reason  string      `json:"reason,omitempty"`
+}
+
+type Store struct {
+	runDir    string
+	eventsLog *os.File
+	snapshot  *RunState
+	lastSeq   uint64
+	mu        sync.Mutex
+}
+
+func Open(runDir string, stageIDs []string) (*Store, error) {
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir runDir: %w", err)
+	}
+	rs := NewRunState(stageIDs)
+
+	eventsPath := filepath.Join(runDir, "events.jsonl")
+
+	// legacy fallback: state.json exists, events.jsonl does not
+	if _, err := os.Stat(eventsPath); os.IsNotExist(err) {
+		if legacy, lerr := loadLegacyState(filepath.Join(runDir, "state.json")); lerr == nil {
+			for id, st := range legacy.Stages {
+				if _, known := rs.Stages[id]; !known {
+					continue
+				}
+				rs.SetStageStatus(id, st.Status)
+			}
+		}
+	}
+
+	lastSeq, lastGoodOffset, err := replayEvents(eventsPath, rs)
+	if err != nil {
+		return nil, fmt.Errorf("replay: %w", err)
+	}
+
+	f, err := os.OpenFile(eventsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open events.jsonl: %w", err)
+	}
+	if err := f.Truncate(lastGoodOffset); err != nil {
+		return nil, fmt.Errorf("truncate events.jsonl: %w", err)
+	}
+	if _, err := f.Seek(lastGoodOffset, 0); err != nil {
+		return nil, fmt.Errorf("seek events.jsonl: %w", err)
+	}
+
+	s := &Store{
+		runDir:    runDir,
+		eventsLog: f,
+		snapshot:  rs,
+		lastSeq:   lastSeq,
+	}
+
+	// if started from legacy fallback — write synthetic events
+	if lastSeq == 0 {
+		for _, id := range stageIDs {
+			st := rs.Stages[id].Status
+			if st == StatusPending {
+				continue
+			}
+			s.lastSeq++
+			tr := Transition{
+				Seq:     s.lastSeq,
+				Time:    time.Now(),
+				StageID: id,
+				From:    StatusPending,
+				To:      st,
+				Event:   "legacy_load",
+			}
+			data, _ := json.Marshal(tr)
+			data = append(data, '\n')
+			if _, werr := f.Write(data); werr != nil {
+				return nil, fmt.Errorf("write legacy event: %w", werr)
+			}
+		}
+		if s.lastSeq > 0 {
+			if err := f.Sync(); err != nil {
+				return nil, fmt.Errorf("fsync after legacy events: %w", err)
+			}
+		}
+	}
+
+	return s, nil
+}
+
+func loadLegacyState(path string) (*RunState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var rs RunState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return nil, err
+	}
+	return &rs, nil
+}
+
+func replayEvents(path string, rs *RunState) (lastSeq uint64, lastGoodOffset int64, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	var offset int64
+	var goodOffset int64
+	for _, line := range bytesLines(data) {
+		offset += int64(len(line)) + 1 // +1 на \n
+		if len(bytes.TrimSpace(line)) == 0 {
+			goodOffset = offset
+			continue
+		}
+		var t Transition
+		if err := json.Unmarshal(line, &t); err != nil {
+			break
+		}
+		rs.SetStageStatus(t.StageID, t.To)
+		lastSeq = t.Seq
+		goodOffset = offset
+	}
+	return lastSeq, goodOffset, nil
+}
+
+func bytesLines(data []byte) [][]byte {
+	var out [][]byte
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			out = append(out, data[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		out = append(out, data[start:])
+	}
+	return out
+}
+
+func (s *Store) Get(stageID string) StageStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.snapshot.Stages[stageID]; ok {
+		return st.Status
+	}
+	return StatusPending
+}
+
+func (s *Store) Snapshot() RunState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := RunState{
+		FlowName:   s.snapshot.FlowName,
+		StartedAt:  s.snapshot.StartedAt,
+		StageOrder: append([]string(nil), s.snapshot.StageOrder...),
+		Stages:     make(map[string]StageState, len(s.snapshot.Stages)),
+	}
+	for k, v := range s.snapshot.Stages {
+		out.Stages[k] = v
+	}
+	return out
+}
+
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.eventsLog != nil {
+		err := s.eventsLog.Close()
+		s.eventsLog = nil
+		return err
+	}
+	return nil
+}
+
+// applyHook is for tests only. Called after fsync but before snapshot rewrite.
+var applyHookMu sync.Mutex
+var applyHook func(Transition)
+
+// SetApplyHook installs a test hook called inside Apply between fsync and snapshot rewrite.
+// Production code MUST NOT call this.
+func SetApplyHook(h func(Transition)) {
+	applyHookMu.Lock()
+	applyHook = h
+	applyHookMu.Unlock()
+}
+
+func (s *Store) Apply(t Transition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current := s.snapshot.Stages[t.StageID].Status
+	if current != t.From {
+		return fmt.Errorf("concurrent change: stage %q is in %q, expected %q",
+			t.StageID, current, t.From)
+	}
+
+	s.lastSeq++
+	t.Seq = s.lastSeq
+	t.Time = time.Now()
+
+	data, err := json.Marshal(t)
+	if err != nil {
+		return fmt.Errorf("marshal transition: %w", err)
+	}
+	data = append(data, '\n')
+
+	if _, err := s.eventsLog.Write(data); err != nil {
+		return fmt.Errorf("write events.jsonl: %w", err)
+	}
+	if err := s.eventsLog.Sync(); err != nil {
+		return fmt.Errorf("fsync events.jsonl: %w", err)
+	}
+
+	applyHookMu.Lock()
+	hook := applyHook
+	applyHookMu.Unlock()
+	if hook != nil {
+		hook(t)
+	}
+
+	s.snapshot.SetStageStatus(t.StageID, t.To)
+
+	if err := s.writeSnapshot(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: snapshot write failed: %v\n", err)
+	}
+	return nil
+}
+
+func (s *Store) writeSnapshot() error {
+	data, err := json.MarshalIndent(s.snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.runDir, "state.json")
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}

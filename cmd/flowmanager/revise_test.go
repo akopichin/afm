@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,10 +38,28 @@ func makeRunState(t *testing.T, runName, stageID string, status state.StageStatu
 	rs.FlowName = runName
 	rs.SetStageStatus(stageID, status)
 	sf := filepath.Join(runDir, "state.json")
-	if err := rs.Save(sf); err != nil {
+	data, err := json.MarshalIndent(rs, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sf, data, 0644); err != nil {
 		t.Fatal(err)
 	}
 	return runDir
+}
+
+// loadRunState reads state.json from a run directory.
+func loadRunState(t *testing.T, runDir string) *state.RunState {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	var rs state.RunState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	return &rs
 }
 
 // TestReviseSavesFeedback verifies that the revise command saves feedback
@@ -78,11 +97,7 @@ func TestReviseSavesFeedback(t *testing.T) {
 	}
 
 	// Check status changed to revising
-	sf := filepath.Join(runDir, "state.json")
-	rs, err := state.Load(sf)
-	if err != nil {
-		t.Fatalf("load state: %v", err)
-	}
+	rs := loadRunState(t, runDir)
 	if rs.Stages[cmdInit].Status != state.StatusRevising {
 		t.Errorf("expected status revising, got: %v", rs.Stages[cmdInit].Status)
 	}

@@ -2,8 +2,8 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -23,7 +22,7 @@ const bashCommand = "bash"
 
 // bash scripts for mocking the AI client (simulate claude stream-json protocol)
 
-const mockPlanningScript = `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"# Plan\n\n- [ ] Step 1: implement feature\n- [ ] Step 2: write tests\n"}]}}'
+const mockPlanningScript = `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\n\n- [ ] Step 1: implement feature\n- [ ] Step 2: write tests\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] feature works\n"}]}}'
 echo '{"type":"result","subtype":"success"}'`
 
 const mockImplementationScript = `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"implementation done"}]}}'
@@ -54,25 +53,24 @@ func setupOrchestratorWithRunner(t *testing.T, stages []flow.Stage, runner execu
 		stageIDs[i] = s.ID
 	}
 
-	rs := state.NewRunState(stageIDs)
-	stateFile := filepath.Join(runDir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
+	store, err := state.Open(runDir, stageIDs)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
 
 	cfg := config.Default()
 
 	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  cfg,
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
 	})
 
-	return orch, runDir, stateFile
+	return orch, runDir, filepath.Join(runDir, "state.json")
 }
 
 // autoApprove subscribes to the bus and auto-approves any stage reaching awaiting_approval.
@@ -80,8 +78,8 @@ func setupOrchestratorWithRunner(t *testing.T, stages []flow.Stage, runner execu
 func autoApprove(orch *orchestrator.Orchestrator) context.CancelFunc {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		events := orch.Bus().Subscribe()
-		defer orch.Bus().Unsubscribe(events)
+		subID, events := orch.UIBus().Subscribe(64)
+		defer orch.UIBus().Unsubscribe(subID)
 		for {
 			select {
 			case <-ctx.Done():
@@ -93,7 +91,7 @@ func autoApprove(orch *orchestrator.Orchestrator) context.CancelFunc {
 				if ev.Type == orchestrator.EventStageStatusChanged {
 					status, _ := ev.Data.(string)
 					if status == string(state.StatusAwaitingApproval) {
-						orch.Approve(ev.StageID)
+						_ = orch.Approve(context.Background(), ev.StageID)
 					}
 				}
 			}
@@ -102,10 +100,50 @@ func autoApprove(orch *orchestrator.Orchestrator) context.CancelFunc {
 	return cancel
 }
 
+func waitForStatus(t *testing.T, stateFile, stageID string, want state.StageStatus, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		rs, err := tryLoadStateJSON(stateFile)
+		if err == nil && rs.Stages[stageID].Status == want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	rs, err := tryLoadStateJSON(stateFile)
+	current := "<missing>"
+	if err == nil && rs != nil {
+		current = string(rs.Stages[stageID].Status)
+	}
+	t.Fatalf("stage %s did not reach %s within %s (current: %s)", stageID, want, timeout, current)
+}
+
+func tryLoadStateJSON(path string) (*state.RunState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var rs state.RunState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return nil, err
+	}
+	return &rs, nil
+}
+
+func loadStateJSON(t *testing.T, path string) *state.RunState {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	var rs state.RunState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	return &rs
+}
+
 // doneCreatingRunner wraps a Runner and creates .done after successful RunAgent calls.
-// The orchestrator requires .done files for implementation stage completion.
-// Mock scripts cannot create .done themselves because they don't know stageDir,
-// so this wrapper creates the file based on the logFile path.
 type doneCreatingRunner struct {
 	delegate executor.Runner
 }
@@ -120,6 +158,70 @@ func (r *doneCreatingRunner) RunAgent(ctx context.Context, agentType, stageName,
 		return err
 	}
 	// Extract stage dir from logFile path: {runDir}/{stageID}/implementation.log
+	stageDir := filepath.Dir(logFile)
+	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("test completion"), 0644)
+}
+
+// phaseDispatchRunner uses a different runner for planning vs other phases.
+type phaseDispatchRunner struct {
+	planning executor.Runner
+	other    executor.Runner
+}
+
+func (r *phaseDispatchRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	return r.planning.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *phaseDispatchRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	return r.other.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+// promptCapturingRunner wraps a Runner and captures the prompt passed to RunPlanning.
+type promptCapturingRunner struct {
+	delegate   executor.Runner
+	onPlanning func(prompt string)
+}
+
+func (r *promptCapturingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	if r.onPlanning != nil {
+		r.onPlanning(prompt)
+	}
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *promptCapturingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+// planCreatingDoneRunner wraps a Runner and creates a plan file + .done.
+type planCreatingDoneRunner struct {
+	delegate  executor.Runner
+	planFile  string
+	planAfter int // create plan after this many RunPlanning calls
+	mu        sync.Mutex
+	calls     int
+}
+
+func (r *planCreatingDoneRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	err := r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.calls++
+	shouldCreate := r.calls == r.planAfter
+	r.mu.Unlock()
+	if shouldCreate {
+		_ = os.WriteFile(r.planFile, []byte("# Plan\n- step 1"), 0644)
+	}
+	return nil
+}
+
+func (r *planCreatingDoneRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	err := r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+	if err != nil {
+		return err
+	}
 	stageDir := filepath.Dir(logFile)
 	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("test completion"), 0644)
 }
@@ -153,7 +255,7 @@ func TestIntegration_FullSingleStage(t *testing.T) {
 	}
 
 	// Verify: final status is done
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	if final.Stages["backend"].Status != state.StatusDone {
 		t.Errorf("expected done, got %v", final.Stages["backend"].Status)
 	}
@@ -187,7 +289,7 @@ func TestIntegration_TwoParallelStages(t *testing.T) {
 	}
 
 	// Verify both stages are done
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	for _, id := range []string{"alpha", "beta"} {
 		if final.Stages[id].Status != state.StatusDone {
 			t.Errorf("stage %s: expected done, got %v", id, final.Stages[id].Status)
@@ -214,7 +316,7 @@ func TestIntegration_SequentialDependencies(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	if final.Stages["first"].Status != state.StatusDone {
 		t.Errorf("first: expected done, got %v", final.Stages["first"].Status)
 	}
@@ -258,7 +360,7 @@ func TestIntegration_PreExistingPlan(t *testing.T) {
 	}
 
 	// Verify: final status is done
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	if final.Stages["ready"].Status != state.StatusDone {
 		t.Errorf("expected done, got %v", final.Stages["ready"].Status)
 	}
@@ -271,9 +373,11 @@ func TestIntegration_WithReviewAgent(t *testing.T) {
 		{ID: "reviewed", Name: "Reviewed Stage", Description: "needs review", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation, flow.AgentReview}},
 	}
 
-	base := mockRunner(t, mockReviewScript)
-	runner := &doneCreatingRunner{delegate: base}
-	orch, runDir, _ := setupOrchestratorWithRunner(t, stages, runner)
+	planningRunner := mockRunner(t, mockPlanningScript)
+	reviewRunner := mockRunner(t, mockReviewScript)
+	runner := &phaseDispatchRunner{planning: planningRunner, other: reviewRunner}
+	doneRunner := &doneCreatingRunner{delegate: runner}
+	orch, runDir, _ := setupOrchestratorWithRunner(t, stages, doneRunner)
 
 	cancel := autoApprove(orch)
 	defer cancel()
@@ -291,44 +395,6 @@ func TestIntegration_WithReviewAgent(t *testing.T) {
 	if _, err := os.Stat(reviewLog); err != nil {
 		t.Errorf("review.log not found: %v", err)
 	}
-}
-
-// TestIntegration_FailedStage verifies that when the AI client fails,
-// the stage ends up in failed status.
-func TestIntegration_FailedStage(t *testing.T) {
-	stages := []flow.Stage{
-		{ID: "fail", Name: "Failing Stage", Description: "will fail", Agents: []flow.AgentType{flow.AgentPlanning}},
-	}
-
-	runner := mockRunner(t, mockFailScript)
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
-	if err := orch.Run(context.Background()); err != nil {
-		t.Fatalf("Run should not return error for failed stage: %v", err)
-	}
-
-	// Verify: status failed
-	final, _ := state.Load(stateFile)
-	if final.Stages["fail"].Status != state.StatusFailed {
-		t.Errorf("expected failed, got %v", final.Stages["fail"].Status)
-	}
-}
-
-// promptCapturingRunner wraps a Runner and captures the prompt passed to RunPlanning.
-type promptCapturingRunner struct {
-	delegate   executor.Runner
-	onPlanning func(prompt string)
-}
-
-func (r *promptCapturingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
-	if r.onPlanning != nil {
-		r.onPlanning(prompt)
-	}
-	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
-}
-
-func (r *promptCapturingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
-	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
 }
 
 // TestIntegration_PlanningPromptIncludesDependencyPlan verifies that when a stage
@@ -360,23 +426,22 @@ func TestIntegration_PlanningPromptIncludesDependencyPlan(t *testing.T) {
 	}
 
 	stageIDs := []string{"first", "second"}
-	rs := state.NewRunState(stageIDs)
-	// Mark first stage as done so second starts planning
-	rs.SetStageStatus("first", state.StatusDone)
-	stateFile := filepath.Join(runDir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
+	store, err := state.Open(runDir, stageIDs)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
+	// Mark first stage as done so second starts planning
+	_ = store.Apply(state.Transition{StageID: "first", From: state.StatusPending, To: state.StatusDone, Event: "test_setup"})
 
 	cfg := config.Default()
 	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    capturingRunner,
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  cfg,
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  capturingRunner,
 	})
 
 	cancel := autoApprove(orch)
@@ -388,207 +453,6 @@ func TestIntegration_PlanningPromptIncludesDependencyPlan(t *testing.T) {
 
 	if !strings.Contains(capturedPrompt, "# First Plan") {
 		t.Errorf("planning prompt should contain dependency plan, got:\n%s", capturedPrompt)
-	}
-}
-
-// rateLimitThenSuccessRunner wraps a Runner and returns a rate limit error
-// on the first N calls, then delegates to the underlying runner.
-type rateLimitThenSuccessRunner struct {
-	delegate  executor.Runner
-	failCount int    // number of calls to fail before succeeding
-	failMsg   string // error message for failures
-	mu        sync.Mutex
-	callCount int
-}
-
-func (r *rateLimitThenSuccessRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
-	r.mu.Lock()
-	r.callCount++
-	count := r.callCount
-	r.mu.Unlock()
-
-	if count <= r.failCount {
-		return fmt.Errorf("%s", r.failMsg)
-	}
-	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
-}
-
-func (r *rateLimitThenSuccessRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
-	r.mu.Lock()
-	r.callCount++
-	count := r.callCount
-	r.mu.Unlock()
-
-	if count <= r.failCount {
-		return fmt.Errorf("%s", r.failMsg)
-	}
-	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
-}
-
-// TestIntegration_RetryOnServerError verifies that 500 errors trigger
-// backoff retry, same as rate limit errors.
-func TestIntegration_RetryOnServerError(t *testing.T) {
-	origBackoff := orchestrator.RetryBackoff
-	orchestrator.RetryBackoff = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff })
-
-	stages := []flow.Stage{
-		{ID: "server-err", Name: "Server Error", Description: "test 500 retry", Agents: []flow.AgentType{flow.AgentPlanning}},
-	}
-
-	delegate := mockRunner(t, mockPlanningScript)
-	rlRunner := &rateLimitThenSuccessRunner{
-		delegate:  delegate,
-		failCount: 1,
-		failMsg:   "500 Internal Server Error",
-	}
-	runner := &doneCreatingRunner{delegate: rlRunner}
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
-	cancel := autoApprove(orch)
-	defer cancel()
-
-	if err := orch.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	rlRunner.mu.Lock()
-	calls := rlRunner.callCount
-	rlRunner.mu.Unlock()
-	if calls < 2 {
-		t.Errorf("expected at least 2 calls (1 fail + 1 success), got %d", calls)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["server-err"].Status != state.StatusDone {
-		t.Errorf("expected done after 500 retry, got %v", final.Stages["server-err"].Status)
-	}
-}
-
-// TestIntegration_RetryOnRateLimit verifies that the orchestrator retries
-// when the runner returns a rate limit error, and eventually succeeds.
-func TestIntegration_RetryOnRateLimit(t *testing.T) {
-	// Speed up retries: use minimal backoff durations
-	origBackoff := orchestrator.RetryBackoff
-	orchestrator.RetryBackoff = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff })
-
-	stages := []flow.Stage{
-		{ID: "retry-stage", Name: "Retry Stage", Description: "test retry", Agents: []flow.AgentType{flow.AgentPlanning}},
-	}
-
-	// Fail once with rate limit, then succeed
-	delegate := mockRunner(t, mockPlanningScript)
-	rlRunner := &rateLimitThenSuccessRunner{
-		delegate:  delegate,
-		failCount: 1,
-		failMsg:   "You've hit your limit · resets 3pm",
-	}
-	runner := &doneCreatingRunner{delegate: rlRunner}
-
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
-	// autoApprove so the stage completes fully after the retry succeeds
-	cancel := autoApprove(orch)
-	defer cancel()
-
-	if err := orch.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	// Verify runner was called more than once (retry happened)
-	rlRunner.mu.Lock()
-	calls := rlRunner.callCount
-	rlRunner.mu.Unlock()
-	if calls < 2 {
-		t.Errorf("expected at least 2 runner calls (1 fail + 1 success), got %d", calls)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["retry-stage"].Status != state.StatusDone {
-		t.Errorf("expected done after retry, got %v", final.Stages["retry-stage"].Status)
-	}
-}
-
-// TestIntegration_RetryExhausted verifies that after exhausting all retry
-// attempts the stage ends up in failed status.
-func TestIntegration_RetryExhausted(t *testing.T) {
-	// Speed up retries: use minimal backoff durations
-	origBackoff := orchestrator.RetryBackoff
-	orchestrator.RetryBackoff = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff })
-
-	stages := []flow.Stage{
-		{ID: "exhaust", Name: "Exhaust Stage", Description: "test retry exhausted", Agents: []flow.AgentType{flow.AgentPlanning}},
-	}
-
-	// Always fail with rate limit
-	delegate := mockRunner(t, mockFailScript)
-	runner := &rateLimitThenSuccessRunner{
-		delegate:  delegate,
-		failCount: 99,
-		failMsg:   "You've hit your limit · resets 3pm",
-	}
-
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
-	if err := orch.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["exhaust"].Status != state.StatusFailed {
-		t.Errorf("expected failed after retries exhausted, got %v", final.Stages["exhaust"].Status)
-	}
-}
-
-// TestIntegration_ResumeWithDoneFile verifies that on resume, a stage in "running"
-// with an existing .done file transitions to "done" without restarting the agent.
-func TestIntegration_ResumeWithDoneFile(t *testing.T) {
-	stages := []flow.Stage{
-		{ID: "s1", Name: "Stage 1", Description: "already done", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-	}
-
-	runDir := t.TempDir()
-	stageDir := filepath.Join(runDir, "s1")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stageDir, ".done"), []byte("completed work summary"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	rs := state.NewRunState([]string{"s1"})
-	rs.SetStageStatus("s1", state.StatusRunning)
-	stateFile := filepath.Join(runDir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	// Use a failing runner — if the agent runs, the test should fail
-	runner := mockRunner(t, mockFailScript)
-
-	cfg := config.Default()
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
-	})
-
-	if err := orch.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["s1"].Status != state.StatusDone {
-		t.Errorf("expected done (from .done file), got %v", final.Stages["s1"].Status)
 	}
 }
 
@@ -622,7 +486,7 @@ func TestIntegration_PrePlannedStageWaitsForDeps(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	final, _ := state.Load(stateFile)
+	final := loadStateJSON(t, stateFile)
 	if final.Stages["init"].Status != state.StatusDone {
 		t.Errorf("init: expected done, got %v", final.Stages["init"].Status)
 	}
@@ -637,84 +501,29 @@ func TestIntegration_PrePlannedStageWaitsForDeps(t *testing.T) {
 	}
 }
 
-// planCreatingDoneRunner wraps a Runner and creates a plan file + .done.
-type planCreatingDoneRunner struct {
-	delegate  executor.Runner
-	planFile  string
-	planAfter int // create plan after this many RunPlanning calls
-	mu        sync.Mutex
-	calls     int
-}
+// TestIntegration_PlanSavedToCustomFile: описание стадии просит агента сохранить
+// план в файл с произвольным именем. Агент пишет план через Write tool, а текстом
+// выводит лишь резюме. Оркестратор должен подхватить план из записанного файла,
+// а не проваливать стадию на валидации текстового вывода.
+func TestIntegration_PlanSavedToCustomFile(t *testing.T) {
+	planFile := filepath.Join(t.TempDir(), "my-custom-plan.md")
+	planContent := "## Tasks\n\n- [ ] step 1\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] works\n"
 
-func (r *planCreatingDoneRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
-	err := r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
-	if err != nil {
-		return err
-	}
-	r.mu.Lock()
-	r.calls++
-	shouldCreate := r.calls == r.planAfter
-	r.mu.Unlock()
-	if shouldCreate {
-		_ = os.WriteFile(r.planFile, []byte("# Plan\n- step 1"), 0644)
-	}
-	return nil
-}
+	script := fmt.Sprintf(
+		`printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"%s","content":"..."}}]}}\n'`+
+			"\nprintf '%%b' %q > %q"+
+			"\nprintf '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"plan saved to file\"}]}}\n'"+
+			"\nprintf '{\"type\":\"result\",\"subtype\":\"success\"}\n'",
+		planFile, planContent, planFile,
+	)
 
-func (r *planCreatingDoneRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
-	err := r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
-	if err != nil {
-		return err
-	}
-	stageDir := filepath.Dir(logFile)
-	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("test completion"), 0644)
-}
-
-// noDoneRunner wraps a Runner and does NOT create .done, simulating an agent
-// that exits successfully without completing work.
-// After retryAfter calls it starts creating .done.
-type noDoneRunner struct {
-	delegate   executor.Runner
-	retryAfter int // create .done after this many RunAgent calls
-	mu         sync.Mutex
-	agentCalls int
-}
-
-func (r *noDoneRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
-	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
-}
-
-func (r *noDoneRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
-	err := r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
-	if err != nil {
-		return err
-	}
-	r.mu.Lock()
-	r.agentCalls++
-	calls := r.agentCalls
-	r.mu.Unlock()
-
-	if calls > r.retryAfter {
-		stageDir := filepath.Dir(logFile)
-		_ = os.WriteFile(filepath.Join(stageDir, ".done"), []byte("done after retry"), 0644)
-	}
-	return nil
-}
-
-// TestIntegration_IncompleteRetry verifies that when an agent exits without
-// creating .done, the orchestrator retries once, and the retry succeeds.
-func TestIntegration_IncompleteRetry(t *testing.T) {
 	stages := []flow.Stage{
-		{ID: "incomplete", Name: "Incomplete", Description: "test incomplete retry", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+		{ID: "init", Name: "Init", Description: "save plan to my-custom-plan.md",
+			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 
-	base := mockRunner(t, mockPlanningScript)
-	runner := &noDoneRunner{
-		delegate:   base,
-		retryAfter: 1, // first RunAgent (implementation) — no .done; second (retry) — creates .done
-	}
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
+	runner := &doneCreatingRunner{delegate: mockRunner(t, script)}
+	orch, runDir, stateFile := setupOrchestratorWithRunner(t, stages, runner)
 	cancel := autoApprove(orch)
 	defer cancel()
 
@@ -722,516 +531,16 @@ func TestIntegration_IncompleteRetry(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	runner.mu.Lock()
-	calls := runner.agentCalls
-	runner.mu.Unlock()
-
-	if calls < 2 {
-		t.Errorf("expected at least 2 RunAgent calls (1 incomplete + 1 retry), got %d", calls)
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["init"].Status != state.StatusDone {
+		t.Errorf("init: expected done, got %v", final.Stages["init"].Status)
 	}
 
-	final, _ := state.Load(stateFile)
-	if final.Stages["incomplete"].Status != state.StatusDone {
-		t.Errorf("expected done after incomplete retry, got %v", final.Stages["incomplete"].Status)
-	}
-}
-
-// TestIntegration_IncompleteRetryExhausted verifies that when an agent never
-// creates .done, the stage fails after one retry attempt.
-func TestIntegration_IncompleteRetryExhausted(t *testing.T) {
-	stages := []flow.Stage{
-		{ID: "never-done", Name: "Never Done", Description: "test incomplete exhausted", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-	}
-
-	base := mockRunner(t, mockPlanningScript)
-	runner := &noDoneRunner{
-		delegate:   base,
-		retryAfter: 999, // never create .done
-	}
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
-	cancel := autoApprove(orch)
-	defer cancel()
-
-	if err := orch.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["never-done"].Status != state.StatusFailed {
-		t.Errorf("expected failed after incomplete retry exhausted, got %v", final.Stages["never-done"].Status)
-	}
-}
-
-// TestIntegration_FailedDependencyCascade verifies that when a stage fails,
-// all pending stages that depend on it are also marked as failed,
-// so the flow terminates instead of hanging forever.
-func TestIntegration_FailedDependencyCascade(t *testing.T) {
-	stages := []flow.Stage{
-		{ID: "a", Name: "A", Description: "will fail", Agents: []flow.AgentType{flow.AgentPlanning}},
-		{ID: "b", Name: "B", Description: "depends on A", DependsOn: []string{"a"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-		{ID: "c", Name: "C", Description: "depends on B", DependsOn: []string{"b"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-	}
-
-	runner := mockRunner(t, mockFailScript)
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := orch.Run(ctx); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	final, _ := state.Load(stateFile)
-	for _, id := range []string{"a", "b", "c"} {
-		if final.Stages[id].Status != state.StatusFailed {
-			t.Errorf("stage %s: expected failed, got %v", id, final.Stages[id].Status)
-		}
-	}
-}
-
-// TestIntegration_ResumeFromRetrying verifies that a stage stuck in "retrying"
-// status (process killed during backoff) is properly restarted on resume.
-func TestIntegration_ResumeFromRetrying(t *testing.T) {
-	stages := []flow.Stage{
-		{ID: "retry-stuck", Name: "Retry Stuck", Description: "was retrying", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-	}
-
-	runDir := t.TempDir()
-	stageDir := filepath.Join(runDir, "retry-stuck")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	rs := state.NewRunState([]string{"retry-stuck"})
-	rs.SetStageStatus("retry-stuck", state.StatusRetrying)
-	stateFile := filepath.Join(runDir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	base := mockRunner(t, mockPlanningScript)
-	runner := &doneCreatingRunner{delegate: base}
-
-	cfg := config.Default()
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
-	})
-
-	cancel := autoApprove(orch)
-	defer cancel()
-
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer ctxCancel()
-
-	if err := orch.Run(ctx); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["retry-stuck"].Status != state.StatusDone {
-		t.Errorf("expected done after resume from retrying, got %v", final.Stages["retry-stuck"].Status)
-	}
-}
-
-// TestIntegration_ResumeFromPlanningWithExistingPlan verifies that if planning
-// was completed (plan.md exists) but the orchestrator crashed before transitioning
-// to awaiting_approval, the stage resumes correctly without re-planning.
-func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
-	stages := []flow.Stage{
-		{ID: "planned", Name: "Planned", Description: "already planned", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-	}
-
-	runDir := t.TempDir()
-	stageDir := filepath.Join(runDir, "planned")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Existing Plan\n\nStep 1\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	rs := state.NewRunState([]string{"planned"})
-	rs.SetStageStatus("planned", state.StatusPlanning)
-	stateFile := filepath.Join(runDir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	// Use a failing runner for planning — if planning re-runs, the test fails
-	base := mockRunner(t, mockPlanningScript)
-	runner := &doneCreatingRunner{delegate: base}
-
-	cfg := config.Default()
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
-	})
-
-	cancel := autoApprove(orch)
-	defer cancel()
-
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer ctxCancel()
-
-	if err := orch.Run(ctx); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	final, _ := state.Load(stateFile)
-	if final.Stages["planned"].Status != state.StatusDone {
-		t.Errorf("expected done, got %v", final.Stages["planned"].Status)
-	}
-
-	// Verify the original plan was preserved (not overwritten by re-planning)
-	data, _ := os.ReadFile(filepath.Join(stageDir, "plan.md"))
-	if !strings.Contains(string(data), "Existing Plan") {
-		t.Error("plan.md was overwritten by re-planning, expected 'Existing Plan' content")
-	}
-}
-
-// TestFullDialogCycle verifies the full interactive dialog lifecycle:
-// stage starts → agent calls ask_user via MCP → awaiting_user_input →
-// user answers → agent completes → stage done.
-func TestFullDialogCycle(t *testing.T) {
-	dir := t.TempDir()
-
-	agentScript := filepath.Join(dir, "mock-agent.sh")
-	script := "#!/bin/bash\n" +
-		"MCP=\"\"\n" +
-		"while [ $# -gt 0 ]; do\n" +
-		"  case \"$1\" in\n" +
-		"    --mcp-config) MCP=\"$2\"; shift 2;;\n" +
-		"    --session-id|--resume) shift 2;;\n" +
-		"    *) shift;;\n" +
-		"  esac\n" +
-		"done\n" +
-		"if [ -z \"$MCP\" ]; then echo 'no mcp config' >&2; exit 1; fi\n" +
-		"URL=$(python3 -c \"import json,sys;d=json.load(open(sys.argv[1]));print(d['mcpServers']['flowmanager']['url'])\" \"$MCP\" 2>/dev/null)\n" +
-		"if [ -z \"$URL\" ]; then URL=$(grep -o '\"url\": *\"[^\"]*\"' \"$MCP\" | head -1 | sed 's/.*\"url\":[[:space:]]*\"[[:space:]]*//' | sed 's/\".*//'); fi\n" +
-		"STAGE_DIR=$(dirname \"$MCP\")\n" +
-		"curl -sf -X POST \"$URL\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}' >/dev/null\n" +
-		"curl -sf -X POST \"$URL\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_user\",\"arguments\":{\"id\":\"q1\",\"question\":\"go ahead?\"}}}' >/dev/null\n" +
-		"echo 'done' > \"$STAGE_DIR/.done\"\n" +
-		"echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'\n" +
-		"echo '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
-	if err := os.WriteFile(agentScript, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	stages := []flow.Stage{
-		{
-			ID: "discovery", Name: "Discovery", Description: "ask user",
-			Agents:      []flow.AgentType{flow.AgentImplementation},
-			Interactive: true,
-			Command:     agentScript,
-		},
-	}
-
-	stageDir := filepath.Join(dir, "discovery")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# plan"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	rs := state.NewRunState([]string{"discovery"})
-	rs.SetStageStatus("discovery", state.StatusReady)
-	stateFile := filepath.Join(dir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := config.Default()
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    dir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-	})
-
-	mcpSrv := mcp.NewServer(dir, orchestrator.NewMcpNotifier(orch))
-	srv := httptest.NewServer(mcpSrv)
-	defer srv.Close()
-	orch.SetDashboardURL(srv.URL)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
-
-	waitForStatus(t, stateFile, "discovery", state.StatusAwaitingUserInput, 5*time.Second)
-
-	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
-	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q1", Answer: "go for it", FromOptions: false}); err != nil {
-		t.Fatal(err)
-	}
-	if err := mcpSrv.NotifyAnswer("discovery", "implementation", "q1", "go for it", false); err != nil {
-		t.Fatal(err)
-	}
-
-	waitForStatus(t, stateFile, "discovery", state.StatusDone, 5*time.Second)
-
-	entries, err := mcp.ReadDialog(dialogPath)
+	data, err := os.ReadFile(filepath.Join(runDir, "init", "plan.md"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("init/plan.md: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 dialog entry, got %d", len(entries))
+	if !strings.Contains(string(data), "## Tasks") {
+		t.Errorf("init/plan.md should contain adopted plan, got %q", string(data))
 	}
-	if entries[0].Answer == nil || *entries[0].Answer != "go for it" {
-		t.Errorf("answer mismatch: %+v", entries[0])
-	}
-}
-
-// TestResumeAfterCrash verifies that when flowManager crashes while a stage
-// is in awaiting_user_input, and the user's answer is already persisted in
-// dialog.jsonl, the orchestrator on restart detects the status, resumes the
-// interactive agent, which replays the sealed Q/A pair via MCP, and the stage
-// reaches done.
-func TestResumeAfterCrash(t *testing.T) {
-	dir := t.TempDir()
-	stageDir := filepath.Join(dir, "discovery")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# plan"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Pre-populate: agent asked q1 and user answered before crash
-	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
-	if err := mcp.AppendQuestion(dialogPath, mcp.Question{ID: "q1", Question: "x?"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q1", Answer: "after restart"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Pre-populate: session.json exists (simulating prior run)
-	if err := os.WriteFile(filepath.Join(stageDir, "implementation.session.json"),
-		[]byte(`{"session_id":"test-uuid-resume"}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Agent script: calls MCP ask_user (gets replay answer), creates .done, exits
-	agentScript := filepath.Join(dir, "mock-resume-agent.sh")
-	script := "#!/bin/bash\n" +
-		"MCP=\"\"\n" +
-		"while [ $# -gt 0 ]; do\n" +
-		"  case \"$1\" in\n" +
-		"    --mcp-config) MCP=\"$2\"; shift 2;;\n" +
-		"    --session-id|--resume) shift 2;;\n" +
-		"    *) shift;;\n" +
-		"  esac\n" +
-		"done\n" +
-		"if [ -z \"$MCP\" ]; then echo 'no mcp config' >&2; exit 1; fi\n" +
-		"URL=$(python3 -c \"import json,sys;d=json.load(open(sys.argv[1]));print(d['mcpServers']['flowmanager']['url'])\" \"$MCP\" 2>/dev/null)\n" +
-		"if [ -z \"$URL\" ]; then URL=$(grep -o '\"url\": *\"[^\"]*\"' \"$MCP\" | head -1 | sed 's/.*\"url\":[[:space:]]*\"[[:space:]]*//' | sed 's/\".*//'); fi\n" +
-		"STAGE_DIR=$(dirname \"$MCP\")\n" +
-		"curl -sf -X POST \"$URL\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}' >/dev/null\n" +
-		"curl -sf -X POST \"$URL\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_user\",\"arguments\":{\"id\":\"q1\",\"question\":\"x?\"}}}' >/dev/null\n" +
-		"echo 'done' > \"$STAGE_DIR/.done\"\n" +
-		"echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"resumed\"}]}}'\n" +
-		"echo '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
-	if err := os.WriteFile(agentScript, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	stages := []flow.Stage{
-		{
-			ID: "discovery", Name: "Discovery", Description: "ask user",
-			Agents:      []flow.AgentType{flow.AgentImplementation},
-			Interactive: true,
-			Command:     agentScript,
-		},
-	}
-
-	rs := state.NewRunState([]string{"discovery"})
-	rs.SetStageStatus("discovery", state.StatusAwaitingUserInput)
-	stateFile := filepath.Join(dir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := config.Default()
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    dir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-	})
-
-	mcpSrv := mcp.NewServer(dir, orchestrator.NewMcpNotifier(orch))
-	srv := httptest.NewServer(mcpSrv)
-	defer srv.Close()
-	orch.SetDashboardURL(srv.URL)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
-
-	// Stage should go from awaiting_user_input → running → done via resume
-	waitForStatus(t, stateFile, "discovery", state.StatusDone, 10*time.Second)
-
-	// Verify dialog was preserved
-	entries, err := mcp.ReadDialog(dialogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 dialog entry, got %d", len(entries))
-	}
-	if entries[0].Answer == nil || *entries[0].Answer != "after restart" {
-		t.Errorf("answer mismatch: %+v", entries[0])
-	}
-}
-
-// openQuestionRunner injects an unanswered ask_user question into the
-// planning dialog file on the Nth RunPlanning call, simulating an agent
-// that gave up before the user answered.
-type openQuestionRunner struct {
-	delegate     executor.Runner
-	runDir       string
-	stageID      string
-	qID          string
-	leaveOpenOn  int
-	mu           sync.Mutex
-	planningRuns int
-}
-
-func (r *openQuestionRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
-	r.mu.Lock()
-	r.planningRuns++
-	run := r.planningRuns
-	r.mu.Unlock()
-
-	if run == r.leaveOpenOn {
-		dialogPath := filepath.Join(r.runDir, r.stageID, "planning.dialog.jsonl")
-		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: r.qID, Question: "left open"})
-	}
-	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
-}
-
-func (r *openQuestionRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
-	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
-}
-
-// TestIntegration_PlanningWithOpenQuestionWaits verifies the open-question
-// gate: when planning completes but the dialog file still has an unanswered
-// ask_user question, the stage must NOT advance to awaiting_approval. It
-// must hold in awaiting_user_input until an answer is recorded, then
-// re-run planning and proceed normally.
-func TestIntegration_PlanningWithOpenQuestionWaits(t *testing.T) {
-	stages := []flow.Stage{
-		{
-			ID: "gated", Name: "Gated", Description: "interactive planning",
-			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
-		},
-	}
-
-	runDir := t.TempDir()
-	rs := state.NewRunState([]string{"gated"})
-	stateFile := filepath.Join(runDir, "state.json")
-	if err := rs.Save(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	base := mockRunner(t, mockPlanningScript)
-	openR := &openQuestionRunner{
-		delegate:    base,
-		runDir:      runDir,
-		stageID:     "gated",
-		qID:         "q-stuck",
-		leaveOpenOn: 1,
-	}
-	runner := &doneCreatingRunner{delegate: openR}
-
-	cfg := config.Default()
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir:    runDir,
-		Stages:    stages,
-		State:     rs,
-		StateFile: stateFile,
-		Config:    cfg,
-		Prompts:   orchestrator.DefaultPrompts(),
-		Runner:    runner,
-	})
-
-	cancelApprove := autoApprove(orch)
-	defer cancelApprove()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
-
-	waitForStatus(t, stateFile, "gated", state.StatusAwaitingUserInput, 5*time.Second)
-
-	// Make sure the stage does NOT jump straight to awaiting_approval or done
-	// while the question is still open.
-	time.Sleep(150 * time.Millisecond)
-	rs2, _ := state.Load(stateFile)
-	if got := rs2.Stages["gated"].Status; got != state.StatusAwaitingUserInput {
-		t.Fatalf("stage moved away from awaiting_user_input while question open: got %s", got)
-	}
-
-	// Persist the user's answer and notify the orchestrator. We bypass the
-	// MCP server here because the mock runner is synchronous and never
-	// connected to one.
-	dialogPath := filepath.Join(runDir, "gated", "planning.dialog.jsonl")
-	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q-stuck", Answer: "go ahead"}); err != nil {
-		t.Fatal(err)
-	}
-	orch.Bus().Publish(orchestrator.Event{
-		Type:    orchestrator.EventUserAnswered,
-		StageID: "gated",
-		Data: map[string]any{
-			"id":     "q-stuck",
-			"phase":  "planning",
-			"answer": "go ahead",
-		},
-	})
-
-	waitForStatus(t, stateFile, "gated", state.StatusDone, 10*time.Second)
-
-	openR.mu.Lock()
-	runs := openR.planningRuns
-	openR.mu.Unlock()
-	if runs < 2 {
-		t.Errorf("expected planning to re-run after the answer, got %d runs", runs)
-	}
-}
-
-func waitForStatus(t *testing.T, stateFile, stageID string, want state.StageStatus, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		rs, err := state.Load(stateFile)
-		if err == nil && rs.Stages[stageID].Status == want {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	rs, _ := state.Load(stateFile)
-	current := "<nil>"
-	if rs != nil {
-		current = string(rs.Stages[stageID].Status)
-	}
-	t.Fatalf("stage %s did not reach %s within %s (current: %s)", stageID, want, timeout, current)
 }

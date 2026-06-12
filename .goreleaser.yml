@@ -1,0 +1,30 @@
+version: 2
+
+project_name: flowmanager
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/flowmanager
+    binary: flowmanager
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"

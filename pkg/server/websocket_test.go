@@ -25,7 +25,7 @@ func TestWebSocket_ReceivesEvents(t *testing.T) {
 
 	// Give the subscription a moment to register, then publish.
 	time.Sleep(50 * time.Millisecond)
-	srv.bus.Publish(orchestrator.Event{
+	srv.uiBus.Publish(orchestrator.Event{
 		Type:    orchestrator.EventStageStatusChanged,
 		StageID: "s1",
 		Data:    "awaiting_approval",

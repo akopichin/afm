@@ -1028,6 +1028,15 @@ body::after {
   margin-right: 2px;
 }
 
+.dialog-history .agent-msg {
+  border-left: 2px solid rgba(186, 148, 255, 0.25);
+  padding-left: 12px;
+  font-size: 11px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 .phase-divider {
   font-size: 9px;
   text-transform: uppercase;

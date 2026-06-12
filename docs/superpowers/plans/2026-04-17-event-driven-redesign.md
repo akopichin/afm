@@ -94,7 +94,7 @@ package orchestrator
 import (
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func TestFSM_ValidTransitions(t *testing.T) {
@@ -162,7 +162,7 @@ Expected: FAIL — `ValidTransition` и `IsTerminal` не определены.
 ```go
 package orchestrator
 
-import "gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+import "github.com/akopichin/afm/pkg/state"
 
 // validTransitions задаёт допустимые переходы FSM стадии.
 var validTransitions = map[state.StageStatus][]state.StageStatus{
@@ -786,11 +786,11 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/executor"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // mockRunner имитирует выполнение агентов без реального AI-клиента.
@@ -905,10 +905,10 @@ import (
 	"path/filepath"
 	"sync"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/executor"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // Prompts holds the prompt templates for each agent type.
@@ -1280,10 +1280,10 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func setupOrchestratorV2(t *testing.T, stages []flow.Stage, runner *mockRunner) (*orchestrator.Orchestrator, string, string) {
@@ -1538,8 +1538,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func setupTestServer(t *testing.T) (*Server, string) {
@@ -1666,7 +1666,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -1759,7 +1759,7 @@ import (
 	"net/http"
 	"strings"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 // Server — HTTP-сервер для дашборда и API.
@@ -1878,7 +1878,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 func TestWebSocket_ReceivesEvents(t *testing.T) {
@@ -1925,7 +1925,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 var upgrader = websocket.Upgrader{
@@ -2022,7 +2022,7 @@ var FS embed.FS
 Добавить в `pkg/server/server.go` в конструктор `New`:
 
 ```go
-import "gitlab.ae-rus.net/bx/ai-flow-manager/pkg/web"
+import "github.com/akopichin/afm/pkg/web"
 
 // В New(), после регистрации API маршрутов:
 mux.Handle("/", http.FileServer(http.FS(web.FS)))
@@ -2067,12 +2067,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/assets"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/config"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/flow"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/orchestrator"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/server"
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/assets"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/server"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func newRunCmd() *cobra.Command {
@@ -2324,7 +2324,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.ae-rus.net/bx/ai-flow-manager/pkg/state"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // ANSI цвета
@@ -2476,7 +2476,7 @@ allowed-tools: [Bash, Read, AskUserQuestion]
 which flowmanager
 ```
 
-If not found: `go install gitlab.ae-rus.net/bx/ai-flow-manager/cmd/flowmanager@latest`
+If not found: `go install github.com/akopichin/afm/cmd/flowmanager@latest`
 
 ## Step 1: Select Flow
 

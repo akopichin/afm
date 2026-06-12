@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,24 +20,27 @@ func newApproveCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stageID := args[0]
-			stateFile, err := findLatestStateFile(stageID)
+			runDir, stageIDs, err := findLatestRunDir(stageID)
 			if err != nil {
 				return err
 			}
-			rs, err := state.Load(stateFile)
+			store, err := state.Open(runDir, stageIDs)
 			if err != nil {
-				return fmt.Errorf("load state: %w", err)
+				return fmt.Errorf("open store: %w", err)
 			}
-			st, ok := rs.Stages[stageID]
-			if !ok {
-				return fmt.Errorf("stage %q not found", stageID)
+			defer store.Close()
+
+			current := store.Get(stageID)
+			if current != state.StatusAwaitingApproval {
+				return fmt.Errorf("stage %q is %v, not awaiting_approval", stageID, current)
 			}
-			if st.Status != state.StatusAwaitingApproval {
-				return fmt.Errorf("stage %q is %v, not awaiting_approval", stageID, st.Status)
-			}
-			rs.SetStageStatus(stageID, state.StatusReady)
-			if err := rs.Save(stateFile); err != nil {
-				return fmt.Errorf("save state: %w", err)
+			if err := store.Apply(state.Transition{
+				StageID: stageID,
+				From:    state.StatusAwaitingApproval,
+				To:      state.StatusReady,
+				Event:   "cli_approve",
+			}); err != nil {
+				return fmt.Errorf("approve: %w", err)
 			}
 			fmt.Printf("approved stage %q: ready to run\n", stageID)
 			return nil
@@ -44,14 +48,14 @@ func newApproveCmd() *cobra.Command {
 	}
 }
 
-// findLatestStateFile returns the state.json of the most recent run that
-// contains stageID. This prevents operating on the wrong flow when multiple
-// flows have runs in .flowManager/runs/.
-func findLatestStateFile(stageID string) (string, error) {
+// findLatestRunDir returns the run directory and all stage IDs of the most
+// recent run that contains stageID. This prevents operating on the wrong flow
+// when multiple flows have runs in .flowManager/runs/.
+func findLatestRunDir(stageID string) (runDir string, stageIDs []string, err error) {
 	base := filepath.Join(".flowManager", "runs")
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return "", fmt.Errorf("no runs dir: %w", err)
+	entries, readErr := os.ReadDir(base)
+	if readErr != nil {
+		return "", nil, fmt.Errorf("no runs dir: %w", readErr)
 	}
 	var dirs []string
 	for _, e := range entries {
@@ -60,19 +64,27 @@ func findLatestStateFile(stageID string) (string, error) {
 		}
 	}
 	if len(dirs) == 0 {
-		return "", errors.New("no runs found")
+		return "", nil, errors.New("no runs found")
 	}
 	slices.Sort(dirs)
 	slices.Reverse(dirs) // newest first
 	for _, dir := range dirs {
 		sf := filepath.Join(dir, "state.json")
-		rs, err := state.Load(sf)
-		if err != nil {
+		sd, loadErr := os.ReadFile(sf)
+		if loadErr != nil {
+			continue
+		}
+		var rs state.RunState
+		if jsonErr := json.Unmarshal(sd, &rs); jsonErr != nil {
 			continue
 		}
 		if _, ok := rs.Stages[stageID]; ok {
-			return sf, nil
+			ids := make([]string, 0, len(rs.Stages))
+			for id := range rs.Stages {
+				ids = append(ids, id)
+			}
+			return dir, ids, nil
 		}
 	}
-	return "", fmt.Errorf("no active run found for stage %q", stageID)
+	return "", nil, fmt.Errorf("no active run found for stage %q", stageID)
 }

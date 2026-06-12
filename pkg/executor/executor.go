@@ -1,12 +1,14 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,6 +32,7 @@ const (
 	contentTypeText    = "text"
 	contentTypeToolUse = "tool_use"
 	toolNameBash       = "Bash"
+	toolNameWrite      = "Write"
 )
 
 // Executor spawns AI client subprocesses.
@@ -148,7 +151,7 @@ func contentToAction(c streamContent) (toolName, detail string, ok bool) {
 			fp = inp.Pattern
 		}
 		switch c.Name {
-		case "Write", "Edit", "Read", "Glob", "Grep":
+		case toolNameWrite, "Edit", "Read", "Glob", "Grep":
 			return c.Name, fp, true
 		case toolNameBash:
 			cmd := inp.Command
@@ -195,8 +198,14 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 
 	lg.LogStart("planning", stageName)
 
+	absOut, err := filepath.Abs(outFile)
+	if err != nil {
+		absOut = outFile
+	}
+
 	var textBuf strings.Builder
 	var firstErr string
+	var agentWroteOutFile bool
 	runErr := e.run(ctx, prompt, func(line string) {
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
@@ -212,6 +221,13 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 		for _, c := range ev.Message.Content {
 			if c.Type == contentTypeText {
 				textBuf.WriteString(c.Text)
+			}
+			if c.Type == contentTypeToolUse && c.Name == toolNameWrite {
+				var inp toolInput
+				json.Unmarshal(c.Input, &inp) //nolint:errcheck
+				if abs, absErr := filepath.Abs(inp.FilePath); inp.FilePath != "" && absErr == nil && abs == absOut {
+					agentWroteOutFile = true
+				}
 			}
 			if tool, detail, actionOK := contentToAction(c); actionOK {
 				lg.LogAction(tool, detail)
@@ -229,11 +245,46 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 		}
 		return runErr
 	}
-	if textBuf.Len() == 0 {
-		// Агент записал план через Write tool — не затираем файл пустой строкой.
+	if agentWroteOutFile || textBuf.Len() == 0 {
+		// Агент записал план через Write tool — текст чата (резюме,
+		// комментарии) не должен затирать файл плана.
 		return nil
 	}
 	return os.WriteFile(outFile, []byte(textBuf.String()), 0644)
+}
+
+// WrittenFiles возвращает пути файлов, записанных агентом через Write tool,
+// в порядке появления событий в stream-json логе. Отсутствующий или
+// нечитаемый лог даёт пустой список.
+func WrittenFiles(jsonlPath string) []string {
+	f, err := os.Open(jsonlPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var files []string
+	sc := bufio.NewScanner(f)
+	// Строки stream-json содержат полный контент Write-вызовов и легко
+	// превышают дефолтный лимит сканера в 64 КБ.
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		ev, ok := parseStreamEvent(sc.Text())
+		if !ok {
+			continue
+		}
+		for _, c := range ev.Message.Content {
+			if c.Type != contentTypeToolUse || c.Name != toolNameWrite {
+				continue
+			}
+			var inp toolInput
+			if json.Unmarshal(c.Input, &inp) != nil || inp.FilePath == "" {
+				continue
+			}
+			files = append(files, inp.FilePath)
+		}
+	}
+	return files
 }
 
 // RunAgent runs the AI client with prompt via stdin, writing human-readable

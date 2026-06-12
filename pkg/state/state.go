@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,35 +64,6 @@ func (rs *RunState) AllDone() bool {
 		}
 	}
 	return true
-}
-
-// Save writes state atomically (temp file + rename).
-func (rs *RunState) Save(path string) error {
-	data, err := json.MarshalIndent(rs, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("write temp state: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename state: %w", err)
-	}
-	return nil
-}
-
-// Load reads state from a JSON file.
-func Load(path string) (*RunState, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read state: %w", err)
-	}
-	var rs RunState
-	if err := json.Unmarshal(data, &rs); err != nil {
-		return nil, fmt.Errorf("unmarshal state: %w", err)
-	}
-	return &rs, nil
 }
 
 // FindLatestRunDir finds the most recent run directory for a given flow name

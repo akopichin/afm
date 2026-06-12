@@ -345,3 +345,24 @@ stages:
 		t.Error("plan path not set")
 	}
 }
+
+func TestParseVerify(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    agents: [implementation]
+    plan: docs/plans/existing.md
+    verify: ".venv/bin/python -m pytest tests/ -q"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Stages[0].Verify != ".venv/bin/python -m pytest tests/ -q" {
+		t.Errorf("verify command not parsed, got %q", f.Stages[0].Verify)
+	}
+}

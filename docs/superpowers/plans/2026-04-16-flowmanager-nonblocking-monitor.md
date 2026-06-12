@@ -203,7 +203,7 @@ which flowmanager
 
 If not found:
 - macOS: `brew install <owner>/tap/flowmanager`
-- Any platform: `go install gitlab.ae-rus.net/bx/ai-flow-manager/cmd/flowmanager@latest`
+- Any platform: `go install github.com/akopichin/afm/cmd/flowmanager@latest`
 
 ## Step 1: Select Flow
 

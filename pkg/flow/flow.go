@@ -66,6 +66,10 @@ type Stage struct {
 	Artifacts   []Artifact `yaml:"artifacts"`
 	Inputs      []Input    `yaml:"inputs"`
 	Interactive bool       `yaml:"interactive"`
+	// Verify is an optional shell command executed in the project directory
+	// after the stage reports completion. Non-zero exit means the stage is
+	// not actually done, regardless of what the agent claims.
+	Verify string `yaml:"verify"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.

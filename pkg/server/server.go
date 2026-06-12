@@ -10,17 +10,18 @@ import (
 
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/web"
 )
 
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
 	runDir         string
-	stateFile      string
-	bus            *orchestrator.EventBus
-	approveFn      func(stageID string)
-	reviseFn       func(stageID, feedback string)
-	retryFn        func(stageID string)
+	store          *state.Store
+	uiBus          *orchestrator.UIBus
+	approveFn      func(ctx context.Context, stageID string) error
+	reviseFn       func(ctx context.Context, stageID, feedback string) error
+	retryFn        func(ctx context.Context, stageID string) error
 	mcpSrv         *mcp.Server
 	dialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	dialogCancelFn func(stageID string) error
@@ -31,11 +32,11 @@ type Server struct {
 type Config struct {
 	Port           int
 	RunDir         string
-	StateFile      string
-	Bus            *orchestrator.EventBus
-	ApproveFn      func(stageID string)
-	ReviseFn       func(stageID, feedback string)
-	RetryFn        func(stageID string)
+	Store          *state.Store
+	UIBus          *orchestrator.UIBus
+	ApproveFn      func(ctx context.Context, stageID string) error
+	ReviseFn       func(ctx context.Context, stageID, feedback string) error
+	RetryFn        func(ctx context.Context, stageID string) error
 	McpServer      *mcp.Server
 	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	DialogCancelFn func(stageID string) error
@@ -45,8 +46,8 @@ type Config struct {
 func New(cfg Config) *Server {
 	s := &Server{
 		runDir:         cfg.RunDir,
-		stateFile:      cfg.StateFile,
-		bus:            cfg.Bus,
+		store:          cfg.Store,
+		uiBus:          cfg.UIBus,
 		approveFn:      cfg.ApproveFn,
 		reviseFn:       cfg.ReviseFn,
 		retryFn:        cfg.RetryFn,

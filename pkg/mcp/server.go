@@ -25,7 +25,7 @@ const (
 	jType        = "type"
 )
 
-// Notifier is implemented by orchestrator.EventBus so the MCP server can
+// Notifier is implemented by orchestrator.McpNotifier so the MCP server can
 // publish ask_user/user_answered events without importing orchestrator.
 type Notifier interface {
 	PublishAskUser(stageID, phase, qID, question string, options []string, allowCustom bool)
