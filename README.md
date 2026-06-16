@@ -144,11 +144,12 @@ stages:
 | `description` | да | Задача для AI |
 | `agents` | да | `planning`, `implementation`, `review` |
 | `depends_on` | нет | ID стадий, которые должны завершиться раньше |
+| `eager_planning` | нет | `true` — planning стартует сразу при запуске flow, не дожидаясь `depends_on`. По умолчанию planning ждёт завершения зависимостей |
 | `skills` | нет | Claude-скиллы для агента |
 | `plan` | нет | Путь к готовому план-файлу (пропускает planning) |
 | `command` | нет | AI-команда для этой стадии (переопределяет config) |
 | `max_parallel` | нет | Лимит параллельных стадий для этой команды |
-| `interactive` | нет | `true` — включает MCP-tool `ask_user` для диалога с пользователем через dashboard |
+| `interactive` | нет | `true` — включает файловый протокол диалога с пользователем через dashboard. Агенту передаётся env `FLOWMANAGER_STAGE_DIR`, он пишет `<phase>.q<N>.question.json` и ждёт `<phase>.q<N>.answer.json` через bash-цикл |
 | `artifacts` | нет | Файлы, которые стадия производит для других стадий |
 | `inputs` | нет | Артефакты из зависимых стадий (`stage.artifact`) |
 | `verify` | нет | Shell-команда, выполняется в директории проекта после `.done`. Exit-код ≠ 0 — стадия не засчитывается: один ретрай агента с выводом команды в промпте, затем `failed`. Защита от ложного «done» |
@@ -183,14 +184,16 @@ stages:
 
 ### Интерактивные стадии
 
-Стадия с `interactive: true` получает MCP-tool `ask_user` для диалога с пользователем через dashboard. Агент вызывает `ask_user` с вопросом и вариантами ответа — в dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия находится в статусе `awaiting_user_input`.
+Стадия с `interactive: true` получает файловый протокол для диалога с пользователем через dashboard. Агенту передаётся env-переменная `FLOWMANAGER_STAGE_DIR` (путь к stage-директории). Чтобы задать вопрос, агент пишет файл `<phase>.q<N>.question.json` (где `<phase>` — `planning`/`implementation`/`review`, `N` растёт: q1, q2, …), а затем ждёт появления `<phase>.q<N>.answer.json` через bash-цикл. В dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия находится в статусе `awaiting_user_input`; после ответа выполнение продолжается.
 
 ```yaml
 stages:
   - id: discovery
     name: "Сбор требований"
     description: |
-      Спроси у пользователя preferred language через ask_user (id: q1).
+      Спроси у пользователя preferred language через файловый протокол (id: q1):
+      запиши $FLOWMANAGER_STAGE_DIR/implementation.q1.question.json и дождись
+      ответа $FLOWMANAGER_STAGE_DIR/implementation.q1.answer.json.
       После ответа запиши итог в ./summary.md.
     agents: [implementation]
     interactive: true
@@ -232,7 +235,7 @@ server:
 При запуске автоматически открывается дашборд:
 
 - **Левая панель** — список стадий с цветными статус-индикаторами
-- **Центральная панель** — план с построчным ревью и inline-комментариями, лог агента (только текстовые сообщения)
+- **Центральная панель** — план с построчным ревью и inline-комментариями, лог агента (сообщения с markdown-форматированием)
 - **Правая панель** — лента событий со всех стадий с бейджами источников
 - **Прогресс-бар** — внизу, сколько стадий завершено
 
@@ -249,6 +252,7 @@ server:
 - Пропускает завершённые стадии (`done`)
 - Сохраняет стадии ожидающие одобрения (`awaiting_approval`)
 - Перезапускает прерванные стадии (`planning`, `running`, `revising`)
+- Сохраняет стадии в `awaiting_user_input`: файлы вопросов/ответов переживают перезапуск, незакрытый вопрос снова показывается в dashboard, после ответа стадия продолжается
 
 ## Структура директорий
 
@@ -264,6 +268,10 @@ server:
         planning.jsonl   # raw stream-json
         implementation.log
         review.log
+        # файлы интерактивного диалога (только для interactive: true):
+        <phase>.q<N>.question.json   # вопрос агента
+        <phase>.q<N>.answer.json     # ответ пользователя
+        <phase>.dialog.jsonl         # история диалога для UI
   config.yaml      # конфиг проекта (опционально)
 ```
 
@@ -279,16 +287,18 @@ server:
 
 ```
 pending → planning → awaiting_approval → ready → running → done
-                                                         ↘ failed
+                ↓                                     ↓        ↘ failed
+                └────→ awaiting_user_input ←──────────┘
          ↑                                         ↓
          └───────── revising ←────────────────────┘
 ```
 
-- `pending` — ещё не запущена
+- `pending` — ещё не запущена; planning стартует только после завершения всех `depends_on` (если не задан `eager_planning: true`)
 - `planning` — AI строит план
 - `awaiting_approval` — план готов, ждёт одобрения (через веб или CLI)
 - `ready` — план одобрен, ждёт своей очереди (зависимости)
 - `running` — AI реализует план
+- `awaiting_user_input` — интерактивная стадия приостановлена: агент задал вопрос через файловый протокол и ждёт ответа пользователя; после ответа возвращается в `planning` или `running` (в ту фазу, где был задан вопрос)
 - `done` / `failed` — завершена
 - `revising` — отправлены правки, AI переделывает план
 

@@ -51,23 +51,3 @@ func newUUID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
-
-func writeMcpConfig(stageDir, stageID, phase, dashURL string) (string, error) {
-	cfg := map[string]any{
-		"mcpServers": map[string]any{
-			"flowmanager": map[string]any{
-				"type": "http",
-				"url":  fmt.Sprintf("%s/mcp/%s/%s", dashURL, stageID, phase),
-			},
-		},
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(stageDir, "mcp.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return "", err
-	}
-	return path, nil
-}

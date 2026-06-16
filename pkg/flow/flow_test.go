@@ -346,6 +346,35 @@ stages:
 	}
 }
 
+const eagerPlanningYAML = `
+name: eager-flow
+description: "eager planning"
+stages:
+  - id: base
+    name: "Base"
+    description: "base stage"
+    agents: [planning, implementation]
+  - id: dependent
+    name: "Dependent"
+    description: "plans eagerly"
+    depends_on: [base]
+    eager_planning: true
+    agents: [planning, implementation]
+`
+
+func TestParseEagerPlanning(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, eagerPlanningYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !f.Stages[1].EagerPlanning {
+		t.Errorf("eager_planning: got false, want true")
+	}
+	if f.Stages[0].EagerPlanning {
+		t.Errorf("eager_planning default: got true, want false")
+	}
+}
+
 func TestParseVerify(t *testing.T) {
 	yaml := `
 name: f

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/web"
@@ -22,7 +21,6 @@ type Server struct {
 	approveFn      func(ctx context.Context, stageID string) error
 	reviseFn       func(ctx context.Context, stageID, feedback string) error
 	retryFn        func(ctx context.Context, stageID string) error
-	mcpSrv         *mcp.Server
 	dialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	dialogCancelFn func(stageID string) error
 	httpSrv        *http.Server
@@ -37,7 +35,6 @@ type Config struct {
 	ApproveFn      func(ctx context.Context, stageID string) error
 	ReviseFn       func(ctx context.Context, stageID, feedback string) error
 	RetryFn        func(ctx context.Context, stageID string) error
-	McpServer      *mcp.Server
 	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	DialogCancelFn func(stageID string) error
 }
@@ -51,7 +48,6 @@ func New(cfg Config) *Server {
 		approveFn:      cfg.ApproveFn,
 		reviseFn:       cfg.ReviseFn,
 		retryFn:        cfg.RetryFn,
-		mcpSrv:         cfg.McpServer,
 		dialogAnswerFn: cfg.DialogAnswerFn,
 		dialogCancelFn: cfg.DialogCancelFn,
 	}
@@ -60,9 +56,6 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/ws", s.handleWebSocket)
-	if cfg.McpServer != nil {
-		mux.Handle("/mcp/", cfg.McpServer)
-	}
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 
 	s.httpSrv = &http.Server{

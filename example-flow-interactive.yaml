@@ -15,13 +15,18 @@ stages:
       1. Какой язык программирования предпочитает (предложи Go, Python, TypeScript).
       2. Какой стиль архитектуры (предложи monolith, microservices, "не знаю").
 
+      Для каждого вопроса используй файловый протокол диалога:
+      - запиши $FLOWMANAGER_STAGE_DIR/implementation.q1.question.json
+        (формат: {"id":"q1","question":"...","options":["Go","Python","TypeScript"],"allow_custom":true})
+      - дождись ответа: while [ ! -f "$FLOWMANAGER_STAGE_DIR/implementation.q1.answer.json" ]; do sleep 30; done
+      - повтори для q2 (архитектура)
+
       После двух ответов запиши итог в ./summary.md в формате:
         # Сводка
         - Язык: <ответ>
         - Архитектура: <ответ>
 
-      Используй tool ask_user с id вопросов q1, q2.
-      Когда summary.md записан — заверши работу.
+      Когда summary.md записан — заверши работу (создай .done).
     agents: [implementation]
     interactive: true
     artifacts:

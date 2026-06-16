@@ -2,7 +2,6 @@ package orchestrator_test
 
 import (
 	"context"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,11 +176,10 @@ func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
 	}
 }
 
-// TestResumeAfterCrash verifies that when flowManager crashes while a stage
-// is in awaiting_user_input, and the user's answer is already persisted in
-// dialog.jsonl, the orchestrator on restart detects the status, resumes the
-// interactive agent, which replays the sealed Q/A pair via MCP, and the stage
-// reaches done.
+// TestResumeAfterCrash verifies that when flowManager crashes while a stage is
+// in awaiting_user_input, and both question.json and answer.json already exist
+// on disk, the orchestrator on restart resumes the interactive agent, which
+// reads the pre-existing answer.json via its bash loop, and the stage reaches done.
 func TestResumeAfterCrash(t *testing.T) {
 	dir := t.TempDir()
 	stageDir := filepath.Join(dir, "discovery")
@@ -192,7 +190,16 @@ func TestResumeAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pre-populate: agent asked q1 and user answered before crash
+	// Pre-populate: agent had already asked q1 and user answered before crash.
+	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
+	if err := os.WriteFile(qPath, []byte(`{"id":"q1","question":"x?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	aPath := filepath.Join(stageDir, "implementation.q1.answer.json")
+	if err := os.WriteFile(aPath, []byte(`{"id":"q1","answer":"after restart","from_options":false}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Also populate dialog.jsonl for history.
 	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
 	if err := mcp.AppendQuestion(dialogPath, mcp.Question{ID: "q1", Question: "x?"}); err != nil {
 		t.Fatal(err)
@@ -200,30 +207,20 @@ func TestResumeAfterCrash(t *testing.T) {
 	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q1", Answer: "after restart"}); err != nil {
 		t.Fatal(err)
 	}
-
-	// Pre-populate: session.json exists (simulating prior run)
+	// Pre-populate: session.json to simulate prior run.
 	if err := os.WriteFile(filepath.Join(stageDir, "implementation.session.json"),
 		[]byte(`{"session_id":"test-uuid-resume"}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Agent script: calls MCP ask_user (gets replay answer), creates .done, exits
+	// Agent script: checks FLOWMANAGER_STAGE_DIR, reads answer.json (already exists),
+	// creates .done, exits.
 	agentScript := filepath.Join(dir, "mock-resume-agent.sh")
 	script := "#!/bin/bash\n" +
-		"MCP=\"\"\n" +
-		"while [ $# -gt 0 ]; do\n" +
-		"  case \"$1\" in\n" +
-		"    --mcp-config) MCP=\"$2\"; shift 2;;\n" +
-		"    --session-id|--resume) shift 2;;\n" +
-		"    *) shift;;\n" +
-		"  esac\n" +
-		"done\n" +
-		"if [ -z \"$MCP\" ]; then echo 'no mcp config' >&2; exit 1; fi\n" +
-		"URL=$(python3 -c \"import json,sys;d=json.load(open(sys.argv[1]));print(d['mcpServers']['flowmanager']['url'])\" \"$MCP\" 2>/dev/null)\n" +
-		"if [ -z \"$URL\" ]; then URL=$(grep -o '\"url\": *\"[^\"]*\"' \"$MCP\" | head -1 | sed 's/.*\"url\":[[:space:]]*\"[[:space:]]*//' | sed 's/\".*//'); fi\n" +
-		"STAGE_DIR=$(dirname \"$MCP\")\n" +
-		"curl -sf -X POST \"$URL\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}' >/dev/null\n" +
-		"curl -sf -X POST \"$URL\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"ask_user\",\"arguments\":{\"id\":\"q1\",\"question\":\"x?\"}}}' >/dev/null\n" +
+		"STAGE_DIR=\"$FLOWMANAGER_STAGE_DIR\"\n" +
+		"if [ -z \"$STAGE_DIR\" ]; then echo 'no FLOWMANAGER_STAGE_DIR' >&2; exit 1; fi\n" +
+		"# answer.json should already exist from before the crash\n" +
+		"if [ ! -f \"$STAGE_DIR/implementation.q1.answer.json\" ]; then echo 'answer missing' >&2; exit 1; fi\n" +
 		"echo 'done' > \"$STAGE_DIR/.done\"\n" +
 		"echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"resumed\"}]}}'\n" +
 		"echo '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
@@ -231,14 +228,12 @@ func TestResumeAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stages := []flow.Stage{
-		{
-			ID: "discovery", Name: "Discovery", Description: "ask user",
-			Agents:      []flow.AgentType{flow.AgentImplementation},
-			Interactive: true,
-			Command:     agentScript,
-		},
-	}
+	stages := []flow.Stage{{
+		ID: "discovery", Name: "Discovery", Description: "ask user",
+		Agents:      []flow.AgentType{flow.AgentImplementation},
+		Interactive: true,
+		Command:     agentScript,
+	}}
 
 	store, err := state.Open(dir, []string{"discovery"})
 	if err != nil {
@@ -257,19 +252,14 @@ func TestResumeAfterCrash(t *testing.T) {
 		Prompts: orchestrator.DefaultPrompts(),
 	})
 
-	mcpSrv := mcp.NewServer(dir, orchestrator.NewMcpNotifier(orch))
-	srv := httptest.NewServer(mcpSrv)
-	defer srv.Close()
-	orch.SetDashboardURL(srv.URL)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	go func() { _ = orch.Run(ctx) }()
 
-	// Stage should go from awaiting_user_input → running → done via resume
+	// Stage goes from awaiting_user_input → running → done via file-based resume.
 	waitForStatus(t, stateFile, "discovery", state.StatusDone, 10*time.Second)
 
-	// Verify dialog was preserved
+	// Verify dialog was preserved.
 	entries, err := mcp.ReadDialog(dialogPath)
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -105,52 +106,6 @@ func TestFindEntry(t *testing.T) {
 	}
 }
 
-func TestHasOpenQuestions(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "d.jsonl")
-
-	hasOpen, err := mcp.HasOpenQuestions(path)
-	if err != nil {
-		t.Fatalf("missing file should not error: %v", err)
-	}
-	if hasOpen {
-		t.Error("empty/missing dialog should have no open questions")
-	}
-
-	if err := mcp.AppendQuestion(path, mcp.Question{ID: testQ1, Question: testQuestionX}); err != nil {
-		t.Fatal(err)
-	}
-	hasOpen, err = mcp.HasOpenQuestions(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasOpen {
-		t.Error("unanswered question should be reported as open")
-	}
-
-	if err := mcp.AppendAnswer(path, mcp.Answer{ID: testQ1, Answer: answerYes}); err != nil {
-		t.Fatal(err)
-	}
-	hasOpen, err = mcp.HasOpenQuestions(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hasOpen {
-		t.Error("answered question should not be open anymore")
-	}
-
-	if err := mcp.AppendQuestion(path, mcp.Question{ID: testQ2, Question: testQuestionY}); err != nil {
-		t.Fatal(err)
-	}
-	hasOpen, err = mcp.HasOpenQuestions(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasOpen {
-		t.Error("new unanswered question after an answered one should be open")
-	}
-}
-
 func TestConcurrentAppend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d.jsonl")
@@ -186,5 +141,163 @@ func TestConcurrentAppend(t *testing.T) {
 	}
 	if len(entries) != 500 {
 		t.Errorf("expected 500 entries, got %d (some appends were corrupted)", len(entries))
+	}
+}
+
+func TestFindUnansweredQuestions(t *testing.T) {
+	dir := t.TempDir()
+
+	// Empty directory → empty result.
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("empty dir: want [], got %v, err %v", got, err)
+	}
+
+	// Single unanswered question.
+	q1 := filepath.Join(dir, "planning.q1.question.json")
+	if err := os.WriteFile(q1, []byte(`{"id":"q1","question":"proceed?","options":["yes","no"],"allow_custom":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 unanswered, got %d", len(got))
+	}
+	if got[0].Phase != "planning" || got[0].ID != "q1" || got[0].Question != "proceed?" {
+		t.Fatalf("unexpected entry: %+v", got[0])
+	}
+	if !got[0].AllowCustom || len(got[0].Options) != 2 {
+		t.Fatalf("allow_custom or options mismatch: %+v", got[0])
+	}
+
+	// Second question from a different phase.
+	q2 := filepath.Join(dir, "implementation.q1.question.json")
+	if err := os.WriteFile(q2, []byte(`{"id":"q1","question":"how?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 unanswered, got %d", len(got))
+	}
+
+	// Answer planning.q1 → should disappear from results.
+	a1 := filepath.Join(dir, "planning.q1.answer.json")
+	if err := os.WriteFile(a1, []byte(`{"id":"q1","answer":"yes"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Phase != "implementation" {
+		t.Fatalf("want 1 unanswered (implementation), got %v", got)
+	}
+
+	// Malformed JSON → skipped silently, does not error.
+	bad := filepath.Join(dir, "review.q1.question.json")
+	if err := os.WriteFile(bad, []byte(`not json`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("malformed JSON must be skipped; want 1, got %d", len(got))
+	}
+
+	// allow_custom defaults to true when omitted.
+	if !got[0].AllowCustom {
+		t.Error("allow_custom should default to true when not present in JSON")
+	}
+}
+
+// TestReadDialog_AnswerBeforeQuestion exercises the merge branch where the
+// answer line is appended before the question line (the question poller and
+// the HTTP answer handler write to dialog.jsonl from separate goroutines).
+// ReadDialog must fold them into a single entry carrying both sets of fields.
+func TestReadDialog_AnswerBeforeQuestion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "d.jsonl")
+
+	if err := mcp.AppendAnswer(path, mcp.Answer{ID: testQ1, Answer: answerYes, FromOptions: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.AppendQuestion(path, mcp.Question{
+		ID: testQ1, Question: testQuestionDoX, Options: []string{answerYes, "no"}, AllowCustom: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := mcp.ReadDialog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want 1 merged entry, got %d", len(entries))
+	}
+	e := entries[0]
+	if e.ID != testQ1 || e.Question != testQuestionDoX || len(e.Options) != 2 || !e.AllowCustom {
+		t.Errorf("question fields not merged onto answer-first entry: %+v", e)
+	}
+	if e.Answer == nil || *e.Answer != answerYes || !e.FromOptions {
+		t.Errorf("answer fields lost during merge: %+v", e)
+	}
+}
+
+// TestFindUnansweredQuestions_SamePhaseAndFallback covers cases the basic
+// test does not: multiple unanswered questions within a single phase, an
+// explicit allow_custom:false, and an empty JSON "id" that falls back to the
+// id parsed from the filename.
+func TestFindUnansweredQuestions_SamePhaseAndFallback(t *testing.T) {
+	// Two unanswered questions in the SAME phase are both returned.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "planning.q1.question.json"),
+		[]byte(`{"id":"q1","question":"first?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "planning.q2.question.json"),
+		[]byte(`{"id":"q2","question":"second?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 unanswered in same phase, got %d: %+v", len(got), got)
+	}
+
+	// allow_custom:false is honored (not forced to the default true).
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "planning.q1.question.json"),
+		[]byte(`{"id":"q1","question":"which?","allow_custom":false}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].AllowCustom {
+		t.Fatalf("allow_custom=false not honored: %+v", got)
+	}
+
+	// Empty JSON "id" → falls back to the id parsed from the filename.
+	dir3 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir3, "planning.qX.question.json"),
+		[]byte(`{"id":"","question":"no id in json?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "qX" {
+		t.Fatalf("empty JSON id should fall back to filename id, got: %+v", got)
 	}
 }

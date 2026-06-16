@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -107,7 +109,16 @@ func ReadDialog(path string) ([]Entry, error) {
 			if err := json.Unmarshal([]byte(line), &q); err != nil {
 				continue
 			}
-			if _, ok := byID[q.ID]; !ok {
+			if e, ok := byID[q.ID]; ok {
+				// The answer line arrived before the question line (the two
+				// records are written by different goroutines). Fill in the
+				// question fields on the existing entry instead of dropping
+				// them, leaving the answer fields untouched.
+				e.TS = q.TS
+				e.Question = q.Question
+				e.Options = q.Options
+				e.AllowCustom = q.AllowCustom
+			} else {
 				byID[q.ID] = &Entry{
 					ID: q.ID, TS: q.TS, Question: q.Question,
 					Options: q.Options, AllowCustom: q.AllowCustom,
@@ -127,21 +138,6 @@ func ReadDialog(path string) ([]Entry, error) {
 	return out, nil
 }
 
-// HasOpenQuestions reports whether the dialog file has any question that
-// has not yet been answered. A missing file means no open questions.
-func HasOpenQuestions(path string) (bool, error) {
-	entries, err := ReadDialog(path)
-	if err != nil {
-		return false, err
-	}
-	for i := range entries {
-		if entries[i].Answer == nil {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // FindEntry returns the entry with the given id, or nil if not present.
 func FindEntry(path, id string) (*Entry, error) {
 	entries, err := ReadDialog(path)
@@ -156,17 +152,25 @@ func FindEntry(path, id string) (*Entry, error) {
 	return nil, nil
 }
 
+// appendMu serializes concurrent writers of dialog.jsonl. Two goroutines now
+// append to the same files — the question poller (AppendQuestion) and the HTTP
+// answer handler (AppendAnswer) — and O_APPEND does not guarantee byte-atomic
+// writes for records larger than PIPE_BUF, so without a lock their bytes could
+// interleave and corrupt the JSONL (silently dropped on read).
+var appendMu sync.Mutex
+
 // appendLine opens the file with O_APPEND and writes one JSON record + \n.
-// POSIX guarantees atomic appends up to PIPE_BUF (4096); our records fit.
 func appendLine(path string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
 	data = append(data, '\n')
-	if len(data) > 4096 {
-		return fmt.Errorf("dialog record too large (%d bytes > PIPE_BUF)", len(data))
+	if len(data) > 1<<20 {
+		return fmt.Errorf("dialog record too large (%d bytes > 1 MB)", len(data))
 	}
+	appendMu.Lock()
+	defer appendMu.Unlock()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open append: %w", err)
@@ -176,4 +180,70 @@ func appendLine(path string, v any) error {
 		return fmt.Errorf("write: %w", err)
 	}
 	return nil
+}
+
+// QuestionFile holds metadata extracted from a *.question.json file.
+type QuestionFile struct {
+	Phase       string
+	ID          string
+	Question    string
+	Options     []string
+	AllowCustom bool
+}
+
+// FindUnansweredQuestions scans stageDir for *.question.json files that do not
+// have a matching *.answer.json. Filenames must follow "<phase>.<id>.question.json".
+func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
+	matches, err := filepath.Glob(filepath.Join(stageDir, "*.question.json"))
+	if err != nil {
+		return nil, err
+	}
+	var out []QuestionFile
+	for _, qPath := range matches {
+		base := strings.TrimSuffix(filepath.Base(qPath), ".question.json")
+		dot := strings.Index(base, ".")
+		if dot < 0 {
+			continue
+		}
+		phase, id := base[:dot], base[dot+1:]
+
+		if phase != "planning" && phase != "implementation" && phase != "review" {
+			continue
+		}
+
+		answerPath := strings.TrimSuffix(qPath, ".question.json") + ".answer.json"
+		if _, statErr := os.Stat(answerPath); statErr == nil {
+			continue // already answered
+		}
+
+		raw, readErr := os.ReadFile(qPath)
+		if readErr != nil {
+			continue
+		}
+		var qf struct {
+			ID          string   `json:"id"`
+			Question    string   `json:"question"`
+			Options     []string `json:"options"`
+			AllowCustom *bool    `json:"allow_custom"`
+		}
+		if err := json.Unmarshal(raw, &qf); err != nil {
+			continue
+		}
+		actualID := qf.ID
+		if actualID == "" {
+			actualID = id
+		}
+		if actualID == "" {
+			continue
+		}
+		allowCustom := true
+		if qf.AllowCustom != nil {
+			allowCustom = *qf.AllowCustom
+		}
+		out = append(out, QuestionFile{
+			Phase: phase, ID: actualID, Question: qf.Question,
+			Options: qf.Options, AllowCustom: allowCustom,
+		})
+	}
+	return out, nil
 }

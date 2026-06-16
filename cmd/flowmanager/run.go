@@ -17,7 +17,6 @@ import (
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
@@ -83,8 +82,6 @@ func newRunCmd() *cobra.Command {
 				Prompts: prompts,
 			})
 
-			mcpSrv := mcp.NewServer(runDir, orchestrator.NewMcpNotifier(orch))
-
 			// Disable interactive flags when dashboard is not running
 			if cfg.Server.GetPort() == 0 {
 				for i := range f.Stages {
@@ -105,14 +102,10 @@ func newRunCmd() *cobra.Command {
 					ApproveFn: orch.Approve,
 					ReviseFn:  orch.Revise,
 					RetryFn:   orch.Retry,
-					McpServer: mcpSrv,
 					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
-						return mcpSrv.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
+						return orch.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
 					},
 					DialogCancelFn: func(stageID string) error {
-						if err := mcpSrv.CancelStage(stageID); err != nil {
-							return err
-						}
 						orch.FailStage(stageID, "cancelled by user")
 						return nil
 					},

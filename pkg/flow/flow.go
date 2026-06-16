@@ -56,6 +56,10 @@ type Stage struct {
 	Agents      []AgentType `yaml:"agents"`
 	Skills      []string    `yaml:"skills"`
 	DependsOn   []string    `yaml:"depends_on"`
+	// EagerPlanning starts the planning agent immediately without
+	// waiting for depends_on stages to finish (the default before
+	// the planning-by-deps gate was introduced).
+	EagerPlanning bool `yaml:"eager_planning"`
 	// Plan is an optional path to an existing plan file.
 	// If set, the planning agent is skipped.
 	Plan string `yaml:"plan"`

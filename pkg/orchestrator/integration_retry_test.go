@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,31 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+// manualRetryRunner: planning of "First" always fails; implementation of
+// "Blocker" blocks until released; everything else delegates.
+type manualRetryRunner struct {
+	delegate executor.Runner
+	release  <-chan struct{}
+}
+
+func (r *manualRetryRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	if stageName == "First" {
+		return errors.New("planning exploded")
+	}
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *manualRetryRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	if stageName == "Blocker" {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
 
 // rateLimitThenSuccessRunner wraps a Runner and returns a rate limit error
 // on the first N calls, then delegates to the underlying runner.
@@ -349,5 +375,57 @@ func TestIntegration_VerifyFail(t *testing.T) {
 	}
 	if !strings.Contains(prompts[1], "VERIFY-BOOM") {
 		t.Errorf("retry prompt should contain verify output, got:\n%s", prompts[1])
+	}
+}
+
+// TestIntegration_ManualRetryWaitsForDeps verifies that manual retry of a
+// failed dependent stage keeps it pending instead of starting planning while
+// its dependency is still failed.
+func TestIntegration_ManualRetryWaitsForDeps(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "first", Name: "First", Description: "fails at planning", Agents: []flow.AgentType{flow.AgentPlanning}},
+		{ID: "second", Name: "Second", Description: "depends on first", DependsOn: []string{"first"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+		{ID: "blocker", Name: "Blocker", Description: "keeps the flow alive", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	release := make(chan struct{})
+	rec := &callRecordingRunner{delegate: &manualRetryRunner{
+		delegate: &doneCreatingRunner{delegate: mockRunner(t, mockPlanningScript)},
+		release:  release,
+	}}
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, rec)
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- orch.Run(context.Background()) }()
+
+	// first fails its planning, second is cascade-failed.
+	waitForStatus(t, stateFile, "second", state.StatusFailed, 10*time.Second)
+
+	// Manual retry of second: dependency is still failed — the stage must
+	// stay pending and must not start planning.
+	if err := orch.Retry(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, stateFile, "second", state.StatusPending, 10*time.Second)
+
+	// Release the blocker; its completion re-fails second (dep still failed)
+	// and the flow terminates.
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, c := range rec.callsSnapshot() {
+		if c == "planning:Second" {
+			t.Errorf("second must not plan after manual retry with failed dep, calls: %v", rec.callsSnapshot())
+		}
+	}
+
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["second"].Status != state.StatusFailed {
+		t.Errorf("second: expected failed, got %v", final.Stages["second"].Status)
 	}
 }

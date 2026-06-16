@@ -50,14 +50,19 @@ func NewFSM(store *state.Store) *FSM {
 	return &FSM{
 		store: store,
 		rules: map[FSMEvent]Rule{
-			EvStartPlanning:    {From: []state.StageStatus{state.StatusPending, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusPlanning)},
-			EvPlanReady:        {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying}, To: to(state.StatusAwaitingApproval)},
-			EvApprove:          {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
-			EvRevise:           {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusRevising)},
-			EvStartRun:         {From: []state.StageStatus{state.StatusReady}, To: to(state.StatusRunning)},
-			EvComplete:         {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying}, To: to(state.StatusDone)},
-			EvFail:             {From: nil, To: to(state.StatusFailed)},
-			EvAskUser:          {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning}, To: to(state.StatusAwaitingUserInput)},
+			EvStartPlanning: {From: []state.StageStatus{state.StatusPending, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusPlanning)},
+			EvPlanReady:     {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying}, To: to(state.StatusAwaitingApproval)},
+			EvApprove:       {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
+			EvRevise:        {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusRevising)},
+			EvStartRun:      {From: []state.StageStatus{state.StatusReady}, To: to(state.StatusRunning)},
+			EvComplete:      {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying}, To: to(state.StatusDone)},
+			EvFail:          {From: nil, To: to(state.StatusFailed)},
+			// EvAskUser must be reachable from any state the question poller scans
+			// (planning, running, plus the retry/revision cycles where an agent can
+			// ask mid-flight). Without retrying/revising here the transition is
+			// silently rejected and the stage never reaches awaiting_user_input,
+			// which breaks the cancel path and the onUserAnswered restart path.
+			EvAskUser:          {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
 			EvUserAnswered:     {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
 			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning}, To: to(state.StatusRetrying)},
 			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying}, To: phaseDispatch},

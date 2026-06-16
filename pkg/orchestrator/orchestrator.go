@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
@@ -77,6 +79,7 @@ type Orchestrator struct {
 		acquire()
 		release()
 	} // per-command semaphores
+	activeAgents sync.Map // stageID → struct{}: set while an agent goroutine runs
 }
 
 // New creates an Orchestrator.
@@ -144,7 +147,7 @@ func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason
 	if ok {
 		ev := Event{Type: EventStageStatusChanged, StageID: stageID, Data: string(to)}
 		o.ui.Publish(ev)
-		// Wake the event loop so it can check allTerminal(). Non-blocking to avoid deadlock.
+		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		select {
 		case o.critical.ch <- ev:
 		default:
@@ -156,20 +159,59 @@ func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason
 // SetDashboardURL sets the dashboard URL after the server starts listening.
 func (o *Orchestrator) SetDashboardURL(url string) { o.opts.DashboardURL = url }
 
-// PublishCriticalForTest publishes an event to the critical bus for test use.
-func (o *Orchestrator) PublishCriticalForTest(ev Event) {
-	_ = o.critical.Publish(context.Background(), ev)
-}
-
 // FailStage marks a stage as failed with a reason.
 func (o *Orchestrator) FailStage(stageID, reason string) {
 	o.Trigger(stageID, EvFail, GuardCtx{}, reason)
 	o.failBlockedStages()
 }
 
+// markAgentActive records that an agent goroutine is running for a stage.
+// Called after sem.acquire() so it reflects actively-running agents only.
+// Store is idempotent, so double-marking (e.g. goroutine + nested call) is safe.
+func (o *Orchestrator) markAgentActive(stageID string) { o.activeAgents.Store(stageID, struct{}{}) }
+
+// markAgentDone clears the active-agent marker for a stage. Called via defer
+// before sem.release().
+func (o *Orchestrator) markAgentDone(stageID string) { o.activeAgents.Delete(stageID) }
+
+// isAgentActive reports whether an agent goroutine is currently running for a stage.
+func (o *Orchestrator) isAgentActive(stageID string) bool {
+	_, ok := o.activeAgents.Load(stageID)
+	return ok
+}
+
+// NotifyAnswer is called by the HTTP handler when the user submits an answer.
+// If the agent goroutine is still running (its bash loop is awaiting
+// answer.json), we only transition the status — the bash loop will detect the
+// file and continue without a restart. If the goroutine has exited, we publish
+// to the critical bus so onUserAnswered can restart it.
+func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
+	if o.isAgentActive(stageID) {
+		guardPhase := phaseImplementation
+		switch phase {
+		case phasePlanning:
+			guardPhase = phasePlanning
+		case phaseReview:
+			guardPhase = phaseReview
+		default:
+			// phaseImplementation (already set as default above)
+		}
+		o.Trigger(stageID, EvUserAnswered, GuardCtx{Phase: guardPhase}, "")
+		o.ui.Publish(Event{Type: EventUserAnswered, StageID: stageID, Data: map[string]any{
+			"id": qID, "phase": phase, "answer": answer,
+		}})
+		return nil
+	}
+	return o.critical.Publish(context.Background(), Event{
+		Type:    EventUserAnswered,
+		StageID: stageID,
+		Data:    map[string]any{"id": qID, "phase": phase, "answer": answer},
+	})
+}
+
 // runnerFor returns the appropriate Runner for a stage's phase.
-// For interactive stages, generates mcp.json and a session id, then
-// returns an executor configured with --mcp-config and --session-id (or --resume).
+// For interactive stages it generates a session id and returns an executor
+// configured with --session-id / --resume and FLOWMANAGER_STAGE_DIR env.
 func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	if !s.Interactive {
 		if s.Command == "" {
@@ -183,12 +225,6 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	mcpPath, err := writeMcpConfig(stageDir, s.ID, phase, o.opts.DashboardURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: interactive stage %q: mcp config failed: %v; using non-interactive runner\n", s.ID, err)
-		return o.runnerForFallback(s)
-	}
-
 	resume := sessionExists(stageDir, phase)
 	sessionID, err := loadOrCreateSession(stageDir, phase)
 	if err != nil {
@@ -209,7 +245,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		OnAction:    uiActionPublisher(o.ui, s.ID),
 		SessionID:   sessionID,
 		Resume:      resume,
-		McpConfig:   mcpPath,
+		StageDir:    stageDir,
 	})
 }
 
@@ -251,6 +287,7 @@ func (o *Orchestrator) semFor(s flow.Stage) interface {
 // Run starts the event-driven orchestrator loop.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	o.startPlanningForPending(ctx)
+	o.startQuestionPoller(ctx) // file-based dialog poller
 
 	for {
 		select {
@@ -260,9 +297,74 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			if err := o.handleEvent(ctx, ev); err != nil {
 				return err
 			}
-			if o.allTerminal() {
+			if o.shouldExit() {
 				return nil
 			}
+		}
+	}
+}
+
+// startQuestionPoller launches a goroutine that scans active stage directories
+// every second for new *.question.json files (file-based dialog protocol).
+func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		processed := map[string]bool{} // "stageID|phase|id" → true
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				o.pollQuestions(processed)
+			}
+		}
+	}()
+}
+
+// pollQuestions scans each active stage directory for unanswered question files.
+// For each new file: writes it to dialog.jsonl (for UI history) and publishes
+// EventAskUser to transition the stage to awaiting_user_input.
+func (o *Orchestrator) pollQuestions(processed map[string]bool) {
+	snap := o.opts.Store.Snapshot()
+	for stageID, st := range snap.Stages {
+		switch st.Status {
+		case state.StatusPlanning, state.StatusRunning, state.StatusRevising,
+			state.StatusRetrying, state.StatusAwaitingUserInput:
+		default:
+			continue
+		}
+		stageDir := filepath.Join(o.opts.RunDir, stageID)
+		questions, err := mcp.FindUnansweredQuestions(stageDir)
+		if err != nil {
+			continue
+		}
+		for _, q := range questions {
+			key := stageID + "|" + q.Phase + "|" + q.ID
+			if processed[key] {
+				continue
+			}
+			processed[key] = true
+			// Write to dialog.jsonl for history (idempotent via FindEntry check).
+			dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
+			if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
+				_ = mcp.AppendQuestion(dialogPath, mcp.Question{
+					ID:          q.ID,
+					Question:    q.Question,
+					Options:     q.Options,
+					AllowCustom: q.AllowCustom,
+				})
+			}
+			// Notify UI and transition stage status.
+			o.ui.Publish(Event{
+				Type:    EventAskUser,
+				StageID: stageID,
+				Data: map[string]any{
+					"id": q.ID, "phase": q.Phase, "question": q.Question,
+					"options": q.Options, "allow_custom": q.AllowCustom,
+				},
+			})
+			o.Trigger(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
 		}
 	}
 }
@@ -326,6 +428,7 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 		}
 		o.Trigger(ev.StageID, EvComplete, GuardCtx{}, "")
 		o.failBlockedStages()
+		o.startPlanningForUnblocked(ctx)
 		o.startReadyStages(ctx)
 		o.tryActivatePrePlanned(ctx)
 	default:
@@ -334,24 +437,28 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 	return nil
 }
 
-// hasOpenQuestion reports whether the dialog file for the given stage/phase
-// contains an ask_user question that has not yet been answered.
+// hasOpenQuestion reports whether stageDir contains a *.question.json file
+// for the given phase that has no corresponding *.answer.json yet.
 func (o *Orchestrator) hasOpenQuestion(stageID, phase string) bool {
 	if phase == "" {
 		return false
 	}
-	dialogPath := filepath.Join(o.opts.RunDir, stageID, phase+".dialog.jsonl")
-	open, err := mcp.HasOpenQuestions(dialogPath)
+	questions, err := mcp.FindUnansweredQuestions(filepath.Join(o.opts.RunDir, stageID))
 	if err != nil {
 		return false
 	}
-	return open
+	for _, q := range questions {
+		if q.Phase == phase {
+			return true
+		}
+	}
+	return false
 }
 
-// onUserAnswered resumes a stage that was paused on awaiting_user_input
-// once the user's answer has been recorded. If a waiter inside the MCP
-// server already delivered the answer to a still-running agent, the
-// status will not be awaiting_user_input here and this is a no-op.
+// onUserAnswered resumes a stage that was paused on awaiting_user_input.
+// If the agent is still running (its bash loop is waiting for answer.json),
+// NotifyAnswer already transitioned the status — this is a no-op.
+// If the agent exited before the user answered, we restart it here.
 func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 	if o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
 		return nil
@@ -372,23 +479,47 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 		return nil
 	}
 
+	// Agent exited before the user answered. Restart it so it can read
+	// answer.json (bash loop exits immediately since the file now exists).
 	switch phase {
 	case phasePlanning:
 		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phasePlanning}, "")
 		go func(st flow.Stage) {
 			sem := o.semFor(st)
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
 			o.runPlanningAgent(ctx, st)
 		}(*stage)
-	default:
+	case phaseImplementation:
 		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseImplementation}, "")
 		go func(st flow.Stage) {
 			sem := o.semFor(st)
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
 			o.runImplementationAgent(ctx, st)
 		}(*stage)
+	case phaseReview:
+		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseReview}, "")
+		go func(st flow.Stage) {
+			sem := o.semFor(st)
+			sem.acquire()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
+			o.runReviewAgent(ctx, st)
+		}(*stage)
+	default:
+		return fmt.Errorf("unexpected phase: %q", phase)
 	}
 	return nil
 }
@@ -401,6 +532,7 @@ func (o *Orchestrator) onApproved(ctx context.Context, ev Event) error {
 	if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
 		// Planning-only stage — nothing to implement, mark as done.
 		o.Trigger(ev.StageID, EvComplete, GuardCtx{}, "planning-only stage")
+		o.startPlanningForUnblocked(ctx)
 		o.startReadyStages(ctx)
 		o.tryActivatePrePlanned(ctx)
 		return nil
@@ -436,7 +568,11 @@ func (o *Orchestrator) onRevised(ctx context.Context, ev Event) error {
 		sem := o.semFor(s)
 		go func() {
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(stageID)
+			defer func() {
+				o.markAgentDone(stageID)
+				sem.release()
+			}()
 			o.runPlanningWithFeedback(ctx, s)
 		}()
 	}
@@ -462,12 +598,36 @@ func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 	}
 
 	if !stage.NeedsPlanning() {
+		stageDir := filepath.Join(o.opts.RunDir, stageID)
+		planPath := filepath.Join(stageDir, "plan.md")
+		if _, err := os.Stat(planPath); err != nil {
+			// plan.md not yet on disk — try to copy it from stage.Plan source.
+			if !o.depsDone(*stage) {
+				return nil
+			}
+			if stage.Plan == "" {
+				o.Trigger(stageID, EvFail, GuardCtx{}, "no plan.md and no plan source configured")
+				return nil
+			}
+			if err := os.MkdirAll(stageDir, 0755); err != nil {
+				o.Trigger(stageID, EvFail, GuardCtx{}, "mkdir failed")
+				return nil
+			}
+			if err := copyFile(stage.Plan, planPath); err != nil {
+				o.Trigger(stageID, EvFail, GuardCtx{}, "copy plan failed: "+err.Error())
+				return nil
+			}
+		}
 		o.Trigger(stageID, EvReady, GuardCtx{}, "")
 		o.Trigger(stageID, EvStartRun, GuardCtx{}, "")
 		go func(st flow.Stage) {
 			sem := o.semFor(st)
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
 			o.runImplementationAgent(ctx, st)
 		}(*stage)
 		o.startReadyStages(ctx)
@@ -482,14 +642,32 @@ func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 		go func(st flow.Stage) {
 			sem := o.semFor(st)
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
 			o.runImplementationAgent(ctx, st)
 		}(*stage)
 	} else {
+		// Deps not done — stay pending; planning starts automatically
+		// via startPlanningForUnblocked once dependencies complete.
+		if !stage.EagerPlanning && !o.depsDone(*stage) {
+			return nil
+		}
+		// Synchronous transition guards against double start
+		// (matches startPlanningForUnblocked pattern).
+		if _, ok := o.Trigger(stageID, EvStartPlanning, GuardCtx{Stage: *stage}, "manual retry"); !ok {
+			return nil
+		}
 		go func(st flow.Stage) {
 			sem := o.semFor(st)
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
 			o.runPlanningAgent(ctx, st)
 		}(*stage)
 	}
@@ -542,6 +720,38 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 	o.startReadyStages(ctx)
 }
 
+// startPlanningForUnblocked starts planning for pending stages whose
+// dependencies are all done. Stages with eager_planning start at flow
+// start and are never gated here.
+func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
+	for _, s := range o.opts.Stages {
+		if !s.NeedsPlanning() {
+			continue
+		}
+		if o.opts.Store.Get(s.ID) != state.StatusPending {
+			continue
+		}
+		if !o.depsDone(s) {
+			continue
+		}
+		// Synchronous transition out of pending guards against double
+		// start: a second call sees "planning" and skips the stage.
+		if _, ok := o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "deps done"); !ok {
+			continue
+		}
+		go func(st flow.Stage) {
+			sem := o.semFor(st)
+			sem.acquire()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
+			o.runPlanningAgent(ctx, st)
+		}(s)
+	}
+}
+
 // startReadyStages starts implementation for stages whose dependencies are done.
 func (o *Orchestrator) startReadyStages(ctx context.Context) {
 	snap := o.opts.Store.Snapshot()
@@ -560,7 +770,11 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		go func(st flow.Stage) {
 			sem := o.semFor(st)
 			sem.acquire()
-			defer sem.release()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
 			o.runImplementationAgent(ctx, st)
 		}(*stage)
 	}
@@ -573,6 +787,8 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 		return
 	}
 
+	// Defensive: may be a no-op if the caller already transitioned
+	// the stage to "planning" (e.g. startPlanningForUnblocked).
 	o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "")
 
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
@@ -639,6 +855,9 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 }
 
 func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
+	o.markAgentActive(s.ID)
+	defer o.markAgentDone(s.ID)
+
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 
 	o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "")
@@ -776,6 +995,27 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 	})
 }
 
+func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		return
+	}
+
+	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
+		reviewPrompt := prompts.Build(prompts.Inputs{
+			Template:   o.opts.Prompts.Review,
+			Stage:      s,
+			PhaseAgent: prompts.AgentReview,
+		})
+		reviewLog := filepath.Join(stageDir, "review.log")
+		rr := o.runnerFor(s, phaseReview)
+		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
+	}, func() error {
+		return checkCompletion(stageDir, ".", s)
+	})
+}
+
 // failBlockedStages marks pending stages as failed if any of their
 // dependencies are in StatusFailed. This prevents the flow from hanging
 // when a dependency fails and dependent stages can never start.
@@ -812,6 +1052,21 @@ func (o *Orchestrator) allTerminal() bool {
 		}
 	}
 	return true
+}
+
+// shouldExit reports whether the orchestrator loop should stop.
+// Without a dashboard, any terminal state (done or failed) is final.
+// With a dashboard, exit only when all stages are done — failed stages stay
+// visible so the user can retry them without restarting the process.
+func (o *Orchestrator) shouldExit() bool {
+	if !o.allTerminal() {
+		return false
+	}
+	if o.opts.DashboardURL == "" {
+		return true
+	}
+	snap := o.opts.Store.Snapshot()
+	return snap.AllDone()
 }
 
 func (o *Orchestrator) currentStatus(id string) state.StageStatus {

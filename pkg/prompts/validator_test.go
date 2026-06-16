@@ -43,6 +43,20 @@ func TestValidatePlan(t *testing.T) {
 			want:     nil,
 		},
 		{
+			// Планирующий агент пишет разделы на языке проекта (для русскоязычных
+			// флоу — «Задачи»/«Допущения»). Валидатор обязан принимать такие заголовки.
+			name:     "russian headings accepted",
+			required: []string{"Tasks", "Assumptions", "Acceptance Criteria"},
+			md:       "## Задачи\n- a\n## Допущения\n- none\n## Acceptance Criteria\n- [ ] x",
+			want:     nil,
+		},
+		{
+			name:     "fully russian plan accepted",
+			required: []string{"Tasks", "Assumptions", "Acceptance Criteria"},
+			md:       "## Задачи\n- a\n## Допущения\n- none\n## Критерии приёмки\n- [ ] x",
+			want:     nil,
+		},
+		{
 			name:     "empty string",
 			required: []string{"Tasks"},
 			md:       "",

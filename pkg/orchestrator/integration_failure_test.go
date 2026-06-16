@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -91,5 +92,136 @@ func TestPromptInjection_DescriptionWithMaliciousTags(t *testing.T) {
 
 	if n := strings.Count(capturedPrompt, "</system_rules>"); n != 1 {
 		t.Errorf("description injection escaped: found %d </system_rules>, want exactly 1 (the legit one)", n)
+	}
+}
+
+// TestIntegration_NoPlanningForDoomedStage verifies that when a dependency
+// fails, the dependent stage is failed without ever starting its planning.
+func TestIntegration_NoPlanningForDoomedStage(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "first", Name: "First", Description: "implementation fails", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+		{ID: "second", Name: "Second", Description: "never plans", DependsOn: []string{"first"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	rec := &callRecordingRunner{delegate: &phaseDispatchRunner{
+		planning: mockRunner(t, mockPlanningScript),
+		other:    mockRunner(t, mockFailScript),
+	}}
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, rec)
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	if err := orch.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final := loadStateJSON(t, stateFile)
+	for _, id := range []string{"first", "second"} {
+		if final.Stages[id].Status != state.StatusFailed {
+			t.Errorf("stage %s: expected failed, got %v", id, final.Stages[id].Status)
+		}
+	}
+
+	for _, c := range rec.callsSnapshot() {
+		if c == "planning:Second" {
+			t.Errorf("second must never plan when first failed, calls: %v", rec.callsSnapshot())
+		}
+	}
+}
+
+// TestIntegration_DashboardStaysAliveOnAllFailed verifies that when DashboardURL
+// is set, the orchestrator does NOT exit when all stages are failed — it keeps
+// running so the user can retry via the dashboard.
+func TestIntegration_DashboardStaysAliveOnAllFailed(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "fail", Name: "Fail", Description: "fails permanently",
+			Agents: []flow.AgentType{flow.AgentPlanning}},
+	}
+
+	runner := mockRunner(t, mockFailScript)
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+	orch.SetDashboardURL("http://localhost:9876")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "fail", state.StatusFailed, 5*time.Second)
+
+	// Orchestrator must still be running after all stages failed.
+	select {
+	case err := <-done:
+		t.Fatalf("orchestrator exited early (err=%v); expected to stay alive when dashboard is set", err)
+	case <-time.After(200 * time.Millisecond):
+		// correct: still running
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled on shutdown, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("orchestrator did not exit after context cancel")
+	}
+}
+
+// TestIntegration_DashboardRetryAfterAllFailed verifies that when DashboardURL
+// is set, a failed stage can be retried via the orchestrator and the process
+// exits normally once all stages are done.
+func TestIntegration_DashboardRetryAfterAllFailed(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "fail-then-ok", Name: "Fail Then OK", Description: "fails once, succeeds on retry",
+			Agents: []flow.AgentType{flow.AgentPlanning}},
+	}
+
+	// First planning call: non-retryable failure.
+	// Subsequent calls (after manual Retry): succeed.
+	failOnce := &rateLimitThenSuccessRunner{
+		delegate:  mockRunner(t, mockPlanningScript),
+		failCount: 1,
+		failMsg:   "permanent_failure",
+	}
+
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, failOnce)
+	orch.SetDashboardURL("http://localhost:9876")
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- orch.Run(context.Background()) }()
+
+	waitForStatus(t, stateFile, "fail-then-ok", state.StatusFailed, 5*time.Second)
+
+	// Must still be running.
+	select {
+	case err := <-done:
+		t.Fatalf("orchestrator exited early (err=%v); expected to stay alive when dashboard is set", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := orch.Retry(context.Background(), "fail-then-ok"); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	// Orchestrator should exit cleanly once the retried stage completes.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("orchestrator did not exit after all stages done")
+	}
+
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["fail-then-ok"].Status != state.StatusDone {
+		t.Errorf("expected done after retry, got %v", final.Stages["fail-then-ok"].Status)
 	}
 }

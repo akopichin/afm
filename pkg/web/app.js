@@ -1,5 +1,5 @@
 // flowManager Dashboard — client-side logic.
-// No frameworks, no npm, no external dependencies.
+// No frameworks, no npm. Единственная зависимость — вендоренный markdown-it.min.js.
 
 (function () {
     "use strict";
@@ -112,25 +112,102 @@
     }
 
     // ---- Markdown helpers ----
+    // Инлайн-рендер одной строки для построчного режима ревью:
+    // bold, курсив, ссылки, code — через markdown-it; чекбоксы — свои спаны.
     function inlineFormat(text) {
-        text = escapeHTML(text);
-        // checkboxes: [x] and [ ]
-        text = text.replace(/\[x\]/g, '<span class="cb cb-done">&#10003;</span>');
-        text = text.replace(/\[ \]/g, '<span class="cb cb-open">&#9744;</span>');
-        // bold: **text**
-        text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-        // inline code: `text`
-        text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
-        return text;
+        var html = md.renderInline(text);
+        html = html.replace(/\[x\]/g, '<span class="cb cb-done">&#10003;</span>');
+        html = html.replace(/\[ \]/g, '<span class="cb cb-open">&#9744;</span>');
+        return html;
     }
 
     function escapeHTML(s) {
         return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    var md = window.markdownit({ html: false, linkify: true });
+
+    // Рендерит markdown в элемент: спецсекции, чекбоксы, ссылки в новой вкладке.
+    function renderMarkdownInto(el, text) {
+        el.classList.add("md");
+        el.innerHTML = renderMarkdownHTML(text || "");
+        decorateCheckboxes(el);
+        decorateLinks(el);
+    }
+
+    // Режет текст по заголовкам спецсекций (## Assumptions / ## Acceptance Criteria),
+    // каждый кусок рендерит markdown-it'ом, секции оборачивает в сворачиваемые блоки.
+    function renderMarkdownHTML(text) {
+        var lines = text.split("\n");
+        var html = [];
+        var buf = [];
+        var inSection = false;
+        var inCode = false;
+
+        function flush() {
+            if (buf.length) {
+                html.push(md.render(buf.join("\n")));
+                buf = [];
+            }
+        }
+
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (line.trim().indexOf("```") === 0) {
+                inCode = !inCode;
+                buf.push(line);
+                continue;
+            }
+            if (inCode) {
+                buf.push(line);
+                continue;
+            }
+            var section = detectSection(line);
+            if (section) {
+                flush();
+                if (inSection) html.push("</div></div>");
+                html.push('<div class="plan-section-wrapper ' + section.css + '">' +
+                    '<h2 class="section-header">' + section.icon + " " + section.label + "</h2>" +
+                    '<div class="plan-section-body">');
+                inSection = true;
+                continue;
+            }
+            if (inSection && isH2(line)) {
+                flush();
+                html.push("</div></div>");
+                inSection = false;
+            }
+            buf.push(line);
+        }
+        flush();
+        if (inSection) html.push("</div></div>");
+        return html.join("");
+    }
+
+    // Заменяет [x] / [ ] в начале пунктов списка на стилизованные чекбоксы.
+    function decorateCheckboxes(root) {
+        root.querySelectorAll("li").forEach(function (li) {
+            var html = li.innerHTML;
+            if (/^\s*\[x\]/.test(html)) {
+                li.innerHTML = html.replace("[x]", '<span class="cb cb-done">&#10003;</span>');
+            } else if (/^\s*\[ \]/.test(html)) {
+                li.innerHTML = html.replace("[ ]", '<span class="cb cb-open">&#9744;</span>');
+            }
+        });
+    }
+
+    // Внешние ссылки открываются в новой вкладке, чтобы не терять состояние дашборда.
+    function decorateLinks(root) {
+        root.querySelectorAll("a").forEach(function (a) {
+            a.target = "_blank";
+            a.rel = "noopener";
+        });
+    }
+
     // ---- Render plan with line numbers and inline comments ----
     function renderPlanReview(text) {
         $planContent.innerHTML = "";
+        $planContent.classList.remove("md");
         $planEmpty.classList.add("hidden");
         $planContent.classList.remove("hidden");
 
@@ -164,7 +241,7 @@
                     inCodeBlock = false;
                     codeLines.push(line);
                     var codeDiv = createPlanLine(codeBlockStart + 1, codeLines.join("\n").length, "<pre><code>" + escapeHTML(codeLines.join("\n").trim()) + "</code></pre>");
-                    appendToTarget(currentBody || fragment, codeDiv);
+                    (currentBody || fragment).appendChild(codeDiv);
                     continue;
                 }
             }
@@ -211,7 +288,7 @@
             // Regular line
             var html = formatLine(line);
             var div = createPlanLine(lineNum, lineNum, html);
-            appendToTarget(currentBody || fragment, div);
+            (currentBody || fragment).appendChild(div);
         }
 
         // Close unclosed wrapper
@@ -226,11 +303,8 @@
         }
 
         $planContent.appendChild(fragment);
+        decorateLinks($planContent);
         updateReviseButton();
-    }
-
-    function appendToTarget(target, element) {
-        target.appendChild(element);
     }
 
     function formatLine(line) {
@@ -435,15 +509,21 @@
             if (e.type === "agent_text") {
                 var msg = document.createElement("div");
                 msg.className = "agent-msg";
-                msg.textContent = e.text || "";
+                renderMarkdownInto(msg, e.text);
                 $dialogHistory.appendChild(msg);
                 return;
             }
             if (e.answer !== undefined && e.answer !== null) {
                 var qa = document.createElement("div");
                 qa.className = "qa";
-                qa.innerHTML = "<div class='q'>" + escapeHTML(e.question) + "</div>" +
-                    "<div class='a'>→ " + escapeHTML(e.answer) + "</div>";
+                var qDiv = document.createElement("div");
+                qDiv.className = "q";
+                renderMarkdownInto(qDiv, e.question);
+                var aDiv = document.createElement("div");
+                aDiv.className = "a";
+                aDiv.textContent = "→ " + (e.answer || "");
+                qa.appendChild(qDiv);
+                qa.appendChild(aDiv);
                 $dialogHistory.appendChild(qa);
             }
         });
@@ -480,7 +560,7 @@
         dialogState.pending = { stageID: stageID, id: q.id, phase: q.phase, allowCustom: q.allow_custom };
 
         $dialogPending.classList.remove("hidden");
-        $dialogPending.querySelector(".dialog-question").textContent = q.question;
+        renderMarkdownInto($dialogPending.querySelector(".dialog-question"), q.question);
 
         var $opts = $dialogPending.querySelector(".dialog-options");
         $opts.innerHTML = "";
@@ -665,78 +745,9 @@
             } else {
                 // Regular markdown render for other statuses
                 $planContent.classList.remove("hidden");
-                $planContent.innerHTML = renderMarkdown(text);
+                renderMarkdownInto($planContent, text);
             }
         });
-    }
-
-    function renderMarkdown(text) {
-        if (!text) return "";
-
-        text = text.replace(/```([\s\S]*?)```/g, function (_, code) {
-            return "<pre><code>" + escapeHTML(code.trim()) + "</code></pre>";
-        });
-
-        var lines = text.split("\n");
-        var html = [];
-        var inList = false;
-        var inSection = null; // "assumptions" or "criteria"
-
-        for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            var section = detectSection(line);
-
-            if (section) {
-                if (inList) { html.push("</ul>"); inList = false; }
-                if (inSection) { html.push("</div></div>"); }
-                inSection = section.css;
-                html.push('<div class="plan-section-wrapper ' + section.css + '">');
-                html.push('<h2 class="section-header">' + section.icon + " " + section.label + "</h2>");
-                html.push('<div class="plan-section-body">');
-                continue;
-            }
-
-            if (inSection && isH2(line)) {
-                if (inList) { html.push("</ul>"); inList = false; }
-                html.push("</div></div>");
-                inSection = null;
-            }
-
-            if (line.indexOf("### ") === 0) {
-                if (inList) { html.push("</ul>"); inList = false; }
-                html.push("<h3>" + inlineFormat(line.slice(4)) + "</h3>");
-                continue;
-            }
-            if (line.indexOf("## ") === 0) {
-                if (inList) { html.push("</ul>"); inList = false; }
-                html.push("<h2>" + inlineFormat(line.slice(3)) + "</h2>");
-                continue;
-            }
-            if (line.indexOf("# ") === 0) {
-                if (inList) { html.push("</ul>"); inList = false; }
-                html.push("<h1>" + inlineFormat(line.slice(2)) + "</h1>");
-                continue;
-            }
-
-            if (/^[-*]\s+/.test(line)) {
-                if (!inList) { html.push("<ul>"); inList = true; }
-                html.push("<li>" + inlineFormat(line.replace(/^[-*]\s+/, "")) + "</li>");
-                continue;
-            }
-
-            if (inList) { html.push("</ul>"); inList = false; }
-
-            if (line.trim() === "") {
-                html.push("");
-                continue;
-            }
-
-            html.push("<p>" + inlineFormat(line) + "</p>");
-        }
-
-        if (inList) { html.push("</ul>"); }
-        if (inSection) { html.push("</div></div>"); }
-        return html.join("\n");
     }
 
     function loadLog() {

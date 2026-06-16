@@ -363,7 +363,6 @@ func TestSessionIDPassedAsArg(t *testing.T) {
 		ExtraArgs: []string{testFlagC, script, testSeparator},
 		OnAction:  func(_, _ string) {},
 		SessionID: "test-uuid-123",
-		McpConfig: "/tmp/mcp-test.json",
 	})
 
 	err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile)
@@ -376,9 +375,6 @@ func TestSessionIDPassedAsArg(t *testing.T) {
 		t.Fatalf("read args output: %v", err)
 	}
 	got := string(data)
-	if !strings.Contains(got, "--mcp-config") || !strings.Contains(got, "/tmp/mcp-test.json") {
-		t.Errorf("missing mcp-config in args: %q", got)
-	}
 	if !strings.Contains(got, "--session-id") || !strings.Contains(got, "test-uuid-123") {
 		t.Errorf("missing session-id in args: %q", got)
 	}
@@ -420,6 +416,37 @@ func TestResumeFlagPassedAsArg(t *testing.T) {
 	}
 }
 
+// TestRunSetsStageDir verifies that StageDir is exposed to the agent
+// subprocess via the FLOWMANAGER_STAGE_DIR env var (file-based dialog protocol).
+func TestRunSetsStageDir(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "env.txt")
+
+	// Print FLOWMANAGER_STAGE_DIR to outFile, then emit stream-json completion.
+	script := fmt.Sprintf(`printf '%%s' "$FLOWMANAGER_STAGE_DIR" > %s`+"\n"+
+		`echo '{"type":"result","subtype":"success"}'`, outFile)
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		StageDir:    "/tmp/test-stage-dir",
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read env output: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "/tmp/test-stage-dir" {
+		t.Errorf("FLOWMANAGER_STAGE_DIR=%q, want %q", got, "/tmp/test-stage-dir")
+	}
+}
+
 func TestNoExtraFlagsWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")
@@ -442,7 +469,7 @@ func TestNoExtraFlagsWhenEmpty(t *testing.T) {
 		t.Fatalf("read args output: %v", err)
 	}
 	got := string(data)
-	if strings.Contains(got, "--session-id") || strings.Contains(got, "--resume") || strings.Contains(got, "--mcp-config") {
+	if strings.Contains(got, "--session-id") || strings.Contains(got, "--resume") {
 		t.Errorf("no extra flags expected when fields empty: %q", got)
 	}
 }

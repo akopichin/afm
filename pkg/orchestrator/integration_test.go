@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -190,6 +191,36 @@ func (r *promptCapturingRunner) RunPlanning(ctx context.Context, stageName, prom
 }
 
 func (r *promptCapturingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+// callRecordingRunner wraps a Runner and records the order of calls
+// as "planning:<stageName>" / "agent:<stageName>".
+type callRecordingRunner struct {
+	delegate executor.Runner
+	mu       sync.Mutex
+	calls    []string
+}
+
+func (r *callRecordingRunner) record(kind, stageName string) {
+	r.mu.Lock()
+	r.calls = append(r.calls, kind+":"+stageName)
+	r.mu.Unlock()
+}
+
+func (r *callRecordingRunner) callsSnapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.calls...)
+}
+
+func (r *callRecordingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	r.record("planning", stageName)
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *callRecordingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	r.record("agent", stageName)
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
 }
 
@@ -542,5 +573,106 @@ func TestIntegration_PlanSavedToCustomFile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "## Tasks") {
 		t.Errorf("init/plan.md should contain adopted plan, got %q", string(data))
+	}
+}
+
+// eagerProbeRunner blocks planning of stage "First" until planning of
+// "Second" is observed, proving that "Second" plans eagerly at startup.
+type eagerProbeRunner struct {
+	delegate   executor.Runner
+	secondSeen chan struct{}
+	once       sync.Once
+}
+
+func (r *eagerProbeRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	if stageName == "Second" {
+		r.once.Do(func() { close(r.secondSeen) })
+	}
+	if stageName == "First" {
+		select {
+		case <-r.secondSeen:
+		case <-time.After(10 * time.Second):
+			return errors.New("planning of Second did not start eagerly")
+		}
+	}
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *eagerProbeRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+// TestIntegration_EagerPlanningStartsImmediately verifies that a stage with
+// eager_planning: true plans at flow start, before its dependency is done.
+func TestIntegration_EagerPlanningStartsImmediately(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "first", Name: "First", Description: "runs first", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+		{ID: "second", Name: "Second", Description: "plans eagerly", DependsOn: []string{"first"}, EagerPlanning: true, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	runner := &eagerProbeRunner{
+		delegate:   &doneCreatingRunner{delegate: mockRunner(t, mockPlanningScript)},
+		secondSeen: make(chan struct{}),
+	}
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	if err := orch.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final := loadStateJSON(t, stateFile)
+	for _, id := range []string{"first", "second"} {
+		if final.Stages[id].Status != state.StatusDone {
+			t.Errorf("stage %s: expected done, got %v", id, final.Stages[id].Status)
+		}
+	}
+}
+
+// TestIntegration_PlanningWaitsForDependencies verifies that by default the
+// planning of a dependent stage starts only after its dependency is done.
+func TestIntegration_PlanningWaitsForDependencies(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "first", Name: "First", Description: "runs first", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+		{ID: "second", Name: "Second", Description: "plans after first is done", DependsOn: []string{"first"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	rec := &callRecordingRunner{delegate: &doneCreatingRunner{delegate: mockRunner(t, mockPlanningScript)}}
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, rec)
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	if err := orch.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final := loadStateJSON(t, stateFile)
+	for _, id := range []string{"first", "second"} {
+		if final.Stages[id].Status != state.StatusDone {
+			t.Errorf("stage %s: expected done, got %v", id, final.Stages[id].Status)
+		}
+	}
+
+	calls := rec.callsSnapshot()
+	idxImplFirst, idxPlanSecond := -1, -1
+	for i, c := range calls {
+		switch c {
+		case "agent:First":
+			if idxImplFirst == -1 {
+				idxImplFirst = i
+			}
+		case "planning:Second":
+			idxPlanSecond = i
+		default:
+		}
+	}
+	if idxImplFirst == -1 || idxPlanSecond == -1 {
+		t.Fatalf("expected both agent:First and planning:Second in calls, got %v", calls)
+	}
+	if idxPlanSecond < idxImplFirst {
+		t.Errorf("planning of second started before first finished, calls: %v", calls)
 	}
 }

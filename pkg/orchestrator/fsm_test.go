@@ -101,6 +101,26 @@ func TestFSM_Apply_AskUser(t *testing.T) {
 	}
 }
 
+// TestFSM_Apply_AskUser_FromRetryAndRevising locks in the fix for the question
+// poller scanning retrying/revising stages: EvAskUser must transition them to
+// awaiting_user_input, otherwise a question asked mid-retry/mid-revision never
+// reaches the awaiting state and the answer is lost.
+func TestFSM_Apply_AskUser_FromRetryAndRevising(t *testing.T) {
+	for _, from := range []state.StageStatus{state.StatusRetrying, state.StatusRevising} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		to, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if !ok || to != state.StatusAwaitingUserInput {
+			t.Errorf("%s->awaiting_user_input: got (%v, %v), want (awaiting_user_input, true)", from, to, ok)
+		}
+	}
+}
+
 func TestFSM_PhaseDispatch_UserAnswered(t *testing.T) {
 	fsm, store := newTestFSM(t, []string{"a"})
 	defer store.Close()

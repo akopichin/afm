@@ -86,7 +86,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			go func(stage flow.Stage) {
 				sem := o.semFor(stage)
 				sem.acquire()
-				defer sem.release()
+				o.markAgentActive(stage.ID)
+				defer func() {
+					o.markAgentDone(stage.ID)
+					sem.release()
+				}()
 				o.runPlanningAgent(ctx, stage)
 			}(s)
 		case state.StatusRevising:
@@ -108,7 +112,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			go func(st flow.Stage) {
 				sem := o.semFor(st)
 				sem.acquire()
-				defer sem.release()
+				o.markAgentActive(st.ID)
+				defer func() {
+					o.markAgentDone(st.ID)
+					sem.release()
+				}()
 				o.runImplementationAgent(ctx, st)
 			}(s)
 		default:
@@ -120,12 +128,20 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					continue
 				}
 			}
-			// (Re)start planning (planning runs eagerly before deps are done)
+			// Pending stages wait for depends_on unless eager_planning is set.
+			// Interrupted planning (status "planning") always resumes.
+			if current == state.StatusPending && !s.EagerPlanning && !o.depsDone(s) {
+				continue
+			}
 			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "")
 			go func(stage flow.Stage) {
 				sem := o.semFor(stage)
 				sem.acquire()
-				defer sem.release()
+				o.markAgentActive(stage.ID)
+				defer func() {
+					o.markAgentDone(stage.ID)
+					sem.release()
+				}()
 				o.runPlanningAgent(ctx, stage)
 			}(s)
 		}
@@ -133,6 +149,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 
 	// Cascade failures to stages blocked by failed dependencies.
 	o.failBlockedStages()
+
+	// Start planning for stages whose dependencies are already done
+	// (covers recovery where a dependency was recovered as done above).
+	o.startPlanningForUnblocked(ctx)
 
 	// Start implementation for stages that are ready.
 	o.startReadyStages(ctx)
@@ -145,6 +165,9 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 // session.json exists most recently. The phase is detected by looking at
 // mtimes of <phase>.session.json files in the stage directory.
 func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage) {
+	o.markAgentActive(s.ID)
+	defer o.markAgentDone(s.ID)
+
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	phase := o.detectInterruptedPhase(stageDir)
 

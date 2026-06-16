@@ -44,6 +44,8 @@ stages:
       5. Юнит-тесты компонента (vitest + testing-library).
     agents: [planning, implementation, review]
     depends_on: [backend-auth]
+    # planning этой стадии стартует после завершения backend-auth;
+    # eager_planning: true — планировать сразу, не дожидаясь
 
   # ──────────────────────────────────────────────────
   # Стадия 3: интеграционные тесты

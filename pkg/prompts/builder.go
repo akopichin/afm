@@ -42,7 +42,19 @@ func Build(in Inputs) string {
 	}
 	if in.Interactive {
 		sb.WriteString("\n\n<interactive_rules>\n")
-		sb.WriteString("You may use the mcp__flowmanager__ask_user tool. Ask ONE question at a time. The tool BLOCKS until the user answers — wait, do not retry, do not skip.\n")
+		sb.WriteString("Use the file-based dialog protocol to ask the user questions.\n")
+		sb.WriteString("The env var FLOWMANAGER_STAGE_DIR contains your stage directory.\n")
+		sb.WriteString("Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).\n\n")
+		sb.WriteString("For each question:\n")
+		sb.WriteString("1. Write the question file using the Write tool:\n")
+		fmt.Fprintf(&sb, "   Path: $FLOWMANAGER_STAGE_DIR/%s.q<N>.question.json\n", in.PhaseAgent)
+		sb.WriteString("   Content: {\"id\":\"qN\",\"question\":\"## Full context here\\n\\nYour question?\",\"options\":[\"A\",\"B\"],\"allow_custom\":true}\n")
+		sb.WriteString("   Put ALL context in 'question': descriptions, trade-offs, examples. Use markdown freely.\n")
+		sb.WriteString("2. Wait for the answer via Bash:\n")
+		fmt.Fprintf(&sb, "   while [ ! -f \"$FLOWMANAGER_STAGE_DIR/%s.qN.answer.json\" ]; do sleep 30; done && cat \"$FLOWMANAGER_STAGE_DIR/%s.qN.answer.json\"\n", in.PhaseAgent, in.PhaseAgent)
+		sb.WriteString("3. If bash times out (10 min) without the file: run the exact same bash command again.\n")
+		sb.WriteString("   NEVER give up waiting — keep retrying the bash loop until the file appears.\n")
+		sb.WriteString("Ask ONE question at a time.\n")
 		sb.WriteString("</interactive_rules>\n")
 	}
 	sb.WriteString("\n</system_rules>\n\n")

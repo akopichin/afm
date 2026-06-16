@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -271,27 +272,125 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid phase", http.StatusBadRequest)
 		return
 	}
-	dialogPath := filepath.Join(s.runDir, stageID, req.Phase+".dialog.jsonl")
+	// req.ID is embedded in the question/answer filenames, so it must be a
+	// safe filename component — this guards against path traversal via a
+	// crafted id (e.g. "../../foo").
+	if !isValidDialogID(req.ID) {
+		http.Error(w, "invalid question id", http.StatusBadRequest)
+		return
+	}
+	stageDir := filepath.Join(s.runDir, stageID)
+	questionPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".question.json")
+	answerPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".answer.json")
 
-	// Verify the question exists.
-	entry, _ := mcp.FindEntry(dialogPath, req.ID)
-	if entry == nil {
+	// Question must exist as a file written by the agent. We'll re-check this
+	// after writing the answer to ensure the question didn't disappear (TOCTOU race).
+	if _, err := os.Stat(questionPath); err != nil {
 		http.Error(w, "question not found", http.StatusNotFound)
 		return
 	}
 
-	// Reject duplicate answers.
-	if entry.Answer != nil {
-		http.Error(w, "question already answered", http.StatusConflict)
+	// Read question.json to validate answer against options if allow_custom is false.
+	var qf struct {
+		Options     []string `json:"options,omitempty"`
+		AllowCustom *bool    `json:"allow_custom"`
+	}
+	questionData, err := os.ReadFile(questionPath)
+	if err != nil {
+		http.Error(w, "read question: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := json.Unmarshal(questionData, &qf); err != nil {
+		http.Error(w, "parse question: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Validate answer against options if custom answers are not allowed.
+	// Default to allow_custom=true if not specified (protocol default).
+	allowCustom := true
+	if qf.AllowCustom != nil {
+		allowCustom = *qf.AllowCustom
+	}
+	if !allowCustom {
+		if len(qf.Options) == 0 {
+			http.Error(w, "question has no options but allow_custom=false", http.StatusBadRequest)
+			return
+		}
+		allowed := make(map[string]bool)
+		for _, opt := range qf.Options {
+			allowed[opt] = true
+		}
+		if !allowed[req.Answer] {
+			http.Error(w, "answer not in allowed options", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Atomically write answer.json FIRST so the agent's bash loop can pick it
+	// up. This is the critical path: the dialog history is only for the UI and
+	// must not be persisted before the agent's answer exists. Writing history
+	// first would leave the UI showing an answered question while the agent
+	// hangs forever if the answer.json write then fails.
+	payload, err := json.Marshal(map[string]any{
+		"id": req.ID, "answer": req.Answer, "from_options": req.FromOptions,
+	})
+	if err != nil {
+		http.Error(w, "encode answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Use O_EXCL to atomically create and check for existence in one operation,
+	// preventing TOCTOU race condition where two concurrent requests both see
+	// the file doesn't exist, then both try to create it.
+	f, err := os.OpenFile(answerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			http.Error(w, "question already answered", http.StatusConflict)
+			return
+		}
+		http.Error(w, "create answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := f.Write(payload); err != nil {
+		f.Close()
+		_ = os.Remove(answerPath)
+		http.Error(w, "write answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(answerPath)
+		http.Error(w, "sync answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(answerPath)
+		http.Error(w, "close answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Re-check that the question file still exists to ensure we maintain the
+	// invariant that answer.json only exists when its question.json exists.
+	// Another goroutine could have deleted the question between our initial
+	// check and now.
+	if _, err := os.Stat(questionPath); err != nil {
+		_ = os.Remove(answerPath)
+		http.Error(w, "question disappeared during write", http.StatusBadRequest)
+		return
+	}
+	// Persist the answer in dialog history for the UI (after answer.json is
+	// safely on disk). This is best-effort: answer.json is already written and
+	// dialogAnswerFn below is the critical side effect (status transition /
+	// agent restart). Returning an error here would skip the notify and leave
+	// the stage stuck in awaiting_user_input even though the agent received its
+	// answer, with no way for the user to recover (a retry hits the 409 below).
+	dialogPath := filepath.Join(stageDir, req.Phase+".dialog.jsonl")
 	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{
 		ID: req.ID, Answer: req.Answer, FromOptions: req.FromOptions,
 	}); err != nil {
-		http.Error(w, "persist answer: "+err.Error(), http.StatusInternalServerError)
-		return
+		log.Printf("WARN: persist dialog answer for %s/%s: %v (answer.json already written)", stageID, req.ID, err) //nolint:gosec // G706: stageID and req.ID are validated safe filename components above
 	}
+
 	if s.dialogAnswerFn != nil {
 		if err := s.dialogAnswerFn(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
 			http.Error(w, "notify: "+err.Error(), http.StatusInternalServerError)
@@ -339,4 +438,11 @@ func isValidStageID(id string) bool {
 		return false
 	}
 	return true
+}
+
+// isValidDialogID validates a question id that is embedded in question/answer
+// filenames (<phase>.<id>.{question,answer}.json). Same rules as a stage id:
+// safe filename component, no path traversal.
+func isValidDialogID(id string) bool {
+	return isValidStageID(id)
 }

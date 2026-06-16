@@ -23,7 +23,7 @@ type Config struct {
 	OnAction    func(tool, detail string) // called for each parsed agent action (may be nil)
 	SessionID   string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
 	Resume      bool                      // if true, --resume <SessionID> is used instead of --session-id
-	McpConfig   string                    // path to mcp.json, passed via --mcp-config when non-empty
+	StageDir    string                    // passed to agent as FLOWMANAGER_STAGE_DIR env var (file-based dialog protocol)
 }
 
 const defaultCommand = "claude"
@@ -339,9 +339,6 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 // lineCallback for each stdout line. Respects idle timeout.
 func (e *Executor) run(ctx context.Context, prompt string, lineCallback func(string)) error {
 	args := append([]string{}, e.cfg.ExtraArgs...)
-	if e.cfg.McpConfig != "" {
-		args = append(args, "--mcp-config", e.cfg.McpConfig)
-	}
 	if e.cfg.SessionID != "" {
 		if e.cfg.Resume {
 			args = append(args, "--resume", e.cfg.SessionID)
@@ -352,13 +349,17 @@ func (e *Executor) run(ctx context.Context, prompt string, lineCallback func(str
 	cmd := exec.CommandContext(ctx, e.cfg.Command, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
-	// Strip CLAUDECODE to allow nested sessions
+	// Strip CLAUDECODE to allow nested sessions, then expose the stage
+	// directory so interactive agents can use the file-based dialog protocol.
 	env := os.Environ()
-	filtered := env[:0]
+	filtered := make([]string, 0, len(env)+1)
 	for _, kv := range env {
 		if !strings.HasPrefix(kv, "CLAUDECODE=") {
 			filtered = append(filtered, kv)
 		}
+	}
+	if e.cfg.StageDir != "" {
+		filtered = append(filtered, "FLOWMANAGER_STAGE_DIR="+e.cfg.StageDir)
 	}
 	cmd.Env = filtered
 
