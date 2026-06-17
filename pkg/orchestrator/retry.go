@@ -59,10 +59,10 @@ var RetryBackoff = []time.Duration{5 * time.Second, 10 * time.Second, 30 * time.
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error) {
 	backoff := append([]time.Duration{}, RetryBackoff...)
 	incompleteReason := ""
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	for attempt := 0; attempt <= len(backoff); attempt++ {
 		retryCtx := ""
 		if attempt > 0 {
-			stageDir := filepath.Join(o.opts.RunDir, s.ID)
 			retryCtx = buildRetryContext(stageDir, phase)
 			if incompleteReason != "" {
 				retryCtx += "\n\n## Completion check failed\n\n" + incompleteReason +
@@ -102,6 +102,12 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			o.failBlockedStages()
 			return
 		}
+
+		// Retryable errors (e.g. 529) are typically caused by an overgrown
+		// session context. Drop the session file so the next attempt starts a
+		// fresh Claude session. Answers already written to answer.json files
+		// remain on disk and are re-read immediately by the agent's bash loop.
+		_ = os.Remove(sessionFile(stageDir, phase))
 
 		if attempt < len(backoff) {
 			o.Trigger(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
