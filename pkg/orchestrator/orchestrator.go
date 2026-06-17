@@ -821,13 +821,16 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 			if adoptWrittenPlan(logFile, outFile) {
 				return nil
 			}
+			if s.Interactive {
+				return nil
+			}
 			if err := o.rePromptMissingSections(ctx, s, string(planMD), issues.MissingSections, outFile); err != nil {
 				return err
 			}
 		}
 		return nil
 	}, func() error {
-		return checkPlanCompletion(stageDir)
+		return checkPlanCompletionFor(stageDir, s.Interactive)
 	})
 }
 
@@ -911,13 +914,16 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 			if adoptWrittenPlan(logFile, outFile) {
 				return nil
 			}
+			if s.Interactive {
+				return nil
+			}
 			if err := o.rePromptMissingSections(ctx, s, string(planMD), issues.MissingSections, outFile); err != nil {
 				return err
 			}
 		}
 		return nil
 	}, func() error {
-		return checkPlanCompletion(stageDir)
+		return checkPlanCompletionFor(stageDir, s.Interactive)
 	})
 }
 

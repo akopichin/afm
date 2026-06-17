@@ -9,16 +9,30 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/prompts"
 )
 
 // checkPlanCompletion verifies that plan.md exists and is not empty.
 func checkPlanCompletion(stageDir string) error {
+	return checkPlanCompletionFor(stageDir, false)
+}
+
+// checkPlanCompletionFor verifies that plan.md exists and is not empty.
+// For interactive stages it also validates required sections, returning
+// IncompleteWorkError (retryable once) so runWithRetry can retry with log context.
+func checkPlanCompletionFor(stageDir string, interactive bool) error {
 	data, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 	if err != nil {
 		return fmt.Errorf("missing plan.md: %w", err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return errors.New("plan.md is empty")
+	}
+	if interactive {
+		issues := prompts.ValidatePlan(string(data), requiredPlanSections)
+		if !issues.IsClean() {
+			return &IncompleteWorkError{Reason: "plan missing sections: " + strings.Join(issues.MissingSections, ", ")}
+		}
 	}
 	return nil
 }

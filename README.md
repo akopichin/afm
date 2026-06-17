@@ -302,7 +302,7 @@ pending → planning → awaiting_approval → ready → running → done
 - `done` / `failed` — завершена
 - `revising` — отправлены правки, AI переделывает план
 
-## Разработка
+## Разработка.
 
 ```bash
 make build    # собрать
