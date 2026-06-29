@@ -642,3 +642,98 @@ func TestRunPlanningCapturesStderr(t *testing.T) {
 		t.Errorf("stderr not captured to file: %q", string(data))
 	}
 }
+
+func TestRunSetsProxyURL(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "env.txt")
+
+	// Записываем ANTHROPIC_BASE_URL и FLOWMANAGER_PROXY_URL в файл, потом эмитируем result.
+	script := fmt.Sprintf(
+		`printf '%%s\n%%s' "$ANTHROPIC_BASE_URL" "$FLOWMANAGER_PROXY_URL" > %s`+"\n"+
+			`echo '{"type":"result","subtype":"success"}'`,
+		outFile)
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		ProxyURL:    "http://127.0.0.1:18765",
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, _ := os.ReadFile(outFile)
+	lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
+	if len(lines) < 2 {
+		t.Fatalf("expected 2 lines, got: %q", string(data))
+	}
+	if lines[0] != "http://127.0.0.1:18765" {
+		t.Errorf("ANTHROPIC_BASE_URL=%q, want http://127.0.0.1:18765", lines[0])
+	}
+	if lines[1] != "http://127.0.0.1:18765" {
+		t.Errorf("FLOWMANAGER_PROXY_URL=%q, want http://127.0.0.1:18765", lines[1])
+	}
+}
+
+func TestRunProxyURLOverridesEnv(t *testing.T) {
+	// Если в env уже есть ANTHROPIC_BASE_URL — ProxyURL должен его заменить.
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "env.txt")
+
+	t.Setenv("ANTHROPIC_BASE_URL", "https://original.example.com")
+
+	script := fmt.Sprintf(
+		`printf '%%s' "$ANTHROPIC_BASE_URL" > %s`+"\n"+
+			`echo '{"type":"result","subtype":"success"}'`,
+		outFile)
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		ProxyURL:    "http://127.0.0.1:18765",
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, _ := os.ReadFile(outFile)
+	got := strings.TrimSpace(string(data))
+	if got != "http://127.0.0.1:18765" {
+		t.Errorf("ANTHROPIC_BASE_URL=%q, want http://127.0.0.1:18765 (original env should be replaced)", got)
+	}
+}
+
+func TestRunSetsProxyShimInPATH(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "env.txt")
+	shimDir := t.TempDir()
+
+	script := fmt.Sprintf(
+		`printf '%%s' "$PATH" > %s`+"\n"+
+			`echo '{"type":"result","subtype":"success"}'`,
+		outFile)
+
+	ex := executor.New(executor.Config{
+		Command:      testCmdShell,
+		ExtraArgs:    []string{testFlagC, script},
+		IdleTimeout:  5 * time.Second,
+		ProxyShimDir: shimDir,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, _ := os.ReadFile(outFile)
+	path := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(path, shimDir+":") && path != shimDir {
+		t.Errorf("PATH should start with shimDir %q, got %q", shimDir, path)
+	}
+}

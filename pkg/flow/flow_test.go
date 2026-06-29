@@ -368,10 +368,10 @@ func TestParseEagerPlanning(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !f.Stages[1].EagerPlanning {
-		t.Errorf("eager_planning: got false, want true")
+		t.Error("eager_planning: got false, want true")
 	}
 	if f.Stages[0].EagerPlanning {
-		t.Errorf("eager_planning default: got true, want false")
+		t.Error("eager_planning default: got true, want false")
 	}
 }
 

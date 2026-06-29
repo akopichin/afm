@@ -28,3 +28,24 @@ executor:
 # Files needed: planning.md, implementation.md, review.md, summary.md
 # Default: "" (use embedded prompts)
 # prompts_dir: .flowManager/prompts/
+
+# Built-in reverse proxy settings.
+# The proxy intercepts agent HTTP traffic and applies transforms.
+# Default: enabled when ANTHROPIC_BASE_URL is set or proxy.upstream is configured.
+# proxy:
+#   # Set to false to disable the proxy entirely.
+#   # Default: true
+#   # enabled: true
+#
+#   # Upstream Anthropic-compatible API base URL.
+#   # Default: "" (reads from ANTHROPIC_BASE_URL environment variable)
+#   # upstream: https://api.z.ai/api/anthropic
+#
+#   # Proxy listen port (0 = random free port).
+#   # Default: 0
+#   # port: 0
+#
+#   # Transform overrides. null/absent = auto-detect by upstream host.
+#   # transforms:
+#   #   zai: true   # force-enable ZAI fix (non-streaming→streaming for api.z.ai)
+#   #   zai: false  # force-disable even when upstream is api.z.ai

@@ -18,6 +18,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/proxy"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -74,12 +75,42 @@ func newRunCmd() *cobra.Command {
 			fmt.Printf("flowmanager: running %q\n", f.Name)
 			fmt.Printf("  run dir: %s\n", runDir)
 
+			var proxyAddr, proxyShimDir string
+			if cfg.Proxy.IsEnabled() {
+				upstream := cfg.Proxy.Upstream
+				if upstream == "" {
+					upstream = os.Getenv("ANTHROPIC_BASE_URL")
+				}
+				if upstream != "" {
+					transforms := proxy.BuildTransforms(upstream, cfg.Proxy.Transforms.ZAI)
+					p := proxy.New(upstream, transforms)
+					addr, err := p.Start(cfg.Proxy.Port)
+					if err != nil {
+						return fmt.Errorf("start proxy: %w", err)
+					}
+					defer p.Shutdown(context.Background()) //nolint:errcheck // best-effort graceful shutdown
+					proxyAddr = addr
+					fmt.Printf("  proxy: %s → %s\n", addr, upstream)
+
+					if shimDir, shimErr := proxy.CreateShim(addr); shimErr == nil {
+						proxyShimDir = shimDir
+						defer os.RemoveAll(shimDir) //nolint:errcheck // best-effort cleanup
+					} else {
+						fmt.Fprintf(os.Stderr, "warning: proxy shim: %v\n", shimErr)
+					}
+				} else {
+					fmt.Println("  proxy: skipped (no upstream) — set proxy.upstream in config or export ANTHROPIC_BASE_URL to enable")
+				}
+			}
+
 			orch := orchestrator.New(orchestrator.Options{
-				RunDir:  runDir,
-				Stages:  f.Stages,
-				Store:   store,
-				Config:  cfg,
-				Prompts: prompts,
+				RunDir:       runDir,
+				Stages:       f.Stages,
+				Store:        store,
+				Config:       cfg,
+				Prompts:      prompts,
+				ProxyURL:     proxyAddr,
+				ProxyShimDir: proxyShimDir,
 			})
 
 			// Disable interactive flags when dashboard is not running

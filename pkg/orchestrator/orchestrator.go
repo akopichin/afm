@@ -65,6 +65,8 @@ type Options struct {
 	Prompts      Prompts
 	Runner       executor.Runner // nil = real Executor
 	DashboardURL string          // e.g. "http://127.0.0.1:9876"
+	ProxyURL     string          // forwarded to executor env as ANTHROPIC_BASE_URL
+	ProxyShimDir string          // forwarded to executor env PATH prefix
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -90,10 +92,12 @@ func New(opts Options) *Orchestrator {
 	r := opts.Runner
 	if r == nil {
 		r = executor.New(executor.Config{
-			Command:     opts.Config.Client.Command,
-			ExtraArgs:   opts.Config.Client.ExtraArgs,
-			IdleTimeout: opts.Config.Executor.IdleTimeout,
-			OnAction:    uiActionPublisher(ui, ""),
+			Command:      opts.Config.Client.Command,
+			ExtraArgs:    opts.Config.Client.ExtraArgs,
+			IdleTimeout:  opts.Config.Executor.IdleTimeout,
+			OnAction:     uiActionPublisher(ui, ""),
+			ProxyURL:     opts.ProxyURL,
+			ProxyShimDir: opts.ProxyShimDir,
 		})
 	}
 
@@ -218,9 +222,11 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			return o.runner
 		}
 		return executor.New(executor.Config{
-			Command:     s.Command,
-			IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-			OnAction:    uiActionPublisher(o.ui, s.ID),
+			Command:      s.Command,
+			IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
+			OnAction:     uiActionPublisher(o.ui, s.ID),
+			ProxyURL:     o.opts.ProxyURL,
+			ProxyShimDir: o.opts.ProxyShimDir,
 		})
 	}
 
@@ -240,13 +246,15 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
 	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
 	return executor.New(executor.Config{
-		Command:     cmd,
-		ExtraArgs:   extraArgs,
-		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		OnAction:    uiActionPublisher(o.ui, s.ID),
-		SessionID:   sessionID,
-		Resume:      resume,
-		StageDir:    stageDir,
+		Command:      cmd,
+		ExtraArgs:    extraArgs,
+		IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
+		OnAction:     uiActionPublisher(o.ui, s.ID),
+		SessionID:    sessionID,
+		Resume:       resume,
+		StageDir:     stageDir,
+		ProxyURL:     o.opts.ProxyURL,
+		ProxyShimDir: o.opts.ProxyShimDir,
 	})
 }
 
@@ -255,9 +263,11 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 		return o.runner
 	}
 	return executor.New(executor.Config{
-		Command:     s.Command,
-		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		OnAction:    uiActionPublisher(o.ui, s.ID),
+		Command:      s.Command,
+		IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
+		OnAction:     uiActionPublisher(o.ui, s.ID),
+		ProxyURL:     o.opts.ProxyURL,
+		ProxyShimDir: o.opts.ProxyShimDir,
 	})
 }
 

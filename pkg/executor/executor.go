@@ -17,13 +17,15 @@ import (
 
 // Config configures the executor.
 type Config struct {
-	Command     string
-	ExtraArgs   []string
-	IdleTimeout time.Duration
-	OnAction    func(tool, detail string) // called for each parsed agent action (may be nil)
-	SessionID   string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume      bool                      // if true, --resume <SessionID> is used instead of --session-id
-	StageDir    string                    // passed to agent as FLOWMANAGER_STAGE_DIR env var (file-based dialog protocol)
+	Command      string
+	ExtraArgs    []string
+	IdleTimeout  time.Duration
+	OnAction     func(tool, detail string) // called for each parsed agent action (may be nil)
+	SessionID    string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume       bool                      // if true, --resume <SessionID> is used instead of --session-id
+	StageDir     string                    // passed to agent as FLOWMANAGER_STAGE_DIR env var (file-based dialog protocol)
+	ProxyURL     string                    // if set, ANTHROPIC_BASE_URL and FLOWMANAGER_PROXY_URL are set in agent env
+	ProxyShimDir string                    // if set, prepended to PATH in agent env (for wrapper scripts)
 }
 
 const defaultCommand = "claude"
@@ -401,17 +403,38 @@ func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lin
 	cmd := exec.CommandContext(ctx, e.cfg.Command, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
-	// Strip CLAUDECODE to allow nested sessions, then expose the stage
-	// directory so interactive agents can use the file-based dialog protocol.
+	// Strip CLAUDECODE to allow nested sessions, expose stage directory and proxy settings.
 	env := os.Environ()
-	filtered := make([]string, 0, len(env)+1)
+	filtered := make([]string, 0, len(env)+3)
 	for _, kv := range env {
-		if !strings.HasPrefix(kv, "CLAUDECODE=") {
+		switch {
+		case strings.HasPrefix(kv, "CLAUDECODE="):
+			// always strip for nested sessions
+		case e.cfg.ProxyURL != "" && strings.HasPrefix(kv, "ANTHROPIC_BASE_URL="):
+			// strip: replaced below with proxy address
+		default:
 			filtered = append(filtered, kv)
 		}
 	}
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "FLOWMANAGER_STAGE_DIR="+e.cfg.StageDir)
+	}
+	if e.cfg.ProxyURL != "" {
+		filtered = append(filtered, "ANTHROPIC_BASE_URL="+e.cfg.ProxyURL)
+		filtered = append(filtered, "FLOWMANAGER_PROXY_URL="+e.cfg.ProxyURL)
+	}
+	if e.cfg.ProxyShimDir != "" {
+		pathSet := false
+		for i, kv := range filtered {
+			if strings.HasPrefix(kv, "PATH=") {
+				filtered[i] = "PATH=" + e.cfg.ProxyShimDir + ":" + kv[5:]
+				pathSet = true
+				break
+			}
+		}
+		if !pathSet {
+			filtered = append(filtered, "PATH="+e.cfg.ProxyShimDir+":"+os.Getenv("PATH"))
+		}
 	}
 	cmd.Env = filtered
 

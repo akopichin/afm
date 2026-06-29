@@ -108,3 +108,61 @@ func TestServerPortZeroDisablesServer(t *testing.T) {
 		t.Errorf("port should be 0 when explicitly set: got %d", cfg.Server.GetPort())
 	}
 }
+
+func TestProxyConfig_IsEnabled(t *testing.T) {
+	var p config.ProxyConfig
+	if !p.IsEnabled() {
+		t.Error("nil Enabled should default to true")
+	}
+	f := false
+	p.Enabled = &f
+	if p.IsEnabled() {
+		t.Error("Enabled=false should return false")
+	}
+	tr := true
+	p.Enabled = &tr
+	if !p.IsEnabled() {
+		t.Error("Enabled=true should return true")
+	}
+}
+
+func TestProxyConfigMerge(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+proxy:
+  enabled: false
+  upstream: https://api.z.ai/api/anthropic
+  port: 9000
+  transforms:
+    zai: true
+`)
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Proxy.IsEnabled() {
+		t.Error("proxy.enabled=false should disable proxy")
+	}
+	if cfg.Proxy.Upstream != "https://api.z.ai/api/anthropic" {
+		t.Errorf("upstream: got %q", cfg.Proxy.Upstream)
+	}
+	if cfg.Proxy.Port != 9000 {
+		t.Errorf("port: got %d, want 9000", cfg.Proxy.Port)
+	}
+	if cfg.Proxy.Transforms.ZAI == nil || !*cfg.Proxy.Transforms.ZAI {
+		t.Error("transforms.zai should be true")
+	}
+}
+
+func TestProxyConfigMergeDefaults(t *testing.T) {
+	cfg := config.Default()
+	if !cfg.Proxy.IsEnabled() {
+		t.Error("proxy should be enabled by default")
+	}
+	if cfg.Proxy.Upstream != "" {
+		t.Errorf("default upstream should be empty, got %q", cfg.Proxy.Upstream)
+	}
+	if cfg.Proxy.Port != 0 {
+		t.Errorf("default port should be 0, got %d", cfg.Proxy.Port)
+	}
+}

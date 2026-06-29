@@ -44,11 +44,31 @@ func (s ServerConfig) GetPort() int {
 	return *s.Port
 }
 
+// TransformOverrides controls which proxy transforms are applied.
+// nil = auto-detect by upstream host, true = always, false = never.
+type TransformOverrides struct {
+	ZAI *bool `yaml:"zai"`
+}
+
+// ProxyConfig configures the built-in reverse proxy.
+type ProxyConfig struct {
+	Enabled    *bool              `yaml:"enabled"`
+	Upstream   string             `yaml:"upstream"`
+	Port       int                `yaml:"port"`
+	Transforms TransformOverrides `yaml:"transforms"`
+}
+
+// IsEnabled returns true by default (nil Enabled → enabled).
+func (p ProxyConfig) IsEnabled() bool {
+	return p.Enabled == nil || *p.Enabled
+}
+
 // Config is the merged configuration for flowmanager.
 type Config struct {
 	Client     ClientConfig   `yaml:"client"`
 	Executor   ExecutorConfig `yaml:"executor"`
 	Server     ServerConfig   `yaml:"server"`
+	Proxy      ProxyConfig    `yaml:"proxy"`
 	PromptsDir string         `yaml:"prompts_dir"`
 }
 
@@ -118,6 +138,18 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Server.OpenBrowser != nil {
 		dst.Server.OpenBrowser = overlay.Server.OpenBrowser
+	}
+	if overlay.Proxy.Enabled != nil {
+		dst.Proxy.Enabled = overlay.Proxy.Enabled
+	}
+	if overlay.Proxy.Upstream != "" {
+		dst.Proxy.Upstream = overlay.Proxy.Upstream
+	}
+	if overlay.Proxy.Port != 0 {
+		dst.Proxy.Port = overlay.Proxy.Port
+	}
+	if overlay.Proxy.Transforms.ZAI != nil {
+		dst.Proxy.Transforms.ZAI = overlay.Proxy.Transforms.ZAI
 	}
 	return nil
 }

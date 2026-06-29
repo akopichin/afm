@@ -127,3 +127,83 @@ When adding new interactive features:
 3. Update handler validation in `pkg/server/handlers.go` if phase names change
 4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_DialogViolationDetected`), not `eagerProbeRunner` (which only applies to non-interactive stages)
 5. Verify atomic write pattern (O_EXCL) is preserved in handlers
+
+## Built-in Reverse Proxy
+
+flowManager can run a built-in reverse proxy that intercepts agent HTTP traffic to Anthropic-compatible gateways and applies transforms. The primary use case is working around `api.z.ai` 529 errors: `ZAITransform` rewrites non-streaming requests to streaming, collects the SSE response, and reassembles it into a single Anthropic JSON `message`.
+
+### Architecture
+
+`run.go` starts the proxy before the orchestrator (random free port, `127.0.0.1` only). The proxy address and a `claude` shim directory are threaded through `orchestrator.Options` → `executor.Config` → the agent process env (`ANTHROPIC_BASE_URL`, `FLOWMANAGER_PROXY_URL`, and `PATH` with the shim dir prepended). `ZAITransform` is auto-detected when the upstream host contains `api.z.ai`.
+
+**Upstream resolution (in `run.go`, before `orchestrator.New`):** `cfg.Proxy.Upstream` (config), else `os.Getenv("ANTHROPIC_BASE_URL")`. If both are empty the proxy is skipped (no-op + info log). A proxy `Start` failure is a **hard error** (`start proxy: %w`); a `CreateShim` failure is a **non-fatal warning** — env-var injection still points the agent at the proxy. Proxy + shim are torn down via `defer` (`p.Shutdown`, `os.RemoveAll(shimDir)`).
+
+### Key Files
+
+| File | Responsibility |
+|------|-----------------|
+| `pkg/proxy/transform.go` | `Transform` interface (`Match` + `ServeHTTP`) |
+| `pkg/proxy/proxy.go` | `Proxy` struct, `New`/`Start`/`Addr`/`Shutdown`, `ServeHTTP` dispatch, `passthroughTo` |
+| `pkg/proxy/zai.go` | `ZAITransform`, `BuildTransforms` (auto-detect + `*bool` override), `parseSSE` (SSE→JSON reassembly), `writeSSEError` |
+| `pkg/proxy/shim.go` | `CreateShim` — temp dir with a `claude` wrapper that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude` |
+| `pkg/config/config.go` | `ProxyConfig`, `TransformOverrides`, `IsEnabled()` (nil `Enabled` → enabled), merge in `mergeFile` |
+| `pkg/executor/executor.go` | `Config.ProxyURL`/`ProxyShimDir` → injects `ANTHROPIC_BASE_URL` + `FLOWMANAGER_PROXY_URL` and prepends shim dir to `PATH` in the agent env (also strips any pre-existing `ANTHROPIC_BASE_URL` when `ProxyURL` is set) |
+| `pkg/orchestrator/orchestrator.go` | `Options.ProxyURL`/`ProxyShimDir` forwarded to **all four** `executor.New` call sites (`New`, two in `runnerFor`, `runnerForFallback`) |
+| `cmd/flowmanager/run.go` | Starts proxy + shim before the orchestrator; resolves upstream |
+
+### How the ZAI transform works
+
+For requests where `stream` is absent/false (and upstream is `api.z.ai`):
+1. Inject `stream: true` into the body, forward to upstream.
+2. Read the SSE response; `parseSSE` accumulates `message_start` (id/role/model/usage), `content_block_start` + `content_block_delta` (text/thinking/tool_use/signature deltas) in content-block index order, and `message_delta` (stop_reason + usage merge).
+3. Return a single Anthropic JSON `message`.
+
+`stream: true` requests and non-JSON bodies pass through unchanged. Upstream non-200 responses are forwarded transparently (status + headers + body). An upstream SSE `error` event or an empty SSE response yields HTTP 529 with a structured Anthropic-style error.
+
+### Wrapper commands (glm51, etc.) — no patching required
+
+When `client.command` is a wrapper (e.g. `glm51`) that exports `ANTHROPIC_BASE_URL` itself and then `exec`s `claude`, the proxy still works without patching the wrapper:
+- flowmanager prepends a shim dir to the agent's `PATH`. The shim is a `claude` script that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude`.
+- The wrapper clobbers `ANTHROPIC_BASE_URL`, but its inner `exec claude` resolves to the **shim** (PATH precedence), which re-sets the proxy address for the real `claude`.
+- Requirement: the real `claude` must be in flowmanager's `PATH` (used by `CreateShim`'s `exec.LookPath`).
+
+This is why the shim wraps `claude` (the actual HTTP client), **not** `client.command` — wrapping the wrapper would be clobbered by the wrapper's own `export`. The env-var injection alone is insufficient for wrappers because they overwrite `ANTHROPIC_BASE_URL`; the shim is what actually delivers the proxy address to `claude`.
+
+### Environment Variables
+
+| Variable | Purpose | Set By |
+|----------|---------|--------|
+| `ANTHROPIC_BASE_URL` | Upstream source (fallback in `run.go`) / injected proxy address (to the agent) | `run.go` reads; executor injects proxy address when `ProxyURL` set |
+| `FLOWMANAGER_PROXY_URL` | Proxy address (informational, mirrors `ANTHROPIC_BASE_URL`) | executor when `ProxyURL` set |
+| `PATH` | Prepended with the shim dir so the wrapper's `claude` call resolves to the shim | executor when `ProxyShimDir` set |
+
+### Config
+
+```yaml
+proxy:
+  enabled: true                          # nil/absent → enabled by default
+  upstream: https://api.z.ai/api/anthropic   # else read from $ANTHROPIC_BASE_URL
+  port: 0                                # 0 = random free port
+  transforms:
+    zai: true                            # nil = auto-detect by host; true = force on; false = force off
+```
+
+### Debugging
+
+- **`proxy: skipped (no upstream) …`** — no upstream found. Set `proxy.upstream` in config or `export ANTHROPIC_BASE_URL`.
+- **`proxy: http://127.0.0.1:PORT → <upstream>`** — proxy started; agents route through it.
+- **`warning: proxy shim: …`** — shim creation failed (usually `claude` not in `PATH`); non-fatal — env-var injection still applies, but wrapper commands that clobber `ANTHROPIC_BASE_URL` will bypass the proxy.
+- **Proxy not taking effect with a wrapper command** — confirm `claude` is in `PATH` (shim requires it) and the wrapper ultimately execs a binary named `claude`.
+
+### Common Changes
+
+- **Add a transform:** implement `proxy.Transform` (`Match` + `ServeHTTP`), append it in `BuildTransforms`. `Proxy.ServeHTTP` dispatches to the first matching transform; requests with no match pass through unchanged via `passthroughTo`.
+- **Change upstream resolution:** edit the block in `run.go` before `orchestrator.New`.
+- **Keep all four `executor.New` sites in sync** when touching proxy plumbing in the orchestrator (`New`, two in `runnerFor`, `runnerForFallback`) — missing one leaves an agent path without proxy settings.
+
+### Known limitations (tracked follow-ups)
+
+- `pkg/proxy/zai.go` uses `http.DefaultClient` (no explicit timeout) — relies on the request context for cancellation.
+- The SSE `[DONE]` terminator detection assumes `\n` line endings (Anthropic uses `\n`); `\r\n` would need a `TrimRight`.
+- The `stop_sequence` field is currently never populated (always null).
+- `passthroughTo` produces a double slash in the path if the upstream has a trailing slash.
