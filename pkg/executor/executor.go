@@ -35,6 +35,33 @@ const (
 	toolNameWrite      = "Write"
 )
 
+// DefaultClaudeArgs returns the standard claude stream-json invocation flags.
+//
+// --verbose is required by Claude Code 2.1.x when --print is combined with
+// --output-format=stream-json, and is harmless on versions where it is
+// optional. It also makes the stream contain tool_use events, which the
+// executor's parser relies on.
+func DefaultClaudeArgs() []string {
+	return []string{"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"}
+}
+
+// ResolveArgs prepends DefaultClaudeArgs to extra and drops exact duplicates.
+// Used for interactive stages, which always need the claude flags regardless of
+// user config; dedup avoids passing --verbose twice when the user also sets it.
+func ResolveArgs(extra []string) []string {
+	merged := append(append([]string{}, DefaultClaudeArgs()...), extra...)
+	seen := make(map[string]bool, len(merged))
+	out := make([]string, 0, len(merged))
+	for _, a := range merged {
+		if seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
+}
+
 // Executor spawns AI client subprocesses.
 type Executor struct {
 	cfg Config
@@ -50,7 +77,7 @@ func New(cfg Config) *Executor {
 	}
 	// For claude-compatible commands, prepend default stream-json flags if no custom args set.
 	if len(cfg.ExtraArgs) == 0 {
-		cfg.ExtraArgs = []string{"--print", "--output-format", "stream-json", "--dangerously-skip-permissions"}
+		cfg.ExtraArgs = DefaultClaudeArgs()
 	}
 	return &Executor{cfg: cfg}
 }
@@ -180,6 +207,17 @@ func contentToAction(c streamContent) (toolName, detail string, ok bool) {
 	}
 }
 
+// openStderrLog opens <logBase>.stderr.log for appending so the agent's stderr
+// (e.g. claude "requires --verbose") is captured instead of lost. Returns nil
+// on error — stderr is diagnostic only, callers fall back to io.Discard.
+func openStderrLog(logFile string) *os.File {
+	f, err := os.OpenFile(strings.TrimSuffix(logFile, ".log")+".stderr.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
 // RunPlanning runs the AI client with prompt via stdin, collects text output
 // into outFile, writes human-readable log to logFile, and raw stream to logFile+".jsonl".
 func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
@@ -196,6 +234,13 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	}
 	defer jf.Close()
 
+	// Capture the agent's stderr to a sibling .stderr.log (diagnostic only).
+	var stderr = io.Discard
+	if sf := openStderrLog(logFile); sf != nil {
+		stderr = sf
+		defer sf.Close()
+	}
+
 	lg.LogStart("planning", stageName)
 
 	absOut, err := filepath.Abs(outFile)
@@ -206,7 +251,7 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	var textBuf strings.Builder
 	var firstErr string
 	var agentWroteOutFile bool
-	runErr := e.run(ctx, prompt, func(line string) {
+	runErr := e.run(ctx, prompt, stderr, func(line string) {
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -303,10 +348,17 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	}
 	defer jf.Close()
 
+	// Capture the agent's stderr to a sibling .stderr.log (diagnostic only).
+	var stderr = io.Discard
+	if sf := openStderrLog(logFile); sf != nil {
+		stderr = sf
+		defer sf.Close()
+	}
+
 	lg.LogStart(agentType, stageName)
 
 	var firstErr string
-	runErr := e.run(ctx, prompt, func(line string) {
+	runErr := e.run(ctx, prompt, stderr, func(line string) {
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -337,7 +389,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls
 // lineCallback for each stdout line. Respects idle timeout.
-func (e *Executor) run(ctx context.Context, prompt string, lineCallback func(string)) error {
+func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lineCallback func(string)) error {
 	args := append([]string{}, e.cfg.ExtraArgs...)
 	if e.cfg.SessionID != "" {
 		if e.cfg.Resume {
@@ -367,7 +419,7 @@ func (e *Executor) run(ctx context.Context, prompt string, lineCallback func(str
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = io.Discard
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", e.cfg.Command, err)

@@ -109,7 +109,8 @@ Common patterns:
 - **Agent waiting:** `*.question.json` exists, but no corresponding `*.answer.json` yet
 - **Answer received:** Both `*.question.json` and `*.answer.json` exist, agent should have exited
 - **Dialog history:** Check `*.dialog.jsonl` for full Q&A history (safe to ignore if missing)
-- **Agent hung:** Check agent stdout/stderr in `<phase>.log` if polling loop times out (30s default)
+- **Agent error / hung:** Agent stdout (tool actions) is in `<phase>.log`; agent **stderr** (claude diagnostics, e.g. `stream-json requires --verbose`) is in `<phase>.stderr.log`. The bash polling loop times out after the executor's idle timeout (30 min default).
+- **Dialog protocol violation:** Stage failed fast with reason `dialog protocol violation` in `events.jsonl` — the interactive agent wrote a `*.question.json` OUTSIDE `$FLOWMANAGER_STAGE_DIR` (detected by `detectDialogViolation` scanning `<phase>.jsonl` Write events in `pkg/orchestrator/orchestrator.go`). On manual retry, `<phase>.session.json` and `<phase>.jsonl` are cleared so detection starts fresh.
 
 ### Polling Latency
 
@@ -124,5 +125,5 @@ When adding new interactive features:
 1. Ensure agent writes `<phase>.<id>.question.json` in correct format
 2. Ensure agent polls correctly: `while [ ! -f "$FLOWMANAGER_STAGE_DIR/<phase>.<id>.answer.json" ]; do sleep 30; done`
 3. Update handler validation in `pkg/server/handlers.go` if phase names change
-4. Add integration tests using `eagerProbeRunner` or similar wrappers
+4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_DialogViolationDetected`), not `eagerProbeRunner` (which only applies to non-interactive stages)
 5. Verify atomic write pattern (O_EXCL) is preserved in handlers

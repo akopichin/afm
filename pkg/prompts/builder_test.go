@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -52,5 +53,30 @@ func TestBuild_Golden_PlanningSimple(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Errorf("output mismatch.\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestBuild_InteractivePrintsAbsolutePathAndNowhereElse(t *testing.T) {
+	stageDir := t.TempDir()
+	in := Inputs{
+		Template:    "RULES",
+		Stage:       flow.Stage{ID: "propose", Name: "Propose", Description: "ask user"},
+		PhaseAgent:  AgentPlanning,
+		StageDir:    stageDir,
+		Interactive: true,
+	}
+	out := Build(in)
+
+	// Абсолютный путь stage-директории должен быть напечатан явно, в форме %q.
+	if !strings.Contains(out, fmt.Sprintf("%q", stageDir)) {
+		t.Errorf("interactive prompt should contain quoted absolute stage dir %q:\n%s", stageDir, out)
+	}
+	// Явный запрет писать куда-либо ещё (точная формулировка из builder.go).
+	if !strings.Contains(out, "NOWHERE ELSE") {
+		t.Errorf("interactive prompt should say 'NOWHERE ELSE':\n%s", out)
+	}
+	// Путь для записи вопроса.
+	if !strings.Contains(out, "planning.q<N>.question.json") {
+		t.Errorf("interactive prompt should show question file path:\n%s", out)
 	}
 }

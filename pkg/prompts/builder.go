@@ -2,6 +2,7 @@ package prompts
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -41,13 +42,21 @@ func Build(in Inputs) string {
 		sb.WriteString(in.OutputContractMD)
 	}
 	if in.Interactive {
+		// Печатаем буквальный абсолютный путь stage-директории, чтобы у агента
+		// не было причин придумывать путь (afm bug-2: агент писал question.json
+		// в .flowManager/stages/... и ломал диалог).
+		stageDir := in.StageDir
+		if abs, err := filepath.Abs(in.StageDir); err == nil && abs != "" {
+			stageDir = abs
+		}
 		sb.WriteString("\n\n<interactive_rules>\n")
 		sb.WriteString("Use the file-based dialog protocol to ask the user questions.\n")
-		sb.WriteString("The env var FLOWMANAGER_STAGE_DIR contains your stage directory.\n")
+		fmt.Fprintf(&sb, "Your stage directory is FLOWMANAGER_STAGE_DIR=%q\n", stageDir)
 		sb.WriteString("Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).\n\n")
 		sb.WriteString("For each question:\n")
 		sb.WriteString("1. Write the question file using the Write tool:\n")
-		fmt.Fprintf(&sb, "   Path: $FLOWMANAGER_STAGE_DIR/%s.q<N>.question.json\n", in.PhaseAgent)
+		fmt.Fprintf(&sb, "   Path: %s/%s.q<N>.question.json  (== $FLOWMANAGER_STAGE_DIR/%s.q<N>.question.json)\n", stageDir, in.PhaseAgent, in.PhaseAgent)
+		sb.WriteString("   Write the file to this path and NOWHERE ELSE. Do NOT invent paths like .flowManager/stages/... — always use $FLOWMANAGER_STAGE_DIR.\n")
 		sb.WriteString("   Content: {\"id\":\"qN\",\"question\":\"## Full context here\\n\\nYour question?\",\"options\":[\"A\",\"B\"],\"allow_custom\":true}\n")
 		sb.WriteString("   Put ALL context in 'question': descriptions, trade-offs, examples. Use markdown freely.\n")
 		sb.WriteString("2. Wait for the answer via Bash:\n")

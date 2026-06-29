@@ -129,7 +129,7 @@ a:hover { text-decoration: underline; }
 #feed-panel {
   position: relative;
   z-index: 1;
-  background: rgba(8, 20, 26, 0.55);
+  background: rgba(8, 20, 26, 0.88);
   border: 1px solid var(--mint-soft);
   padding: 14px;
   overflow-y: auto;
@@ -1074,23 +1074,29 @@ body::after {
   }
 }
 
-.dialog-pending::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(183, 135, 255, 0.9), transparent);
-  animation: pendingScan 3.2s linear infinite;
-  pointer-events: none;
+@keyframes dialogFlash {
+  0% {
+    box-shadow:
+      0 0 0 2px var(--violet),
+      0 0 50px rgba(183, 135, 255, 0.9),
+      inset 0 0 30px rgba(183, 135, 255, 0.3);
+  }
+  40% {
+    box-shadow:
+      0 0 0 1px rgba(183, 135, 255, 0.6),
+      0 0 30px rgba(183, 135, 255, 0.5),
+      inset 0 0 20px rgba(183, 135, 255, 0.15);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 transparent,
+      inset 0 0 0 transparent;
+  }
 }
 
-@keyframes pendingScan {
-  0%   { transform: translateY(0); opacity: 0; }
-  8%   { opacity: 1; }
-  92%  { opacity: 1; }
-  100% { transform: translateY(180px); opacity: 0; }
+.dialog-flash {
+  animation: dialogFlash 2.5s ease-out forwards;
 }
 
 .dialog-pending .dialog-question {

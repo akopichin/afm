@@ -186,6 +186,8 @@ stages:
 
 Стадия с `interactive: true` получает файловый протокол для диалога с пользователем через dashboard. Агенту передаётся env-переменная `FLOWMANAGER_STAGE_DIR` (путь к stage-директории). Чтобы задать вопрос, агент пишет файл `<phase>.q<N>.question.json` (где `<phase>` — `planning`/`implementation`/`review`, `N` растёт: q1, q2, …), а затем ждёт появления `<phase>.q<N>.answer.json` через bash-цикл. В dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия находится в статусе `awaiting_user_input`; после ответа выполнение продолжается.
 
+Для запуска `claude` всегда добавляются флаги `--print --output-format stream-json --verbose --dangerously-skip-permissions` (`--verbose` обязателен для stream-json в Claude Code 2.1.x). Если интерактивный агент по ошибке запишет `question.json` вне `$FLOWMANAGER_STAGE_DIR`, стадия сразу перейдёт в `failed` с причиной `dialog protocol violation` (видно в `events.jsonl`) — это защита от вечного зависания.
+
 ```yaml
 stages:
   - id: discovery
@@ -264,8 +266,9 @@ server:
       state.json   # текущий статус всех стадий
       <stage-id>/
         plan.md          # план стадии
-        planning.log     # лог агента планирования
+        planning.log     # лог агента планирования (stdout: tool actions)
         planning.jsonl   # raw stream-json
+        planning.stderr.log  # stderr агента (диагностика, напр. ошибки claude)
         implementation.log
         review.log
         # файлы интерактивного диалога (только для interactive: true):

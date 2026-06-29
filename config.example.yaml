@@ -9,7 +9,7 @@ client:
   command: claude
 
   # Extra arguments appended to the command.
-  # Default: ["--print", "--output-format", "stream-json", "--dangerously-skip-permissions"]
+  # Default: ["--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
   # (auto-added for "claude", override here for custom commands)
   # extra_args:
   #   - --my-custom-flag

@@ -26,6 +26,7 @@
     var $startedAt = document.getElementById("started-at");
     var $elapsed = document.getElementById("elapsed");
     var $feedContent = document.getElementById("feed-content");
+    var $feedPanel = document.getElementById("feed-panel");
     var $retrySection = document.getElementById("retry-section");
     var $btnRetry = document.getElementById("btn-retry");
     var $dialogSection = document.getElementById("dialog-section");
@@ -48,6 +49,7 @@
     // Dialog state
     var dialogState = { pending: null };
     var dialogEntries = [];
+    var lastFlashedQuestionID = null;
 
     // ---- Special section detection ----
     var SPECIAL_SECTIONS = {
@@ -549,6 +551,16 @@
             }
         }
         if (open) {
+            var questionKey = (open.phase || "") + "." + (open.id || "");
+            if (questionKey !== lastFlashedQuestionID) {
+                lastFlashedQuestionID = questionKey;
+                $dialogSection.classList.remove("dialog-flash");
+                void $dialogSection.offsetWidth;
+                $dialogSection.classList.add("dialog-flash");
+                setTimeout(function () {
+                    $dialogSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                }, 50);
+            }
             renderPendingQuestion(stageID, open);
         } else {
             $dialogPending.classList.add("hidden");
@@ -638,6 +650,46 @@
             ? "▾ РАЗВЕРНУТЬ ИСТОРИЮ"
             : "▴ СВЕРНУТЬ ИСТОРИЮ";
     };
+
+    // ---- Stage focus helpers ----
+    var ACTIVE_STATUSES = { running: 1, planning: 1, revising: 1, retrying: 1, awaiting_user_input: 1 };
+
+    function findActiveStage(startAfterID) {
+        if (!state) return null;
+        var ids = state.stage_order && state.stage_order.length > 0
+            ? state.stage_order
+            : Object.keys(state.stages).sort();
+        var startIdx = startAfterID ? ids.indexOf(startAfterID) + 1 : 0;
+        if (startIdx < 0) startIdx = 0;
+        for (var i = startIdx; i < ids.length; i++) {
+            if (state.stages[ids[i]] && ACTIVE_STATUSES[state.stages[ids[i]].status]) return ids[i];
+        }
+        return null;
+    }
+
+    function findFirstStage(status) {
+        if (!state) return null;
+        var ids = state.stage_order && state.stage_order.length > 0
+            ? state.stage_order
+            : Object.keys(state.stages).sort();
+        for (var i = 0; i < ids.length; i++) {
+            if (state.stages[ids[i]] && state.stages[ids[i]].status === status) return ids[i];
+        }
+        return null;
+    }
+
+    function selectStage(id) {
+        selectedStageID = id;
+        lineComments = {};
+        activeCommentLine = null;
+        dialogEntries = [];
+        $dialogSection.classList.add("hidden");
+        renderStages();
+        renderDetail();
+        loadDialog(id);
+        var li = $stagesList.querySelector('[data-stage-id="' + id + '"]');
+        if (li) li.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
 
     // ---- Render stages list ----
     function renderStages() {
@@ -1021,7 +1073,7 @@
         while ($feedContent.children.length > 200) {
             $feedContent.removeChild($feedContent.firstChild);
         }
-        $feedContent.scrollTop = $feedContent.scrollHeight;
+        $feedPanel.scrollTop = $feedPanel.scrollHeight;
     }
 
     function handleEvent(ev) {
@@ -1044,6 +1096,18 @@
             renderProgress();
             if (ev.stage_id === selectedStageID) {
                 renderDetail();
+                if (newStatus === "done") {
+                    var nextID = findActiveStage(ev.stage_id);
+                    if (nextID) selectStage(nextID);
+                }
+            } else if (ACTIVE_STATUSES[newStatus]) {
+                if (!selectedStageID) {
+                    selectStage(ev.stage_id);
+                } else if (state.stages[selectedStageID] && state.stages[selectedStageID].status === "done") {
+                    selectStage(ev.stage_id);
+                }
+            } else if (newStatus === "failed" && !selectedStageID) {
+                selectStage(ev.stage_id);
             }
             return;
         }
@@ -1087,6 +1151,9 @@
             renderProgress();
             if (selectedStageID) {
                 renderDetail();
+            } else {
+                var activeID = findActiveStage(null) || findFirstStage("failed");
+                if (activeID) selectStage(activeID);
             }
         });
     }

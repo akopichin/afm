@@ -23,6 +23,8 @@ func buildRetryContext(stageDir, phase string) string {
 	switch phase {
 	case phasePlanning:
 		logName = "planning.log"
+	case phaseReview:
+		logName = "review.log"
 	default:
 		logName = "implementation.log"
 	}
@@ -98,6 +100,10 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		}
 
 		if !isRetryableError(err) {
+			// Drop the session file so a later retry starts a fresh Claude session
+			// instead of resuming a conversation that was never created (e.g. the
+			// process died before claude created it). Mirrors the retryable branch.
+			_ = os.Remove(sessionFile(stageDir, phase))
 			o.Trigger(s.ID, EvFail, GuardCtx{}, err.Error())
 			o.failBlockedStages()
 			return

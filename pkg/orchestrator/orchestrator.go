@@ -236,8 +236,9 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	if cmd == "" {
 		cmd = o.opts.Config.Client.Command
 	}
-	requiredArgs := []string{"--print", "--output-format", "stream-json", "--dangerously-skip-permissions"}
-	extraArgs := append(requiredArgs, o.opts.Config.Client.ExtraArgs...)
+	// Interactive stages always need the claude stream-json flags (incl. --verbose,
+	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
+	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
 	return executor.New(executor.Config{
 		Command:     cmd,
 		ExtraArgs:   extraArgs,
@@ -366,7 +367,57 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 			})
 			o.Trigger(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
 		}
+		// No open question in stageDir: if this is an interactive stage, check
+		// whether the agent wrote one elsewhere (dialog contract violation).
+		// Fail fast with a clear reason instead of hanging forever (afm bug-2).
+		if len(questions) == 0 {
+			if stage := o.graph.Stage(stageID); stage != nil && stage.Interactive {
+				if reason, ok := detectDialogViolation(stageDir); ok {
+					o.FailStage(stageID, reason)
+				}
+			}
+		}
 	}
+}
+
+// detectDialogViolation scans the agent's stream-json logs (<phase>.jsonl) for a
+// Write of a *.question.json file OUTSIDE the stage directory. Such a write
+// violates the file-based dialog contract: the poller and dashboard only look
+// inside stageDir, so a misplaced question hangs the stage forever. Returns a
+// human-readable reason when a violation is found.
+func detectDialogViolation(stageDir string) (string, bool) {
+	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
+		jsonlPath := filepath.Join(stageDir, phase+".jsonl")
+		for _, f := range executor.WrittenFiles(jsonlPath) {
+			if !strings.HasSuffix(filepath.Base(f), ".question.json") {
+				continue
+			}
+			if !pathInside(f, stageDir) {
+				return fmt.Sprintf("dialog protocol violation: question written to %s, expected %s", f, stageDir), true
+			}
+		}
+	}
+	return "", false
+}
+
+// pathInside reports whether file is located inside dir. Both are resolved to
+// absolute paths the same way (filepath.Abs, no symlink resolution), so they
+// stay in a consistent form — the agent's Write paths and stageDir both originate
+// from the same source (FLOWMANAGER_STAGE_DIR), so a consistent resolution is
+// sufficient and avoids EvalSymlinks' failure on not-yet-existing files.
+func pathInside(file, dir string) bool {
+	absFile, err := filepath.Abs(file)
+	if err != nil {
+		absFile = filepath.Clean(file)
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = filepath.Clean(dir)
+	}
+	if absDir != string(filepath.Separator) {
+		absDir += string(filepath.Separator)
+	}
+	return strings.HasPrefix(absFile+string(filepath.Separator), absDir)
 }
 
 // Approve approves a stage plan.
@@ -593,6 +644,24 @@ func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 		return nil
 	}
 
+	// Manual retry of an interactive stage must start a fresh Claude session:
+	// a leftover <phase>.session.json may reference a conversation that was
+	// never created (phantom), which makes claude fail with "No conversation
+	// found". Clear all phase sessions for this stage.
+	//
+	// Also truncate <phase>.jsonl: detectDialogViolation re-scans the raw
+	// stream-json log every poll tick, and a *.question.json Write from a
+	// previous (violating) run would otherwise re-fire instantly and make the
+	// stage un-retryable. Truncating here (before re-activation) is race-free
+	// because the poller skips stages in non-active states.
+	if stage.Interactive {
+		stageDir := filepath.Join(o.opts.RunDir, stageID)
+		for _, ph := range []string{phasePlanning, phaseImplementation, phaseReview} {
+			_ = os.Remove(sessionFile(stageDir, ph))
+			_ = os.Truncate(filepath.Join(stageDir, ph+".jsonl"), 0)
+		}
+	}
+
 	if _, ok := o.Trigger(stageID, EvManualRetry, GuardCtx{}, ""); !ok {
 		return nil
 	}
@@ -803,6 +872,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 			PhaseAgent:       prompts.AgentPlanning,
 			DependencyPlans:  depPlans,
 			Artifacts:        artCtx,
+			StageDir:         stageDir,
 			Interactive:      s.Interactive,
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext,
@@ -897,6 +967,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 			Artifacts:        artCtx,
 			PreviousPlan:     prevPlan,
 			Feedback:         string(feedbackData),
+			StageDir:         stageDir,
 			Interactive:      s.Interactive,
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext,
@@ -972,6 +1043,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			DependencyPlans: depPlans,
 			Artifacts:       artCtx,
 			Plan:            string(planData),
+			StageDir:        stageDir,
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext + stageDirNote,
 		})
@@ -984,9 +1056,13 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 
 		if s.HasAgent(flow.AgentReview) {
 			reviewPrompt := prompts.Build(prompts.Inputs{
-				Template:   o.opts.Prompts.Review,
-				Stage:      s,
-				PhaseAgent: prompts.AgentReview,
+				Template:        o.opts.Prompts.Review,
+				Stage:           s,
+				PhaseAgent:      prompts.AgentReview,
+				DependencyPlans: depPlans,
+				Artifacts:       artCtx,
+				StageDir:        stageDir,
+				Interactive:     s.Interactive,
 			})
 			reviewLog := filepath.Join(stageDir, "review.log")
 			rr := o.runnerFor(s, phaseReview)
@@ -1008,11 +1084,22 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 		return
 	}
 
+	depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+	artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+	if artErr != nil {
+		log.Printf("WARN: collect artifacts for %s review: %v", s.ID, artErr)
+	}
+
 	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
 		reviewPrompt := prompts.Build(prompts.Inputs{
-			Template:   o.opts.Prompts.Review,
-			Stage:      s,
-			PhaseAgent: prompts.AgentReview,
+			Template:        o.opts.Prompts.Review,
+			Stage:           s,
+			PhaseAgent:      prompts.AgentReview,
+			DependencyPlans: depPlans,
+			Artifacts:       artCtx,
+			StageDir:        stageDir,
+			Interactive:     s.Interactive,
+			RetryContext:    retryContext,
 		})
 		reviewLog := filepath.Join(stageDir, "review.log")
 		rr := o.runnerFor(s, phaseReview)

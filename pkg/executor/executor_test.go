@@ -498,3 +498,147 @@ func TestIdleTimeout(t *testing.T) {
 		t.Errorf("log should contain FAILED on timeout: %q", string(data))
 	}
 }
+
+// argContains reports whether s is present in slice.
+func argContains(slice []string, s string) bool {
+	for _, x := range slice {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDefaultClaudeArgsContainsVerbose(t *testing.T) {
+	args := executor.DefaultClaudeArgs()
+	want := []string{"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"}
+	if len(args) != len(want) {
+		t.Fatalf("DefaultClaudeArgs=%v, want %v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("DefaultClaudeArgs[%d]=%q, want %q", i, args[i], want[i])
+		}
+	}
+}
+
+func TestResolveArgsDedupsVerbose(t *testing.T) {
+	got := executor.ResolveArgs([]string{"--verbose", "--model", "foo"})
+	count := 0
+	for _, a := range got {
+		if a == "--verbose" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("--verbose count=%d, want 1; args=%v", count, got)
+	}
+	if !argContains(got, "--model") || !argContains(got, "foo") {
+		t.Errorf("user args lost: %v", got)
+	}
+	// Defaults must come first so user overrides cannot land before --print.
+	want := executor.DefaultClaudeArgs()
+	if len(got) < len(want) {
+		t.Fatalf("ResolveArgs dropped defaults: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ResolveArgs[%d]=%q, defaults must be prepended; got %v", i, got[i], got)
+		}
+	}
+}
+
+func TestResolveArgsEmptyReturnsDefaults(t *testing.T) {
+	got := executor.ResolveArgs(nil)
+	if len(got) == 0 || !argContains(got, "--verbose") {
+		t.Errorf("ResolveArgs(nil)=%v, want defaults with --verbose", got)
+	}
+}
+
+// TestNewAppliesDefaultArgs проверяет, что New без ExtraArgs подставляет дефолт,
+// содержащий --verbose (afm bug #1.1).
+func TestNewAppliesDefaultArgs(t *testing.T) {
+	dir := t.TempDir()
+	argsOut := filepath.Join(dir, "args.txt")
+	scriptPath := filepath.Join(dir, "echoargs.sh")
+	script := "#!/bin/bash\necho \"$@\" > " + argsOut + "\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logFile := filepath.Join(dir, "impl.log")
+
+	// ExtraArgs не задан → New применяет DefaultClaudeArgs (с --verbose).
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, err := os.ReadFile(argsOut)
+	if err != nil {
+		t.Fatalf("read args: %v", err)
+	}
+	if !strings.Contains(string(data), "--verbose") {
+		t.Errorf("default args missing --verbose: %q", string(data))
+	}
+}
+
+// TestRunAgentCapturesStderr проверяет, что stderr подпроцесса пишется в
+// <logBase>.stderr.log (afm bug #1.2) — раньше он уходил в io.Discard.
+func TestRunAgentCapturesStderr(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	// stdout: результат (RunAgent завершается без ошибки); stderr: диагностика.
+	script := `echo '{"type":"result","subtype":"success"}'; echo 'INTERNAL: boom' >&2`
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	stderrFile := strings.TrimSuffix(logFile, ".log") + ".stderr.log"
+	data, err := os.ReadFile(stderrFile)
+	if err != nil {
+		t.Fatalf("read stderr log: %v", err)
+	}
+	if !strings.Contains(string(data), "INTERNAL: boom") {
+		t.Errorf("stderr not captured to file: %q", string(data))
+	}
+}
+
+// TestRunPlanningCapturesStderr — зеркало TestRunAgentCapturesStderr для пути
+// RunPlanning: stderr должен писаться в <logBase>.stderr.log (afm bug #1.2).
+func TestRunPlanningCapturesStderr(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "plan.md")
+	logFile := filepath.Join(dir, "planning.log")
+	// stdout: ассистентский текст + result; stderr: диагностика.
+	script := `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"# Plan"}]}}'; echo '{"type":"result","subtype":"success"}'; echo 'INTERNAL: boom' >&2`
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunPlanning(context.Background(), "s1", "do work", outFile, logFile); err != nil {
+		t.Fatalf("RunPlanning: %v", err)
+	}
+
+	stderrFile := strings.TrimSuffix(logFile, ".log") + ".stderr.log"
+	data, err := os.ReadFile(stderrFile)
+	if err != nil {
+		t.Fatalf("read stderr log: %v", err)
+	}
+	if !strings.Contains(string(data), "INTERNAL: boom") {
+		t.Errorf("stderr not captured to file: %q", string(data))
+	}
+}
