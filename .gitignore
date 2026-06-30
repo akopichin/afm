@@ -5,13 +5,13 @@
 .superpowers/
 
 # binaries
-/flowmanager
+/afm
 /bin/
 tmp/
 .idea/*
 
 # рабочие данные
-.flowManager/runs/
+.afm/runs/
 docs/plans/
 .DS_Store
 sync-upstream.sh

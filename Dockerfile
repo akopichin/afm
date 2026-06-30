@@ -16,6 +16,6 @@ USER ${USER}
 
 WORKDIR /app
 
-COPY --chown=${USER}:${USER} --from=builder /go/src/app/bin/flowmanager .
+COPY --chown=${USER}:${USER} --from=builder /go/src/app/bin/afm .
 
-CMD ["./flowmanager"]
+CMD ["./afm"]

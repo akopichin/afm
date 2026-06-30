@@ -1,5 +1,5 @@
 ---
-description: Show status of the current flowManager run
+description: Show status of the current afm run
 allowed-tools: [Bash]
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: [Bash]
 Run:
 
 ```bash
-flowmanager check
+afm check
 ```
 
 Display the output as-is. **STOP immediately after displaying.**

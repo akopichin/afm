@@ -1,5 +1,5 @@
-# flowManager Configuration
-# Place in: .flowManager/config.yaml (project-level) or ~/.flowManager/config.yaml (global)
+# afm Configuration
+# Place in: .afm/config.yaml (project-level) or ~/.afm/config.yaml (global)
 # Project-level config overrides global. Missing fields keep defaults.
 
 # AI client settings
@@ -27,7 +27,7 @@ executor:
 # Directory with custom prompt templates (overrides embedded defaults).
 # Files needed: planning.md, implementation.md, review.md, summary.md
 # Default: "" (use embedded prompts)
-# prompts_dir: .flowManager/prompts/
+# prompts_dir: .afm/prompts/
 
 # Built-in reverse proxy settings.
 # The proxy intercepts agent HTTP traffic and applies transforms.

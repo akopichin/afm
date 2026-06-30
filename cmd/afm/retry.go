@@ -37,7 +37,7 @@ func newRetryCmd() *cobra.Command {
 			}); err != nil {
 				return fmt.Errorf("retry: %w", err)
 			}
-			fmt.Printf("stage %q retried: run 'flowmanager run' to restart\n", stageID)
+			fmt.Printf("stage %q retried: run 'afm run' to restart\n", stageID)
 			return nil
 		},
 	}

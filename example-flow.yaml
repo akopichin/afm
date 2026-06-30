@@ -1,11 +1,11 @@
 # Пример flow.yaml — добавление фичи авторизации через JWT
 #
 # Использование:
-#   flowmanager run example-flow.yaml
-#   flowmanager approve backend-auth   # после просмотра плана
-#   flowmanager check                  # статус выполнения
+#   afm run example-flow.yaml
+#   afm approve backend-auth   # после просмотра плана
+#   afm check                  # статус выполнения
 #
-# Или положить в .flowManager/flows/ — тогда run без аргументов сам найдёт.
+# Или положить в .afm/flows/ — тогда run без аргументов сам найдёт.
 
 name: jwt-auth
 description: "Реализация JWT-авторизации: middleware, эндпоинты логина/логаута, тесты"

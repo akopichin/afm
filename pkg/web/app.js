@@ -1,4 +1,4 @@
-// flowManager Dashboard — client-side logic.
+// afm Dashboard — client-side logic.
 // No frameworks, no npm. Единственная зависимость — вендоренный markdown-it.min.js.
 
 (function () {

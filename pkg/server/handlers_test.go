@@ -227,9 +227,9 @@ func TestDialogGetWithTranscript(t *testing.T) {
 	}
 
 	jsonl := `{"type":"assistant","message":{"content":[{"type":"text","text":"## Дизайн расширения"}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__flowmanager__ask_user","input":{"id":"q1","question":"Дизайн ок?"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__afm__ask_user","input":{"id":"q1","question":"Дизайн ок?"}}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Финальный штрих."}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__flowmanager__ask_user","input":{"id":"q2","question":"Утверждаем?"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__afm__ask_user","input":{"id":"q2","question":"Утверждаем?"}}]}}
 `
 	if err := os.WriteFile(filepath.Join(stageDir, "planning.jsonl"), []byte(jsonl), 0644); err != nil {
 		t.Fatal(err)

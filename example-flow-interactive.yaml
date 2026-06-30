@@ -1,7 +1,7 @@
 # Интерактивный demo-flow — проверка диалогового стейджа
 #
 # Использование:
-#   flowmanager run example-flow-interactive.yaml
+#   afm run example-flow-interactive.yaml
 #   # открыть dashboard, ответить на вопросы в секции «Диалог»
 
 name: interactive-demo
@@ -16,9 +16,9 @@ stages:
       2. Какой стиль архитектуры (предложи monolith, microservices, "не знаю").
 
       Для каждого вопроса используй файловый протокол диалога:
-      - запиши $FLOWMANAGER_STAGE_DIR/implementation.q1.question.json
+      - запиши $AFM_STAGE_DIR/implementation.q1.question.json
         (формат: {"id":"q1","question":"...","options":["Go","Python","TypeScript"],"allow_custom":true})
-      - дождись ответа: while [ ! -f "$FLOWMANAGER_STAGE_DIR/implementation.q1.answer.json" ]; do sleep 30; done
+      - дождись ответа: while [ ! -f "$AFM_STAGE_DIR/implementation.q1.answer.json" ]; do sleep 30; done
       - повтори для q2 (архитектура)
 
       После двух ответов запиши итог в ./summary.md в формате:

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN_NAME="flowmanager"
+BIN_NAME="afm"
 INSTALL_DIR="$HOME/homebrew/bin"
 SKILLS_DIR="$HOME/.claude/skills"
 
@@ -33,7 +33,8 @@ done
 
 echo ""
 echo "Готово! Доступные команды:"
-echo "  /flowmanager         — запустить flow"
-echo "  /flowmanager-check   — статус текущего flow"
-echo "  /flowmanager-init    — создать flow.yaml"
-echo "  /flowmanager-monitor — фоновый мониторинг (субагент)"
+echo "  /afm        — запустить flow"
+echo "  /afm-check  — статус текущего flow"
+echo "  /afm-init   — создать flow.yaml"
+echo "  /afm-retry  — повторить упавшую стадию"
+echo "  /afm-review — ревью плана стадии"

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,8 +42,11 @@ func newInitCmd() *cobra.Command {
 				})
 			}
 
-			outPath := ".flowManager/flows/" + name + ".yaml"
-			os.MkdirAll(".flowManager/flows", 0755) //nolint:errcheck
+			flowsDir := filepath.Join(fmDir(), "flows")
+			if err := os.MkdirAll(flowsDir, 0755); err != nil {
+				return fmt.Errorf("create flows dir: %w", err)
+			}
+			outPath := filepath.Join(flowsDir, name+".yaml")
 
 			var sb strings.Builder
 			sb.WriteString("name: " + name + "\n")

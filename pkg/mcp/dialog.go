@@ -1,5 +1,5 @@
 // Package mcp implements the MCP (Model Context Protocol) HTTP server
-// for the flowManager ask_user tool, plus per-phase dialog persistence.
+// for the afm ask_user tool, plus per-phase dialog persistence.
 package mcp
 
 import (

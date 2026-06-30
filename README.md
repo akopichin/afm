@@ -1,6 +1,6 @@
-# flowManager
+# afm
 
-CLI-инструмент для оркестрации многостадийных AI-задач. Описываешь задачу в YAML-файле, разбиваешь на стадии — flowManager запускает AI-агентов последовательно или параллельно, ждёт твоего одобрения планов и автоматически выполняет реализацию.
+CLI-инструмент для оркестрации многостадийных AI-задач. Описываешь задачу в YAML-файле, разбиваешь на стадии — afm запускает AI-агентов последовательно или параллельно, ждёт твоего одобрения планов и автоматически выполняет реализацию.
 
 ## Как это работает
 
@@ -14,13 +14,13 @@ CLI-инструмент для оркестрации многостадийн�
 
 Стадии могут запускаться параллельно. Зависимости через `depends_on` гарантируют правильный порядок.
 
-Состояние каждого запуска сохраняется в `.flowManager/runs/` — если прервать, `run` автоматически продолжит с того же места (прерванные стадии перезапускаются, завершённые — пропускаются).
+Состояние каждого запуска сохраняется в `.afm/runs/` — если прервать, `run` автоматически продолжит с того же места (прерванные стадии перезапускаются, завершённые — пропускаются).
 
 ## Установка
 
 **Из исходников:**
 ```bash
-make build        # собрать в bin/flowmanager
+make build        # собрать в bin/afm
 make install      # установить через go install
 ```
 
@@ -29,27 +29,27 @@ make install      # установить через go install
 ./install.sh
 ```
 
-Скрипт копирует бинарник в `/usr/local/bin` и устанавливает скиллы для Claude Code (`/flowmanager`, `/flowmanager-check`, `/flowmanager-init`).
+Скрипт копирует бинарник в `/usr/local/bin` и устанавливает скиллы для Claude Code (`/afm`, `/afm-check`, `/afm-init`).
 
 ## Быстрый старт
 
 ### 1. Создать flow
 
 ```bash
-flowmanager init
+afm init
 ```
 
-Интерактивно задаёт вопросы и создаёт `.flowManager/flows/<name>.yaml`.
+Интерактивно задаёт вопросы и создаёт `.afm/flows/<name>.yaml`.
 
 Или написать вручную — см. пример ниже.
 
 ### 2. Запустить
 
 ```bash
-flowmanager run flow.yaml
+afm run flow.yaml
 
-# Если flow лежит в .flowManager/flows/ — можно без аргумента:
-flowmanager run
+# Если flow лежит в .afm/flows/ — можно без аргумента:
+afm run
 ```
 
 Автоматически откроется веб-дашборд (по умолчанию `http://localhost:9876`).
@@ -63,19 +63,19 @@ flowmanager run
 **Через CLI:**
 ```bash
 # Посмотреть план
-cat .flowManager/runs/<run-dir>/<stage-id>/plan.md
+cat .afm/runs/<run-dir>/<stage-id>/plan.md
 
 # Одобрить
-flowmanager approve backend-auth
+afm approve backend-auth
 
 # Не нравится — попросить переделать
-flowmanager revise backend-auth --feedback "Нужно добавить Redis для блеклиста токенов"
+afm revise backend-auth --feedback "Нужно добавить Redis для блеклиста токенов"
 ```
 
 ### 4. Следить за прогрессом
 
 ```bash
-flowmanager check
+afm check
 ```
 
 ```
@@ -89,6 +89,21 @@ integration-tests     pending                15:31:02
 ```
 
 Или в реальном времени через веб-дашборд — стадии, прогресс-бар, лента событий, логи.
+
+## Указание рабочей директории
+
+По умолчанию `.afm/` создаётся в текущей папке. Чтобы вынести её в другое место:
+
+```bash
+# Флаг (разовый запуск)
+afm --dir ~/my-flows run
+
+# Переменная окружения (постоянно)
+export AFM_DIR=~/my-flows
+afm run
+```
+
+Все команды (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) уважают `--dir`.
 
 ## Файл flow.yaml
 
@@ -149,7 +164,7 @@ stages:
 | `plan` | нет | Путь к готовому план-файлу (пропускает planning) |
 | `command` | нет | AI-команда для этой стадии (переопределяет config) |
 | `max_parallel` | нет | Лимит параллельных стадий для этой команды |
-| `interactive` | нет | `true` — включает файловый протокол диалога с пользователем через dashboard. Агенту передаётся env `FLOWMANAGER_STAGE_DIR`, он пишет `<phase>.q<N>.question.json` и ждёт `<phase>.q<N>.answer.json` через bash-цикл |
+| `interactive` | нет | `true` — включает файловый протокол диалога с пользователем через dashboard. Агенту передаётся env `AFM_STAGE_DIR`, он пишет `<phase>.q<N>.question.json` и ждёт `<phase>.q<N>.answer.json` через bash-цикл |
 | `artifacts` | нет | Файлы, которые стадия производит для других стадий |
 | `inputs` | нет | Артефакты из зависимых стадий (`stage.artifact`) |
 | `verify` | нет | Shell-команда, выполняется в директории проекта после `.done`. Exit-код ≠ 0 — стадия не засчитывается: один ретрай агента с выводом команды в промпте, затем `failed`. Защита от ложного «done» |
@@ -184,9 +199,9 @@ stages:
 
 ### Интерактивные стадии
 
-Стадия с `interactive: true` получает файловый протокол для диалога с пользователем через dashboard. Агенту передаётся env-переменная `FLOWMANAGER_STAGE_DIR` (путь к stage-директории). Чтобы задать вопрос, агент пишет файл `<phase>.q<N>.question.json` (где `<phase>` — `planning`/`implementation`/`review`, `N` растёт: q1, q2, …), а затем ждёт появления `<phase>.q<N>.answer.json` через bash-цикл. В dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия находится в статусе `awaiting_user_input`; после ответа выполнение продолжается.
+Стадия с `interactive: true` получает файловый протокол для диалога с пользователем через dashboard. Агенту передаётся env-переменная `AFM_STAGE_DIR` (путь к stage-директории). Чтобы задать вопрос, агент пишет файл `<phase>.q<N>.question.json` (где `<phase>` — `planning`/`implementation`/`review`, `N` растёт: q1, q2, …), а затем ждёт появления `<phase>.q<N>.answer.json` через bash-цикл. В dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия находится в статусе `awaiting_user_input`; после ответа выполнение продолжается.
 
-Для запуска `claude` всегда добавляются флаги `--print --output-format stream-json --verbose --dangerously-skip-permissions` (`--verbose` обязателен для stream-json в Claude Code 2.1.x). Если интерактивный агент по ошибке запишет `question.json` вне `$FLOWMANAGER_STAGE_DIR`, стадия сразу перейдёт в `failed` с причиной `dialog protocol violation` (видно в `events.jsonl`) — это защита от вечного зависания.
+Для запуска `claude` всегда добавляются флаги `--print --output-format stream-json --verbose --dangerously-skip-permissions` (`--verbose` обязателен для stream-json в Claude Code 2.1.x). Если интерактивный агент по ошибке запишет `question.json` вне `$AFM_STAGE_DIR`, стадия сразу перейдёт в `failed` с причиной `dialog protocol violation` (видно в `events.jsonl`) — это защита от вечного зависания.
 
 ```yaml
 stages:
@@ -194,8 +209,8 @@ stages:
     name: "Сбор требований"
     description: |
       Спроси у пользователя preferred language через файловый протокол (id: q1):
-      запиши $FLOWMANAGER_STAGE_DIR/implementation.q1.question.json и дождись
-      ответа $FLOWMANAGER_STAGE_DIR/implementation.q1.answer.json.
+      запиши $AFM_STAGE_DIR/implementation.q1.question.json и дождись
+      ответа $AFM_STAGE_DIR/implementation.q1.answer.json.
       После ответа запиши итог в ./summary.md.
     agents: [implementation]
     interactive: true
@@ -208,7 +223,7 @@ stages:
 
 ## Конфигурация
 
-Создай `.flowManager/config.yaml` в проекте или `~/.flowManager/config.yaml` глобально:
+Создай `.afm/config.yaml` в проекте или `~/.afm/config.yaml` глобально:
 
 ```yaml
 client:
@@ -223,18 +238,18 @@ server:
   port: 9876                # порт веб-дашборда
   open_browser: true        # открывать браузер при старте
 
-# prompts_dir: .flowManager/prompts/  # кастомные шаблоны промптов
+# prompts_dir: .afm/prompts/  # кастомные шаблоны промптов
 ```
 
 Приоритет настроек (от высокого к низкому):
 1. CLI-флаги (`--max-parallel`, `--port`)
-2. `.flowManager/config.yaml` проекта
-3. `~/.flowManager/config.yaml` глобальный
+2. `.afm/config.yaml` проекта
+3. `~/.afm/config.yaml` глобальный
 4. Значения по умолчанию
 
 ## Встроенный прокси
 
-flowManager умеет запускать встроенный reverse-прокси, который перехватывает HTTP-трафик AI-агентов к Anthropic-совместимым шлюзам и применяет трансформации. Главная цель — обходить ошибки `529` от `api.z.ai`: прокси превращает non-streaming-запрос в streaming, получает SSE-ответ и собирает его обратно в обычный JSON-ответ.
+afm умеет запускать встроенный reverse-прокси, который перехватывает HTTP-трафик AI-агентов к Anthropic-совместимым шлюзам и применяет трансформации. Главная цель — обходить ошибки `529` от `api.z.ai`: прокси превращает non-streaming-запрос в streaming, получает SSE-ответ и собирает его обратно в обычный JSON-ответ.
 
 ### Когда включается
 
@@ -261,7 +276,7 @@ ZAI-трансформ **авто-включается**, когда upstream с
 
 ### Работа с обёртками над claude (например glm51)
 
-Если `client.command` — обёртка (типа `glm51`), которая сама выставляет `ANTHROPIC_BASE_URL` и зовёт `claude`, **патчить обёртку не нужно**. flowManager создаёт временный shim — скрипт с именем `claude`, который выставляет адрес прокси и зовёт настоящий `claude`. Этот shim оказывается первым в `PATH` агента и перехватывает внутренний `exec claude` из обёртки — поэтому адрес прокси «переживает» перезатирание переменной внутри обёртки.
+Если `client.command` — обёртка (типа `glm51`), которая сама выставляет `ANTHROPIC_BASE_URL` и зовёт `claude`, **патчить обёртку не нужно**. afm создаёт временный shim — скрипт с именем `claude`, который выставляет адрес прокси и зовёт настоящий `claude`. Этот shim оказывается первым в `PATH` агента и перехватывает внутренний `exec claude` из обёртки — поэтому адрес прокси «переживает» перезатирание переменной внутри обёртки.
 
 Единственное условие: настоящий `claude` должен быть в `PATH` (он нужен для создания shim'а). Если `claude` не найден — shim не создаётся (non-fatal warning), и прокси работает только для команд, которые сами читают `ANTHROPIC_BASE_URL` из окружения.
 
@@ -283,7 +298,7 @@ ZAI-трансформ **авто-включается**, когда upstream с
 
 ### Resume при перезапуске
 
-При повторном запуске `flowmanager run` инструмент автоматически:
+При повторном запуске `afm run` инструмент автоматически:
 - Пропускает завершённые стадии (`done`)
 - Сохраняет стадии ожидающие одобрения (`awaiting_approval`)
 - Перезапускает прерванные стадии (`planning`, `running`, `revising`)
@@ -292,7 +307,7 @@ ZAI-трансформ **авто-включается**, когда upstream с
 ## Структура директорий
 
 ```
-.flowManager/
+.afm/
   flows/           # flow.yaml файлы
   runs/
     <flow>-<ts>/   # данные одного запуска
@@ -315,9 +330,9 @@ ZAI-трансформ **авто-включается**, когда upstream с
 
 После `./install.sh` доступны скиллы:
 
-- `/flowmanager` — запускает flow, мониторит и запрашивает одобрения планов прямо в чате
-- `/flowmanager-check` — показывает статус текущего запуска
-- `/flowmanager-init` — создаёт flow.yaml интерактивно
+- `/afm` — запускает flow, мониторит и запрашивает одобрения планов прямо в чате
+- `/afm-check` — показывает статус текущего запуска
+- `/afm-init` — создаёт flow.yaml интерактивно
 
 ## Жизненный цикл стадии
 

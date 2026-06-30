@@ -3,12 +3,12 @@ description: Create a new flow.yaml interactively
 allowed-tools: [Bash, AskUserQuestion, Read]
 ---
 
-# flowmanager init — Create a Flow
+# afm init — Create a Flow
 
 ## Step 0: Verify Installation
 
 ```bash
-which flowmanager
+which afm
 ```
 
 ## Step 1: Gather Information
@@ -23,10 +23,10 @@ Use AskUserQuestion to collect:
 Pass the answers interactively to:
 
 ```bash
-flowmanager init
+afm init
 ```
 
-Or construct the YAML manually and save to `.flowManager/flows/{name}.yaml`.
+Or construct the YAML manually and save to `.afm/flows/{name}.yaml`.
 
 ## Step 3: Confirm
 

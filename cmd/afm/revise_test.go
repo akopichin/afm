@@ -27,10 +27,10 @@ func chdirTemp(t *testing.T) string {
 	return dir
 }
 
-// makeRunState creates .flowManager/runs/{runName}/state.json with the given stage.
+// makeRunState creates .afm/runs/{runName}/state.json with the given stage.
 func makeRunState(t *testing.T, runName, stageID string, status state.StageStatus) string {
 	t.Helper()
-	runDir := filepath.Join(".flowManager", "runs", runName)
+	runDir := filepath.Join(".afm", "runs", runName)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		t.Fatal(err)
 	}

@@ -85,7 +85,7 @@ func TestApproveWrongFlowBug(t *testing.T) {
 	}
 
 	// Проверяем что статус в flow-a обновился
-	runDir := filepath.Join(".flowManager", "runs", "flow-a-20260101-100000")
+	runDir := filepath.Join(".afm", "runs", "flow-a-20260101-100000")
 	rs := loadRunState(t, runDir)
 	if rs.Stages["a-stage"].Status != state.StatusReady {
 		t.Errorf("ожидался статус ready, получили: %v", rs.Stages["a-stage"].Status)

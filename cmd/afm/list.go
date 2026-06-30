@@ -11,12 +11,12 @@ import (
 func newListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List available flow files in .flowManager/flows/",
+		Short: "List available flow files in .afm/flows/",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := filepath.Join(".flowManager", "flows")
+			dir := filepath.Join(fmDir(), "flows")
 			entries, err := os.ReadDir(dir)
 			if err != nil {
-				fmt.Println("No flows found (create one with `flowmanager init`)")
+				fmt.Println("No flows found (create one with `afm init`)")
 				return nil
 			}
 			fmt.Println("Available flows:")

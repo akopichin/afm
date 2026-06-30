@@ -32,7 +32,8 @@ func newRunCmd() *cobra.Command {
 		Use:   "run [flow.yaml]",
 		Short: "Run a flow (or resume the latest run)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			home, _ := os.UserHomeDir()
+			cfg, err := config.LoadFrom(filepath.Join(home, ".afm"), fmDir())
 			if err != nil {
 				return err
 			}
@@ -72,7 +73,7 @@ func newRunCmd() *cobra.Command {
 			}
 			defer store.Close()
 
-			fmt.Printf("flowmanager: running %q\n", f.Name)
+			fmt.Printf("afm: running %q\n", f.Name)
 			fmt.Printf("  run dir: %s\n", runDir)
 
 			var proxyAddr, proxyShimDir string
@@ -165,7 +166,7 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("run: %w", err)
 			}
 
-			fmt.Printf("flowmanager: flow %q completed\n", f.Name)
+			fmt.Printf("afm: flow %q completed\n", f.Name)
 			return nil
 		},
 	}
@@ -197,18 +198,18 @@ func resolveFlowPath(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	entries, err := os.ReadDir(filepath.Join(".flowManager", "flows"))
+	entries, err := os.ReadDir(filepath.Join(fmDir(), "flows"))
 	if err != nil {
-		return "", errors.New("no flow file provided and .flowManager/flows/ not found")
+		return "", errors.New("no flow file provided and " + fmDir() + "/flows/ not found")
 	}
 	var yamls []string
 	for _, e := range entries {
 		if !e.IsDir() && (filepath.Ext(e.Name()) == extYAML || filepath.Ext(e.Name()) == extYML) {
-			yamls = append(yamls, filepath.Join(".flowManager", "flows", e.Name()))
+			yamls = append(yamls, filepath.Join(fmDir(), "flows", e.Name()))
 		}
 	}
 	if len(yamls) == 0 {
-		return "", errors.New("no flow YAML files found in .flowManager/flows/")
+		return "", errors.New("no flow YAML files found in " + fmDir() + "/flows/")
 	}
 	if len(yamls) == 1 {
 		return yamls[0], nil
@@ -217,20 +218,20 @@ func resolveFlowPath(args []string) (string, error) {
 }
 
 func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
-	base := filepath.Join(".flowManager", "runs")
+	base := filepath.Join(fmDir(), "runs")
 
 	stageIDs := make([]string, len(f.Stages))
 	for i, s := range f.Stages {
 		stageIDs[i] = s.ID
 	}
 
-	existing, lookErr := state.FindLatestRunDir(f.Name)
+	existing, lookErr := state.FindLatestRunDir(base, f.Name)
 	if lookErr == nil {
 		store, err = state.Open(existing, stageIDs)
 		if err == nil {
 			snap := store.Snapshot()
 			if !snap.AllDone() {
-				fmt.Printf("flowmanager: resuming run %s\n", filepath.Base(existing))
+				fmt.Printf("afm: resuming run %s\n", filepath.Base(existing))
 				return existing, store, nil
 			}
 		} else {

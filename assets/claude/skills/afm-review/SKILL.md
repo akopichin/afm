@@ -3,7 +3,7 @@ description: Review a stage plan and provide feedback or approve
 allowed-tools: [Bash, Read, AskUserQuestion]
 ---
 
-# flowmanager-review — Review Stage Plan
+# afm-review — Review Stage Plan
 
 **SCOPE**: Read a stage plan, ask for approval or feedback, then call approve/revise.
 
@@ -12,7 +12,7 @@ allowed-tools: [Bash, Read, AskUserQuestion]
 If argument was provided, use it as stage ID. Otherwise:
 
 ```bash
-flowmanager check
+afm check
 ```
 
 Ask the user which stage to review via AskUserQuestion.
@@ -22,13 +22,13 @@ Ask the user which stage to review via AskUserQuestion.
 Find the latest run directory:
 
 ```bash
-ls -t .flowManager/runs/ | head -1
+ls -t .afm/runs/ | head -1
 ```
 
 Read the plan file:
 
 ```bash
-cat .flowManager/runs/{run_dir}/{stage_id}/plan.md
+cat .afm/runs/{run_dir}/{stage_id}/plan.md
 ```
 
 ## Step 3: Show plan and ask for feedback
@@ -46,13 +46,13 @@ Show the plan content to the user via AskUserQuestion:
 **If approved** (ok / да / yes / lgtm / approve):
 
 ```bash
-flowmanager approve {stage_id}
+afm approve {stage_id}
 ```
 
 **If feedback** (any other text):
 
 ```bash
-flowmanager revise {stage_id} --feedback "{user response verbatim}"
+afm revise {stage_id} --feedback "{user response verbatim}"
 ```
 
 ## Step 5: STOP

@@ -44,23 +44,23 @@ func Build(in Inputs) string {
 	if in.Interactive {
 		// Печатаем буквальный абсолютный путь stage-директории, чтобы у агента
 		// не было причин придумывать путь (afm bug-2: агент писал question.json
-		// в .flowManager/stages/... и ломал диалог).
+		// в .afm/stages/... и ломал диалог).
 		stageDir := in.StageDir
 		if abs, err := filepath.Abs(in.StageDir); err == nil && abs != "" {
 			stageDir = abs
 		}
 		sb.WriteString("\n\n<interactive_rules>\n")
 		sb.WriteString("Use the file-based dialog protocol to ask the user questions.\n")
-		fmt.Fprintf(&sb, "Your stage directory is FLOWMANAGER_STAGE_DIR=%q\n", stageDir)
+		fmt.Fprintf(&sb, "Your stage directory is AFM_STAGE_DIR=%q\n", stageDir)
 		sb.WriteString("Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).\n\n")
 		sb.WriteString("For each question:\n")
 		sb.WriteString("1. Write the question file using the Write tool:\n")
-		fmt.Fprintf(&sb, "   Path: %s/%s.q<N>.question.json  (== $FLOWMANAGER_STAGE_DIR/%s.q<N>.question.json)\n", stageDir, in.PhaseAgent, in.PhaseAgent)
-		sb.WriteString("   Write the file to this path and NOWHERE ELSE. Do NOT invent paths like .flowManager/stages/... — always use $FLOWMANAGER_STAGE_DIR.\n")
+		fmt.Fprintf(&sb, "   Path: %s/%s.q<N>.question.json  (== $AFM_STAGE_DIR/%s.q<N>.question.json)\n", stageDir, in.PhaseAgent, in.PhaseAgent)
+		sb.WriteString("   Write the file to this path and NOWHERE ELSE. Do NOT invent paths like .afm/stages/... — always use $AFM_STAGE_DIR.\n")
 		sb.WriteString("   Content: {\"id\":\"qN\",\"question\":\"## Full context here\\n\\nYour question?\",\"options\":[\"A\",\"B\"],\"allow_custom\":true}\n")
 		sb.WriteString("   Put ALL context in 'question': descriptions, trade-offs, examples. Use markdown freely.\n")
 		sb.WriteString("2. Wait for the answer via Bash:\n")
-		fmt.Fprintf(&sb, "   while [ ! -f \"$FLOWMANAGER_STAGE_DIR/%s.qN.answer.json\" ]; do sleep 30; done && cat \"$FLOWMANAGER_STAGE_DIR/%s.qN.answer.json\"\n", in.PhaseAgent, in.PhaseAgent)
+		fmt.Fprintf(&sb, "   while [ ! -f \"$AFM_STAGE_DIR/%s.qN.answer.json\" ]; do sleep 30; done && cat \"$AFM_STAGE_DIR/%s.qN.answer.json\"\n", in.PhaseAgent, in.PhaseAgent)
 		sb.WriteString("3. If bash times out (10 min) without the file: run the exact same bash command again.\n")
 		sb.WriteString("   NEVER give up waiting — keep retrying the bash loop until the file appears.\n")
 		sb.WriteString("Ask ONE question at a time.\n")

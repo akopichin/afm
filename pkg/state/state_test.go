@@ -61,6 +61,38 @@ func TestAwaitingUserInputStatus(t *testing.T) {
 	}
 }
 
+func TestFindLatestRunDir(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "runs")
+
+	// run-старый
+	old := filepath.Join(base, "myflow-20260101-100000")
+	os.MkdirAll(old, 0755)
+
+	// run-новый (алфавитно позже)
+	newer := filepath.Join(base, "myflow-20260101-120000")
+	os.MkdirAll(newer, 0755)
+
+	got, err := state.FindLatestRunDir(base, "myflow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newer {
+		t.Errorf("got %q, want %q", got, newer)
+	}
+}
+
+func TestFindLatestRunDir_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "runs")
+	os.MkdirAll(base, 0755)
+
+	_, err := state.FindLatestRunDir(base, "noflow")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
 func TestVersionPlan(t *testing.T) {
 	dir := t.TempDir()
 	stageDir := filepath.Join(dir, "s1")

@@ -50,9 +50,9 @@ func newApproveCmd() *cobra.Command {
 
 // findLatestRunDir returns the run directory and all stage IDs of the most
 // recent run that contains stageID. This prevents operating on the wrong flow
-// when multiple flows have runs in .flowManager/runs/.
+// when multiple flows have runs in .afm/runs/.
 func findLatestRunDir(stageID string) (runDir string, stageIDs []string, err error) {
-	base := filepath.Join(".flowManager", "runs")
+	base := filepath.Join(fmDir(), "runs")
 	entries, readErr := os.ReadDir(base)
 	if readErr != nil {
 		return "", nil, fmt.Errorf("no runs dir: %w", readErr)

@@ -417,14 +417,14 @@ func TestResumeFlagPassedAsArg(t *testing.T) {
 }
 
 // TestRunSetsStageDir verifies that StageDir is exposed to the agent
-// subprocess via the FLOWMANAGER_STAGE_DIR env var (file-based dialog protocol).
+// subprocess via the AFM_STAGE_DIR env var (file-based dialog protocol).
 func TestRunSetsStageDir(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")
 	outFile := filepath.Join(dir, "env.txt")
 
-	// Print FLOWMANAGER_STAGE_DIR to outFile, then emit stream-json completion.
-	script := fmt.Sprintf(`printf '%%s' "$FLOWMANAGER_STAGE_DIR" > %s`+"\n"+
+	// Print AFM_STAGE_DIR to outFile, then emit stream-json completion.
+	script := fmt.Sprintf(`printf '%%s' "$AFM_STAGE_DIR" > %s`+"\n"+
 		`echo '{"type":"result","subtype":"success"}'`, outFile)
 
 	ex := executor.New(executor.Config{
@@ -443,7 +443,7 @@ func TestRunSetsStageDir(t *testing.T) {
 		t.Fatalf("read env output: %v", err)
 	}
 	if got := strings.TrimSpace(string(data)); got != "/tmp/test-stage-dir" {
-		t.Errorf("FLOWMANAGER_STAGE_DIR=%q, want %q", got, "/tmp/test-stage-dir")
+		t.Errorf("AFM_STAGE_DIR=%q, want %q", got, "/tmp/test-stage-dir")
 	}
 }
 
@@ -648,9 +648,9 @@ func TestRunSetsProxyURL(t *testing.T) {
 	logFile := filepath.Join(dir, "impl.log")
 	outFile := filepath.Join(dir, "env.txt")
 
-	// Записываем ANTHROPIC_BASE_URL и FLOWMANAGER_PROXY_URL в файл, потом эмитируем result.
+	// Записываем ANTHROPIC_BASE_URL и AFM_PROXY_URL в файл, потом эмитируем result.
 	script := fmt.Sprintf(
-		`printf '%%s\n%%s' "$ANTHROPIC_BASE_URL" "$FLOWMANAGER_PROXY_URL" > %s`+"\n"+
+		`printf '%%s\n%%s' "$ANTHROPIC_BASE_URL" "$AFM_PROXY_URL" > %s`+"\n"+
 			`echo '{"type":"result","subtype":"success"}'`,
 		outFile)
 
@@ -674,7 +674,7 @@ func TestRunSetsProxyURL(t *testing.T) {
 		t.Errorf("ANTHROPIC_BASE_URL=%q, want http://127.0.0.1:18765", lines[0])
 	}
 	if lines[1] != "http://127.0.0.1:18765" {
-		t.Errorf("FLOWMANAGER_PROXY_URL=%q, want http://127.0.0.1:18765", lines[1])
+		t.Errorf("AFM_PROXY_URL=%q, want http://127.0.0.1:18765", lines[1])
 	}
 }
 

@@ -63,7 +63,7 @@ func (p ProxyConfig) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
 }
 
-// Config is the merged configuration for flowmanager.
+// Config is the merged configuration for afm.
 type Config struct {
 	Client     ClientConfig   `yaml:"client"`
 	Executor   ExecutorConfig `yaml:"executor"`
@@ -81,16 +81,6 @@ func Default() Config {
 		Executor: ExecutorConfig{IdleTimeout: 30 * time.Minute, MaxParallel: 0},
 		Server:   ServerConfig{Port: &port, OpenBrowser: &openBrowser},
 	}
-}
-
-// Load loads configuration from the standard locations:
-// ~/.flowManager/config.yaml (global) and .flowManager/config.yaml (project).
-func Load() (Config, error) {
-	home, _ := os.UserHomeDir()
-	return LoadFrom(
-		filepath.Join(home, ".flowManager"),
-		".flowManager",
-	)
 }
 
 // LoadFrom loads and merges config from explicit global and project dirs.

@@ -60,12 +60,12 @@ func (r *fileQuestionRunner) RunAgent(ctx context.Context, agentType, stageName,
 func TestFullDialogCycle(t *testing.T) {
 	dir := t.TempDir()
 
-	// Mock agent: uses FLOWMANAGER_STAGE_DIR env var, writes question.json,
+	// Mock agent: uses AFM_STAGE_DIR env var, writes question.json,
 	// polls for answer.json (max 10s for test), then creates .done.
 	agentScript := filepath.Join(dir, "mock-agent.sh")
 	script := "#!/bin/bash\n" +
-		"STAGE_DIR=\"$FLOWMANAGER_STAGE_DIR\"\n" +
-		"if [ -z \"$STAGE_DIR\" ]; then echo 'no FLOWMANAGER_STAGE_DIR' >&2; exit 1; fi\n" +
+		"STAGE_DIR=\"$AFM_STAGE_DIR\"\n" +
+		"if [ -z \"$STAGE_DIR\" ]; then echo 'no AFM_STAGE_DIR' >&2; exit 1; fi\n" +
 		"printf '{\"id\":\"q1\",\"question\":\"go ahead?\"}' > \"$STAGE_DIR/implementation.q1.question.json\"\n" +
 		"for i in $(seq 1 20); do\n" +
 		"  if [ -f \"$STAGE_DIR/implementation.q1.answer.json\" ]; then break; fi\n" +

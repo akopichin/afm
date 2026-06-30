@@ -1,4 +1,8 @@
-# FlowManager Development Guide
+# AFM Development Guide
+
+## Working directory: `.afm` and `--dir`
+
+By default afm stores runs, flows, and config under `.afm/` in the working directory. The parent directory is resolved in `PersistentPreRunE` (`cmd/afm/main.go`) with priority **flag > env > `.`**: the `--dir` persistent flag, else the `AFM_DIR` env variable, else the current directory. All subcommands read the effective `.afm` path via `fmDir()` (`filepath.Join(rootDir, ".afm")`); `state.FindLatestRunDir(base, flowName)` takes the runs base as an explicit argument instead of hardcoding the path.
 
 ## File-Based Dialog Protocol (Interactive Stages)
 
@@ -7,12 +11,12 @@ The interactive dialog system was refactored from an MCP HTTP server to a file-b
 ### Architecture
 
 **Agent writes question:**
-- Agent writes: `$FLOWMANAGER_STAGE_DIR/<phase>.<id>.question.json`
+- Agent writes: `$AFM_STAGE_DIR/<phase>.<id>.question.json`
 - Example: `planning.q1.question.json`
 - Format: `{"id":"q1", "question":"...", "options":[...], "allow_custom":true/false}`
 
 **Agent polls for answer:**
-- Bash loop in agent script: `while [ ! -f "$FLOWMANAGER_STAGE_DIR/<phase>.<id>.answer.json" ]; do sleep 30; done`
+- Bash loop in agent script: `while [ ! -f "$AFM_STAGE_DIR/<phase>.<id>.answer.json" ]; do sleep 30; done`
 - When file appears, agent reads it and continues
 - Format: `{"id":"q1", "answer":"...", "from_options":true/false}`
 
@@ -37,7 +41,7 @@ The interactive dialog system was refactored from an MCP HTTP server to a file-b
 |------|-----------------|
 | `pkg/mcp/dialog.go` | `FindUnansweredQuestions()`, `QuestionFile` type, `appendLine()` for dialog.jsonl |
 | `pkg/orchestrator/orchestrator.go` | `startQuestionPoller()`, `NotifyAnswer()`, `pollQuestions()`, active agent tracking |
-| `pkg/executor/executor.go` | Passes `FLOWMANAGER_STAGE_DIR` environment variable to agent process |
+| `pkg/executor/executor.go` | Passes `AFM_STAGE_DIR` environment variable to agent process |
 | `pkg/server/handlers.go` | `handleDialogAnswer()` with atomic write pattern (O_EXCL) |
 | `pkg/prompts/builder.go` | Interactive rules instruction in system prompt |
 
@@ -75,16 +79,17 @@ The interactive dialog system was refactored from an MCP HTTP server to a file-b
 
 | Variable | Purpose | Set By |
 |----------|---------|--------|
-| `FLOWMANAGER_STAGE_DIR` | Stage directory for question/answer files | `executor.New()` when `StageDir` configured |
+| `AFM_STAGE_DIR` | Stage directory for question/answer files | `executor.New()` when `StageDir` configured |
+| `AFM_DIR` | Parent directory for `.afm` (used when `--dir` is not set) | CLI flag `--dir` / env, resolved in `PersistentPreRunE` |
 
 ### Testing File-Based Dialog Locally
 
 Mock agents must implement their own polling:
 ```bash
-while [ ! -f "$FLOWMANAGER_STAGE_DIR/<phase>.q1.answer.json" ]; do 
+while [ ! -f "$AFM_STAGE_DIR/<phase>.q1.answer.json" ]; do 
   sleep 0.5
 done
-answer=$(cat "$FLOWMANAGER_STAGE_DIR/<phase>.q1.answer.json" | jq -r '.answer')
+answer=$(cat "$AFM_STAGE_DIR/<phase>.q1.answer.json" | jq -r '.answer')
 ```
 
 Write question.json with proper schema:
@@ -101,7 +106,7 @@ Write question.json with proper schema:
 
 Check stage directory for dialog files:
 ```bash
-ls -la .flowManager/runs/<run_id>/<stage_id>/
+ls -la .afm/runs/<run_id>/<stage_id>/
 # Look for: planning.q1.question.json, planning.q1.answer.json, planning.dialog.jsonl
 ```
 
@@ -110,7 +115,7 @@ Common patterns:
 - **Answer received:** Both `*.question.json` and `*.answer.json` exist, agent should have exited
 - **Dialog history:** Check `*.dialog.jsonl` for full Q&A history (safe to ignore if missing)
 - **Agent error / hung:** Agent stdout (tool actions) is in `<phase>.log`; agent **stderr** (claude diagnostics, e.g. `stream-json requires --verbose`) is in `<phase>.stderr.log`. The bash polling loop times out after the executor's idle timeout (30 min default).
-- **Dialog protocol violation:** Stage failed fast with reason `dialog protocol violation` in `events.jsonl` — the interactive agent wrote a `*.question.json` OUTSIDE `$FLOWMANAGER_STAGE_DIR` (detected by `detectDialogViolation` scanning `<phase>.jsonl` Write events in `pkg/orchestrator/orchestrator.go`). On manual retry, `<phase>.session.json` and `<phase>.jsonl` are cleared so detection starts fresh.
+- **Dialog protocol violation:** Stage failed fast with reason `dialog protocol violation` in `events.jsonl` — the interactive agent wrote a `*.question.json` OUTSIDE `$AFM_STAGE_DIR` (detected by `detectDialogViolation` scanning `<phase>.jsonl` Write events in `pkg/orchestrator/orchestrator.go`). On manual retry, `<phase>.session.json` and `<phase>.jsonl` are cleared so detection starts fresh.
 
 ### Polling Latency
 
@@ -123,18 +128,18 @@ Common patterns:
 
 When adding new interactive features:
 1. Ensure agent writes `<phase>.<id>.question.json` in correct format
-2. Ensure agent polls correctly: `while [ ! -f "$FLOWMANAGER_STAGE_DIR/<phase>.<id>.answer.json" ]; do sleep 30; done`
+2. Ensure agent polls correctly: `while [ ! -f "$AFM_STAGE_DIR/<phase>.<id>.answer.json" ]; do sleep 30; done`
 3. Update handler validation in `pkg/server/handlers.go` if phase names change
 4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_DialogViolationDetected`), not `eagerProbeRunner` (which only applies to non-interactive stages)
 5. Verify atomic write pattern (O_EXCL) is preserved in handlers
 
 ## Built-in Reverse Proxy
 
-flowManager can run a built-in reverse proxy that intercepts agent HTTP traffic to Anthropic-compatible gateways and applies transforms. The primary use case is working around `api.z.ai` 529 errors: `ZAITransform` rewrites non-streaming requests to streaming, collects the SSE response, and reassembles it into a single Anthropic JSON `message`.
+afm can run a built-in reverse proxy that intercepts agent HTTP traffic to Anthropic-compatible gateways and applies transforms. The primary use case is working around `api.z.ai` 529 errors: `ZAITransform` rewrites non-streaming requests to streaming, collects the SSE response, and reassembles it into a single Anthropic JSON `message`.
 
 ### Architecture
 
-`run.go` starts the proxy before the orchestrator (random free port, `127.0.0.1` only). The proxy address and a `claude` shim directory are threaded through `orchestrator.Options` → `executor.Config` → the agent process env (`ANTHROPIC_BASE_URL`, `FLOWMANAGER_PROXY_URL`, and `PATH` with the shim dir prepended). `ZAITransform` is auto-detected when the upstream host contains `api.z.ai`.
+`run.go` starts the proxy before the orchestrator (random free port, `127.0.0.1` only). The proxy address and a `claude` shim directory are threaded through `orchestrator.Options` → `executor.Config` → the agent process env (`ANTHROPIC_BASE_URL`, `AFM_PROXY_URL`, and `PATH` with the shim dir prepended). `ZAITransform` is auto-detected when the upstream host contains `api.z.ai`.
 
 **Upstream resolution (in `run.go`, before `orchestrator.New`):** `cfg.Proxy.Upstream` (config), else `os.Getenv("ANTHROPIC_BASE_URL")`. If both are empty the proxy is skipped (no-op + info log). A proxy `Start` failure is a **hard error** (`start proxy: %w`); a `CreateShim` failure is a **non-fatal warning** — env-var injection still points the agent at the proxy. Proxy + shim are torn down via `defer` (`p.Shutdown`, `os.RemoveAll(shimDir)`).
 
@@ -147,9 +152,9 @@ flowManager can run a built-in reverse proxy that intercepts agent HTTP traffic 
 | `pkg/proxy/zai.go` | `ZAITransform`, `BuildTransforms` (auto-detect + `*bool` override), `parseSSE` (SSE→JSON reassembly), `writeSSEError` |
 | `pkg/proxy/shim.go` | `CreateShim` — temp dir with a `claude` wrapper that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude` |
 | `pkg/config/config.go` | `ProxyConfig`, `TransformOverrides`, `IsEnabled()` (nil `Enabled` → enabled), merge in `mergeFile` |
-| `pkg/executor/executor.go` | `Config.ProxyURL`/`ProxyShimDir` → injects `ANTHROPIC_BASE_URL` + `FLOWMANAGER_PROXY_URL` and prepends shim dir to `PATH` in the agent env (also strips any pre-existing `ANTHROPIC_BASE_URL` when `ProxyURL` is set) |
+| `pkg/executor/executor.go` | `Config.ProxyURL`/`ProxyShimDir` → injects `ANTHROPIC_BASE_URL` + `AFM_PROXY_URL` and prepends shim dir to `PATH` in the agent env (also strips any pre-existing `ANTHROPIC_BASE_URL` when `ProxyURL` is set) |
 | `pkg/orchestrator/orchestrator.go` | `Options.ProxyURL`/`ProxyShimDir` forwarded to **all four** `executor.New` call sites (`New`, two in `runnerFor`, `runnerForFallback`) |
-| `cmd/flowmanager/run.go` | Starts proxy + shim before the orchestrator; resolves upstream |
+| `cmd/afm/run.go` | Starts proxy + shim before the orchestrator; resolves upstream |
 
 ### How the ZAI transform works
 
@@ -163,9 +168,9 @@ For requests where `stream` is absent/false (and upstream is `api.z.ai`):
 ### Wrapper commands (glm51, etc.) — no patching required
 
 When `client.command` is a wrapper (e.g. `glm51`) that exports `ANTHROPIC_BASE_URL` itself and then `exec`s `claude`, the proxy still works without patching the wrapper:
-- flowmanager prepends a shim dir to the agent's `PATH`. The shim is a `claude` script that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude`.
+- afm prepends a shim dir to the agent's `PATH`. The shim is a `claude` script that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude`.
 - The wrapper clobbers `ANTHROPIC_BASE_URL`, but its inner `exec claude` resolves to the **shim** (PATH precedence), which re-sets the proxy address for the real `claude`.
-- Requirement: the real `claude` must be in flowmanager's `PATH` (used by `CreateShim`'s `exec.LookPath`).
+- Requirement: the real `claude` must be in afm's `PATH` (used by `CreateShim`'s `exec.LookPath`).
 
 This is why the shim wraps `claude` (the actual HTTP client), **not** `client.command` — wrapping the wrapper would be clobbered by the wrapper's own `export`. The env-var injection alone is insufficient for wrappers because they overwrite `ANTHROPIC_BASE_URL`; the shim is what actually delivers the proxy address to `claude`.
 
@@ -174,7 +179,7 @@ This is why the shim wraps `claude` (the actual HTTP client), **not** `client.co
 | Variable | Purpose | Set By |
 |----------|---------|--------|
 | `ANTHROPIC_BASE_URL` | Upstream source (fallback in `run.go`) / injected proxy address (to the agent) | `run.go` reads; executor injects proxy address when `ProxyURL` set |
-| `FLOWMANAGER_PROXY_URL` | Proxy address (informational, mirrors `ANTHROPIC_BASE_URL`) | executor when `ProxyURL` set |
+| `AFM_PROXY_URL` | Proxy address (informational, mirrors `ANTHROPIC_BASE_URL`) | executor when `ProxyURL` set |
 | `PATH` | Prepended with the shim dir so the wrapper's `claude` call resolves to the shim | executor when `ProxyShimDir` set |
 
 ### Config

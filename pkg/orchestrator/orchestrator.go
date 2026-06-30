@@ -215,7 +215,7 @@ func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOpti
 
 // runnerFor returns the appropriate Runner for a stage's phase.
 // For interactive stages it generates a session id and returns an executor
-// configured with --session-id / --resume and FLOWMANAGER_STAGE_DIR env.
+// configured with --session-id / --resume and AFM_STAGE_DIR env.
 func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	if !s.Interactive {
 		if s.Command == "" {
@@ -413,7 +413,7 @@ func detectDialogViolation(stageDir string) (string, bool) {
 // pathInside reports whether file is located inside dir. Both are resolved to
 // absolute paths the same way (filepath.Abs, no symlink resolution), so they
 // stay in a consistent form — the agent's Write paths and stageDir both originate
-// from the same source (FLOWMANAGER_STAGE_DIR), so a consistent resolution is
+// from the same source (AFM_STAGE_DIR), so a consistent resolution is
 // sufficient and avoids EvalSymlinks' failure on not-yet-existing files.
 func pathInside(file, dir string) bool {
 	absFile, err := filepath.Abs(file)

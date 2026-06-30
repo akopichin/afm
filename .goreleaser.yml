@@ -1,14 +1,14 @@
 version: 2
 
-project_name: flowmanager
+project_name: afm
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - main: ./cmd/flowmanager
-    binary: flowmanager
+  - main: ./cmd/afm
+    binary: afm
     env:
       - CGO_ENABLED=0
     goos:

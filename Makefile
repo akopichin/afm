@@ -1,5 +1,5 @@
 LOCAL_BIN=$(CURDIR)/bin
-PROJECT_NAME=flowmanager
+PROJECT_NAME=afm
 
 export GO111MODULE=on
 GOENV:=GO111MODULE=on
@@ -19,7 +19,7 @@ $(GOLANGCI_BIN): $(LOCAL_BIN)
 bindeps: $(GOLANGCI_BIN)
 
 build:
-	$(GOENV) CGO_ENABLED=0 go build -v -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/flowmanager
+	$(GOENV) CGO_ENABLED=0 go build -v -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/afm
 
 test:
 	$(GOENV) go test ./... -v -race
@@ -39,9 +39,9 @@ clean:
 # install обновляет ~/go/bin и освежает копии бинарника в других
 # директориях PATH (например ~/homebrew/bin), чтобы не оставались устаревшие.
 install:
-	$(GOENV) go install ./cmd/flowmanager
+	$(GOENV) go install ./cmd/afm
 	@src=$$(go env GOPATH)/bin/$(PROJECT_NAME); \
-	for f in $(HOME)/homebrew/bin/flowmanager $(HOME)/homebrew/bin/flowManager; do \
+	for f in $(HOME)/homebrew/bin/afm $(HOME)/homebrew/bin/afm; do \
 		if [ -e $$f ] && [ ! -L $$f ]; then \
 			cp $$src $$f && echo "updated copy: $$f"; \
 		fi; \

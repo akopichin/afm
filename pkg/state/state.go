@@ -67,9 +67,8 @@ func (rs *RunState) AllDone() bool {
 }
 
 // FindLatestRunDir finds the most recent run directory for a given flow name
-// under .flowManager/runs/.
-func FindLatestRunDir(flowName string) (string, error) {
-	base := filepath.Join(".flowManager", "runs")
+// under base/.
+func FindLatestRunDir(base, flowName string) (string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return "", fmt.Errorf("read runs dir: %w", err)

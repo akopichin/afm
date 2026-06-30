@@ -11,8 +11,8 @@ func TestDialogTranscript(t *testing.T) {
 	path := filepath.Join(dir, "planning.jsonl")
 	lines := `{"type":"assistant","message":{"content":[{"type":"text","text":"Представляю дизайн."}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.go"}}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__flowmanager__ask_user","input":{"id":"q1","question":"Дизайн ок?"}}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__flowmanager__ask_user","input":{"id":"q1","question":"Дизайн ок? Утверждаем?"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__afm__ask_user","input":{"id":"q1","question":"Дизайн ок?"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__afm__ask_user","input":{"id":"q1","question":"Дизайн ок? Утверждаем?"}}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"   "}]}}
 {"type":"result","subtype":"success"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Пишу план."}]}}

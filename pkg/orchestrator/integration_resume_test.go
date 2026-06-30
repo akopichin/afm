@@ -176,7 +176,7 @@ func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
 	}
 }
 
-// TestResumeAfterCrash verifies that when flowManager crashes while a stage is
+// TestResumeAfterCrash verifies that when afm crashes while a stage is
 // in awaiting_user_input, and both question.json and answer.json already exist
 // on disk, the orchestrator on restart resumes the interactive agent, which
 // reads the pre-existing answer.json via its bash loop, and the stage reaches done.
@@ -213,12 +213,12 @@ func TestResumeAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Agent script: checks FLOWMANAGER_STAGE_DIR, reads answer.json (already exists),
+	// Agent script: checks AFM_STAGE_DIR, reads answer.json (already exists),
 	// creates .done, exits.
 	agentScript := filepath.Join(dir, "mock-resume-agent.sh")
 	script := "#!/bin/bash\n" +
-		"STAGE_DIR=\"$FLOWMANAGER_STAGE_DIR\"\n" +
-		"if [ -z \"$STAGE_DIR\" ]; then echo 'no FLOWMANAGER_STAGE_DIR' >&2; exit 1; fi\n" +
+		"STAGE_DIR=\"$AFM_STAGE_DIR\"\n" +
+		"if [ -z \"$STAGE_DIR\" ]; then echo 'no AFM_STAGE_DIR' >&2; exit 1; fi\n" +
 		"# answer.json should already exist from before the crash\n" +
 		"if [ ! -f \"$STAGE_DIR/implementation.q1.answer.json\" ]; then echo 'answer missing' >&2; exit 1; fi\n" +
 		"echo 'done' > \"$STAGE_DIR/.done\"\n" +

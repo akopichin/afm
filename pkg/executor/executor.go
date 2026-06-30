@@ -23,8 +23,8 @@ type Config struct {
 	OnAction     func(tool, detail string) // called for each parsed agent action (may be nil)
 	SessionID    string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
 	Resume       bool                      // if true, --resume <SessionID> is used instead of --session-id
-	StageDir     string                    // passed to agent as FLOWMANAGER_STAGE_DIR env var (file-based dialog protocol)
-	ProxyURL     string                    // if set, ANTHROPIC_BASE_URL and FLOWMANAGER_PROXY_URL are set in agent env
+	StageDir     string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	ProxyURL     string                    // if set, ANTHROPIC_BASE_URL and AFM_PROXY_URL are set in agent env
 	ProxyShimDir string                    // if set, prepended to PATH in agent env (for wrapper scripts)
 }
 
@@ -417,11 +417,11 @@ func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lin
 		}
 	}
 	if e.cfg.StageDir != "" {
-		filtered = append(filtered, "FLOWMANAGER_STAGE_DIR="+e.cfg.StageDir)
+		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
 	}
 	if e.cfg.ProxyURL != "" {
 		filtered = append(filtered, "ANTHROPIC_BASE_URL="+e.cfg.ProxyURL)
-		filtered = append(filtered, "FLOWMANAGER_PROXY_URL="+e.cfg.ProxyURL)
+		filtered = append(filtered, "AFM_PROXY_URL="+e.cfg.ProxyURL)
 	}
 	if e.cfg.ProxyShimDir != "" {
 		pathSet := false

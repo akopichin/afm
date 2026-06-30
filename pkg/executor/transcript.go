@@ -8,7 +8,7 @@ import (
 )
 
 // askUserToolName — имя MCP-инструмента ask_user в stream-json логе.
-const askUserToolName = "mcp__flowmanager__ask_user"
+const askUserToolName = "mcp__afm__ask_user"
 
 // TranscriptItem — один элемент диалоговой ленты из stream-json лога:
 // либо текст ассистента (Text != ""), либо вызов ask_user (AskUserID != "").
