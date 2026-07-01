@@ -49,3 +49,20 @@ executor:
 #   # transforms:
 #   #   zai: true   # force-enable ZAI fix (non-streaming→streaming for api.z.ai)
 #   #   zai: false  # force-disable even when upstream is api.z.ai
+
+# Docker mode — запускать afm и агентов внутри Docker-контейнера.
+# Включается через конфиг или переменную окружения AFM_USE_DOCKER=1.
+# docker:
+#   # Включить Docker mode. nil/absent → смотрим $AFM_USE_DOCKER.
+#   # Default: false
+#   # enabled: true
+#
+#   # Docker-образ для запуска.
+#   # Default: "akopichin/afm:latest" (или $AFM_DOCKER_IMAGE)
+#   # image: akopichin/afm:latest
+#
+#   # Доп. хост-директории для кастомных агентов (токены/конфиги вне ~/.claude,
+#   # напр. ~/.ai-free для GLM-обёрток glm51/glm52). Пути с ~ → /root/…, абсолютные —
+#   # тот же путь; монтируются только для чтения.
+#   # extra_mounts:
+#   #   - ~/.ai-free

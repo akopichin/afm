@@ -166,3 +166,91 @@ func TestProxyConfigMergeDefaults(t *testing.T) {
 		t.Errorf("default port should be 0, got %d", cfg.Proxy.Port)
 	}
 }
+
+func TestDockerConfig_IsDockerEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	cases := []struct {
+		name         string
+		cfg          config.DockerConfig
+		envUseDocker string
+		envInDocker  string
+		want         bool
+	}{
+		{"enabled=true", config.DockerConfig{Enabled: &trueVal}, "", "", true},
+		{"enabled=false", config.DockerConfig{Enabled: &falseVal}, "", "", false},
+		{"nil+env=1", config.DockerConfig{}, "1", "", true},
+		{"nil+env=true", config.DockerConfig{}, "true", "", true},
+		{"nil+env=", config.DockerConfig{}, "", "", false},
+		{"in_docker overrides", config.DockerConfig{Enabled: &trueVal}, "", "1", false},
+		{"explicit=true wins over AFM_IN_DOCKER=1 not", config.DockerConfig{Enabled: &trueVal}, "", "1", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_USE_DOCKER", tc.envUseDocker)
+			t.Setenv("AFM_IN_DOCKER", tc.envInDocker)
+			if got := tc.cfg.IsDockerEnabled(); got != tc.want {
+				t.Errorf("IsDockerEnabled()=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDockerConfig_GetImage(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("AFM_DOCKER_IMAGE", "")
+		cfg := config.DockerConfig{}
+		if cfg.GetImage() != "akopichin/afm:latest" {
+			t.Errorf("got %q, want akopichin/afm:latest", cfg.GetImage())
+		}
+	})
+	t.Run("config override", func(t *testing.T) {
+		t.Setenv("AFM_DOCKER_IMAGE", "")
+		cfg := config.DockerConfig{Image: "myrepo/afm:v1"}
+		if cfg.GetImage() != "myrepo/afm:v1" {
+			t.Errorf("got %q", cfg.GetImage())
+		}
+	})
+	t.Run("env override", func(t *testing.T) {
+		t.Setenv("AFM_DOCKER_IMAGE", "local/afm:dev")
+		cfg := config.DockerConfig{Image: "myrepo/afm:v1"}
+		if cfg.GetImage() != "local/afm:dev" {
+			t.Errorf("got %q", cfg.GetImage())
+		}
+	})
+}
+
+func TestLoadFrom_DockerConfig(t *testing.T) {
+	dir := t.TempDir()
+	trueVal := true
+	writeYAML(t, dir, "config.yaml", `
+docker:
+  enabled: true
+  image: test/afm:dev
+  extra_mounts:
+    - ~/.ai-free
+    - /etc/extra
+`)
+	cfg, err := config.LoadFrom(dir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Docker.Enabled == nil || *cfg.Docker.Enabled != trueVal {
+		t.Errorf("Docker.Enabled: got %v, want &true", cfg.Docker.Enabled)
+	}
+	if cfg.Docker.Image != "test/afm:dev" {
+		t.Errorf("Docker.Image: got %q", cfg.Docker.Image)
+	}
+	wantMounts := []string{"~/.ai-free", "/etc/extra"}
+	if len(cfg.Docker.ExtraMounts) != len(wantMounts) {
+		t.Fatalf("Docker.ExtraMounts: got %v, want %v", cfg.Docker.ExtraMounts, wantMounts)
+	}
+	for i, w := range wantMounts {
+		if cfg.Docker.ExtraMounts[i] != w {
+			t.Errorf("Docker.ExtraMounts[%d]: got %q, want %q", i, cfg.Docker.ExtraMounts[i], w)
+		}
+	}
+	_ = trueVal
+}

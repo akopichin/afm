@@ -212,3 +212,78 @@ proxy:
 - The SSE `[DONE]` terminator detection assumes `\n` line endings (Anthropic uses `\n`); `\r\n` would need a `TrimRight`.
 - The `stop_sequence` field is currently never populated (always null).
 - `passthroughTo` produces a double slash in the path if the upstream has a trailing slash.
+
+## Docker Mode
+
+afm умеет автоматически перезапускать себя внутри Docker при включённом Docker-режиме.
+
+### Включение
+
+Через конфиг (`.afm/config.yaml` или `~/.afm/config.yaml`):
+```yaml
+docker:
+  enabled: true
+  image: akopichin/afm:latest   # опционально, это дефолт
+```
+
+Или через переменную окружения:
+```bash
+AFM_USE_DOCKER=1 afm run flow.yaml
+```
+
+### Что монтируется автоматически
+
+| Хост | Контейнер | Назначение |
+|------|-----------|------------|
+| `$(pwd)` (абсолютный путь) | тот же путь | Проект + `.afm/` (runs, flows, config) |
+| `~/.claude/` | `/root/.claude` | Auth, skills, память |
+| `~/.claude.json` (если есть) | `/root/.claude.json` (`:ro`) | Конфиг claude CLI (файл в доме, не внутри `~/.claude/`) |
+| `~/.afm/` | `/root/.afm` | Глобальный конфиг afm |
+| Нестандартные агенты из flow | `/usr/local/bin/<cmd>` (`:ro`) | Кастомные команды |
+| `docker.extra_mounts` | `~`-пути → `/root/…`, прочие — тот же путь (`:ro`) | Токены/конфиги кастомных агентов (напр. `~/.ai-free`) |
+
+**Dashboard:** порт из `server.port` пробрасывается на хост через `-p <port>:<port>`, иначе UI недоступен снаружи контейнера. **Браузер** открывает хост-side opener: afm внутри Linux-контейнера сам открыть браузер на macOS-хосте не может (`runtime.GOOS=linux` → `xdg-open` без display), поэтому отдельный процесс-помощник запускается на хосте ДО re-exec, опрашивает проброшенный порт и зовёт `open`/`xdg-open`. Внутри контейнера вызов `openBrowser` пропускается (`AFM_IN_DOCKER=1`).
+
+### Environment Variables
+
+| Переменная | Назначение |
+|-----------|------------|
+| `AFM_USE_DOCKER=1` | Включить Docker mode без правки конфига |
+| `AFM_IN_DOCKER=1` | Выставляется внутри контейнера — предотвращает рекурсию (не трогать) |
+| `IS_SANDBOX=1` | Выставляется внутри контейнера — даёт claude право на `--dangerously-skip-permissions` под root (контейнер = песочница) |
+| `AFM_DOCKER_IMAGE` | Переопределить образ (например, для локальной сборки) |
+| `ANTHROPIC_API_KEY` | Пробрасывается в bare-форме `-e KEY` (без значения — не светится в `ps aux`/history) |
+| `ANTHROPIC_BASE_URL` | То же самое |
+
+### Публикация нового образа
+
+```bash
+make docker-push   # собирает Dockerfile.runtime и пушит в akopichin/afm:latest
+```
+
+### Отладка
+
+```bash
+# Посмотреть что именно будет запущено
+AFM_USE_DOCKER=1 AFM_DOCKER_IMAGE=local/afm:dev afm run flow.yaml
+
+# Войти в контейнер вручную
+docker run --rm -it \
+  -v $(pwd):/project \
+  -v ~/.claude:/root/.claude \
+  -v ~/.afm:/root/.afm \
+  akopichin/afm:latest bash
+```
+
+### Нестандартные агенты (не claude)
+
+Если в flow прописан `command: glm51` (или другой не-claude бинарник), afm автоматически:
+1. Находит бинарник через `which glm51`
+2. Монтирует его в контейнер: `-v /path/to/glm51:/usr/local/bin/glm51:ro`
+
+Бинарники, не найденные в PATH на хосте, молча пропускаются.
+
+Ограничения:
+- В контейнер монтируется только сам файл бинарника/скрипта агента (`:ro`). Если скрипт-обёртка вызывает сторонние зависимости (node/python/скрипты-сиблинги/файлы вроде `~/.glmrc`), они не перенесутся — используйте агентов, чьи зависимости уже есть в образе.
+- `command` в flow должен быть именем из `PATH` (базовым именем), а не абсолютным путём: монтируется только `filepath.Base(cmd)`, и внутри контейнера искался бы абсолютный путь хоста.
+- Если скрипт-агент читает свои токены/конфиги из дома (напр. GLM-обёртки `glm51`/`glm52`/`ai-free.claude-glm` — из `~/.ai-free/claude-glm/`), добавьте эту директорию в `docker.extra_mounts`, иначе агент упадёт с "файл не найден".

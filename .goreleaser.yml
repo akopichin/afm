@@ -26,5 +26,13 @@ archives:
         format: zip
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
+dockers:
+  - image_templates:
+      - "akopichin/afm:{{ .Tag }}"
+      - "akopichin/afm:latest"
+    dockerfile: Dockerfile.runtime
+    build_flag_templates:
+      - "--platform=linux/amd64"
+
 checksum:
   name_template: "checksums.txt"

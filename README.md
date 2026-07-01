@@ -31,6 +31,28 @@ make install      # установить через go install
 
 Скрипт копирует бинарник в `/usr/local/bin` и устанавливает скиллы для Claude Code (`/afm`, `/afm-check`, `/afm-init`).
 
+### Запуск в Docker (без локальной установки)
+
+```bash
+docker run --rm -it \
+  -v $(pwd):/project \
+  -v ~/.claude:/root/.claude \
+  -v ~/.afm:/root/.afm \
+  -e ANTHROPIC_API_KEY \
+  akopichin/afm:latest \
+  run flow.yaml
+```
+
+Или включить автоматический Docker-режим в конфиге — тогда обычная команда `afm run` сама перезапустится в контейнере:
+
+```yaml
+# .afm/config.yaml
+docker:
+  enabled: true
+```
+
+Образ включает: claude CLI, Node 22, Python 3.12, Go 1.26, git.
+
 ## Быстрый старт
 
 ### 1. Создать flow

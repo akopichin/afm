@@ -16,6 +16,7 @@ import (
 
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/proxy"
@@ -55,6 +56,36 @@ func newRunCmd() *cobra.Command {
 			f, err := flow.ParseFile(flowPath)
 			if err != nil {
 				return fmt.Errorf("parse flow: %w", err)
+			}
+
+			// Docker self-re-exec: если включён Docker-режим и мы не внутри контейнера —
+			// перезапускаем себя в Docker.
+			if cfg.Docker.IsDockerEnabled() {
+				absDir, absErr := filepath.Abs(rootDir)
+				if absErr != nil {
+					return fmt.Errorf("resolve project dir: %w", absErr)
+				}
+				cmds := docker.ScanCommands(f, cfg.Client.Command)
+				port := cfg.Server.GetPort()
+				// afm внутри Linux-контейнера не может открыть браузер на macOS-хосте
+				// (runtime.GOOS=linux → xdg-open без display). Поэтому opener запускаем
+				// на хосте ДО re-exec: это отдельный процесс, он переживает syscall.Exec
+				// родителя и откроет dashboard, как только контейнер поднимет порт.
+				if port > 0 && cfg.Server.IsOpenBrowser() {
+					launchHostBrowserOpener(port)
+				}
+				// --dir должен быть абсолютным: относительный путь внутри контейнера
+				// резолвился бы относительно -w (absDir) и дублировал вложенность.
+				// Последний --dir выигрывает у возможного пользовательского флага
+				// (cobra/pflag берёт последнее вхождение non-slice флага).
+				return docker.ReExec(docker.ReExecConfig{
+					Image:         cfg.Docker.GetImage(),
+					ProjectDir:    absDir,
+					Commands:      cmds,
+					DashboardPort: port,
+					ExtraMounts:   cfg.Docker.ExtraMounts,
+					ExtraArgs:     append(os.Args[1:], "--dir="+absDir),
+				})
 			}
 
 			// Apply flow-level overrides (CLI flag takes priority, then YAML, then config)
@@ -154,7 +185,10 @@ func newRunCmd() *cobra.Command {
 				dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
 				orch.SetDashboardURL(dashURL)
 				fmt.Printf("  dashboard: %s\n", dashURL)
-				if cfg.Server.IsOpenBrowser() {
+				// Внутри Docker-контейнера (Linux) openBrowser зовёт xdg-open, которого
+				// там нет и без display — пропуск; браузер уже открывает хост-side
+				// opener (launchHostBrowserOpener), запущенный до re-exec.
+				if cfg.Server.IsOpenBrowser() && os.Getenv("AFM_IN_DOCKER") != "1" {
 					openBrowser(dashURL)
 				}
 			}
@@ -177,18 +211,47 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-func openBrowser(url string) {
-	var cmd string
+// browserCmd возвращает команду открытия браузера для текущей ОС
+// ("open" на macOS, "xdg-open" на Linux) или "" для неподдерживаемой ОС.
+func browserCmd() string {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = "open"
+		return "open"
 	case "linux":
-		cmd = "xdg-open"
+		return "xdg-open"
 	default:
+		return ""
+	}
+}
+
+func openBrowser(url string) {
+	cmd := browserCmd()
+	if cmd == "" {
 		return
 	}
 	//nolint:gosec // opening a local URL in the browser is safe
 	_ = exec.Command(cmd, url).Start()
+}
+
+// launchHostBrowserOpener запускает на хосте фоновый помощник, который ждёт,
+// пока dashboard поднимется на port, и открывает URL в браузере хоста.
+// Нужен только для Docker-режима: afm внутри Linux-контейнера сам открыть
+// браузер на macOS-хосте не может. Помощник — отдельный процесс (Start без
+// Wait), поэтому он переживает syscall.Exec родителя, заменяющего afm на docker.
+func launchHostBrowserOpener(port int) {
+	openCmd := browserCmd()
+	if openCmd == "" {
+		return
+	}
+	url := fmt.Sprintf("http://localhost:%d", port)
+	// Опрашиваем порт до ~60с; открываем браузер при первом ответе и выходим.
+	script := fmt.Sprintf(`for i in $(seq 1 60); do curl -sf -m 1 %s >/dev/null 2>&1 && %s %s && break; sleep 1; done`, url, openCmd, url)
+	c := exec.Command("sh", "-c", script)
+	c.Stdin = nil
+	c.Stdout = nil
+	c.Stderr = nil
+	//nolint:gosec // скрипт собран из констант и int-порта, не из пользовательского ввода
+	_ = c.Start()
 }
 
 const extYAML = ".yaml"

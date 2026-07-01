@@ -63,12 +63,47 @@ func (p ProxyConfig) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
 }
 
+// DockerConfig configures Docker-mode self-re-exec.
+type DockerConfig struct {
+	Enabled *bool  `yaml:"enabled"` // nil = смотрим AFM_USE_DOCKER
+	Image   string `yaml:"image"`
+	// ExtraMounts — дополнительные хост-пути (можно с ~), которые пробрасываются
+	// в контейнер по тому же пути только для чтения. Нужно кастомным агентам,
+	// хранящим токены/конфиги вне ~/.claude (напр. ~/.ai-free).
+	ExtraMounts []string `yaml:"extra_mounts"`
+}
+
+// IsDockerEnabled returns true if Docker mode should be used.
+// AFM_IN_DOCKER=1 always returns false (already inside container).
+func (d DockerConfig) IsDockerEnabled() bool {
+	if os.Getenv("AFM_IN_DOCKER") == "1" {
+		return false
+	}
+	if d.Enabled != nil {
+		return *d.Enabled
+	}
+	v := os.Getenv("AFM_USE_DOCKER")
+	return v == "1" || v == "true"
+}
+
+// GetImage returns the Docker image to use, preferring AFM_DOCKER_IMAGE env var.
+func (d DockerConfig) GetImage() string {
+	if img := os.Getenv("AFM_DOCKER_IMAGE"); img != "" {
+		return img
+	}
+	if d.Image != "" {
+		return d.Image
+	}
+	return "akopichin/afm:latest"
+}
+
 // Config is the merged configuration for afm.
 type Config struct {
 	Client     ClientConfig   `yaml:"client"`
 	Executor   ExecutorConfig `yaml:"executor"`
 	Server     ServerConfig   `yaml:"server"`
 	Proxy      ProxyConfig    `yaml:"proxy"`
+	Docker     DockerConfig   `yaml:"docker"`
 	PromptsDir string         `yaml:"prompts_dir"`
 }
 
@@ -140,6 +175,15 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Proxy.Transforms.ZAI != nil {
 		dst.Proxy.Transforms.ZAI = overlay.Proxy.Transforms.ZAI
+	}
+	if overlay.Docker.Enabled != nil {
+		dst.Docker.Enabled = overlay.Docker.Enabled
+	}
+	if overlay.Docker.Image != "" {
+		dst.Docker.Image = overlay.Docker.Image
+	}
+	if overlay.Docker.ExtraMounts != nil {
+		dst.Docker.ExtraMounts = overlay.Docker.ExtraMounts
 	}
 	return nil
 }

@@ -1,0 +1,35 @@
+# Stage 1: build afm binary
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /afm ./cmd/afm
+
+# Stage 2: runtime environment
+FROM ubuntu:24.04
+
+# Node 22 + Python 3.12 + dev tools
+RUN apt-get update && apt-get install -y \
+      curl \
+      git \
+      ca-certificates \
+      gnupg \
+      python3 \
+      python3-pip \
+      python3-venv \
+      build-essential && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Go 1.26 (для verify: go test и подобных команд в flow)
+COPY --from=builder /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:$PATH"
+
+# claude CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# afm binary
+COPY --from=builder /afm /usr/local/bin/afm
+
+WORKDIR /project
+ENTRYPOINT ["/usr/local/bin/afm"]

@@ -1,0 +1,7 @@
+.git
+bin/
+.afm/
+.superpowers/
+node_modules/
+*.test
+*.out

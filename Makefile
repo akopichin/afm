@@ -58,3 +58,22 @@ install-skills:
 		cp $$skill/SKILL.md $(SKILLS_DIR)/$$name/SKILL.md; \
 		echo "installed skill: $$name"; \
 	done
+
+DOCKER_IMAGE := akopichin/afm
+DOCKER_TAG   := latest
+
+.PHONY: docker-build docker-push docker-run
+
+docker-build:
+	docker build -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+
+docker-push: docker-build
+	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
+
+docker-run:
+	docker run --rm -it \
+	  -v $(PWD):/project \
+	  -v $(HOME)/.claude:/root/.claude \
+	  -v $(HOME)/.afm:/root/.afm \
+	  -e ANTHROPIC_API_KEY \
+	  $(DOCKER_IMAGE):$(DOCKER_TAG) $(ARGS)
