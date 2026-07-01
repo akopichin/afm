@@ -291,3 +291,9 @@ docker run --rm -it \
 - В контейнер монтируется только сам файл бинарника/скрипта агента (`:ro`). Если скрипт-обёртка вызывает сторонние зависимости (node/python/скрипты-сиблинги/файлы вроде `~/.glmrc`), они не перенесутся — используйте агентов, чьи зависимости уже есть в образе.
 - `command` в flow должен быть именем из `PATH` (базовым именем), а не абсолютным путём: монтируется только `filepath.Base(cmd)`, и внутри контейнера искался бы абсолютный путь хоста.
 - Если скрипт-агент читает свои токены/конфиги из дома (напр. GLM-обёртки `glm51`/`glm52`/`ai-free.claude-glm` — из `~/.ai-free/claude-glm/`), добавьте эту директорию в `docker.extra_mounts`, иначе агент упадёт с "файл не найден".
+
+### Известные грабли (Docker-mode)
+
+- **gosu сбрасывает HOME для uid без записи в `/etc/passwd`** → ставит `HOME=/`. Поэтому в `docker-entrypoint.sh` HOME задаётся **после** gosu (`gosu uid:gid env HOME=/home/afm afm …`), а не до. Иначе агенты ищут `~/`-файлы в `/` (баг: токен искался в `//.ai-free/…`).
+- **`:ro` single-file bind-mount + атомарный rename = corruption.** Приложения, переписывающие конфиг через temp+rename (claude и `~/.claude.json`), не могут обновить `:ro`-маунт и квартитят его как corrupted. Не монтируй `:ro` то, что приложение пишет — пусть создаст свежий container-local файл.
+- **`os.ModeCharDevice` ≢ TTY.** `/dev/null` — тоже char device, поэтому эвристика `Stdin.Stat().Mode()&ModeCharDevice` ложно добавляла `-it` в не-TTY → `docker run` падал "the input device is not a TTY". Честная проверка — `golang.org/x/term.IsTerminal`.

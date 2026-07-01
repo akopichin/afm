@@ -54,6 +54,7 @@ func newRootCmd() *cobra.Command {
 		newRetryCmd(),
 		newInitCmd(),
 		newListCmd(),
+		newInstallSkillsCmd(),
 	)
 	return root
 }
