@@ -7,12 +7,13 @@ RUN CGO_ENABLED=0 go build -o /afm ./cmd/afm
 # Stage 2: runtime environment
 FROM ubuntu:24.04
 
-# Node 22 + Python 3.12 + dev tools
+# Node 22 + Python 3.12 + dev tools + gosu (для дропа привилегий до host-uid)
 RUN apt-get update && apt-get install -y \
       curl \
       git \
       ca-certificates \
       gnupg \
+      gosu \
       python3 \
       python3-pip \
       python3-venv \
@@ -31,5 +32,12 @@ RUN npm install -g @anthropic-ai/claude-code
 # afm binary
 COPY --from=builder /afm /usr/local/bin/afm
 
+# Дом для non-root пользователя (entrypoint chown'ит его под host-uid и ставит HOME).
+RUN mkdir -p /home/afm
+
+# Entrypoint-shim: дропает root → host-uid через gosu, затем запускает afm.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 WORKDIR /project
-ENTRYPOINT ["/usr/local/bin/afm"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

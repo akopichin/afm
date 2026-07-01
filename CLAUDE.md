@@ -236,13 +236,16 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 | Хост | Контейнер | Назначение |
 |------|-----------|------------|
 | `$(pwd)` (абсолютный путь) | тот же путь | Проект + `.afm/` (runs, flows, config) |
-| `~/.claude/` | `/root/.claude` | Auth, skills, память |
-| `~/.claude.json` (если есть) | `/root/.claude.json` (`:ro`) | Конфиг claude CLI (файл в доме, не внутри `~/.claude/`) |
-| `~/.afm/` | `/root/.afm` | Глобальный конфиг afm |
+| `~/.claude/` | `/home/afm/.claude` | Auth, skills, память (= `$HOME/.claude` в контейнере) |
+| `~/.afm/` | `/home/afm/.afm` | Глобальный конфиг afm |
 | Нестандартные агенты из flow | `/usr/local/bin/<cmd>` (`:ro`) | Кастомные команды |
-| `docker.extra_mounts` | `~`-пути → `/root/…`, прочие — тот же путь (`:ro`) | Токены/конфиги кастомных агентов (напр. `~/.ai-free`) |
+| `docker.extra_mounts` | `~`-пути → `/home/afm/…`, прочие — тот же путь (`:ro`) | Токены/конфиги кастомных агентов (напр. `~/.ai-free`) |
+
+`~/.claude.json` намеренно **НЕ** монтируется — claude создаёт свежий container-local конфиг (`/home/afm/.claude.json`). Auth кастомных агентов идёт через `ANTHROPIC_AUTH_TOKEN` из env, не через этот файл; попытка примонтировать его `:ro` приводила к падению (`corrupted: JSON Parse error`).
 
 **Dashboard:** порт из `server.port` пробрасывается на хост через `-p <port>:<port>`, иначе UI недоступен снаружи контейнера. **Браузер** открывает хост-side opener: afm внутри Linux-контейнера сам открыть браузер на macOS-хосте не может (`runtime.GOOS=linux` → `xdg-open` без display), поэтому отдельный процесс-помощник запускается на хосте ДО re-exec, опрашивает проброшенный порт и зовёт `open`/`xdg-open`. Внутри контейнера вызов `openBrowser` пропускается (`AFM_IN_DOCKER=1`).
+
+**Привилегии (важно):** контейнер стартует под root, но entrypoint (`docker-entrypoint.sh` + `gosu`) сразу дропает привилегии до хостового uid/gid (`AFM_HOST_UID/GID`, передаются из `os.Getuid/Getgid`) и выставляет `HOME=/home/afm`. Поэтому afm и агенты работают под тем же пользователем, что и на хосте — все записи в `~/.claude`, `~/.afm`, каталог проекта и `extra_mounts` принадлежат пользователю хоста, а не root (нет root-owned файлов и конфликтов с правами у хостового claude). Под non-root claude разрешает `--dangerously-skip-permissions` без `IS_SANDBOX`.
 
 ### Environment Variables
 
@@ -250,7 +253,7 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 |-----------|------------|
 | `AFM_USE_DOCKER=1` | Включить Docker mode без правки конфига |
 | `AFM_IN_DOCKER=1` | Выставляется внутри контейнера — предотвращает рекурсию (не трогать) |
-| `IS_SANDBOX=1` | Выставляется внутри контейнера — даёт claude право на `--dangerously-skip-permissions` под root (контейнер = песочница) |
+| `AFM_HOST_UID` / `AFM_HOST_GID` | Передаются внутрь; entrypoint дропает root до этого uid/gid (`gosu`), чтобы записи в тома принадлежали пользователю хоста |
 | `AFM_DOCKER_IMAGE` | Переопределить образ (например, для локальной сборки) |
 | `ANTHROPIC_API_KEY` | Пробрасывается в bare-форме `-e KEY` (без значения — не светится в `ps aux`/history) |
 | `ANTHROPIC_BASE_URL` | То же самое |
@@ -267,11 +270,12 @@ make docker-push   # собирает Dockerfile.runtime и пушит в akopic
 # Посмотреть что именно будет запущено
 AFM_USE_DOCKER=1 AFM_DOCKER_IMAGE=local/afm:dev afm run flow.yaml
 
-# Войти в контейнер вручную
+# Войти в контейнер вручную (привилегии дропаются до твоего uid через entrypoint)
 docker run --rm -it \
   -v $(pwd):/project \
-  -v ~/.claude:/root/.claude \
-  -v ~/.afm:/root/.afm \
+  -v ~/.claude:/home/afm/.claude \
+  -v ~/.afm:/home/afm/.afm \
+  -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
   akopichin/afm:latest bash
 ```
 

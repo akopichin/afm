@@ -154,12 +154,14 @@ func TestReExec_BuildsDockerArgs(t *testing.T) {
 		"docker run --rm",
 		"-p 9876:9876",
 		"-v /home/user/myproject:/home/user/myproject",
-		":/root/.claude", // хост-путь зависит от ОС, проверяем только контейнерную часть
-		":/root/.afm",
+		":/home/afm/.claude", // хост-путь зависит от ОС, проверяем контейнерную часть (= HOME контейнера)
+		":/home/afm/.afm",
 		"-w /home/user/myproject",
 		"-v /usr/local/bin/glm51:/usr/local/bin/glm51:ro",
-		home + "/.ai-free:/root/.ai-free:ro", // extra_mount: хост home/.ai-free → контейнер /root/.ai-free ($HOME)
+		home + "/.ai-free:/home/afm/.ai-free:ro", // extra_mount: хост home/.ai-free → контейнер /home/afm/.ai-free ($HOME)
 		"-e AFM_IN_DOCKER=1",
+		"-e AFM_HOST_UID=", // привилегии дропаются до хостового uid (entrypoint gosu)
+		"-e AFM_HOST_GID=",
 		"akopichin/afm:latest",
 		"run flow.yaml",
 	}

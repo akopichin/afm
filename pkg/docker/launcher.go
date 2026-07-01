@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -13,6 +14,13 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 )
+
+// containerHome — домашний каталог non-root пользователя внутри контейнера.
+// Маунты ~/.claude и ~/.afm накладываются поверх containerHome/.claude и .afm,
+// а entrypoint (gosu, см. docker-entrypoint.sh) выставляет HOME=containerHome и
+// дропает привилегии до хостового uid — поэтому записи в тома принадлежат
+// пользователю хоста, а не root.
+const containerHome = "/home/afm"
 
 // CommandMount описывает нестандартный агент для монтирования в контейнер.
 type CommandMount struct {
@@ -108,18 +116,20 @@ func ReExec(cfg ReExecConfig) error {
 	}
 
 	// Монтируем проект по тому же абсолютному пути — os.Args проходят без изменений.
+	// ~/.claude и ~/.afm — в домашний каталог контейнера (containerHome), чтобы
+	// claude/агенты находили их через $HOME (его выставляет entrypoint-shim).
 	args = append(args,
 		"-v", cfg.ProjectDir+":"+cfg.ProjectDir,
-		"-v", home+"/.claude:/root/.claude",
-		"-v", home+"/.afm:/root/.afm",
+		"-v", home+"/.claude:"+containerHome+"/.claude",
+		"-v", home+"/.afm:"+containerHome+"/.afm",
 		"-w", cfg.ProjectDir,
 	)
 	// ВНИМАНИЕ: ~/.claude.json намеренно НЕ монтируем. claude при попытке обновить
 	// :ro-файл (атомарный write-through-rename) ломается и квартитит его как
 	// "corrupted: JSON Parse error", после чего агент падает. Вместо этого claude
-	// создаёт свежий container-local конфиг в /root/.claude.json — этого достаточно:
-	// auth кастомных агентов (glm*) идёт через ANTHROPIC_AUTH_TOKEN из env, а не из
-	// .claude.json. Предупреждение "config not found" при этом — нефатальный шум.
+	// создаёт свежий container-local конфиг в containerHome/.claude.json — этого
+	// достаточно: auth кастомных агентов (glm*) идёт через ANTHROPIC_AUTH_TOKEN из
+	// env, а не из .claude.json. Предупреждение "config not found" — нефатальный шум.
 
 	// Нестандартные агенты монтируем read-only.
 	for _, m := range cfg.Commands {
@@ -127,18 +137,24 @@ func ReExec(cfg ReExecConfig) error {
 	}
 
 	// Доп. хост-директории кастомных агентов (токены/конфиги вне ~/.claude).
-	// Пути с ~ монтируем в домашний каталог контейнера (/root/…), чтобы скрипты
-	// находили их через $HOME; абсолютные пути — по тому же пути (как проект).
+	// Пути с ~ монтируем в домашний каталог контейнера (containerHome/…), чтобы
+	// скрипты находили их через $HOME; абсолютные пути — по тому же пути (как проект).
 	for _, m := range cfg.ExtraMounts {
 		hostPath := expandHome(m, home)
-		containerPath := expandHome(m, "/root")
+		containerPath := expandHome(m, containerHome)
 		args = append(args, "-v", hostPath+":"+containerPath+":ro")
 	}
 
 	// Окружение внутри контейнера.
-	// IS_SANDBOX=1: контейнер — это песочница, поэтому claude разрешает
-	// --dangerously-skip-permissions под root (иначе он отказывается работать).
-	args = append(args, "-e", "AFM_IN_DOCKER=1", "-e", "IS_SANDBOX=1")
+	// AFM_HOST_UID/GID: entrypoint дропает привилегии (gosu) до хостового
+	// пользователя, чтобы записи в примонтированные тома принадлежали пользователю
+	// хоста, а не root. Под non-root claude разрешает --dangerously-skip-permissions
+	// без дополнительных флагов, поэтому IS_SANDBOX больше не нужен.
+	args = append(args,
+		"-e", "AFM_IN_DOCKER=1",
+		"-e", "AFM_HOST_UID="+strconv.Itoa(os.Getuid()),
+		"-e", "AFM_HOST_GID="+strconv.Itoa(os.Getgid()),
+	)
 	// Передаём секреты только в bare-форме `-e KEY` (без значения): docker-клиент
 	// наследует окружение afm (см. os.Environ() в вызове execFunc ниже) и сам
 	// подставит значение. Так секрет никогда не попадает в argv `docker run` и

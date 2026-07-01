@@ -36,8 +36,9 @@ make install      # установить через go install
 ```bash
 docker run --rm -it \
   -v $(pwd):/project \
-  -v ~/.claude:/root/.claude \
-  -v ~/.afm:/root/.afm \
+  -v ~/.claude:/home/afm/.claude \
+  -v ~/.afm:/home/afm/.afm \
+  -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
   -e ANTHROPIC_API_KEY \
   akopichin/afm:latest \
   run flow.yaml

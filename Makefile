@@ -73,7 +73,8 @@ docker-push: docker-build
 docker-run:
 	docker run --rm -it \
 	  -v $(PWD):/project \
-	  -v $(HOME)/.claude:/root/.claude \
-	  -v $(HOME)/.afm:/root/.afm \
+	  -v $(HOME)/.claude:/home/afm/.claude \
+	  -v $(HOME)/.afm:/home/afm/.afm \
+	  -e AFM_HOST_UID=$(shell id -u) -e AFM_HOST_GID=$(shell id -g) \
 	  -e ANTHROPIC_API_KEY \
 	  $(DOCKER_IMAGE):$(DOCKER_TAG) $(ARGS)
