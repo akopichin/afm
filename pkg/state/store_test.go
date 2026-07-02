@@ -222,6 +222,52 @@ func TestSnapshot_ReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestSnapshot_IncludesStageNames(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	store.SetStageNames(map[string]string{"a": "Alpha Stage", "b": ""})
+
+	snap := store.Snapshot()
+	if snap.StageNames["a"] != "Alpha Stage" {
+		t.Errorf("StageNames[a] = %q, want %q", snap.StageNames["a"], "Alpha Stage")
+	}
+	// mutating the snapshot must not affect the store
+	snap.StageNames["a"] = "MUTATED"
+	snap2 := store.Snapshot()
+	if snap2.StageNames["a"] != "Alpha Stage" {
+		t.Error("Snapshot leaked StageNames reference: original mutated")
+	}
+}
+
+// SetStageNames must copy the caller's map: mutating the input after the call
+// must not leak into the store. Guards against an aliasing bug where the
+// snapshot would share the caller's backing map.
+func TestSetStageNames_CopiesInput(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	names := map[string]string{"a": "Alpha"}
+	store.SetStageNames(names)
+
+	// Mutate the caller's map after the call.
+	names["a"] = "MUTATED"
+	delete(names, "a")
+
+	got := store.Snapshot().StageNames["a"]
+	if got != "Alpha" {
+		t.Errorf("SetStageNames aliased the input map: got %q, want %q", got, "Alpha")
+	}
+}
+
 func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 	dir := t.TempDir()
 	store1, _ := Open(dir, []string{"a"})

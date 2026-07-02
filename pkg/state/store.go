@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -175,10 +176,23 @@ func (s *Store) Snapshot() RunState {
 		StageOrder: append([]string(nil), s.snapshot.StageOrder...),
 		Stages:     make(map[string]StageState, len(s.snapshot.Stages)),
 	}
+	if s.snapshot.StageNames != nil {
+		out.StageNames = maps.Clone(s.snapshot.StageNames)
+	}
 	for k, v := range s.snapshot.Stages {
 		out.Stages[k] = v
 	}
 	return out
+}
+
+// SetStageNames stores the display name for each stage. Names are flow metadata
+// (sourced from the flow file), not runtime state — they are not part of the
+// event log. Empty values are stored as-is; the UI handles them gracefully.
+// The map is copied so later mutations by the caller cannot corrupt the store.
+func (s *Store) SetStageNames(names map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshot.StageNames = maps.Clone(names)
 }
 
 func (s *Store) Close() error {

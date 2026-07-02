@@ -92,6 +92,13 @@ func Build(in Inputs) string {
 	}
 	sb.WriteString("</stage>\n")
 
+	// Explicit per-stage directive, escaped like Description.
+	if in.Stage.Prompt != "" {
+		sb.WriteString("\n<prompt>\n")
+		sb.WriteString(escapeTags(in.Stage.Prompt))
+		sb.WriteString("\n</prompt>\n")
+	}
+
 	if in.Plan != "" {
 		sb.WriteString("\n<plan>\n")
 		sb.WriteString(escapeTags(in.Plan))
@@ -140,6 +147,8 @@ var tagReplacer = strings.NewReplacer(
 	"<example_output>", "<\u200bexample_output>",
 	"</interactive_rules>", "</\u200binteractive_rules>",
 	"<interactive_rules>", "<\u200binteractive_rules>",
+	"</prompt>", "</\u200bprompt>",
+	"<prompt>", "<\u200bprompt>",
 )
 
 func escapeTags(s string) string {

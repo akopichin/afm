@@ -104,6 +104,19 @@ func newRunCmd() *cobra.Command {
 			}
 			defer store.Close()
 
+			// Populate stage display names from the flow definition. Works for both
+			// new runs and resumed ones — names always come from the current flow file,
+			// so they stay correct even if the flow was edited between runs.
+			{
+				stageNames := make(map[string]string, len(f.Stages))
+				for _, s := range f.Stages {
+					if s.Name != "" {
+						stageNames[s.ID] = s.Name
+					}
+				}
+				store.SetStageNames(stageNames)
+			}
+
 			fmt.Printf("afm: running %q\n", f.Name)
 			fmt.Printf("  run dir: %s\n", runDir)
 

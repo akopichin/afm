@@ -72,6 +72,26 @@ func TestHandleStatus(t *testing.T) {
 	}
 }
 
+func TestHandleStatus_IncludesStageNames(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.store.SetStageNames(map[string]string{testStageID: "Backend Stage"})
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var rs state.RunState
+	if err := json.NewDecoder(w.Body).Decode(&rs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := rs.StageNames[testStageID]; got != "Backend Stage" {
+		t.Errorf("stage_names[%q] = %q, want %q", testStageID, got, "Backend Stage")
+	}
+}
+
 func TestHandlePlan(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/plan", nil)

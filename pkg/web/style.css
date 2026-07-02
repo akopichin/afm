@@ -391,6 +391,29 @@ body::after {
   background: rgba(111, 212, 204, 0.06);
 }
 
+/* Средняя ячейка сетки .stage-item: id крупно + name мелко под ним.
+   .stage-id наследует font-size/text-transform/letter-spacing от .stage-item. */
+.stage-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stage-id {
+  font-weight: 600;
+}
+
+.stage-name {
+  font-size: 9px;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* status-dot стилизуется как кольцо */
 .status-dot {
   width: 14px;

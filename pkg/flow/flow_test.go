@@ -2,6 +2,7 @@ package flow_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -393,5 +394,27 @@ stages:
 	}
 	if f.Stages[0].Verify != ".venv/bin/python -m pytest tests/ -q" {
 		t.Errorf("verify command not parsed, got %q", f.Stages[0].Verify)
+	}
+}
+
+func TestParsePrompt(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    agents: [implementation]
+    plan: docs/plans/existing.md
+    prompt: |
+      Focus on the error-handling path and keep changes minimal.
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(f.Stages[0].Prompt, "Focus on the error-handling path") {
+		t.Errorf("prompt not parsed, got %q", f.Stages[0].Prompt)
 	}
 }

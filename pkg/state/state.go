@@ -32,9 +32,13 @@ type StageState struct {
 
 // RunState is the top-level state persisted in state.json.
 type RunState struct {
-	FlowName   string                `json:"flow_name"`
-	StartedAt  time.Time             `json:"started_at"`
-	StageOrder []string              `json:"stage_order"`
+	FlowName   string    `json:"flow_name"`
+	StartedAt  time.Time `json:"started_at"`
+	StageOrder []string  `json:"stage_order"`
+	// StageNames maps stage id → human-readable name from the flow file.
+	// omitempty keeps old state.json files (without stage_names) compatible
+	// and only emits the field when it has been populated.
+	StageNames map[string]string     `json:"stage_names,omitempty"`
 	Stages     map[string]StageState `json:"stages"`
 }
 

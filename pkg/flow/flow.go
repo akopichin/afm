@@ -74,6 +74,9 @@ type Stage struct {
 	// after the stage reports completion. Non-zero exit means the stage is
 	// not actually done, regardless of what the agent claims.
 	Verify string `yaml:"verify"`
+	// Prompt is an optional explicit instruction delivered to the agent
+	// after the <stage> context block.
+	Prompt string `yaml:"prompt"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.

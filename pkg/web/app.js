@@ -711,11 +711,24 @@
             dot.className = "status-dot";
             dot.dataset.status = st.status;
 
-            var name = document.createElement("span");
-            name.textContent = id;
+            var label = document.createElement("span");
+            label.className = "stage-label";
+
+            var idSpan = document.createElement("span");
+            idSpan.className = "stage-id";
+            idSpan.textContent = id;
+            label.appendChild(idSpan);
+
+            var stageName = state.stage_names && state.stage_names[id];
+            if (stageName) {
+                var nameSpan = document.createElement("span");
+                nameSpan.className = "stage-name";
+                nameSpan.textContent = stageName;
+                label.appendChild(nameSpan);
+            }
 
             li.appendChild(dot);
-            li.appendChild(name);
+            li.appendChild(label);
 
             if (st.status === "awaiting_user_input") {
                 var badge = document.createElement("span");
@@ -743,7 +756,7 @@
         var st = state.stages[selectedStageID];
         if (!st) return;
 
-        $detailTitle.textContent = selectedStageID;
+        $detailTitle.textContent = (state.stage_names && state.stage_names[selectedStageID]) || selectedStageID;
         $detailStatus.textContent = statusLabels[st.status] || st.status;
         $detailStatus.dataset.status = st.status;
 
