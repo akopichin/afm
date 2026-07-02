@@ -65,6 +65,9 @@ func newRunCmd() *cobra.Command {
 				if absErr != nil {
 					return fmt.Errorf("resolve project dir: %w", absErr)
 				}
+				if err := docker.CheckClaudeDockerAuth(cfg.Client.Command); err != nil {
+					return err
+				}
 				cmds := docker.ScanCommands(f, cfg.Client.Command)
 				port := cfg.Server.GetPort()
 				// afm внутри Linux-контейнера не может открыть браузер на macOS-хосте
@@ -85,6 +88,7 @@ func newRunCmd() *cobra.Command {
 					DashboardPort: port,
 					ExtraMounts:   cfg.Docker.ExtraMounts,
 					ExtraArgs:     append(os.Args[1:], "--dir="+absDir),
+					ClientCommand: cfg.Client.Command,
 				})
 			}
 

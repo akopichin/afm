@@ -36,6 +36,44 @@ type ReExecConfig struct {
 	DashboardPort int      // порт dashboard; при >0 пробрасывается на хост через -p
 	ExtraMounts   []string // доп. хост-директории (могут начинаться с ~) → монтируются :ro
 	ExtraArgs     []string // os.Args[1:]
+	ClientCommand string   // имя агента из config (для проверки auth при command: claude)
+}
+
+const claudeCommand = "claude"
+
+// claudeAuthEnvVars — env vars, через которые claude CLI принимает токены в Docker.
+// macOS хранит OAuth-токены в Keychain, который недоступен из Linux-контейнера;
+// поэтому auth должна идти через один из этих env vars.
+var claudeAuthEnvVars = []string{
+	"CLAUDE_CODE_OAUTH_TOKEN", // long-lived token: `claude setup-token`
+	"ANTHROPIC_API_KEY",       // API-ключ Anthropic
+	"ANTHROPIC_AUTH_TOKEN",    // auth token для кастомных шлюзов
+}
+
+// CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker
+// задан один из поддерживаемых auth env vars. macOS Keychain недоступен из
+// Linux-контейнера, поэтому OAuth-сессия из ~/.claude.json там не работает.
+// Возвращает ошибку с инструкцией, если auth не настроена.
+func CheckClaudeDockerAuth(clientCommand string) error {
+	if clientCommand != claudeCommand && clientCommand != "" {
+		return nil
+	}
+	for _, key := range claudeAuthEnvVars {
+		if os.Getenv(key) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"command: claude в Docker-режиме требует auth через env var.\n" +
+			"macOS Keychain (OAuth-сессия) недоступен из Linux-контейнера.\n\n" +
+			"Варианты:\n" +
+			"  1. Claude Pro/Max: сгенерировать долгоживущий токен:\n" +
+			"       claude setup-token\n" +
+			"     и добавить в ~/.zshrc:\n" +
+			"       export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-si-...\n\n" +
+			"  2. API-ключ Anthropic:\n" +
+			"       export ANTHROPIC_API_KEY=sk-ant-api-<ключ>",
+	)
 }
 
 // defaultExecFunc — дефолтная обёртка над syscall.Exec; вынесена в именованную
@@ -128,8 +166,9 @@ func ReExec(cfg ReExecConfig) error {
 	// :ro-файл (атомарный write-through-rename) ломается и квартитит его как
 	// "corrupted: JSON Parse error", после чего агент падает. Вместо этого claude
 	// создаёт свежий container-local конфиг в containerHome/.claude.json — этого
-	// достаточно: auth кастомных агентов (glm*) идёт через ANTHROPIC_AUTH_TOKEN из
-	// env, а не из .claude.json. Предупреждение "config not found" — нефатальный шум.
+	// достаточно: auth claude идёт через CLAUDE_CODE_OAUTH_TOKEN (long-lived token,
+	// генерируется командой `claude setup-token`) или ANTHROPIC_API_KEY из env,
+	// а не из .claude.json. Предупреждение "config not found" — нефатальный шум.
 
 	// Нестандартные агенты монтируем read-only.
 	for _, m := range cfg.Commands {
@@ -159,7 +198,7 @@ func ReExec(cfg ReExecConfig) error {
 	// наследует окружение afm (см. os.Environ() в вызове execFunc ниже) и сам
 	// подставит значение. Так секрет никогда не попадает в argv `docker run` и
 	// не светится в `ps aux`, history и audit-логах хоста.
-	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"} {
 		if os.Getenv(key) != "" {
 			args = append(args, "-e", key)
 		}

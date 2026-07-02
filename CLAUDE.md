@@ -241,7 +241,12 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 | Нестандартные агенты из flow | `/usr/local/bin/<cmd>` (`:ro`) | Кастомные команды |
 | `docker.extra_mounts` | `~`-пути → `/home/afm/…`, прочие — тот же путь (`:ro`) | Токены/конфиги кастомных агентов (напр. `~/.ai-free`) |
 
-`~/.claude.json` намеренно **НЕ** монтируется — claude создаёт свежий container-local конфиг (`/home/afm/.claude.json`). Auth кастомных агентов идёт через `ANTHROPIC_AUTH_TOKEN` из env, не через этот файл; попытка примонтировать его `:ro` приводила к падению (`corrupted: JSON Parse error`).
+`~/.claude.json` намеренно **НЕ** монтируется — claude создаёт свежий container-local конфиг (`/home/afm/.claude.json`). Попытка примонтировать его `:ro` приводила к падению (`corrupted: JSON Parse error`), т.к. claude обновляет файл атомарным rename.
+
+**Auth для `command: claude` в Docker:** macOS хранит OAuth-токены в Keychain (`Claude Safe Storage`), который недоступен из Linux-контейнера. Поэтому `claude` внутри Docker пишет `not logged in`. Решение — передать токен через env var:
+1. Сгенерировать долгоживущий токен: `claude setup-token` → сохранить в `~/.zshrc` как `export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-si-...`
+2. Launcher автоматически прокинет `CLAUDE_CODE_OAUTH_TOKEN` в контейнер (если задан в env).
+   Также поддерживается `ANTHROPIC_API_KEY` (API-ключ) и `ANTHROPIC_AUTH_TOKEN`.
 
 **Dashboard:** порт из `server.port` пробрасывается на хост через `-p <port>:<port>`, иначе UI недоступен снаружи контейнера. **Браузер** открывает хост-side opener: afm внутри Linux-контейнера сам открыть браузер на macOS-хосте не может (`runtime.GOOS=linux` → `xdg-open` без display), поэтому отдельный процесс-помощник запускается на хосте ДО re-exec, опрашивает проброшенный порт и зовёт `open`/`xdg-open`. Внутри контейнера вызов `openBrowser` пропускается (`AFM_IN_DOCKER=1`).
 
@@ -256,7 +261,9 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 | `AFM_HOST_UID` / `AFM_HOST_GID` | Передаются внутрь; entrypoint дропает root до этого uid/gid (`gosu`), чтобы записи в тома принадлежали пользователю хоста |
 | `AFM_DOCKER_IMAGE` | Переопределить образ (например, для локальной сборки) |
 | `ANTHROPIC_API_KEY` | Пробрасывается в bare-форме `-e KEY` (без значения — не светится в `ps aux`/history) |
+| `ANTHROPIC_AUTH_TOKEN` | То же самое |
 | `ANTHROPIC_BASE_URL` | То же самое |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Долгоживущий OAuth-токен для `command: claude` (генерируется через `claude setup-token`) |
 
 ### Публикация нового образа
 

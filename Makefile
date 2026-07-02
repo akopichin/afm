@@ -38,10 +38,13 @@ clean:
 
 # install обновляет ~/go/bin и освежает копии бинарника в других
 # директориях PATH (например ~/homebrew/bin), чтобы не оставались устаревшие.
+# codesign -s - создаёт ad-hoc подпись: macOS 26+ убивает неподписанные бинарники
+# с SIGKILL (Code Signature Invalid) при запуске любого subcommand.
 install:
 	$(GOENV) go install ./cmd/afm
 	@src=$$(go env GOPATH)/bin/$(PROJECT_NAME); \
-	for f in $(HOME)/homebrew/bin/afm $(HOME)/homebrew/bin/afm; do \
+	codesign -f -s - $$src && echo "codesigned: $$src"; \
+	for f in $(HOME)/homebrew/bin/afm; do \
 		if [ -e $$f ] && [ ! -L $$f ]; then \
 			cp $$src $$f && echo "updated copy: $$f"; \
 		fi; \

@@ -91,13 +91,14 @@ func New(opts Options) *Orchestrator {
 
 	r := opts.Runner
 	if r == nil {
+		globalProxyURL, globalShimDir := proxyForCmd(opts.Config.Client.Command, opts.ProxyURL, opts.ProxyShimDir)
 		r = executor.New(executor.Config{
 			Command:      opts.Config.Client.Command,
 			ExtraArgs:    opts.Config.Client.ExtraArgs,
 			IdleTimeout:  opts.Config.Executor.IdleTimeout,
 			OnAction:     uiActionPublisher(ui, ""),
-			ProxyURL:     opts.ProxyURL,
-			ProxyShimDir: opts.ProxyShimDir,
+			ProxyURL:     globalProxyURL,
+			ProxyShimDir: globalShimDir,
 		})
 	}
 
@@ -213,6 +214,17 @@ func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOpti
 	})
 }
 
+// proxyForCmd возвращает ProxyURL и ProxyShimDir для команды cmd.
+// Команда claude использует OAuth-токен (CLAUDE_CODE_OAUTH_TOKEN) и ходит
+// напрямую на api.anthropic.com — инжектировать прокси z.ai ей не нужно
+// (z.ai не принимает OAuth-токены, только API-ключи).
+func proxyForCmd(cmd, proxyURL, shimDir string) (string, string) {
+	if cmd == "claude" {
+		return "", ""
+	}
+	return proxyURL, shimDir
+}
+
 // runnerFor returns the appropriate Runner for a stage's phase.
 // For interactive stages it generates a session id and returns an executor
 // configured with --session-id / --resume and AFM_STAGE_DIR env.
@@ -221,12 +233,13 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		if s.Command == "" {
 			return o.runner
 		}
+		pURL, pShim := proxyForCmd(s.Command, o.opts.ProxyURL, o.opts.ProxyShimDir)
 		return executor.New(executor.Config{
 			Command:      s.Command,
 			IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
 			OnAction:     uiActionPublisher(o.ui, s.ID),
-			ProxyURL:     o.opts.ProxyURL,
-			ProxyShimDir: o.opts.ProxyShimDir,
+			ProxyURL:     pURL,
+			ProxyShimDir: pShim,
 		})
 	}
 
@@ -245,6 +258,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	// Interactive stages always need the claude stream-json flags (incl. --verbose,
 	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
 	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
+	pURL, pShim := proxyForCmd(cmd, o.opts.ProxyURL, o.opts.ProxyShimDir)
 	return executor.New(executor.Config{
 		Command:      cmd,
 		ExtraArgs:    extraArgs,
@@ -253,8 +267,8 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		SessionID:    sessionID,
 		Resume:       resume,
 		StageDir:     stageDir,
-		ProxyURL:     o.opts.ProxyURL,
-		ProxyShimDir: o.opts.ProxyShimDir,
+		ProxyURL:     pURL,
+		ProxyShimDir: pShim,
 	})
 }
 
@@ -262,12 +276,13 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 	if s.Command == "" {
 		return o.runner
 	}
+	pURL, pShim := proxyForCmd(s.Command, o.opts.ProxyURL, o.opts.ProxyShimDir)
 	return executor.New(executor.Config{
 		Command:      s.Command,
 		IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
 		OnAction:     uiActionPublisher(o.ui, s.ID),
-		ProxyURL:     o.opts.ProxyURL,
-		ProxyShimDir: o.opts.ProxyShimDir,
+		ProxyURL:     pURL,
+		ProxyShimDir: pShim,
 	})
 }
 
