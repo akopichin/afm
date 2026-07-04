@@ -1,0 +1,133 @@
+Imports:
+  - Types:
+      - Logger
+    From: pkg/progress
+
+Annotations: |
+  Запуск и мониторинг агентских процессов: stdout/stderr стриминг, транскрипты, файловый
+  dialog-протокол (AFM_STAGE_DIR), проксирование HTTP-трафика (ProxyURL/ProxyShimDir). Использует
+  `Logger` для записи человекочитаемого лога стадии.
+
+---
+
+"DefaultClaudeArgs() -> args:[]string":
+  location: executor.go
+  annotations: |
+    Стандартные флаги вызова claude в режиме stream-json.
+
+    Requirements:
+    - --verbose обязателен для Claude Code 2.1.x при совместном использовании --print и
+      --output-format=stream-json; также включает tool_use-события в потоке, на которые опирается
+      парсер executor'а
+
+"ResolveArgs(extra []string) -> args:[]string":
+  location: executor.go
+  annotations: |
+    Добавляет `DefaultClaudeArgs` перед `extra` и убирает точные дубликаты.
+
+    Requirements:
+    - Используется для интерактивных стадий, которым всегда нужны флаги claude независимо от
+      пользовательского конфига; дедупликация не даёт передать --verbose дважды
+
+"ParseToolAction(line string) -> toolName:string, detail:string, ok:bool":
+  location: executor.go
+  annotations: |
+    Разбирает одну строку stream-json лога в человекочитаемое имя инструмента и деталь.
+
+    Constraints:
+    - ok=false для событий, которые не логируются (result, system и т.п.)
+
+"WrittenFiles(jsonlPath string) -> paths:[]string":
+  location: executor.go
+  annotations: |
+    Пути файлов, записанных агентом через инструмент Write, в порядке появления событий в
+    stream-json логе.
+
+    Constraints:
+    - Отсутствующий или нечитаемый лог даёт пустой список
+
+"DialogTranscript(jsonlPath string) -> items:[]TranscriptItem":
+  location: transcript.go
+  annotations: |
+    Читает stream-json лог и возвращает текстовые сообщения ассистента и вызовы ask_user в порядке
+    появления.
+
+    Algorithm:
+    1. Повторные вызовы ask_user с тем же id (polling-ретраи) схлопываются в первое вхождение
+    2. Отсутствующий или нечитаемый файл даёт пустой список
+
+"TranscriptItem(text string, askUserID string)":
+  location: transcript.go
+  annotations: |
+    Один элемент диалоговой ленты: либо текст ассистента (Text != ""), либо вызов ask_user
+    (AskUserID != "").
+  properties:
+    "Text -> string": |
+      Текст сообщения ассистента.
+    "AskUserID -> string": |
+      ID вызова ask_user.
+
+"Config(command string, extraArgs []string, idleTimeout string, onAction ActionCallback, sessionID string, resume bool, stageDir string, proxyURL string, proxyShimDir string)":
+  location: executor.go
+  annotations: |
+    Конфигурация executor'а.
+    `onAction`: колбэк, вызываемый для каждого распарсенного действия агента (может быть не задан)
+    `sessionID`: если непусто — передаётся через --session-id (или --resume при Resume=true)
+    `stageDir`: передаётся агенту как AFM_STAGE_DIR (file-based dialog protocol, см. pkg/mcp)
+    `proxyURL`: если задан — ANTHROPIC_BASE_URL и AFM_PROXY_URL выставляются в окружении агента
+    `proxyShimDir`: если задан — добавляется в начало PATH в окружении агента (для враппер-скриптов,
+    см. pkg/proxy, CreateShim)
+
+    Requirements:
+    - При установке ProxyURL уже существующий ANTHROPIC_BASE_URL в окружении вычищается перед
+      инъекцией proxy-адреса
+  properties:
+    "Command -> string": |
+      Команда AI-клиента.
+    "ExtraArgs -> []string": |
+      Дополнительные аргументы.
+    "IdleTimeout -> string": |
+      Таймаут простоя.
+    "SessionID -> string": |
+      ID сессии для resume.
+    "Resume -> bool": |
+      Использовать --resume вместо --session-id.
+    "StageDir -> string": |
+      Директория стадии.
+    "ProxyURL -> string": |
+      Адрес встроенного proxy.
+    "ProxyShimDir -> string": |
+      Директория shim'а для PATH.
+
+"Runner()":
+  location: runner.go
+  annotations: |
+    Интерфейс запуска AI-агентов. Позволяет подмену в тестах.
+  methods:
+    "RunPlanning(ctx string, stageName string, prompt string, outFile string, logFile string) -> err:error": |
+      Запускает AI-клиента с промптом через stdin, собирает текстовый вывод в `outFile`, пишет
+      человекочитаемый лог в `logFile` и сырой поток в logFile+".jsonl".
+    "RunAgent(ctx string, agentType string, stageName string, prompt string, logFile string) -> err:error": |
+      Запускает AI-клиента с промптом через stdin, пишет человекочитаемые действия в `logFile` и сырой
+      stream-json в `logFile` с расширением .jsonl.
+
+"Runner::Executor(cfg Config)":
+  location: executor.go
+  annotations: |
+    Реализация `Runner`, порождающая процессы AI-клиента.
+
+    Use `Logger` from Imports to write the human-readable stage log for both RunAgent and RunPlanning.
+  methods:
+    "New(cfg Config) -> executor:Executor": |
+      Создаёт Executor.
+    "RunAgent(ctx string, agentType string, stageName string, prompt string, logFile string) -> err:error": |
+      См. Runner.RunAgent. Использует `Logger` (NewLogger(logFile)) для записи человекочитаемого лога.
+    "RunPlanning(ctx string, stageName string, prompt string, outFile string, logFile string) -> err:error": |
+      См. Runner.RunPlanning. Использует `Logger` (NewLogger(logFile)) для записи человекочитаемого лога.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Запуск и мониторинг агентских процессов: стриминг, транскрипты, dialog-протокол, proxy-инъекция.

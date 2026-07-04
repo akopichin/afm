@@ -1,0 +1,79 @@
+Imports:
+  - Types:
+      - Stage
+    From: pkg/flow
+
+Annotations: |
+  Сборка system-промптов для агентов по данным стадии флоу (`Stage` из pkg/flow).
+
+---
+
+"Build(in Inputs) -> prompt:string":
+  location: builder.go
+  annotations: |
+    Собирает финальный текст промпта для агента.
+    `in`: входные данные сборки (шаблон, стадия, артефакты, контекст диалога и т.д.)
+
+"EscapeTagsForReprompt(s string) -> escaped:string":
+  location: builder.go
+  annotations: |
+    Экранирует служебные теги для использования в тексте повторного промпта (re-prompt).
+
+"Inputs(template string, stage Stage, phaseAgent string, dependencyPlans string, artifacts string, plan string, previousPlan string, feedback string, retryContext string, stageDir string, interactive bool, outputContractMD string, exampleOutput string)":
+  location: builder.go
+  annotations: |
+    Входные данные для сборки промпта одной фазы (planning/implementation/review) одной стадии.
+    `phaseAgent`: одно из planning, implementation, review (тип Agent)
+    `stageDir`: директория стадии — используется для AFM_STAGE_DIR file-based dialog protocol
+    (см. pkg/mcp, pkg/orchestrator)
+  properties:
+    "Template -> string": |
+      Шаблон промпта.
+    "Stage -> Stage": |
+      Стадия флоу, для которой собирается промпт (импортировано из pkg/flow).
+    "PhaseAgent -> string": |
+      Тип фазы-агента.
+    "DependencyPlans -> string": |
+      Планы стадий-зависимостей.
+    "Artifacts -> string": |
+      Секция артефактов.
+    "Plan -> string": |
+      Текущий план.
+    "PreviousPlan -> string": |
+      Предыдущая версия плана.
+    "Feedback -> string": |
+      Фидбек ревизии.
+    "RetryContext -> string": |
+      Контекст повторной попытки.
+    "StageDir -> string": |
+      Директория стадии (AFM_STAGE_DIR).
+    "Interactive -> bool": |
+      Разрешён ли file-based dialog protocol для этой стадии.
+    "OutputContractMD -> string": |
+      Markdown-описание контракта результата.
+    "ExampleOutput -> string": |
+      Пример ожидаемого результата.
+
+"PlanIssues(missingSections []string)":
+  location: validator.go
+  annotations: |
+    Результат валидации плана на предмет отсутствующих обязательных секций.
+  properties:
+    "MissingSections -> []string": |
+      Список отсутствующих секций.
+  methods:
+    "IsClean() -> clean:bool": |
+      true, если отсутствующих секций нет.
+
+"ValidatePlan(md string, required []string) -> issues:PlanIssues":
+  location: validator.go
+  annotations: |
+    Проверяет markdown плана на наличие обязательных секций.
+    `required`: список обязательных заголовков секций
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Сборка system-промптов для агентов по данным стадии флоу.

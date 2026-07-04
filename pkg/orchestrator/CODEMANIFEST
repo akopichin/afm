@@ -1,0 +1,315 @@
+Imports:
+  - Types:
+      - Config
+    From: pkg/config
+  - Types:
+      - Runner
+    From: pkg/executor
+  - Types:
+      - Stage
+      - Artifact
+    From: pkg/flow
+  - Types:
+      - QuestionFile
+      - Question
+    Usages:
+      - dialog_protocol
+    From: pkg/mcp
+  - Types:
+      - Inputs
+      - PlanIssues
+    From: pkg/prompts
+  - Types:
+      - Store
+      - RunState
+      - StageState
+      - Transition
+    From: pkg/state
+
+Usages:
+  rapid: .goga/usages/cooks/rapid.md
+
+Annotations: |
+  Ядро оркестрации: FSM переходов статуса стадии, событийная шина (UI + критическая), граф зависимостей
+  стадий, сессии/recovery/retry, adoption плана. Внутренне неоднородна (FSM / Bus / Graph /
+  session-recovery — см. §4.2 плана: решение не дробить на отдельные клеточки из-за DSL-ограничения
+  «клеточка = Go-пакет» и запрета переноса .go-файлов), но type-level аннотации ниже группируют типы
+  по этим зонам ответственности.
+
+  FSM-зона (fsm.go, errors.go): переходы статуса + guard-правила + классификация ошибок.
+  Bus-зона (bus.go): pub/sub событий — единственная зона с реальным внешним потребителем (pkg/server
+  держит `UIBus` напрямую).
+  Graph-зона (graph.go): граф зависимостей стадий.
+  Orchestration-зона (orchestrator.go, completion.go, context.go, plan_adopt.go, recovery.go, retry.go,
+  session.go): event loop верхнего уровня, координирующий все остальные зоны.
+
+  Use `rapid` for the FSM property-based test harness (fsm_test.go — тестовый контур, не часть контракта).
+
+---
+
+"IsTerminal(s string) -> terminal:bool":
+  location: fsm.go
+  annotations: |
+    true, если StageStatus терминален (done/failed).
+
+"FSM(store Store)":
+  location: fsm.go
+  annotations: |
+    Конечный автомат переходов статуса стадии.
+
+    FSM-зона: применяет guard-правила (`Rule`) к текущему статусу и событию, персистирует переход через
+    `Store` (импорт из pkg/state), формируя запись `Transition` (импорт из pkg/state).
+  methods:
+    "NewFSM(store Store) -> fsm:FSM": |
+      Создаёт FSM поверх хранилища состояния.
+    "Apply(stageID string, ev string, ctx GuardCtx, reason string) -> status:string, applied:bool, err:error": |
+      Применяет FSM-событие к стадии, строит `Transition` (from/to/event/`reason`) и передаёт его
+      в Store.Apply.
+      `ev`: одно из start_planning, plan_ready, approve, revise, start_run, complete, fail,
+      ask_user, user_answered, schedule_retry, resume_after_retry, manual_retry,
+      blocked_by_dep, ready (тип FSMEvent)
+
+"GuardCtx(stage Stage, phase string)":
+  location: fsm.go
+  annotations: |
+    Контекст для guard-правил перехода.
+  properties:
+    "Stage -> Stage": |
+      Стадия флоу (импортировано из pkg/flow).
+    "Phase -> string": |
+      Текущая фаза (planning/implementation/review).
+
+"Rule(from []string, to string)":
+  location: fsm.go
+  annotations: |
+    Guard-правило перехода: из каких статусов в какой, вычисляемый по `GuardCtx`.
+  properties:
+    "From -> []string": |
+      Допустимые исходные статусы (StageStatus).
+    "To -> string": |
+      Функция вычисления целевого статуса по `GuardCtx`.
+
+"Classify(err string) -> classification:int":
+  location: errors.go
+  annotations: |
+    Классифицирует ошибку стадии.
+
+    Requirements:
+    - Возвращает одно из: ClassNone, ClassRetryable, ClassIncomplete, ClassMissingArtifact,
+      ClassMissingSections, ClassFatal, ClassStorageFatal
+
+"IncompleteWorkError(reason string)":
+  location: errors.go
+  annotations: |
+    Ошибка незавершённой работы стадии.
+  properties:
+    "Reason -> string": |
+      Причина незавершённости.
+
+"MissingArtifactError(name string)":
+  location: errors.go
+  annotations: |
+    Ошибка отсутствующего обязательного артефакта.
+  properties:
+    "Name -> string": |
+      Имя отсутствующего артефакта.
+
+"MissingSectionsError(missing []string)":
+  location: errors.go
+  annotations: |
+    Ошибка отсутствующих обязательных секций плана. Missing заполняется из PlanIssues.MissingSections
+    (импорт pkg/prompts, ValidatePlan) после проверки IsClean().
+  properties:
+    "Missing -> []string": |
+      Список отсутствующих секций.
+
+"StorageError(inner string)":
+  location: errors.go
+  annotations: |
+    Оборачивает фатальную ошибку хранилища состояния.
+  properties:
+    "Inner -> string": |
+      Исходная ошибка.
+
+"UIBus()":
+  location: bus.go
+  annotations: |
+    Bus-зона. Pub/sub шина событий для внешних подписчиков (дашборд, WebSocket). Единственная зона
+    pkg/orchestrator, потребляемая напрямую внешней клеточкой — pkg/server держит *UIBus и вызывает
+    Subscribe/SubscriberDroppedCount.
+
+    Requirements:
+    - Subscribe возвращает канал событий (в контракте абстрагирован как поток `Event`, см. Constraints);
+      реализация вправе использовать Go-канал буферизованного размера
+
+    Constraints:
+    - Сигнатура DSL не может выразить <-chan T напрямую (запрещённая форма) — Subscribe/Recv
+      документируются как отдающие подписку/поток `Event`, а не одиночное значение
+  methods:
+    "NewUIBus() -> bus:UIBus": |
+      Создаёт UIBus.
+    "Publish(ev Event)": |
+      Публикует событие всем подписчикам.
+    "Subscribe(bufSize int) -> id:int, events:Event": |
+      Подписывается на поток событий с буфером `bufSize`. `events` — поток (см. Constraints).
+    "Unsubscribe(id int)": |
+      Отписывает подписчика.
+    "SubscriberDroppedCount(id int) -> count:int": |
+      Число событий, пропущенных подписчиком из-за переполнения буфера.
+    "DroppedCount() -> count:int": |
+      Суммарное число пропущенных событий по всем подписчикам.
+
+"CriticalBus(buf int)":
+  location: bus.go
+  annotations: |
+    Bus-зона. Критическая (гарантированная доставка) шина для внутренней координации event loop
+    (например, NotifyAnswer → onUserAnswered).
+  methods:
+    "NewCriticalBus(buf int) -> bus:CriticalBus": |
+      Создаёт критическую шину с указанным буфером.
+    "Publish(ctx string, ev Event) -> err:error": |
+      Публикует событие с учётом контекста отмены.
+    "Recv() -> events:Event": |
+      Поток событий для внутреннего потребителя (см. Constraints у `UIBus`).
+
+"Event(eventType string, stageID string, data string)":
+  location: bus.go
+  annotations: |
+    Событие, передаваемое через `UIBus`/`CriticalBus`.
+    `eventType`: одно из stage_status_changed, agent_action, agent_completed, approved,
+    revised, retry_scheduled, retry_exhausted, manual_retry, ask_user, user_answered
+    (тип EventType)
+  properties:
+    "Type -> string": |
+      Тип события (EventType).
+    "StageID -> string": |
+      ID стадии, к которой относится событие.
+    "Data -> string": |
+      Полезная нагрузка события (опционально, произвольная структура).
+
+"Graph(stages []Stage)":
+  location: graph.go
+  annotations: |
+    Graph-зона. Граф зависимостей стадий флоу.
+  methods:
+    "NewGraph(stages []Stage) -> graph:Graph": |
+      Строит граф из списка стадий (импортировано из pkg/flow).
+    "AllIDs() -> ids:[]string": |
+      Все ID стадий.
+    "Stage(id string) -> stage:Stage": |
+      Стадия по ID.
+    "ReadyStages(statuses map[string]string) -> ids:[]string": |
+      ID стадий в статусе ready, все зависимости которых в статусе done.
+      `statuses`: карта stageID → StageStatus
+
+"CollectArtifacts(projectDir string, runDir string, stage Stage, allStages []Stage) -> section:string, err:error":
+  location: context.go
+  annotations: |
+    Orchestration-зона. Читает файлы артефактов, на которые ссылаются `Inputs` стадии, и формирует
+    секцию промпта. Индексирует `Artifact` (импорт pkg/flow) каждой стадии по имени.
+
+    Constraints:
+    - Возвращает ошибку, если обязательный файл артефакта отсутствует
+
+"CollectDependencyPlans(runDir string, stage Stage, allStages []Stage) -> section:string":
+  location: context.go
+  annotations: |
+    Orchestration-зона. Читает plan.md каждой стадии из DependsOn и формирует секцию промпта.
+
+    Constraints:
+    - Отсутствующие планы дают предупреждающий комментарий, не ошибку
+
+"Options(runDir string, stages []Stage, store Store, config Config, prompts Prompts, runner Runner, dashboardURL string, proxyURL string, proxyShimDir string)":
+  location: orchestrator.go
+  annotations: |
+    Orchestration-зона. Конфигурация оркестратора.
+    `runner`: nil = реальный Executor, построенный из ExecutorConfig (pkg/executor; формальный
+    импорт типа опущен — имя Config конфликтует с config.Config, правило import_has_not_duplicate)
+  properties:
+    "RunDir -> string": |
+      Директория рана.
+    "Stages -> []Stage": |
+      Стадии флоу.
+    "Store -> Store": |
+      Хранилище состояния (импорт pkg/state).
+    "Config -> Config": |
+      Конфигурация afm (импорт pkg/config).
+    "Prompts -> Prompts": |
+      Шаблоны промптов.
+    "Runner -> Runner": |
+      Исполнитель агентов (импорт pkg/executor).
+    "DashboardURL -> string": |
+      URL дашборда.
+    "ProxyURL -> string": |
+      Адрес встроенного proxy, пробрасывается в окружение executor'а.
+    "ProxyShimDir -> string": |
+      Директория shim'а, пробрасывается в PATH executor'а.
+
+"Prompts(planning string, implementation string, review string, summary string)":
+  location: orchestrator.go
+  annotations: |
+    Шаблоны промптов для каждого типа агента.
+  properties:
+    "Planning -> string": |
+      Шаблон промпта планирования.
+    "Implementation -> string": |
+      Шаблон промпта реализации.
+    "Review -> string": |
+      Шаблон промпта ревью.
+    "Summary -> string": |
+      Шаблон промпта саммари.
+  methods:
+    "DefaultPrompts() -> prompts:Prompts": |
+      Пустые промпты (заполняются из assets).
+
+"Orchestrator(opts Options)":
+  location: orchestrator.go
+  annotations: |
+    Orchestration-зона. Управляет полным жизненным циклом рана флоу через событийный цикл.
+
+    Use `dialog_protocol` from Imports for the full file-based question/answer contract (pkg/mcp).
+
+    Algorithm (file-based dialog protocol — совместно с pkg/mcp, см. CLAUDE.md и `dialog_protocol`):
+    1. startQuestionPoller — фоновая горутина сканирует директории стадий каждую секунду на предмет
+       *.question.json, получая список `QuestionFile` (через FindUnansweredQuestions из pkg/mcp).
+       Список активных стадий берётся из снимка `RunState` (Store.Snapshot -> map stageID → `StageState`)
+    2. При обнаружении — конструирует `Question` (через AppendQuestion, если требуется зафиксировать
+       вопрос в dialog.jsonl) и публикует `Event` типа ask_user, стадия переходит в
+       awaiting_user_input
+    3. activeAgents (потокобезопасная карта) отслеживает, какие стадии имеют активную горутину агента
+    4. NotifyAnswer: если горутина агента ещё активна — только переход FSM (bash-цикл агента сам
+       обнаружит файл ответа); если горутина уже завершилась — публикация в критическую шину, чтобы
+       onUserAnswered перезапустил агента с --resume
+  methods:
+    "New(opts Options) -> orchestrator:Orchestrator": |
+      Создаёт оркестратор.
+    "Run(ctx string) -> err:error": |
+      Запускает событийный цикл оркестратора. Для каждой фазы стадии строит промпт через `Prompts`
+      (импорт pkg/prompts), помечая фазу значением Agent (AgentPlanning/AgentImplementation/
+      AgentReview — enum-тип prompts.Agent абстрагирован к string); план проверяется через
+      ValidatePlan -> `PlanIssues`, повторный запрос секций —
+      только если !IsClean(). Цикл завершается, когда снимок `RunState` (Store.Snapshot) показывает
+      все стадии терминальными (`StageState`.Status ∈ {done, failed}, см. IsTerminal).
+    "Approve(ctx string, stageID string) -> err:error": |
+      Утверждает план стадии.
+    "Revise(ctx string, stageID string, feedback string) -> err:error": |
+      Отправляет фидбек на повторное планирование стадии.
+    "Retry(ctx string, stageID string) -> err:error": |
+      Повторяет проваленную стадию, переводя её в pending и перезапуская.
+    "FailStage(stageID string, reason string)": |
+      Помечает стадию проваленной с указанной причиной.
+    "Trigger(stageID string, ev string, ctx GuardCtx, reason string) -> status:string, applied:bool": |
+      Применяет FSM-событие для перехода статуса стадии.
+    "NotifyAnswer(stageID string, phase string, qID string, answer string, fromOptions bool) -> err:error": |
+      См. Algorithm выше.
+    "SetDashboardURL(url string)": |
+      Устанавливает URL дашборда после старта сервера.
+    "UIBus() -> bus:UIBus": |
+      Возвращает `UIBus` для внешних подписчиков (pkg/server, WebSocket).
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Ядро оркестрации afm: FSM, событийные шины, граф зависимостей, event loop, file-based dialog protocol.

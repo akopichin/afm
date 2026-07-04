@@ -1,0 +1,129 @@
+Usages:
+  yaml_v3: .goga/usages/cooks/yaml-v3.md
+
+Annotations: |
+  Загрузка и мердж конфигурации afm (.afm/config.yaml, ~/.afm/config.yaml). Использует `yaml_v3` для
+  парсинга — опциональность полей выражена указателем + методом-геттером с дефолтом (см. `yaml_v3`).
+
+---
+
+"Default() -> config:Config":
+  location: config.go
+  annotations: |
+    Возвращает встроенную конфигурацию по умолчанию.
+
+"LoadFrom(globalDir string, projectDir string) -> config:Config, err:error":
+  location: config.go
+  annotations: |
+    Загружает и мержит конфигурацию из явных глобальной и проектной директорий.
+    `globalDir`: путь к глобальному ~/.afm
+    `projectDir`: путь к проектному .afm
+
+    Requirements:
+    - Отсутствующие файлы молча игнорируются, применяются дефолты
+    - Использовать `yaml_v3` для парсинга YAML
+
+"Config(client ClientConfig, executor ExecutorConfig, server ServerConfig, proxy ProxyConfig, docker DockerConfig, promptsDir string)":
+  location: config.go
+  annotations: |
+    Смерженная конфигурация afm целиком.
+  properties:
+    "Client -> ClientConfig": |
+      Настройки команды AI-клиента.
+    "Executor -> ExecutorConfig": |
+      Параметры выполнения агентов.
+    "Server -> ServerConfig": |
+      Настройки веб-дашборда.
+    "Proxy -> ProxyConfig": |
+      Настройки встроенного reverse-proxy.
+    "Docker -> DockerConfig": |
+      Настройки Docker-режима.
+    "PromptsDir -> string": |
+      Переопределение директории system-промптов.
+
+"ClientConfig(command string, extraArgs []string)":
+  location: config.go
+  annotations: |
+    Команда AI-клиента и дополнительные аргументы CLI.
+  properties:
+    "Command -> string": |
+      Имя/путь исполняемого агента (например, claude).
+    "ExtraArgs -> []string": |
+      Дополнительные аргументы командной строки.
+
+"ExecutorConfig(idleTimeout string, maxParallel int)":
+  location: config.go
+  annotations: |
+    Параметры исполнения агентских процессов.
+  properties:
+    "IdleTimeout -> string": |
+      Таймаут простоя агента (значение time.Duration, например 30m).
+    "MaxParallel -> int": |
+      Максимум параллельных агентов.
+
+"ServerConfig(port int, openBrowser bool)":
+  location: config.go
+  annotations: |
+    Настройки HTTP-дашборда. Port/OpenBrowser — опциональные (nil = не задано явно), геттеры
+    возвращают дефолт.
+  properties:
+    "Port -> int": |
+      Порт дашборда (nil → дефолт 9876, см. GetPort).
+    "OpenBrowser -> bool": |
+      Открывать браузер автоматически (nil → true, см. IsOpenBrowser).
+  methods:
+    "GetPort() -> port:int": |
+      Возвращает Port, либо 9876, если не задан.
+    "IsOpenBrowser() -> enabled:bool": |
+      Возвращает OpenBrowser, либо true, если не задан.
+
+"ProxyConfig(enabled bool, upstream string, port int, transforms TransformOverrides)":
+  location: config.go
+  annotations: |
+    Настройки встроенного reverse-proxy для агентского HTTP-трафика.
+  properties:
+    "Enabled -> bool": |
+      nil → включено по умолчанию (см. IsEnabled).
+    "Upstream -> string": |
+      Upstream-адрес (иначе читается из ANTHROPIC_BASE_URL).
+    "Port -> int": |
+      Порт proxy (0 = случайный свободный).
+    "Transforms -> TransformOverrides": |
+      Переопределения по конкретным трансформам.
+  methods:
+    "IsEnabled() -> enabled:bool": |
+      true по умолчанию (nil Enabled → enabled).
+
+"TransformOverrides(zai bool)":
+  location: config.go
+  annotations: |
+    Управляет тем, какие proxy-трансформы применяются.
+  properties:
+    "ZAI -> bool": |
+      nil = автоопределение по upstream-хосту (api.z.ai), true = всегда, false = никогда.
+
+"DockerConfig(enabled bool, image string, extraMounts []string)":
+  location: config.go
+  annotations: |
+    Настройки Docker-режима самоперезапуска.
+  properties:
+    "Enabled -> bool": |
+      nil = смотрим AFM_USE_DOCKER.
+    "Image -> string": |
+      Docker-образ.
+    "ExtraMounts -> []string": |
+      Доп. хост-пути (можно с ~), пробрасываемые в контейнер read-only — для кастомных агентов,
+      хранящих токены/конфиги вне ~/.claude.
+  methods:
+    "GetImage() -> image:string": |
+      Образ, с приоритетом AFM_DOCKER_IMAGE.
+    "IsDockerEnabled() -> enabled:bool": |
+      true, если нужно использовать Docker-режим. AFM_IN_DOCKER=1 всегда даёт false (уже внутри
+      контейнера).
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Загрузка и мердж конфигурации afm из глобального и проектного YAML.

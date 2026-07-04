@@ -1,0 +1,89 @@
+Usages:
+  yaml_v3: .goga/usages/cooks/yaml-v3.md
+
+Annotations: |
+  Модель flow.yaml — стадии, артефакты, входы/выходы. Парсинг через `yaml_v3`.
+
+---
+
+"ParseFile(path string) -> flow:Flow, err:error":
+  location: flow.go
+  annotations: |
+    Читает и валидирует flow YAML-файл.
+    `path`: путь к файлу flow.yaml
+
+    Use `yaml_v3` for implementation.
+
+"Flow(name string, description string, maxParallel int, stages []Stage)":
+  location: flow.go
+  annotations: |
+    Верхнеуровневая структура, распарсенная из flow YAML.
+  properties:
+    "Name -> string": |
+      Имя флоу.
+    "Description -> string": |
+      Описание флоу.
+    "MaxParallel -> int": |
+      Максимум параллельных стадий.
+    "Stages -> []Stage": |
+      Список стадий флоу.
+
+"Stage(id string, name string, description string, agents []string, skills []string, dependsOn []string, eagerPlanning bool, plan string, command string, maxParallel int, artifacts []Artifact, inputs []Input, interactive bool, verify string, prompt string)":
+  location: flow.go
+  annotations: |
+    Одна стадия флоу.
+    `agents`: список значений AgentType — planning, implementation, review
+    `eagerPlanning`: если true, планирующий агент стартует немедленно, не дожидаясь `dependsOn`
+    `plan`: путь к готовому файлу плана — если задан, планирующий агент пропускается
+    `command`: переопределяет глобальную команду клиента для этой стадии
+    `verify`: shell-команда, выполняемая после заявленного завершения стадии; ненулевой код означает,
+    что стадия не завершена, независимо от заявления агента
+    `prompt`: явная инструкция агенту после блока контекста <stage>
+  methods:
+    "HasAgent(a string) -> has:bool": |
+      Есть ли у стадии указанный тип агента (`a` — значение AgentType). Для implementation также
+      считает true при любом кастомном (не встроенном) агенте.
+    "ImplAgent() -> agentType:string": |
+      Тип агента для фазы implementation: кастомный агент приоритетнее, иначе implementation.
+    "NeedsPlanning() -> needs:bool": |
+      Будет ли для стадии запущен планирующий агент.
+
+"Artifact(name string, path string, description string, inline bool)":
+  location: flow.go
+  annotations: |
+    Файл, который стадия производит для других стадий.
+  properties:
+    "Name -> string": |
+      Имя артефакта.
+    "Path -> string": |
+      Путь к файлу артефакта.
+    "Description -> string": |
+      Описание артефакта.
+    "Inline -> bool": |
+      Инлайнить ли содержимое в промпт (nil → true, см. IsInline).
+  methods:
+    "IsInline() -> inline:bool": |
+      Значение Inline, либо true по умолчанию.
+
+"Input(ref string, optional bool)":
+  location: flow.go
+  annotations: |
+    Артефакт, потребляемый стадией от зависимости.
+
+    Requirements:
+    - Парсится либо из простой строки "stage.artifact", либо из объекта `{ref, optional}`
+  properties:
+    "Ref -> string": |
+      Ссылка вида stage.artifact.
+    "Optional -> bool": |
+      Необязательность входа.
+  methods:
+    "UnmarshalYAML(value yaml.Node) -> err:error": |
+      Разбор из строки или объекта YAML.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Модель flow.yaml: стадии, артефакты, входы/выходы.

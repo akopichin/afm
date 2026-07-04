@@ -1,0 +1,141 @@
+name: Goga feature
+description: "Feature implementation"
+
+stages:
+  - id: propose
+    name: "Propose"
+    interactive: true
+    agents: [planning, implementation, review]
+    description: |
+      Выяснение что делать.
+    prompt: |
+      if goga binary not installed - install it with `pip install goga && goga connect claude`
+      Save the task file as `<git branch --show-current>.md`
+    skills:
+      - goga-propose
+
+  - id: propose-review
+    name: "Propose Review"
+    interactive: true
+    description: |
+      Review the task `<git branch --show-current>.md`
+    prompt: |
+      Review the task `<git branch --show-current>.md`
+    agents: [planning, implementation]
+    skills:
+      - goga-review-task
+    depends_on: [propose]
+
+  - id: brainstorm
+    name: "Architecture Brainstorm"
+    interactive: true
+    description: |
+      Use the task `<git branch --show-current>.md`
+      Save the architecture plan as `<git branch --show-current>.md`
+    prompt: |
+      Use the task `<git branch --show-current>.md`
+      Save the architecture plan as `<git branch --show-current>.md`
+    agents: [planning, implementation, review]
+    skills:
+      - goga-brainstorm
+    depends_on: [propose, propose-review]
+
+  - id: brainstorm-review
+    name: "Architecture Review"
+    interactive: true
+    description: |
+      Review the architecture plan `<git branch --show-current>.md`
+    prompt: |
+      Review the architecture plan `<git branch --show-current>.md`
+    agents: [planning, implementation]
+    skills:
+      - goga-review-arch
+    depends_on: [propose, propose-review, brainstorm]
+
+  - id: apply
+    name: "Apply Architecture"
+    description: |
+      Apply the architecture plan `<git branch --show-current>.md`
+    prompt: |
+      Apply the architecture plan `<git branch --show-current>.md`
+    agents: [planning, implementation, review]
+    skills:
+      - goga-apply
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review]
+
+  - id: design
+    name: "Design Architecture To Code"
+    interactive: true
+    description: |
+      Save the design document as `<git branch --show-current>.md`
+    prompt: |
+      Save the design document as `<git branch --show-current>.md`
+    agents: [planning, implementation, review]
+    skills:
+      - goga-design
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review, apply]
+
+  - id: design-review
+    name: "Design Review"
+    interactive: true
+    description: |
+      Review the design document `<git branch --show-current>.md`
+    prompt: |
+      Review the design document `<git branch --show-current>.md`
+    agents: [planning, implementation]
+    skills:
+      - goga-review-design
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review, apply, design]
+
+  - id: plan
+    name: "Plan"
+    interactive: true
+    description: |
+      Use the design document `<git branch --show-current>.md`
+      Save the plan as `<git branch --show-current>.md`
+    prompt: |
+      Use the design document `<git branch --show-current>.md`
+      Save the plan as `<git branch --show-current>.md`
+    agents: [planning, implementation, review]
+    skills:
+      - goga-plan
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review, apply, design, design-review]
+
+  - id: plan-review
+    name: "Plan Review"
+    interactive: true
+    description: |
+      Review the plan `<git branch --show-current>.md`
+    prompt: |
+      Review the plan `<git branch --show-current>.md`
+    agents: [planning, implementation]
+    skills:
+      - goga-review-plan
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review, apply, design, design-review, plan]
+
+  - id: fix-changes
+    name: "Fix changes"
+    interactive: true
+    description: |
+      Поправить все, чтобы оно работало.
+    prompt: |
+      Steps:
+        1. Commit all changes.
+        2. Ask the user whether the implementation is built and ready for acceptance.
+
+      Requirements:
+        - If the user confirms it is ready for acceptance — complete the execution.
+
+      Constraints:
+        - Don't autoconfirm user answer.
+        - Except changes in `docs/<tasks|arch|design|plans>`.
+    agents: [planning, implementation]
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review, apply, design, design-review, plan, plan-review]
+
+  - id: accept
+    name: "Accept Result"
+    interactive: true
+    skills:
+      - goga-accept
+    agents: [planning, implementation, review]
+    depends_on: [propose, propose-review, brainstorm, brainstorm-review, apply, design, design-review, plan, plan-review, fix-changes]

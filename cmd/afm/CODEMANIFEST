@@ -1,0 +1,236 @@
+Imports:
+  - Types:
+      - Config
+      - DockerConfig
+      - ProxyConfig
+    From: pkg/config
+  - Types:
+      - ReExecConfig
+      - CommandMount
+      - ScanCommands
+      - ReExec
+      - CheckClaudeDockerAuth
+    Usages:
+      - docker_privilege_drop
+    From: pkg/docker
+  - Types:
+      - Flow
+    From: pkg/flow
+  - Types:
+      - Orchestrator
+      - Options
+      - Prompts
+    From: pkg/orchestrator
+  - Types:
+      - Proxy
+      - BuildTransforms
+      - CreateShim
+    From: pkg/proxy
+  - Types:
+      - Server
+    From: pkg/server
+  - Types:
+      - Store
+      - Transition
+      - RunState
+    From: pkg/state
+  - Types:
+      - SkillsFS
+      - ReadPrompt
+    From: assets
+
+Usages:
+  cobra: .goga/usages/cooks/cobra.md
+
+Annotations: |
+  CLI entrypoint afm. Дерево команд строится через `cobra` — корневая команда с персистентным флагом
+  --dir и PersistentPreRunE, вычисляющим .afm-директорию по приоритету флаг > AFM_DIR > ..
+  Каждая подкоманда — независимый конструктор newXxxCmd, регистрируемый через root.AddCommand.
+
+  approve/retry/revise строят `Transition` (импорт pkg/state) и применяют его через
+  store.Apply; check/approve читают текущий снимок через `RunState` (импорт pkg/state).
+
+---
+
+"resolveRootDir(dirFlag string, envDir string) -> dir:string":
+  location: main.go
+  annotations: |
+    Вычисляет базовую директорию проекта по приоритету: флаг --dir > AFM_DIR > текущая директория.
+
+"fmDir() -> path:string":
+  location: main.go
+  annotations: |
+    Возвращает эффективный путь .afm (join rootDir + .afm).
+
+"newRootCmd() -> cmd:cobra.Command":
+  location: main.go
+  annotations: |
+    Корневая команда afm.
+
+    Use `cobra` for implementation.
+
+    Requirements:
+    - Персистентный флаг --dir
+    - PersistentPreRunE вызывает `resolveRootDir`
+
+"newRunCmd() -> cmd:cobra.Command":
+  location: run.go
+  annotations: |
+    Запускает флоу: разрешает путь к flow-файлу, загружает `Config` (pkg/config, LoadFrom),
+    инициализирует ран, стартует встроенный `Proxy` (pkg/proxy, если задан upstream) через
+    `BuildTransforms` + shim (`CreateShim`), опционально перезапускает себя в Docker через `ReExecConfig`
+    (pkg/docker, см. `docker_privilege_drop`), запускает `Orchestrator` с `Options` (pkg/orchestrator)
+    и `Server` (с настройками HTTP-дашборда из pkg/server), открывает браузер.
+
+    Algorithm (built-in reverse proxy, см. CLAUDE.md «Built-in Reverse Proxy»):
+    1. Proxy запускается только если Config.Proxy (`ProxyConfig`).IsEnabled() (nil/absent Enabled →
+       включено по умолчанию); внутри этого гейта upstream разрешается: Config.Proxy.Upstream, иначе
+       ANTHROPIC_BASE_URL; если оба пусты — proxy пропускается (no-op, печатается сообщение); если
+       IsEnabled() ложно — proxy пропускается полностью без вывода
+    2. Ошибка Proxy.Start — фатальна; ошибка `CreateShim` — не фатальна (предупреждение, инъекция
+       env-переменных всё равно работает)
+    3. Proxy и shim останавливаются через defer (Shutdown, удаление shim-директории)
+
+    Requirements:
+    - Docker-режим (Config.Docker — `DockerConfig`, IsDockerEnabled): проверяется сразу после парсинга
+      флоу, до инициализации рана и до запуска proxy — при включении вызывается
+      `CheckClaudeDockerAuth` (фатальная ошибка, если command: claude без поддерживаемого auth env var),
+      затем собирается `CommandMount` для нестандартных агентов (`ScanCommands`) и вызывается `ReExec`
+      с заполненным `ReExecConfig` (см. `docker_privilege_drop` из Imports); ReExec замещает процесс
+      (syscall.Exec) — код после этой ветки (run-инициализация, proxy, Orchestrator, Server) в этом
+      процессе не выполняется
+
+"resolveFlowPath(args []string) -> path:string, err:error":
+  location: run.go
+  annotations: |
+    Разрешает путь к flow-файлу из аргументов команды (расширения .yaml/.yml).
+
+"resolveRun(f Flow) -> runDir:string, store:Store, err:error":
+  location: run.go
+  annotations: |
+    Инициализирует директорию рана и хранилище состояния для флоу.
+
+"loadPrompts(overrideDir string) -> prompts:Prompts, err:error":
+  location: run.go
+  annotations: |
+    Загружает шаблоны промптов через `ReadPrompt` (импорт из assets), с опциональным переопределением
+    директории.
+
+"browserCmd() -> cmd:string":
+  location: run.go
+  annotations: |
+    Определяет команду открытия браузера для текущей ОС.
+
+"openBrowser(url string)":
+  location: run.go
+  annotations: |
+    Открывает URL в браузере хоста.
+
+    Constraints:
+    - Пропускается внутри Docker-контейнера (AFM_IN_DOCKER=1) — afm внутри Linux-контейнера не может
+      открыть браузер на хосте
+
+"launchHostBrowserOpener(port int)":
+  location: run.go
+  annotations: |
+    Запускает хост-side процесс-помощник ДО re-exec в Docker, который поллит проброшенный порт и
+    вызывает open/xdg-open на хосте.
+
+"newCheckCmd() -> cmd:cobra.Command":
+  location: check.go
+  annotations: |
+    Показывает статус текущего рана: читает state.json напрямую в `RunState` (импорт pkg/state) и
+    печатает список стадий и их статус (RunState.Stages[id].Status).
+
+"statusColor(s string) -> color:string":
+  location: check.go
+  annotations: |
+    Цвет вывода для статуса стадии.
+    `s`: значение статуса стадии (StageState.Status в pkg/state)
+
+"lastLogAction(stageDir string) -> action:string":
+  location: check.go
+  annotations: |
+    Последняя записанная строка действия из лога стадии.
+
+"newApproveCmd() -> cmd:cobra.Command":
+  location: approve.go
+  annotations: |
+    Утверждает план стадии (вызывает Orchestrator.Approve).
+
+"findLatestRunDir(stageID string) -> runDir:string, stageIDs:[]string, err:error":
+  location: approve.go
+  annotations: |
+    Находит последнюю директорию рана, содержащую указанную стадию.
+
+"newReviseCmd() -> cmd:cobra.Command":
+  location: revise.go
+  annotations: |
+    Отправляет фидбек на повторное планирование стадии (вызывает Orchestrator.Revise).
+
+"newRetryCmd() -> cmd:cobra.Command":
+  location: retry.go
+  annotations: |
+    Повторяет проваленную стадию (вызывает Orchestrator.Retry).
+
+"newListCmd() -> cmd:cobra.Command":
+  location: list.go
+  annotations: |
+    Выводит список доступных ранов/флоу.
+
+"newInitCmd() -> cmd:cobra.Command":
+  location: init.go
+  annotations: |
+    Интерактивно создаёт новый flow.yaml, опрашивая пользователя через `prompt` по одной стадии
+    (`stageInput`) за раз.
+
+"prompt(scanner string, label string) -> value:string":
+  location: init.go
+  annotations: |
+    Запрашивает у пользователя строку ввода с меткой.
+
+"splitComma(s string) -> parts:[]string":
+  location: init.go
+  annotations: |
+    Разбивает строку по запятой в список.
+
+"stageInput()":
+  location: init.go
+  annotations: |
+    Промежуточная структура пользовательского ввода для одной стадии при интерактивном создании флоу.
+
+"newInstallSkillsCmd() -> cmd:cobra.Command":
+  location: install_skills.go
+  annotations: |
+    Устанавливает claude-скиллы afm (`SkillsFS`, импорт из assets) в целевую директорию.
+
+"resolveSkillsDir(override string) -> dir:string, err:error":
+  location: install_skills.go
+  annotations: |
+    Разрешает целевую директорию установки скиллов.
+
+"installSkills(dest string, force bool) -> err:error":
+  location: install_skills.go
+  annotations: |
+    Копирует скиллы из `SkillsFS` в целевую директорию.
+
+    Requirements:
+    - Без --force (force=false) существующие файлы пропускаются как есть (не перезаписываются,
+      не удаляются); с --force (force=true) существующие файлы перезаписываются. Директории не
+      удаляются — файлов, отсутствующих в `SkillsFS`, но оставшихся в целевой директории от старых
+      версий, installSkills не касается
+
+    Constraints:
+    - Не трогает содержимое, принадлежащее другим расширениям
+
+"main()":
+  location: main.go
+  annotations: |
+    Точка входа процесса afm — строит корневую команду (`newRootCmd`) и выполняет её.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  CLI entrypoint afm: run/check/approve/retry/revise/list/init/install-skills поверх cobra.

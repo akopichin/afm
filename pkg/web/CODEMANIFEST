@@ -1,0 +1,28 @@
+Imports:
+  - Usages:
+      - dashboard_assets
+    From: pkg/web/dashboard
+
+Annotations: |
+  Встроенные веб-ассеты дашборда через go:embed. Файлы ассетов физически лежат в pkg/web/dashboard/
+  (см. `dashboard_assets` из Imports) — эта клеточка лишь встраивает их в бинарник и отдаёт как fs.FS
+  (через fs.Sub, укореняя в исходных web-путях).
+
+---
+
+"FS() -> fs:fs.FS":
+  location: embed.go
+  annotations: |
+    Встроенная файловая система с веб-ассетами дашборда, полученными через go:embed dashboard/* и
+    укоренёнными в исходных web-путях через fs.Sub(embedded, "dashboard"). Экспортируется как
+    пакетная переменная типа fs.FS (а не embed.FS — fs.Sub возвращает fs.FS); потребитель —
+    pkg/server (http.FileServer(http.FS(web.FS))).
+
+    Use `dashboard_assets` from Imports for the actual asset inventory and structure.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Go-часть pkg/web — go:embed обёртка над статическими ассетами дашборда (см. pkg/web/dashboard).

@@ -1,0 +1,58 @@
+Usages:
+  x_sys_windows: .goga/usages/cooks/x-sys-windows.md
+
+Annotations: |
+  Кроссплатформенные файловые advisory-локи и логирование прогресса стадии. На Windows — `x_sys_windows`
+  (windows.LockFileEx, //go:build windows), на Unix — syscall.Flock стандартной библиотеки
+  (//go:build !windows, не отдельная внешняя зависимость).
+
+---
+
+"Lock(path string)":
+  location: progress.go
+  annotations: |
+    Файловый эксклюзивный лок. Тип и NewLock объявлены здесь; методы `Lock`/TryLock/Unlock
+    реализованы платформенно-специфично (//go:build !windows / //go:build windows) в отдельных
+    файлах того же пакета — контракт описывает поведение метода независимо от того, в каком из
+    build-tag файлов лежит конкретная реализация.
+
+    Use `x_sys_windows` for the Windows-specific implementation branch.
+  methods:
+    "NewLock(path string) -> lock:Lock, err:error": |
+      Создаёт handle лока для пути (не захватывает).
+    "Lock() -> err:error": |
+      Захватывает эксклюзивный блокирующий flock.
+    "TryLock() -> err:error": |
+      Пытается захватить неблокирующий эксклюзивный flock.
+    "Unlock()": |
+      Освобождает flock и закрывает файл.
+
+"Logger(path string)":
+  location: progress.go
+  annotations: |
+    Пишет отметки времени в файл (append-only) и в stdout.
+  methods:
+    "NewLogger(path string) -> logger:Logger, err:error": |
+      Открывает (или создаёт) файл лога.
+
+      Algorithm:
+      1. Если файл уже существует и непустой — дописать разделитель рестарта (проверяется только
+      наличие содержимого, не наличие футера завершения)
+    "Log(msg string)": |
+      Пишет строку с меткой времени в файл и в stdout.
+    "LogAction(toolName string, detail string)": |
+      Пишет строку действия (имя инструмента + детали).
+    "LogStart(agentType string, stageName string)": |
+      Пишет баннер старта с типом агента, именем стадии и временем.
+    "LogEnd(err error)": |
+      Пишет баннер завершения/ошибки с прошедшей длительностью.
+      `err`: ошибка завершения, если есть (nil → баннер успешного завершения)
+    "Close() -> err:error": |
+      Закрывает файл.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Файловые advisory-локи и логирование прогресса стадии, кроссплатформенно.
