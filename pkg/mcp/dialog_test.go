@@ -217,6 +217,28 @@ func TestFindUnansweredQuestions(t *testing.T) {
 	}
 }
 
+// TestFindUnansweredQuestions_UnknownPhaseSkipped locks in the phase
+// whitelist: only planning/implementation/review question files are
+// recognized, any other phase prefix is silently skipped.
+func TestFindUnansweredQuestions_UnknownPhaseSkipped(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "bogus.q1.question.json"), []byte(`{"id":"q1","question":"proceed?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "planning.q1.question.json"), []byte(`{"id":"q1","question":"proceed?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Phase != "planning" {
+		t.Fatalf("unknown phase must be skipped; want 1 (planning), got %+v", got)
+	}
+}
+
 // TestReadDialog_AnswerBeforeQuestion exercises the merge branch where the
 // answer line is appended before the question line (the question poller and
 // the HTTP answer handler write to dialog.jsonl from separate goroutines).

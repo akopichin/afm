@@ -345,3 +345,96 @@ func TestIntegration_DialogViolationDetected(t *testing.T) {
 		t.Errorf("events.jsonl missing offending path %q: %q", wrongQuestion, string(eventsData))
 	}
 }
+
+// TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit воспроизводит afm bug:
+// интерактивный planning-агент задал вопрос и ВЫШЕЛ (claude завершился), не
+// дождавшись ответа пользователя и не написав plan.md. Раньше такое завершение
+// приводило к "missing artifact or incomplete" — стадия падала, пока агент
+// легитимно ждал ответа. После фикса стадия удерживается в awaiting_user_input,
+// а когда пользователь отвечает — агент перезапускается и дописывает план.
+func TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit(t *testing.T) {
+	dir := t.TempDir()
+
+	// Агент: пока нет answer.json — пишет question.json и сразу выходит (без
+	// plan.md), имитируя преждевременный exit в ожидании ответа. Когда ответ
+	// уже есть — пишет валидный план с обязательными секциями.
+	agentScript := filepath.Join(dir, "mock-agent.sh")
+	script := "#!/bin/bash\n" +
+		"STAGE=\"$AFM_STAGE_DIR\"\n" +
+		"A=\"$STAGE/planning.q1.answer.json\"\n" +
+		"if [ ! -f \"$A\" ]; then\n" +
+		"  printf '{\"id\":\"q1\",\"question\":\"decide?\"}' > \"$STAGE/planning.q1.question.json\"\n" +
+		"  echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"waiting for q1\"}]}}'\n" +
+		"  echo '{\"type\":\"result\",\"subtype\":\"success\"}'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"## Tasks\\n\\n- [ ] do it\\n\\n## Assumptions\\n\\n- none\\n\\n## Acceptance Criteria\\n\\n- [ ] works\\n\"}]}}'\n" +
+		"echo '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
+	if err := os.WriteFile(agentScript, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "propose",
+		Name:        "Propose",
+		Description: "interactive planning that exits while waiting",
+		Agents:      []flow.AgentType{flow.AgentPlanning},
+		Interactive: true,
+		Command:     agentScript,
+	}}
+
+	store, err := state.Open(dir, []string{"propose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	cancelApprove := autoApprove(orch)
+	defer cancelApprove()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Агент задал вопрос и вышел → poller перевёл стадию в awaiting_user_input.
+	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 5*time.Second)
+
+	// Ключевая проверка фикса: стадия не должна падать от того, что агент
+	// завершился без артефакта. До фикса здесь уже лежал бы StatusFailed
+	// ("missing artifact or incomplete").
+	time.Sleep(500 * time.Millisecond)
+	if got := loadStateJSON(t, stateFile).Stages["propose"].Status; got == state.StatusFailed {
+		t.Fatal("interactive stage failed while agent waited for user reply; should hold awaiting_user_input")
+	}
+
+	// Пользователь отвечает — агент перезапускается и дописывает план.
+	stageDir := filepath.Join(dir, "propose")
+	answerPath := filepath.Join(stageDir, "planning.q1.answer.json")
+	payload, _ := json.Marshal(map[string]any{"id": "q1", "answer": "go ahead", "from_options": false})
+	tmp := answerPath + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, answerPath); err != nil {
+		t.Fatal(err)
+	}
+	dialogPath := filepath.Join(stageDir, "planning.dialog.jsonl")
+	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q1", Answer: "go ahead"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.NotifyAnswer("propose", "planning", "q1", "go ahead", false); err != nil {
+		t.Fatalf("NotifyAnswer: %v", err)
+	}
+
+	// План дописан, approved (autoApprove), planning-only стадия → done.
+	waitForStatus(t, stateFile, "propose", state.StatusDone, 10*time.Second)
+}

@@ -1,0 +1,44 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+  x_tools_analysis: .goga/usages/cooks/x-tools-analysis.md
+
+Annotations: |
+  Кастомный статический анализатор (go/analysis), не имеющий внутренних зависимостей на другие
+  пакеты проекта — работает через AST-анализ исходников, не через импорт pkg/state. Использует
+  `x_tools_analysis` (singlechecker.Main) для получения самостоятельного CLI-бинарника.
+
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+---
+
+"Analyzer(name string, doc string)":
+  location: main.go
+  annotations: |
+    Анализатор noStoreApplyOutsideFSM: запрещает прямые вызовы (*state.Store).Apply вне
+    pkg/orchestrator/fsm.go.
+
+    Requirements:
+    - Единственное разрешённое место вызова внутри проверяемого дерева — pkg/orchestrator/fsm.go
+      (см. pkg/state, аннотация Store.Apply)
+    - _test.go-файлы исключены из проверки по суффиксу пути (тестовые вызовы Store.Apply
+      разрешены везде)
+
+    Constraints:
+    - Анализатор не ограничивает пакеты сам по себе — область проверки задаётся снаружи,
+      аргументом CLI-инвокации. make lint вызывает бинарник как ./pkg/... (см. Makefile), т.е.
+      cmd/afm вне области проверки. cmd/afm/approve.go, cmd/afm/revise.go, cmd/afm/retry.go
+      вызывают store.Apply напрямую (CLI-мутации состояния вне работающего оркестратора) — это
+      осознанно не покрывается этим анализатором.
+
+    Use `x_tools_analysis` for the singlechecker CLI wiring.
+
+    Реализовано как переменная-литерал *analysis.Analyzer, а не через конструктор; параметры
+    сигнатуры описывают поля Name/Doc этого литерала.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Линтер, запрещающий вызовы Store.Apply вне pkg/orchestrator/fsm.go.

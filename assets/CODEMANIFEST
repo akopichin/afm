@@ -1,0 +1,36 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+
+Annotations: |
+  Встроенные system-промпты (prompts/) и claude-скиллы (claude/skills/afm*, 5 директорий) как
+  embedded FS. Потребители — cmd/afm/run.go (промпты через `ReadPrompt`) и
+  cmd/afm/install_skills.go (скиллы через `SkillsFS`).
+
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+---
+
+"ReadPrompt(name string, overrideDir string) -> prompt:string, err:error":
+  location: assets.go
+  annotations: |
+    Возвращает промпт по имени файла.
+    `name`: имя файла промпта
+    `overrideDir`: если непусто — читать из этой директории вместо встроенных файлов
+
+"FS() -> fs:embed.FS":
+  location: assets.go
+  annotations: |
+    Встроенная файловая система с system-промптами (prompts/).
+
+"SkillsFS() -> fs:embed.FS":
+  location: assets.go
+  annotations: |
+    Встроенная файловая система с claude-скиллами (claude/skills/afm*, 5 директорий).
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Встроенные system-промпты и claude-скиллы afm как embedded FS.

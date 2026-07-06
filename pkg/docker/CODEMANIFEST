@@ -1,0 +1,112 @@
+Imports:
+  - Types:
+      - Flow
+    From: pkg/flow
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+  x_term: .goga/usages/cooks/x-term.md
+
+Annotations: |
+  Docker-режим: перезапуск afm внутри контейнера, монтирование томов, TTY-детекция (`x_term`), drop
+  привилегий через gosu.
+
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+  Algorithm (общий механизм privilege-drop, см. CLAUDE.md «Docker Mode»):
+  1. Контейнер стартует под root
+  2. Entrypoint (docker-entrypoint.sh + gosu) сразу дропает привилегии до хостового uid/gid
+     (AFM_HOST_UID/AFM_HOST_GID)
+  3. HOME=/home/afm выставляется ПОСЛЕ дропа привилегий через gosu — gosu сбрасывает HOME для uid
+     без записи в /etc/passwd, выставляя HOME=/; установка HOME до gosu приводит к тому, что агенты
+     ищут ~/-файлы в /
+
+---
+
+"CheckClaudeDockerAuth(clientCommand string) -> err:error":
+  location: launcher.go
+  annotations: |
+    Проверяет, что при command: claude в Docker задан один из поддерживаемых auth env vars
+    (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN).
+
+    Requirements:
+    - macOS Keychain недоступен из Linux-контейнера — OAuth-сессия из ~/.claude.json там не работает
+    - Возвращает ошибку с инструкцией, если auth не настроена
+
+"ReExec(cfg ReExecConfig) -> err:error":
+  location: launcher.go
+  annotations: |
+    Заменяет текущий процесс на docker run с нужными монтированиями.
+
+    Requirements:
+    - Использовать `x_term` (term.IsTerminal) для честной TTY-детекции при решении, добавлять ли -it
+      (os.ModeCharDevice ложно срабатывает на /dev/null)
+
+    Constraints:
+    - Возвращает ошибку, если docker не найден в PATH или если не удалось определить домашний
+      каталог пользователя (нужен для монтирования ~/.claude, ~/.afm); при успехе управление не
+      возвращается (syscall.Exec)
+
+"ScanCommands(f Flow, globalCmd string) -> mounts:[]CommandMount":
+  location: launcher.go
+  annotations: |
+    Возвращает список нестандартных (не claude) агентов из флоу для монтирования в контейнер.
+    `f`: описание флоу (импортировано из pkg/flow), указатель на Flow, передаётся по указателю
+
+    Constraints:
+    - Бинарники, не найденные в PATH на хосте, молча пропускаются
+
+"SetExecFunc(f)":
+  location: launcher.go
+  annotations: |
+    Заменяет функцию exec (только для тестов).
+
+    `f`: exec replacement callback matching func(argv0 string, argv []string, envv []string) error
+    — used to intercept process execution in tests.
+
+    Constraints:
+    - execFunc — изменяемое состояние уровня пакета; предназначено только для последовательного
+      использования в тестах, не безопасно при параллельных тестах
+
+"ResetExecFunc()":
+  location: launcher.go
+  annotations: |
+    Возвращает функцию exec к дефолтной (только для тестов).
+
+"CommandMount(hostPath string, containerName string)":
+  location: launcher.go
+  annotations: |
+    Нестандартный агент для монтирования в контейнер.
+  properties:
+    "HostPath -> string": |
+      Путь к бинарнику на хосте.
+    "ContainerName -> string": |
+      Имя, под которым бинарник монтируется в контейнер (/usr/local/bin/<name>).
+
+"ReExecConfig(image string, projectDir string, commands []CommandMount, dashboardPort int, extraMounts []string, extraArgs []string, clientCommand string)":
+  location: launcher.go
+  annotations: |
+    Параметры для перезапуска afm в Docker.
+  properties:
+    "Image -> string": |
+      Docker-образ.
+    "ProjectDir -> string": |
+      Абсолютный путь к директории проекта.
+    "Commands -> []CommandMount": |
+      Нестандартные агенты для монтирования.
+    "DashboardPort -> int": |
+      Порт дашборда; при >0 пробрасывается на хост через -p.
+    "ExtraMounts -> []string": |
+      Доп. хост-директории (могут начинаться с ~), монтируются read-only.
+    "ExtraArgs -> []string": |
+      os.Args[1:].
+    "ClientCommand -> string": |
+      Имя агента из конфига — для проверки auth при command: claude.
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Docker-режим самоперезапуска afm: монтирования, TTY-детекция, проверка auth.

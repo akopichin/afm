@@ -81,6 +81,33 @@ func TestBuild_InteractivePrintsAbsolutePathAndNowhereElse(t *testing.T) {
 	}
 }
 
+// TestBuild_InteractiveRobustnessInstructions locks in the polling-loop
+// robustness wording added to fix the "agent gives up waiting" dialog-stall
+// bug: a bash-timeout must not be treated as a stop signal, ScheduleWakeup/
+// background waits must not be used, and the output artifact must be
+// deferred until all answers are collected.
+func TestBuild_InteractiveRobustnessInstructions(t *testing.T) {
+	in := Inputs{
+		Template:    "RULES",
+		Stage:       flow.Stage{ID: "propose", Name: "Propose", Description: "ask user"},
+		PhaseAgent:  AgentPlanning,
+		StageDir:    t.TempDir(),
+		Interactive: true,
+	}
+	out := Build(in)
+
+	for _, want := range []string{
+		"EXPECTED and is NOT a signal to stop",
+		"Keep re-launching it until the answer file appears",
+		"Do NOT use ScheduleWakeup, background tasks, async waits",
+		"Do NOT write to plan.md / output artifact yet",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("interactive prompt should contain %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestBuild_PromptBlockAppearsAfterStage(t *testing.T) {
 	in := Inputs{
 		Template:   "RULES",

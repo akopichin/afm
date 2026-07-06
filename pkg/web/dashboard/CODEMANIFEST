@@ -1,0 +1,35 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+
+Annotations: |
+  Статический контент дашборда: HTML-разметка, стили, клиентский JS и favicon, встраиваемые родительской
+  клеточкой pkg/web через go:embed dashboard/*. Контракт описывает состав и назначение файлов, не
+  придумывая API поверх статического контента.
+
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+---
+
+"DashboardAssets()":
+  location: index.html
+  annotations: |
+    Статический бандл дашборда, отдаваемый как embed.FS из pkg/web.
+
+    Requirements:
+    - index.html — корневая HTML-страница дашборда
+    - style.css — стили дашборда
+    - app.js — клиентская логика (поллинг стадий/событий, WebSocket-подписка через pkg/server)
+    - markdown-it.min.js — сторонняя библиотека рендеринга markdown (планы/фидбек в UI)
+    - favicon.svg — иконка вкладки браузера
+
+    Constraints:
+    - Минимальный контракт: предметного API в привычном смысле нет (статический контент), это ожидаемо
+      и не является ошибкой дизайна
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Статические веб-ассеты дашборда afm, встраиваемые в бинарник клеточкой pkg/web.

@@ -1,0 +1,173 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+
+Annotations: |
+  Персистентное файловое хранилище состояния стадий рана (state.json). Прямые вызовы (*Store).Apply
+  внутри pkg/orchestrator допускаются только из pkg/orchestrator/fsm.go — см. tools/setstatuslinter
+  (слой 0, независимая клеточка, аннотирует то же самое правило со стороны анализатора). Это
+  ограничение проверяется статически только для ./pkg/...: cmd/afm (approve/retry/revise)
+  сознательно вызывает Store.Apply напрямую, минуя FSM — эти CLI-команды мутируют state.json
+  оффлайн, без запущенного процесса Orchestrator, поэтому пройти через живой FSM физически
+  невозможно.
+
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+---
+
+"FindLatestRunDir(base string, flowName string) -> path:string, err:error":
+  location: state.go
+  annotations: |
+    Находит самую свежую директорию рана для указанного имени флоу под base/.
+
+"SaveFeedback(stageDir string, feedback string) -> err:error":
+  location: state.go
+  annotations: |
+    Добавляет feedback в feedback.md стадии с разделителями ревизий.
+
+"VersionPlan(stageDir string) -> version:int, err:error":
+  location: state.go
+  annotations: |
+    Переименовывает plan.md в `plan.v{N}.md` и возвращает N.
+
+"SetApplyHook(h TransitionCallback)":
+  location: store.go
+  annotations: |
+    Устанавливает тестовый хук, вызываемый внутри Apply между fsync и перезаписью снапшота.
+    `h`: функция-колбэк вида func(Transition) — вызывается с применённым `Transition`
+
+    Constraints:
+    - Продакшн-код не должен вызывать эту функцию — только тестовый контур
+
+"NewRunState(stageIDs []string) -> state:RunState":
+  location: state.go
+  annotations: |
+    Конструктор для `RunState` — пакетная функция без receiver'а (не метод). Создаёт начальный
+    `RunState` со всеми стадиями в статусе pending.
+
+"StageStatus(value string)":
+  location: state.go
+  annotations: |
+    Строковый enum жизненного цикла стадии (type StageStatus string). Валидные значения:
+    pending (StatusPending), planning (StatusPlanning), awaiting_approval (StatusAwaitingApproval),
+    revising (StatusRevising), ready (StatusReady), running (StatusRunning),
+    retrying (StatusRetrying), awaiting_user_input (StatusAwaitingUserInput), done (StatusDone),
+    failed (StatusFailed).
+
+    Requirements:
+    - Используется как underlying-тип для StageState.Status, Transition.From/Transition.To
+
+"RunState(flowName string, startedAt string, stageOrder []string, stageNames map[string]string, stages map[string]StageState)":
+  location: state.go
+  annotations: |
+    Верхнеуровневое состояние, персистируемое в state.json. `stageNames` — опционально
+    (omitempty), для обратной совместимости со старыми state.json без этого поля.
+  properties:
+    "FlowName -> string": |
+      Имя флоу.
+    "StartedAt -> string": |
+      Момент старта рана.
+
+      Note: реальный Go-тип поля — time.Time, сериализуется в JSON как RFC3339/ISO-8601 строка.
+    "StageOrder -> []string": |
+      Порядок ID стадий.
+    "StageNames -> map[string]string": |
+      Человекочитаемое имя стадии по ID (из flow-файла — метаданные, не рантайм-состояние).
+    "Stages -> map[string]StageState": |
+      Состояние каждой стадии по ID.
+  methods:
+    "AllDone() -> done:bool": |
+      true, если у каждой стадии статус done.
+    "SetStageStatus(stageID string, status string)": |
+      Обновляет статус стадии и её timestamp.
+      `status`: одно из значений StageStatus — pending, planning, awaiting_approval, revising,
+      ready, running, retrying, awaiting_user_input, done, failed
+
+"StageState(status string, updatedAt string)":
+  location: state.go
+  annotations: |
+    Персистентное состояние одной стадии.
+  properties:
+    "Status -> string": |
+      Значение StageStatus.
+    "UpdatedAt -> string": |
+      Время последнего изменения.
+
+      Note: реальный Go-тип поля — time.Time, сериализуется в JSON как RFC3339/ISO-8601 строка.
+
+"Open(runDir string, stageIDs []string) -> store:Store, err:error":
+  location: store.go
+  annotations: |
+    Конструктор для `Store` — пакетная функция без receiver'а (не метод). Открывает (или создаёт)
+    хранилище состояния для директории рана.
+
+    Algorithm:
+    1. Создаёт runDir, если его ещё нет
+    2. Если events.jsonl отсутствует — пытается загрузить state.json как легаси-фолбэк и применить
+       статусы стадий из него к начальному `RunState`
+    3. Реплеит переходы из events.jsonl в `RunState`, попутно отслеживая byte-offset последней
+       валидной строки — так детектируется повреждённая/неполная последняя строка лога
+    4. Открывает events.jsonl на запись, усекает (truncate) файл и переоткрывает его позицию на
+       последнем валидном offset, если была найдена порча хвоста
+    5. Если реплей не дал ни одного события, но легаси-состояние было загружено — синтезирует
+       события перехода legacy_load для каждой стадии со статусом, отличным от pending, дописывает
+       их в events.jsonl и делает fsync
+
+"Store()":
+  location: store.go
+  annotations: |
+    Файловое хранилище состояния — читает/пишет state.json и лог переходов (event log).
+  methods:
+    "Apply(t Transition) -> err:error": |
+      Применяет переход состояния, дописывает событие в лог, синхронизирует и перезаписывает снапшот.
+
+      Constraints:
+      - Внутри pkg/orchestrator вызывается только из pkg/orchestrator/fsm.go (см.
+        tools/setstatuslinter); cmd/afm (approve/retry/revise) — единственное осознанное
+        исключение, вне области действия статической проверки (см. Annotations выше)
+      - Optimistic-concurrency guard: если текущий статус стадии не совпадает с полем From
+        параметра t, Apply отклоняет переход и возвращает ошибку, не трогая лог и снапшот
+      - Если периодическая перезапись state.json (writeSnapshot) падает — ошибка только
+        логируется в stderr, а Apply всё равно возвращает nil; единственная жёсткая гарантия —
+        успешный append в events.jsonl, nil-ошибка НЕ означает, что state.json точно актуален
+    "Close() -> err:error": |
+      Закрывает хранилище.
+    "Get(stageID string) -> status:string": |
+      Текущий статус стадии.
+    "SetStageNames(names map[string]string)": |
+      Сохраняет отображаемое имя для каждой стадии. Карта копируется — мутации вызывающей стороной
+      после вызова не влияют на хранилище.
+    "Snapshot() -> state:RunState": |
+      Текущий снапшот состояния рана.
+
+"Transition(seq int, time string, stageID string, from string, to string, event string, reason string)":
+  location: store.go
+  annotations: |
+    Запись одного перехода состояния в event log.
+  properties:
+    "Seq -> int": |
+      Порядковый номер перехода.
+
+      Note: реальный Go-тип поля — uint64 (монотонно возрастающий номер); в DSL используется
+      int, так как uint64 не входит в список допустимых типов.
+    "Time -> string": |
+      Время перехода.
+
+      Note: реальный Go-тип поля — time.Time, сериализуется в JSON как RFC3339/ISO-8601 строка.
+    "StageID -> string": |
+      ID стадии.
+    "From -> string": |
+      Статус до перехода (StageStatus).
+    "To -> string": |
+      Статус после перехода (StageStatus).
+    "Event -> string": |
+      Имя события FSM, вызвавшего переход.
+    "Reason -> string": |
+      Причина перехода (опционально).
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Персистентное файловое состояние рана: state.json + event log переходов.

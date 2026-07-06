@@ -1,0 +1,11 @@
+language: golang
+build:
+  image: qarium/goga-golang-1.26:1.0
+  task_executor:
+    agent: claude
+codemanifest:
+  usages:
+    conventions: .goga/usages/conventions.md
+    golang: golang
+  annotations: |
+    Use `conventions` for code writing rules and testing.

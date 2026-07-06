@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
@@ -74,6 +75,20 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 
 		err := agentFn(retryCtx)
 		if err == nil {
+			// afm bug: интерактивный агент может завершиться (выйти из claude),
+			// не дождавшись ответа пользователя — на диске остаётся
+			// question.json без answer.json. Это не ошибка работы и не повод
+			// фейлить стадию: артефакта ещё нет просто потому, что пользователь
+			// не ответил. Удерживаем stage в awaiting_user_input — когда ответ
+			// появится, onUserAnswered перезапустит агента и он допишет план.
+			// Без этой ветки стадия падала с "missing artifact or incomplete"
+			// ровно на таком выходе агента в ожидании.
+			if s.Interactive && o.hasOpenQuestion(s.ID, phase) {
+				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingUserInput {
+					o.Trigger(s.ID, EvAskUser, GuardCtx{Phase: phase}, "")
+				}
+				return
+			}
 			if completionCheck == nil {
 				_ = o.critical.Publish(context.Background(), Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return

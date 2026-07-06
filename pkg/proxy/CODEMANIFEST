@@ -1,0 +1,92 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+
+Annotations: |
+  Встроенный reverse-proxy агентского HTTP-трафика к Anthropic-совместимым шлюзам. `Transform` —
+  точка расширения: Proxy.ServeHTTP диспетчеризует на первый подходящий трансформ по Match, иначе —
+  passthrough без изменений.
+
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+---
+
+"Transform()":
+  location: transform.go
+  annotations: |
+    Интерфейс обработки проксируемых HTTP-запросов для конкретного upstream.
+  methods:
+    "Match(upstreamURL string) -> matches:bool": |
+      Применим ли этот трансформ к данному upstream URL.
+    "ServeHTTP(w http.ResponseWriter, r http.Request, upstream string)": |
+      Обрабатывает проксируемый запрос.
+      `upstream`: провалидированный базовый URL upstream (например, https://api.z.ai/api/anthropic)
+
+"BuildTransforms(upstream string, zai bool) -> transforms:[]Transform":
+  location: zai.go
+  annotations: |
+    Возвращает упорядоченный список трансформов для указанного upstream.
+    `zai`: nil = автоопределение по хосту (api.z.ai), true = всегда, false = никогда
+
+    `zai`: tri-state — declared as bool here but the real Go parameter is *bool; nil (unset)
+    means auto-detect by upstream host (api.z.ai), true forces the transform on, false forces it off.
+
+"ZAITransform()":
+  location: zai.go
+  annotations: |
+    Исправляет ошибки 529 от api.z.ai: конвертирует non-streaming запросы в streaming и разбирает
+    SSE-ответ обратно в единый JSON message.
+
+    Algorithm:
+    1. Match — true для upstream URL, содержащих api.z.ai
+    2. Для stream=true запросов — пропустить без изменений
+    3. Для stream=false/отсутствующего — внедрить stream: true, переслать upstream
+    4. Прочитать SSE-ответ; накопить message_start (id/role/model/usage), content_block_start +
+       content_block_delta (text/thinking/tool_use/signature deltas) по индексу блока, message_delta
+       (stop_reason + merge usage)
+    5. Вернуть единый JSON message
+
+    Constraints:
+    - Upstream-ответы не-200 пересылаются как есть (статус + заголовки + тело)
+    - SSE-событие error или пустой SSE-ответ дают HTTP 529 со структурированной ошибкой в стиле Anthropic
+  methods:
+    "Match(upstreamURL string) -> matches:bool": |
+      true для upstream URL, содержащих api.z.ai.
+    "ServeHTTP(w http.ResponseWriter, r http.Request, upstream string)": |
+      См. Algorithm выше.
+
+"Proxy(upstream string, transforms []Transform)":
+  location: proxy.go
+  annotations: |
+    Reverse-proxy, применяющий первый подходящий `Transform` к каждому запросу. Запросы без
+    подходящего трансформа передаются без изменений.
+  methods:
+    "New(upstream string, transforms []Transform) -> proxy:Proxy": |
+      Создаёт Proxy, пересылающий на upstream с указанными трансформами.
+    "Start(port int) -> addr:string, err:error": |
+      Слушает 127.0.0.1:port (0 = порт, назначаемый ОС), возвращает адрес как
+      http://127.0.0.1:PORT. Сервер работает в фоне.
+    "Addr() -> addr:string": |
+      Адрес прослушивания (пусто до Start).
+    "ServeHTTP(w http.ResponseWriter, r http.Request)": |
+      Диспетчеризация на первый подходящий трансформ, либо passthrough.
+    "Shutdown(ctx string) -> err:error": |
+      Плавно останавливает proxy-сервер.
+
+"CreateShim(proxyAddr string) -> shimDir:string, err:error":
+  location: shim.go
+  annotations: |
+    Создаёт временную директорию с shell-скриптом claude, переопределяющим ANTHROPIC_BASE_URL на
+    `proxyAddr` перед вызовом настоящего claude. Директорию нужно добавить в начало PATH в
+    окружении агента.
+
+    Constraints:
+    - Вызывающая сторона отвечает за defer os.RemoveAll(shimDir)
+    - Возвращает ошибку, если claude не найден в текущем PATH
+
+---
+
+Author: Goga
+CreatedAt: 03/07/26
+Description: |
+  Reverse-proxy агентского HTTP-трафика с точкой расширения Transform; ZAI SSE-реассемблинг под api.z.ai.
