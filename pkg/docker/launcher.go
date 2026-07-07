@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"golang.org/x/term"
 
@@ -76,11 +75,36 @@ func CheckClaudeDockerAuth(clientCommand string) error {
 	)
 }
 
-// defaultExecFunc — дефолтная обёртка над syscall.Exec; вынесена в именованную
-// переменную уровня пакета, чтобы ResetExecFunc восстанавливала ссылку, а не
-// пересоздавала литерал (иначе gosec G702 срабатывает на теле функции).
+// SubprocessExitError передаётся вызывающей стороне вместо os.Exit:
+// caller должен вызвать os.Exit(err.Code), чтобы отразить код завершения docker.
+type SubprocessExitError struct {
+	Code int
+}
+
+func (e *SubprocessExitError) Error() string {
+	return fmt.Sprintf("exit: %d", e.Code)
+}
+
+// defaultExecFunc запускает docker как дочерний процесс и ждёт его завершения.
+// Ранее использовался syscall.Exec (замена текущего образа), но на macOS 26
+// execve() из подписанного Go-бинаря в docker вызывает SIGKILL — macOS блокирует
+// смену образа между разными code identities. exec.Command обходит это
+// ограничение: docker запускается дочерним процессом, а не заменяет текущий.
+// Возвращает *SubprocessExitError — caller обязан завершить процесс с этим кодом.
 var defaultExecFunc = func(argv0 string, argv []string, envv []string) error {
-	return syscall.Exec(argv0, argv, envv)
+	c := exec.Command(argv0, argv[1:]...) //nolint:gosec
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Env = envv
+	if err := c.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &SubprocessExitError{Code: exitErr.ExitCode()}
+		}
+		return err
+	}
+	return &SubprocessExitError{Code: 0}
 }
 
 // execFunc — заменяемая в тестах обёртка над syscall.Exec.

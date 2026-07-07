@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akopichin/afm/pkg/docker"
 )
 
 var rootDir string
@@ -32,6 +35,10 @@ func resolveRootDir(dirFlag, envDir string) string {
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
+		var exitErr *docker.SubprocessExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		os.Exit(1)
 	}
 }
