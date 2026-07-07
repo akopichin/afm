@@ -21,4 +21,4 @@ chown "$AFM_HOST_UID:$AFM_HOST_GID" /home/afm
 # Поэтому HOME задаём явно ПОСЛЕ gosu (через env) — иначе afm и его субпроцессы
 # (агенты) видят HOME=/ и не находят ~/файлы (токены ~/.ai-free, конфиг ~/.claude).
 # /home/afm — туда же примонтированы ~/.claude, ~/.afm и extra_mounts.
-exec gosu "$AFM_HOST_UID:$AFM_HOST_GID" env HOME=/home/afm /usr/local/bin/afm "$@"
+exec gosu "$AFM_HOST_UID:$AFM_HOST_GID" env HOME=/home/afm PATH="/home/afm/.local/bin:$PATH" /usr/local/bin/afm "$@"
