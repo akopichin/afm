@@ -25,6 +25,9 @@ const phasePlanning = "planning"
 
 const phaseImplementation = "implementation"
 const phaseReview = "review"
+const keyAnswer = "answer"
+const keyID = "id"
+const keyPhase = "phase"
 
 const planningContract = `## Output Contract (mandatory)
 The plan MUST contain sections: "## Tasks", "## Assumptions", "## Acceptance Criteria".`
@@ -82,6 +85,11 @@ type Orchestrator struct {
 		release()
 	} // per-command semaphores
 	activeAgents sync.Map // stageID → struct{}: set while an agent goroutine runs
+	// preAskPhase хранит корректную фазу в момент EvAskUser (stageID → phase string).
+	// Используется при EvUserAnswered вместо фазы из имени файла вопроса:
+	// агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
+	// что ломает phaseDispatch и уводит FSM в wrong state.
+	preAskPhase sync.Map
 }
 
 // New creates an Orchestrator.
@@ -192,25 +200,17 @@ func (o *Orchestrator) isAgentActive(stageID string) bool {
 // to the critical bus so onUserAnswered can restart it.
 func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
 	if o.isAgentActive(stageID) {
-		guardPhase := phaseImplementation
-		switch phase {
-		case phasePlanning:
-			guardPhase = phasePlanning
-		case phaseReview:
-			guardPhase = phaseReview
-		default:
-			// phaseImplementation (already set as default above)
-		}
+		guardPhase := o.popPreAskPhase(stageID, phase)
 		o.Trigger(stageID, EvUserAnswered, GuardCtx{Phase: guardPhase}, "")
 		o.ui.Publish(Event{Type: EventUserAnswered, StageID: stageID, Data: map[string]any{
-			"id": qID, "phase": phase, "answer": answer,
+			keyID: qID, keyPhase: phase, keyAnswer: answer,
 		}})
 		return nil
 	}
 	return o.critical.Publish(context.Background(), Event{
 		Type:    EventUserAnswered,
 		StageID: stageID,
-		Data:    map[string]any{"id": qID, "phase": phase, "answer": answer},
+		Data:    map[string]any{keyID: qID, "phase": phase, keyAnswer: answer},
 	})
 }
 
@@ -386,10 +386,15 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 				Type:    EventAskUser,
 				StageID: stageID,
 				Data: map[string]any{
-					"id": q.ID, "phase": q.Phase, "question": q.Question,
+					keyID: q.ID, keyPhase: q.Phase, "question": q.Question,
 					"options": q.Options, "allow_custom": q.AllowCustom,
 				},
 			})
+			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
+			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал
+			// "review" вместо "planning") — при EvUserAnswered используем сохранённую
+			// фазу, а не ту что в файле вопроса.
+			o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
 			o.Trigger(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
 		}
 		// No open question in stageDir: if this is an interactive stage, check
@@ -485,6 +490,8 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 	// answered an ask_user question, hold the stage in awaiting_user_input.
 	// The stage resumes on EventUserAnswered.
 	if o.hasOpenQuestion(ev.StageID, agentType) {
+		// agentType здесь — реальная фаза от executor, не из имени файла вопроса.
+		o.preAskPhase.Store(ev.StageID, agentType)
 		o.Trigger(ev.StageID, EvAskUser, GuardCtx{Phase: agentType}, "")
 		return nil
 	}
@@ -531,6 +538,28 @@ func (o *Orchestrator) hasOpenQuestion(stageID, phase string) bool {
 	return false
 }
 
+// correctPhaseForState возвращает корректную фазу для возврата из awaiting_user_input,
+// основываясь на текущем состоянии FSM, а не на фазе из имени файла вопроса.
+// Агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
+// поэтому мы дублируем правило phaseDispatch на основе реального состояния:
+// planning/revising → phasePlanning, всё остальное → фаза из файла (обычно корректна).
+func (o *Orchestrator) correctPhaseForState(current state.StageStatus, filePhase string) string {
+	if current == state.StatusPlanning || current == state.StatusRevising {
+		return phasePlanning
+	}
+	return filePhase
+}
+
+// popPreAskPhase читает и удаляет сохранённую фазу для стейджа.
+// Если запись отсутствует (напр. перезапуск afm без перехода через EvAskUser),
+// возвращает fallback — фазу из имени файла вопроса.
+func (o *Orchestrator) popPreAskPhase(stageID, fallback string) string {
+	if v, ok := o.preAskPhase.LoadAndDelete(stageID); ok {
+		return v.(string)
+	}
+	return fallback
+}
+
 // onUserAnswered resumes a stage that was paused on awaiting_user_input.
 // If the agent is still running (its bash loop is waiting for answer.json),
 // NotifyAnswer already transitioned the status — this is a no-op.
@@ -541,12 +570,12 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 	}
 
 	data, _ := ev.Data.(map[string]any)
-	phase, _ := data["phase"].(string)
-	if phase == "" {
+	rawPhase, _ := data[keyPhase].(string)
+	if rawPhase == "" {
 		return nil
 	}
 
-	if o.hasOpenQuestion(ev.StageID, phase) {
+	if o.hasOpenQuestion(ev.StageID, rawPhase) {
 		return nil
 	}
 
@@ -554,6 +583,9 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 	if stage == nil {
 		return nil
 	}
+
+	// Используем корректную фазу из preAskPhase, а не сырую из имени файла вопроса.
+	phase := o.popPreAskPhase(ev.StageID, rawPhase)
 
 	// Agent exited before the user answered. Restart it so it can read
 	// answer.json (bash loop exits immediately since the file now exists).
