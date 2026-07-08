@@ -6,7 +6,7 @@ Domain: driving a flow run end-to-end and observing its events. Audience: `pkg/s
 o := orchestrator.New(orchestrator.Options{
     RunDir: runDir, Stages: f.Stages, Store: store, Config: cfg,
     Prompts: prompts, DashboardURL: dashboardURL,
-    ProxyURL: proxyURL, ProxyShimDir: proxyShimDir,
+    ProxyURL: proxyURL, ProxyShimDir: proxyShimDir, GlobalPrompt: f.Prompt,
 })
 go func() { _ = o.Run(ctx) }()
 o.SetDashboardURL(actualAddr) // once the server has actually bound its port

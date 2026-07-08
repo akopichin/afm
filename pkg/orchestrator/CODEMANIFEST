@@ -253,7 +253,7 @@ Annotations: |
     Constraints:
     - Отсутствующие планы дают предупреждающий комментарий, не ошибку
 
-"Options(runDir string, stages []Stage, store Store, config Config, prompts Prompts, runner Runner, dashboardURL string, proxyURL string, proxyShimDir string)":
+"Options(runDir string, stages []Stage, store Store, config Config, prompts Prompts, runner Runner, dashboardURL string, proxyURL string, proxyShimDir string, globalPrompt string)":
   location: orchestrator.go
   annotations: |
     Orchestration-зона. Конфигурация оркестратора.
@@ -278,6 +278,9 @@ Annotations: |
       Адрес встроенного proxy, пробрасывается в окружение executor'а.
     "ProxyShimDir -> string": |
       Директория shim'а, пробрасывается в PATH executor'а.
+    "GlobalPrompt -> string": |
+      Общий (root-level) промпт флоу (Flow.Prompt, pkg/flow), пробрасывается во все вызовы
+      prompts.Build.
 
 "Prompts(planning string, implementation string, review string, summary string)":
   location: orchestrator.go
@@ -328,6 +331,10 @@ Annotations: |
       ValidatePlan -> `PlanIssues`, повторный запрос секций —
       только если !IsClean(). Цикл завершается, когда снимок `RunState` (Store.Snapshot) показывает
       все стадии терминальными (`StageState`.Status ∈ {done, failed}, см. IsTerminal).
+
+      Каждый из 5 вызовов prompts.Build (planning, повтор planning/revise, implementation,
+      inline-review, standalone review) передаёт значение GlobalPrompt из `Options` в поле
+      GlobalPrompt импортированного `Inputs`.
     "Approve(ctx string, stageID string) -> err:error": |
       Утверждает план стадии.
     "Revise(ctx string, stageID string, feedback string) -> err:error": |

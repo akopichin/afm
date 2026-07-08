@@ -12,6 +12,10 @@ import (
 
 var rootDir string
 
+// version вшивается через -ldflags "-X main.version=…" при сборке
+// (Makefile build/install, Dockerfile.runtime ARG AFM_VERSION). По умолчанию "dev".
+var version = "dev"
+
 // fmDir возвращает путь к служебному каталогу .afm относительно rootDir.
 // rootDir задаётся флагом --dir, иначе переменной AFM_DIR, иначе "."
 // (PersistentPreRunE в корневой команде).
@@ -52,6 +56,7 @@ func newRootCmd() *cobra.Command {
 			return nil
 		},
 	}
+	root.Version = version // cobra регистрирует флаг --version
 	root.PersistentFlags().StringVar(&rootDir, "dir", "", "base directory for .afm (default: current dir, env: AFM_DIR)")
 	root.AddCommand(
 		newRunCmd(),

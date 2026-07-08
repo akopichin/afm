@@ -418,3 +418,35 @@ stages:
 		t.Errorf("prompt not parsed, got %q", f.Stages[0].Prompt)
 	}
 }
+
+func TestParseRootPrompt(t *testing.T) {
+	yaml := `
+name: f
+description: d
+prompt: |
+  Always write commit messages in Russian.
+stages:
+  - id: s1
+    name: S1
+    description: d
+    agents: [implementation]
+    plan: docs/plans/existing.md
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(f.Prompt, "Always write commit messages in Russian") {
+		t.Errorf("root prompt not parsed, got %q", f.Prompt)
+	}
+}
+
+func TestParseRootPromptEmpty(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, validYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Prompt != "" {
+		t.Errorf("root prompt: got %q want empty", f.Prompt)
+	}
+}

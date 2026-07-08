@@ -121,8 +121,12 @@ func (s *Stage) NeedsPlanning() bool {
 
 // Flow is the top-level structure parsed from a flow YAML file.
 type Flow struct {
-	Name        string  `yaml:"name"`
-	Description string  `yaml:"description"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	// Prompt is shared text added to the system prompt of every stage and
+	// every phase (planning/implementation/review). Empty value does not
+	// change behavior.
+	Prompt      string  `yaml:"prompt"`
 	MaxParallel int     `yaml:"max_parallel"`
 	Stages      []Stage `yaml:"stages"`
 }

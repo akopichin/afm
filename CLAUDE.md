@@ -267,9 +267,17 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 
 ### Публикация нового образа
 
+Версионированный релиз (SemVer, авто-бамп) — пушит иммутабельный `akopichin/afm:vX.Y.Z` и rolling `:latest`:
+
 ```bash
-make docker-push   # собирает Dockerfile.runtime и пушит в akopichin/afm:latest
+make release-patch   # v1.2.3 → v1.2.4  (bugfix)
+make release-minor   # v1.2.3 → v1.3.0  (новая фича, обратная совместимость)
+make release-major   # v1.2.3 → v2.0.0  (breaking change)
 ```
+
+`scripts/release.sh` читает последний SemVer git-тег, бампит уровень, собирает имидж с двумя тегами и пушит оба; git-тег создаётся локально только после успешного пуша (push тега в remote — вручную: `git push origin vX.Y.Z`). Версия вшита в бинарник: `docker run akopichin/afm:vX.Y.Z afm --version` покажет тег.
+
+`make docker-push` — dev-only, пушит только `:latest` (быстрая итерация без релиза). Чтобы выдать конкретную версию — используй `:vX.Y.Z` нужного релиза.
 
 ### Отладка
 

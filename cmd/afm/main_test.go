@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +48,23 @@ func TestFmDir(t *testing.T) {
 		if got := fmDir(); got != want {
 			t.Errorf("fmDir() with rootDir=%q = %q, want %q", root, got, want)
 		}
+	}
+}
+
+// TestRootVersionOutput проверяет, что корневая команда печатает версию по --version.
+// cobra регистрирует --version только если cmd.Version != "".
+func TestRootVersionOutput(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--version"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--version execute: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, version) {
+		t.Errorf("--version output=%q, want it to contain %q", got, version)
 	}
 }

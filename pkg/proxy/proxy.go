@@ -92,6 +92,10 @@ func (p *Proxy) captureUsage(tw *teeResponseWriter, r *http.Request) {
 	if p.usageLogPath == "" {
 		return
 	}
+	// Non-200 responses (errors, rate limits, etc.) carry no usage field — skip silently.
+	if tw.statusCode != 0 && tw.statusCode != http.StatusOK {
+		return
+	}
 	contentType := tw.w.Header().Get("Content-Type")
 	record, err := ParseUsage(contentType, tw.buf.String())
 	if err != nil {
@@ -129,8 +133,9 @@ func passthroughTo(upstream string) *httputil.ReverseProxy {
 // concurrent requests. Forwards are immediate on every Write, so client-visible
 // streaming latency is unaffected — capture only happens after the handler returns.
 type teeResponseWriter struct {
-	w   http.ResponseWriter
-	buf bytes.Buffer
+	w          http.ResponseWriter
+	buf        bytes.Buffer
+	statusCode int
 }
 
 func (tw *teeResponseWriter) Header() http.Header { return tw.w.Header() }
@@ -140,4 +145,7 @@ func (tw *teeResponseWriter) Write(b []byte) (int, error) {
 	return tw.w.Write(b)
 }
 
-func (tw *teeResponseWriter) WriteHeader(code int) { tw.w.WriteHeader(code) }
+func (tw *teeResponseWriter) WriteHeader(code int) {
+	tw.statusCode = code
+	tw.w.WriteHeader(code)
+}

@@ -36,3 +36,9 @@ for _, in := range stage.Inputs {
 
 `Input` unmarshals from either a bare string (`"stage.artifact"`) or an object (`{ref, optional}`) —
 callers do not need to special-case either form; `UnmarshalYAML` normalizes both.
+
+## Reading the root prompt
+
+`f.Prompt` holds the optional root-level `prompt:` directive from `flow.yaml`. It is
+forwarded verbatim into `orchestrator.Options.GlobalPrompt` by `cmd/afm`; an empty
+value (`""` — YAML key absent) means "no root prompt", not an error.

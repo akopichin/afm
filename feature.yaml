@@ -1,4 +1,4 @@
-name: Goga feature
+name: preprompt
 description: "Feature implementation"
 
 stages:
@@ -82,6 +82,7 @@ stages:
       Review the design document `<git branch --show-current>.md`
     prompt: |
       Review the design document `<git branch --show-current>.md`
+      If goga isn't installed install it with pip install goga && goga connect claude
     agents: [planning, implementation]
     skills:
       - goga-review-design

@@ -4,6 +4,9 @@ PROJECT_NAME=afm
 export GO111MODULE=on
 GOENV:=GO111MODULE=on
 
+# version вшивается в бинарник через -ldflags. git describe → тег/SHA, иначе "dev".
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 GOLANGCI_BIN=$(LOCAL_BIN)/golangci-lint
 GOLANGCI_TAG=v2.11.4
 
@@ -19,7 +22,7 @@ $(GOLANGCI_BIN): $(LOCAL_BIN)
 bindeps: $(GOLANGCI_BIN)
 
 build:
-	$(GOENV) CGO_ENABLED=0 go build -v -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/afm
+	$(GOENV) CGO_ENABLED=0 go build -v -ldflags "-X main.version=$(VERSION)" -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/afm
 
 test:
 	$(GOENV) go test ./... -v -race
@@ -41,7 +44,7 @@ clean:
 # codesign -s - создаёт ad-hoc подпись: macOS 26+ убивает неподписанные бинарники
 # с SIGKILL (Code Signature Invalid) при запуске любого subcommand.
 install:
-	$(GOENV) go install ./cmd/afm
+	$(GOENV) go install -ldflags "-X main.version=$(VERSION)" ./cmd/afm
 	@src=$$(go env GOPATH)/bin/$(PROJECT_NAME); \
 	codesign -f -s - $$src && echo "codesigned: $$src"; \
 	for f in $(HOME)/homebrew/bin/afm; do \
@@ -68,7 +71,7 @@ DOCKER_TAG   := latest
 .PHONY: docker-build docker-push docker-run
 
 docker-build:
-	docker build -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	docker build --build-arg AFM_VERSION=$(VERSION) -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 docker-push: docker-build
 	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
@@ -81,3 +84,11 @@ docker-run:
 	  -e AFM_HOST_UID=$(shell id -u) -e AFM_HOST_GID=$(shell id -g) \
 	  -e ANTHROPIC_API_KEY \
 	  $(DOCKER_IMAGE):$(DOCKER_TAG) $(ARGS)
+
+.PHONY: release-patch release-minor release-major
+release-patch:
+	./scripts/release.sh patch
+release-minor:
+	./scripts/release.sh minor
+release-major:
+	./scripts/release.sh major

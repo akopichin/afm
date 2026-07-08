@@ -31,6 +31,9 @@ Annotations: |
        в системный блок правил, затем добавляет секции описания стадии, зависимостей/артефактов,
        плана/предыдущего плана/фидбека/retry-контекста/примера вывода — каждая экранируется
        через escapeTags
+    1b. Если поле GlobalPrompt входного `in` непусто — добавляет блок global_prompt с содержимым,
+        экранированным через escapeTags, сразу после закрывающего system_rules, до секций context/
+        stage; при пустом GlobalPrompt блок не рендерится вовсе (сохранение обратной совместимости)
     2. Если стадия интерактивна (Interactive=true) — добавляет внутрь системного блока правил
        отдельный подблок "interactive rules", инструктирующий агента:
        a. писать файл вопроса "phaseAgent.id.question.json" инструментом Write строго внутри
@@ -54,7 +57,7 @@ Annotations: |
   annotations: |
     Экранирует служебные теги для использования в тексте повторного промпта (re-prompt).
 
-"Inputs(template string, stage Stage, phaseAgent Agent, dependencyPlans string, artifacts string, plan string, previousPlan string, feedback string, retryContext string, stageDir string, interactive bool, outputContractMD string, exampleOutput string)":
+"Inputs(template string, stage Stage, phaseAgent Agent, dependencyPlans string, artifacts string, plan string, previousPlan string, feedback string, retryContext string, stageDir string, interactive bool, outputContractMD string, exampleOutput string, globalPrompt string)":
   location: builder.go
   annotations: |
     Входные данные для сборки промпта одной фазы (planning/implementation/review) одной стадии.
@@ -88,6 +91,9 @@ Annotations: |
       Markdown-описание контракта результата.
     "ExampleOutput -> string": |
       Пример ожидаемого результата.
+    "GlobalPrompt -> string": |
+      Общий (root-level) промпт флоу (Flow.Prompt, импорт pkg/flow через cmd/afm/pkg/orchestrator).
+      Рендерится в блок <global_prompt> только если непусто.
 
 "PlanIssues(missingSections []string)":
   location: validator.go

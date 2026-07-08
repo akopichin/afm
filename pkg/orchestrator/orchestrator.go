@@ -70,6 +70,7 @@ type Options struct {
 	DashboardURL string          // e.g. "http://127.0.0.1:9876"
 	ProxyURL     string          // forwarded to executor env as ANTHROPIC_BASE_URL
 	ProxyShimDir string          // forwarded to executor env PATH prefix
+	GlobalPrompt string          // Flow.Prompt, forwarded to every prompts.Build call
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -933,6 +934,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 			Interactive:      s.Interactive,
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext,
+			GlobalPrompt:     o.opts.GlobalPrompt,
 		})
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, "planning.log")
@@ -1028,6 +1030,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 			Interactive:      s.Interactive,
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext,
+			GlobalPrompt:     o.opts.GlobalPrompt,
 		})
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, "planning-revision.log")
@@ -1103,6 +1106,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext + stageDirNote,
+			GlobalPrompt:    o.opts.GlobalPrompt,
 		})
 		logFile := filepath.Join(stageDir, "implementation.log")
 
@@ -1120,6 +1124,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 				Artifacts:       artCtx,
 				StageDir:        stageDir,
 				Interactive:     s.Interactive,
+				GlobalPrompt:    o.opts.GlobalPrompt,
 			})
 			reviewLog := filepath.Join(stageDir, "review.log")
 			rr := o.runnerFor(s, phaseReview)
@@ -1157,6 +1162,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext,
+			GlobalPrompt:    o.opts.GlobalPrompt,
 		})
 		reviewLog := filepath.Join(stageDir, "review.log")
 		rr := o.runnerFor(s, phaseReview)

@@ -27,15 +27,20 @@ Annotations: |
     Строковый enum типа встроенного агента (type AgentType string). Значения:
     planning (AgentPlanning), implementation (AgentImplementation), review (AgentReview).
 
-"Flow(name string, description string, maxParallel int, stages []Stage)":
+"Flow(name string, description string, prompt string, maxParallel int, stages []Stage)":
   location: flow.go
   annotations: |
     Верхнеуровневая структура, распарсенная из flow YAML.
+    `prompt`: общий текст, добавляемый в системный промпт каждой стадии и каждой фазы
+    (planning/implementation/review); пустое значение не меняет поведение.
   properties:
     "Name -> string": |
       Имя флоу.
     "Description -> string": |
       Описание флоу.
+    "Prompt -> string": |
+      Общий (root-level) промпт флоу, применяется ко всем стадиям и фазам. Пусто/отсутствует —
+      поведение не меняется.
     "MaxParallel -> int": |
       Максимум параллельных стадий.
     "Stages -> []Stage": |

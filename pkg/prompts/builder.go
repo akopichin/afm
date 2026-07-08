@@ -30,6 +30,7 @@ type Inputs struct {
 	Interactive      bool
 	OutputContractMD string
 	ExampleOutput    string
+	GlobalPrompt     string
 }
 
 func Build(in Inputs) string {
@@ -70,6 +71,12 @@ func Build(in Inputs) string {
 		sb.WriteString("</interactive_rules>\n")
 	}
 	sb.WriteString("\n</system_rules>\n\n")
+
+	if in.GlobalPrompt != "" {
+		sb.WriteString("<global_prompt>\n")
+		sb.WriteString(escapeTags(in.GlobalPrompt))
+		sb.WriteString("\n</global_prompt>\n\n")
+	}
 
 	if in.DependencyPlans != "" || in.Artifacts != "" {
 		sb.WriteString("<context>\n")
@@ -152,6 +159,8 @@ var tagReplacer = strings.NewReplacer(
 	"<interactive_rules>", "<\u200binteractive_rules>",
 	"</prompt>", "</\u200bprompt>",
 	"<prompt>", "<\u200bprompt>",
+	"</global_prompt>", "</\u200bglobal_prompt>",
+	"<global_prompt>", "<\u200bglobal_prompt>",
 )
 
 func escapeTags(s string) string {

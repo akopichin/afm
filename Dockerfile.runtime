@@ -2,7 +2,8 @@
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 go build -o /afm ./cmd/afm
+ARG AFM_VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-X main.version=$AFM_VERSION" -o /afm ./cmd/afm
 
 # Stage 2: runtime environment
 FROM ubuntu:24.04

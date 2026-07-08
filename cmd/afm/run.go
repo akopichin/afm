@@ -171,6 +171,7 @@ func newRunCmd() *cobra.Command {
 				Prompts:      prompts,
 				ProxyURL:     proxyAddr,
 				ProxyShimDir: proxyShimDir,
+				GlobalPrompt: f.Prompt,
 			})
 
 			// Disable interactive flags when dashboard is not running
