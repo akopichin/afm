@@ -97,14 +97,52 @@ func (d DockerConfig) GetImage() string {
 	return "akopichin/afm:latest"
 }
 
+// ModelPricing holds a single model's consumption prices in USD per million tokens.
+type ModelPricing struct {
+	InputPerMtok  float64 `yaml:"input_per_mtok"`
+	OutputPerMtok float64 `yaml:"output_per_mtok"`
+	CachePerMtok  float64 `yaml:"cache_per_mtok"`
+}
+
+// PricingConfig is the optional per-model pricing table. A nil/empty Models map
+// means pricing is unconfigured — callers treat the cost metric as fully hidden.
+type PricingConfig struct {
+	Models map[string]ModelPricing `yaml:"models"`
+}
+
+// GetModelPricing returns the pricing for an exact model name.
+// Unknown models (or an unconfigured pricing table) yield ok=false — there is
+// no fuzzy/prefix fallback. A nil map read is safe in Go and never panics.
+func (p PricingConfig) GetModelPricing(model string) (ModelPricing, bool) {
+	pricing, ok := p.Models[model]
+	return pricing, ok
+}
+
+// AccountingConfig controls consumption time-aggregation (bucket width).
+type AccountingConfig struct {
+	BucketMinutes int `yaml:"bucket_minutes"`
+}
+
+// GetBucketMinutes returns BucketMinutes, or 5 when it is 0. A plain int field
+// (not *int) is used by design: the zero value doubles as "unset" since a real
+// 0-minute bucket width would be meaningless.
+func (a AccountingConfig) GetBucketMinutes() int {
+	if a.BucketMinutes == 0 {
+		return 5
+	}
+	return a.BucketMinutes
+}
+
 // Config is the merged configuration for afm.
 type Config struct {
-	Client     ClientConfig   `yaml:"client"`
-	Executor   ExecutorConfig `yaml:"executor"`
-	Server     ServerConfig   `yaml:"server"`
-	Proxy      ProxyConfig    `yaml:"proxy"`
-	Docker     DockerConfig   `yaml:"docker"`
-	PromptsDir string         `yaml:"prompts_dir"`
+	Client     ClientConfig     `yaml:"client"`
+	Executor   ExecutorConfig   `yaml:"executor"`
+	Server     ServerConfig     `yaml:"server"`
+	Proxy      ProxyConfig      `yaml:"proxy"`
+	Docker     DockerConfig     `yaml:"docker"`
+	Pricing    PricingConfig    `yaml:"pricing"`
+	Accounting AccountingConfig `yaml:"accounting"`
+	PromptsDir string           `yaml:"prompts_dir"`
 }
 
 // Default returns the built-in default configuration.
@@ -184,6 +222,12 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Docker.ExtraMounts != nil {
 		dst.Docker.ExtraMounts = overlay.Docker.ExtraMounts
+	}
+	if overlay.Pricing.Models != nil {
+		dst.Pricing.Models = overlay.Pricing.Models
+	}
+	if overlay.Accounting.BucketMinutes != 0 {
+		dst.Accounting.BucketMinutes = overlay.Accounting.BucketMinutes
 	}
 	return nil
 }

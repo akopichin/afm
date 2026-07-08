@@ -16,6 +16,11 @@ Imports:
       - Entry
       - Answer
     From: pkg/mcp
+  - Types:
+      - Accountant
+    Usages:
+      - query_usage
+    From: pkg/accounting
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -31,11 +36,12 @@ Annotations: |
   pkg/executor) для сопоставления записей диалога с текстом ассистента; принимает ответ пользователя
   через AppendAnswer (`Answer`, импорт pkg/mcp).
 
+  Use `query_usage` from Imports for querying consumption aggregates via `Accountant`.
   Use `conventions` for code writing rules and testing. Use `golang` for implementation.
 
 ---
 
-"Config(port int, runDir string, store Store, uiBus UIBus, approveFn string, reviseFn string, retryFn string, dialogAnswerFn string, dialogCancelFn string)":
+"Config(port int, runDir string, store Store, uiBus UIBus, approveFn string, reviseFn string, retryFn string, dialogAnswerFn string, dialogCancelFn string, accountant Accountant)":
   location: server.go
   annotations: |
     Настройки сервера.
@@ -68,6 +74,8 @@ Annotations: |
       Колбэк отмены диалога.
 
       Сигнатура: func(stageID string) error.
+    "Accountant -> Accountant": |
+      Фасад запроса потребления ресурсов (импорт pkg/accounting), используется хендлером /api/usage.
 
 "Server(cfg Config)":
   location: server.go
@@ -94,6 +102,9 @@ Annotations: |
       (по умолчанию allow_custom=true, если поле не задано): пустой options при allow_custom=false —
       400; ответ вне списка options — 400
     - Корень (/) отдаётся статикой из `FS` (импорт pkg/web) через http.FileServer
+    - GET /api/usage?metric=tokens|cost|kb&stage=<id> вызывает `UsageHandler` от `Accountant`;
+      отсутствие секции pricing в конфиге — не ошибка: Accountant.Query возвращает пустой список
+      агрегатов для metric=cost, хендлер отвечает 200 с пустым списком, не ошибкой
   methods:
     "New(cfg Config) -> server:Server": |
       Создаёт сервер.
@@ -104,9 +115,21 @@ Annotations: |
     "Shutdown(ctx string) -> err:error": |
       Плавно останавливает сервер.
 
+"UsageHandler(accountant Accountant) -> handler:http.Handler":
+  location: usage_handler.go
+  annotations: |
+    Фабрика HTTP-обработчика для /api/usage.
+
+    Algorithm:
+    1. Разобрать query-параметры metric (дефолт "tokens") и stage (дефолт "" = все стейджи)
+    2. Валидировать metric ∈ {tokens, cost, kb}; иначе — 400
+    3. Вызвать Query на `accountant`
+    4. При ошибке — 500; иначе — 200 и JSON-массив UsageAggregate
+
 ---
 
 Author: Goga
 CreatedAt: 03/07/26
 Description: |
-  HTTP + WebSocket дашборд afm: API стадий, дозвод/ревизия/ретрай, диалог, стриминг событий.
+  HTTP + WebSocket дашборд afm: API стадий, дозвод/ревизия/ретрай, диалог, стриминг событий,
+  агрегаты потребления ресурсов.

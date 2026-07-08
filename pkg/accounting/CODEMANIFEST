@@ -1,0 +1,223 @@
+Imports:
+  - Types:
+      - UsageRecord
+    Usages:
+      - usage_log
+    From: pkg/proxy
+  - Types:
+      - PricingConfig
+      - ModelPricing
+    From: pkg/config
+  - Types:
+      - Store
+      - Transition
+    Usages:
+      - store_facade
+    From: pkg/state
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  golang: golang
+
+Annotations: |
+  Аккаунтинг потребления ресурсов (токены/деньги/KB) по стейджам: комбинирует per-request `UsageRecord`
+  (импорт pkg/proxy, real-time при активном прокси) с jsonl result-событиями (авторитетные токены +
+  total_cost_usd, фолбэк без прокси) и атрибуцией по времени через историю переходов `Store` (метод
+  History, импорт pkg/state).
+  Стоимость дерайвится из `PricingConfig` (импорт pkg/config) — единый механизм, опционально.
+
+  Use `store_facade` from Imports for reading stage transition history via `Store`.
+  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+
+---
+
+"Accountant(runDir string, store Store, pricing PricingConfig, bucketMinutes int)":
+  location: accountant.go
+  annotations: |
+    Фасад запроса потребления для одного рана. Конструируется один раз, держит переданные `runDir`,
+    `store`, `pricing` и `bucketMinutes` как внутреннее состояние (без экспортируемых свойств —
+    аналогично Proxy/Executor).
+  methods:
+    "NewAccountant(runDir string, store Store, pricing PricingConfig, bucketMinutes int) -> accountant:Accountant": |
+      Конструктор.
+      `bucketMinutes`: ширина временного бакета для группировки в `Aggregate`. Вызывающая сторона
+      отвечает за разрешение дефолта заранее (см. config.AccountingConfig.GetBucketMinutes) — эта
+      функция не подставляет 5 сама.
+    "Query(metric string, stage string) -> aggregates:[]UsageAggregate, err:error": |
+      `metric`: одно из tokens|cost|kb.
+      `stage`: пусто = все стейджи.
+
+      Algorithm:
+      1. `LoadUsageRecords` из runDir/usage.jsonl (отсутствие файла → пустой список, не ошибка)
+      2. `LoadStageWindows` от store
+      3. Для каждого stageID из store.Snapshot().StageOrder — `ReadResultUsage` по его
+         phase.jsonl-файлам (planning/implementation/review)
+      4. `Aggregate` от накопленных records, windows, resultUsages, pricing, metric, stage и
+         bucketMinutes (сохранённого при конструировании)
+
+      Requirements:
+      - metric=cost при пустом pricing.Models → пустой список результатов, не ошибка
+
+      Constraints:
+      - Не мутирует `Store`/events.jsonl — read-only потребитель
+
+"DeriveCost(inputTokens int, outputTokens int, cacheTokens int, pricing ModelPricing) -> costUsd:float64":
+  location: cost.go
+  annotations: |
+    Переводит токены в стоимость по ставкам `pricing`.
+    Вызывающая сторона отвечает за получение `pricing` через `PricingConfig`.GetModelPricing заранее —
+    эта функция не проверяет наличие цены.
+
+    Algorithm:
+    1. Умножить `inputTokens` на InputPerMtok, разделить на миллион (ставка задана за миллион токенов)
+    2. То же для `outputTokens` на OutputPerMtok и для `cacheTokens` на CachePerMtok
+    3. Просуммировать три величины в costUsd
+
+"StageWindow(stageID string, start string, end string)":
+  location: attribution.go
+  annotations: |
+    Временное окно выполнения стейджа.
+  properties:
+    "StageID -> string": |
+      ID стейджа.
+    "Start -> string": |
+      Начало окна (RFC3339).
+    "End -> string": |
+      Конец окна (RFC3339). Пусто — стейдж ещё выполняется.
+
+"LoadStageWindows(store Store) -> windows:[]StageWindow, err:error":
+  location: attribution.go
+  annotations: |
+    Строит окна выполнения стейджей из истории переходов.
+
+    Algorithm:
+    1. Вызвать History на `store` — получить полную историю `Transition`, отсортированную по
+       возрастанию поля Time
+    2. Для каждого stageID открыть окно в момент ухода из pending в любой активный статус
+       (planning/running/awaiting_* — не только running: планировочные и интерактивные стейджи до
+       running не доходят, но потребляют токены в своём окне); следующий по времени терминальный
+       переход (done либо failed) той же стадии закрывает окно своим Time → `StageWindow`
+       (Start из Time открытия, End из Time терминала)
+    3. Стейдж с открытым окном, но без последующего терминального перехода — End=""
+
+    Constraints:
+    - Повторный запуск стадии после явной неудачи (failed→pending→активный статус) даёт отдельное окно
+
+"LoadUsageRecords(path string) -> records:[]UsageRecord, err:error":
+  location: reader.go
+  annotations: |
+    Читает usage.jsonl (формат владеет pkg/proxy, см. `UsageRecord` и `usage_log`) построчно.
+
+    Constraints:
+    - Отсутствующий файл → пустой список, err=nil (прокси не был активен этот ран — не ошибка)
+
+"AttributeStage(record UsageRecord, windows []StageWindow) -> stageID:string, ok:bool":
+  location: attribution.go
+  annotations: |
+    Сопоставляет `record`'s Timestamp с окном стейджа.
+
+    Algorithm:
+    1. Найти все `windows`, чей интервал [Start, End) (End пусто = не закрыт, считать открытым до
+       текущего момента) содержит `record`'s Timestamp
+    2. Ровно одно совпадение → вернуть его StageID, ok:true
+    3. Ноль совпадений или более одного совпадения (перекрывающиеся окна) → ok:false
+
+    Constraints:
+    - Неоднозначное перекрытие окон (параллельные top-level стейджи) сознательно даёт ok:false —
+      точный алгоритм разрешения уточняется на design-стадии, см. Risks в docs/tasks/master.md
+
+"ReadResultUsage(jsonlPath string) -> usage:ResultUsage, ok:bool":
+  location: reader.go
+  annotations: |
+    Читает терминальное result-событие из phase.jsonl (формат владеет pkg/executor — файловая
+    конвенция, не импортируется как Go-тип: поля total_cost_usd, usage с вложенными input_tokens/
+    output_tokens/cache_creation_input_tokens/cache_read_input_tokens, session_id, duration_ms).
+
+    Algorithm:
+    1. Прочитать `jsonlPath` построчно, найти последнюю строку с полем type равным "result"
+    2. Разобрать её поля в `ResultUsage`
+
+    Constraints:
+    - ok:false — файл отсутствует, нечитаем, либо не содержит result-события (аналогично
+      pkg/executor.WrittenFiles' "отсутствующий лог → пусто")
+
+"ResultUsage(stageID string, inputTokens int, outputTokens int, cacheCreationTokens int, cacheReadTokens int, totalCostUsd float64, durationMs int, sessionID string)":
+  location: reader.go
+  annotations: |
+    Авторитетные токены + стоимость + метаданные из result-события одной фазы стейджа.
+  properties:
+    "StageID -> string": |
+      ID стейджа, к которому относится эта фаза.
+    "InputTokens -> int": |
+      Входные токены (авторитетные, из клиента).
+    "OutputTokens -> int": |
+      Выходные токены.
+    "CacheCreationTokens -> int": |
+      Токены создания кэша.
+    "CacheReadTokens -> int": |
+      Токены чтения из кэша.
+    "TotalCostUsd -> float64": |
+      Стоимость, посчитанная клиентом (используется только для кросс-чека, не как отображаемая метрика).
+    "DurationMs -> int": |
+      Длительность фазы в миллисекундах.
+    "SessionID -> string": |
+      ID сессии клиента.
+
+"Aggregate(records []UsageRecord, windows []StageWindow, resultUsages []ResultUsage, pricing PricingConfig, metric string, stage string, bucketMinutes int) -> aggregates:[]UsageAggregate":
+  location: aggregate.go
+  annotations: |
+    Строит агрегаты потребления.
+
+    Algorithm:
+    1. Атрибутировать каждую запись из `records` через `AttributeStage`; отбросить неатрибутированные
+    2. Отфильтровать по `stage` (пусто = все стейджи)
+    3. Если у стейджа нет proxy-записей (нет активного прокси этот ран) — использовать
+       соответствующие `resultUsages` как fallback-источник токенов (metric=tokens только: `ResultUsage`
+       не содержит Model, поэтому pricing.GetModelPricing для него невозможен — при metric=cost
+       такой стейдж не попадает в агрегат, TotalCostUsd не используется как источник отображаемой
+       стоимости, см. Constraints)
+    4. Вычислить per-record значение выбранной метрики:
+       - metric=tokens: сумма InputTokens+OutputTokens+CacheCreationTokens+CacheReadTokens записи
+         (для fallback `ResultUsage` — те же четыре одноимённых поля)
+       - metric=cost: получить `ModelPricing` через pricing.GetModelPricing по модели записи; при
+         ok=false — пропустить запись (не включать в агрегат); иначе значение — `DeriveCost` от
+         InputTokens, OutputTokens и суммы CacheCreationTokens+CacheReadTokens записи с найденным
+         `ModelPricing`
+       - metric=kb: сумма RequestBytes+ResponseBytes записи, делённая на 1024
+    5. Вычислить TimeBucket записи — начало `bucketMinutes`-минутного интервала UTC wall-clock,
+       содержащего её Timestamp (округление вниз до ближайшей границы, кратной `bucketMinutes` минутам
+       от начала часа; для fallback `ResultUsage`, у которого нет собственного Timestamp, используется
+       Start её `StageWindow`)
+    6. Сгруппировать по стейджу и вычисленному на шаге 5 TimeBucket, просуммировать вычисленные на
+       шаге 4 per-record значения в поле Value результирующего `UsageAggregate`
+
+    Requirements:
+    - `bucketMinutes` больше нуля (вызывающая сторона уже разрешила дефолт через
+      config.AccountingConfig.GetBucketMinutes, см. `Accountant`)
+
+    Constraints:
+    - TotalCostUsd из `ResultUsage` никогда не суммируется в `UsageAggregate` — единственный
+      источник отображаемой стоимости — дерайв из токенов через `PricingConfig` (см. Description задачи,
+      docs/tasks/master.md)
+
+"UsageAggregate(stageID string, timeBucket string, metric string, value float64)":
+  location: aggregate.go
+  annotations: |
+    Одна строка агрегата: стейдж × временной бакет × метрика → значение.
+  properties:
+    "StageID -> string": |
+      ID стейджа.
+    "TimeBucket -> string": |
+      Начало временного бакета (RFC3339) — см. `Aggregate` шаг 5 для правила вычисления границы.
+    "Metric -> string": |
+      Одно из tokens|cost|kb.
+    "Value -> float64": |
+      Значение метрики за бакет.
+
+---
+
+Author: Goga
+CreatedAt: 07/07/26
+Description: |
+  Аккаунтинг потребления ресурсов (токены/деньги/KB) по стейджам: атрибуция, дерайв стоимости,
+  агрегация по стейджу/времени/метрике.

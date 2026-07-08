@@ -23,6 +23,11 @@ openBrowser := cfg.Server.IsOpenBrowser() // true if Server.OpenBrowser is nil
 proxyEnabled := cfg.Proxy.IsEnabled()  // true if Proxy.Enabled is nil
 dockerEnabled := cfg.Docker.IsDockerEnabled() // checks AFM_USE_DOCKER if Docker.Enabled is nil
 image := cfg.Docker.GetImage()        // AFM_DOCKER_IMAGE takes priority if set
+pricing, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5")
+if !ok {
+    // no pricing configured for this model (or the pricing: section is absent entirely) —
+    // omit the cost metric, show tokens/KB only
+}
 ```
 
 ## Consuming sub-configs

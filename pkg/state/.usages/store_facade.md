@@ -1,5 +1,5 @@
 Domain: reading and mutating persistent run state. Audience: `pkg/orchestrator`, `pkg/server`,
-`cmd/afm`.
+`cmd/afm`, `pkg/accounting` (read-only: `History` + `Snapshot` only).
 
 ## Opening a store
 
@@ -18,6 +18,26 @@ status := store.Get(stageID)      // current StageStatus
 snap := store.Snapshot()          // full RunState
 if snap.AllDone() { ... }
 ```
+
+## Reading transition history (read-only: pkg/accounting)
+
+`pkg/accounting` derives stage execution windows from the full transition history — it needs only
+`History()` and `Snapshot()`, never `Apply`:
+
+```go
+history, err := store.History() // []Transition, ascending Seq (append order of the event log)
+if err != nil {
+    return err
+}
+// Read-only: a defensive copy of the in-memory replayed log — does not reopen events.jsonl.
+// Ascending Seq implies non-decreasing Time. A run with zero transitions -> empty slice, never an error.
+for _, t := range history {
+    // t.From / t.To are StageStatus; t.Time is the transition timestamp; t.StageID is the stage
+}
+```
+
+`pkg/accounting` consumes the store through a local pointer-free `Store` interface (`History()`, `Snapshot()`)
+that `*state.Store` satisfies structurally — keeping accounting's signatures pointer-free per the Go DSL.
 
 ## Applying a transition (write path — restricted to pkg/orchestrator/fsm.go)
 

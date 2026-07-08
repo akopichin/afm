@@ -34,6 +34,16 @@
     var $dialogPending = document.getElementById("dialog-pending");
     var $dialogToggle = document.getElementById("dialog-toggle");
 
+    // ---- Consumption panel refs ----
+    var $usagePanel = document.getElementById("usage-panel");
+    var $usageToggle = document.getElementById("usage-toggle");
+    var $usageMetricSwitch = document.getElementById("usage-metric-switch");
+    var $usageStageSelect = document.getElementById("usage-stage-select");
+    var $usageChart = document.getElementById("usage-chart");
+    var $usageEmpty = document.getElementById("usage-empty");
+    var $usageTotal = document.getElementById("usage-total");
+    var $usageMeta = document.getElementById("usage-meta");
+
     // ---- State ----
     var state = null;          // RunState from API
     var selectedStageID = null;
@@ -50,6 +60,24 @@
     var dialogState = { pending: null };
     var dialogEntries = [];
     var lastFlashedQuestionID = null;
+
+    // ---- Consumption panel state ----
+    // currentUsageMetric по умолчанию "tokens"; "cost" рендерится только если пробный
+    // запрос /api/usage?metric=cost вернул непустой массив (pricing не настроен → []).
+    var currentUsageMetric = "tokens";
+    var currentUsageStage = "";     // "" = все стадии
+    var usageInited = false;
+    var usageStageSignature = null; // чтобы не перестраивать <select> на каждый апдейт
+    var usageRefreshTimer = null;
+
+    // Палитра графика — дублирует CSS-токены явными hex: var() в SVG presentation
+    // attributes не работает, а генерить SVG удобнее строками.
+    var USAGE_COLORS = {
+        mint: "#6fd4cc",
+        amber: "#e5d442",
+        inkDim: "#4a8a85",
+        grid: "rgba(111, 212, 204, 0.10)"
+    };
 
     // ---- Special section detection ----
     var SPECIAL_SECTIONS = {
@@ -651,6 +679,245 @@
             : "▴ СВЕРНУТЬ ИСТОРИЮ";
     };
 
+    // ---- Consumption panel ----
+    // Слайд-аут панель потребления: свич метрик (tokens/cost/kb), фильтр по стейджам
+    // (из уже загруженного списка state), hand-rolled SVG-график временного ряда по
+    // []UsageAggregate, сгруппированный по timeBucket. Источник: GET /api/usage.
+
+    // Форматирование значения под метрику (итог и тултипы точек).
+    function formatUsageValue(v, metric) {
+        if (metric === "cost") return formatUsageCost(v);
+        if (metric === "kb") return v.toFixed(1) + " KB";
+        return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " т.";
+    }
+
+    // Стоимость: маленькие суммы показываем с большей точностью (cost обычно < $0.01).
+    function formatUsageCost(v) {
+        if (v === 0) return "$0";
+        if (v < 0.01) return "$" + v.toFixed(4);
+        return "$" + v.toFixed(2);
+    }
+
+    // Компактная подпись для оси Y (помещается в узкую панель).
+    function formatUsageAxis(v, metric) {
+        if (v === 0) return "0";
+        if (metric === "cost") return v < 0.01 ? v.toFixed(3) : v.toFixed(2);
+        if (metric === "kb") return Math.round(v).toString();
+        if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k";
+        return Math.round(v).toString();
+    }
+
+    // "2026-07-07T10:05:00Z" -> "10:05" (подпись точки по оси X).
+    function formatUsageBucket(rfc3339) {
+        var m = /T(\d{2}:\d{2})/.exec(rfc3339 || "");
+        return m ? m[1] : (rfc3339 || "");
+    }
+
+    function usageSum(aggregates) {
+        var s = 0;
+        for (var i = 0; i < aggregates.length; i++) s += aggregates[i].value || 0;
+        return s;
+    }
+
+    // Рисует SVG-график: оси, сетка, area+line, точки с тултипами, подписи бакетов.
+    // Пустой массив → состояние «Нет данных».
+    function renderUsageChart(aggregates) {
+        var metric = currentUsageMetric;
+        if (!aggregates || aggregates.length === 0) {
+            $usageChart.innerHTML = "";
+            $usageEmpty.classList.remove("hidden");
+            return;
+        }
+        $usageEmpty.classList.add("hidden");
+
+        // Сортируем по timeBucket (RFC3339 лексикографически сравним для UTC).
+        var pts = aggregates.slice().sort(function (a, b) {
+            return a.timeBucket < b.timeBucket ? -1 : a.timeBucket > b.timeBucket ? 1 : 0;
+        });
+
+        var W = 320, H = 180;
+        var padL = 38, padR = 10, padT = 12, padB = 24;
+        var plotW = W - padL - padR;
+        var plotH = H - padT - padB;
+
+        var max = 0;
+        for (var i = 0; i < pts.length; i++) if (pts[i].value > max) max = pts[i].value;
+        if (max <= 0) max = 1;
+
+        var n = pts.length;
+        function xAt(idx) {
+            return n <= 1 ? padL + plotW / 2 : padL + (plotW * idx) / (n - 1);
+        }
+        function yAt(v) { return padT + plotH * (1 - v / max); }
+
+        // Горизонтальная сетка + подписи оси Y (4 деления).
+        var ticks = 4;
+        var gridSvg = "";
+        for (var g = 0; g <= ticks; g++) {
+            var gv = (max * g) / ticks;
+            var gy = yAt(gv);
+            gridSvg += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="' + USAGE_COLORS.grid + '" stroke-width="1"/>';
+            gridSvg += '<text x="' + (padL - 6) + '" y="' + (gy + 3).toFixed(1) + '" text-anchor="end" fill="' + USAGE_COLORS.inkDim + '" font-size="8" font-family="inherit">' + formatUsageAxis(gv, metric) + '</text>';
+        }
+
+        // Линия + заливка под ней.
+        var linePts = [];
+        for (var k = 0; k < n; k++) {
+            linePts.push(xAt(k).toFixed(1) + "," + yAt(pts[k].value).toFixed(1));
+        }
+        var baseY = (padT + plotH).toFixed(1);
+        var lineD = "M " + linePts.join(" L ");
+        var areaD = "M " + padL + "," + baseY + " L " + linePts.join(" L ") +
+            " L " + xAt(n - 1).toFixed(1) + "," + baseY + " Z";
+
+        // Точки + подписи оси X (прореживаем, чтобы не налезали).
+        var ptsSvg = "";
+        var labelStep = Math.max(1, Math.ceil(n / 6));
+        for (var p = 0; p < n; p++) {
+            var px = xAt(p), py = yAt(pts[p].value);
+            ptsSvg += '<circle cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1) + '" r="2.4" fill="' + USAGE_COLORS.amber + '"><title>' +
+                escapeHTML(formatUsageBucket(pts[p].timeBucket)) + " · " +
+                escapeHTML(formatUsageValue(pts[p].value, metric)) + "</title></circle>";
+            if (p % labelStep === 0 || p === n - 1) {
+                ptsSvg += '<text x="' + px.toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" fill="' + USAGE_COLORS.inkDim + '" font-size="8" font-family="inherit">' + formatUsageBucket(pts[p].timeBucket) + "</text>";
+            }
+        }
+
+        $usageChart.innerHTML =
+            '<defs><linearGradient id="usageAreaGrad" x1="0" y1="0" x2="0" y2="1">' +
+              '<stop offset="0%" stop-color="' + USAGE_COLORS.mint + '" stop-opacity="0.35"/>' +
+              '<stop offset="100%" stop-color="' + USAGE_COLORS.mint + '" stop-opacity="0.02"/>' +
+            "</linearGradient></defs>" +
+            gridSvg +
+            '<path d="' + areaD + '" fill="url(#usageAreaGrad)" stroke="none"/>' +
+            '<path d="' + lineD + '" fill="none" stroke="' + USAGE_COLORS.mint + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' +
+            ptsSvg;
+    }
+
+    // Загружает агрегаты по текущим metric/stage и перерисовывает график + итог.
+    function loadUsage() {
+        var metric = currentUsageMetric;
+        var stage = currentUsageStage;
+        apiGet("/api/usage?metric=" + encodeURIComponent(metric) + "&stage=" + encodeURIComponent(stage), function (err, text) {
+            if (err) {
+                renderUsageChart([]);
+                $usageTotal.textContent = "—";
+                $usageMeta.textContent = "ошибка запроса";
+                return;
+            }
+            var data;
+            try { data = JSON.parse(text); } catch (_) { data = null; }
+            if (!Array.isArray(data)) data = [];
+            renderUsageChart(data);
+            $usageTotal.textContent = formatUsageValue(usageSum(data), metric);
+            $usageMeta.innerHTML = '<span>' + data.length + " точек</span>" +
+                '<span>' + (stage ? escapeHTML(stage) : "все стадии") + "</span>";
+        });
+    }
+
+    // Один пробный запрос cost: pricing не настроен → сервер вернёт 200 [] → опцию
+    // «Стоимость» прячем на клиенте (не показываем тоггл, который всегда пустой).
+    function probeUsageCost(cb) {
+        apiGet("/api/usage?metric=cost&stage=", function (err, text) {
+            if (err) { cb(false); return; }
+            var data;
+            try { data = JSON.parse(text); } catch (_) { data = null; }
+            cb(Array.isArray(data) && data.length > 0);
+        });
+    }
+
+    // Перестраивает <select> стейджей, если состав списка изменился (не на каждый
+    // апдейт — чтобы не сбрасывать открытый пользователем dropdown). Источник — тот
+    // же state.stage_order/stages, что и у списка стадий, без нового API-вызова.
+    function refreshUsageStageOptions() {
+        if (!state) return;
+        var ids = state.stage_order && state.stage_order.length > 0
+            ? state.stage_order
+            : Object.keys(state.stages).sort();
+        var sig = ids.join(",");
+        if (sig === usageStageSignature) {
+            $usageStageSelect.value = currentUsageStage || "";
+            return;
+        }
+        usageStageSignature = sig;
+
+        var prev = currentUsageStage || "";
+        var html = '<option value="">Все стадии</option>';
+        for (var i = 0; i < ids.length; i++) {
+            var id = ids[i];
+            html += '<option value="' + escapeHTML(id) + '"' +
+                (id === prev ? " selected" : "") + ">" + escapeHTML(id) + "</option>";
+        }
+        $usageStageSelect.innerHTML = html;
+        // Ранее выбранный стейдж исчез из рана — сбрасываем на «все».
+        if (prev && ids.indexOf(prev) === -1) {
+            currentUsageStage = "";
+        }
+        $usageStageSelect.value = currentUsageStage || "";
+    }
+
+    function initUsagePanel() {
+        usageInited = true;
+
+        var metricBtns = $usageMetricSwitch.querySelectorAll(".usage-metric");
+        metricBtns.forEach(function (b) {
+            b.addEventListener("click", function () {
+                var m = b.getAttribute("data-metric");
+                if (!m || m === currentUsageMetric) return;
+                currentUsageMetric = m;
+                metricBtns.forEach(function (x) { x.classList.toggle("active", x === b); });
+                loadUsage();
+            });
+        });
+
+        $usageStageSelect.addEventListener("change", function () {
+            currentUsageStage = $usageStageSelect.value;
+            loadUsage();
+        });
+
+        // Прячем/показываем «Стоимость» по результату пробного cost-запроса.
+        probeUsageCost(function (available) {
+            var costBtn = $usageMetricSwitch.querySelector('[data-metric="cost"]');
+            if (costBtn) costBtn.classList.toggle("hidden", !available);
+            // Если cost был активен, а оказался недоступен — откатываемся на tokens.
+            if (!available && currentUsageMetric === "cost") {
+                currentUsageMetric = "tokens";
+                var tok = $usageMetricSwitch.querySelector('[data-metric="tokens"]');
+                metricBtns.forEach(function (x) { x.classList.toggle("active", x === tok); });
+                loadUsage();
+            }
+        });
+    }
+
+    function openUsagePanel() {
+        $usagePanel.classList.add("open");
+        // aria-hidden на тело (не на aside) — вкладка-тоггл остаётся доступной всегда.
+        $usagePanel.querySelector(".usage-panel-body").setAttribute("aria-hidden", "false");
+        if (!usageInited) initUsagePanel();
+        refreshUsageStageOptions();
+        loadUsage();
+        // Живой апдейт, пока панель открыта (как поллинг лога/событий в остальном UI).
+        if (!usageRefreshTimer) usageRefreshTimer = setInterval(usageRefreshTick, 10000);
+    }
+
+    function closeUsagePanel() {
+        $usagePanel.classList.remove("open");
+        $usagePanel.querySelector(".usage-panel-body").setAttribute("aria-hidden", "true");
+        if (usageRefreshTimer) {
+            clearInterval(usageRefreshTimer);
+            usageRefreshTimer = null;
+        }
+    }
+
+    function usageRefreshTick() {
+        if ($usagePanel.classList.contains("open")) loadUsage();
+    }
+
+    $usageToggle.addEventListener("click", function () {
+        if ($usagePanel.classList.contains("open")) closeUsagePanel();
+        else openUsagePanel();
+    });
+
     // ---- Stage focus helpers ----
     var ACTIVE_STATUSES = { running: 1, planning: 1, revising: 1, retrying: 1, awaiting_user_input: 1 };
 
@@ -740,6 +1007,9 @@
             li.addEventListener("click", onStageClick);
             $stagesList.appendChild(li);
         }
+
+        // Держим фильтр стейджей панели потребления в синхронизации со списком.
+        refreshUsageStageOptions();
     }
 
     // ---- Render detail ----

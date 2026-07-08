@@ -222,6 +222,129 @@ func TestDockerConfig_GetImage(t *testing.T) {
 	})
 }
 
+// TestConfigPricingAccountingFieldsExists is a contract test: Config must expose
+// Pricing (PricingConfig) and Accounting (AccountingConfig) fields, and the new
+// sub-config types must carry their declared properties + getter methods.
+func TestConfigPricingAccountingFieldsExists(t *testing.T) {
+	var cfg config.Config
+
+	// Config fields exist and are assignable to the declared types.
+	cfg.Pricing = config.PricingConfig{
+		Models: map[string]config.ModelPricing{
+			"claude-sonnet-5": {
+				InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3,
+			},
+		},
+	}
+	cfg.Accounting = config.AccountingConfig{BucketMinutes: 5}
+
+	// PricingConfig.GetModelPricing signature: (string) (ModelPricing, bool).
+	pricing, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5")
+	if !ok {
+		t.Fatal("GetModelPricing for configured model must return ok=true")
+	}
+	_ = pricing
+
+	// AccountingConfig.GetBucketMinutes signature: () int.
+	if minutes := cfg.Accounting.GetBucketMinutes(); minutes != 5 {
+		t.Errorf("GetBucketMinutes: got %d, want 5", minutes)
+	}
+}
+
+func TestPricingConfig_GetModelPricingFound(t *testing.T) {
+	p := config.PricingConfig{
+		Models: map[string]config.ModelPricing{
+			"claude-sonnet-5": {InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3},
+		},
+	}
+	got, ok := p.GetModelPricing("claude-sonnet-5")
+	if !ok {
+		t.Fatal("expected ok=true for a configured model")
+	}
+	want := config.ModelPricing{InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3}
+	if got != want {
+		t.Errorf("GetModelPricing: got %+v, want %+v", got, want)
+	}
+}
+
+func TestPricingConfig_GetModelPricingUnknownModel(t *testing.T) {
+	p := config.PricingConfig{
+		Models: map[string]config.ModelPricing{
+			"claude-sonnet-5": {InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3},
+		},
+	}
+	got, ok := p.GetModelPricing("claude-opus-4")
+	if ok {
+		t.Error("expected ok=false for a model not in the table (no fuzzy fallback)")
+	}
+	if got != (config.ModelPricing{}) {
+		t.Errorf("expected zero-value ModelPricing for unknown model, got %+v", got)
+	}
+}
+
+func TestPricingConfig_GetModelPricingNilModelsMap(t *testing.T) {
+	// Zero-value PricingConfig — Models is nil. The lookup must be ok=false and
+	// never panic on the nil-map read.
+	var p config.PricingConfig
+	got, ok := p.GetModelPricing("claude-sonnet-5")
+	if ok {
+		t.Error("expected ok=false when Models is nil")
+	}
+	if got != (config.ModelPricing{}) {
+		t.Errorf("expected zero-value ModelPricing, got %+v", got)
+	}
+}
+
+func TestAccountingConfig_GetBucketMinutes(t *testing.T) {
+	if got := (config.AccountingConfig{}).GetBucketMinutes(); got != 5 {
+		t.Errorf("zero value: got %d, want default 5", got)
+	}
+	if got := (config.AccountingConfig{BucketMinutes: 10}).GetBucketMinutes(); got != 10 {
+		t.Errorf("explicit value: got %d, want 10", got)
+	}
+}
+
+func TestLoadFrom_PricingAccountingOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+pricing:
+  models:
+    claude-sonnet-5:
+      input_per_mtok: 3.0
+      output_per_mtok: 15.0
+      cache_per_mtok: 0.3
+accounting:
+  bucket_minutes: 10
+`)
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pricing, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5")
+	if !ok {
+		t.Fatal("pricing override: expected configured model to be found")
+	}
+	if want := (config.ModelPricing{InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3}); pricing != want {
+		t.Errorf("pricing override: got %+v, want %+v", pricing, want)
+	}
+	if got := cfg.Accounting.GetBucketMinutes(); got != 10 {
+		t.Errorf("accounting override: got %d, want 10", got)
+	}
+}
+
+func TestLoadFrom_PricingAccountingDefaults(t *testing.T) {
+	// With no pricing:/accounting: section, Default() yields a zero-value
+	// Pricing/Accounting — GetModelPricing is ok=false (cost metric hidden),
+	// GetBucketMinutes falls back to 5.
+	cfg := config.Default()
+	if _, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5"); ok {
+		t.Error("default Pricing should be empty (ok=false for every lookup)")
+	}
+	if got := cfg.Accounting.GetBucketMinutes(); got != 5 {
+		t.Errorf("default bucket minutes: got %d, want 5", got)
+	}
+}
+
 func TestLoadFrom_DockerConfig(t *testing.T) {
 	dir := t.TempDir()
 	trueVal := true

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm/assets"
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
@@ -132,7 +133,11 @@ func newRunCmd() *cobra.Command {
 				}
 				if upstream != "" {
 					transforms := proxy.BuildTransforms(upstream, cfg.Proxy.Transforms.ZAI)
-					p := proxy.New(upstream, transforms)
+					// usageLogPath: прокси пишет сюда по одной строке UsageRecord на каждый
+					// проксированный ответ (и Transform-обработанный, и passthrough). Accountant
+					// ниже читает этот же файл — тот же runDir, тот же "usage.jsonl".
+					usageLogPath := filepath.Join(runDir, "usage.jsonl")
+					p := proxy.New(upstream, transforms, usageLogPath)
 					addr, err := p.Start(cfg.Proxy.Port)
 					if err != nil {
 						return fmt.Errorf("start proxy: %w", err)
@@ -151,6 +156,12 @@ func newRunCmd() *cobra.Command {
 					fmt.Println("  proxy: skipped (no upstream) — set proxy.upstream in config or export ANTHROPIC_BASE_URL to enable")
 				}
 			}
+
+			// Accountant строится безусловно: даже без активного прокси этот рана он
+			// работает — store.History() даёт окна этапов, а <phase>.jsonl даёт
+			// result-fallback по токенам. pricing/accounting могут быть нулевыми —
+			// Query тогда вернёт пустой срез для cost, это валидный путь, не ошибка.
+			accountant := accounting.NewAccountant(runDir, store, cfg.Pricing, cfg.Accounting.GetBucketMinutes())
 
 			orch := orchestrator.New(orchestrator.Options{
 				RunDir:       runDir,
@@ -175,13 +186,14 @@ func newRunCmd() *cobra.Command {
 			// Start HTTP server if port > 0
 			if cfg.Server.GetPort() > 0 {
 				srv := server.New(server.Config{
-					Port:      cfg.Server.GetPort(),
-					RunDir:    runDir,
-					Store:     store,
-					UIBus:     orch.UIBus(),
-					ApproveFn: orch.Approve,
-					ReviseFn:  orch.Revise,
-					RetryFn:   orch.Retry,
+					Port:       cfg.Server.GetPort(),
+					RunDir:     runDir,
+					Store:      store,
+					Accountant: accountant,
+					UIBus:      orch.UIBus(),
+					ApproveFn:  orch.Approve,
+					ReviseFn:   orch.Revise,
+					RetryFn:    orch.Retry,
 					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
 						return orch.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
 					},

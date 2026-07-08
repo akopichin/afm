@@ -26,6 +26,7 @@ type Store struct {
 	eventsLog *os.File
 	snapshot  *RunState
 	lastSeq   uint64
+	history   []Transition
 	mu        sync.Mutex
 }
 
@@ -49,7 +50,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		}
 	}
 
-	lastSeq, lastGoodOffset, err := replayEvents(eventsPath, rs)
+	history, lastSeq, lastGoodOffset, err := replayEvents(eventsPath, rs)
 	if err != nil {
 		return nil, fmt.Errorf("replay: %w", err)
 	}
@@ -70,6 +71,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		eventsLog: f,
 		snapshot:  rs,
 		lastSeq:   lastSeq,
+		history:   history,
 	}
 
 	// if started from legacy fallback — write synthetic events
@@ -93,6 +95,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 			if _, werr := f.Write(data); werr != nil {
 				return nil, fmt.Errorf("write legacy event: %w", werr)
 			}
+			s.history = append(s.history, tr)
 		}
 		if s.lastSeq > 0 {
 			if err := f.Sync(); err != nil {
@@ -116,13 +119,13 @@ func loadLegacyState(path string) (*RunState, error) {
 	return &rs, nil
 }
 
-func replayEvents(path string, rs *RunState) (lastSeq uint64, lastGoodOffset int64, err error) {
+func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint64, lastGoodOffset int64, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, 0, nil
+			return nil, 0, 0, nil
 		}
-		return 0, 0, err
+		return nil, 0, 0, err
 	}
 	var offset int64
 	var goodOffset int64
@@ -137,10 +140,11 @@ func replayEvents(path string, rs *RunState) (lastSeq uint64, lastGoodOffset int
 			break
 		}
 		rs.SetStageStatus(t.StageID, t.To)
+		history = append(history, t)
 		lastSeq = t.Seq
 		goodOffset = offset
 	}
-	return lastSeq, goodOffset, nil
+	return history, lastSeq, goodOffset, nil
 }
 
 func bytesLines(data []byte) [][]byte {
@@ -183,6 +187,22 @@ func (s *Store) Snapshot() RunState {
 		out.Stages[k] = v
 	}
 	return out
+}
+
+// History returns the full transition history accumulated during Open's replay
+// of events.jsonl and extended by every subsequent Apply. Read-only — it reads
+// the already-replayed in-memory log, it never re-opens events.jsonl. The slice
+// is ordered by ascending Seq (the append order of the event log, which also
+// guarantees non-decreasing Time). A defensive copy is returned so callers
+// cannot mutate the store's internal log. A run with zero transitions returns
+// an empty slice, never an error — the error is reserved for a future failure
+// mode (currently always nil).
+func (s *Store) History() ([]Transition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Transition, len(s.history))
+	copy(out, s.history)
+	return out, nil
 }
 
 // SetStageNames stores the display name for each stage. Names are flow metadata
@@ -244,6 +264,8 @@ func (s *Store) Apply(t Transition) error {
 	if err := s.eventsLog.Sync(); err != nil {
 		return fmt.Errorf("fsync events.jsonl: %w", err)
 	}
+
+	s.history = append(s.history, t)
 
 	applyHookMu.Lock()
 	hook := applyHook

@@ -1,27 +1,38 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"time"
 )
 
 // Proxy is a reverse proxy that applies the first matching Transform to each request.
-// Requests with no matching transform are passed through unchanged.
+// Requests with no matching transform are passed through unchanged. When usageLogPath
+// is non-empty, every proxied response's usage is captured to that file uniformly —
+// regardless of whether a Transform handled the request or it passed through.
 type Proxy struct {
-	upstream   string
-	transforms []Transform
-	srv        *http.Server
-	addr       string
+	upstream     string
+	transforms   []Transform
+	usageLogPath string
+	srv          *http.Server
+	addr         string
 }
 
 // New creates a Proxy forwarding to upstream with the given transforms.
-func New(upstream string, transforms []Transform) *Proxy {
-	return &Proxy{upstream: upstream, transforms: transforms}
+// usageLogPath is the file appended with one UsageRecord per proxied response; an
+// empty string disables capture (a valid convention used in tests).
+func New(upstream string, transforms []Transform, usageLogPath string) *Proxy {
+	return &Proxy{
+		upstream:     upstream,
+		transforms:   transforms,
+		usageLogPath: usageLogPath,
+	}
 }
 
 // Start listens on 127.0.0.1:port (0 = OS-assigned free port) and returns
@@ -52,7 +63,17 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 }
 
 // ServeHTTP dispatches to the first matching transform, or falls back to passthrough.
+// Both paths write through a tee-writer so usage can be captured uniformly afterward —
+// this is the fix that makes passthrough responses counted too, not just Transform ones.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	tw := &teeResponseWriter{w: w}
+	p.dispatch(tw, r)
+	p.captureUsage(tw, r)
+}
+
+// dispatch routes the request through the wrapped writer: the first matching transform
+// handles it, otherwise a plain reverse proxy passes it through unchanged.
+func (p *Proxy) dispatch(w http.ResponseWriter, r *http.Request) {
 	for _, t := range p.transforms {
 		if t.Match(p.upstream) {
 			t.ServeHTTP(w, r, p.upstream)
@@ -60,6 +81,31 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	passthroughTo(p.upstream).ServeHTTP(w, r)
+}
+
+// captureUsage runs the post-dispatch capture algorithm: parse the buffered response
+// into a UsageRecord, fill the measured byte sizes, and append it to usageLogPath.
+// Capture is a no-op when usageLogPath is empty, and any failure is logged and
+// swallowed — the client-visible response is already sent, so capture must never
+// alter or delay it.
+func (p *Proxy) captureUsage(tw *teeResponseWriter, r *http.Request) {
+	if p.usageLogPath == "" {
+		return
+	}
+	contentType := tw.w.Header().Get("Content-Type")
+	record, err := ParseUsage(contentType, tw.buf.String())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: proxy usage parse: %v\n", err)
+		return
+	}
+	record.Timestamp = time.Now()
+	if r.ContentLength > 0 {
+		record.RequestBytes = int(r.ContentLength)
+	}
+	record.ResponseBytes = tw.buf.Len()
+	if err := AppendUsageRecord(p.usageLogPath, record); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: proxy usage append: %v\n", err)
+	}
 }
 
 // passthroughTo returns a ReverseProxy that forwards to the given upstream base URL,
@@ -76,3 +122,22 @@ func passthroughTo(upstream string) *httputil.ReverseProxy {
 		},
 	}
 }
+
+// teeResponseWriter forwards every call to the underlying http.ResponseWriter while
+// also buffering the written body bytes for post-dispatch usage capture. Each request
+// gets its own instance (a per-ServeHTTP local), so there is no shared buffer across
+// concurrent requests. Forwards are immediate on every Write, so client-visible
+// streaming latency is unaffected — capture only happens after the handler returns.
+type teeResponseWriter struct {
+	w   http.ResponseWriter
+	buf bytes.Buffer
+}
+
+func (tw *teeResponseWriter) Header() http.Header { return tw.w.Header() }
+
+func (tw *teeResponseWriter) Write(b []byte) (int, error) {
+	tw.buf.Write(b) //nolint:errcheck // bytes.Buffer.Write is documented as never failing
+	return tw.w.Write(b)
+}
+
+func (tw *teeResponseWriter) WriteHeader(code int) { tw.w.WriteHeader(code) }

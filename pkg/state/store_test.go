@@ -268,6 +268,142 @@ func TestSetStageNames_CopiesInput(t *testing.T) {
 	}
 }
 
+// TestStore_HistoryMethodExists is a contract test: it asserts that
+// (*Store).History exists with the signature () ([]Transition, error) and is
+// callable. It is expected to fail to compile until History() is implemented.
+func TestStore_HistoryMethodExists(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	transitions, err := store.History()
+	if err != nil {
+		t.Fatalf("History() returned unexpected error: %v", err)
+	}
+	// Compile-time assertion of the return shape: transitions is []Transition.
+	var _ = transitions
+}
+
+// TestStore_HistoryReturnsOrderedTransitions asserts that replay of an existing
+// events.jsonl populates History with every transition in ascending Seq order.
+// The fixture is built with a real Store's Apply (the only way events.jsonl is
+// populated in production) then re-opened, so the test exercises both the
+// Apply→log path and the replay→history path.
+func TestStore_HistoryReturnsOrderedTransitions(t *testing.T) {
+	dir := t.TempDir()
+
+	store1, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	steps := []Transition{
+		{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"},
+		{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"},
+		{StageID: "a", From: StatusAwaitingApproval, To: StatusReady, Event: "approve"},
+	}
+	for _, tr := range steps {
+		if err := store1.Apply(tr); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+	}
+	store1.Close()
+
+	store2, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store2.Close()
+
+	transitions, err := store2.History()
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(transitions) != len(steps) {
+		t.Fatalf("len(transitions) = %d, want %d", len(transitions), len(steps))
+	}
+	for i := 1; i < len(transitions); i++ {
+		if transitions[i-1].Seq >= transitions[i].Seq {
+			t.Errorf("Seq not strictly ascending at %d: %d >= %d",
+				i, transitions[i-1].Seq, transitions[i].Seq)
+		}
+		if transitions[i-1].Time.After(transitions[i].Time) {
+			t.Errorf("Time not non-decreasing at %d: %s > %s",
+				i, transitions[i-1].Time, transitions[i].Time)
+		}
+	}
+	if transitions[0].StageID != "a" || transitions[len(transitions)-1].To != StatusReady {
+		t.Errorf("history content mismatch: first=%+v last=%+v",
+			transitions[0], transitions[len(transitions)-1])
+	}
+
+	// History must not share storage with the store: mutating the returned slice
+	// (or expecting the store to reflect such a mutation) must not corrupt state.
+	transitions[0] = Transition{StageID: "MUTATED"}
+	again, _ := store2.History()
+	if again[0].StageID == "MUTATED" {
+		t.Error("History leaked internal slice: caller mutation affected the store")
+	}
+}
+
+// TestStore_HistoryEmptyRunReturnsEmptySlice asserts that a freshly created run
+// (no prior events.jsonl, every stage pending) yields an empty slice, not nil
+// and not an error.
+func TestStore_HistoryEmptyRunReturnsEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	transitions, err := store.History()
+	if err != nil {
+		t.Fatalf("History on empty run returned error: %v", err)
+	}
+	if transitions == nil {
+		t.Fatal("History returned nil, want non-nil empty slice")
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("len(transitions) = %d, want 0", len(transitions))
+	}
+}
+
+// TestStore_HistoryReflectsInSessionApply asserts that Apply extends History
+// within a single Open session (no reopen), so a live caller observes newly
+// applied transitions immediately.
+func TestStore_HistoryReflectsInSessionApply(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	if transitions, _ := store.History(); len(transitions) != 0 {
+		t.Fatalf("initial History len = %d, want 0", len(transitions))
+	}
+
+	if err := store.Apply(Transition{
+		StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning",
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	transitions, err := store.History()
+	if err != nil {
+		t.Fatalf("History after Apply: %v", err)
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("History len after one Apply = %d, want 1", len(transitions))
+	}
+	if transitions[0].Seq != 1 || transitions[0].To != StatusPlanning {
+		t.Errorf("History[0] = %+v, want Seq=1 To=planning", transitions[0])
+	}
+}
+
 func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 	dir := t.TempDir()
 	store1, _ := Open(dir, []string{"a"})

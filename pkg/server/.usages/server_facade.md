@@ -10,6 +10,7 @@ srv := server.New(server.Config{
     RetryFn:        o.Retry,
     DialogAnswerFn: o.NotifyAnswer,
     DialogCancelFn: cancelFn,
+    Accountant:     accounting.NewAccountant(runDir, store, cfg.Pricing, cfg.Accounting.GetBucketMinutes()),
 })
 addr, err := srv.Start()
 if err != nil {

@@ -5,7 +5,8 @@ Usages:
 Annotations: |
   Встроенный reverse-proxy агентского HTTP-трафика к Anthropic-совместимым шлюзам. `Transform` —
   точка расширения: Proxy.ServeHTTP диспетчеризует на первый подходящий трансформ по Match, иначе —
-  passthrough без изменений.
+  passthrough без изменений. Инспектирует usage каждого ответа (все апстримы, SSE и JSON) через
+  `ParseUsage`, независимо от применённого Transform, и пишет `UsageRecord` через `AppendUsageRecord`.
 
   Use `conventions` for code writing rules and testing. Use `golang` for implementation.
 
@@ -49,20 +50,26 @@ Annotations: |
     Constraints:
     - Upstream-ответы не-200 пересылаются как есть (статус + заголовки + тело)
     - SSE-событие error или пустой SSE-ответ дают HTTP 529 со структурированной ошибкой в стиле Anthropic
+
+    Note: usage-захват для ответа этого трансформа не требует отдельной логики — Proxy.ServeHTTP
+    оборачивает http.ResponseWriter уже переданный сюда как w, поэтому JSON, который этот метод
+    пишет в w, перехватывается тем же универсальным механизмом (см. Proxy.ServeHTTP).
   methods:
     "Match(upstreamURL string) -> matches:bool": |
       true для upstream URL, содержащих api.z.ai.
     "ServeHTTP(w http.ResponseWriter, r http.Request, upstream string)": |
       См. Algorithm выше.
 
-"Proxy(upstream string, transforms []Transform)":
+"Proxy(upstream string, transforms []Transform, usageLogPath string)":
   location: proxy.go
   annotations: |
     Reverse-proxy, применяющий первый подходящий `Transform` к каждому запросу. Запросы без
-    подходящего трансформа передаются без изменений.
+    подходящего трансформа передаются без изменений. Инспектирует usage каждого ответа независимо
+    от Transform (см. ServeHTTP Algorithm).
   methods:
-    "New(upstream string, transforms []Transform) -> proxy:Proxy": |
+    "New(upstream string, transforms []Transform, usageLogPath string) -> proxy:Proxy": |
       Создаёт Proxy, пересылающий на upstream с указанными трансформами.
+      `usageLogPath`: путь к usage.jsonl рана; пустая строка отключает запись usage (например, в тестах).
     "Start(port int) -> addr:string, err:error": |
       Слушает 127.0.0.1:port (0 = порт, назначаемый ОС), возвращает адрес как
       http://127.0.0.1:PORT. Сервер работает в фоне.
@@ -70,6 +77,18 @@ Annotations: |
       Адрес прослушивания (пусто до Start).
     "ServeHTTP(w http.ResponseWriter, r http.Request)": |
       Диспетчеризация на первый подходящий трансформ, либо passthrough.
+
+      Algorithm (usage capture, применяется единообразно для любого пути — Transform или passthrough):
+      1. Обернуть `w` внутренним неэкспортируемым tee-writer'ом: каждый Write немедленно уходит в
+         оригинальный `w` (стриминг клиенту не блокируется) и одновременно копируется во внутренний буфер
+      2. Выполнить диспетчеризацию как обычно (Transform.ServeHTTP или passthrough), передав обёрнутый writer
+      3. По завершении обработчика вызвать `ParseUsage` с накопленным буфером и Content-Type ответа
+      4. Собрать `UsageRecord` (добавив байты запроса/ответа), записать через `AppendUsageRecord` в
+         usageLogPath
+
+      Requirements:
+      - Ошибки захвата/разбора/записи usage (`ParseUsage`/`AppendUsageRecord`) логируются и пропускаются —
+        не изменяют и не блокируют уже отправленный клиенту ответ (байты форвардятся до разбора)
     "Shutdown(ctx string) -> err:error": |
       Плавно останавливает proxy-сервер.
 
@@ -84,9 +103,69 @@ Annotations: |
     - Вызывающая сторона отвечает за defer os.RemoveAll(shimDir)
     - Возвращает ошибку, если claude не найден в текущем PATH
 
+"UsageRecord(timestamp string, model string, inputTokens int, outputTokens int, cacheCreationTokens int, cacheReadTokens int, requestBytes int, responseBytes int)":
+  location: usage.go
+  annotations: |
+    Данные об одном перехваченном запросе к апстриму: модель, токены (input/output/cache), объём
+    запроса/ответа в байтах, момент запроса.
+
+    Note: Timestamp — реальный Go-тип time.Time, сериализуется как RFC3339.
+  properties:
+    "Timestamp -> string": |
+      Момент запроса (RFC3339).
+    "Model -> string": |
+      Имя модели upstream'а.
+    "InputTokens -> int": |
+      Входные токены.
+    "OutputTokens -> int": |
+      Выходные токены.
+    "CacheCreationTokens -> int": |
+      Токены создания кэша.
+    "CacheReadTokens -> int": |
+      Токены чтения из кэша.
+    "RequestBytes -> int": |
+      Размер тела запроса в байтах.
+    "ResponseBytes -> int": |
+      Размер тела ответа в байтах.
+
+"ParseUsage(contentType string, body string) -> record:UsageRecord, err:error":
+  location: usage.go
+  annotations: |
+    Разбирает тело проксируемого ответа в `UsageRecord`, обобщая существующую логику разбора SSE-
+    ответов на все апстримы и оба режима ответа.
+    `contentType`: заголовок Content-Type ответа
+    `body`: накопленные байты тела ответа
+
+    Algorithm:
+    1. Если `contentType` содержит "text/event-stream" — разобрать `body` как SSE-поток (в стиле
+       существующего SSE-парсинга): накопить usage из message_start/message_delta
+    2. Иначе — распарсить `body` как единый JSON, извлечь model и usage напрямую (покрывает и
+       non-streaming Anthropic-ответы, и переупакованный ZAITransform-ответ)
+
+    Requirements:
+    - Байты запроса/ответа добавляются в `UsageRecord` вызывающей стороной (Proxy.ServeHTTP), не
+      этой функцией — `ParseUsage` заполняет только модель+токены
+
+    Constraints:
+    - Не-200 ответ или отсутствие поля usage — возвращает `err`, не строит нулевую запись
+
+"AppendUsageRecord(path string, record UsageRecord) -> err:error":
+  location: usage.go
+  annotations: |
+    Добавляет `record` как одну JSON-строку в файл `path` (например, .afm/runs/<run>/usage.jsonl).
+
+    Algorithm:
+    1. Открыть `path` в режиме добавления (создать при отсутствии)
+    2. Сериализовать `record` в JSON, записать одну строку, закрыть файл
+
+    Requirements:
+    - Один вызов — одна операция open-write-close (без держания хендла между вызовами), см. pkg/state
+      SaveFeedback для аналогичного паттерна
+
 ---
 
 Author: Goga
 CreatedAt: 03/07/26
 Description: |
-  Reverse-proxy агентского HTTP-трафика с точкой расширения Transform; ZAI SSE-реассемблинг под api.z.ai.
+  Reverse-proxy агентского HTTP-трафика с точкой расширения Transform; ZAI SSE-реассемблинг под api.z.ai;
+  захват usage (токены/KB) для всех ответов через ParseUsage/AppendUsageRecord.

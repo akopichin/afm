@@ -12,7 +12,7 @@ if cfg.Proxy.IsEnabled() { // nil Enabled → enabled by default
         // no-op: skip proxy entirely, log info
     } else {
         transforms := proxy.BuildTransforms(upstream, cfg.Proxy.Transforms.ZAI)
-        p := proxy.New(upstream, transforms)
+        p := proxy.New(upstream, transforms, filepath.Join(runDir, "usage.jsonl")) // "" disables usage-log writing
         addr, err := p.Start(cfg.Proxy.Port) // 0 = OS-assigned port
         if err != nil {
             return fmt.Errorf("start proxy: %w", err) // fatal

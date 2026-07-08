@@ -44,6 +44,11 @@ Imports:
       - SkillsFS
       - ReadPrompt
     From: assets
+  - Types:
+      - Accountant
+    Usages:
+      - query_usage
+    From: pkg/accounting
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -100,6 +105,11 @@ Annotations: |
        IsEnabled() ложно — proxy пропускается полностью без вывода
     2. Ошибка Proxy.Start — фатальна; ошибка `CreateShim` — не фатальна (предупреждение, инъекция
        env-переменных всё равно работает)
+    2b. Proxy строится с новым usageLogPath-аргументом (filepath.Join(runDir, "usage.jsonl")) — см.
+        pkg/proxy New; после старта Proxy конструируется `Accountant` (accounting.NewAccountant,
+        импорт нового pkg/accounting, см. `query_usage` для паттерна конструирования) из
+        runDir/store/cfg.Pricing/cfg.Accounting.GetBucketMinutes() и передаётся в server.Config — см.
+        pkg/server server_facade
     3. Proxy и shim останавливаются через defer (Shutdown, удаление shim-директории)
 
     Requirements:

@@ -1,0 +1,16 @@
+name: Accept new code
+description: "Feature acceptance"
+
+stages:
+  - id: accept
+    name: "Accept new code"
+    interactive: true
+    agents: [planning, implementation]
+    description: |
+      Надо по измененному коду обновить codemanifest-ы.
+    prompt: |
+      if goga binary not installed - install it with `pip install goga && goga connect claude`
+      Обнови все что касается кодманифестов согласно коду, используй скилл goga-accept
+    skills:
+      - goga-accept
+

@@ -139,6 +139,14 @@ Annotations: |
       после вызова не влияют на хранилище.
     "Snapshot() -> state:RunState": |
       Текущий снапшот состояния рана.
+    "History() -> transitions:[]Transition, err:error": |
+      Возвращает полную историю переходов состояния, накопленную при Open (replay событий из
+      events.jsonl). Read-only — использует уже реплеенный в памяти лог, не открывает файл повторно.
+
+      Requirements:
+      - Порядок транзакций — по возрастанию Seq, как в event log
+      - Seq присваивается в том же порядке, в котором записывается Time (append-only event log) —
+        возрастание Seq подряд подразумевает неубывание Time
 
 "Transition(seq int, time string, stageID string, from string, to string, event string, reason string)":
   location: store.go

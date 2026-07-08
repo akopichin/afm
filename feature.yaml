@@ -114,7 +114,7 @@ stages:
     depends_on: [plan]
 
   - id: fix-changes
-    name: "Fix changes"
+    name: "Fix changes (plan review)"
     interactive: true
     description: |
       Поправить все, чтобы оно работало.
@@ -131,11 +131,3 @@ stages:
         - Except changes in `docs/<tasks|arch|design|plans>`.
     agents: [planning, implementation]
     depends_on: [plan-review]
-
-  - id: accept
-    name: "Accept Result"
-    interactive: true
-    skills:
-      - goga-accept
-    agents: [planning, implementation]
-    depends_on: [fix-changes]

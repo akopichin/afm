@@ -128,6 +128,43 @@
         </div>
     </footer>
 
+    <!-- Consumption panel — slide-out overlay (toggled by the right-edge arrow) -->
+    <aside id="usage-panel" class="usage-panel">
+        <button id="usage-toggle" class="usage-toggle" type="button"
+                title="Панель потребления" aria-label="Панель потребления">
+            <svg class="usage-toggle-arrow" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 6 L9 12 L15 18" fill="none" stroke="currentColor"
+                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+        <div class="usage-panel-body" aria-hidden="true">
+            <header class="usage-panel-head">
+                <h2>Потребление</h2>
+                <span class="usage-total" id="usage-total">—</span>
+            </header>
+
+            <div class="usage-controls">
+                <div class="usage-metric-switch" id="usage-metric-switch" role="group" aria-label="Метрика">
+                    <button type="button" class="usage-metric active" data-metric="tokens">Токены</button>
+                    <button type="button" class="usage-metric hidden" data-metric="cost">Стоимость</button>
+                    <button type="button" class="usage-metric" data-metric="kb">KB</button>
+                </div>
+                <label class="usage-stage-filter" for="usage-stage-select">
+                    <span class="usage-stage-label">Стейдж</span>
+                    <select id="usage-stage-select"></select>
+                </label>
+            </div>
+
+            <div class="usage-chart-wrap">
+                <svg id="usage-chart" class="usage-chart" viewBox="0 0 320 180"
+                     preserveAspectRatio="none" aria-hidden="true"></svg>
+                <div class="usage-empty hidden" id="usage-empty">Нет данных</div>
+            </div>
+
+            <div class="usage-meta" id="usage-meta"></div>
+        </div>
+    </aside>
+
     <script src="markdown-it.min.js"></script>
     <script src="app.js"></script>
 </body>

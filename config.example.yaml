@@ -66,3 +66,40 @@ executor:
 #   # тот же путь; монтируются только для чтения.
 #   # extra_mounts:
 #   #   - ~/.ai-free
+
+# Учёт потребления (токены / стоимость / трафик).
+# afm захватывает каждый проксированный ответ агента в usage.jsonl и отдаёт
+# агрегаты через GET /api/usage?metric=tokens|cost|kb. Метрика cost считается
+# только при заданном разделе pricing; без него cost полностью скрыт.
+#
+# КАК ОПРЕДЕЛЯЕТСЯ МОДЕЛЬ (ключ цены):
+# Ключ обязан СТРОГО совпадать со значением поля `model` из ответа upstream-API —
+# именно оно попадает в usage.jsonl (его же шлёт провайдер). Никакого fuzzy или
+# сопоставления по префиксу: если API отдаёт "claude-sonnet-4-5-20250929", то и
+# ключ должен быть таким же. Чтобы увидеть точную строку для своего агента —
+# посмотри поле model в .afm/runs/<run>/usage.jsonl. Модели glm-* (напр. glm-5.2)
+# совпадают как есть; у Claude API строка обычно с датой — добавь её сюда.
+#
+# Цены ОРИЕНТИРОВОЧНЫЕ (list price, интернет-источники на момент составления),
+# USD за 1 млн токенов — проверяй актуальные у провайдера и поправь под себя.
+# cache_per_mtok — единая ставка cache read/write (в Anthropic они различаются,
+# тут усреднено ближе к read, т.к. чтений обычно больше).
+pricing:
+  models:
+    # Anthropic Claude — platform.claude.com/docs/en/about-claude/pricing
+    claude-opus-4-5:     { input_per_mtok: 5.0,  output_per_mtok: 25.0, cache_per_mtok: 0.5 }
+    claude-sonnet-4-5:   { input_per_mtok: 3.0,  output_per_mtok: 15.0, cache_per_mtok: 0.3 }
+    claude-sonnet-5:     { input_per_mtok: 2.0,  output_per_mtok: 10.0, cache_per_mtok: 0.2 }  # intro до 31.08.2026
+    claude-haiku-4-5:    { input_per_mtok: 1.0,  output_per_mtok: 5.0,  cache_per_mtok: 0.1 }
+    # OpenAI GPT — openai.com/api/pricing
+    gpt-4o:              { input_per_mtok: 2.5,  output_per_mtok: 10.0, cache_per_mtok: 1.25 }
+    gpt-4o-mini:         { input_per_mtok: 0.15, output_per_mtok: 0.6,  cache_per_mtok: 0.075 }
+    # z.ai GLM — docs.z.ai/guides/overview/pricing (glm-5.2 нет в прайсе, ≈ по glm-4.6)
+    glm-4.6:             { input_per_mtok: 0.6,  output_per_mtok: 2.2,  cache_per_mtok: 0.11 }
+    glm-4.5:             { input_per_mtok: 0.6,  output_per_mtok: 1.1,  cache_per_mtok: 0.11 }
+    glm-5.2:             { input_per_mtok: 0.6,  output_per_mtok: 2.2,  cache_per_mtok: 0.11 }
+
+# Ширина бакета агрегации по времени (в минутах) для /api/usage и панели дашборда.
+# Default: 5
+# accounting:
+#   bucket_minutes: 5

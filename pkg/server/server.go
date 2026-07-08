@@ -23,6 +23,7 @@ type Server struct {
 	retryFn        func(ctx context.Context, stageID string) error
 	dialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	dialogCancelFn func(stageID string) error
+	accountant     Accountant
 	httpSrv        *http.Server
 }
 
@@ -37,6 +38,11 @@ type Config struct {
 	RetryFn        func(ctx context.Context, stageID string) error
 	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	DialogCancelFn func(stageID string) error
+	// Accountant — источник данных потребления рана для GET /api/usage. Локальный
+	// интерфейс (см. usage_handler.go): *accounting.Accountant удовлетворяет ему
+	// структурно. В New передаётся в UsageHandler как есть — тот же экземпляр, без
+	// отдельного построения внутри Server.
+	Accountant Accountant
 }
 
 // New creates a Server.
@@ -50,12 +56,14 @@ func New(cfg Config) *Server {
 		retryFn:        cfg.RetryFn,
 		dialogAnswerFn: cfg.DialogAnswerFn,
 		dialogCancelFn: cfg.DialogCancelFn,
+		accountant:     cfg.Accountant,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.Handle("/api/usage", UsageHandler(cfg.Accountant))
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 
 	s.httpSrv = &http.Server{
