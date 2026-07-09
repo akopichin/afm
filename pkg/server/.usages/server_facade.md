@@ -5,6 +5,7 @@ Domain: starting the HTTP dashboard and wiring it to the orchestrator. Audience:
 ```go
 srv := server.New(server.Config{
     Port: cfg.Server.GetPort(), RunDir: runDir, Store: store, UIBus: o.UIBus(),
+    Theme:          cfg.EffectiveTheme(),
     ApproveFn:      o.Approve,
     ReviseFn:       o.Revise,
     RetryFn:        o.Retry,
@@ -17,7 +18,10 @@ if err != nil {
     return err
 }
 if cfg.Server.IsOpenBrowser() {
-    openBrowser(addr)
+    openBrowser(addr) // opt-in: open_browser defaults to false
+} else {
+    // default path — the browser is not opened automatically; print the URL instead
+    fmt.Printf("  dashboard: %s\n  → open this URL in your browser to follow the run\n", addr)
 }
 defer srv.Shutdown(ctx)
 ```

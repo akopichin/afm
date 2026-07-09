@@ -19,7 +19,8 @@ getter over reading the field directly:
 
 ```go
 port := cfg.Server.GetPort()          // 9876 if Server.Port is nil
-openBrowser := cfg.Server.IsOpenBrowser() // true if Server.OpenBrowser is nil
+openBrowser := cfg.Server.IsOpenBrowser() // false if Server.OpenBrowser is nil (browser is opt-in)
+theme := cfg.EffectiveTheme()         // normalized dashboard theme: "goga" or "novacorps" (empty/unknown → novacorps)
 proxyEnabled := cfg.Proxy.IsEnabled()  // true if Proxy.Enabled is nil
 dockerEnabled := cfg.Docker.IsDockerEnabled() // checks AFM_USE_DOCKER if Docker.Enabled is nil
 image := cfg.Docker.GetImage()        // AFM_DOCKER_IMAGE takes priority if set

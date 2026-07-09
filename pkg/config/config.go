@@ -11,6 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// envFlag reports whether an environment variable is truthy ("1" or "true").
+func envFlag(name string) bool {
+	v := os.Getenv(name)
+	return v == "1" || v == "true"
+}
+
 // ClientConfig configures the AI client command.
 type ClientConfig struct {
 	Command   string   `yaml:"command"`
@@ -29,10 +35,10 @@ type ServerConfig struct {
 	OpenBrowser *bool `yaml:"open_browser"`
 }
 
-// IsOpenBrowser returns OpenBrowser value (defaults to true).
+// IsOpenBrowser returns OpenBrowser value (defaults to false).
 func (s ServerConfig) IsOpenBrowser() bool {
 	if s.OpenBrowser == nil {
-		return true
+		return false
 	}
 	return *s.OpenBrowser
 }
@@ -83,8 +89,7 @@ func (d DockerConfig) IsDockerEnabled() bool {
 	if d.Enabled != nil {
 		return *d.Enabled
 	}
-	v := os.Getenv("AFM_USE_DOCKER")
-	return v == "1" || v == "true"
+	return envFlag("AFM_USE_DOCKER")
 }
 
 // GetImage returns the Docker image to use, preferring AFM_DOCKER_IMAGE env var.
@@ -119,9 +124,19 @@ func (p PricingConfig) GetModelPricing(model string) (ModelPricing, bool) {
 	return pricing, ok
 }
 
-// AccountingConfig controls consumption time-aggregation (bucket width).
+// AccountingConfig controls consumption tracking and time-aggregation (bucket width).
 type AccountingConfig struct {
-	BucketMinutes int `yaml:"bucket_minutes"`
+	Enabled       *bool `yaml:"enabled"`
+	BucketMinutes int   `yaml:"bucket_minutes"`
+}
+
+// IsEnabled returns true by default (nil Enabled → enabled).
+// AFM_NO_USAGE=1 disables token tracking regardless of config.
+func (a AccountingConfig) IsEnabled() bool {
+	if envFlag("AFM_NO_USAGE") {
+		return false
+	}
+	return a.Enabled == nil || *a.Enabled
 }
 
 // GetBucketMinutes returns BucketMinutes, or 5 when it is 0. A plain int field
@@ -149,7 +164,7 @@ type Config struct {
 
 // Default returns the built-in default configuration.
 func Default() Config {
-	openBrowser := true
+	openBrowser := false
 	port := 9876
 	return Config{
 		Client:   ClientConfig{Command: "claude"},
@@ -250,6 +265,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Pricing.Models != nil {
 		dst.Pricing.Models = overlay.Pricing.Models
+	}
+	if overlay.Accounting.Enabled != nil {
+		dst.Accounting.Enabled = overlay.Accounting.Enabled
 	}
 	if overlay.Accounting.BucketMinutes != 0 {
 		dst.Accounting.BucketMinutes = overlay.Accounting.BucketMinutes

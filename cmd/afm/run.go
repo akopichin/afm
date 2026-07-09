@@ -136,7 +136,11 @@ func newRunCmd() *cobra.Command {
 					// usageLogPath: прокси пишет сюда по одной строке UsageRecord на каждый
 					// проксированный ответ (и Transform-обработанный, и passthrough). Accountant
 					// ниже читает этот же файл — тот же runDir, тот же "usage.jsonl".
-					usageLogPath := filepath.Join(runDir, "usage.jsonl")
+					// Пустая строка → proxy.captureUsage no-op (учёт отключён).
+					usageLogPath := ""
+					if cfg.Accounting.IsEnabled() {
+						usageLogPath = filepath.Join(runDir, "usage.jsonl")
+					}
 					p := proxy.New(upstream, transforms, usageLogPath)
 					addr, err := p.Start(cfg.Proxy.Port)
 					if err != nil {
@@ -216,11 +220,14 @@ func newRunCmd() *cobra.Command {
 				dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
 				orch.SetDashboardURL(dashURL)
 				fmt.Printf("  dashboard: %s\n", dashURL)
-				// Внутри Docker-контейнера (Linux) openBrowser зовёт xdg-open, которого
-				// там нет и без display — пропуск; браузер уже открывает хост-side
-				// opener (launchHostBrowserOpener), запущенный до re-exec.
-				if cfg.Server.IsOpenBrowser() && os.Getenv("AFM_IN_DOCKER") != "1" {
-					openBrowser(dashURL)
+				if cfg.Server.IsOpenBrowser() {
+					// Локально — openBrowser; в Docker — хост-side opener уже запущен
+					// (launchHostBrowserOpener, run.go:78), в контейнере xdg-open нет.
+					if os.Getenv("AFM_IN_DOCKER") != "1" {
+						openBrowser(dashURL)
+					}
+				} else {
+					fmt.Println("  → open this URL in your browser to follow the run")
 				}
 			}
 

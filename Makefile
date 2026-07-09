@@ -43,13 +43,17 @@ clean:
 # директориях PATH (например ~/homebrew/bin), чтобы не оставались устаревшие.
 # codesign -s - создаёт ad-hoc подпись: macOS 26+ убивает неподписанные бинарники
 # с SIGKILL (Code Signature Invalid) при запуске любого subcommand.
+# ВАЖНО: cp подписанного бинарника ставит xattr com.apple.provenance, который
+# рассинхронизируется с подписью → macOS 26 убивает копию (SIGKILL 137, spctl
+# rejected). Поэтому копию нужно пере-подписать НА МЕСТЕ после cp.
 install:
 	$(GOENV) go install -ldflags "-X main.version=$(VERSION)" ./cmd/afm
 	@src=$$(go env GOPATH)/bin/$(PROJECT_NAME); \
 	codesign -f -s - $$src && echo "codesigned: $$src"; \
 	for f in $(HOME)/homebrew/bin/afm; do \
 		if [ -e $$f ] && [ ! -L $$f ]; then \
-			cp $$src $$f && echo "updated copy: $$f"; \
+			cp $$src $$f && \
+			codesign -f -s - $$f && echo "updated+signed copy: $$f"; \
 		fi; \
 	done
 

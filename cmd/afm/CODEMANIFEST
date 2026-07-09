@@ -96,8 +96,11 @@ Annotations: |
     инициализирует ран, стартует встроенный `Proxy` (pkg/proxy, если задан upstream) через
     `BuildTransforms` + shim (`CreateShim`), опционально перезапускает себя в Docker через `ReExecConfig`
     (pkg/docker, см. `docker_privilege_drop`), запускает `Orchestrator` с `Options` (pkg/orchestrator)
-    и `Server` (с настройками HTTP-дашборда из pkg/server), открывает браузер. И передаёт значение
-    Prompt из `Flow` в поле GlobalPrompt при построении `Options`.
+    и `Server` (с настройками HTTP-дашборда из pkg/server; тема дашборда — из
+    pkg/config.EffectiveTheme). По умолчанию (open_browser=false) браузер НЕ открывается — в лог печатается
+    URL дашборда с подсказкой; при IsOpenBrowser()=true локально вызывается `openBrowser` (в Docker —
+    хост-side opener, запущенный до re-exec). И передаёт значение Prompt из `Flow` в поле
+    GlobalPrompt при построении `Options`.
 
     Algorithm (built-in reverse proxy, см. CLAUDE.md «Built-in Reverse Proxy»):
     1. Proxy запускается только если Config.Proxy (`ProxyConfig`).IsEnabled() (nil/absent Enabled →

@@ -18,7 +18,9 @@ Annotations: |
 
     Requirements:
     - index.html — корневая HTML-страница дашборда
-    - style.css — стили дашборда
+    - style.css — стили дашборда (default novacorps)
+    - style-goga.css — стили goga-темы (подключается server-side при theme=goga, см. pkg/server)
+    - quarium-logo.png — логотип quarium в шапке goga-темы
     - app.js — клиентская логика (поллинг стадий/событий, WebSocket-подписка через pkg/server)
     - markdown-it.min.js — сторонняя библиотека рендеринга markdown (планы/фидбек в UI)
     - favicon.svg — иконка вкладки браузера

@@ -2,6 +2,19 @@
 
 Новые возможности — сверху, дальше вниз по устареванию. Даты — по коммитам в `fix`/`master`.
 
+## 2026-07-09
+
+### Тема дашборда `goga`
+- Вторая тема веб-дашборда, включаемая флажком `theme: goga` в `~/.afm/config.yaml` (top-level). Визуально по мотивам qarium.ru/goga: тёмно-синий фон `#0A0E1A`, teal-акцент `#20D4BF`, sans-serif шрифт, скруглённые углы, без неон-декора. Дефолтная тема — `novacorps` (прежняя hi-tech мятная). Неизвестное значение → warning + `novacorps`.
+- Самодостаточный `pkg/web/dashboard/style-goga.css` (стиль с нуля; `style.css`/`index.html` для дефолта не тронуты). Доставка темы — server-side replace `style.css`→`style-goga.css` и класс `<body>` при отдаче `/` (без FOUC, без `/api/config`).
+- Лого quarium + заголовок «Goga» в goga-теме (CSS: скрыт Nova-гексагон, `background quarium-logo.png`, `h1`→«Goga» teal через `::before`).
+- Палитра графика потребления (`app.js USAGE_COLORS`) читается из CSS-токенов с fallback на mint — график teal в goga, не меняется в novacorps.
+- Интерфейс переведён на английский для обеих тем (`index.html`, `app.js`, CSS `content`).
+
+### `open_browser` по умолчанию `false`
+- `server.open_browser` (в `~/.afm/config.yaml`) теперь по умолчанию `false`: браузер НЕ открывается автоматически при старте дашборда — в лог печатается URL с подсказкой `→ open this URL in your browser to follow the run`. `server.open_browser: true` возвращает прежнее авто-открытие. Работает для локального запуска и Docker (хост-side opener).
+- Примечание: «косяки с подписанием бинарника» на macOS 26 (SIGKILL неподписанного бинаря) НЕ связаны с открытием браузера — лечатся `make install` (ad-hoc codesign), а не этим флажком.
+
 ## 2026-07-08
 
 ### Глобальный `prompt` (root-level)

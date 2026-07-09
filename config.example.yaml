@@ -11,6 +11,12 @@
 # Default: "novacorps"
 # theme: goga
 
+# server:
+#   # Открывать браузер с дашбордом автоматически при запуске.
+#   # Default: false — URL печатается в лог, откройте вручную.
+#   # open_browser: true
+#   # port: 9876
+
 # AI client settings
 client:
   # Command to run as the AI agent.

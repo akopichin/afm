@@ -28,7 +28,7 @@ Annotations: |
     - Отсутствующие файлы молча игнорируются, применяются дефолты
     - Использовать `yaml_v3` для парсинга YAML
 
-"Config(client ClientConfig, executor ExecutorConfig, server ServerConfig, proxy ProxyConfig, docker DockerConfig, pricing PricingConfig, accounting AccountingConfig, promptsDir string)":
+"Config(client ClientConfig, executor ExecutorConfig, server ServerConfig, proxy ProxyConfig, docker DockerConfig, pricing PricingConfig, accounting AccountingConfig, promptsDir string, theme string)":
   location: config.go
   annotations: |
     Смерженная конфигурация afm целиком.
@@ -49,6 +49,21 @@ Annotations: |
       Настройки временной агрегации потребления (ширина бакета).
     "PromptsDir -> string": |
       Переопределение директории system-промптов.
+    "Theme -> string": |
+      Тема веб-дашборда (goga | novacorps). Пустая строка — дефолт novacorps.
+      Нормализуется методом EffectiveTheme.
+  methods:
+    "EffectiveTheme() -> theme:string": |
+      Нормализованное имя темы дашборда.
+
+      Algorithm:
+      1. Привести значение темы (поле Theme) к нижнему регистру и обрезать пробелы
+      2. "goga" → вернуть "goga"
+      3. Иначе (включая пустую строку и "novacorps") → вернуть "novacorps";
+         неизвестное непустое значение логирует предупреждение в stderr
+
+      Constraints:
+      - Неизвестное значение не вызывает ошибку — fallback на novacorps
 
 "ClientConfig(command string, extraArgs []string)":
   location: config.go
@@ -79,12 +94,12 @@ Annotations: |
     "Port -> int": |
       Порт дашборда (nil → дефолт 9876, см. GetPort).
     "OpenBrowser -> bool": |
-      Открывать браузер автоматически (nil → true, см. IsOpenBrowser).
+      Открывать браузер автоматически (nil → false, см. IsOpenBrowser).
   methods:
     "GetPort() -> port:int": |
       Возвращает Port, либо 9876, если не задан.
     "IsOpenBrowser() -> enabled:bool": |
-      Возвращает OpenBrowser, либо true, если не задан.
+      Возвращает OpenBrowser, либо false, если не задан.
 
 "ProxyConfig(enabled bool, upstream string, port int, transforms TransformOverrides)":
   location: config.go

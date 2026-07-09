@@ -75,8 +75,25 @@ func TestServerConfigDefaults(t *testing.T) {
 	if cfg.Server.GetPort() != 9876 {
 		t.Errorf("default port: got %d, want 9876", cfg.Server.GetPort())
 	}
-	if !cfg.Server.IsOpenBrowser() {
-		t.Error("default open_browser should be true")
+	if cfg.Server.IsOpenBrowser() {
+		t.Error("default open_browser should be false")
+	}
+}
+
+func TestServerConfig_IsOpenBrowser(t *testing.T) {
+	var s config.ServerConfig
+	if s.IsOpenBrowser() {
+		t.Error("nil OpenBrowser should default to false")
+	}
+	tb := true
+	s.OpenBrowser = &tb
+	if !s.IsOpenBrowser() {
+		t.Error("OpenBrowser=true should return true")
+	}
+	fb := false
+	s.OpenBrowser = &fb
+	if s.IsOpenBrowser() {
+		t.Error("OpenBrowser=false should return false")
 	}
 }
 

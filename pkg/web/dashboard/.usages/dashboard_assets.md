@@ -5,7 +5,9 @@ Domain: static asset inventory of the afm dashboard, for the `pkg/web` cell that
 ```
 pkg/web/dashboard/
 ├── index.html          # root HTML page
-├── style.css           # dashboard styles
+├── style.css           # dashboard styles (default novacorps theme)
+├── style-goga.css      # goga theme styles (linked server-side when theme=goga, see pkg/server)
+├── quarium-logo.png    # quarium logo in the goga theme header
 ├── app.js              # client logic: stage/event polling, WebSocket subscription, consumption panel
 ├── markdown-it.min.js  # third-party markdown renderer (plans/feedback in the UI)
 └── favicon.svg         # browser tab icon

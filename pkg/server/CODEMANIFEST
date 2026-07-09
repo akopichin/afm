@@ -41,7 +41,7 @@ Annotations: |
 
 ---
 
-"Config(port int, runDir string, store Store, uiBus UIBus, approveFn string, reviseFn string, retryFn string, dialogAnswerFn string, dialogCancelFn string, accountant Accountant)":
+"Config(port int, runDir string, store Store, uiBus UIBus, approveFn string, reviseFn string, retryFn string, dialogAnswerFn string, dialogCancelFn string, accountant Accountant, theme string)":
   location: server.go
   annotations: |
     Настройки сервера.
@@ -76,6 +76,9 @@ Annotations: |
       Сигнатура: func(stageID string) error.
     "Accountant -> Accountant": |
       Фасад запроса потребления ресурсов (импорт pkg/accounting), используется хендлером /api/usage.
+    "Theme -> string": |
+      Тема дашборда из pkg/config (нормализованная через EffectiveTheme). "goga" активирует
+      goga-тему; прочее (включая пустую строку) — default novacorps.
 
 "Server(cfg Config)":
   location: server.go
@@ -101,13 +104,21 @@ Annotations: |
     - Хендлер ответа на диалог валидирует ответ против options вопроса, если allow_custom=false
       (по умолчанию allow_custom=true, если поле не задано): пустой options при allow_custom=false —
       400; ответ вне списка options — 400
-    - Корень (/) отдаётся статикой из `FS` (импорт pkg/web) через http.FileServer
+    - Корень (/) и /index.html отдаются через serveIndex (предподготовленный index.html), прочая
+      статика — через http.FileServer из `FS` (импорт pkg/web); serveIndex при пустом indexBytes
+      fallback'ит на FileServer (защита от регрессии embed)
+    - При theme=="goga" метод New предподготавливает index.html: заменяет href="style.css" →
+      href="style-goga.css" и class="theme-novacorps" → class="theme-goga" (тема пришла из
+      pkg/config через server.Config.Theme, см. EffectiveTheme)
     - GET /api/usage?metric=tokens|cost|kb&stage=<id> вызывает `UsageHandler` от `Accountant`;
       отсутствие секции pricing в конфиге — не ошибка: Accountant.Query возвращает пустой список
       агрегатов для metric=cost, хендлер отвечает 200 с пустым списком, не ошибкой
   methods:
     "New(cfg Config) -> server:Server": |
       Создаёт сервер.
+
+      При theme=="goga" предподготавливает index.html (замена CSS-ссылки и body-класса); ошибка
+      чтения embed — предупреждение в stderr, indexBytes остаётся пустым (fallback на FileServer).
     "Start() -> addr:string, err:error": |
       Запускает HTTP-сервер, возвращает фактический адрес.
     "Handler() -> handler:http.Handler": |
