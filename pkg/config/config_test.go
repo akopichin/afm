@@ -377,3 +377,50 @@ docker:
 	}
 	_ = trueVal
 }
+
+func TestThemeMerge(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "theme: goga\n")
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Theme != "goga" {
+		t.Errorf("theme: got %q, want %q", cfg.Theme, "goga")
+	}
+}
+
+func TestThemeEmptyDoesNotOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "theme: \"\"\n")
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Theme != "" {
+		t.Errorf("empty theme should stay empty: got %q", cfg.Theme)
+	}
+}
+
+func TestEffectiveTheme(t *testing.T) {
+	cases := []struct {
+		name  string
+		theme string
+		want  string
+	}{
+		{"empty", "", "novacorps"},
+		{"goga", "goga", "goga"},
+		{"goga-upper", "GOGA", "goga"},
+		{"goga-spaced", "  goga  ", "goga"},
+		{"novacorps", "novacorps", "novacorps"},
+		{"unknown", "dark", "novacorps"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{Theme: tc.theme}
+			if got := cfg.EffectiveTheme(); got != tc.want {
+				t.Errorf("EffectiveTheme(%q)=%q, want %q", tc.theme, got, tc.want)
+			}
+		})
+	}
+}

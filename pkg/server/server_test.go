@@ -93,3 +93,68 @@ func TestServer_UsageRouteWired(t *testing.T) {
 		t.Fatalf("body: got %+v, want %+v", got, want)
 	}
 }
+
+func TestServer_IndexDefaultTheme(t *testing.T) {
+	srv := New(Config{Accountant: &stubAccountant{}})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `href="style.css"`) {
+		t.Error("default тема должна ссылаться на style.css")
+	}
+	if !strings.Contains(body, `class="theme-novacorps"`) {
+		t.Error("default тема должна ставить class theme-novacorps")
+	}
+	if strings.Contains(body, "style-goga") {
+		t.Error("default тема не должна ссылаться на style-goga.css")
+	}
+}
+
+func TestServer_IndexGogaTheme(t *testing.T) {
+	srv := New(Config{Theme: themeGoga, Accountant: &stubAccountant{}})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `href="style-goga.css"`) {
+		t.Error("goga тема должна ссылаться на style-goga.css")
+	}
+	if !strings.Contains(body, `class="theme-goga"`) {
+		t.Error("goga тема должна ставить class theme-goga")
+	}
+	if strings.Contains(body, "theme-novacorps") {
+		t.Error("goga тема не должна содержать theme-novacorps")
+	}
+	if strings.Contains(body, `href="style.css"`) {
+		t.Error("goga тема не должна ссылаться на style.css")
+	}
+}
+
+func TestServer_ServesGogaStylesheet(t *testing.T) {
+	srv := New(Config{Theme: "goga", Accountant: &stubAccountant{}})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/style-goga.css", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /style-goga.css: got %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "--mint") {
+		t.Error("style-goga.css должен определять CSS-токен --mint")
+	}
+}

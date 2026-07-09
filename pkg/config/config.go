@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -143,6 +144,7 @@ type Config struct {
 	Pricing    PricingConfig    `yaml:"pricing"`
 	Accounting AccountingConfig `yaml:"accounting"`
 	PromptsDir string           `yaml:"prompts_dir"`
+	Theme      string           `yaml:"theme"`
 }
 
 // Default returns the built-in default configuration.
@@ -154,6 +156,26 @@ func Default() Config {
 		Executor: ExecutorConfig{IdleTimeout: 30 * time.Minute, MaxParallel: 0},
 		Server:   ServerConfig{Port: &port, OpenBrowser: &openBrowser},
 	}
+}
+
+// Dashboard theme names returned by EffectiveTheme.
+const (
+	themeGoga      = "goga"
+	themeNovacorps = "novacorps"
+)
+
+// EffectiveTheme returns the normalized dashboard theme name.
+// "goga" activates the goga theme; any other value (incl. empty/"novacorps")
+// falls back to the default "novacorps". Unknown values log a warning to stderr.
+func (c Config) EffectiveTheme() string {
+	t := strings.ToLower(strings.TrimSpace(c.Theme))
+	if t == themeGoga {
+		return themeGoga
+	}
+	if c.Theme != "" && t != themeNovacorps {
+		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, themeNovacorps)
+	}
+	return themeNovacorps
 }
 
 // LoadFrom loads and merges config from explicit global and project dirs.
@@ -195,6 +217,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.PromptsDir != "" {
 		dst.PromptsDir = overlay.PromptsDir
+	}
+	if overlay.Theme != "" {
+		dst.Theme = overlay.Theme
 	}
 	if overlay.Server.Port != nil {
 		dst.Server.Port = overlay.Server.Port

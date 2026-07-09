@@ -1420,7 +1420,7 @@ body::after {
 
 /* Вертикальная микро-подпись на вкладке */
 .usage-toggle::after {
-  content: "ПОТРЕБЛ.";
+  content: "USAGE";
   position: absolute;
   bottom: 10px;
   left: 50%;

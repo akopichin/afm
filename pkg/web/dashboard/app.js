@@ -70,13 +70,21 @@
     var usageStageSignature = null; // чтобы не перестраивать <select> на каждый апдейт
     var usageRefreshTimer = null;
 
-    // Палитра графика — дублирует CSS-токены явными hex: var() в SVG presentation
-    // attributes не работает, а генерить SVG удобнее строками.
+    // Палитра графика — читается из CSS-токенов активной темы, с fallback на
+    // mint-палитру Nova Corps. var() в SVG presentation attributes не работает,
+    // а генерить SVG удобнее строками — поэтому читаем computed values один раз.
+    // В Nova Corps --usage-grid не определён → fallback → график не меняется;
+    // в goga-теме --mint/--amber/--ink-dim/--usage-grid дают teal/blue палитру.
+    var _cssVars = getComputedStyle(document.documentElement);
+    function _cssVar(name, fallback) {
+        var v = _cssVars.getPropertyValue(name).trim();
+        return v || fallback;
+    }
     var USAGE_COLORS = {
-        mint: "#6fd4cc",
-        amber: "#e5d442",
-        inkDim: "#4a8a85",
-        grid: "rgba(111, 212, 204, 0.10)"
+        mint:   _cssVar("--mint",       "#6fd4cc"),
+        amber:  _cssVar("--amber",      "#e5d442"),
+        inkDim: _cssVar("--ink-dim",    "#4a8a85"),
+        grid:   _cssVar("--usage-grid", "rgba(111, 212, 204, 0.10)")
     };
 
     // ---- Special section detection ----
@@ -97,18 +105,18 @@
         return line.trim().indexOf("## ") === 0;
     }
 
-    // ---- Status labels (Russian) ----
+    // ---- Status labels ----
     var statusLabels = {
-        pending: "Ожидание",
-        planning: "Планирование",
-        awaiting_approval: "Ожидает одобрения",
-        revising: "Правки",
-        ready: "Готов",
-        running: "Выполняется",
-        done: "Завершено",
-        failed: "Ошибка",
-        retrying: "Повтор",
-        awaiting_user_input: "Ожидает ответ"
+        pending: "Pending",
+        planning: "Planning",
+        awaiting_approval: "Awaiting approval",
+        revising: "Revising",
+        ready: "Ready",
+        running: "Running",
+        done: "Done",
+        failed: "Failed",
+        retrying: "Retrying",
+        awaiting_user_input: "Awaiting reply"
     };
 
     // ---- API helpers ----
@@ -410,7 +418,7 @@
         form.id = "active-comment-form";
 
         var textarea = document.createElement("textarea");
-        textarea.placeholder = "Комментарий к строке " + lineNum + "...";
+        textarea.placeholder = "Comment on line " + lineNum + "...";
         textarea.value = lineComments[lineNum] || "";
 
         var actions = document.createElement("div");
@@ -418,7 +426,7 @@
 
         var btnAdd = document.createElement("button");
         btnAdd.className = "btn btn-send";
-        btnAdd.textContent = lineComments[lineNum] ? "Обновить" : "Добавить";
+        btnAdd.textContent = lineComments[lineNum] ? "Update" : "Add";
         btnAdd.addEventListener("click", function (ev) {
             ev.stopPropagation();
             var text = textarea.value.trim();
@@ -434,7 +442,7 @@
 
         var btnCancel = document.createElement("button");
         btnCancel.className = "btn btn-cancel";
-        btnCancel.textContent = "Отмена";
+        btnCancel.textContent = "Cancel";
         btnCancel.addEventListener("click", function (ev) {
             ev.stopPropagation();
             closeCommentForm();
@@ -443,7 +451,7 @@
 
         var btnDelete = document.createElement("button");
         btnDelete.className = "btn btn-cancel";
-        btnDelete.textContent = "Удалить";
+        btnDelete.textContent = "Delete";
         btnDelete.style.display = lineComments[lineNum] ? "inline-block" : "none";
         btnDelete.addEventListener("click", function (ev) {
             ev.stopPropagation();
@@ -477,7 +485,7 @@
 
         var display = document.createElement("div");
         display.className = "line-comment-form line-comment-display";
-        display.innerHTML = '<div style="color:var(--c-awaiting);font-size:12px;margin-bottom:4px">Комментарий к строке ' + lineNum + '</div>' +
+        display.innerHTML = '<div style="color:var(--c-awaiting);font-size:12px;margin-bottom:4px">Comment on line ' + lineNum + '</div>' +
             '<div style="color:var(--text);white-space:pre-wrap">' + escapeHTML(text) + '</div>';
         display.addEventListener("click", function (ev) { ev.stopPropagation(); });
         lineDiv.appendChild(display);
@@ -493,7 +501,7 @@
     function updateReviseButton() {
         var count = Object.keys(lineComments).length;
         $btnRevise.disabled = count === 0;
-        $btnRevise.textContent = count > 0 ? "Отправить правку (" + count + ")" : "Отправить правку";
+        $btnRevise.textContent = count > 0 ? "Send revision (" + count + ")" : "Send revision";
     }
 
     function buildFeedbackString() {
@@ -501,7 +509,7 @@
         var lineNums = Object.keys(lineComments).map(Number).sort(function (a, b) { return a - b; });
         for (var i = 0; i < lineNums.length; i++) {
             var n = lineNums[i];
-            parts.push("Строка " + n + ": " + lineComments[n]);
+            parts.push("Line " + n + ": " + lineComments[n]);
         }
         return parts.join("\n\n");
     }
@@ -651,7 +659,7 @@
         };
 
         $dialogPending.querySelector(".btn-cancel-dialog").onclick = function () {
-            if (!confirm("Отменить стейдж?")) return;
+            if (!confirm("Cancel stage?")) return;
             cancelDialog(stageID);
         };
     }
@@ -660,7 +668,7 @@
         apiPost("/api/stages/" + encodeURIComponent(stageID) + "/dialog/answer", {
             id: qID, phase: phase, answer: answer, from_options: fromOptions
         }, function (err) {
-            if (err) { alert("Ошибка отправки: " + err.message); return; }
+            if (err) { alert("Send error: " + err.message); return; }
             $dialogPending.classList.add("hidden");
             loadDialog(stageID);
         });
@@ -668,15 +676,15 @@
 
     function cancelDialog(stageID) {
         apiPost("/api/stages/" + encodeURIComponent(stageID) + "/dialog/cancel", null, function (err) {
-            if (err) alert("Ошибка отмены: " + err.message);
+            if (err) alert("Cancel error: " + err.message);
         });
     }
 
     $dialogToggle.onclick = function () {
         $dialogHistory.classList.toggle("collapsed");
         $dialogToggle.textContent = $dialogHistory.classList.contains("collapsed")
-            ? "▾ РАЗВЕРНУТЬ ИСТОРИЮ"
-            : "▴ СВЕРНУТЬ ИСТОРИЮ";
+            ? "▾ EXPAND HISTORY"
+            : "▴ COLLAPSE HISTORY";
     };
 
     // ---- Consumption panel ----
@@ -688,7 +696,7 @@
     function formatUsageValue(v, metric) {
         if (metric === "cost") return formatUsageCost(v);
         if (metric === "kb") return v.toFixed(1) + " KB";
-        return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " т.";
+        return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " tok";
     }
 
     // Стоимость: маленькие суммы показываем с большей точностью (cost обычно < $0.01).
@@ -802,7 +810,7 @@
             if (err) {
                 renderUsageChart([]);
                 $usageTotal.textContent = "—";
-                $usageMeta.textContent = "ошибка запроса";
+                $usageMeta.textContent = "request error";
                 return;
             }
             var data;
@@ -810,8 +818,8 @@
             if (!Array.isArray(data)) data = [];
             renderUsageChart(data);
             $usageTotal.textContent = formatUsageValue(usageSum(data), metric);
-            $usageMeta.innerHTML = '<span>' + data.length + " точек</span>" +
-                '<span>' + (stage ? escapeHTML(stage) : "все стадии") + "</span>";
+            $usageMeta.innerHTML = '<span>' + data.length + " points</span>" +
+                '<span>' + (stage ? escapeHTML(stage) : "all stages") + "</span>";
         });
     }
 
@@ -842,7 +850,7 @@
         usageStageSignature = sig;
 
         var prev = currentUsageStage || "";
-        var html = '<option value="">Все стадии</option>';
+        var html = '<option value="">All stages</option>';
         for (var i = 0; i < ids.length; i++) {
             var id = ids[i];
             html += '<option value="' + escapeHTML(id) + '"' +
@@ -1301,7 +1309,7 @@
                 statusClass = statusStr ? "status-" + statusStr.replace(/[^a-z0-9_]/gi, "") : "";
                 break;
             case "agent_completed":
-                msg = "\u0430\u0433\u0435\u043d\u0442 " + (ev.data || "") + " \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d";
+                msg = "agent " + (ev.data || "") + " completed";
                 break;
             case "agent_action":
                 var actionData = ev.data || {};
@@ -1311,33 +1319,33 @@
                 msgClass = "feed-msg action";
                 break;
             case "approved":
-                msg = "\u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043e";
+                msg = "approved";
                 statusClass = "status-awaiting_approval";
                 break;
             case "revised":
-                msg = "\u043f\u0440\u0430\u0432\u043a\u0438: " + (ev.data || "");
+                msg = "revisions: " + (ev.data || "");
                 msgClass = "feed-msg error";
                 statusClass = "status-revising";
                 break;
             case "retry_scheduled":
-                msg = "\u043f\u043e\u0432\u0442\u043e\u0440: " + (ev.data || "");
+                msg = "retry: " + (ev.data || "");
                 statusClass = "status-retrying";
                 break;
             case "retry_exhausted":
-                msg = "\u043f\u043e\u043f\u044b\u0442\u043a\u0438 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d\u044b";
+                msg = "retries exhausted";
                 statusClass = "status-failed";
                 msgClass = "feed-msg error";
                 break;
             case "manual_retry":
-                msg = "\u0440\u0443\u0447\u043d\u043e\u0439 \u043f\u043e\u0432\u0442\u043e\u0440";
+                msg = "manual retry";
                 statusClass = "status-retrying";
                 break;
             case "ask_user":
-                msg = "\u0432\u043e\u043f\u0440\u043e\u0441 \u0430\u0433\u0435\u043d\u0442\u0443";
+                msg = "question to agent";
                 statusClass = "status-awaiting_user_input";
                 break;
             case "user_answered":
-                msg = "\u043e\u0442\u0432\u0435\u0442 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044e";
+                msg = "reply to user";
                 statusClass = "status-running";
                 break;
             default:

@@ -191,6 +191,7 @@ func newRunCmd() *cobra.Command {
 					RunDir:     runDir,
 					Store:      store,
 					Accountant: accountant,
+					Theme:      cfg.EffectiveTheme(),
 					UIBus:      orch.UIBus(),
 					ApproveFn:  orch.Approve,
 					ReviseFn:   orch.Revise,

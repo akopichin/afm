@@ -2,6 +2,15 @@
 # Place in: .afm/config.yaml (project-level) or ~/.afm/config.yaml (global)
 # Project-level config overrides global. Missing fields keep defaults.
 
+# Тема веб-дашборда.
+# "goga"        — тёмная tech-тема по мотивам qarium.ru/goga (teal-акцент #20D4BF,
+#                 sans-serif шрифт, скруглённые углы, лого Goga, английский UI).
+# "novacorps"   — дефолтная hi-tech тема (мятный акцент, моноширинный шрифт,
+#                 scanline/неон-декор).
+# Любое иное или пустое значение → дефолтная "novacorps" (неизвестное — warning в stderr).
+# Default: "novacorps"
+# theme: goga
+
 # AI client settings
 client:
   # Command to run as the AI agent.
