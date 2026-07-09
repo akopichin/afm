@@ -146,6 +146,47 @@ func TestProxy_ServeHTTP_DisabledCaptureDoesNotCreateFile(t *testing.T) {
 	}
 }
 
+// TestProxy_ServeHTTP_NoUsageCaptureOnNonOKStatus asserts that a non-200 passthrough
+// response (errors, rate limits) is NOT captured as a usage record, even when the body
+// carries a valid usage field and usageLogPath is set. The status-skip in captureUsage
+// is what suppresses spurious warnings on error responses — a regression that removes
+// the skip would write a record here because the body parses successfully.
+func TestProxy_ServeHTTP_NoUsageCaptureOnNonOKStatus(t *testing.T) {
+	upstreamBody := `{"model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":20}}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests) // 429 — body carries usage, but status is an error
+		w.Write([]byte(upstreamBody))             //nolint:errcheck
+	}))
+	defer upstream.Close()
+
+	usageLog := filepath.Join(t.TempDir(), "usage.jsonl")
+	p := proxy.New(upstream.URL, nil, usageLog) // no transforms → passthrough, capture enabled
+	addr, err := p.Start(0)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer p.Shutdown(context.Background()) //nolint:errcheck
+
+	resp, err := http.Post(addr+"/v1/messages", "application/json", strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatalf("proxy POST: %v", err)
+	}
+	io.ReadAll(resp.Body) //nolint:errcheck
+	resp.Body.Close()
+
+	// Client must still see the upstream error status, forwarded transparently.
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status forwarded: got %d, want 429", resp.StatusCode)
+	}
+
+	// No usage record must be written for a non-200 response.
+	if _, err := os.Stat(usageLog); !os.IsNotExist(err) {
+		data, _ := os.ReadFile(usageLog)
+		t.Errorf("usage log must not exist for non-200 response; stat err: %v, content: %q", err, string(data))
+	}
+}
+
 // TestProxy_ServeHTTP_TeeDoesNotAlterClientResponse asserts the tee-writer forwards
 // every client-visible byte unchanged and without blocking — the response body equals
 // the upstream's body exactly, same as before this change.
