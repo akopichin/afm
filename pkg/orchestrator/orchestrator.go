@@ -740,7 +740,7 @@ func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 				o.Trigger(stageID, EvFail, GuardCtx{}, "mkdir failed")
 				return nil
 			}
-			if err := copyFile(stage.Plan, planPath); err != nil {
+			if err := copyFile(resolvePlanSource(o.opts.RunDir, *stage), planPath); err != nil {
 				o.Trigger(stageID, EvFail, GuardCtx{}, "copy plan failed: "+err.Error())
 				return nil
 			}
@@ -836,7 +836,7 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 			continue
 		}
 		dst := filepath.Join(stageDir, "plan.md")
-		if err := copyFile(s.Plan, dst); err != nil {
+		if err := copyFile(resolvePlanSource(o.opts.RunDir, s), dst); err != nil {
 			o.Trigger(s.ID, EvFail, GuardCtx{}, "copy plan failed")
 			continue
 		}
@@ -1227,6 +1227,25 @@ func (o *Orchestrator) shouldExit() bool {
 
 func (o *Orchestrator) currentStatus(id string) state.StageStatus {
 	return o.opts.Store.Get(id)
+}
+
+// resolvePlanSource превращает путь stage.Plan в путь к существующему файлу.
+// Plan — путь к существующему файлу плана. Если путь относительный (./…), план
+// обычно произведён стадией-зависимостью и лежит в её run-директории
+// (<runDir>/<depID>/<path>) — ищем его там. Не найден ни в одной зависимости —
+// fallback на буквальный путь (pre-existing план в project-dir, прежнее поведение).
+func resolvePlanSource(runDir string, stage flow.Stage) string {
+	if stage.Plan == "" || !strings.HasPrefix(stage.Plan, "./") {
+		return stage.Plan
+	}
+	rel := strings.TrimPrefix(stage.Plan, "./")
+	for _, depID := range stage.DependsOn {
+		candidate := filepath.Join(runDir, depID, rel)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return stage.Plan
 }
 
 func copyFile(src, dst string) error {

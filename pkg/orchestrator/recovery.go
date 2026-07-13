@@ -43,7 +43,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				}
 				dst := filepath.Join(stageDir, "plan.md")
 				if s.Plan != "" {
-					if err := copyFile(s.Plan, dst); err != nil {
+					if err := copyFile(resolvePlanSource(o.opts.RunDir, s), dst); err != nil {
 						o.Trigger(s.ID, EvFail, GuardCtx{}, "copy plan failed")
 						continue
 					}

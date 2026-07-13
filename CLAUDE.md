@@ -275,7 +275,7 @@ make release-minor   # v1.2.3 → v1.3.0  (новая фича, обратная
 make release-major   # v1.2.3 → v2.0.0  (breaking change)
 ```
 
-`scripts/release.sh` читает последний SemVer git-тег, бампит уровень, собирает имидж с двумя тегами и пушит оба; git-тег создаётся локально только после успешного пуша (push тега в remote — вручную: `git push origin vX.Y.Z`). Версия вшита в бинарник: `docker run akopichin/afm:vX.Y.Z afm --version` покажет тег.
+`scripts/release.sh` читает последний SemVer git-тег, бампит уровень, собирает имидж с двумя тегами и пушит оба; после успешного пуша образа создаёт локальный git-тег **и сразу пушит его в remote** (`git push origin vX.Y.Z`). Сбой пуша тега (нет сети/auth) не валит релиз — образ уже опубликован, тег пушится вручную. Версия вшита в бинарник: `docker run akopichin/afm:vX.Y.Z afm --version` покажет тег.
 
 `make docker-push` — dev-only, пушит только `:latest` (быстрая итерация без релиза). Чтобы выдать конкретную версию — используй `:vX.Y.Z` нужного релиза.
 

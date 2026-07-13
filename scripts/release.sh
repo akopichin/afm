@@ -48,6 +48,13 @@ docker build --build-arg AFM_VERSION="$next" \
 docker push akopichin/afm:"$next"
 docker push akopichin/afm:latest
 
-# git-тег — только после успешного пуша (орфан-тег при сбое пуша исключён)
+# git-тег — только после успешного пуша образа (орфан-тег при сбое пуша исключён).
 git tag -a "$next" -m "Release $next"
-echo "released $next (tag created locally; push to remote: git push origin $next)"
+
+# Пушим git-тег в remote автоматически. Образ уже опубликован, поэтому сбой пуша
+# тега (нет сети/auth) НЕ валит релиз — предупреждаем и оставляем пушить вручную.
+if git push origin "$next"; then
+    echo "released $next (image + git tag pushed)"
+else
+    echo "released $next (image pushed; git tag $next is LOCAL — push manually: git push origin $next)" >&2
+fi
