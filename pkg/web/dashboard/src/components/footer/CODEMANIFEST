@@ -1,0 +1,36 @@
+Imports:
+  - Types: [Stage]
+    Usages: [dashboard-data-types]
+    From: src/types
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react`. Use `typescript` for naming and strict
+  typing. Use `Stage` from Imports. Use `dashboard-data-types` from Imports for guidance on consuming `Stage`.
+
+---
+
+"Footer(stages: Stage[], elapsedMs: number) -> element: ReactElement":
+  location: Footer.tsx
+  annotations: |
+    Футер: прогресс, время старта, elapsed.
+
+    `stages`: список стадий для прогресса
+    `elapsedMs`: прошедшее время в миллисекундах от старта (готовое значение от хука секундомера)
+    `element`: разметка футера
+
+    Requirements:
+    - Прогресс — доля стадий со статусом done от общего числа stages
+    - startedAt и elapsed отображаются в человекочитаемом формате; elapsed пересчитывается вызывающим хуком
+      секундомера каждую секунду (см. useElapsed)
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Футер дашборда.

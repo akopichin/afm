@@ -81,8 +81,10 @@ func New(cfg Config) *Server {
 		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
 	} else {
 		if cfg.Theme == themeGoga {
+			// Vite собирает index.html с относительными путями (base: './'),
+			// поэтому ссылка на стиль — href="./style.css". Подменяем на goga-стиль.
 			indexBytes = bytes.ReplaceAll(indexBytes,
-				[]byte(`href="style.css"`), []byte(`href="style-goga.css"`))
+				[]byte(`href="./style.css"`), []byte(`href="./style-goga.css"`))
 			indexBytes = bytes.ReplaceAll(indexBytes,
 				[]byte(`class="theme-novacorps"`), []byte(`class="theme-goga"`))
 		}

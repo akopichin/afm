@@ -21,7 +21,18 @@ $(GOLANGCI_BIN): $(LOCAL_BIN)
 .PHONY: bindeps
 bindeps: $(GOLANGCI_BIN)
 
-build:
+DASHBOARD_DIR := $(CURDIR)/pkg/web/dashboard
+
+# web собирает React-дашборд (Vite → index.html + assets/* в корне pkg/web/dashboard/),
+# откуда go:embed вкомпилирует его в бинарь. Обязательный шаг ПЕРЕД go-сборкой —
+# иначе в бинарь попадёт устаревший/пустой дашборд. npm-зависимости ставятся
+# автоматически при отсутствии node_modules.
+.PHONY: web
+web:
+	@test -d $(DASHBOARD_DIR)/node_modules || (echo ">> installing dashboard dependencies" && cd $(DASHBOARD_DIR) && npm install)
+	cd $(DASHBOARD_DIR) && npm run build
+
+build: web
 	$(GOENV) CGO_ENABLED=0 go build -v -ldflags "-X main.version=$(VERSION)" -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/afm
 
 test:
@@ -46,7 +57,7 @@ clean:
 # ВАЖНО: cp подписанного бинарника ставит xattr com.apple.provenance, который
 # рассинхронизируется с подписью → macOS 26 убивает копию (SIGKILL 137, spctl
 # rejected). Поэтому копию нужно пере-подписать НА МЕСТЕ после cp.
-install:
+install: web
 	$(GOENV) go install -ldflags "-X main.version=$(VERSION)" ./cmd/afm
 	@src=$$(go env GOPATH)/bin/$(PROJECT_NAME); \
 	codesign -f -s - $$src && echo "codesigned: $$src"; \
@@ -74,6 +85,9 @@ DOCKER_TAG   := latest
 
 .PHONY: docker-build docker-push docker-run
 
+# docker-build не зависит от web: Dockerfile.runtime сам собирает React-дашборд
+# в node-стадии (см. stage web) — это же использует release.sh, так что релизный
+# образ всегда получает свежий фронт из исходников.
 docker-build:
 	docker build --build-arg AFM_VERSION=$(VERSION) -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 

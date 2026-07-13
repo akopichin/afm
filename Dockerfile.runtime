@@ -1,11 +1,23 @@
-# Stage 1: build afm binary
+# Stage 1: build React dashboard (Vite → index.html + assets/ + статика из public/)
+FROM node:22-bookworm-slim AS web
+WORKDIR /dash
+# Сначала только манифесты зависимостей — слой npm ci кэшируется отдельно от
+# исходников и не инвалидируется при правках в src/.
+COPY pkg/web/dashboard/package.json pkg/web/dashboard/package-lock.json ./
+RUN npm ci
+COPY pkg/web/dashboard/ .
+RUN npm run build
+
+# Stage 2: build afm binary (вкомпилирует собранный дашборд через go:embed)
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 COPY . .
+# Перекрываем dashboard свежим билдом из stage web: точка входа, бандл, стили, иконки.
+COPY --from=web /dash/index.html /dash/assets /dash/style.css /dash/style-goga.css /dash/favicon.svg /dash/quarium-logo.png ./pkg/web/dashboard/
 ARG AFM_VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-X main.version=$AFM_VERSION" -o /afm ./cmd/afm
 
-# Stage 2: runtime environment
+# Stage 3: runtime environment
 FROM ubuntu:24.04
 
 # Node 22 + Python 3.12 + dev tools + gosu (для дропа привилегий до host-uid)

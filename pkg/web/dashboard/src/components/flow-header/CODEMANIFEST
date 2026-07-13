@@ -1,0 +1,30 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react` — only functional components, no state
+  management library. Use `typescript` for naming and strict typing.
+
+---
+
+"FlowHeader(flowName: string, connected: boolean) -> element: ReactElement":
+  location: FlowHeader.tsx
+  annotations: |
+    Шапка дашборда: название флоу и индикатор состояния WebSocket-соединения.
+
+    `flowName`: отображаемое имя флоу
+    `connected`: true, если соединение открыто
+    `element`: разметка шапки
+
+    Requirements:
+    - Индикатор отображает текст LINK, когда connected истинно, и OFFLINE — когда ложно
+    - Разметка сохраняет id flow-name и id ws-status для совместимости с темой goga
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Шапка дашборда с именем флоу и индикатором WS-соединения.

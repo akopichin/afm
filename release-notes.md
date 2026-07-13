@@ -2,6 +2,40 @@
 
 Новые возможности — сверху, дальше вниз по устареванию. Даты — по коммитам в `fix`/`master`.
 
+## 2026-07-13
+
+### Дашборд на React
+- Веб-дашборд переписан с vanilla JS (`app.js` + `markdown-it.min.js`) на **React 18 + Vite + TypeScript** (`pkg/web/dashboard/src`); markdown-it упакован внутрь бандла, отдельного файла больше нет.
+- **`go:embed` ограничен** только раздаваемой статикой (`index.html`, `assets/`, стили, иконки). Раньше `dashboard/*` утягивал в бинарь `node_modules` (~96 МБ) — бинарник весил 163 МБ; теперь **14 МБ**.
+- **Сборка фронтенда в `make`**: цель `web` (`npm run build`) стала пререквизитом `build`/`install`/`docker-build` — веб всегда пересобирается и вкомпилируется в бинарь.
+- **`Dockerfile.runtime` multi-stage**: node-стадия собирает React, go-стадия встраивает его через embed. `make release-*` теперь тоже собирает веб (релизный образ всегда с актуальным дашбордом из исходников).
+- `.dockerignore`: `**/node_modules/` исключён из docker-контекста.
+
+### WebSocket keepalive
+- Сервер пингует соединения (gorilla `PingMessage` + `SetReadDeadline` 60 c + `PongHandler`) и рвёт «мёртвые» клиента; app-level `{"type":"heartbeat"}` каждые 30 c (`pkg/server/websocket.go`, single-writer через `select`).
+- Клиент (`use-event-feed`): автореконнект с backoff (был) + **watchdog** (тишина >75 c → принудительный реконнект); heartbeat обновляет liveness, но в ленту событий не попадает.
+
+### Resizable-лейаут и maximize
+- Панели на **`react-resizable-panels`**: 3 колонки (`stages | central | feed`) и вертикальные сплиты `plan/dialog/log` внутри central; размеры сохраняются в `localStorage`. Дефолт 15/60/25 (колонки), 30/45/25 (строки).
+- **Maximize** (иконка ⛶) панелей plan/dialog/feed на весь экран через React-портал; внутреннее состояние (скролл, ввод) сохраняется, `Esc`/✕ — свернуть.
+
+### Сигнал «ждёт пользователя»
+- Для статусов `awaiting_user_input`/`awaiting_approval`: пульс элемента стадии в сайдбаре + точка в шапке + свечение панели + мигание `document.title` в фоновой вкладке + автоскролл центральной колонки к ожидающей панели.
+
+### Auto-scroll диалога и фида
+- Диалог и лента событий прижаты к низу при появлении контента, пока пользователь сам не уехал вверх (кнопка «↓ к последнему»); при наличии ждущего ответа вопроса диалог проматывается к нему (и при загрузке, и при новом вопросе).
+
+### Диалог: только Q/A, без «мыслей» агента
+- В секцию диалога больше не попадают `text`-блоки агента из stream-json лога (для GLM это рассуждения вслух, дублировавшие панель log) — только вопросы/ответы. Контекст рассуждений остаётся в `LogPanel`. Кнопки вариантов ответа подсвечивают выбор (`selected`).
+
+### Тема goga после React-миграции
+- `style-goga.css` пересобран как `@import "style.css"` + goga design-tokens (прежде отдельный 1100-строчный файл под vanilla-DOM — сломался после миграции на React). Теперь обе темы разделяют структуру из `style.css`, goga отличается палитрой + оверрайдами; темы больше не расходятся.
+- goga-оверрайды: лого «goga» (teal), чистый фон без novacorps-клетки и `.ray`, панели на `--bg-elev`.
+- `pkg/server/server.go`: подмена CSS под `href="./style.css"` (Vite `base: './'`) — фикс переключения стиля для goga.
+
+### Тесты сервера под React
+- `TestServerServesMarkdownIt` → `TestServerServesReactBundle` (markdown-it в бандле); `TestServer_IndexDefaultTheme`/`_IndexGogaTheme` актуализированы под собранный React `index.html` (`./style.css`, `#root`, theme-class).
+
 ## 2026-07-09
 
 ### Тема дашборда `goga`

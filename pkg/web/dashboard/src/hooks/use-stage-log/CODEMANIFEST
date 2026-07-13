@@ -1,0 +1,52 @@
+Imports:
+  - Types: [LogEntry]
+    Usages: [dashboard-data-types]
+    From: src/types
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react` for the cancelled-flag guard and for
+  restarting the timer when stageId changes. Use `typescript` for typing the parsed log entries.
+  Use `LogEntry` from Imports. Use `dashboard-data-types` from Imports for guidance on the /api/stages/{id}/log
+  source.
+
+---
+
+"useStageLog(stageId: string | null) -> entries: LogEntry[]":
+  location: use-stage-log.ts
+  annotations: |
+    Хук поллинга операционного лога выбранной стадии через GET /api/stages/{stageId}/log.
+
+    `stageId`: идентификатор выбранной стадии либо null
+    `entries`: список строк лога
+
+    Algorithm:
+    1. При монтировании и изменении stageId выполнить запрос GET /api/stages/{stageId}/log
+    2. Прочитать ответ как текст; оставить только строки вида «HH:MM:SS text …» (фильтрация tool/banner-строк
+       как в renderLog текущего app.js) и разобрать их в LogEntry (timestamp, message, level='info')
+    3. Если не отменён — обновить состояние
+    4. Запланировать повторный опрос (интервал 3000мс)
+    5. При размонтировании или смене stageId — отмена, остановка таймера
+
+    Requirements:
+    - stageId равный null — пустой массив entries без запроса (нет выбранной стадии)
+    - Эндпоинт лога отдаёт plain text, не JSON — парсинг строковый, единственная точка приведения типа
+    - Использовать флаг отмены для игнорирования устаревших ответов
+    - Источник лога — отдельный поллинг этого эндпоинта, а не фильтрация WebSocket-событий
+
+    Constraints:
+    - Не выполнять запрос и не держать таймер, пока stageId равен null
+    - В текущем app.js таймер лога ставится только для активных статусов стадии
+      (planning/running/revising/retrying/awaiting_user_input); хук опрашивает безусловно — осознанное
+      упрощение (дополнительные запросы для завершённых стадий), зафиксировано как известное отклонение от app.js
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Хук поллинга лога стадии (GET /api/stages/{id}/log).

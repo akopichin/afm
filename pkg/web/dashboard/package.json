@@ -1,0 +1,35 @@
+{
+  "name": "afm-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "afm dashboard — React/Vite/TypeScript SPA (behavioural parity rewrite of app.js)",
+  "scripts": {
+    "dev": "npm run restore-index && vite",
+    "build": "npm run restore-index && npm run clean:assets && vite build",
+    "restore-index": "node scripts/restore-index.js",
+    "clean:assets": "rm -rf assets",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-resizable-panels": "^4.12.2"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/markdown-it": "^14.1.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}

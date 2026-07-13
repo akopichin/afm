@@ -1,0 +1,77 @@
+Imports:
+  - Types: [Stage, PlanComment]
+    Usages: [dashboard-data-types]
+    From: src/types
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react` (раздел markdown-it фиксирует конфиг и
+  переход на npm-зависимость; поведение режима ревью плана перенесено из renderPlanReview/formatLine/
+  decorateCheckboxes текущего app.js). Use `typescript` for naming and strict typing. Use `Stage`, `PlanComment`
+  from Imports. Use `dashboard-data-types` from Imports for guidance on consuming `Stage`/`PlanComment`.
+
+---
+
+"MarkdownRenderer(source: string) -> element: ReactElement":
+  location: MarkdownRenderer.tsx
+  annotations: |
+    Обёртка над npm-пакетом markdown-it (см. react).
+
+    `source`: markdown-текст
+    `element`: разметка с HTML
+
+    Requirements:
+    - Конфигурация парсера html=false, linkify=true
+    - Экземпляр создаётся один раз на модуль
+
+    Constraints:
+    - Никакой другой сторонней библиотеки рендера markdown, кроме npm-пакета markdown-it, не используется
+
+"PlanPanel(stage: Stage) -> element: ReactElement":
+  location: PlanPanel.tsx
+  annotations: |
+    Панель плана стадии: загрузка markdown плана, рендер (обычный или режим ревью), действия Approve/Send
+    revision/Retry, комментарии к строкам плана. Поведение перенесено из loadPlan/renderPlanReview/
+    onPlanLineClick текущего app.js.
+
+    `stage`: выбранная стадия (полный объект — статус определяет режим ревью, видимость действий и mark-done)
+    `element`: разметка панели
+
+    Разметка плана загружается запросом GET /api/stages/{stage.id}/plan (plain text) и рендерится: в обычном
+    режиме — через MarkdownRenderer, в режиме ревью (stage.status === 'awaiting_approval') — построчно с
+    номерами строк и комментариями.
+
+    Requirements:
+    - Режим ревью (awaiting_approval): спецсекции «## Assumptions»/«## Acceptance Criteria» сворачиваемые, каждая
+      строка с номером, чекбоксы [x]/[ ] стилизованы, code-блоки (```) отдельными блоками; клик по строке
+      открывает форму комментария
+    - При stage.status === 'done' все «- [ ]» заменяются на «- [x]» (mark-all-done, как в текущем app.js)
+    - Действия Approve/Send revision показываются только для awaiting_approval; Retry — только для failed
+
+  properties:
+    "planMarkdown -> string": |
+      Markdown-текст плана, загруженный из GET /api/stages/{stage.id}/plan (внутреннее состояние).
+    "comments -> PlanComment[]": |
+      Комментарии к строкам плана (внутреннее клиентское состояние режима ревью; накапливаются и отправляются
+      одним feedback-полем ревизии, а не через отдельный API комментариев).
+  methods:
+    "approve() -> done:Promise<void>": |
+      Отправляет подтверждение плана (POST /api/stages/{stage.id}/approve).
+
+      Обновление состояния — через хук состояния флоу, без оптимистичного апдейта.
+    "sendRevision() -> done:Promise<void>": |
+      Отправляет запрос на доработку (POST /api/stages/{stage.id}/revise). Собирает feedback из накопленных
+      комментариев к строкам (формат «Line N: text», как buildFeedbackString в текущем app.js).
+    "retry() -> done:Promise<void>": |
+      Запрашивает повтор стадии (POST /api/stages/{stage.id}/retry).
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Панель плана стадии с markdown, режимом ревью и действиями Approve/Revise/Retry.

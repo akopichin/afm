@@ -1,0 +1,119 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `typescript` for TypeScript conventions (strict
+  mode, naming, single external-JSON assertion point). This cell is a deliberate deviation from the project's
+  general JS/Jest conventions in favor of TypeScript + Vitest, scoped only to the dashboard rewrite. All types
+  here are plain data shapes with no behavior, shared across every dashboard component cell. Re-exported
+  through a barrel index.ts per the project's facade convention.
+
+---
+
+"Stage()":
+  location: stage.ts
+  annotations: |
+    Данные одной стадии afm-флоу. Источник — поле stages ответа GET /api/status (объект по идентификатору
+    стадии), потребляется хуком состояния флоу и передаётся в список стадий, футер и панель потребления.
+    Набор значений статуса совпадает с реальными статусами стадий afm (см. statusLabels в текущем app.js):
+    pending, planning, awaiting_approval, revising, ready, running, done, failed, retrying, awaiting_user_input.
+  properties:
+    "id -> string": |
+      Уникальный идентификатор стадии.
+    "name -> string": |
+      Отображаемое имя стадии.
+    "status -> 'pending' | 'planning' | 'awaiting_approval' | 'revising' | 'ready' | 'running' | 'done' | 'failed' | 'retrying' | 'awaiting_user_input'": |
+      Текущий статус стадии из полного набора статусов afm.
+    "updatedAt -> string": |
+      Время последнего обновления стадии в формате ISO 8601.
+
+"AfmEvent()":
+  location: afm-event.ts
+  annotations: |
+    Событие, приходящее через WebSocket /ws, потребляется хуком подписки на WebSocket-соединение и
+    отображается в ленте событий. Богатый набор type (stage_status_changed, approved, revised, retry_scheduled,
+    retry_exhausted, manual_retry, ask_user, agent_action, agent_completed) используется корневой композицией
+    как канал обновления состояния, а не только как лента для отображения.
+  properties:
+    "type -> string": |
+      Тип события из набора типов WS-событий afm.
+    "payload -> unknown": |
+      Произвольные данные события (поле data сервера), специфичные для type.
+    "stageId -> string": |
+      Идентификатор стадии, к которой относится событие (поле stage_id сервера).
+    "timestamp -> string": |
+      Время приёма события на клиенте в формате ISO 8601 (сервер время не присылает).
+
+"UsagePoint()":
+  location: usage-point.ts
+  annotations: |
+    Точка временного ряда потребления ресурсов из GET /api/usage (с параметром metric и опционально stage),
+    потребляется хуком поллинга метрик потребления и отображается в панели потребления.
+  properties:
+    "timestamp -> string": |
+      Время точки в формате ISO 8601.
+    "metric -> 'tokens' | 'cost' | 'kb'": |
+      Метрика, к которой относится значение.
+    "value -> number": |
+      Значение метрики в этой точке.
+
+"DialogQuestion()":
+  location: dialog-question.ts
+  annotations: |
+    Вопрос в диалоговом канале стадии — с опциями либо ожидающий свободный ответ. Источник — GET
+    /api/stages/{id}/dialog.
+  properties:
+    "id -> string": |
+      Уникальный идентификатор вопроса.
+    "phase -> string": |
+      Фаза диалога (поле phase сервера), для группировки истории.
+    "text -> string": |
+      Текст вопроса (поле question сервера).
+    "options -> Array<string>": |
+      Предопределённые опции ответа (массив строк сервера); пустой массив — ожидается только свободный текст.
+    "allowCustom -> boolean": |
+      Разрешён ли свободный ответ (поле allow_custom сервера).
+
+"DialogAnswer()":
+  location: dialog-answer.ts
+  annotations: |
+    Ответ пользователя на вопрос диалогового канала — выбор опции или свободный текст. Отправляется POST
+    /api/stages/{id}/dialog/answer.
+  properties:
+    "questionId -> string": |
+      Идентификатор вопроса, на который дан ответ.
+    "value -> string": |
+      Значение ответа: идентификатор опции либо введённый текст.
+
+"PlanComment()":
+  location: plan-comment.ts
+  annotations: |
+    Комментарий к строке плана, создаётся в диалоговом канале, отображается в панели плана. Один и тот же
+    импортированный тип используется и для создания, и для отображения; координация между клетками идёт через
+    корневую композицию.
+  properties:
+    "line -> number": |
+      Номер строки плана.
+    "text -> string": |
+      Текст комментария.
+
+"LogEntry()":
+  location: log-entry.ts
+  annotations: |
+    Строка операционного лога выбранной стадии. Источник — GET /api/stages/{id}/log (отдельный поллинг, не
+    WebSocket-события), отображается в окне лога.
+  properties:
+    "timestamp -> string": |
+      Время записи в формате ISO 8601.
+    "message -> string": |
+      Текст сообщения.
+    "level -> 'debug' | 'info' | 'warn' | 'error'": |
+      Уровень важности записи.
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Общие типы данных дашборда afm.

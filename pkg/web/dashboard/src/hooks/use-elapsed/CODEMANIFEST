@@ -1,0 +1,37 @@
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react` for the interval-based effect and the
+  cleanup on unmount. Use `typescript` for typing.
+
+---
+
+"useElapsed(startedAt: string) -> elapsedMs: number":
+  location: use-elapsed.ts
+  annotations: |
+    Хук секундомера прошедшего времени от startedAt; тикает собственным интервалом раз в секунду.
+
+    `startedAt`: время старта флоу в ISO 8601
+    `elapsedMs`: прошедшее время в миллисекундах от startedAt до текущего момента
+
+    Algorithm:
+    1. При монтировании вычислить elapsedMs как разницу текущего времени и startedAt
+    2. Запустить интервал 1000мс, на каждом тике перевычислять elapsedMs
+    3. При размонтировании — остановить интервал
+
+    Requirements:
+    - Собственный односекундный интервал (как elapsedTimer в текущем app.js), не привязанный к циклу поллинга
+      стадий, чтобы счётчик обновлялся плавно каждую секунду
+
+    Constraints:
+    - Не зависит от ре-рендера родителя для обновления значения
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Хук секундомера прошедшего времени (1с интервал).

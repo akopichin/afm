@@ -3,11 +3,16 @@ Usages:
   golang: golang
 
 Annotations: |
-  Статический контент дашборда: HTML-разметка, стили, клиентский JS и favicon, встраиваемые родительской
-  клеточкой pkg/web через go:embed dashboard/*. Контракт описывает состав и назначение файлов, не
-  придумывая API поверх статического контента.
+  Use `conventions` for code writing rules and testing. Use `golang` для контекста Go-потребителя
+  (pkg/web встраивает каталог через //go:embed — см. контракт встраивания ниже). Инвентарь ассетов,
+  сборочный пайплайн Vite и контракт встраивания описаны в клеточном usage-документе
+  .usages/dashboard_assets.md.
 
-  Use `conventions` for code writing rules and testing. Use `golang` for implementation.
+  Статический контент дашборда: собранный Vite бандл (index.html + assets/), стили, favicon и legacy-файлы,
+  встраиваемые родительской клеточкой pkg/web через go:embed dashboard/*. Контракт описывает состав и
+  назначение файлов и сборочный пайплайн, не придумывая API поверх статического контента. После
+  поведенческого rewrite (vanilla app.js → React/Vite/TypeScript SPA в src/) бандл собирается Vite, а не
+  правится руками; рантайм-логика описана собственными клеточками в src/.
 
 ---
 
@@ -16,27 +21,47 @@ Annotations: |
   annotations: |
     Статический бандл дашборда, отдаваемый как embed.FS из pkg/web.
 
-    Requirements:
-    - index.html — корневая HTML-страница дашборда
+    Состав каталога:
+    - index.html — корневая HTML-страница: подключает style.css и ссылается на собранный бандл
+      ./assets/index-<hash>.js; точка монтирования #root рендерится из src/main.tsx
+    - index.dev.html — исходный dev-шаблон index.html (восстанавливается из него в index.html перед
+      сборкой, см. пайплайн ниже)
+    - assets/ — выход сборки Vite (vite build → index-<hash>.js; хеш в имени, пересоздаётся при каждой
+      сборке через clean:assets)
     - style.css — стили дашборда (default novacorps)
     - style-goga.css — стили goga-темы (подключается server-side при theme=goga, см. pkg/server)
     - quarium-logo.png — логотип quarium в шапке goga-темы
-    - app.js — клиентская логика (поллинг стадий/событий, WebSocket-подписка через pkg/server)
-    - markdown-it.min.js — сторонняя библиотека рендеринга markdown (планы/фидбек в UI)
     - favicon.svg — иконка вкладки браузера
-    - app.js добавляет панель потребления: выезжающая слева-направо панель по кнопке-стрелке, свич
-      метрик (токены/деньги/KB — опция "деньги" скрывается на клиенте, если /api/usage?metric=cost
-      возвращает пустой массив), фильтр по стейджам (из существующего списка стейджей), и
-      hand-rolled SVG-график временного ряда; без новой сторонней JS-библиотеки (markdown-it.min.js
-      остаётся единственным исключением)
+    - src/ — исходники React/Vite/TypeScript SPA (точка входа src/main.tsx → src/app/App); описаны
+      собственными клеточками, здесь не детализируются
+    - app.js — legacy-клиентская логика (vanilla JS; её поведенческий паритет переписан в src/).
+      Файл НЕ удаляется: он по-прежнему попадает в //go:embed dashboard/* клеточкой pkg/web, но
+      активной точкой входа больше не является (index.html его не подключает)
+
+    Зависимости:
+    - markdown-it (npm, ^14.1.0) — рендеринг markdown планов/фидбека; потребляется через штатный import
+      из node_modules в src/components/plan-panel/markdown.ts (ранее вендоренная JS-библиотека в каталоге
+      удалена, отдельного исключения про стороннюю JS-библиотеку больше нет)
+
+    Сборочный пайплайн (npm-скрипты):
+    - restore-index (node scripts/restore-index.js) — копирует index.dev.html → index.html. Vite с
+      outDir='.' перезаписывает index.html собранной версией, поэтому восстановление обязательно перед
+      dev и build (иначе повторная сборка падает: clean:assets удаляет assets/, и Vite теряет точку входа)
+    - clean:assets (rm -rf assets) — очищает хешированные ассеты перед сборкой, чтобы они не
+      накапливались и не раздували встраиваемый бинарник
+    - build = restore-index && clean:assets && vite build — собирает index.html + assets/index-<hash>.js
+      в корень dashboard/, чтобы контракт pkg/web остался без правок
 
     Constraints:
     - Минимальный контракт: предметного API в привычном смысле нет (статический контент), это ожидаемо
       и не является ошибкой дизайна
+    - Сборка кладёт результат в корень dashboard/ (Vite outDir='.', emptyOutDir=false) — контракт
+      встраивания pkg/web (//go:embed dashboard/* + fs.Sub) не меняется
+    - app.js сохраняется как legacy только ради //go:embed; править его как активную логику не нужно
 
 ---
 
 Author: Goga
 CreatedAt: 03/07/26
 Description: |
-  Статические веб-ассеты дашборда afm, встраиваемые в бинарник клеточкой pkg/web.
+  Статические веб-ассеты дашборда afm (собираются Vite из src/), встраиваемые в бинарник клеточкой pkg/web.

@@ -1,0 +1,59 @@
+Imports:
+  - Types: [Stage, DialogQuestion]
+    Usages: [dashboard-data-types]
+    From: src/types
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react`. Use `typescript` for naming and strict
+  typing. Use `Stage`, `DialogQuestion` from Imports. Use `dashboard-data-types` from Imports for guidance on
+  consuming these types and the /api/stages/{id}/dialog source.
+
+---
+
+"DialogChannel(stage: Stage) -> element: ReactElement":
+  location: DialogChannel.tsx
+  annotations: |
+    Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос (опции и/или свободный ответ),
+    отмена. Поведение перенесено из loadDialog/renderDialog/renderPendingQuestion текущего app.js.
+
+    `stage`: выбранная стадия (полный объект — статус влияет на видимость канала)
+    `element`: разметка канала
+
+    История и текущий вопрос загружаются запросом GET /api/stages/{stage.id}/dialog (JSON-массив записей с
+    полями phase/type/question/answer/id/options/allow_custom). Текущий вопрос — последняя запись с answer=null
+    (записи agent_text вопросом не считаются).
+
+    Requirements:
+    - История группируется по phase (разделители фаз); записи agent_text рендерятся как сообщения агента
+    - Опции currentQuestion — массив строк (label одновременно является значением ответа); allow_custom разрешает
+      свободный текст; selectOption и ввод текста взаимоисключающие
+    - Видимость: канал показан, если есть история либо stage.status === 'awaiting_user_input'
+
+  properties:
+    "history -> DialogQuestion[]": |
+      История вопросов диалога, загруженная из GET /api/stages/{stage.id}/dialog.
+    "currentQuestion -> DialogQuestion | null": |
+      Активный вопрос (последняя запись без ответа) либо null.
+  methods:
+    "answer(questionId: string, value: string, fromOptions: boolean) -> done:Promise<void>": |
+      Отправляет ответ (POST /api/stages/{stage.id}/dialog/answer) телом { id, phase, answer, from_options }:
+      либо выбранная опция (fromOptions=true, value — строка опции), либо свободный текст (fromOptions=false).
+
+      `questionId`: идентификатор вопроса (поле id текущего вопроса)
+      `value`: значение ответа — строка выбранной опции либо введённый текст
+      `fromOptions`: true, если value — выбранная опция; false — свободный текст
+    "cancel() -> done:Promise<void>": |
+      Отменяет текущий диалог (POST /api/stages/{stage.id}/dialog/cancel) — соответствует кнопке отмены в
+      текущем app.js.
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Диалоговый канал стадии.

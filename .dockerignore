@@ -2,6 +2,11 @@
 bin/
 .afm/
 .superpowers/
-node_modules/
+# На любой глубине: pkg/web/dashboard/node_modules (~96 МБ) не нужен в образе —
+# бинарь встраивает уже собранные ассеты фронтенда, а не исходники/зависимости.
+**/node_modules/
+# Локальный бинарь и временные файлы — не нужны в build context.
+/afm
+/tmp/
 *.test
 *.out

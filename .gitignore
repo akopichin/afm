@@ -14,4 +14,8 @@ tmp/
 .afm/runs/
 docs/plans/
 .DS_Store
+
+# React-дашборд: npm-зависимости и runtime-данные afm
+pkg/web/dashboard/node_modules/
+pkg/web/dashboard/.afm/
 sync-upstream.sh

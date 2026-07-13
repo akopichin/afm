@@ -1,0 +1,52 @@
+Imports:
+  - Types: [Stage]
+    Usages: [dashboard-data-types]
+    From: src/types
+
+Usages:
+  conventions: .goga/usages/conventions.md
+  react: .goga/usages/cooks/react.md
+  typescript: .goga/usages/cooks/typescript.md
+
+Annotations: |
+  Use `conventions` for code writing rules and testing. Use `react` for hook structure and the cancelled-flag
+  guard under React StrictMode. Use `typescript` for the single assertion point for external JSON. Use `Stage`
+  from Imports as the stage shape. Use `dashboard-data-types` from Imports for guidance on the /api/status
+  source and the full status set.
+
+---
+
+"useStatus() -> status: { flowName: string, stages: Stage[], startedAt: string, refresh: () => void }":
+  location: use-status.ts
+  annotations: |
+    Хук состояния флоу через GET /api/status: периодический опрос плюс возможность немедленного обновления.
+    Возвращает объект `status` — единый источник этих данных для всей композиции (как loadState в текущем
+    app.js). Поля: flowName — имя флоу (поле flow_name ответа), stages — список стадий (нормализованный из
+    объекта по id с учётом stage_order и stage_names, как в app.js), startedAt — время старта в ISO 8601,
+    refresh — функция немедленного ре-запроса состояния.
+
+    `refresh`: триггер немедленного обновления; вызывается корневой композицией при значимых WebSocket-событиях
+    (WS работает как канал обновления состояния — см. корневую клеточку App)
+
+    Algorithm:
+    1. При монтировании выполнить запрос GET /api/status
+    2. Распарсить JSON, нормализовать к форме status (см. typescript): stages — объект по id → массив в порядке
+       stage_order (fallback Object.keys(stages).sort), имена — из stage_names, время — из updated_at
+    3. Если хук не отменён — обновить состояние
+    4. Запланировать повторный опрос по таймеру (3000мс)
+    5. При размонтировании — выставить флаг отмены и остановить таймер
+
+    Requirements:
+    - Использовать флаг отмены для игнорирования устаревших ответов после размонтирования
+    - stages — пустой массив до первого успешного ответа, а не undefined/null
+    - refresh() инициирует внеочередной запрос, не дожидаясь таймера (источник правды для WS-обновлений)
+
+    Constraints:
+    - Не запускать параллельные пересекающиеся запросы поверх уже запланированного таймера
+
+---
+
+Author: Goga
+CreatedAt: 10/07/26
+Description: |
+  Хук состояния флоу (GET /api/status).

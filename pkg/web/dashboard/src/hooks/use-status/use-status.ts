@@ -1,0 +1,104 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Stage, StageStatus } from '../../types'
+import { STAGE_STATUSES } from '../../types'
+
+// Периодический опрос состояния флоу. Соответствует loadState в текущем app.js,
+// но в React-форме: поллинг по таймеру + возможность немедленного обновления через
+// refresh() (WS-события — канал обновления состояния, см. корневую композицию).
+const POLL_INTERVAL_MS = 3000
+
+export type FlowStatus = {
+  flowName: string
+  stages: Stage[]
+  startedAt: string
+}
+
+const EMPTY_STATUS: FlowStatus = { flowName: '', stages: [], startedAt: '' }
+
+// Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
+// объект по id, порядок — в stage_order, имена — в stage_names (как в текущем app.js).
+
+export function useStatus(): FlowStatus & { refresh: () => void } {
+  const [status, setStatus] = useState<FlowStatus>(EMPTY_STATUS)
+  const cancelledRef = useRef(false)
+
+  const load = useCallback(async () => {
+    let response: Response
+    try {
+      response = await fetch('/api/status')
+    } catch {
+      return
+    }
+
+    if (!response.ok) return
+
+    // Единственная точка приведения типа для внешнего JSON.
+    const data: unknown = await response.json()
+    if (cancelledRef.current) return
+
+    setStatus(normalizeStatus(data))
+  }, [])
+
+  const refresh = useCallback(() => {
+    void load()
+  }, [load])
+
+  useEffect(() => {
+    cancelledRef.current = false
+    void load()
+
+    const timer = setInterval(() => {
+      void load()
+    }, POLL_INTERVAL_MS)
+
+    return () => {
+      cancelledRef.current = true
+      clearInterval(timer)
+    }
+  }, [load])
+
+  return { ...status, refresh }
+}
+
+function normalizeStatus(raw: unknown): FlowStatus {
+  const obj = isRecord(raw) ? raw : {}
+
+  const flowName = typeof obj.flow_name === 'string' ? obj.flow_name : ''
+  const startedAt = typeof obj.started_at === 'string' ? obj.started_at : ''
+
+  const stagesObj = isRecord(obj.stages) ? obj.stages : {}
+  const namesObj = isRecord(obj.stage_names) ? obj.stage_names : {}
+
+  const order = resolveOrder(obj.stage_order, stagesObj)
+
+  const stages: Stage[] = order.map((id) => toStage(id, stagesObj[id], namesObj[id]))
+
+  return { flowName, stages, startedAt }
+}
+
+function resolveOrder(stageOrder: unknown, stagesObj: Record<string, unknown>): string[] {
+  if (Array.isArray(stageOrder) && stageOrder.length > 0) {
+    const filtered = stageOrder.filter((id): id is string => typeof id === 'string')
+    if (filtered.length > 0) return filtered
+  }
+
+  return Object.keys(stagesObj).sort()
+}
+
+function toStage(id: string, raw: unknown, nameRaw: unknown): Stage {
+  const obj = isRecord(raw) ? raw : {}
+
+  const status: StageStatus = isStageStatus(obj.status) ? obj.status : 'pending'
+  const updatedAt = typeof obj.updated_at === 'string' ? obj.updated_at : ''
+  const name = typeof nameRaw === 'string' ? nameRaw : ''
+
+  return { id, name, status, updatedAt }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+}
+
+function isStageStatus(value: unknown): value is StageStatus {
+  return typeof value === 'string' && (STAGE_STATUSES as readonly string[]).includes(value)
+}
