@@ -29,6 +29,7 @@ func newRunCmd() *cobra.Command {
 	var maxParallel int
 	var idleTimeout time.Duration
 	var port int
+	var requireApproval bool
 
 	cmd := &cobra.Command{
 		Use:   "run [flow.yaml]",
@@ -168,14 +169,15 @@ func newRunCmd() *cobra.Command {
 			accountant := accounting.NewAccountant(runDir, store, cfg.Pricing, cfg.Accounting.GetBucketMinutes())
 
 			orch := orchestrator.New(orchestrator.Options{
-				RunDir:       runDir,
-				Stages:       f.Stages,
-				Store:        store,
-				Config:       cfg,
-				Prompts:      prompts,
-				ProxyURL:     proxyAddr,
-				ProxyShimDir: proxyShimDir,
-				GlobalPrompt: f.Prompt,
+				RunDir:          runDir,
+				Stages:          f.Stages,
+				Store:           store,
+				Config:          cfg,
+				Prompts:         prompts,
+				ProxyURL:        proxyAddr,
+				ProxyShimDir:    proxyShimDir,
+				GlobalPrompt:    f.Prompt,
+				RequireApproval: requireApproval,
 			})
 
 			// Disable interactive flags when dashboard is not running
@@ -246,6 +248,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxParallel, "max-parallel", 0, "max parallel stages (0=unlimited)")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "agent idle timeout")
 	cmd.Flags().IntVar(&port, "port", 0, "dashboard port (0=use config)")
+	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "fail if a stage plan needs approval but no dashboard is running")
 	return cmd
 }
 

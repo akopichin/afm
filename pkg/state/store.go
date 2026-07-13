@@ -297,10 +297,6 @@ func (s *Store) writeSnapshot() error {
 		f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
 	if err := f.Close(); err != nil {
 		return err
 	}

@@ -90,7 +90,8 @@ func TestDetectDialogViolation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			reason, ok := detectDialogViolation(stageDir)
+			o := &Orchestrator{violationCache: make(map[string]violationCacheEntry)}
+			reason, ok := o.detectDialogViolation(stageDir)
 			if ok != tc.wantOK {
 				t.Fatalf("detectDialogViolation ok = %v, want %v (reason=%q)", ok, tc.wantOK, reason)
 			}
@@ -103,7 +104,8 @@ func TestDetectDialogViolation(t *testing.T) {
 
 // TestDetectDialogViolationMissingLog: no jsonl at all → no violation, no error.
 func TestDetectDialogViolationMissingLog(t *testing.T) {
-	reason, ok := detectDialogViolation(t.TempDir())
+	o := &Orchestrator{violationCache: make(map[string]violationCacheEntry)}
+	reason, ok := o.detectDialogViolation(t.TempDir())
 	if ok {
 		t.Errorf("detectDialogViolation on empty dir = (%q, true), want false", reason)
 	}

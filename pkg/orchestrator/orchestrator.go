@@ -61,16 +61,24 @@ func DefaultPrompts() Prompts { return Prompts{} }
 
 // Options configures an Orchestrator.
 type Options struct {
-	RunDir       string
-	Stages       []flow.Stage
-	Store        *state.Store
-	Config       config.Config
-	Prompts      Prompts
-	Runner       executor.Runner // nil = real Executor
-	DashboardURL string          // e.g. "http://127.0.0.1:9876"
-	ProxyURL     string          // forwarded to executor env as ANTHROPIC_BASE_URL
-	ProxyShimDir string          // forwarded to executor env PATH prefix
-	GlobalPrompt string          // Flow.Prompt, forwarded to every prompts.Build call
+	RunDir          string
+	Stages          []flow.Stage
+	Store           *state.Store
+	Config          config.Config
+	Prompts         Prompts
+	Runner          executor.Runner // nil = real Executor
+	DashboardURL    string          // e.g. "http://127.0.0.1:9876"
+	ProxyURL        string          // forwarded to executor env as ANTHROPIC_BASE_URL
+	ProxyShimDir    string          // forwarded to executor env PATH prefix
+	GlobalPrompt    string          // Flow.Prompt, forwarded to every prompts.Build call
+	RequireApproval bool            // headless: fail instead of auto-approve on awaiting_approval
+}
+
+// violationCacheEntry хранит stat-данные для одного .jsonl файла.
+// Используется в detectDialogViolation чтобы не перечитывать неизменившиеся файлы.
+type violationCacheEntry struct {
+	size  int64
+	mtime time.Time
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -91,6 +99,9 @@ type Orchestrator struct {
 	// агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
 	// что ломает phaseDispatch и уводит FSM в wrong state.
 	preAskPhase sync.Map
+	// violationCache кешует stat .jsonl-файлов для detectDialogViolation.
+	// Доступен только из горутины поллера — мьютекс не нужен.
+	violationCache map[string]violationCacheEntry // key: путь к .jsonl
 }
 
 // New creates an Orchestrator.
@@ -137,13 +148,14 @@ func New(opts Options) *Orchestrator {
 	}
 
 	return &Orchestrator{
-		opts:     opts,
-		graph:    NewGraph(opts.Stages),
-		runner:   r,
-		critical: critical,
-		ui:       ui,
-		fsm:      NewFSM(opts.Store),
-		sems:     sems,
+		opts:           opts,
+		graph:          NewGraph(opts.Stages),
+		runner:         r,
+		critical:       critical,
+		ui:             ui,
+		fsm:            NewFSM(opts.Store),
+		sems:           sems,
+		violationCache: make(map[string]violationCacheEntry),
 	}
 }
 
@@ -403,7 +415,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 		// Fail fast with a clear reason instead of hanging forever (afm bug-2).
 		if len(questions) == 0 {
 			if stage := o.graph.Stage(stageID); stage != nil && stage.Interactive {
-				if reason, ok := detectDialogViolation(stageDir); ok {
+				if reason, ok := o.detectDialogViolation(stageDir); ok {
 					o.FailStage(stageID, reason)
 				}
 			}
@@ -416,9 +428,21 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 // violates the file-based dialog contract: the poller and dashboard only look
 // inside stageDir, so a misplaced question hangs the stage forever. Returns a
 // human-readable reason when a violation is found.
-func detectDialogViolation(stageDir string) (string, bool) {
+//
+// Результат каждого файла кешируется по (size, mtime): если файл не изменился
+// с прошлого тика, он не перечитывается. Метод вызывается только из поллера —
+// синхронизация не нужна.
+func (o *Orchestrator) detectDialogViolation(stageDir string) (string, bool) {
 	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
 		jsonlPath := filepath.Join(stageDir, phase+".jsonl")
+		info, err := os.Stat(jsonlPath)
+		if err != nil {
+			continue // файл не существует — нарушений нет
+		}
+		cached, ok := o.violationCache[jsonlPath]
+		if ok && cached.size == info.Size() && cached.mtime.Equal(info.ModTime()) {
+			continue // не изменился с прошлого тика
+		}
 		for _, f := range executor.WrittenFiles(jsonlPath) {
 			if !strings.HasSuffix(filepath.Base(f), ".question.json") {
 				continue
@@ -427,6 +451,7 @@ func detectDialogViolation(stageDir string) (string, bool) {
 				return fmt.Sprintf("dialog protocol violation: question written to %s, expected %s", f, stageDir), true
 			}
 		}
+		o.violationCache[jsonlPath] = violationCacheEntry{size: info.Size(), mtime: info.ModTime()}
 	}
 	return "", false
 }
@@ -505,6 +530,17 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 			return nil
 		}
 		o.Trigger(ev.StageID, EvPlanReady, GuardCtx{}, "")
+		// Headless: нет дашборда → никто не нажмёт Approve.
+		// RequireApproval=true → fail-fast с понятным сообщением.
+		// RequireApproval=false (дефолт) → авто-апрув, flow идёт дальше.
+		if o.opts.DashboardURL == "" {
+			if o.opts.RequireApproval {
+				o.FailStage(ev.StageID, "approval required but no dashboard running (use --port or server.port in config)")
+				return nil
+			}
+			log.Printf("headless: auto-approving plan for stage %q", ev.StageID)
+			_ = o.critical.Publish(ctx, Event{Type: EventApproved, StageID: ev.StageID})
+		}
 		o.tryActivatePrePlanned(ctx)
 	case phaseImplementation:
 		if current != state.StatusRunning && current != state.StatusRetrying {
