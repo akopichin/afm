@@ -1,7 +1,7 @@
 Imports:
   - Types: [UsagePoint]
     Usages: [dashboard-data-types]
-    From: src/types
+    From: pkg/web/dashboard/src/types
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -15,12 +15,12 @@ Annotations: |
 
 ---
 
-"useUsageData(metric: string, stageFilter: string | null) -> points: UsagePoint[]":
+"useUsageData(metric: 'tokens' | 'cost' | 'kb', stageFilter: string | null) -> points: UsagePoint[]":
   location: use-usage-data.ts
   annotations: |
     Хук поллинга GET /api/usage для заданной метрики и (опционально) фильтра по стадии.
 
-    `metric`: запрашиваемая метрика
+    `metric`: запрашиваемая метрика из набора tokens/cost/kb
     `stageFilter`: идентификатор стадии либо null
     `points`: список точек временного ряда
 

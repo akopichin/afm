@@ -1,7 +1,7 @@
 Imports:
   - Types: [Stage]
     Usages: [dashboard-data-types]
-    From: src/types
+    From: pkg/web/dashboard/src/types
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -14,12 +14,13 @@ Annotations: |
 
 ---
 
-"Footer(stages: Stage[], elapsedMs: number) -> element: ReactElement":
+"Footer(stages: Stage[], startedAt: string, elapsedMs: number) -> element: ReactElement":
   location: Footer.tsx
   annotations: |
     Футер: прогресс, время старта, elapsed.
 
     `stages`: список стадий для прогресса
+    `startedAt`: время старта флоу в формате ISO 8601 (пустая строка — старт ещё не зафиксирован, отображается «--»)
     `elapsedMs`: прошедшее время в миллисекундах от старта (готовое значение от хука секундомера)
     `element`: разметка футера
 

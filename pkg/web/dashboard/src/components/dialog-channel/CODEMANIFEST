@@ -1,7 +1,7 @@
 Imports:
   - Types: [Stage, DialogQuestion]
     Usages: [dashboard-data-types]
-    From: src/types
+    From: pkg/web/dashboard/src/types
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -15,13 +15,15 @@ Annotations: |
 
 ---
 
-"DialogChannel(stage: Stage) -> element: ReactElement":
+"DialogChannel(stage: Stage, attention: boolean) -> element: ReactElement":
   location: DialogChannel.tsx
   annotations: |
     Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос (опции и/или свободный ответ),
     отмена. Поведение перенесено из loadDialog/renderDialog/renderPendingQuestion текущего app.js.
 
     `stage`: выбранная стадия (полный объект — статус влияет на видимость канала)
+    `attention`: опциональный (по умолчанию false) — если true, привлечь внимание к панели канала
+      (визуальная подсветка, стадия ждёт ответа пользователя)
     `element`: разметка канала
 
     История и текущий вопрос загружаются запросом GET /api/stages/{stage.id}/dialog (JSON-массив записей с

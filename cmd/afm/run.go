@@ -190,6 +190,11 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
+			// dashboardStarted — поднят ли HTTP-сервер дашборда. По флагу после
+			// завершения флоу выдерживаем паузу (dashboardExitGrace), чтобы UI успел
+			// подтянуть терминальный статус до того, как процесс оборвёт соединения.
+			dashboardStarted := false
+
 			// Start HTTP server if port > 0
 			if cfg.Server.GetPort() > 0 {
 				srv := server.New(server.Config{
@@ -215,6 +220,7 @@ func newRunCmd() *cobra.Command {
 					return fmt.Errorf("start dashboard: %w", err)
 				}
 				defer func() { _ = srv.Shutdown(context.Background()) }()
+				dashboardStarted = true
 
 				// Resolve listener address to localhost for client-facing URLs.
 				// ln.Addr() may return [::]:port which is not reachable as a client URL.
@@ -241,6 +247,20 @@ func newRunCmd() *cobra.Command {
 			}
 
 			fmt.Printf("afm: flow %q completed\n", f.Name)
+
+			// Удерживаем дашборд чуть дольше завершения флоу: WS успевает доставить
+			// stage_status_changed→done, фронт делает refresh(), и очередной
+			// /api/status-поллинг (3с) тоже возвращает терминальный снапшот. Без паузы
+			// процесс рвёт соединение раньше — UI «залипает» на последнем активном
+			// статусе (например, running) вместо done/failed.
+			if dashboardStarted {
+				fmt.Printf("  dashboard: holding %s for UI to render final state\n", dashboardExitGrace)
+				select {
+				case <-time.After(dashboardExitGrace):
+				case <-ctx.Done(): // Ctrl-C — выходим сразу, не дожидаясь паузы
+				}
+			}
+
 			return nil
 		},
 	}
@@ -297,6 +317,13 @@ func launchHostBrowserOpener(port int) {
 
 const extYAML = ".yaml"
 const extYML = ".yml"
+
+// dashboardExitGrace — на сколько задержать завершение процесса после успеха
+// флоу, если поднят дашборд. Фронтенд опрашивает /api/status каждые 3с
+// (POLL_INTERVAL_MS в use-status.ts) и обновляется по WS; 5с хватает, чтобы UI
+// гарантированно увидел терминальный статус (done/failed) до остановки сервера
+// и (в Docker-режиме) контейнера.
+const dashboardExitGrace = 5 * time.Second
 
 func resolveFlowPath(args []string) (string, error) {
 	if len(args) > 0 {

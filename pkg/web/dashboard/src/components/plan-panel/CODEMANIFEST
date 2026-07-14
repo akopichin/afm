@@ -1,7 +1,7 @@
 Imports:
   - Types: [Stage, PlanComment]
     Usages: [dashboard-data-types]
-    From: src/types
+    From: pkg/web/dashboard/src/types
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -31,7 +31,7 @@ Annotations: |
     Constraints:
     - Никакой другой сторонней библиотеки рендера markdown, кроме npm-пакета markdown-it, не используется
 
-"PlanPanel(stage: Stage) -> element: ReactElement":
+"PlanPanel(stage: Stage, attention: boolean) -> element: ReactElement":
   location: PlanPanel.tsx
   annotations: |
     Панель плана стадии: загрузка markdown плана, рендер (обычный или режим ревью), действия Approve/Send
@@ -39,6 +39,8 @@ Annotations: |
     onPlanLineClick текущего app.js.
 
     `stage`: выбранная стадия (полный объект — статус определяет режим ревью, видимость действий и mark-done)
+    `attention`: опциональный (по умолчанию false) — если true, привлечь внимание к панели плана
+      (визуальная подсветка, стадия ждёт approve/revision)
     `element`: разметка панели
 
     Разметка плана загружается запросом GET /api/stages/{stage.id}/plan (plain text) и рендерится: в обычном

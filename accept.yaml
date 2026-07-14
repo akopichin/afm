@@ -9,7 +9,7 @@ stages:
   - id: accept
     name: "accept"
     interactive: true
-    agents: [planning, implementation]
+    agents: [planning]
     description: |
       засинкать codemanifest-ы с кодом.
     prompt: |

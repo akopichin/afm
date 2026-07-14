@@ -1,10 +1,10 @@
 Imports:
   - Types: [Stage, UsagePoint]
     Usages: [dashboard-data-types]
-    From: src/types
+    From: pkg/web/dashboard/src/types
   - Types: [useUsageData]
     Usages: [usage-data]
-    From: src/hooks/use-usage-data
+    From: pkg/web/dashboard/src/hooks/use-usage-data
 
 Usages:
   conventions: .goga/usages/conventions.md

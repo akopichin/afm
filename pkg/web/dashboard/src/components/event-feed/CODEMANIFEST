@@ -1,7 +1,7 @@
 Imports:
   - Types: [AfmEvent]
     Usages: [dashboard-data-types]
-    From: src/types
+    From: pkg/web/dashboard/src/types
 
 Usages:
   conventions: .goga/usages/conventions.md

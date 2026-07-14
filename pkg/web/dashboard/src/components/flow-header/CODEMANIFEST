@@ -9,13 +9,15 @@ Annotations: |
 
 ---
 
-"FlowHeader(flowName: string, connected: boolean) -> element: ReactElement":
+"FlowHeader(flowName: string, connected: boolean, attention: boolean) -> element: ReactElement":
   location: FlowHeader.tsx
   annotations: |
     Шапка дашборда: название флоу и индикатор состояния WebSocket-соединения.
 
     `flowName`: отображаемое имя флоу
     `connected`: true, если соединение открыто
+    `attention`: опциональный (по умолчанию false) — если true, рядом с именем флоу горит пульсирующая
+      amber-точка: хотя бы одна стадия ждёт действия пользователя
     `element`: разметка шапки
 
     Requirements:
