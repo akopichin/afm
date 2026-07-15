@@ -1,1 +1,0 @@
-export { ConsumptionPanel } from './ConsumptionPanel'

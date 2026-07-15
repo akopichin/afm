@@ -19,8 +19,18 @@ func envFlag(name string) bool {
 
 // ClientConfig configures the AI client command.
 type ClientConfig struct {
-	Command   string   `yaml:"command"`
-	ExtraArgs []string `yaml:"extra_args"`
+	Command    string   `yaml:"command"`
+	ExtraArgs  []string `yaml:"extra_args"`
+	ClaudeBare *bool    `yaml:"claude_bare"` // nil → --bare OFF (default, нужны skills); true → --bare on
+}
+
+// IsClaudeBare сообщает, добавлять ли --bare в генерируемые claude-врапперы.
+// По умолчанию (nil) → false: --bare ВЫКЛЮЧЕН, т.к. он skip'ает skills
+// auto-discovery — Skill-tool перестаёт резолвить goga-* skills (агент имитирует
+// их сам). claude_bare: true включает --bare (body ~4 KB вместо ~127 KB, ниже
+// нагрузка на шлюз/z.ai и шанс 529) — имеет смысл для stages БЕЗ skills.
+func (c ClientConfig) IsClaudeBare() bool {
+	return c.ClaudeBare != nil && *c.ClaudeBare
 }
 
 // ExecutorConfig controls agent execution parameters.
@@ -51,33 +61,112 @@ func (s ServerConfig) GetPort() int {
 	return *s.Port
 }
 
-// TransformOverrides controls which proxy transforms are applied.
-// nil = auto-detect by upstream host, true = always, false = never.
-type TransformOverrides struct {
-	ZAI *bool `yaml:"zai"`
+// AgentRecipe describes how to generate a claude-compatible wrapper for a custom
+// agent command (e.g. glm51) inside Docker, so the host binary is not mounted.
+// See docs/superpowers/specs/2026-07-14-docker-autoshim-design.md.
+
+// Допустимые значения AgentRecipe.Type.
+const (
+	recipeTypeClaude = "claude"
+	recipeTypeOpenAI = "openai"
+	recipeTypeCursor = "cursor" // Cursor Cloud Agents API (async run-based, не chat completions)
+)
+
+type AgentRecipe struct {
+	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "cursor" = Cursor Cloud Agents API
+	Model        string     `yaml:"model"`         // required → ANTHROPIC_DEFAULT_*_MODEL (claude) / OPENAI_MODEL (openai) / CURSOR_MODEL (cursor)
+	URL          string     `yaml:"url"`           // optional (claude); required (openai, cursor) — agent gateway
+	SystemPrompt string     `yaml:"system_prompt"` // optional; "file:<path>" → --append-system-prompt-file content
+	Auth         RecipeAuth `yaml:"auth"`          // required
 }
 
-// ProxyConfig configures the built-in reverse proxy.
-type ProxyConfig struct {
-	Enabled    *bool              `yaml:"enabled"`
-	Upstream   string             `yaml:"upstream"`
-	Port       int                `yaml:"port"`
-	Transforms TransformOverrides `yaml:"transforms"`
+// RecipeAuth describes where afm reads the secret on the host (From) and which
+// claude auth env var the generated wrapper exports (To).
+type RecipeAuth struct {
+	From string `yaml:"from"` // "env:VAR" | "file:<path>"
+	To   string `yaml:"to"`   // "env:<VAR>"; VAR ∈ ClaudeAuthEnvVars
 }
 
-// IsEnabled returns true by default (nil Enabled → enabled).
-func (p ProxyConfig) IsEnabled() bool {
-	return p.Enabled == nil || *p.Enabled
+// EnvVarName strips the "env:" prefix from Auth.To.
+func (a RecipeAuth) EnvVarName() string { return strings.TrimPrefix(a.To, "env:") }
+
+// ClaudeAuthEnvVars — env vars through which claude accepts tokens in a Linux
+// container (macOS Keychain is unavailable there).
+var ClaudeAuthEnvVars = []string{
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+}
+
+func isClaudeAuthEnvVar(name string) bool {
+	for _, v := range ClaudeAuthEnvVars {
+		if v == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate returns an error if the recipe is malformed.
+func (r AgentRecipe) Validate() error {
+	// type — allow-list; неизвестное значение (напр. опечатка "openapi") молча
+	// трактовалось бы как claude, что ведёт к некорректной генерации обёртки.
+	switch r.Type {
+	case "", recipeTypeClaude, recipeTypeOpenAI, recipeTypeCursor:
+	default:
+		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", or \"cursor\"; got %q", r.Type)
+	}
+	if r.Model == "" {
+		return errors.New("recipe: model is required")
+	}
+	if !strings.HasPrefix(r.Auth.To, "env:") {
+		return errors.New("recipe: auth.to must be an env: reference (e.g. env:OPENAI_API_KEY)")
+	}
+	// openai и cursor — внешние шлюзы: url обязателен, auth.to не ограничен ClaudeAuthEnvVars
+	// (используют свои env vars: OPENAI_API_KEY, CURSOR_API_KEY и т.д.).
+	if r.Type == recipeTypeOpenAI || r.Type == recipeTypeCursor {
+		if r.URL == "" {
+			return fmt.Errorf("recipe: url is required for type: %s", r.Type)
+		}
+		return nil
+	}
+	// claude (type == "" или "claude"): auth.to ограничен ClaudeAuthEnvVars
+	if !isClaudeAuthEnvVar(r.Auth.EnvVarName()) {
+		return fmt.Errorf("recipe: auth.to env var %q is not one of %v", r.Auth.EnvVarName(), ClaudeAuthEnvVars)
+	}
+	return nil
 }
 
 // DockerConfig configures Docker-mode self-re-exec.
 type DockerConfig struct {
 	Enabled *bool  `yaml:"enabled"` // nil = смотрим AFM_USE_DOCKER
 	Image   string `yaml:"image"`
+	// AutoShim включает генерацию claude-совместимых обёрток для recipe-агентов
+	// внутри контейнера, чтобы не монтировать хостовый бинарник :ro.
+	// nil = выключено (монтирование :ro как раньше).
+	AutoShim *bool `yaml:"autoShim"`
+	// Agents — recipe-агенты: имя команды → рецепт генерации обёртки.
+	Agents map[string]AgentRecipe `yaml:"agents"`
+	// SecretsFile — опц. путь к файлу с секретами; по умолчанию global ~/.afm
+	// + project .afm.
+	SecretsFile string `yaml:"secrets_file"`
 	// ExtraMounts — дополнительные хост-пути (можно с ~), которые пробрасываются
 	// в контейнер по тому же пути только для чтения. Нужно кастомным агентам,
 	// хранящим токены/конфиги вне ~/.claude (напр. ~/.ai-free).
 	ExtraMounts []string `yaml:"extra_mounts"`
+}
+
+// IsAutoShim reports whether wrapper auto-generation is enabled.
+func (d DockerConfig) IsAutoShim() bool { return d.AutoShim != nil && *d.AutoShim }
+
+// ValidateAgents validates every recipe. Called only when autoShim is enabled.
+func (d DockerConfig) ValidateAgents() error {
+	for name, r := range d.Agents {
+		if err := r.Validate(); err != nil {
+			return fmt.Errorf("docker.agents.%s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // IsDockerEnabled returns true if Docker mode should be used.
@@ -103,63 +192,14 @@ func (d DockerConfig) GetImage() string {
 	return "akopichin/afm:latest"
 }
 
-// ModelPricing holds a single model's consumption prices in USD per million tokens.
-type ModelPricing struct {
-	InputPerMtok  float64 `yaml:"input_per_mtok"`
-	OutputPerMtok float64 `yaml:"output_per_mtok"`
-	CachePerMtok  float64 `yaml:"cache_per_mtok"`
-}
-
-// PricingConfig is the optional per-model pricing table. A nil/empty Models map
-// means pricing is unconfigured — callers treat the cost metric as fully hidden.
-type PricingConfig struct {
-	Models map[string]ModelPricing `yaml:"models"`
-}
-
-// GetModelPricing returns the pricing for an exact model name.
-// Unknown models (or an unconfigured pricing table) yield ok=false — there is
-// no fuzzy/prefix fallback. A nil map read is safe in Go and never panics.
-func (p PricingConfig) GetModelPricing(model string) (ModelPricing, bool) {
-	pricing, ok := p.Models[model]
-	return pricing, ok
-}
-
-// AccountingConfig controls consumption tracking and time-aggregation (bucket width).
-type AccountingConfig struct {
-	Enabled       *bool `yaml:"enabled"`
-	BucketMinutes int   `yaml:"bucket_minutes"`
-}
-
-// IsEnabled returns true by default (nil Enabled → enabled).
-// AFM_NO_USAGE=1 disables token tracking regardless of config.
-func (a AccountingConfig) IsEnabled() bool {
-	if envFlag("AFM_NO_USAGE") {
-		return false
-	}
-	return a.Enabled == nil || *a.Enabled
-}
-
-// GetBucketMinutes returns BucketMinutes, or 5 when it is 0. A plain int field
-// (not *int) is used by design: the zero value doubles as "unset" since a real
-// 0-minute bucket width would be meaningless.
-func (a AccountingConfig) GetBucketMinutes() int {
-	if a.BucketMinutes == 0 {
-		return 5
-	}
-	return a.BucketMinutes
-}
-
 // Config is the merged configuration for afm.
 type Config struct {
-	Client     ClientConfig     `yaml:"client"`
-	Executor   ExecutorConfig   `yaml:"executor"`
-	Server     ServerConfig     `yaml:"server"`
-	Proxy      ProxyConfig      `yaml:"proxy"`
-	Docker     DockerConfig     `yaml:"docker"`
-	Pricing    PricingConfig    `yaml:"pricing"`
-	Accounting AccountingConfig `yaml:"accounting"`
-	PromptsDir string           `yaml:"prompts_dir"`
-	Theme      string           `yaml:"theme"`
+	Client     ClientConfig   `yaml:"client"`
+	Executor   ExecutorConfig `yaml:"executor"`
+	Server     ServerConfig   `yaml:"server"`
+	Docker     DockerConfig   `yaml:"docker"`
+	PromptsDir string         `yaml:"prompts_dir"`
+	Theme      string         `yaml:"theme"`
 }
 
 // Default returns the built-in default configuration.
@@ -224,6 +264,9 @@ func mergeFile(dst *Config, path string) error {
 	if overlay.Client.ExtraArgs != nil {
 		dst.Client.ExtraArgs = overlay.Client.ExtraArgs
 	}
+	if overlay.Client.ClaudeBare != nil {
+		dst.Client.ClaudeBare = overlay.Client.ClaudeBare
+	}
 	if overlay.Executor.IdleTimeout != 0 {
 		dst.Executor.IdleTimeout = overlay.Executor.IdleTimeout
 	}
@@ -242,18 +285,6 @@ func mergeFile(dst *Config, path string) error {
 	if overlay.Server.OpenBrowser != nil {
 		dst.Server.OpenBrowser = overlay.Server.OpenBrowser
 	}
-	if overlay.Proxy.Enabled != nil {
-		dst.Proxy.Enabled = overlay.Proxy.Enabled
-	}
-	if overlay.Proxy.Upstream != "" {
-		dst.Proxy.Upstream = overlay.Proxy.Upstream
-	}
-	if overlay.Proxy.Port != 0 {
-		dst.Proxy.Port = overlay.Proxy.Port
-	}
-	if overlay.Proxy.Transforms.ZAI != nil {
-		dst.Proxy.Transforms.ZAI = overlay.Proxy.Transforms.ZAI
-	}
 	if overlay.Docker.Enabled != nil {
 		dst.Docker.Enabled = overlay.Docker.Enabled
 	}
@@ -263,14 +294,19 @@ func mergeFile(dst *Config, path string) error {
 	if overlay.Docker.ExtraMounts != nil {
 		dst.Docker.ExtraMounts = overlay.Docker.ExtraMounts
 	}
-	if overlay.Pricing.Models != nil {
-		dst.Pricing.Models = overlay.Pricing.Models
+	if overlay.Docker.AutoShim != nil {
+		dst.Docker.AutoShim = overlay.Docker.AutoShim
 	}
-	if overlay.Accounting.Enabled != nil {
-		dst.Accounting.Enabled = overlay.Accounting.Enabled
+	if overlay.Docker.SecretsFile != "" {
+		dst.Docker.SecretsFile = overlay.Docker.SecretsFile
 	}
-	if overlay.Accounting.BucketMinutes != 0 {
-		dst.Accounting.BucketMinutes = overlay.Accounting.BucketMinutes
+	if overlay.Docker.Agents != nil {
+		if dst.Docker.Agents == nil {
+			dst.Docker.Agents = map[string]AgentRecipe{}
+		}
+		for k, v := range overlay.Docker.Agents {
+			dst.Docker.Agents[k] = v // per-key overlay: проектный слой дополняет/переопределяет глобальный
+		}
 	}
 	return nil
 }

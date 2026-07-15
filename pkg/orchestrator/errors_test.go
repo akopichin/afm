@@ -20,6 +20,11 @@ func TestClassify(t *testing.T) {
 		{"missing sections", &MissingSectionsError{Missing: []string{sectionAssumptions}}, ClassMissingSections},
 		{"storage fatal", &StorageError{Inner: errors.New("disk full")}, ClassStorageFatal},
 		{"generic", errors.New("something broke"), ClassFatal},
+		{"api error 529", errors.New("API Error: 529 Overloaded"), ClassRetryable},
+		{"api error 502", errors.New("API Error: 502 Bad Gateway"), ClassRetryable},
+		{"api error 503", errors.New("API Error: 503 Service Unavailable"), ClassRetryable},
+		{"api error 504", errors.New("API Error: 504 Gateway Timeout"), ClassRetryable},
+		{"api error 500 stays fatal", errors.New("API Error: 500"), ClassFatal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

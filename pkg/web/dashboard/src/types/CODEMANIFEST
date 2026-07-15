@@ -15,7 +15,7 @@ Annotations: |
   location: stage.ts
   annotations: |
     Данные одной стадии afm-флоу. Источник — поле stages ответа GET /api/status (объект по идентификатору
-    стадии), потребляется хуком состояния флоу и передаётся в список стадий, футер и панель потребления.
+    стадии), потребляется хуком состояния флоу и передаётся в список стадий и футер.
     Набор значений статуса совпадает с реальными статусами стадий afm (см. statusLabels в текущем app.js):
     pending, planning, awaiting_approval, revising, ready, running, done, failed, retrying, awaiting_user_input.
   properties:
@@ -44,19 +44,6 @@ Annotations: |
       Идентификатор стадии, к которой относится событие (поле stage_id сервера).
     "timestamp -> string": |
       Время приёма события на клиенте в формате ISO 8601 (сервер время не присылает).
-
-"UsagePoint()":
-  location: usage-point.ts
-  annotations: |
-    Точка временного ряда потребления ресурсов из GET /api/usage (с параметром metric и опционально stage),
-    потребляется хуком поллинга метрик потребления и отображается в панели потребления.
-  properties:
-    "timestamp -> string": |
-      Время точки в формате ISO 8601.
-    "metric -> 'tokens' | 'cost' | 'kb'": |
-      Метрика, к которой относится значение.
-    "value -> number": |
-      Значение метрики в этой точке.
 
 "DialogQuestion()":
   location: dialog-question.ts

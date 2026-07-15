@@ -1,0 +1,40 @@
+# Demo-flow для cursor — пример использования Cursor как агента через type: cursor.
+#
+# Cursor Cloud API (api.cursor.com) не имеет синхронного /chat/completions — это
+# Cloud Agents API, поэтому afm использует адаптер cursor-as-claude (создаёт
+# no-repo Cloud Agent, опрашивает run, эмитит claude stream-json).
+#
+# Требует настройки в config.yaml:
+#   docker:
+#     autoShim: true
+#     agents:
+#       cursor:
+#         type: cursor
+#         model: auto
+#         url: https://api.cursor.com/v1
+#         auth:
+#           from: "file:<путь к токену crsr_…>"
+#           to: "env:CURSOR_API_KEY"
+#
+# Использование (docker-mode, образ с cursor-as-claude — v0.4.0+):
+#   afm run example-flow-cursor.yaml
+#
+# Особенность: первый ответ ~30–90с (старт cloud-VM при создании Cloud Agent).
+
+name: cursor-demo
+description: "Demo: cursor как агент через type: cursor (Cursor Cloud Agents API)"
+
+stages:
+  - id: ask
+    name: "Вопрос курсору"
+    description: |
+      Неинтерактивный запрос к cursor: попроси краткое объяснение и сохрани в plan.md.
+    prompt: |
+      Кратко (3–5 предложений) объясни, что такое service worker в Chrome-расширении,
+      и когда его стоит использовать. Запиши результат в plan.md.
+    command: cursor
+    agents: [planning]
+    artifacts:
+      - name: plan
+        path: ./plan.md
+        description: "Ответ cursor"

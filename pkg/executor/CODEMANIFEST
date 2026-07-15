@@ -11,8 +11,7 @@ Usages:
 
 Annotations: |
   Запуск и мониторинг агентских процессов: stdout/stderr стриминг, транскрипты, файловый
-  dialog-протокол (AFM_STAGE_DIR), проксирование HTTP-трафика (ProxyURL/ProxyShimDir). Использует
-  `Logger` для записи человекочитаемого лога стадии.
+  dialog-протокол (AFM_STAGE_DIR). Использует `Logger` для записи человекочитаемого лога стадии.
 
   Use `conventions` for code writing rules and testing. Use `golang` for implementation.
 
@@ -75,7 +74,7 @@ Annotations: |
     "AskUserID -> string": |
       ID вызова ask_user.
 
-"Config(command string, extraArgs []string, idleTimeout string, onAction string, sessionID string, resume bool, stageDir string, proxyURL string, proxyShimDir string)":
+"Config(command string, extraArgs []string, idleTimeout string, onAction string, sessionID string, resume bool, stageDir string)":
   location: executor.go
   annotations: |
     Конфигурация executor'а.
@@ -83,13 +82,6 @@ Annotations: |
     Сигнатура: func(tool string, detail string), без возврата.
     `sessionID`: если непусто — передаётся через --session-id (или --resume при Resume=true)
     `stageDir`: передаётся агенту как AFM_STAGE_DIR (file-based dialog protocol, см. pkg/mcp)
-    `proxyURL`: если задан — ANTHROPIC_BASE_URL и AFM_PROXY_URL выставляются в окружении агента
-    `proxyShimDir`: если задан — добавляется в начало PATH в окружении агента (для враппер-скриптов,
-    см. pkg/proxy, CreateShim)
-
-    Requirements:
-    - При установке ProxyURL уже существующий ANTHROPIC_BASE_URL в окружении вычищается перед
-      инъекцией proxy-адреса
   properties:
     "Command -> string": |
       Команда AI-клиента.
@@ -109,10 +101,6 @@ Annotations: |
       Использовать --resume вместо --session-id.
     "StageDir -> string": |
       Директория стадии.
-    "ProxyURL -> string": |
-      Адрес встроенного proxy.
-    "ProxyShimDir -> string": |
-      Директория shim'а для PATH.
 
 "Runner()":
   location: runner.go
@@ -146,4 +134,4 @@ Annotations: |
 Author: Goga
 CreatedAt: 03/07/26
 Description: |
-  Запуск и мониторинг агентских процессов: стриминг, транскрипты, dialog-протокол, proxy-инъекция.
+  Запуск и мониторинг агентских процессов: стриминг, транскрипты, dialog-протокол.

@@ -5,7 +5,6 @@ import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { LogPanel } from '../components/log-panel'
 import { EventFeedPanel } from '../components/event-feed'
-import { ConsumptionPanel } from '../components/consumption-panel'
 import { Footer } from '../components/footer'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardLayout } from '../components/layout/DashboardLayout'
@@ -18,9 +17,9 @@ import { useTitleFlash } from '../hooks/use-title-flash'
 import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
 import type { Stage } from '../types'
 
-// Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер,
-// панель потребления. Владеет состоянием выбора текущей стадии; WebSocket работает
-// как канал обновления состояния — по значимым событиям ре-запрашивает /api/status.
+// Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
+// Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
+// состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
   const { flowName, stages, startedAt, refresh } = useStatus()
 
@@ -143,8 +142,6 @@ export function App(): ReactElement {
       </main>
 
       <Footer stages={stages} startedAt={startedAt} elapsedMs={elapsedMs} />
-
-      <ConsumptionPanel stages={stages} />
     </>
   )
 }

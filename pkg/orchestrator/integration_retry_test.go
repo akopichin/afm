@@ -111,8 +111,10 @@ func (r *noDoneRunner) RunAgent(ctx context.Context, agentType, stageName, promp
 // backoff retry, same as rate limit errors.
 func TestIntegration_RetryOnServerError(t *testing.T) {
 	origBackoff := orchestrator.RetryBackoff
-	orchestrator.RetryBackoff = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff })
+	origMax := orchestrator.MaxRetries
+	orchestrator.RetryBackoff = 1 * time.Millisecond
+	orchestrator.MaxRetries = 3
+	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
 
 	stages := []flow.Stage{
 		{ID: "server-err", Name: "Server Error", Description: "test 500 retry", Agents: []flow.AgentType{flow.AgentPlanning}},
@@ -152,8 +154,10 @@ func TestIntegration_RetryOnServerError(t *testing.T) {
 func TestIntegration_RetryOnRateLimit(t *testing.T) {
 	// Speed up retries: use minimal backoff durations
 	origBackoff := orchestrator.RetryBackoff
-	orchestrator.RetryBackoff = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff })
+	origMax := orchestrator.MaxRetries
+	orchestrator.RetryBackoff = 1 * time.Millisecond
+	orchestrator.MaxRetries = 3
+	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
 
 	stages := []flow.Stage{
 		{ID: "retry-stage", Name: "Retry Stage", Description: "test retry", Agents: []flow.AgentType{flow.AgentPlanning}},
@@ -197,8 +201,10 @@ func TestIntegration_RetryOnRateLimit(t *testing.T) {
 func TestIntegration_RetryExhausted(t *testing.T) {
 	// Speed up retries: use minimal backoff durations
 	origBackoff := orchestrator.RetryBackoff
-	orchestrator.RetryBackoff = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff })
+	origMax := orchestrator.MaxRetries
+	orchestrator.RetryBackoff = 1 * time.Millisecond
+	orchestrator.MaxRetries = 3
+	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
 
 	stages := []flow.Stage{
 		{ID: "exhaust", Name: "Exhaust Stage", Description: "test retry exhausted", Agents: []flow.AgentType{flow.AgentPlanning}},

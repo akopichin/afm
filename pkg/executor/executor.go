@@ -17,15 +17,14 @@ import (
 
 // Config configures the executor.
 type Config struct {
-	Command      string
-	ExtraArgs    []string
-	IdleTimeout  time.Duration
-	OnAction     func(tool, detail string) // called for each parsed agent action (may be nil)
-	SessionID    string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume       bool                      // if true, --resume <SessionID> is used instead of --session-id
-	StageDir     string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	ProxyURL     string                    // if set, ANTHROPIC_BASE_URL and AFM_PROXY_URL are set in agent env
-	ProxyShimDir string                    // if set, prepended to PATH in agent env (for wrapper scripts)
+	Command     string
+	ExtraArgs   []string
+	IdleTimeout time.Duration
+	OnAction    func(tool, detail string) // called for each parsed agent action (may be nil)
+	SessionID   string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume      bool                      // if true, --resume <SessionID> is used instead of --session-id
+	StageDir    string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	WrapperDir  string                    // if set, prepended to PATH in agent env so generated wrapper scripts resolve
 }
 
 const defaultCommand = "claude"
@@ -400,18 +399,30 @@ func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lin
 			args = append(args, "--session-id", e.cfg.SessionID)
 		}
 	}
-	cmd := exec.CommandContext(ctx, e.cfg.Command, args...)
+	// Resolve the command via WrapperDir before exec. exec.Command does LookPath
+	// against THIS process's PATH; the wrapper-dir is only added to the CHILD's
+	// env below, so a generated wrapper command (e.g. glm47 inside the
+	// wrapper-dir) would not be found without resolving it to an absolute path
+	// here. For a command not present in the wrapper-dir (e.g. a mounted binary at
+	// /usr/local/bin), LookPath fails and we fall back to the bare name — which
+	// exec.Command then resolves via the parent $PATH as before.
+	cmdPath := e.cfg.Command
+	if e.cfg.WrapperDir != "" {
+		if resolved, err := exec.LookPath(filepath.Join(e.cfg.WrapperDir, e.cfg.Command)); err == nil {
+			cmdPath = resolved
+		}
+	}
+	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
-	// Strip CLAUDECODE to allow nested sessions, expose stage directory and proxy settings.
+	// Strip CLAUDECODE to allow nested sessions, expose stage directory and
+	// wrapper-dir (prepended to PATH so generated wrapper scripts resolve).
 	env := os.Environ()
-	filtered := make([]string, 0, len(env)+3)
+	filtered := make([]string, 0, len(env)+2)
 	for _, kv := range env {
 		switch {
 		case strings.HasPrefix(kv, "CLAUDECODE="):
 			// always strip for nested sessions
-		case e.cfg.ProxyURL != "" && strings.HasPrefix(kv, "ANTHROPIC_BASE_URL="):
-			// strip: replaced below with proxy address
 		default:
 			filtered = append(filtered, kv)
 		}
@@ -419,21 +430,17 @@ func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lin
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
 	}
-	if e.cfg.ProxyURL != "" {
-		filtered = append(filtered, "ANTHROPIC_BASE_URL="+e.cfg.ProxyURL)
-		filtered = append(filtered, "AFM_PROXY_URL="+e.cfg.ProxyURL)
-	}
-	if e.cfg.ProxyShimDir != "" {
+	if e.cfg.WrapperDir != "" {
 		pathSet := false
 		for i, kv := range filtered {
 			if strings.HasPrefix(kv, "PATH=") {
-				filtered[i] = "PATH=" + e.cfg.ProxyShimDir + ":" + kv[5:]
+				filtered[i] = "PATH=" + e.cfg.WrapperDir + ":" + kv[5:]
 				pathSet = true
 				break
 			}
 		}
 		if !pathSet {
-			filtered = append(filtered, "PATH="+e.cfg.ProxyShimDir+":"+os.Getenv("PATH"))
+			filtered = append(filtered, "PATH="+e.cfg.WrapperDir+":"+os.Getenv("PATH"))
 		}
 	}
 	cmd.Env = filtered

@@ -1,6 +1,12 @@
 name: preprompt
 description: "Feature implementation"
 
+prompt: |
+  Общие правила для всего flow:
+  - if goga binary not installed - install it with `pip install goga && goga connect claude`
+  - Общайся на русском.
+
+
 stages:
   - id: propose
     name: "Propose"
@@ -9,7 +15,6 @@ stages:
     description: |
       Выяснение что делать.
     prompt: |
-      if goga binary not installed - install it with `pip install goga && goga connect claude`
       Save the task file as `<git branch --show-current>.md`
     skills:
       - goga-propose

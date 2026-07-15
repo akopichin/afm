@@ -8,8 +8,6 @@ exec := executor.New(executor.Config{
     ExtraArgs:    cfg.Client.ExtraArgs,
     IdleTimeout:  cfg.Executor.IdleTimeout,
     StageDir:     stageDir,      // enables AFM_STAGE_DIR file-based dialog protocol
-    ProxyURL:     proxyURL,      // optional: injects ANTHROPIC_BASE_URL / AFM_PROXY_URL
-    ProxyShimDir: proxyShimDir,  // optional: prepended to PATH
 })
 
 err := exec.RunAgent(ctx, agentType, stageName, prompt, logFile)

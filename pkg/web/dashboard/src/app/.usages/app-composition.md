@@ -13,7 +13,7 @@ createRoot(document.getElementById('root')!).render(<App />)
 ## Особенности
 
 - App — единственное место, где вызываются useStatus/useEventFeed/useStageLog/useElapsed; дочерние клетки
-  данные сами не запрашивают (кроме consumption-panel, которая сама вызывает useUsageData, и plan-panel/
-  dialog-channel, которые сами загружают план/диалог по выбранной стадии).
+  данные сами не запрашивают (кроме plan-panel/dialog-channel, которые сами загружают план/диалог по
+  выбранной стадии).
 - Нет глобального состояния (Redux/Zustand/Context) — весь стейт живёт в App и спускается пропсами.
 - При значимых WebSocket-событиях App ре-запрашивает состояние флоу (WS — канал обновления, не только лента).

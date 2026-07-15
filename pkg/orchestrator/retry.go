@@ -53,17 +53,24 @@ func buildRetryContext(stageDir, phase string) string {
 	return buf.String()
 }
 
-// RetryBackoff defines wait durations between retry attempts.
-var RetryBackoff = []time.Duration{5 * time.Second, 10 * time.Second, 30 * time.Second}
+// RetryBackoff — фиксированная пауза между попытками после retryable-ошибки
+// (529/502/503/504, rate limit). Прежний exponential [5s,10s,30s] сдавался после
+// 4 попыток — z.ai overload длится дольше. Фиксированный 5s + MaxRetries (как в
+// ralphex) переживают окно overload.
+var RetryBackoff = 5 * time.Second
+
+// MaxRetries — число повторных попыток после первого запуска (всего MaxRetries+1).
+// Сверху ограничено idle_timeout stage (30м default): каждая попытка ≈ agent-runtime,
+// так что реально успевает меньше — idle_timeout добьёт лишнее.
+var MaxRetries = 15
 
 // runWithRetry wraps an agent function with automatic retry on rate limit errors.
 // On rate limit: sets status to retrying, waits with backoff, then retries.
 // After exhausting all retries: publishes EventRetryExhausted.
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error) {
-	backoff := append([]time.Duration{}, RetryBackoff...)
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	for attempt := 0; attempt <= len(backoff); attempt++ {
+	for attempt := 0; attempt <= MaxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 {
 			retryCtx = buildRetryContext(stageDir, phase)
@@ -130,15 +137,15 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		// remain on disk and are re-read immediately by the agent's bash loop.
 		_ = os.Remove(sessionFile(stageDir, phase))
 
-		if attempt < len(backoff) {
+		if attempt < MaxRetries {
 			o.Trigger(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
 			o.ui.Publish(Event{
 				Type:    EventRetryScheduled,
 				StageID: s.ID,
-				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, len(backoff), backoff[attempt]),
+				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, MaxRetries, RetryBackoff),
 			})
 			select {
-			case <-time.After(backoff[attempt]):
+			case <-time.After(RetryBackoff):
 			case <-ctx.Done():
 				o.Trigger(s.ID, EvFail, GuardCtx{}, "cancelled during retry")
 				o.failBlockedStages()

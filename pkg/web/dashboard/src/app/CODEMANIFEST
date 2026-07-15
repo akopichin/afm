@@ -11,8 +11,6 @@ Imports:
     From: pkg/web/dashboard/src/components/log-panel
   - Types: [EventFeedPanel]
     From: pkg/web/dashboard/src/components/event-feed
-  - Types: [ConsumptionPanel]
-    From: pkg/web/dashboard/src/components/consumption-panel
   - Types: [Footer]
     From: pkg/web/dashboard/src/components/footer
   - Types: [useStatus]
@@ -42,7 +40,7 @@ Annotations: |
 "App() -> element: ReactElement":
   location: App.tsx
   annotations: |
-    Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер, панель потребления;
+    Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер;
     владеет состоянием выбора текущей стадии.
 
     `element`: разметка всей страницы
@@ -53,8 +51,8 @@ Annotations: |
        `useElapsed`
     2. Хранить selectedStageId; при его отсутствии — автовыбор активной стадии (статусы planning, running,
        revising, retrying, awaiting_user_input), иначе первая стадия со статусом failed
-    3. Распределить данные по клеткам: flowName во `FlowHeader`, stages в `StagesList`/`Footer`/
-       `ConsumptionPanel`, события в `EventFeedPanel`, лог в `LogPanel`, план через `PlanPanel` и диалог через
+    3. Распределить данные по клеткам: flowName во `FlowHeader`, stages в `StagesList`/`Footer`,
+       события в `EventFeedPanel`, лог в `LogPanel`, план через `PlanPanel` и диалог через
        `DialogChannel` — по выбранной стадии, elapsedMs в `Footer`
     4. При значимых WebSocket-событиях (смена статуса стадии, approved, revised, retry_scheduled,
        retry_exhausted, manual_retry, ask_user, user_answered, agent_completed и т.д.) вызывать

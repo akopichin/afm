@@ -66,6 +66,9 @@ func newInitCmd() *cobra.Command {
 			if err := os.WriteFile(outPath, []byte(sb.String()), 0644); err != nil {
 				return fmt.Errorf("write flow file: %w", err)
 			}
+			if err := ensureGitignoreEntry(".", ".afm/secrets.env"); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)
+			}
 			fmt.Printf("\nCreated: %s\n", outPath)
 			return nil
 		},
@@ -95,4 +98,28 @@ func splitComma(s string) []string {
 		}
 	}
 	return result
+}
+
+// ensureGitignoreEntry дописывает entry в .gitignore в repoDir, если его там ещё
+// нет. Создаёт .gitignore при отсутствии. Используется afm-init, чтобы
+// секреты recipe (.afm/secrets.env) не попали в VCS.
+func ensureGitignoreEntry(repoDir, entry string) error {
+	giPath := filepath.Join(repoDir, ".gitignore")
+	data, _ := os.ReadFile(giPath)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return nil // уже есть
+		}
+	}
+	content := entry + "\n"
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		content = "\n" + content
+	}
+	f, err := os.OpenFile(giPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer f.Close()
+	_, err = f.WriteString(content)
+	return err
 }

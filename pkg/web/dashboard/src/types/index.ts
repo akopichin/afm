@@ -2,7 +2,6 @@
 // отсюда, чтобы остальные клетки импортировали их через '../../types' (см. dashboard-data-types).
 export type { Stage, StageStatus } from './stage'
 export type { AfmEvent, AfmEventType } from './afm-event'
-export type { UsagePoint, UsageMetric } from './usage-point'
 export type { DialogQuestion } from './dialog-question'
 export type { DialogAnswer } from './dialog-answer'
 export type { PlanComment } from './plan-comment'

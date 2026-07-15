@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,21 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Executor.MaxParallel != 0 {
 		t.Errorf("default max_parallel: got %d", cfg.Executor.MaxParallel)
+	}
+}
+
+func TestClientConfig_IsClaudeBare(t *testing.T) {
+	// nil (поле отсутствует) → bare ВЫКЛЮЧЕН: skills нужны по умолчанию.
+	if (config.ClientConfig{}).IsClaudeBare() {
+		t.Error("nil ClaudeBare should default to false")
+	}
+	tb := true
+	if !(config.ClientConfig{ClaudeBare: &tb}).IsClaudeBare() {
+		t.Error("ClaudeBare=true should be true")
+	}
+	fb := false
+	if (config.ClientConfig{ClaudeBare: &fb}).IsClaudeBare() {
+		t.Error("ClaudeBare=false should be false")
 	}
 }
 
@@ -126,64 +142,6 @@ func TestServerPortZeroDisablesServer(t *testing.T) {
 	}
 }
 
-func TestProxyConfig_IsEnabled(t *testing.T) {
-	var p config.ProxyConfig
-	if !p.IsEnabled() {
-		t.Error("nil Enabled should default to true")
-	}
-	f := false
-	p.Enabled = &f
-	if p.IsEnabled() {
-		t.Error("Enabled=false should return false")
-	}
-	tr := true
-	p.Enabled = &tr
-	if !p.IsEnabled() {
-		t.Error("Enabled=true should return true")
-	}
-}
-
-func TestProxyConfigMerge(t *testing.T) {
-	dir := t.TempDir()
-	writeYAML(t, dir, "config.yaml", `
-proxy:
-  enabled: false
-  upstream: https://api.z.ai/api/anthropic
-  port: 9000
-  transforms:
-    zai: true
-`)
-	cfg, err := config.LoadFrom("", dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Proxy.IsEnabled() {
-		t.Error("proxy.enabled=false should disable proxy")
-	}
-	if cfg.Proxy.Upstream != "https://api.z.ai/api/anthropic" {
-		t.Errorf("upstream: got %q", cfg.Proxy.Upstream)
-	}
-	if cfg.Proxy.Port != 9000 {
-		t.Errorf("port: got %d, want 9000", cfg.Proxy.Port)
-	}
-	if cfg.Proxy.Transforms.ZAI == nil || !*cfg.Proxy.Transforms.ZAI {
-		t.Error("transforms.zai should be true")
-	}
-}
-
-func TestProxyConfigMergeDefaults(t *testing.T) {
-	cfg := config.Default()
-	if !cfg.Proxy.IsEnabled() {
-		t.Error("proxy should be enabled by default")
-	}
-	if cfg.Proxy.Upstream != "" {
-		t.Errorf("default upstream should be empty, got %q", cfg.Proxy.Upstream)
-	}
-	if cfg.Proxy.Port != 0 {
-		t.Errorf("default port should be 0, got %d", cfg.Proxy.Port)
-	}
-}
-
 func TestDockerConfig_IsDockerEnabled(t *testing.T) {
 	trueVal := true
 	falseVal := false
@@ -237,129 +195,6 @@ func TestDockerConfig_GetImage(t *testing.T) {
 			t.Errorf("got %q", cfg.GetImage())
 		}
 	})
-}
-
-// TestConfigPricingAccountingFieldsExists is a contract test: Config must expose
-// Pricing (PricingConfig) and Accounting (AccountingConfig) fields, and the new
-// sub-config types must carry their declared properties + getter methods.
-func TestConfigPricingAccountingFieldsExists(t *testing.T) {
-	var cfg config.Config
-
-	// Config fields exist and are assignable to the declared types.
-	cfg.Pricing = config.PricingConfig{
-		Models: map[string]config.ModelPricing{
-			"claude-sonnet-5": {
-				InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3,
-			},
-		},
-	}
-	cfg.Accounting = config.AccountingConfig{BucketMinutes: 5}
-
-	// PricingConfig.GetModelPricing signature: (string) (ModelPricing, bool).
-	pricing, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5")
-	if !ok {
-		t.Fatal("GetModelPricing for configured model must return ok=true")
-	}
-	_ = pricing
-
-	// AccountingConfig.GetBucketMinutes signature: () int.
-	if minutes := cfg.Accounting.GetBucketMinutes(); minutes != 5 {
-		t.Errorf("GetBucketMinutes: got %d, want 5", minutes)
-	}
-}
-
-func TestPricingConfig_GetModelPricingFound(t *testing.T) {
-	p := config.PricingConfig{
-		Models: map[string]config.ModelPricing{
-			"claude-sonnet-5": {InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3},
-		},
-	}
-	got, ok := p.GetModelPricing("claude-sonnet-5")
-	if !ok {
-		t.Fatal("expected ok=true for a configured model")
-	}
-	want := config.ModelPricing{InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3}
-	if got != want {
-		t.Errorf("GetModelPricing: got %+v, want %+v", got, want)
-	}
-}
-
-func TestPricingConfig_GetModelPricingUnknownModel(t *testing.T) {
-	p := config.PricingConfig{
-		Models: map[string]config.ModelPricing{
-			"claude-sonnet-5": {InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3},
-		},
-	}
-	got, ok := p.GetModelPricing("claude-opus-4")
-	if ok {
-		t.Error("expected ok=false for a model not in the table (no fuzzy fallback)")
-	}
-	if got != (config.ModelPricing{}) {
-		t.Errorf("expected zero-value ModelPricing for unknown model, got %+v", got)
-	}
-}
-
-func TestPricingConfig_GetModelPricingNilModelsMap(t *testing.T) {
-	// Zero-value PricingConfig — Models is nil. The lookup must be ok=false and
-	// never panic on the nil-map read.
-	var p config.PricingConfig
-	got, ok := p.GetModelPricing("claude-sonnet-5")
-	if ok {
-		t.Error("expected ok=false when Models is nil")
-	}
-	if got != (config.ModelPricing{}) {
-		t.Errorf("expected zero-value ModelPricing, got %+v", got)
-	}
-}
-
-func TestAccountingConfig_GetBucketMinutes(t *testing.T) {
-	if got := (config.AccountingConfig{}).GetBucketMinutes(); got != 5 {
-		t.Errorf("zero value: got %d, want default 5", got)
-	}
-	if got := (config.AccountingConfig{BucketMinutes: 10}).GetBucketMinutes(); got != 10 {
-		t.Errorf("explicit value: got %d, want 10", got)
-	}
-}
-
-func TestLoadFrom_PricingAccountingOverride(t *testing.T) {
-	dir := t.TempDir()
-	writeYAML(t, dir, "config.yaml", `
-pricing:
-  models:
-    claude-sonnet-5:
-      input_per_mtok: 3.0
-      output_per_mtok: 15.0
-      cache_per_mtok: 0.3
-accounting:
-  bucket_minutes: 10
-`)
-	cfg, err := config.LoadFrom("", dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pricing, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5")
-	if !ok {
-		t.Fatal("pricing override: expected configured model to be found")
-	}
-	if want := (config.ModelPricing{InputPerMtok: 3.0, OutputPerMtok: 15.0, CachePerMtok: 0.3}); pricing != want {
-		t.Errorf("pricing override: got %+v, want %+v", pricing, want)
-	}
-	if got := cfg.Accounting.GetBucketMinutes(); got != 10 {
-		t.Errorf("accounting override: got %d, want 10", got)
-	}
-}
-
-func TestLoadFrom_PricingAccountingDefaults(t *testing.T) {
-	// With no pricing:/accounting: section, Default() yields a zero-value
-	// Pricing/Accounting — GetModelPricing is ok=false (cost metric hidden),
-	// GetBucketMinutes falls back to 5.
-	cfg := config.Default()
-	if _, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5"); ok {
-		t.Error("default Pricing should be empty (ok=false for every lookup)")
-	}
-	if got := cfg.Accounting.GetBucketMinutes(); got != 5 {
-		t.Errorf("default bucket minutes: got %d, want 5", got)
-	}
 }
 
 func TestLoadFrom_DockerConfig(t *testing.T) {
@@ -439,5 +274,275 @@ func TestEffectiveTheme(t *testing.T) {
 				t.Errorf("EffectiveTheme(%q)=%q, want %q", tc.theme, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDockerAutoShim_ParseAndValidate(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgYAML := `
+docker:
+  autoShim: true
+  secrets_file: ~/.afm/secrets.env
+  agents:
+    glm51:
+      model: glm-5.1
+      url: https://api.z.ai/api/anthropic
+      system_prompt: "file:~/.ai-free/claude-glm/system-prompt.md"
+      auth:
+        from: "file:~/.ai-free/claude-glm/token"
+        to: "env:ANTHROPIC_AUTH_TOKEN"
+`
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadFrom(dir, dir) // global=project=dir → один файл
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if !cfg.Docker.IsAutoShim() {
+		t.Error("IsAutoShim: expected true")
+	}
+	r := cfg.Docker.Agents["glm51"]
+	if r.Model != "glm-5.1" {
+		t.Errorf("Model: got %q", r.Model)
+	}
+	if r.Auth.EnvVarName() != "ANTHROPIC_AUTH_TOKEN" {
+		t.Errorf("EnvVarName: got %q", r.Auth.EnvVarName())
+	}
+	if cfg.Docker.SecretsFile != "~/.afm/secrets.env" {
+		t.Errorf("SecretsFile: got %q", cfg.Docker.SecretsFile)
+	}
+	if err := cfg.Docker.ValidateAgents(); err != nil {
+		t.Errorf("ValidateAgents: %v", err)
+	}
+}
+
+func TestDockerAutoShim_ValidationErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string
+	}{
+		{"missing model", config.AgentRecipe{Auth: config.RecipeAuth{To: "env:ANTHROPIC_AUTH_TOKEN"}}, "model is required"},
+		{"auth.to not env", config.AgentRecipe{Model: "m", Auth: config.RecipeAuth{To: "ANTHROPIC_AUTH_TOKEN"}}, "must be an env:"},
+		{"auth.to not in list", config.AgentRecipe{Model: "m", Auth: config.RecipeAuth{To: "env:RANDOM"}}, "not one of"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.recipe.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.errSub) {
+				t.Errorf("Validate(): got %v, want substring %q", err, c.errSub)
+			}
+		})
+	}
+}
+
+func TestAgentRecipe_OpenAIType(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string // пустая строка → ожидаем PASS
+	}{
+		{
+			name: "valid openai recipe",
+			recipe: config.AgentRecipe{
+				Type:  "openai",
+				Model: "claude-sonnet-4-5",
+				URL:   "https://api2.cursor.sh/v1",
+				Auth:  config.RecipeAuth{From: "env:CURSOR_TOKEN", To: "env:OPENAI_API_KEY"},
+			},
+		},
+		{
+			name: "openai: missing model",
+			recipe: config.AgentRecipe{
+				Type: "openai",
+				URL:  "https://api2.cursor.sh/v1",
+				Auth: config.RecipeAuth{From: "env:CURSOR_TOKEN", To: "env:OPENAI_API_KEY"},
+			},
+			errSub: "model is required",
+		},
+		{
+			name: "openai: missing url",
+			recipe: config.AgentRecipe{
+				Type:  "openai",
+				Model: "gpt-4o",
+				Auth:  config.RecipeAuth{From: "env:OPENAI_KEY", To: "env:OPENAI_API_KEY"},
+			},
+			errSub: "url is required",
+		},
+		{
+			name: "openai: auth.to not env:",
+			recipe: config.AgentRecipe{
+				Type:  "openai",
+				Model: "gpt-4o",
+				URL:   "https://api.openai.com/v1",
+				Auth:  config.RecipeAuth{From: "env:KEY", To: "OPENAI_API_KEY"},
+			},
+			errSub: "must be an env:",
+		},
+		{
+			name: "openai: any env: var allowed (not restricted to ClaudeAuthEnvVars)",
+			recipe: config.AgentRecipe{
+				Type:  "openai",
+				Model: "gpt-4o",
+				URL:   "https://api.openai.com/v1",
+				Auth:  config.RecipeAuth{From: "env:MY_CUSTOM_KEY", To: "env:MY_TARGET_KEY"},
+			},
+			// env: любой — ошибки нет
+		},
+		{
+			name: "claude type (empty): OPENAI_API_KEY still rejected",
+			recipe: config.AgentRecipe{
+				Model: "glm-5.1",
+				Auth:  config.RecipeAuth{From: "env:TOKEN", To: "env:OPENAI_API_KEY"},
+			},
+			errSub: "not one of",
+		},
+		{
+			name: "unknown type (typo openapi) rejected by allow-list",
+			recipe: config.AgentRecipe{
+				Type:  "openapi", // распространённая опечатка для "openai"
+				Model: "gpt-4o",
+				URL:   "https://api.openai.com/v1",
+				Auth:  config.RecipeAuth{From: "env:KEY", To: "env:OPENAI_API_KEY"},
+			},
+			errSub: "type must be",
+		},
+		{
+			name: "explicit claude type allowed",
+			recipe: config.AgentRecipe{
+				Type:  "claude",
+				Model: "glm-5.1",
+				Auth:  config.RecipeAuth{From: "env:TOKEN", To: "env:ANTHROPIC_API_KEY"},
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.recipe.Validate()
+			if c.errSub == "" {
+				if err != nil {
+					t.Errorf("Validate(): unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), c.errSub) {
+					t.Errorf("Validate(): got %v, want substring %q", err, c.errSub)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentRecipe_CursorType(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string // пустая строка → ожидаем PASS
+	}{
+		{
+			name: "valid cursor recipe",
+			recipe: config.AgentRecipe{
+				Type:  "cursor",
+				Model: "auto",
+				URL:   "https://api.cursor.com/v1",
+				Auth:  config.RecipeAuth{From: "file:~/.ai-free/claude-glm/token-cursor", To: "env:CURSOR_API_KEY"},
+			},
+		},
+		{
+			name: "cursor: missing model",
+			recipe: config.AgentRecipe{
+				Type: "cursor",
+				URL:  "https://api.cursor.com/v1",
+				Auth: config.RecipeAuth{From: "file:t", To: "env:CURSOR_API_KEY"},
+			},
+			errSub: "model is required",
+		},
+		{
+			name: "cursor: missing url",
+			recipe: config.AgentRecipe{
+				Type:  "cursor",
+				Model: "auto",
+				Auth:  config.RecipeAuth{From: "file:t", To: "env:CURSOR_API_KEY"},
+			},
+			errSub: "url is required",
+		},
+		{
+			name: "cursor: any env: var allowed (not restricted to ClaudeAuthEnvVars)",
+			recipe: config.AgentRecipe{
+				Type:  "cursor",
+				Model: "auto",
+				URL:   "https://api.cursor.com/v1",
+				Auth:  config.RecipeAuth{From: "env:MY_KEY", To: "env:MY_CURSOR_KEY"},
+			},
+			// env: любой — ошибки нет
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.recipe.Validate()
+			if c.errSub == "" {
+				if err != nil {
+					t.Errorf("Validate(): unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), c.errSub) {
+					t.Errorf("Validate(): got %v, want substring %q", err, c.errSub)
+				}
+			}
+		})
+	}
+}
+
+func TestDockerAutoShim_ParseOpenAIType(t *testing.T) {
+	dir := t.TempDir()
+	cfgYAML := `
+docker:
+  autoShim: true
+  agents:
+    cursor:
+      type: openai
+      model: claude-sonnet-4-5
+      url: https://api2.cursor.sh/v1
+      auth:
+        from: "env:CURSOR_TOKEN"
+        to: "env:OPENAI_API_KEY"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfgYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadFrom(dir, dir)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	r := cfg.Docker.Agents["cursor"]
+	if r.Type != "openai" {
+		t.Errorf("Type: got %q, want %q", r.Type, "openai")
+	}
+	if r.Auth.EnvVarName() != "OPENAI_API_KEY" {
+		t.Errorf("EnvVarName: got %q", r.Auth.EnvVarName())
+	}
+	if err := cfg.Docker.ValidateAgents(); err != nil {
+		t.Errorf("ValidateAgents: %v", err)
+	}
+}
+
+func TestDockerAutoShim_MergeLayers(t *testing.T) {
+	global := t.TempDir()
+	project := t.TempDir()
+	_ = os.WriteFile(filepath.Join(global, "config.yaml"), []byte("docker:\n  agents:\n    glm51:\n      model: glm-5.1\n      auth: {to: \"env:ANTHROPIC_AUTH_TOKEN\"}\n"), 0644)
+	_ = os.WriteFile(filepath.Join(project, "config.yaml"), []byte("docker:\n  agents:\n    glm52:\n      model: glm-5.2\n      auth: {to: \"env:ANTHROPIC_AUTH_TOKEN\"}\n"), 0644)
+	cfg, err := config.LoadFrom(global, project)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if _, ok := cfg.Docker.Agents["glm51"]; !ok {
+		t.Error("merge: glm51 from global layer missing")
+	}
+	if _, ok := cfg.Docker.Agents["glm52"]; !ok {
+		t.Error("merge: glm52 from project layer missing")
+	}
+	if len(cfg.Docker.Agents) != 2 {
+		t.Errorf("merge: expected 2 agents, got %d", len(cfg.Docker.Agents))
 	}
 }

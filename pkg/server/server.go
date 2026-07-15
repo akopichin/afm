@@ -30,7 +30,6 @@ type Server struct {
 	retryFn        func(ctx context.Context, stageID string) error
 	dialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	dialogCancelFn func(stageID string) error
-	accountant     Accountant
 	theme          string       // "goga" или "" (default novacorps)
 	indexBytes     []byte       // предподготовленный index.html (с заменами для goga)
 	fileServer     http.Handler // отдаёт статику (style.css, app.js, ...)
@@ -48,12 +47,7 @@ type Config struct {
 	RetryFn        func(ctx context.Context, stageID string) error
 	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	DialogCancelFn func(stageID string) error
-	// Accountant — источник данных потребления рана для GET /api/usage. Локальный
-	// интерфейс (см. usage_handler.go): *accounting.Accountant удовлетворяет ему
-	// структурно. В New передаётся в UsageHandler как есть — тот же экземпляр, без
-	// отдельного построения внутри Server.
-	Accountant Accountant
-	Theme      string
+	Theme          string
 }
 
 // New creates a Server.
@@ -67,7 +61,6 @@ func New(cfg Config) *Server {
 		retryFn:        cfg.RetryFn,
 		dialogAnswerFn: cfg.DialogAnswerFn,
 		dialogCancelFn: cfg.DialogCancelFn,
-		accountant:     cfg.Accountant,
 		theme:          cfg.Theme,
 		fileServer:     http.FileServer(http.FS(web.FS)),
 	}
@@ -95,7 +88,6 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/ws", s.handleWebSocket)
-	mux.Handle("/api/usage", UsageHandler(cfg.Accountant))
 	mux.HandleFunc("/", s.serveStatic)
 
 	s.httpSrv = &http.Server{

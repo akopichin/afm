@@ -1,11 +1,10 @@
-Domain: общие типы данных дашборда afm (`Stage`, `AfmEvent`, `UsagePoint`, `DialogQuestion`, `DialogAnswer`,
+Domain: общие типы данных дашборда afm (`Stage`, `AfmEvent`, `DialogQuestion`, `DialogAnswer`,
 `PlanComment`, `LogEntry`) — для клеток-хуков и клеток-компонентов, потребляющих данные бэкенда.
 
 ## Источники данных (соответствие app.js)
 
 - `Stage` — поле stages ответа `GET /api/status` (объект, ключ — id стадии); там же `flow_name` и `started_at`.
 - `LogEntry` — `GET /api/stages/{id}/log` (поллинг 3с).
-- `UsagePoint` — `GET /api/usage?metric=...&stage=...`.
 - `AfmEvent` — WebSocket `/ws`.
 - План и диалог — `GET /api/stages/{id}/plan` и `GET /api/stages/{id}/dialog`.
 
@@ -17,7 +16,7 @@ retrying, awaiting_user_input (done — завершена, не completed).
 Все типы реэкспортируются через barrel index.ts клеточки:
 
 ```ts
-import type { Stage, AfmEvent, UsagePoint } from '../../types'
+import type { Stage, AfmEvent } from '../../types'
 ```
 
 ## Типизация ответа fetch
@@ -35,7 +34,7 @@ async function fetchStatus(): Promise<StatusResponse> {
 
 ## Использование union-типов статусов/метрик/уровней
 
-`Stage.status`, `UsagePoint.metric`, `LogEntry.level` — строковые литеральные union-типы, пригодны для
+`Stage.status`, `LogEntry.level` — строковые литеральные union-типы, пригодны для
 switch/сравнения без дополнительной валидации:
 
 ```ts

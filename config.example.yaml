@@ -29,6 +29,15 @@ client:
   # extra_args:
   #   - --my-custom-flag
 
+  # claude_bare: добавлять ли --bare в генерируемые claude-обёртки (autoShim).
+  # --bare = minimal mode claude Code: пропускает CLAUDE.md auto-discovery,
+  # SessionStart-хуки, skills-listing, auto-memory (~120 KB автоконтекста) — body
+  # запроса ~4 KB вместо ~127 KB (меньше токенов и нагрузки на шлюз/z.ai, ниже шанс
+  # 529). НО --bare ломает Skill-tool: goga-* skills перестают резолвиться (агент
+  # имитирует их сам). Default: false (skills важнее). Включайте claude_bare: true
+  # только для flows БЕЗ skills.
+  # claude_bare: false
+
 # Execution parameters
 executor:
   # Maximum idle time with no output from the agent before killing the process.
@@ -44,27 +53,6 @@ executor:
 # Default: "" (use embedded prompts)
 # prompts_dir: .afm/prompts/
 
-# Built-in reverse proxy settings.
-# The proxy intercepts agent HTTP traffic and applies transforms.
-# Default: enabled when ANTHROPIC_BASE_URL is set or proxy.upstream is configured.
-# proxy:
-#   # Set to false to disable the proxy entirely.
-#   # Default: true
-#   # enabled: true
-#
-#   # Upstream Anthropic-compatible API base URL.
-#   # Default: "" (reads from ANTHROPIC_BASE_URL environment variable)
-#   # upstream: https://api.z.ai/api/anthropic
-#
-#   # Proxy listen port (0 = random free port).
-#   # Default: 0
-#   # port: 0
-#
-#   # Transform overrides. null/absent = auto-detect by upstream host.
-#   # transforms:
-#   #   zai: true   # force-enable ZAI fix (non-streaming→streaming for api.z.ai)
-#   #   zai: false  # force-disable even when upstream is api.z.ai
-
 # Docker mode — запускать afm и агентов внутри Docker-контейнера.
 # Включается через конфиг или переменную окружения AFM_USE_DOCKER=1.
 # docker:
@@ -76,45 +64,46 @@ executor:
 #   # Default: "akopichin/afm:latest" (или $AFM_DOCKER_IMAGE)
 #   # image: akopichin/afm:latest
 #
+#   # autoShim: по флагу afm генерирует claude-врапперы для agents.<cmd> прямо в
+#   # контейнере — без монтирования бинарника и без extra_mounts для токенов.
+#   # Нужен образ, собранный из кода с autoShim. recipe = model + url +
+#   # system_prompt(file:) + auth{from,to}. auth.from — путь к файлу или env:VAR,
+#   # где afm читает секрет НА ХОСТЕ (само значение токена в конфиге НЕ хранится —
+#   # попадает в контейнер как transient env). auth.to ∈ {env:CLAUDE_CODE_OAUTH_TOKEN,
+#   # env:ANTHROPIC_API_KEY, env:ANTHROPIC_AUTH_TOKEN}. model ставится во все 3 тира.
+#   # url bake'ится в враппер как ANTHROPIC_BASE_URL (z.ai, deepseek — напрямую).
+#   # autoShim: true
+#   # agents:
+#   #   glm52:                                  # пример (пути реальные, токенов в конфиге нет)
+#   #     model: glm-5.2
+#   #     url: https://api.z.ai/api/anthropic
+#   #     system_prompt: "file:~/.ai-free/claude-glm/system-prompt.md"
+#   #     auth:
+#   #       from: "file:~/.ai-free/claude-glm/token"
+#   #       to: "env:ANTHROPIC_AUTH_TOKEN"
+#   #   deepseek-v4:                            # docker-only (бинарника на хосте нет) + cross-gateway
+#   #     model: deepseek-v4-pro
+#   #     url: https://api.deepseek.com/anthropic
+#   #     auth:
+#   #       from: "file:~/.ai-free/claude-glm/token-deepseek"
+#   #       to: "env:ANTHROPIC_AUTH_TOKEN"
+#   #   cursor:                                # type:cursor → Cursor Cloud Agents API (НЕ openai chat!)
+#   #     type: cursor                          # api.cursor.com не имеет /chat/completions — это
+#   #     model: auto                           # асинхронный run-based API: cursor-as-claude создаёт
+#   #     url: https://api.cursor.com/v1        # no-repo Cloud Agent, опрашивает run, эмитит claude stream-json.
+#   #     auth:                                 # auth.to — любой env:VAR; CURSOR_API_KEY по конвенции
+#   #       from: "file:~/.ai-free/claude-glm/token-cursor"
+#   #       to: "env:CURSOR_API_KEY"
+#   #   # Для провайдеров с настоящим OpenAI /v1/chat/completions (deepseek, ollama, …) — type: openai:
+#   #   # openai-agent:
+#   #   #   type: openai
+#   #   #   model: deepseek-chat
+#   #   #   url: https://api.deepseek.com/v1
+#   #   #   auth: { from: "env:DEEPSEEK_KEY", to: "env:OPENAI_API_KEY" }
+#
 #   # Доп. хост-директории для кастомных агентов (токены/конфиги вне ~/.claude,
 #   # напр. ~/.ai-free для GLM-обёрток glm51/glm52). Пути с ~ → /home/afm/…, абсолютные —
-#   # тот же путь; монтируются только для чтения.
+#   # тот же путь; монтируются только для чтения. При autoShim:on для recipe-агентов
+#   # токены идут через transient env — этот маунт им не нужен.
 #   # extra_mounts:
 #   #   - ~/.ai-free
-
-# Учёт потребления (токены / стоимость / трафик).
-# afm захватывает каждый проксированный ответ агента в usage.jsonl и отдаёт
-# агрегаты через GET /api/usage?metric=tokens|cost|kb. Метрика cost считается
-# только при заданном разделе pricing; без него cost полностью скрыт.
-#
-# КАК ОПРЕДЕЛЯЕТСЯ МОДЕЛЬ (ключ цены):
-# Ключ обязан СТРОГО совпадать со значением поля `model` из ответа upstream-API —
-# именно оно попадает в usage.jsonl (его же шлёт провайдер). Никакого fuzzy или
-# сопоставления по префиксу: если API отдаёт "claude-sonnet-4-5-20250929", то и
-# ключ должен быть таким же. Чтобы увидеть точную строку для своего агента —
-# посмотри поле model в .afm/runs/<run>/usage.jsonl. Модели glm-* (напр. glm-5.2)
-# совпадают как есть; у Claude API строка обычно с датой — добавь её сюда.
-#
-# Цены ОРИЕНТИРОВОЧНЫЕ (list price, интернет-источники на момент составления),
-# USD за 1 млн токенов — проверяй актуальные у провайдера и поправь под себя.
-# cache_per_mtok — единая ставка cache read/write (в Anthropic они различаются,
-# тут усреднено ближе к read, т.к. чтений обычно больше).
-pricing:
-  models:
-    # Anthropic Claude — platform.claude.com/docs/en/about-claude/pricing
-    claude-opus-4-5:     { input_per_mtok: 5.0,  output_per_mtok: 25.0, cache_per_mtok: 0.5 }
-    claude-sonnet-4-5:   { input_per_mtok: 3.0,  output_per_mtok: 15.0, cache_per_mtok: 0.3 }
-    claude-sonnet-5:     { input_per_mtok: 2.0,  output_per_mtok: 10.0, cache_per_mtok: 0.2 }  # intro до 31.08.2026
-    claude-haiku-4-5:    { input_per_mtok: 1.0,  output_per_mtok: 5.0,  cache_per_mtok: 0.1 }
-    # OpenAI GPT — openai.com/api/pricing
-    gpt-4o:              { input_per_mtok: 2.5,  output_per_mtok: 10.0, cache_per_mtok: 1.25 }
-    gpt-4o-mini:         { input_per_mtok: 0.15, output_per_mtok: 0.6,  cache_per_mtok: 0.075 }
-    # z.ai GLM — docs.z.ai/guides/overview/pricing (glm-5.2 нет в прайсе, ≈ по glm-4.6)
-    glm-4.6:             { input_per_mtok: 0.6,  output_per_mtok: 2.2,  cache_per_mtok: 0.11 }
-    glm-4.5:             { input_per_mtok: 0.6,  output_per_mtok: 1.1,  cache_per_mtok: 0.11 }
-    glm-5.2:             { input_per_mtok: 0.6,  output_per_mtok: 2.2,  cache_per_mtok: 0.11 }
-
-# Ширина бакета агрегации по времени (в минутах) для /api/usage и панели дашборда.
-# Default: 5
-# accounting:
-#   bucket_minutes: 5

@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y \
       ca-certificates \
       gnupg \
       gosu \
+      jq \
       python3 \
       python3-pip \
       python3-venv \
@@ -51,6 +52,14 @@ RUN mkdir -p /home/afm
 # Entrypoint-shim: дропает root → host-uid через gosu, затем запускает afm.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# openai-as-claude: транслятор для OpenAI-совместимых провайдеров (cursor, deepseek, и т.д.)
+COPY scripts/openai-as-claude.sh /usr/local/bin/openai-as-claude
+RUN chmod +x /usr/local/bin/openai-as-claude
+
+# cursor-as-claude: адаптер Cursor Cloud Agents API (асинхронный run-based → claude stream-json)
+COPY scripts/cursor-as-claude.sh /usr/local/bin/cursor-as-claude
+RUN chmod +x /usr/local/bin/cursor-as-claude
 
 WORKDIR /project
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

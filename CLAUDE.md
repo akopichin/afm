@@ -133,86 +133,6 @@ When adding new interactive features:
 4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_DialogViolationDetected`), not `eagerProbeRunner` (which only applies to non-interactive stages)
 5. Verify atomic write pattern (O_EXCL) is preserved in handlers
 
-## Built-in Reverse Proxy
-
-afm can run a built-in reverse proxy that intercepts agent HTTP traffic to Anthropic-compatible gateways and applies transforms. The primary use case is working around `api.z.ai` 529 errors: `ZAITransform` rewrites non-streaming requests to streaming, collects the SSE response, and reassembles it into a single Anthropic JSON `message`.
-
-### Architecture
-
-`run.go` starts the proxy before the orchestrator (random free port, `127.0.0.1` only). The proxy address and a `claude` shim directory are threaded through `orchestrator.Options` → `executor.Config` → the agent process env (`ANTHROPIC_BASE_URL`, `AFM_PROXY_URL`, and `PATH` with the shim dir prepended). `ZAITransform` is auto-detected when the upstream host contains `api.z.ai`.
-
-**Upstream resolution (in `run.go`, before `orchestrator.New`):** `cfg.Proxy.Upstream` (config), else `os.Getenv("ANTHROPIC_BASE_URL")`. If both are empty the proxy is skipped (no-op + info log). A proxy `Start` failure is a **hard error** (`start proxy: %w`); a `CreateShim` failure is a **non-fatal warning** — env-var injection still points the agent at the proxy. Proxy + shim are torn down via `defer` (`p.Shutdown`, `os.RemoveAll(shimDir)`).
-
-### Key Files
-
-| File | Responsibility |
-|------|-----------------|
-| `pkg/proxy/transform.go` | `Transform` interface (`Match` + `ServeHTTP`) |
-| `pkg/proxy/proxy.go` | `Proxy` struct, `New`/`Start`/`Addr`/`Shutdown`, `ServeHTTP` dispatch, `passthroughTo` |
-| `pkg/proxy/zai.go` | `ZAITransform`, `BuildTransforms` (auto-detect + `*bool` override), `parseSSE` (SSE→JSON reassembly), `writeSSEError` |
-| `pkg/proxy/shim.go` | `CreateShim` — temp dir with a `claude` wrapper that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude` |
-| `pkg/config/config.go` | `ProxyConfig`, `TransformOverrides`, `IsEnabled()` (nil `Enabled` → enabled), merge in `mergeFile` |
-| `pkg/executor/executor.go` | `Config.ProxyURL`/`ProxyShimDir` → injects `ANTHROPIC_BASE_URL` + `AFM_PROXY_URL` and prepends shim dir to `PATH` in the agent env (also strips any pre-existing `ANTHROPIC_BASE_URL` when `ProxyURL` is set) |
-| `pkg/orchestrator/orchestrator.go` | `Options.ProxyURL`/`ProxyShimDir` forwarded to **all four** `executor.New` call sites (`New`, two in `runnerFor`, `runnerForFallback`) |
-| `cmd/afm/run.go` | Starts proxy + shim before the orchestrator; resolves upstream |
-
-### How the ZAI transform works
-
-For requests where `stream` is absent/false (and upstream is `api.z.ai`):
-1. Inject `stream: true` into the body, forward to upstream.
-2. Read the SSE response; `parseSSE` accumulates `message_start` (id/role/model/usage), `content_block_start` + `content_block_delta` (text/thinking/tool_use/signature deltas) in content-block index order, and `message_delta` (stop_reason + usage merge).
-3. Return a single Anthropic JSON `message`.
-
-`stream: true` requests and non-JSON bodies pass through unchanged. Upstream non-200 responses are forwarded transparently (status + headers + body). An upstream SSE `error` event or an empty SSE response yields HTTP 529 with a structured Anthropic-style error.
-
-### Wrapper commands (glm51, etc.) — no patching required
-
-When `client.command` is a wrapper (e.g. `glm51`) that exports `ANTHROPIC_BASE_URL` itself and then `exec`s `claude`, the proxy still works without patching the wrapper:
-- afm prepends a shim dir to the agent's `PATH`. The shim is a `claude` script that sets `ANTHROPIC_BASE_URL=<proxy>` and execs the real `claude`.
-- The wrapper clobbers `ANTHROPIC_BASE_URL`, but its inner `exec claude` resolves to the **shim** (PATH precedence), which re-sets the proxy address for the real `claude`.
-- Requirement: the real `claude` must be in afm's `PATH` (used by `CreateShim`'s `exec.LookPath`).
-
-This is why the shim wraps `claude` (the actual HTTP client), **not** `client.command` — wrapping the wrapper would be clobbered by the wrapper's own `export`. The env-var injection alone is insufficient for wrappers because they overwrite `ANTHROPIC_BASE_URL`; the shim is what actually delivers the proxy address to `claude`.
-
-### Environment Variables
-
-| Variable | Purpose | Set By |
-|----------|---------|--------|
-| `ANTHROPIC_BASE_URL` | Upstream source (fallback in `run.go`) / injected proxy address (to the agent) | `run.go` reads; executor injects proxy address when `ProxyURL` set |
-| `AFM_PROXY_URL` | Proxy address (informational, mirrors `ANTHROPIC_BASE_URL`) | executor when `ProxyURL` set |
-| `PATH` | Prepended with the shim dir so the wrapper's `claude` call resolves to the shim | executor when `ProxyShimDir` set |
-
-### Config
-
-```yaml
-proxy:
-  enabled: true                          # nil/absent → enabled by default
-  upstream: https://api.z.ai/api/anthropic   # else read from $ANTHROPIC_BASE_URL
-  port: 0                                # 0 = random free port
-  transforms:
-    zai: true                            # nil = auto-detect by host; true = force on; false = force off
-```
-
-### Debugging
-
-- **`proxy: skipped (no upstream) …`** — no upstream found. Set `proxy.upstream` in config or `export ANTHROPIC_BASE_URL`.
-- **`proxy: http://127.0.0.1:PORT → <upstream>`** — proxy started; agents route through it.
-- **`warning: proxy shim: …`** — shim creation failed (usually `claude` not in `PATH`); non-fatal — env-var injection still applies, but wrapper commands that clobber `ANTHROPIC_BASE_URL` will bypass the proxy.
-- **Proxy not taking effect with a wrapper command** — confirm `claude` is in `PATH` (shim requires it) and the wrapper ultimately execs a binary named `claude`.
-
-### Common Changes
-
-- **Add a transform:** implement `proxy.Transform` (`Match` + `ServeHTTP`), append it in `BuildTransforms`. `Proxy.ServeHTTP` dispatches to the first matching transform; requests with no match pass through unchanged via `passthroughTo`.
-- **Change upstream resolution:** edit the block in `run.go` before `orchestrator.New`.
-- **Keep all four `executor.New` sites in sync** when touching proxy plumbing in the orchestrator (`New`, two in `runnerFor`, `runnerForFallback`) — missing one leaves an agent path without proxy settings.
-
-### Known limitations (tracked follow-ups)
-
-- `pkg/proxy/zai.go` uses `http.DefaultClient` (no explicit timeout) — relies on the request context for cancellation.
-- The SSE `[DONE]` terminator detection assumes `\n` line endings (Anthropic uses `\n`); `\r\n` would need a `TrimRight`.
-- The `stop_sequence` field is currently never populated (always null).
-- `passthroughTo` produces a double slash in the path if the upstream has a trailing slash.
-
 ## Docker Mode
 
 afm умеет автоматически перезапускать себя внутри Docker при включённом Docker-режиме.
@@ -306,6 +226,80 @@ docker run --rm -it \
 - В контейнер монтируется только сам файл бинарника/скрипта агента (`:ro`). Если скрипт-обёртка вызывает сторонние зависимости (node/python/скрипты-сиблинги/файлы вроде `~/.glmrc`), они не перенесутся — используйте агентов, чьи зависимости уже есть в образе.
 - `command` в flow должен быть именем из `PATH` (базовым именем), а не абсолютным путём: монтируется только `filepath.Base(cmd)`, и внутри контейнера искался бы абсолютный путь хоста.
 - Если скрипт-агент читает свои токены/конфиги из дома (напр. GLM-обёртки `glm51`/`glm52`/`ai-free.claude-glm` — из `~/.ai-free/claude-glm/`), добавьте эту директорию в `docker.extra_mounts`, иначе агент упадёт с "файл не найден".
+
+### autoShim: генерируемые врапперы без монтирования
+
+По `docker.autoShim: true` afm генерирует claude-совместимые врапперы для агентов,
+описанных в `docker.agents.<cmd>` (recipe: `model`/`url`/`system_prompt`/`auth`),
+прямо в контейнере — без `-v` монтирования хост-бинарника и без `extra_mounts`
+для токенов. Секрет и контент system_prompt читаются на хосте и передаются в
+контейнер как transient env (`AFM_SECRET_<CMD>`, `AFM_SYSPROMPT_<CMD>`); `url`/`model`
+контейнер берёт из смонтированного `config.yaml`.
+
+```yaml
+docker:
+  autoShim: true
+  agents:
+    glm51:
+      model: glm-5.1
+      url: https://api.z.ai/api/anthropic
+      auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" }
+```
+
+- `auth.to` ∈ {`env:CLAUDE_CODE_OAUTH_TOKEN`, `env:ANTHROPIC_API_KEY`, `env:ANTHROPIC_AUTH_TOKEN`}.
+- Без recipe (при `autoShim: true`) команда монтируется `:ro` как раньше.
+- `url` bake'ится в враппер как `ANTHROPIC_BASE_URL` (z.ai, deepseek — напрямую, без прокси).
+- См. спек `docs/superpowers/specs/2026-07-14-docker-autoshim-design.md`.
+
+#### Тип `openai`: OpenAI-совместимые провайдеры
+
+Для провайдеров с **настоящим** API, совместимым с OpenAI (`v1/chat/completions`), укажи `type: openai`.
+Сгенерированный враппер использует `/usr/local/bin/openai-as-claude` вместо claude:
+
+```yaml
+docker:
+  autoShim: true
+  agents:
+    deepseek:
+      type: openai
+      model: deepseek-chat
+      url: https://api.deepseek.com/v1
+      auth:
+        from: env:DEEPSEEK_KEY        # секрет на хосте
+        to: env:OPENAI_API_KEY        # не ограничен ClaudeAuthEnvVars
+```
+
+Поддерживаемые провайдеры: DeepSeek (`api.deepseek.com`), OpenAI, локальные Ollama/любые
+эндпоинты с `POST /v1/chat/completions`. **Важно:** Cursor сюда НЕ относится — см. ниже `type: cursor`.
+
+Требования в образе: `jq`, `curl` (оба присутствуют в `Dockerfile.runtime`).
+
+#### Тип `cursor`: Cursor Cloud Agents API
+
+Cursor Cloud API (`api.cursor.com`) **не имеет** синхронного `v1/chat/completions` (ответ 404) —
+это **Cloud Agents API**: асинхронный run-based API, где чат = запуск облачного код-агента.
+Поэтому для Cursor используется отдельный тип и адаптер `cursor-as-claude`:
+
+```yaml
+docker:
+  autoShim: true
+  agents:
+    cursor:
+      type: cursor
+      model: auto                    # auto/пусто → Cursor default; иначе model.id из GET /v1/models
+      url: https://api.cursor.com/v1
+      auth:
+        from: "file:~/.ai-free/claude-glm/token-cursor"   # секрет на хосте (CRSR_…)
+        to: env:CURSOR_API_KEY         # любой env:VAR; CURSOR_API_KEY по конвенции
+```
+
+Адаптер `cursor-as-claude`: создаёт no-repo Cloud Agent (`POST /v1/agents`, `mode:"agent"`),
+опрашивает run до терминального статуса, эмитит claude stream-json с `result`-текстом и
+архивирует агента (чтобы не плодить мусор). `system_prompt` для cursor **не используется**
+(адаптер его не передаёт).
+
+Особенность: первый ответ ~30–90с (старт cloud-VM при создании агента); далее run быстрый.
+Токен — user API key из Cursor Dashboard → API Keys (префикс `crsr_`). Требования в образе: `jq`, `curl`.
 
 ### Известные грабли (Docker-mode)
 

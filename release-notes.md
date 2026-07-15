@@ -2,6 +2,43 @@
 
 Новые возможности — сверху, дальше вниз по устареванию. Даты — по коммитам в `fix`/`master`.
 
+## 2026-07-15
+
+### Ретрай на 529/502/503/504 + удаление proxy и accounting
+- `orchestrator.Classify` теперь классифицирует `API Error: 529/502/503/504` (raw-текст из glm-обёрток) как `ClassRetryable` (раньше `ClassFatal` → stage падал). 500 остаётся fatal.
+- Полностью удалён built-in reverse proxy (`pkg/proxy`): ZAI-transform избыточен после ретрая, маршрутизация не нужна (autoShim-врапперы bake'ят прямой upstream-URL). Убрана threading-инфра в `run.go`/`orchestrator`/`executor`/`docker`.
+- Полностью удалён accounting/подсчёт токенов (`pkg/accounting`): терял источник данных без прокси. Убраны `/api/usage`, dashboard `ConsumptionPanel`, config `proxy`/`pricing`/`accounting`.
+- **Backward compat:** `yaml.Unmarshal` lenient → старые конфиги с `proxy`/`pricing`/`accounting` продолжают парситься (секции молча игнорируются). `autoShim:false` нейтрален (glm-обёртки уже шли напрямую). Учёт потребления отложен.
+
+### claude-врапперы: bounded retry + stream-json + `--bare` (config `claude_bare`)
+- **Bounded retry-loop** (`pkg/orchestrator/retry.go`): фикс `RetryBackoff=5s` × `MaxRetries=15` (как в ralphex) вместо прежнего exponential `[5s,10s,30s]` (4 попытки). z.ai 529 — transient; переживает окно overload. Подтверждено: claude шлёт `stream:true` сам (через `--output-format stream-json`), force-streaming не нужен.
+- **`--output-format stream-json` + `--include-partial-messages`** добавлены в генерируемые claude-врапперы (`pkg/docker/wrapper.go`): покрывает non-interactive stages (которым executor не передаёт ExtraArgs) + даёт partial deltas. `--output-format` с дедупом (interactive уже получает его через executor).
+- **`--bare` + config `client.claude_bare`**: `--bare` = minimal mode claude Code (skip CLAUDE.md/hooks/skills/memory), body ~4 KB вместо ~127 KB (ниже нагрузка на z.ai). **НО `--bare` ломает Skill-tool** — goga-* skills перестают резолвиться (агент имитирует их сам). Поэтому **default `claude_bare: false`** (skills важнее). `claude_bare: true` — для flows БЕЗ skills.
+
+### `type: cursor` — Cursor Cloud Agents API
+- Cursor Cloud API (`api.cursor.com`) **не имеет** синхронного OpenAI `/v1/chat/completions` (ответ 404) — это **Cloud Agents API**: асинхронный run-based API, где чат = запуск облачного код-агента. Поэтому `type: openai` (который дёргает `${BASE_URL}/chat/completions`) с Cursor **не работал и не может работать**. Историческая заметка про «Cursor через `api2.cursor.sh`» в `type: openai` была ошибочной — убрана.
+- Новый тип recipe `type: cursor` → враппер с `CURSOR_*` env (`CURSOR_API_KEY`/`CURSOR_BASE_URL`/`CURSOR_MODEL`) и `exec /usr/local/bin/cursor-as-claude`. Адаптер: читает промпт из stdin → `POST /v1/agents` (no-repo, `mode:"agent"`) → опрашивает `GET /agents/{id}/runs/{runId}` до терминального статуса (`FINISHED`/`ERROR`/`CANCELLED`/`EXPIRED`) → эмитит claude stream-json (`assistant`-конверт с `result`-текстом + `result` event) → архивирует агента (best-effort, чтобы не плодить мусор). `model: auto` (или пусто) → поле `model` опускается, Cursor использует default.
+- `auth.to` для cursor — любой `env:VAR` (по конвенции `CURSOR_API_KEY`); `url` обязателен (`https://api.cursor.com/v1`). Не требует `claude` в PATH (как openai). Требует `jq`+`curl` в образе. Тесты: `TestAgentRecipe_CursorType`, `TestCreateWrappers_CursorTemplate`/`_CursorNoClaudeRequired`.
+- **Особенность:** первый ответ занимает ~30–90с (старт cloud-VM при создании агента); сам run дальше быстрый (`durationMs` секунды). Для интерактивного диалога — терпимо, но не мгновенно.
+
+## 2026-07-14
+
+### Docker `autoShim` — генерируемые врапперы без монтирования
+- По флагу `docker.autoShim: true` afm **генерирует claude-совместимые врапперы** для recipe-агентов (`docker.agents.<cmd>`) прямо в контейнере — без `-v` монтирования хост-бинарника и без `extra_mounts` для токенов. Реальные обёртки (`glm47`/`glm51`/`glm52`/`deepseek-v4`) — это «model+url+auth+sysprompt → `exec claude`», поэтому описываются recipe и регенерируются.
+- **Recipe:** `model` (обязателен → `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL`, один на все 3 тира), `url` (gateway), `system_prompt` (`file:<path>` → `--append-system-prompt-file`), `auth.from` (`env:VAR` | `file:<path>` — где afm читает секрет на хосте) + `auth.to` (`env:<VAR>` ∈ {`CLAUDE_CODE_OAUTH_TOKEN`,`ANTHROPIC_API_KEY`,`ANTHROPIC_AUTH_TOKEN`}).
+- **Data flow:** хост читает секрет и контент sysprompt из host-only файлов → transient env `AFM_SECRET_<CMD>`/`AFM_SYSPROMPT_<CMD>` (bare-form `-e`, значение не попадает в argv `docker run`); `url`/`model`/`auth.to` контейнер берёт из смонтированного `config.yaml`. Враппер bake'ит `ANTHROPIC_BASE_URL` (по host-match с `proxy.upstream` — z.ai через прокси ради 529-защиты, deepseek напрямую), подставляет секрет из transient env, `unset`'ит его и `exec`'ит абсолютный `claude`.
+- **Единый wrapper-dir** (`docker.CreateWrappers`) = claude proxy-shim + generated-врапперы; `proxy.CreateShim` удалён. `orchestrator.proxyForCmd` стал generated-aware (`generated` → self-route через baked `BASE_URL`, wrapper-dir на PATH). `docker.ScanCommands` пропускает generated (не монтируются); `docker.UsedRecipes` — секреты резолвятся только для recipe, реально используемых в flow (нет false fail-fast / утечки секретов неиспользуемых агентов). Нет секрета → fail-fast с именем агента. `afm-init` добавляет `.afm/secrets.env` в `.gitignore`.
+- **Bonus:** recipe может описать docker-only агента, бинарника которого нет на хосте (напр. `deepseek-v4`) — `autoShim` сгенерирует его в контейнере.
+- Спек: `docs/superpowers/specs/2026-07-14-docker-autoshim-design.md`.
+
+### `type: openai` — OpenAI-совместимые провайдеры
+- Recipe с `type: openai` → враппер с `OPENAI_*` env (`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`OPENAI_MODEL`) и `exec /usr/local/bin/openai-as-claude` — bash-транслятор: читает промпт из stdin, вызывает `${OPENAI_BASE_URL}/chat/completions` (stream=true), транслирует SSE в claude stream-json. Поддержка Cursor (`api2.cursor.sh`), DeepSeek, локальных LLM и любых OpenAI-совместимых эндпоинтов.
+- `auth.to` для openai — любой `env:VAR` (НЕ ограничен ClaudeAuthEnvVars); `url` обязателен. Требует `jq`+`curl` в образе (добавлены в `Dockerfile.runtime`).
+- Backward compat: пустой `type` (или `"claude"`) = прежнее claude-поведение; неизвестное значение `type` → ошибка валидации.
+
+### Fix: generated-враппер не находился (executor LookPath)
+- `exec.Command` резолвил bare-команду (`glm47`) через `LookPath` по PATH родительского процесса (afm), а wrapper-dir (`ProxyShimDir`) добавлялся только в env ребёнка → `start glm47: executable file not found`. Executor теперь резолвит команду в `ProxyShimDir/<cmd>` (абсолютный путь); для mounted-бинарей fallback на bare name. Регрессионный тест `TestRunAgentResolvesWrapperCommand`. Без этого фикса autoShim не работал end-to-end.
+
 ## 2026-07-13
 
 ### Дашборд на React

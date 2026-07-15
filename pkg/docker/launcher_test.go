@@ -6,9 +6,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
 )
+
+func TestScanCommands_SkipsGenerated(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "glm51")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "glm51"}, // generated → не монтировать
+		},
+	}
+	mounts := docker.ScanCommands(f, "claude", map[string]bool{"glm51": true})
+	if len(mounts) != 0 {
+		t.Errorf("generated command must not be mounted, got %d: %v", len(mounts), mounts)
+	}
+
+	// тот же flow, но glm51 не generated → монтируется
+	mounts2 := docker.ScanCommands(f, "claude", nil)
+	if len(mounts2) != 1 {
+		t.Errorf("non-generated command must be mounted, got %d", len(mounts2))
+	}
+}
 
 func TestScanCommands_SkipsClaude(t *testing.T) {
 	f := &flow.Flow{
@@ -18,7 +45,7 @@ func TestScanCommands_SkipsClaude(t *testing.T) {
 			{ID: "s2", Command: ""},
 		},
 	}
-	mounts := docker.ScanCommands(f, "claude")
+	mounts := docker.ScanCommands(f, "claude", nil)
 	if len(mounts) != 0 {
 		t.Errorf("expected 0 mounts, got %d: %v", len(mounts), mounts)
 	}
@@ -40,7 +67,7 @@ func TestScanCommands_FindsBinary(t *testing.T) {
 			{ID: "s2", Command: "claude"},
 		},
 	}
-	mounts := docker.ScanCommands(f, "claude")
+	mounts := docker.ScanCommands(f, "claude", nil)
 	if len(mounts) != 1 {
 		t.Fatalf("expected 1 mount, got %d", len(mounts))
 	}
@@ -68,7 +95,7 @@ func TestScanCommands_DeduplicatesCommands(t *testing.T) {
 			{ID: "s3", Command: "glm51"},
 		},
 	}
-	mounts := docker.ScanCommands(f, "claude")
+	mounts := docker.ScanCommands(f, "claude", nil)
 	if len(mounts) != 1 {
 		t.Errorf("expected 1 unique mount, got %d", len(mounts))
 	}
@@ -87,7 +114,7 @@ func TestScanCommands_GlobalCmdMounted(t *testing.T) {
 		Stages: []flow.Stage{{ID: "s1", Command: ""}},
 	}
 	// Если globalCmd не claude — тоже монтируем.
-	mounts := docker.ScanCommands(f, "glm51")
+	mounts := docker.ScanCommands(f, "glm51", nil)
 	if len(mounts) != 1 {
 		t.Fatalf("expected 1 mount for global cmd, got %d", len(mounts))
 	}
@@ -103,7 +130,7 @@ func TestScanCommands_SkipsMissingBinary(t *testing.T) {
 			{ID: "s1", Command: "nonexistent-binary-xyz-42"},
 		},
 	}
-	mounts := docker.ScanCommands(f, "claude")
+	mounts := docker.ScanCommands(f, "claude", nil)
 	if len(mounts) != 0 {
 		t.Errorf("expected 0 mounts for missing binary, got %d", len(mounts))
 	}
@@ -225,5 +252,151 @@ func TestReExec_PassthroughEnv(t *testing.T) {
 	}
 	if strings.Contains(argsStr, "-e ANTHROPIC_BASE_URL=https://custom.api") {
 		t.Errorf("ANTHROPIC_BASE_URL leaked in argv with value: %s", argsStr)
+	}
+}
+
+func TestReExec_RecipeTransientEnv_NoMount(t *testing.T) {
+	// секрет в host-only файле
+	tokFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokFile, []byte("secret-value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	// fake docker
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	recipes := map[string]config.AgentRecipe{
+		"glm51": {Model: "glm-5.1", Auth: config.RecipeAuth{From: "file:" + tokFile, To: "env:ANTHROPIC_AUTH_TOKEN"}},
+	}
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:       "akopichin/afm:latest",
+		ProjectDir:  "/tmp/proj",
+		ExtraArgs:   []string{"run", "flow.yaml"},
+		Recipes:     recipes,
+		SecretsFile: "",
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+
+	argsStr := strings.Join(capturedArgs, " ")
+	// transient bare-form -e AFM_SECRET_GLM51 (без значения в argv)
+	if !strings.Contains(argsStr, "-e AFM_SECRET_GLM51") {
+		t.Errorf("missing transient -e AFM_SECRET_GLM51: %s", argsStr)
+	}
+	// значение секрета НЕ в argv
+	if strings.Contains(argsStr, "secret-value") {
+		t.Errorf("secret value leaked into argv: %s", argsStr)
+	}
+	// AFM_URL нет (url читается из cfg в контейнере)
+	if strings.Contains(argsStr, "AFM_URL_") {
+		t.Errorf("AFM_URL_ must not be passed: %s", argsStr)
+	}
+	// cleanup transient env
+	if err := os.Unsetenv("AFM_SECRET_GLM51"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReExec_RecipeMissingSecretFailFast(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	recipes := map[string]config.AgentRecipe{
+		"glm51": {Model: "glm-5.1", Auth: config.RecipeAuth{From: "file:" + filepath.Join(t.TempDir(), "nope"), To: "env:ANTHROPIC_AUTH_TOKEN"}},
+	}
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj", Recipes: recipes,
+	})
+	if err == nil {
+		t.Fatal("expected fail-fast on missing secret")
+	}
+	if !strings.Contains(err.Error(), "glm51") {
+		t.Errorf("error should name the agent: %v", err)
+	}
+}
+
+// TestUsedRecipes_FiltersUnusedAgents доказывает контракт: неиспользуемый агент
+// с отсутствующим секретом не может заблокировать запуск — UsedRecipes исключает
+// его из maps, которую ReExec резолвит. glm52 определён в конфиге, но флоу его не
+// использует → его recipe (с секретом на несуществующий файл) отфильтровывается.
+func TestUsedRecipes_FiltersUnusedAgents(t *testing.T) {
+	// Секрет для glm51 — валидный файл; для glm52 — несуществующий файл.
+	tokFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokFile, []byte("glm51-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	all := map[string]config.AgentRecipe{
+		"glm51": {Model: "glm-5.1", Auth: config.RecipeAuth{From: "file:" + tokFile, To: "env:ANTHROPIC_AUTH_TOKEN"}},
+		"glm52": {Model: "glm-5.2", Auth: config.RecipeAuth{From: "file:" + filepath.Join(t.TempDir(), "missing"), To: "env:ANTHROPIC_AUTH_TOKEN"}},
+	}
+
+	// Флоу использует ТОЛЬКО glm51; glm52 определён в конфиге, но не используется.
+	f := &flow.Flow{
+		Name:   "test",
+		Stages: []flow.Stage{{ID: "s1", Command: "glm51"}},
+	}
+
+	got := docker.UsedRecipes(f, "claude", all)
+
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 used recipe (glm51), got %d: %v", len(got), got)
+	}
+	recipe, ok := got["glm51"]
+	if !ok {
+		t.Fatal("glm51 (used agent) must be present in result")
+	}
+	if recipe.Model != "glm-5.1" {
+		t.Errorf("glm51 model: got %q, want glm-5.1", recipe.Model)
+	}
+	if _, present := got["glm52"]; present {
+		t.Error("glm52 (defined but unused agent) must be filtered out; " +
+			"its missing secret must not be able to block the run")
+	}
+}
+
+// TestUsedRecipes_GlobalCommand приводит globalCmd, который есть в recipes, но
+// ни один stage его не использует — он всё равно должен попасть в результат.
+func TestUsedRecipes_GlobalCommand(t *testing.T) {
+	all := map[string]config.AgentRecipe{
+		"glm51": {Model: "glm-5.1"},
+	}
+	// Флоу без stage-команд, globalCmd=glm51.
+	f := &flow.Flow{Name: "test"}
+	got := docker.UsedRecipes(f, "glm51", all)
+	if len(got) != 1 || got["glm51"].Model != "glm-5.1" {
+		t.Fatalf("globalCmd glm51 must be in result, got %v", got)
+	}
+}
+
+// TestUsedRecipes_EmptyAndClaude покрывает тривиальные случаи: nil recipes и
+// claude-команда (claude никогда не recipe).
+func TestUsedRecipes_EmptyAndClaude(t *testing.T) {
+	all := map[string]config.AgentRecipe{
+		"glm51": {Model: "glm-5.1"},
+	}
+	// globalCmd=claude + stages с claude → пустой результат.
+	f := &flow.Flow{
+		Name:   "test",
+		Stages: []flow.Stage{{ID: "s1", Command: "claude"}},
+	}
+	got := docker.UsedRecipes(f, "claude", all)
+	if len(got) != 0 {
+		t.Errorf("claude should not be a recipe, got %v", got)
 	}
 }

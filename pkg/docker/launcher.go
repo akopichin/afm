@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 )
 
@@ -32,10 +33,12 @@ type ReExecConfig struct {
 	Image         string
 	ProjectDir    string // абсолютный путь к директории проекта
 	Commands      []CommandMount
-	DashboardPort int      // порт dashboard; при >0 пробрасывается на хост через -p
-	ExtraMounts   []string // доп. хост-директории (могут начинаться с ~) → монтируются :ro
-	ExtraArgs     []string // os.Args[1:]
-	ClientCommand string   // имя агента из config (для проверки auth при command: claude)
+	DashboardPort int                           // порт dashboard; при >0 пробрасывается на хост через -p
+	ExtraMounts   []string                      // доп. хост-директории (могут начинаться с ~) → монтируются :ro
+	ExtraArgs     []string                      // os.Args[1:]
+	ClientCommand string                        // имя агента из config (для проверки auth при command: claude)
+	Recipes       map[string]config.AgentRecipe // autoShim: команды с recipe → генерируются, секрет → transient env
+	SecretsFile   string                        // опц. override для default-слоёв secrets.env
 }
 
 const claudeCommand = "claude"
@@ -123,15 +126,16 @@ func ResetExecFunc() {
 	execFunc = defaultExecFunc
 }
 
-// ScanCommands возвращает список нестандартных (не claude) агентов из flow,
-// которые нужно смонтировать в Docker-контейнер.
+// ScanCommands возвращает список нестандартных (не claude, не generated) агентов
+// из flow, которые нужно смонтировать в Docker-контейнер. generated — команды с
+// recipe (autoShim): они генерируются в контейнере, бинарник не монтируется.
 // Бинарники, не найденные в PATH, молча пропускаются.
-func ScanCommands(f *flow.Flow, globalCmd string) []CommandMount {
+func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []CommandMount {
 	seen := make(map[string]bool)
 	var mounts []CommandMount
 
 	addCmd := func(cmd string) {
-		if cmd == "" || cmd == "claude" || seen[cmd] {
+		if cmd == "" || cmd == "claude" || generated[cmd] || seen[cmd] {
 			return
 		}
 		seen[cmd] = true
@@ -150,6 +154,47 @@ func ScanCommands(f *flow.Flow, globalCmd string) []CommandMount {
 		addCmd(s.Command)
 	}
 	return mounts
+}
+
+// UsedRecipeCommands returns the recipe keys that are actually referenced as a
+// stage command or the global client command. Only these get generated wrappers.
+func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]config.AgentRecipe) map[string]bool {
+	used := map[string]bool{}
+	check := func(cmd string) {
+		if cmd == "" || cmd == claudeCommand {
+			return
+		}
+		if _, ok := recipes[cmd]; ok {
+			used[cmd] = true
+		}
+	}
+	check(globalCmd)
+	if f != nil {
+		for _, s := range f.Stages {
+			check(s.Command)
+		}
+	}
+	return used
+}
+
+// UsedRecipes projects the used-command set onto the recipes map, returning only
+// the recipes whose command is actually referenced by the flow (a stage command
+// or the global client command). This is the same rule UsedRecipeCommands applies
+// — no duplication of the skip-claude / used-in-stages logic.
+//
+// Why: ReExec resolves a secret for EVERY entry in ReExecConfig.Recipes and
+// fail-fasts on the first missing one. If run.go passed the entire cfg.Docker.
+// Agents map, a defined-but-unused agent with a missing secret would block the
+// whole run (and leak its secret into the container env). Filtering first keeps
+// secret resolution and secret env injection scoped to agents the flow actually
+// uses — least-privilege.
+func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentRecipe) map[string]config.AgentRecipe {
+	used := UsedRecipeCommands(f, globalCmd, all)
+	out := make(map[string]config.AgentRecipe, len(used))
+	for cmd := range used {
+		out[cmd] = all[cmd]
+	}
+	return out
 }
 
 // ReExec заменяет текущий процесс на docker run с нужными монтированиями.
@@ -225,6 +270,35 @@ func ReExec(cfg ReExecConfig) error {
 	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"} {
 		if os.Getenv(key) != "" {
 			args = append(args, "-e", key)
+		}
+	}
+
+	// autoShim: резолвим секреты recipe на хосте и передаём в контейнер как
+	// transient bare-form env (значение в env afm, не в argv docker). Generated
+	// врапперы внутри контейнера читают $AFM_SECRET_<CMD>/$AFM_SYSPROMPT_<CMD> и
+	// unset'ят их до exec claude. Команды с recipe НЕ монтируются (ScanCommands).
+	if len(cfg.Recipes) > 0 {
+		secrets, err := LoadSecretLayers(cfg.SecretsFile, cfg.ProjectDir)
+		if err != nil {
+			return err
+		}
+		for cmd, recipe := range cfg.Recipes {
+			name := envName(cmd)
+			val, vErr := ResolveAuthValue(recipe.Auth.From, secrets)
+			if vErr != nil {
+				return fmt.Errorf("agent %s: %w", cmd, vErr)
+			}
+			_ = os.Setenv("AFM_SECRET_"+name, val) // процесс далее exec'нет docker; утечки в argv нет
+			args = append(args, "-e", "AFM_SECRET_"+name)
+			if recipe.SystemPrompt != "" {
+				// system_prompt опционален: при ошибке резолва (файла нет и т.п.) — тихий
+				// fallback, claude запускается со своим стандартным system prompt
+				// (без --append-system-prompt-file) вместо glm-специфичного.
+				if sp, spErr := ResolveSystemPrompt(recipe.SystemPrompt); spErr == nil && sp != "" {
+					_ = os.Setenv("AFM_SYSPROMPT_"+name, sp)
+					args = append(args, "-e", "AFM_SYSPROMPT_"+name)
+				}
+			}
 		}
 	}
 

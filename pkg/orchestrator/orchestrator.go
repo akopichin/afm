@@ -68,8 +68,8 @@ type Options struct {
 	Prompts         Prompts
 	Runner          executor.Runner // nil = real Executor
 	DashboardURL    string          // e.g. "http://127.0.0.1:9876"
-	ProxyURL        string          // forwarded to executor env as ANTHROPIC_BASE_URL
-	ProxyShimDir    string          // forwarded to executor env PATH prefix
+	WrapperDir      string          // dir with generated wrapper scripts (prepended to agent PATH)
+	GeneratedAgents map[string]bool // autoShim: команды с generated-враппером (self-route)
 	GlobalPrompt    string          // Flow.Prompt, forwarded to every prompts.Build call
 	RequireApproval bool            // headless: fail instead of auto-approve on awaiting_approval
 }
@@ -111,14 +111,12 @@ func New(opts Options) *Orchestrator {
 
 	r := opts.Runner
 	if r == nil {
-		globalProxyURL, globalShimDir := proxyForCmd(opts.Config.Client.Command, opts.ProxyURL, opts.ProxyShimDir)
 		r = executor.New(executor.Config{
-			Command:      opts.Config.Client.Command,
-			ExtraArgs:    opts.Config.Client.ExtraArgs,
-			IdleTimeout:  opts.Config.Executor.IdleTimeout,
-			OnAction:     uiActionPublisher(ui, ""),
-			ProxyURL:     globalProxyURL,
-			ProxyShimDir: globalShimDir,
+			Command:     opts.Config.Client.Command,
+			ExtraArgs:   opts.Config.Client.ExtraArgs,
+			IdleTimeout: opts.Config.Executor.IdleTimeout,
+			OnAction:    uiActionPublisher(ui, ""),
+			WrapperDir:  wrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
 		})
 	}
 
@@ -227,15 +225,14 @@ func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOpti
 	})
 }
 
-// proxyForCmd возвращает ProxyURL и ProxyShimDir для команды cmd.
-// Команда claude использует OAuth-токен (CLAUDE_CODE_OAUTH_TOKEN) и ходит
-// напрямую на api.anthropic.com — инжектировать прокси z.ai ей не нужно
-// (z.ai не принимает OAuth-токены, только API-ключи).
-func proxyForCmd(cmd, proxyURL, shimDir string) (string, string) {
-	if cmd == "claude" {
-		return "", ""
+// wrapperDirFor возвращает wrapper-dir для команды cmd: для generated-команд
+// (autoShim) — opts.WrapperDir, чтобы сгенерированный скрипт резолвился на PATH;
+// для остальных (включая claude) — пусто (используется реальный бинарник).
+func wrapperDirFor(cmd string, wrapperDir string, generated map[string]bool) string {
+	if generated[cmd] {
+		return wrapperDir
 	}
-	return proxyURL, shimDir
+	return ""
 }
 
 // runnerFor returns the appropriate Runner for a stage's phase.
@@ -246,13 +243,11 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		if s.Command == "" {
 			return o.runner
 		}
-		pURL, pShim := proxyForCmd(s.Command, o.opts.ProxyURL, o.opts.ProxyShimDir)
 		return executor.New(executor.Config{
-			Command:      s.Command,
-			IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
-			OnAction:     uiActionPublisher(o.ui, s.ID),
-			ProxyURL:     pURL,
-			ProxyShimDir: pShim,
+			Command:     s.Command,
+			IdleTimeout: o.opts.Config.Executor.IdleTimeout,
+			OnAction:    uiActionPublisher(o.ui, s.ID),
+			WrapperDir:  wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		})
 	}
 
@@ -271,17 +266,15 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	// Interactive stages always need the claude stream-json flags (incl. --verbose,
 	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
 	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
-	pURL, pShim := proxyForCmd(cmd, o.opts.ProxyURL, o.opts.ProxyShimDir)
 	return executor.New(executor.Config{
-		Command:      cmd,
-		ExtraArgs:    extraArgs,
-		IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
-		OnAction:     uiActionPublisher(o.ui, s.ID),
-		SessionID:    sessionID,
-		Resume:       resume,
-		StageDir:     stageDir,
-		ProxyURL:     pURL,
-		ProxyShimDir: pShim,
+		Command:     cmd,
+		ExtraArgs:   extraArgs,
+		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
+		OnAction:    uiActionPublisher(o.ui, s.ID),
+		SessionID:   sessionID,
+		Resume:      resume,
+		StageDir:    stageDir,
+		WrapperDir:  wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 	})
 }
 
@@ -289,13 +282,11 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 	if s.Command == "" {
 		return o.runner
 	}
-	pURL, pShim := proxyForCmd(s.Command, o.opts.ProxyURL, o.opts.ProxyShimDir)
 	return executor.New(executor.Config{
-		Command:      s.Command,
-		IdleTimeout:  o.opts.Config.Executor.IdleTimeout,
-		OnAction:     uiActionPublisher(o.ui, s.ID),
-		ProxyURL:     pURL,
-		ProxyShimDir: pShim,
+		Command:     s.Command,
+		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
+		OnAction:    uiActionPublisher(o.ui, s.ID),
+		WrapperDir:  wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
 	})
 }
 

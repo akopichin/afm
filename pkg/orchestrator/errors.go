@@ -27,6 +27,10 @@ const (
 	matchHTTP500             = "http 500"
 	matchStatus500           = "status 500"
 	matchInternalServerError = "internal server error"
+	matchAPIError529         = "api error: 529"
+	matchAPIError502         = "api error: 502"
+	matchAPIError503         = "api error: 503"
+	matchAPIError504         = "api error: 504"
 )
 
 type IncompleteWorkError struct{ Reason string }
@@ -73,6 +77,7 @@ func Classify(err error) Classification {
 		matchHitYourLimit, matchRateLimit, matchTooManyRequests,
 		matchOverloaded, matchAtCapacity,
 		matchHTTP500, matchStatus500, matchInternalServerError,
+		matchAPIError529, matchAPIError502, matchAPIError503, matchAPIError504,
 	} {
 		if strings.Contains(msg, p) {
 			return ClassRetryable
