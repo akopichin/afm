@@ -10,11 +10,7 @@ import (
 )
 
 func TestWebSocket_SendsHeartbeat(t *testing.T) {
-	origPing := wsPingPeriod
-	wsPingPeriod = 40 * time.Millisecond
-	defer func() { wsPingPeriod = origPing }()
-
-	srv, _ := setupTestServer(t)
+	srv, _ := setupTestServerWithWS(t, 0, 40*time.Millisecond)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -41,12 +37,7 @@ func TestWebSocket_SendsHeartbeat(t *testing.T) {
 }
 
 func TestWebSocket_ClosesSilentClient(t *testing.T) {
-	origPong, origPing := wsPongWait, wsPingPeriod
-	wsPongWait = 150 * time.Millisecond
-	wsPingPeriod = 50 * time.Millisecond
-	defer func() { wsPongWait, wsPingPeriod = origPong, origPing }()
-
-	srv, _ := setupTestServer(t)
+	srv, _ := setupTestServerWithWS(t, 150*time.Millisecond, 50*time.Millisecond)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

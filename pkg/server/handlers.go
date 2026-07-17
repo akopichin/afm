@@ -19,6 +19,7 @@ const (
 	phasePlanning       = "planning"
 	phaseImplementation = "implementation"
 	phaseReview         = "review"
+	phaseAutonomous     = "autonomous_execution"
 	keyStageID          = "stage_id"
 	keyStatus           = "status"
 )
@@ -54,7 +55,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	stageDir := filepath.Join(s.runDir, stageID)
 
 	var logContent string
-	for _, name := range []string{"planning.log", "planning-revision.log", "implementation.log", "review.log"} {
+	for _, name := range []string{"planning.log", "planning-revision.log", "implementation.log", "review.log", "autonomous.log"} {
 		data, err := os.ReadFile(filepath.Join(stageDir, name))
 		if err == nil {
 			logContent += string(data)
@@ -66,6 +67,43 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = fmt.Fprint(w, logContent) //nolint:gosec // G705: log content from server-side files
+}
+
+// handleSupervisor возвращает последнее решение супервизора для стадии
+// (читает <runDir>/supervisor.jsonl). Даёт UI показать резолюцию
+// (autonomous/standard + reason) персистентно: событие шины EventSupervisorDecision
+// live-only и теряется, если дашборд подключился после старта стадии.
+func (s *Server) handleSupervisor(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/supervisor")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.runDir, "supervisor.jsonl"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var latest map[string]string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry map[string]string
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		if entry["stage_id"] == stageID {
+			latest = entry
+		}
+	}
+	if latest == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(latest)
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +231,7 @@ var phaseStreamLogs = map[string][]string{
 	phasePlanning:       {"planning.jsonl", "planning-reprompt.jsonl", "planning-revision.jsonl"},
 	phaseImplementation: {"implementation.jsonl"},
 	phaseReview:         {"review.jsonl"},
+	phaseAutonomous:     {"autonomous.jsonl"},
 }
 
 // buildDialogEntries собирает диалоговую ленту стейджа: вопросы/ответы из
@@ -203,7 +242,7 @@ var phaseStreamLogs = map[string][]string{
 // панель на обычных стейджах.
 func buildDialogEntries(stageDir string) []dialogUIEntry {
 	var out []dialogUIEntry
-	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
+	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview, phaseAutonomous} {
 		entries, err := mcp.ReadDialog(filepath.Join(stageDir, phase+".dialog.jsonl"))
 		if err != nil || len(entries) == 0 {
 			continue
@@ -233,6 +272,28 @@ func buildDialogEntries(stageDir string) []dialogUIEntry {
 			if !emitted[e.ID] {
 				out = append(out, questionUIEntry(phase, e))
 			}
+		}
+	}
+	// Гарантия видимости: текущий unanswered вопрос показываем ВСЕГДА, даже если
+	// poller ещё не дописал его в <phase>.dialog.jsonl (или staging-состояние) —
+	// читаем *.question.json напрямую. Иначе UI не покажет вопрос, который агент
+	// уже задал (особенно autonomous-фаза, диалог без предистории).
+	if pending, perr := mcp.FindUnansweredQuestions(stageDir); perr == nil {
+		haveID := make(map[string]bool, len(out))
+		for _, e := range out {
+			if e.ID != "" {
+				haveID[e.ID] = true
+			}
+		}
+		for _, q := range pending {
+			if haveID[q.ID] {
+				continue
+			}
+			out = append(out, dialogUIEntry{
+				Phase: q.Phase, ID: q.ID, Question: q.Question,
+				Options: q.Options, AllowCustom: q.AllowCustom,
+			})
+			haveID[q.ID] = true
 		}
 	}
 	return out
@@ -268,7 +329,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id, phase, answer required", http.StatusBadRequest)
 		return
 	}
-	if req.Phase != phasePlanning && req.Phase != phaseImplementation && req.Phase != phaseReview {
+	if req.Phase != phasePlanning && req.Phase != phaseImplementation && req.Phase != phaseReview && req.Phase != phaseAutonomous {
 		http.Error(w, "invalid phase", http.StatusBadRequest)
 		return
 	}

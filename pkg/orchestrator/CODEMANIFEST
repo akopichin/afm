@@ -253,7 +253,7 @@ Annotations: |
     Constraints:
     - Отсутствующие планы дают предупреждающий комментарий, не ошибку
 
-"Options(runDir string, stages []Stage, store Store, config Config, prompts Prompts, runner Runner, dashboardURL string, proxyURL string, proxyShimDir string, globalPrompt string)":
+"Options(runDir string, stages []Stage, store Store, config Config, prompts Prompts, runner Runner, dashboardURL string, globalPrompt string)":
   location: orchestrator.go
   annotations: |
     Orchestration-зона. Конфигурация оркестратора.
@@ -274,10 +274,6 @@ Annotations: |
       Исполнитель агентов (импорт pkg/executor).
     "DashboardURL -> string": |
       URL дашборда.
-    "ProxyURL -> string": |
-      Адрес встроенного proxy, пробрасывается в окружение executor'а.
-    "ProxyShimDir -> string": |
-      Директория shim'а, пробрасывается в PATH executor'а.
     "GlobalPrompt -> string": |
       Общий (root-level) промпт флоу (Flow.Prompt, pkg/flow), пробрасывается во все вызовы
       prompts.Build.

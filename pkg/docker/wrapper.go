@@ -169,10 +169,13 @@ func generateWrapper(s WrapperSpec, realClaude string) (string, error) {
 	// non-streaming → z.ai 529 на overload + executor не парсит вывод; это покрывает и
 	// non-interactive stages, которым executor не передаёт ExtraArgs. --output-format
 	// добавляем только при отсутствии (interactive уже получает его через executor
-	// ExtraArgs), чтобы не дублировать флаг; --include-partial-messages — всегда
-	// (incremental content deltas в stream-json).
+	// ExtraArgs), чтобы не дублировать флаг.
+	// --include-partial-messages добавляем ТОЛЬКО при output-format=stream-json: флаг
+	// требует stream-json, и его безусловное добавление ломало supervisor-ный вызов
+	// RunJSONQuery (--output-format json → claude: "requires --output-format=stream-json").
+	// Для json-вызова (однократный LLM-запрос супервизора) partial не нужен и вреден.
 	b.WriteString("case \" $* \" in *\"--output-format\"*) : ;; *) set -- \"$@\" --output-format stream-json ;; esac\n")
-	b.WriteString("set -- \"$@\" --include-partial-messages\n")
+	b.WriteString("case \" $* \" in *\"--output-format stream-json\"*|*\"--output-format=stream-json\"*) set -- \"$@\" --include-partial-messages ;; esac\n")
 	fmt.Fprintf(&b, "exec %s \"$@\"\n", realClaude)
 	return b.String(), nil
 }

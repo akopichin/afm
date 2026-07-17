@@ -527,6 +527,21 @@ docker:
 	}
 }
 
+func TestConfig_SupervisorMerge(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgFile, []byte("supervisor:\n  command: glm51\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Supervisor.Command != "glm51" {
+		t.Errorf("got %q, want glm51", cfg.Supervisor.Command)
+	}
+}
+
 func TestDockerAutoShim_MergeLayers(t *testing.T) {
 	global := t.TempDir()
 	project := t.TempDir()

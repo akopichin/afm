@@ -29,6 +29,11 @@ func (blockingRunner) RunAgent(ctx context.Context, _, _, _, _ string) error {
 	return ctx.Err()
 }
 
+func (blockingRunner) RunJSONQuery(ctx context.Context, _ string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 // newPollerOrch builds an orchestrator whose stage starts in StatusRunning with a
 // blocking runner, returning the store and a cancellable context for the Run loop.
 func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestrator, *state.Store, context.Context, context.CancelFunc) {

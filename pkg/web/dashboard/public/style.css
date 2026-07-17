@@ -1306,6 +1306,46 @@ body::after {
 .feed-msg.action { color: var(--ink-dim); }
 .feed-msg.error  { color: var(--coral); }
 
+/* Supervisor decisions — выделены из общего лога: акцентный фон + левая полоса. */
+.feed-entry.supervisor {
+  background: rgba(192, 132, 252, 0.12);
+  border-left: 3px solid #c084fc;
+  padding-left: 6px;
+  margin: 2px 0;
+}
+.feed-entry.supervisor:hover {
+  background: rgba(192, 132, 252, 0.18);
+}
+.feed-msg.supervisor {
+  color: #c084fc;
+  font-weight: 600;
+}
+
+/* Supervisor-decision badge в header стадии: показывает трек (autonomous/standard). */
+.supervisor-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid currentColor;
+  max-width: 100%;
+  overflow: hidden;
+}
+.supervisor-badge .supervisor-icon { font-size: 9px; }
+.supervisor-badge .supervisor-reason {
+  font-weight: 400;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.supervisor-badge.autonomous { color: #c084fc; background: rgba(192, 132, 252, 0.10); }
+.supervisor-badge.standard { color: var(--amber); background: rgba(245, 158, 11, 0.08); }
+
 .feed-stage-badge {
   display: inline;
   font-size: 9px;

@@ -207,7 +207,7 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 		}
 		phase, id := base[:dot], base[dot+1:]
 
-		if phase != "planning" && phase != "implementation" && phase != "review" {
+		if phase != "planning" && phase != "implementation" && phase != "review" && phase != "autonomous_execution" {
 			continue
 		}
 

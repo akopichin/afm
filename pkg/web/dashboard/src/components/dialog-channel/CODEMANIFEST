@@ -1,7 +1,9 @@
 Imports:
-  - Types: [Stage, DialogQuestion]
+  - Types: [Stage]
     Usages: [dashboard-data-types]
     From: pkg/web/dashboard/src/types
+  - Types: [MarkdownRenderer]
+    From: pkg/web/dashboard/src/components/plan-panel
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -10,8 +12,16 @@ Usages:
 
 Annotations: |
   Use `conventions` for code writing rules and testing. Use `react`. Use `typescript` for naming and strict
-  typing. Use `Stage`, `DialogQuestion` from Imports. Use `dashboard-data-types` from Imports for guidance on
-  consuming these types and the /api/stages/{id}/dialog source.
+  typing. Use `Stage` from Imports. Use `dashboard-data-types` from Imports for guidance on consuming `Stage`
+  and the /api/stages/{id}/dialog source. Use `MarkdownRenderer` from Imports to render question/answer text.
+
+  Канал также использует Maximizable/PanelFrame (src/components/layout, src/components/panel-frame) для
+  рамки с заголовком/разворотом и useStickToBottom (src/hooks/use-stick-to-bottom) для автопрокрутки — эти
+  клетки пока без собственного CODEMANIFEST (см. отдельную рекомендацию в отчёте acceptance).
+
+  Внутреннее представление записи диалога (DialogEntry) — облегчённая структура прямо с бэкенда
+  (type?/phase?/question?/answer?/id?/allow_custom?/options?/text?), не совпадающая с общим типом
+  DialogQuestion из src/types (тот сейчас этой клеткой не используется).
 
 ---
 
@@ -21,37 +31,47 @@ Annotations: |
     Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос (опции и/или свободный ответ),
     отмена. Поведение перенесено из loadDialog/renderDialog/renderPendingQuestion текущего app.js.
 
-    `stage`: выбранная стадия (полный объект — статус влияет на видимость канала)
+    `stage`: выбранная стадия (полный объект — статус влияет на видимость канала; пустой id — sentinel
+      «стадия не выбрана», опрос не выполняется)
     `attention`: опциональный (по умолчанию false) — если true, привлечь внимание к панели канала
       (визуальная подсветка, стадия ждёт ответа пользователя)
     `element`: разметка канала
 
     История и текущий вопрос загружаются запросом GET /api/stages/{stage.id}/dialog (JSON-массив записей с
-    полями phase/type/question/answer/id/options/allow_custom). Текущий вопрос — последняя запись с answer=null
-    (записи agent_text вопросом не считаются).
+    полями phase/type/question/answer/id/options/allow_custom) и опрашиваются каждые 2 секунды, пока канал
+    смонтирован. Текущий (pending) вопрос — последняя запись с answer=null, кроме записей type='agent_text'.
+
+    Algorithm:
+    1. При смене stage.id (и если id непустой) сбросить локальное состояние и запустить polling каждые 2с
+    2. При каждом опросе — если id pending-вопроса изменился, сбросить выбранную опцию и текст свободного
+       ответа (чтобы live-опрос не затирал ввод посреди уже отвечаемого вопроса)
+    3. Автопрокрутка к последнему сообщению при появлении нового pending-вопроса или новых сообщений истории,
+       пока пользователь сам не проскроллил вверх (см. useStickToBottom); кнопка «↓ к последнему» иначе
+    4. История рендерится по фазам (разделители), записи agent_text в диалог не попадают (они дублируются в
+       LogPanel); историю можно свернуть/развернуть кнопкой, если есть хотя бы один отвеченный вопрос
 
     Requirements:
     - История группируется по phase (разделители фаз); записи agent_text рендерятся как сообщения агента
     - Опции currentQuestion — массив строк (label одновременно является значением ответа); allow_custom разрешает
-      свободный текст; selectOption и ввод текста взаимоисключающие
+      свободный текст; выбор опции и ввод текста взаимоисключающие
     - Видимость: канал показан, если есть история либо stage.status === 'awaiting_user_input'
+    - Вопрос и ответы в истории рендерятся как markdown (через `MarkdownRenderer`)
 
   properties:
-    "history -> DialogQuestion[]": |
-      История вопросов диалога, загруженная из GET /api/stages/{stage.id}/dialog.
-    "currentQuestion -> DialogQuestion | null": |
-      Активный вопрос (последняя запись без ответа) либо null.
+    "entries -> DialogEntry[]": |
+      Внутреннее состояние — сырые записи диалога, загруженные из GET /api/stages/{stage.id}/dialog.
+    "pending -> DialogEntry | null": |
+      Производное значение (useMemo от entries) — активный вопрос (последняя запись без ответа, кроме
+      agent_text) либо null.
   methods:
-    "answer(questionId: string, value: string, fromOptions: boolean) -> done:Promise<void>": |
-      Отправляет ответ (POST /api/stages/{stage.id}/dialog/answer) телом { id, phase, answer, from_options }:
-      либо выбранная опция (fromOptions=true, value — строка опции), либо свободный текст (fromOptions=false).
-
-      `questionId`: идентификатор вопроса (поле id текущего вопроса)
-      `value`: значение ответа — строка выбранной опции либо введённый текст
-      `fromOptions`: true, если value — выбранная опция; false — свободный текст
-    "cancel() -> done:Promise<void>": |
-      Отменяет текущий диалог (POST /api/stages/{stage.id}/dialog/cancel) — соответствует кнопке отмены в
-      текущем app.js.
+    "sendAnswer() -> done:Promise<void>": |
+      Отправляет ответ на текущий pending-вопрос (POST /api/stages/{stage.id}/dialog/answer) телом
+      { id, phase, answer, from_options }. Значения answer/from_options берутся из внутреннего состояния:
+      непустой customText имеет приоритет (from_options=false), иначе — выбранная опция (from_options=true).
+      Если ни то ни другое не задано — не отправляет запрос. После успешной отправки перезагружает историю.
+    "cancel()": |
+      Отменяет текущий диалог (POST /api/stages/{stage.id}/dialog/cancel) после подтверждения через
+      window.confirm('Cancel stage?'); синхронная — не ждёт завершения запроса.
 
 ---
 

@@ -5,8 +5,10 @@ Usages:
 Annotations: |
   Use `conventions` for code writing rules and testing. Use `typescript` for TypeScript conventions (strict
   mode, naming, single external-JSON assertion point). This cell is a deliberate deviation from the project's
-  general JS/Jest conventions in favor of TypeScript + Vitest, scoped only to the dashboard rewrite. All types
-  here are plain data shapes with no behavior, shared across every dashboard component cell. Re-exported
+  general JS/Jest conventions in favor of TypeScript + Vitest, scoped only to the dashboard rewrite. Types here
+  are plain data shapes with no behavior of their own; the cell additionally exports a small set of lookup
+  constants (`STAGE_STATUSES`, `STAGE_STATUS_LABELS`, `ACTIVE_STAGE_STATUSES`, `AFM_EVENT_TYPES`,
+  `SIGNIFICANT_EVENT_TYPES`) and one pure Routine (`extractStageStatus`) alongside the data shapes. Re-exported
   through a barrel index.ts per the project's facade convention.
 
 ---
@@ -18,6 +20,10 @@ Annotations: |
     стадии), потребляется хуком состояния флоу и передаётся в список стадий и футер.
     Набор значений статуса совпадает с реальными статусами стадий afm (см. statusLabels в текущем app.js):
     pending, planning, awaiting_approval, revising, ready, running, done, failed, retrying, awaiting_user_input.
+
+    Cell также экспортирует constants на основе этого набора статусов: `STAGE_STATUS_LABELS` (человекочитаемые
+    подписи для списка стадий/панели деталей), `ACTIVE_STAGE_STATUSES` (подмножество «стадия в работе»:
+    running, planning, revising, retrying, awaiting_user_input — основа автовыбора в App).
   properties:
     "id -> string": |
       Уникальный идентификатор стадии.
@@ -32,9 +38,11 @@ Annotations: |
   location: afm-event.ts
   annotations: |
     Событие, приходящее через WebSocket /ws, потребляется хуком подписки на WebSocket-соединение и
-    отображается в ленте событий. Богатый набор type (stage_status_changed, approved, revised, retry_scheduled,
-    retry_exhausted, manual_retry, ask_user, agent_action, agent_completed) используется корневой композицией
-    как канал обновления состояния, а не только как лента для отображения.
+    отображается в ленте событий. Богатый набор type (`AFM_EVENT_TYPES`: stage_status_changed, approved,
+    revised, retry_scheduled, retry_exhausted, manual_retry, ask_user, user_answered, agent_action,
+    agent_completed, supervisor_decision) используется корневой композицией как канал обновления состояния,
+    а не только как лента для отображения. `SIGNIFICANT_EVENT_TYPES` — подмножество, при котором App
+    ре-запрашивает состояние флоу через refresh().
   properties:
     "type -> string": |
       Тип события из набора типов WS-событий afm.
@@ -85,6 +93,21 @@ Annotations: |
     "text -> string": |
       Текст комментария.
 
+"extractStageStatus(payload: unknown) -> status: StageStatus | null":
+  location: afm-event.ts
+  annotations: |
+    Достаёт новый статус стадии из payload события stage_status_changed. Используется вместе с `AfmEvent`
+    при обработке WebSocket-событий.
+
+    `payload`: данные события (поле data сервера) — строка со статусом либо объект `{ status }`
+    `status`: распознанный статус из полного набора статусов афм, либо null, если payload не строка/объект
+    с полем status, либо содержит нераспознанное значение
+
+    Algorithm:
+    1. Если payload — строка: вернуть её как StageStatus, если она входит в полный набор статусов, иначе null
+    2. Если payload — объект с полем status-строкой из набора статусов: вернуть это значение
+    3. Иначе — null
+
 "LogEntry()":
   location: log-entry.ts
   annotations: |
@@ -97,6 +120,42 @@ Annotations: |
       Текст сообщения.
     "level -> 'debug' | 'info' | 'warn' | 'error'": |
       Уровень важности записи.
+
+"STAGE_STATUSES() -> statuses: ReadonlyArray<string>":
+  location: stage.ts
+  annotations: |
+    Канонический упорядоченный набор всех статусов стадии afm: pending, planning, awaiting_approval,
+    revising, ready, running, done, failed, retrying, awaiting_user_input (см. statusLabels в app.js).
+    Источник производного строкового типа StageStatus и массив для проверки распознанных статусов
+    в useStatus и extractStageStatus.
+
+"STAGE_STATUS_LABELS() -> labels: Record<string, string>":
+  location: stage.ts
+  annotations: |
+    Человекочитаемые подписи статусов для списка стадий и панели деталей. Потребляется корневой
+    композицией App для подписи статуса выбранной стадии в заголовке stageHeader.
+
+"ACTIVE_STAGE_STATUSES() -> active: ReadonlySet<string>":
+  location: stage.ts
+  annotations: |
+    Подмножество статусов «стадия в работе» (running, planning, revising, retrying,
+    awaiting_user_input) — основа автовыбора активной стадии в App. Соответствует ACTIVE_STATUSES
+    в app.js.
+
+"AFM_EVENT_TYPES() -> eventTypes: ReadonlyArray<string>":
+  location: afm-event.ts
+  annotations: |
+    Известные типы WS-событий afm: stage_status_changed, approved, revised, retry_scheduled,
+    retry_exhausted, manual_retry, ask_user, user_answered, agent_action, agent_completed,
+    supervisor_decision. Тип type в AfmEvent намеренно приведён к строке — сервер может присылать
+    и неизвестные типы, которые корневая композиция переносит как ленту (default-ветка app.js).
+
+"SIGNIFICANT_EVENT_TYPES() -> significant: ReadonlySet<string>":
+  location: afm-event.ts
+  annotations: |
+    Подмножество типов событий, по которым корневая композиция App ре-запрашивает состояние флоу
+    через refresh(): смена статуса стадии, approved, revised, retry_scheduled, retry_exhausted,
+    manual_retry, ask_user, user_answered, agent_completed.
 
 ---
 

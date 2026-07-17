@@ -43,3 +43,17 @@ function isActive(status: Stage['status']): boolean {
     || status === 'retrying' || status === 'awaiting_user_input'
 }
 ```
+
+## Готовые константы вместо ручных списков
+
+Не дублируйте наборы статусов/типов событий вручную — используйте готовые константы клеточки:
+
+```ts
+import { ACTIVE_STAGE_STATUSES, STAGE_STATUS_LABELS, SIGNIFICANT_EVENT_TYPES, extractStageStatus } from '../../types'
+
+const isActive = (status: Stage['status']) => ACTIVE_STAGE_STATUSES.has(status)
+const label = STAGE_STATUS_LABELS[stage.status]
+```
+
+`extractStageStatus(payload)` — достаёт распознанный `StageStatus` из payload события `stage_status_changed`
+(строка или `{ status }`), возвращает `null`, если payload не распознан.

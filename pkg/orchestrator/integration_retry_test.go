@@ -42,6 +42,10 @@ func (r *manualRetryRunner) RunAgent(ctx context.Context, agentType, stageName, 
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
 }
 
+func (r *manualRetryRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
 // rateLimitThenSuccessRunner wraps a Runner and returns a rate limit error
 // on the first N calls, then delegates to the underlying runner.
 type rateLimitThenSuccessRunner struct {
@@ -76,6 +80,10 @@ func (r *rateLimitThenSuccessRunner) RunAgent(ctx context.Context, agentType, st
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
 }
 
+func (r *rateLimitThenSuccessRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
 // noDoneRunner wraps a Runner and does NOT create .done, simulating an agent
 // that exits successfully without completing work.
 // After retryAfter calls it starts creating .done.
@@ -105,6 +113,10 @@ func (r *noDoneRunner) RunAgent(ctx context.Context, agentType, stageName, promp
 		_ = os.WriteFile(filepath.Join(stageDir, ".done"), []byte("done after retry"), 0644)
 	}
 	return nil
+}
+
+func (r *noDoneRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // TestIntegration_RetryOnServerError verifies that 500 errors trigger
@@ -313,6 +325,10 @@ func (r *verifyCaptureRunner) RunAgent(ctx context.Context, agentType, stageName
 	}
 	stageDir := filepath.Dir(logFile)
 	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("agent claims done"), 0644)
+}
+
+func (r *verifyCaptureRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // TestIntegration_VerifyPass verifies that a stage with a passing verify

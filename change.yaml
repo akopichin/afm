@@ -1,0 +1,52 @@
+name: change-logo
+description: "mini change"
+
+supervisor_command: glm52
+
+prompt: |
+  if goga binary not installed - install it with `pip install goga && goga connect claude`
+  constraint: пиши все на русском. Не используй английский кроме спец терминов нужных.
+
+stages:
+  - id: change
+    name: "change"
+    supervisor: true
+    supervisor_prompt: скилл может сам все сделать - нужен autonomous режим.
+    interactive: true
+    agents: [planning]
+    description: |
+      засинкать codemanifest-ы с кодом.
+    prompt: |
+      сделать goga-change нужно в theme: goga лого заменить с гога на quarium причем написанное также 2мя цветами и тем же шрифтом, что и на сайте https://qarium.ru.
+    skills:
+      - goga-change
+    command: glm52
+  - id: accept
+    name: "accept"
+    supervisor: true
+    supervisor_prompt: скилл может сам все сделать - нужен autonomous режим.
+    interactive: true
+    agents: [planning]
+    description: |
+      засинкать codemanifest-ы с кодом.
+    prompt: |
+      сделать goga-accept прочекать что все ок по арх с помощью него.
+    skills:
+      - goga-accept
+    command: glm52
+    depends_on: [change]
+
+  - id: commit
+    name: "commit"
+    supervisor: true
+    supervisor_prompt: скилл может сам все сделать - нужен autonomous режим.
+    interactive: true
+    agents: [planning]
+    description: |
+      сделать коммит.
+    prompt: |
+      прогнать линт
+      прогнать билд
+      закоммитить все если все хорошо. Если нет - починить.
+    command: glm52
+    depends_on: [accept]

@@ -46,6 +46,21 @@ func isIncompleteWorkError(err error) bool {
 	return errors.As(err, &target)
 }
 
+// checkAutonomousCompletion проверяет, что execution_summary.md существует и не пуст.
+// Используется как completion-check для runAutonomousAgent (автономный трек).
+// Возвращает IncompleteWorkError (retryable once) если файл отсутствует или пуст —
+// агент получит один retry с контекстом ошибки.
+func checkAutonomousCompletion(stageDir string) error {
+	data, err := os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
+	if err != nil {
+		return &IncompleteWorkError{Reason: "missing execution_summary.md"}
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return &IncompleteWorkError{Reason: "execution_summary.md is empty"}
+	}
+	return nil
+}
+
 // checkCompletion verifies that .done exists and all declared artifacts are present.
 // Returns incompleteWorkError if .done is missing (retryable).
 // Returns missingArtifactError if an artifact is missing (not retryable).

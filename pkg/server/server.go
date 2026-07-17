@@ -34,6 +34,12 @@ type Server struct {
 	indexBytes     []byte       // предподготовленный index.html (с заменами для goga)
 	fileServer     http.Handler // отдаёт статику (style.css, app.js, ...)
 	httpSrv        *http.Server
+	// Keepalive-таймауты вебсокета. Immutable: задаются один раз в New и не
+	// мутируются после (хранение в полях, а не в глобальных переменных, убирает
+	// data race между тестами и readPump/writePump — см. websocket.go).
+	wsPongWait   time.Duration
+	wsPingPeriod time.Duration
+	wsWriteWait  time.Duration
 }
 
 // Config holds server settings.
@@ -48,10 +54,27 @@ type Config struct {
 	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
 	DialogCancelFn func(stageID string) error
 	Theme          string
+	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
+	WSPongWait   time.Duration
+	WSPingPeriod time.Duration
+	WSWriteWait  time.Duration
 }
 
 // New creates a Server.
 func New(cfg Config) *Server {
+	pongWait := cfg.WSPongWait
+	if pongWait == 0 {
+		pongWait = defaultWSPongWait
+	}
+	pingPeriod := cfg.WSPingPeriod
+	if pingPeriod == 0 {
+		pingPeriod = defaultWSPingPeriod
+	}
+	writeWait := cfg.WSWriteWait
+	if writeWait == 0 {
+		writeWait = defaultWSWriteWait
+	}
+
 	s := &Server{
 		runDir:         cfg.RunDir,
 		store:          cfg.Store,
@@ -62,6 +85,9 @@ func New(cfg Config) *Server {
 		dialogAnswerFn: cfg.DialogAnswerFn,
 		dialogCancelFn: cfg.DialogCancelFn,
 		theme:          cfg.Theme,
+		wsPongWait:     pongWait,
+		wsPingPeriod:   pingPeriod,
+		wsWriteWait:    writeWait,
 		fileServer:     http.FileServer(http.FS(web.FS)),
 	}
 
@@ -80,6 +106,11 @@ func New(cfg Config) *Server {
 				[]byte(`href="./style.css"`), []byte(`href="./style-goga.css"`))
 			indexBytes = bytes.ReplaceAll(indexBytes,
 				[]byte(`class="theme-novacorps"`), []byte(`class="theme-goga"`))
+			indexBytes = bytes.ReplaceAll(indexBytes,
+				[]byte(`<title>afm Dashboard</title>`), []byte(`<title>QArium</title>`))
+			indexBytes = bytes.ReplaceAll(indexBytes,
+				[]byte(`type="image/svg+xml" href="./favicon.svg"`),
+				[]byte(`type="image/png" href="./quarium-logo.png"`))
 		}
 		s.indexBytes = indexBytes
 	}
@@ -126,6 +157,8 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handlePlan(w, r)
 	case strings.HasSuffix(path, "/log"):
 		s.handleLog(w, r)
+	case strings.HasSuffix(path, "/supervisor"):
+		s.handleSupervisor(w, r)
 	case strings.HasSuffix(path, "/approve") && r.Method == http.MethodPost:
 		s.handleApprove(w, r)
 	case strings.HasSuffix(path, "/revise") && r.Method == http.MethodPost:

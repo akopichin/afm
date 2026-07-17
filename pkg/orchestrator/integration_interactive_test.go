@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,6 +49,10 @@ func (r *fileQuestionRunner) RunPlanning(ctx context.Context, stageName, prompt,
 
 func (r *fileQuestionRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *fileQuestionRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // TestFullDialogCycle verifies the full interactive dialog lifecycle with
@@ -280,23 +283,26 @@ func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 	}
 }
 
-// TestIntegration_DialogViolationDetected: интерактивный агент пишет
-// question.json ВНЕ stageDir — стадия должна перейти в failed с причиной
-// "dialog protocol violation" вместо вечного зависания (afm bug-2).
-func TestIntegration_DialogViolationDetected(t *testing.T) {
+// TestIntegration_MisplacedQuestionRelocated: интерактивный агент пишет
+// question.json ВНЕ stageDir (баг GLM-4.7: путь из CWD вместо $AFM_STAGE_DIR).
+// Стадия не должна зависнуть навсегда: оркестратор relocate'ит misplaced-файл в
+// правильное место, переводит стадию в awaiting_user_input, а по неверному пути
+// создаёт symlink на answer.json (чтобы агентский polling-loop нашёл ответ).
+func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 	dir := t.TempDir()
 
 	// «Неправильная» директория, куда агент по ошибке кладёт вопрос.
 	wrongDir := filepath.Join(dir, "wrong-stages", "propose")
-	if err := os.MkdirAll(wrongDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	wrongQuestion := filepath.Join(wrongDir, "planning.q1.question.json")
+	wrongAnswer := filepath.Join(wrongDir, "planning.q1.answer.json")
 
-	// Скрипт эмитит Write tool_use с неверным путём в stream-json, затем ждёт
-	// (имитируя зависший bash-loop), пока poller не детектит нарушение.
-	scriptPath := filepath.Join(dir, "badagent.sh")
+	// Скрипт: РЕАЛЬНО создаёт misplaced question.json и эмитит stream-json Write
+	// tool_use с тем же путём (poller узнаёт путь через <phase>.jsonl), затем спит,
+	// имитируя зависший bash-polling-loop агента.
+	scriptPath := filepath.Join(dir, "misplacedagent.sh")
 	script := "#!/bin/bash\n" +
+		fmt.Sprintf("mkdir -p %q\n", wrongDir) +
+		fmt.Sprintf(`echo '{"id":"q1","question":"where?","options":["a","b"]}' > %q`+"\n", wrongQuestion) +
 		fmt.Sprintf(`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":%q,"content":"..."}}]}}'`+"\n", wrongQuestion) +
 		"sleep 30\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
@@ -306,7 +312,7 @@ func TestIntegration_DialogViolationDetected(t *testing.T) {
 	stages := []flow.Stage{{
 		ID:          "propose",
 		Name:        "Propose",
-		Description: "interactive planning that violates dialog contract",
+		Description: "interactive planning that writes question outside stageDir",
 		Agents:      []flow.AgentType{flow.AgentPlanning},
 		Interactive: true,
 		Command:     scriptPath,
@@ -331,18 +337,22 @@ func TestIntegration_DialogViolationDetected(t *testing.T) {
 	defer cancel()
 	go func() { _ = orch.Run(ctx) }()
 
-	waitForStatus(t, stateFile, "propose", state.StatusFailed, 15*time.Second)
+	// misplaced question relocate'ится в stageDir → poller находит её → EvAskUser.
+	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
 
-	// Причина отказа зафиксирована в events.jsonl — с упоминанием неверного пути.
-	eventsData, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	stageDir := filepath.Join(dir, "propose")
+
+	// Файл скопирован в правильное место — вопрос виден в UI.
+	if _, err := os.Stat(filepath.Join(stageDir, "planning.q1.question.json")); err != nil {
+		t.Errorf("relocated question missing in stageDir: %v", err)
+	}
+	// По неверному пути создан dangling-символ на будущий answer.json в stageDir —
+	// агентский polling-loop найдёт ответ, когда пользователь ответит.
+	link, err := os.Readlink(wrongAnswer)
 	if err != nil {
-		t.Fatalf("read events.jsonl: %v", err)
-	}
-	if !strings.Contains(string(eventsData), "dialog protocol violation") {
-		t.Errorf("events.jsonl missing violation reason: %q", string(eventsData))
-	}
-	if !strings.Contains(string(eventsData), wrongQuestion) {
-		t.Errorf("events.jsonl missing offending path %q: %q", wrongQuestion, string(eventsData))
+		t.Errorf("expected answer symlink at %s: %v", wrongAnswer, err)
+	} else if link != filepath.Join(stageDir, "planning.q1.answer.json") {
+		t.Errorf("answer symlink points to %q, want %q", link, filepath.Join(stageDir, "planning.q1.answer.json"))
 	}
 }
 

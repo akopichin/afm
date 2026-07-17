@@ -14,6 +14,7 @@ const (
 	AgentPlanning       Agent = "planning"
 	AgentImplementation Agent = "implementation"
 	AgentReview         Agent = "review"
+	AgentAutonomous     Agent = "autonomous_execution"
 )
 
 type Inputs struct {
@@ -31,13 +32,21 @@ type Inputs struct {
 	OutputContractMD string
 	ExampleOutput    string
 	GlobalPrompt     string
+	// Autonomous — шаблон для автономного трека (без plan.md, с execution_summary.md).
+	// Если непустой, используется вместо Template.
+	Autonomous string
 }
 
 func Build(in Inputs) string {
 	var sb strings.Builder
 
+	// Если задан автономный шаблон — использовать его вместо основного.
+	tmpl := in.Template
+	if in.Autonomous != "" {
+		tmpl = in.Autonomous
+	}
 	sb.WriteString("<system_rules>\n")
-	sb.WriteString(in.Template)
+	sb.WriteString(tmpl)
 	if in.OutputContractMD != "" {
 		sb.WriteString("\n\n")
 		sb.WriteString(in.OutputContractMD)
@@ -55,9 +64,15 @@ func Build(in Inputs) string {
 		fmt.Fprintf(&sb, "Your stage directory is AFM_STAGE_DIR=%q\n", stageDir)
 		sb.WriteString("Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).\n\n")
 		sb.WriteString("For each question:\n")
+		sb.WriteString("0. BEFORE writing any question file, read the real stage dir from the environment:\n")
+		sb.WriteString("   Run Bash: echo \"$AFM_STAGE_DIR\"\n")
+		sb.WriteString("   Capture the printed value (call it STAGE_DIR). Example output: /some/path/runs/my-flow-20240101-120000/my-stage\n")
+		sb.WriteString("   CONSTRAINT: you MUST write the question file to exactly STAGE_DIR/<phase>.q<N>.question.json.\n")
+		sb.WriteString("   FORBIDDEN: writing to any path you did not obtain from echo above.\n")
+		sb.WriteString("   FORBIDDEN: constructing or guessing the path from cwd, flow name, or timestamps.\n")
 		sb.WriteString("1. Write the question file using the Write tool:\n")
-		fmt.Fprintf(&sb, "   Path: %s/%s.q<N>.question.json  (== $AFM_STAGE_DIR/%s.q<N>.question.json)\n", stageDir, in.PhaseAgent, in.PhaseAgent)
-		sb.WriteString("   Write the file to this path and NOWHERE ELSE. Do NOT invent paths like .afm/stages/... — always use $AFM_STAGE_DIR.\n")
+		fmt.Fprintf(&sb, "   Path: <STAGE_DIR from step 0>/%s.q<N>.question.json\n", in.PhaseAgent)
+		sb.WriteString("   Write the file to this path and NOWHERE ELSE.\n")
 		sb.WriteString("   Content: {\"id\":\"qN\",\"question\":\"## Full context here\\n\\nYour question?\",\"options\":[\"A\",\"B\"],\"allow_custom\":true}\n")
 		sb.WriteString("   Put ALL context in 'question': descriptions, trade-offs, examples. Use markdown freely.\n")
 		sb.WriteString("2. Wait for the answer via a blocking Bash polling loop:\n")

@@ -10,7 +10,7 @@ import { useElapsed } from '../../hooks/use-elapsed'
 function App() {
   const { stages, startedAt } = useStatus()
   const elapsedMs = useElapsed(startedAt)
-  return <Footer stages={stages} elapsedMs={elapsedMs} />
+  return <Footer stages={stages} startedAt={startedAt} elapsedMs={elapsedMs} />
 }
 ```
 

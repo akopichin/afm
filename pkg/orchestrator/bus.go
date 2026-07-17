@@ -20,6 +20,7 @@ const (
 	EventManualRetry        EventType = "manual_retry"
 	EventAskUser            EventType = "ask_user"
 	EventUserAnswered       EventType = "user_answered"
+	EventSupervisorDecision EventType = "supervisor_decision"
 )
 
 type Event struct {

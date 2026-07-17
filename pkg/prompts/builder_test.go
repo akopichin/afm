@@ -222,6 +222,37 @@ func TestBuild_NoGlobalPromptBlock_WhenEmpty(t *testing.T) {
 	}
 }
 
+// TestBuild_AutonomousOverridesTemplate locks in the autonomous-track behaviour:
+// when Autonomous is non-empty it replaces Template inside <system_rules>, and
+// when empty Build falls back to Template exactly (the common non-autonomous case).
+func TestBuild_AutonomousOverridesTemplate(t *testing.T) {
+	stage := flow.Stage{ID: "x", Name: "X", Description: "context"}
+
+	// Autonomous non-empty → its content wins, Template content must NOT appear.
+	out := Build(Inputs{
+		Template:   "TEMPLATE_BODY",
+		Autonomous: "AUTONOMOUS_BODY",
+		Stage:      stage,
+		PhaseAgent: AgentAutonomous,
+	})
+	if !strings.Contains(out, "AUTONOMOUS_BODY") {
+		t.Errorf("autonomous body missing from output:\n%s", out)
+	}
+	if strings.Contains(out, "TEMPLATE_BODY") {
+		t.Errorf("template body should NOT appear when Autonomous is set:\n%s", out)
+	}
+
+	// Autonomous empty → Template is used (fallback must be exact).
+	out = Build(Inputs{
+		Template:   "TEMPLATE_BODY",
+		Stage:      stage,
+		PhaseAgent: AgentPlanning,
+	})
+	if !strings.Contains(out, "TEMPLATE_BODY") {
+		t.Errorf("template body missing from output when Autonomous empty:\n%s", out)
+	}
+}
+
 // A closing </global_prompt> inside the global prompt content must be
 // neutralized so it cannot prematurely end the block or inject sibling blocks.
 func TestBuild_GlobalPromptEscapesOwnClosingTag(t *testing.T) {

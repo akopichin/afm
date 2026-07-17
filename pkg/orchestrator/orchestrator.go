@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -25,6 +26,12 @@ const phasePlanning = "planning"
 
 const phaseImplementation = "implementation"
 const phaseReview = "review"
+
+// phaseAutonomous — фаза autonomous-трека (супервизор решил can_execute_autonomously).
+// Как implementation даёт running→done, но без plan.md/approval: агент со скиллами
+// пишет execution_summary.md. Фаза ДИАЛОГОВАЯ — скилл может спрашивать пользователя
+// через тот же file-based dialog protocol (вопросы autonomous_execution.q<N>.*).
+const phaseAutonomous = "autonomous_execution"
 const keyAnswer = "answer"
 const keyID = "id"
 const keyPhase = "phase"
@@ -54,6 +61,7 @@ type Prompts struct {
 	Implementation string
 	Review         string
 	Summary        string
+	Autonomous     string
 }
 
 // DefaultPrompts returns empty prompts (will be set from assets).
@@ -72,6 +80,9 @@ type Options struct {
 	GeneratedAgents map[string]bool // autoShim: команды с generated-враппером (self-route)
 	GlobalPrompt    string          // Flow.Prompt, forwarded to every prompts.Build call
 	RequireApproval bool            // headless: fail instead of auto-approve on awaiting_approval
+	// SupervisorRunner — runner для вызовов Supervisor.EvaluateStage.
+	// nil = Supervisor отключён глобально (DetermineStagePhases всегда вернёт базовые фазы).
+	SupervisorRunner executor.Runner
 }
 
 // violationCacheEntry хранит stat-данные для одного .jsonl файла.
@@ -102,6 +113,15 @@ type Orchestrator struct {
 	// violationCache кешует stat .jsonl-файлов для detectDialogViolation.
 	// Доступен только из горутины поллера — мьютекс не нужен.
 	violationCache map[string]violationCacheEntry // key: путь к .jsonl
+	// supervisor оценивает, можно ли выполнить стадию автономно.
+	// nil, если SupervisorRunner не задан в Options.
+	supervisor *Supervisor
+	// retryBackoff/maxRetries — снимок package-level RetryBackoff/MaxRetries на
+	// момент New. Хранятся в immutable-полях, а не читаются из package var в
+	// горутинах агентов: иначе мутация package var в t.Cleanup теста даёт data
+	// race с runWithRetry (см. retry.go).
+	retryBackoff time.Duration
+	maxRetries   int
 }
 
 // New creates an Orchestrator.
@@ -145,6 +165,13 @@ func New(opts Options) *Orchestrator {
 		}
 	}
 
+	// Supervisor включается только если задан SupervisorRunner; иначе
+	// DetermineStagePhases всегда возвращает базовые фазы.
+	var sup *Supervisor
+	if opts.SupervisorRunner != nil {
+		sup = NewSupervisor(opts.SupervisorRunner)
+	}
+
 	return &Orchestrator{
 		opts:           opts,
 		graph:          NewGraph(opts.Stages),
@@ -154,6 +181,9 @@ func New(opts Options) *Orchestrator {
 		fsm:            NewFSM(opts.Store),
 		sems:           sems,
 		violationCache: make(map[string]violationCacheEntry),
+		supervisor:     sup,
+		retryBackoff:   RetryBackoff,
+		maxRetries:     MaxRetries,
 	}
 }
 
@@ -243,12 +273,18 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		if s.Command == "" {
 			return o.runner
 		}
-		return executor.New(executor.Config{
+		cfg := executor.Config{
 			Command:     s.Command,
 			IdleTimeout: o.opts.Config.Executor.IdleTimeout,
 			OnAction:    uiActionPublisher(o.ui, s.ID),
 			WrapperDir:  wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		})
+		}
+		// Autonomous-фаза диалоговая: агенту нужен AFM_STAGE_DIR, чтобы писать
+		// question.json и писать execution_summary.md в каталог стадии.
+		if phase == phaseAutonomous {
+			cfg.StageDir = filepath.Join(o.opts.RunDir, s.ID)
+		}
+		return executor.New(cfg)
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -402,13 +438,12 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 			o.Trigger(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
 		}
 		// No open question in stageDir: if this is an interactive stage, check
-		// whether the agent wrote one elsewhere (dialog contract violation).
-		// Fail fast with a clear reason instead of hanging forever (afm bug-2).
+		// whether the agent wrote one elsewhere (GLM-4.7 hallucination bug: agent
+		// constructs path from CWD instead of reading $AFM_STAGE_DIR).
+		// Auto-relocate the misplaced file so the dialog becomes visible in the UI.
 		if len(questions) == 0 {
 			if stage := o.graph.Stage(stageID); stage != nil && stage.Interactive {
-				if reason, ok := o.detectDialogViolation(stageDir); ok {
-					o.FailStage(stageID, reason)
-				}
+				o.relocateMisplacedQuestions(stageDir)
 			}
 		}
 	}
@@ -424,8 +459,12 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 // с прошлого тика, он не перечитывается. Метод вызывается только из поллера —
 // синхронизация не нужна.
 func (o *Orchestrator) detectDialogViolation(stageDir string) (string, bool) {
-	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
-		jsonlPath := filepath.Join(stageDir, phase+".jsonl")
+	phases := []string{phasePlanning, phaseImplementation, phaseReview}
+	if isAutonomousStage(stageDir) {
+		phases = append(phases, phaseAutonomous)
+	}
+	for _, phase := range phases {
+		jsonlPath := filepath.Join(stageDir, jsonlFileForPhase(phase))
 		info, err := os.Stat(jsonlPath)
 		if err != nil {
 			continue // файл не существует — нарушений нет
@@ -445,6 +484,67 @@ func (o *Orchestrator) detectDialogViolation(stageDir string) (string, bool) {
 		o.violationCache[jsonlPath] = violationCacheEntry{size: info.Size(), mtime: info.ModTime()}
 	}
 	return "", false
+}
+
+// jsonlFileForPhase возвращает имя JSONL-лога для фазы.
+// Autonomous-фаза логируется в "autonomous.log" → "autonomous.jsonl",
+// а не в "autonomous_execution.jsonl" (как следовало бы из имени фазы).
+func jsonlFileForPhase(phase string) string {
+	if phase == phaseAutonomous {
+		return "autonomous.jsonl"
+	}
+	return phase + ".jsonl"
+}
+
+// relocateMisplacedQuestions ищет question.json файлы, записанные агентом вне stageDir,
+// и автоматически перемещает их внутрь. Для каждого перемещённого файла создаётся
+// dangling-симлинк <wrongDir>/answer.json → <stageDir>/answer.json, чтобы агентский
+// bash-polling-loop нашёл ответ по своему (неверному) пути.
+//
+// Это защита от GLM-4.7 bug: модель конструирует путь из CWD вместо $AFM_STAGE_DIR.
+func (o *Orchestrator) relocateMisplacedQuestions(stageDir string) {
+	phases := []string{phasePlanning, phaseImplementation, phaseReview}
+	if isAutonomousStage(stageDir) {
+		phases = append(phases, phaseAutonomous)
+	}
+	for _, phase := range phases {
+		jsonlPath := filepath.Join(stageDir, jsonlFileForPhase(phase))
+		for _, f := range executor.WrittenFiles(jsonlPath) {
+			if !strings.HasSuffix(filepath.Base(f), ".question.json") {
+				continue
+			}
+			if pathInside(f, stageDir) {
+				continue // уже в правильном месте
+			}
+			// Файл написан в неправильную директорию.
+			if _, err := os.Stat(f); err != nil {
+				continue // файл не существует — агент ещё не дошёл до записи
+			}
+			dst := filepath.Join(stageDir, filepath.Base(f))
+			if _, err := os.Stat(dst); err == nil {
+				continue // уже скопирован ранее
+			}
+			data, err := os.ReadFile(f)
+			if err != nil {
+				log.Printf("WARN: relocate question %s: read: %v", f, err)
+				continue
+			}
+			if err := os.WriteFile(dst, data, 0644); err != nil {
+				log.Printf("WARN: relocate question %s → %s: write: %v", f, dst, err)
+				continue
+			}
+			// Создаём симлинк wrongDir/answer.json → stageDir/answer.json (dangling),
+			// чтобы агентский polling-loop нашёл ответ по своему неверному пути.
+			answerBase := strings.TrimSuffix(filepath.Base(f), ".question.json") + ".answer.json"
+			wrongAnswer := filepath.Join(filepath.Dir(f), answerBase)
+			rightAnswer := filepath.Join(stageDir, answerBase)
+			if _, err := os.Lstat(wrongAnswer); err != nil {
+				_ = os.MkdirAll(filepath.Dir(wrongAnswer), 0755)
+				_ = os.Symlink(rightAnswer, wrongAnswer)
+			}
+			log.Printf("INFO: relocated misplaced question %s → %s (symlink answer)", f, dst)
+		}
+	}
 }
 
 // pathInside reports whether file is located inside dir. Both are resolved to
@@ -533,7 +633,9 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 			_ = o.critical.Publish(ctx, Event{Type: EventApproved, StageID: ev.StageID})
 		}
 		o.tryActivatePrePlanned(ctx)
-	case phaseImplementation:
+	case phaseImplementation, phaseAutonomous:
+		// Завершение implementation-агента или autonomous-трека
+		// (для autonomous execution_summary.md уже написан) → done.
 		if current != state.StatusRunning && current != state.StatusRetrying {
 			return nil
 		}
@@ -653,6 +755,18 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 				sem.release()
 			}()
 			o.runReviewAgent(ctx, st)
+		}(*stage)
+	case phaseAutonomous:
+		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseAutonomous}, "")
+		go func(st flow.Stage) {
+			sem := o.semFor(st)
+			sem.acquire()
+			o.markAgentActive(st.ID)
+			defer func() {
+				o.markAgentDone(st.ID)
+				sem.release()
+			}()
+			o.runAutonomousAgent(ctx, st)
 		}(*stage)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)
@@ -901,7 +1015,21 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 				o.markAgentDone(st.ID)
 				sem.release()
 			}()
-			o.runPlanningAgent(ctx, st)
+
+			phases := o.DetermineStagePhases(ctx, st)
+			if len(phases) == 1 && phases[0] == "autonomous_execution" {
+				stageDir := filepath.Join(o.opts.RunDir, st.ID)
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					o.Trigger(st.ID, EvFail, GuardCtx{}, "mkdir failed")
+					return
+				}
+				_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
+				o.Trigger(st.ID, EvSupervisorApproved, GuardCtx{}, "supervisor: autonomous")
+				o.Trigger(st.ID, EvStartRun, GuardCtx{}, "")
+				o.runAutonomousAgent(ctx, st)
+			} else {
+				o.runPlanningAgent(ctx, st)
+			}
 		}(s)
 	}
 }
@@ -1282,3 +1410,128 @@ func copyFile(src, dst string) error {
 	}
 	return os.WriteFile(dst, data, 0644)
 }
+
+// isAutonomousStage возвращает true, если stageDir содержит autonomous.flag —
+// маркер того, что стадия уже переведена на автономный трек.
+func isAutonomousStage(stageDir string) bool {
+	_, err := os.Stat(filepath.Join(stageDir, "autonomous.flag"))
+	return err == nil
+}
+
+// logSupervisorDecision записывает решение супервизора в <runDir>/supervisor.jsonl
+// (одна JSON-запись на строку). Ошибки записи логируются молча — этот файл
+// лучшего характера (для аудита/UI), fallback DetermineStagePhases на него не завязан.
+func (o *Orchestrator) logSupervisorDecision(stageID, decision, reason string) {
+	type entry struct {
+		Ts       string `json:"ts"`
+		StageID  string `json:"stage_id"`
+		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
+	}
+	e := entry{
+		Ts:       time.Now().UTC().Format(time.RFC3339),
+		StageID:  stageID,
+		Decision: decision,
+		Reason:   reason,
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	logPath := filepath.Join(o.opts.RunDir, "supervisor.jsonl")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
+}
+
+// DetermineStagePhases вызывает Supervisor и возвращает выбранные фазы для стадии.
+// Вызывается внутри горутины планирования (не блокирует event loop).
+//
+// Правила:
+//   - stage.Supervisor=false ИЛИ supervisor отключён (nil) → базовые фазы.
+//   - inline-артефакт guard: наличие inline-артефакта форсирует стандартный цикл
+//     (planning пропускать нельзя — агенту нужен контекст артефакта в plan.md).
+//   - при любой ошибке LLM/парсинга → фолбэк на базовые фазы (без crash flow).
+//   - CanExecuteAutonomously=true → ["autonomous_execution"], логируется решение,
+//     публикуется событие EventSupervisorDecision.
+func (o *Orchestrator) DetermineStagePhases(ctx context.Context, s flow.Stage) []string {
+	base := agentTypesToStrings(s.Agents)
+
+	if !s.Supervisor || o.supervisor == nil {
+		return base
+	}
+	// Inline-артефакт guard: planning пропускать нельзя — агенту нужен контекст
+	// артефакта (фабрика/спецификация) для корректного plan.md.
+	for _, art := range s.Artifacts {
+		if art.IsInline() {
+			log.Printf("supervisor: stage %s has inline artifact %q, skipping evaluation", s.ID, art.Name)
+			return base
+		}
+	}
+	decision, err := o.supervisor.EvaluateStage(ctx, s, o.opts.GlobalPrompt)
+	if err != nil {
+		log.Printf("supervisor: fallback for stage %s: %v", s.ID, err)
+		return base
+	}
+	// Решение супервизора публикуем в UI и пишем в supervisor.jsonl для ОБОИХ треков
+	// (раньше standard не публиковался — UI не видел резолюцию).
+	track := "standard"
+	if decision.CanExecuteAutonomously {
+		track = "autonomous"
+	}
+	o.logSupervisorDecision(s.ID, track, decision.Reason)
+	o.ui.Publish(Event{
+		Type:    EventSupervisorDecision,
+		StageID: s.ID,
+		Data:    decision,
+	})
+	if decision.CanExecuteAutonomously {
+		log.Printf("supervisor: stage %s → autonomous_execution. Reason: %s", s.ID, decision.Reason)
+		return []string{"autonomous_execution"}
+	}
+	log.Printf("supervisor: stage %s → standard. Reason: %s", s.ID, decision.Reason)
+	return base
+}
+
+// runAutonomousAgent выполняет стадию в автономном треке — без plan.md и approval.
+// Агент использует прикреплённые скиллы и обязан написать execution_summary.md
+// по завершении (проверяется completion-check'ом checkAutonomousCompletion).
+//
+// Трек отличается от runImplementationAgent: нет чтения plan.md, нет .done,
+// фаза — "autonomous_execution", используется Autonomous-шаблон промпта.
+func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+
+	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
+		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+		if artErr != nil {
+			log.Printf("WARN: collect artifacts for %s autonomous: %v", s.ID, artErr)
+		}
+		depCtx := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+
+		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
+		prompt := prompts.Build(prompts.Inputs{
+			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
+			Autonomous:      o.opts.Prompts.Autonomous,
+			Stage:           s,
+			PhaseAgent:      prompts.AgentAutonomous,
+			Interactive:     true, // dialog protocol — autonomous-скилл может спрашивать пользователя
+			Artifacts:       artCtx,
+			DependencyPlans: depCtx,
+			StageDir:        stageDir,
+			GlobalPrompt:    o.opts.GlobalPrompt,
+			RetryContext:    retryContext + summaryNote,
+		})
+		logFile := filepath.Join(stageDir, "autonomous.log")
+		r := o.runnerFor(s, phaseAutonomous)
+		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
+	}, func() error {
+		return checkAutonomousCompletion(stageDir)
+	})
+}
+
+// StoreFromOrch возвращает Store оркестратора. Только для тестов.
+func StoreFromOrch(o *Orchestrator) *state.Store { return o.opts.Store }

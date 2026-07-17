@@ -75,13 +75,19 @@ func TestCreateWrappers_AgentTemplate(t *testing.T) {
 		`"$AFM_SYSPROMPT_GLM51"`, // sysprompt guard
 		"--append-system-prompt-file",
 		`*) set -- "$@" --output-format stream-json ;; esac`, // stream-json dedup guard
-		`set -- "$@" --include-partial-messages`,             // partial messages
+		`*"--output-format stream-json"*|*"--output-format=stream-json"*) set -- "$@" --include-partial-messages ;; esac`, // partial only with stream-json (не ломает supervisor json-вызов)
 		"exec " + realClaude + ` "$@"`,
 	}
 	for _, w := range wantSubstrings {
 		if !strings.Contains(s, w) {
 			t.Errorf("agent wrapper missing %q\n--- script ---\n%s", w, s)
 		}
+	}
+	// Регресс: supervisor-ный вызов (--output-format json) НЕ должен получать
+	// --include-partial-messages — claude требует под него stream-json.
+	// Скрипт не содержит безусловного добавления partial.
+	if strings.Contains(s, "\nset -- \"$@\" --include-partial-messages\n") {
+		t.Errorf("wrapper must not unconditionally add --include-partial-messages (breaks json calls)\n--- script ---\n%s", s)
 	}
 }
 

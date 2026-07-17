@@ -12,6 +12,7 @@ type FeedLine = {
   msg: string
   msgClass: string
   statusClass: string
+  entryClass: string
 }
 
 // Правая панель: лента событий флоу. Форматирование записей (текст и классы бейджа)
@@ -45,7 +46,7 @@ export function EventFeedPanel({ events }: EventFeedPanelProps): ReactElement {
               const line = toFeedLine(event)
 
               return (
-                <div className="feed-entry" data-ts={Number.isNaN(ts) ? 0 : ts} key={`${event.timestamp}-${event.type}`}>
+                <div className={`feed-entry${line.entryClass !== '' ? ` ${line.entryClass}` : ''}`} data-ts={Number.isNaN(ts) ? 0 : ts} key={`${event.timestamp}-${event.type}`}>
                   <span className="feed-time">{formatRelativeTime(Number.isNaN(ts) ? 0 : ts)}</span>
                   <span className={line.msgClass}>
                     {event.stageId !== '' && (
@@ -74,6 +75,7 @@ function toFeedLine(event: AfmEvent): FeedLine {
   let msg = ''
   let msgClass = 'feed-msg'
   let statusClass = ''
+  let entryClass = ''
 
   switch (event.type) {
     case 'stage_status_changed': {
@@ -123,11 +125,20 @@ function toFeedLine(event: AfmEvent): FeedLine {
       msg = 'reply to user'
       statusClass = 'status-running'
       break
+    case 'supervisor_decision': {
+      const obj = isRecord(data) ? data : {}
+      const autonomous = obj.can_execute_autonomously === true
+      const reason = typeof obj.reason === 'string' ? obj.reason : ''
+      msg = `supervisor: ${autonomous ? 'autonomous' : 'standard'}${reason !== '' ? ` — ${reason}` : ''}`
+      msgClass = 'feed-msg supervisor'
+      entryClass = 'supervisor'
+      break
+    }
     default:
       msg = event.type
   }
 
-  return { msg, msgClass, statusClass }
+  return { msg, msgClass, statusClass, entryClass }
 }
 
 function extractStatusString(data: unknown): string {

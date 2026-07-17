@@ -1,5 +1,5 @@
 Imports:
-  - Types: [Stage]
+  - Types: [Stage, STAGE_STATUSES]
     Usages: [dashboard-data-types]
     From: pkg/web/dashboard/src/types
 
@@ -31,7 +31,8 @@ Annotations: |
     Algorithm:
     1. При монтировании выполнить запрос GET /api/status
     2. Распарсить JSON, нормализовать к форме status (см. typescript): stages — объект по id → массив в порядке
-       stage_order (fallback Object.keys(stages).sort), имена — из stage_names, время — из updated_at
+       stage_order (fallback Object.keys(stages).sort), имена — из stage_names, время — из updated_at; статус
+       стадии, отсутствующий в `STAGE_STATUSES`, приводится к 'pending'
     3. Если хук не отменён — обновить состояние
     4. Запланировать повторный опрос по таймеру (3000мс)
     5. При размонтировании — выставить флаг отмены и остановить таймер
@@ -42,7 +43,9 @@ Annotations: |
     - refresh() инициирует внеочередной запрос, не дожидаясь таймера (источник правды для WS-обновлений)
 
     Constraints:
-    - Не запускать параллельные пересекающиеся запросы поверх уже запланированного таймера
+    - refresh() и таймер используют общую функцию запроса, но не гасят друг друга явно: возможен редкий
+      overlap, если refresh() вызван вплотную к тику таймера (оба GET идемпотентны, побеждает последний
+      разрешившийся ответ)
 
 ---
 

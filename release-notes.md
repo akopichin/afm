@@ -2,6 +2,43 @@
 
 Новые возможности — сверху, дальше вниз по устареванию. Даты — по коммитам в `fix`/`master`.
 
+## 2026-07-17
+
+### Диалог: авто-релокейт misplaced question вместо fail-fast
+- Интерактивный (в т.ч. autonomous) агент, записавший `*.question.json` **вне** `$AFM_STAGE_DIR` (GLM-4.7 bug: путь строится из CWD, а не из env var), больше не валит стадию причиной `dialog protocol violation` — поллер сам переносит файл в stageDir (`relocateMisplacedQuestions`), стадия переходит в `awaiting_user_input`, вопрос виден в UI. По неверному пути остаётся dangling-симлинк `<id>.answer.json → <stageDir>/<id>.answer.json` — bash-polling-loop агента находит ответ по своему пути.
+- Autonomous-фаза сканируется по правильному имени лога (`autonomous.jsonl`); в `<interactive_rules>` системного промпта — жёсткий constraint писать question.json только через `echo … > "$AFM_STAGE_DIR/…"`.
+- Дашборд: неотвеченный вопрос виден всегда — фолбэк на `question.json` в `buildDialogEntries`, даже если он ещё не попал в `dialog.jsonl`.
+
+### Тема goga: wordmark «QArium»
+- Лого quarium + wordmark «QArium» (QA — teal, rium — белый) в хедере, title вкладки, favicon; хедер/футер на `--bg-elev`, текст прогресса — mint.
+
+### Стабилизация тестов и супервизора
+- Устранены data race в тестах (`-race` зелёный): keepalive-таймауты WebSocket — immutable-поля `Server`; `RetryBackoff`/`MaxRetries` фиксируются снимком при создании `Orchestrator` **и `Supervisor`** (мутация package var после создания не влияет). Retry-цикл супервизора покрыт тестами (transient 529 → успех / exhausted / снапшот).
+
+## 2026-07-16
+
+### Агент-Супервизор — автооценка автономности стадии
+- Stage с `supervisor: true` на старте оценивается LLM-супервизором: может ли он выполниться **автономно** (один шаг через прикреплённый skill — пишет `execution_summary.md`, пропуская planning/approval/review) или требует стандартного многофазного цикла. Решение пишется в `<runDir>/supervisor.jsonl` (`events.jsonl` не трогается).
+- **Fallback-safety:** любая ошибка LLM-вызова (таймаут, плохой JSON) → безопасный фолбэк на базовые фазы. 529/502/503/504 переживаются ретраем (см. ниже). Супервизор **только сокращает** фазы. Inline-артефакты → всегда стандартный трек.
+- **Конфиг:** `flow.supervisor_command` (прим. `glm47`) > `config.supervisor.command` > `config.client.command`; `stage.supervisor: true` + опц. `stage.supervisor_prompt`. Промпт-шаблон `assets/prompts/autonomous.md`.
+- **FSM:** новый переход `EvSupervisorApproved` (planning→ready), событие шины `EventSupervisorDecision`. Resume автономных стадий (`autonomous.flag` + `execution_summary.md`) в `recovery.go`. `CollectDependencyPlans` для автономных зависимостей читает `execution_summary.md` вместо `plan.md`.
+- **Robust parsing:** `Supervisor.parseDecision` извлекает decision-JSON из: сырого JSON / claude-конверта `{"type":"result","result":"…"}` / claude-массива событий `[…]` / ```json-фенсов. Покрывает и `claude --output-format json` (container — single envelope, host — массив).
+- Спек/план: `docs/superpowers/specs/2026-07-16-supervisor-agent-design.md`, `docs/superpowers/plans/2026-07-16-supervisor-agent.md`.
+
+### Fix: supervisor LLM-вызов + claude-врапперы для `--output-format json`
+- **RunJSONQuery** (`pkg/executor`) наследовал `e.cfg.ExtraArgs`, которые `executor.New` дефолтит в `DefaultClaudeArgs` (`--print --output-format stream-json --verbose --dangerously-skip-permissions`). Этот `stream-json` конфликтовал с `--output-format json` супервизора → claude exit 1. **Фикс:** чистая инвокация `-p <prompt> --output-format json` без ExtraArgs + захват stderr в ошибку (диагностика).
+- **docker-враппер** (`pkg/docker/wrapper.go`): `--include-partial-messages` добавляется **только при `output-format=stream-json`** (раньше всегда — для json-вызова это давало `requires --output-format=stream-json`). Аналогичный фикс применён к host-врапперам `glm47/51/52` (ai-free): partial по stream-json, не по `-p`.
+- Валидация live: `afm run` docker-режима с `feature.yaml` (`supervisor: true`, `supervisor_command: glm47`) — `supervisor.jsonl` содержит реальное решение (`decision=standard`, обоснование), до фикса был молчаливый fallback на каждой стадии.
+
+### Supervisor: видимость в UI + ретраи + autonomous-диалог
+- **Supervisor ретраит transient-ошибки** (529/502/503/504) тем же `RetryBackoff`×`MaxRetries`, что и stage-агенты (`EvaluateStage`), а не сразу фолбэчит. На non-retryable — сразу ошибка → фолбэк.
+- **`validateDecision` строг только для autonomous** (`== ["autonomous_execution"]`); для standard фазы advisory (`DetermineStagePhases` и так возвращает base). Убран ложный fallback, когда LLM писал base phases одной строкой `"planning implementation"` (артефакт рендера Go-слайса) — валидное решение больше не пряталось из лога/UI. `BasePhases` рендерится как JSON `["planning","implementation"]`.
+- **Решение супервизора публикуется в UI для обоих треков** (`EventSupervisorDecision` + `supervisor.jsonl`); раньше standard не публиковался — UI не видел резолюцию. В дашборде `supervisor_decision` выделен отдельной подсветкой (`.feed-entry.supervisor`) в Event feed.
+- **Логи autonomous-агента видны в средней "Log" панели**: `handleLog` (`/api/stages/<id>/log`) и `buildDialogEntries` читают `autonomous.log`/`autonomous.jsonl` (раньше только planning/implementation/review → панель была пуста для autonomous-стадий).
+- **Autonomous-фаза диалоговая**: `phaseAutonomous = "autonomous_execution"` — единая фаза без planning/impl/review (скилл всё делает сам, пишет `execution_summary.md`), НО скилл может спрашивать пользователя через тот же file-based dialog protocol (вопросы `autonomous_execution.q<N>.*`, валидная фаза, resume через `onUserAnswered`). Раннер получает `AFM_STAGE_DIR`, промпт включает `<interactive_rules>`.
+- **Персистентный supervisor-decision badge** в хедере стадии в дашборде (решение видно и после ухода события из фида).
+- **Fix host-режима `supervisor_command`**: wrapper генерируется, даже если ни одна стадия не использует команду как агента; секрет резолвится и в host-ветке (`UsedRecipes`).
+
 ## 2026-07-15
 
 ### Ретрай на 529/502/503/504 + удаление proxy и accounting

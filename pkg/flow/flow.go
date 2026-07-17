@@ -77,6 +77,10 @@ type Stage struct {
 	// Prompt is an optional explicit instruction delivered to the agent
 	// after the <stage> context block.
 	Prompt string `yaml:"prompt"`
+	// Supervisor включает оценку стадии агентом-супервизором перед запуском.
+	// Стадия обязана содержать AgentPlanning в Agents.
+	Supervisor       bool   `yaml:"supervisor"`
+	SupervisorPrompt string `yaml:"supervisor_prompt,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -126,9 +130,12 @@ type Flow struct {
 	// Prompt is shared text added to the system prompt of every stage and
 	// every phase (planning/implementation/review). Empty value does not
 	// change behavior.
-	Prompt      string  `yaml:"prompt"`
-	MaxParallel int     `yaml:"max_parallel"`
-	Stages      []Stage `yaml:"stages"`
+	Prompt      string `yaml:"prompt"`
+	MaxParallel int    `yaml:"max_parallel"`
+	// SupervisorCommand задаёт команду для агента-супервизора (как command у стадии).
+	// Default: значение из config.Supervisor.Command или config.Client.Command.
+	SupervisorCommand string  `yaml:"supervisor_command,omitempty"`
+	Stages            []Stage `yaml:"stages"`
 }
 
 // ParseFile reads and validates a flow YAML file.

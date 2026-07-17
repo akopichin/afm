@@ -13,6 +13,11 @@ Annotations: |
   `typescript` for naming and strict typing. Use `AfmEvent` from Imports. Use `dashboard-data-types` from
   Imports for guidance on consuming `AfmEvent`.
 
+  Панель также использует Maximizable/PanelFrame (src/components/layout, src/components/panel-frame) для
+  рамки с заголовком и разворотом на весь экран, и useStickToBottom (src/hooks/use-stick-to-bottom) для
+  автопрокрутки к последнему событию — эти клетки пока без собственного CODEMANIFEST (см. отдельную
+  рекомендацию в отчёте acceptance).
+
 ---
 
 "EventFeedPanel(events: AfmEvent[]) -> element: ReactElement":
@@ -22,6 +27,16 @@ Annotations: |
 
     `events`: список событий
     `element`: разметка ленты
+
+    Algorithm:
+    1. Отрендерить каждое событие через per-type форматирование (своя строка и CSS-класс для
+       stage_status_changed, agent_completed, agent_action, approved, revised, retry_scheduled,
+       retry_exhausted, manual_retry, ask_user, user_answered, supervisor_decision; неизвестные типы —
+       общий фолбэк-формат)
+    2. Автопрокрутка к последнему событию, пока пользователь сам не проскроллил вверх (см.
+       useStickToBottom); при отклонении от низа показать кнопку «к последнему»
+    3. Раз в 5 секунд форсировать ре-рендер, чтобы относительные метки времени событий оставались
+       актуальными
 
     Requirements:
     - Хронологический порядок, без пересортировки

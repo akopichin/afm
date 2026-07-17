@@ -21,14 +21,8 @@ getter over reading the field directly:
 port := cfg.Server.GetPort()          // 9876 if Server.Port is nil
 openBrowser := cfg.Server.IsOpenBrowser() // false if Server.OpenBrowser is nil (browser is opt-in)
 theme := cfg.EffectiveTheme()         // normalized dashboard theme: "goga" or "novacorps" (empty/unknown → novacorps)
-proxyEnabled := cfg.Proxy.IsEnabled()  // true if Proxy.Enabled is nil
 dockerEnabled := cfg.Docker.IsDockerEnabled() // checks AFM_USE_DOCKER if Docker.Enabled is nil
 image := cfg.Docker.GetImage()        // AFM_DOCKER_IMAGE takes priority if set
-pricing, ok := cfg.Pricing.GetModelPricing("claude-sonnet-5")
-if !ok {
-    // no pricing configured for this model (or the pricing: section is absent entirely) —
-    // omit the cost metric, show tokens/KB only
-}
 ```
 
 ## Consuming sub-configs
@@ -38,9 +32,6 @@ clientCmd := cfg.Client.Command       // e.g. "claude"
 extraArgs := cfg.Client.ExtraArgs
 idleTimeout := cfg.Executor.IdleTimeout
 maxParallel := cfg.Executor.MaxParallel
-upstream := cfg.Proxy.Upstream        // falls back to ANTHROPIC_BASE_URL if empty
-proxyPort := cfg.Proxy.Port           // 0 = random free port
-zaiOverride := cfg.Proxy.Transforms.ZAI // *bool, pass straight to proxy.BuildTransforms
 extraMounts := cfg.Docker.ExtraMounts // []string, no getter — read directly
 ```
 

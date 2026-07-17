@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -19,6 +20,13 @@ const testStageID = "s1"
 const testQuestionID = "q1"
 
 func setupTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	return setupTestServerWithWS(t, 0, 0)
+}
+
+// setupTestServerWithWS — как setupTestServer, но с явными keepalive-таймаутами
+// вебсокета (нужны websocket-тестам; 0 → дефолты из websocket.go).
+func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*Server, string) {
 	t.Helper()
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -43,13 +51,15 @@ func setupTestServer(t *testing.T) (*Server, string) {
 
 	bus := orchestrator.NewUIBus()
 	srv := New(Config{
-		Port:      0,
-		RunDir:    runDir,
-		Store:     store,
-		UIBus:     bus,
-		ApproveFn: func(ctx context.Context, id string) error { return nil },
-		ReviseFn:  func(ctx context.Context, id, fb string) error { return nil },
-		RetryFn:   func(ctx context.Context, id string) error { return nil },
+		Port:         0,
+		RunDir:       runDir,
+		Store:        store,
+		UIBus:        bus,
+		ApproveFn:    func(ctx context.Context, id string) error { return nil },
+		ReviseFn:     func(ctx context.Context, id, fb string) error { return nil },
+		RetryFn:      func(ctx context.Context, id string) error { return nil },
+		WSPongWait:   pongWait,
+		WSPingPeriod: pingPeriod,
 	})
 	return srv, runDir
 }

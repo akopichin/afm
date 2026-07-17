@@ -15,12 +15,12 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// Таймауты keepalive. pingPeriod < pongWait, иначе сервер порвёт живых клиентов.
-// Вынесены в переменные пакета для тестов (см. websocket_keepalive_test.go).
-var (
-	wsPongWait   = 60 * time.Second
-	wsPingPeriod = 30 * time.Second
-	wsWriteWait  = 10 * time.Second
+// Дефолтные keepalive-таймауты (применяются в New, если Config не задаёт).
+// pingPeriod < pongWait, иначе сервер порвёт живых клиентов.
+const (
+	defaultWSPongWait   = 60 * time.Second
+	defaultWSPingPeriod = 30 * time.Second
+	defaultWSWriteWait  = 10 * time.Second
 )
 
 // handleWebSocket апгрейдит соединение и стримит UIBus-события клиенту.
@@ -55,9 +55,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // перестал приходить (клиент умер) — дедлайн срабатывает, ReadMessage вернёт
 // ошибку, readPump выйдет → соединение закроется.
 func (s *Server) readPump(conn *websocket.Conn) {
-	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	_ = conn.SetReadDeadline(time.Now().Add(s.wsPongWait))
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return conn.SetReadDeadline(time.Now().Add(s.wsPongWait))
 	})
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
@@ -68,7 +68,7 @@ func (s *Server) readPump(conn *websocket.Conn) {
 
 // writePump — единственный писатель в conn. Select по событиям / тикеру / done.
 func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan orchestrator.Event, done <-chan struct{}) {
-	ticker := time.NewTicker(wsPingPeriod)
+	ticker := time.NewTicker(s.wsPingPeriod)
 	defer ticker.Stop()
 
 	prevDrops := uint64(0)
@@ -85,7 +85,7 @@ func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan orchestrat
 			if drops := s.uiBus.SubscriberDroppedCount(id); drops > prevDrops {
 				prevDrops = drops
 				if drops > 10 {
-					_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+					_ = conn.SetWriteDeadline(time.Now().Add(s.wsWriteWait))
 					_ = conn.WriteMessage(
 						websocket.CloseMessage,
 						websocket.FormatCloseMessage(1008, "event queue overflow"),
@@ -97,16 +97,16 @@ func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan orchestrat
 			if err != nil {
 				continue
 			}
-			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = conn.SetWriteDeadline(time.Now().Add(s.wsWriteWait))
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				return
 			}
 		case <-ticker.C:
 			// ping — control-фрейм (клиент auto-pong); heartbeat — text (виден в JS).
-			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteWait)); err != nil {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(s.wsWriteWait)); err != nil {
 				return
 			}
-			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = conn.SetWriteDeadline(time.Now().Add(s.wsWriteWait))
 			if err := conn.WriteMessage(websocket.TextMessage, heartbeat); err != nil {
 				return
 			}

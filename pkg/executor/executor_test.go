@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -669,5 +670,40 @@ func TestRunSetsWrapperDirInPATH(t *testing.T) {
 	path := strings.TrimSpace(string(data))
 	if !strings.HasPrefix(path, wrapDir+":") && path != wrapDir {
 		t.Errorf("PATH should start with wrapDir %q, got %q", wrapDir, path)
+	}
+}
+
+func TestExecutor_RunJSONQuery(t *testing.T) {
+	// Мок-скрипт эмитит JSON независимо от аргументов. RunJSONQuery вызывает
+	// `<cmd> -p <prompt> --output-format json` и НЕ наследует ExtraArgs (это
+	// streaming-флаги stage-агентов — с ними stream-json конфликтовал бы с json).
+	script := filepath.Join(t.TempDir(), "mock-llm")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho '{\"ok\":true}'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	e := executor.New(executor.Config{Command: script})
+	ctx := context.Background()
+	got, err := e.RunJSONQuery(ctx, "ignored prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]bool
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatalf("unmarshal: %v, raw=%q", err, got)
+	}
+	if !m["ok"] {
+		t.Errorf("expected ok=true, got %v", m)
+	}
+}
+
+func TestExecutor_RunJSONQuery_Error(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "mock-llm-fail")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	e := executor.New(executor.Config{Command: script})
+	_, err := e.RunJSONQuery(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }

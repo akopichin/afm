@@ -26,6 +26,8 @@ func buildRetryContext(stageDir, phase string) string {
 		logName = "planning.log"
 	case phaseReview:
 		logName = "review.log"
+	case phaseAutonomous:
+		logName = "autonomous.log"
 	default:
 		logName = "implementation.log"
 	}
@@ -57,11 +59,17 @@ func buildRetryContext(stageDir, phase string) string {
 // (529/502/503/504, rate limit). Прежний exponential [5s,10s,30s] сдавался после
 // 4 попыток — z.ai overload длится дольше. Фиксированный 5s + MaxRetries (как в
 // ralphex) переживают окно overload.
+//
+// Дефолт: читается ОДИН РАЗ в New и фиксируется в Orchestrator.retryBackoff
+// (immutable), чтобы агентские горутины не гонялись за мутацией package var в
+// тестах. Тесты могут переопределять значение, но обязаны делать это ДО New.
 var RetryBackoff = 5 * time.Second
 
 // MaxRetries — число повторных попыток после первого запуска (всего MaxRetries+1).
 // Сверху ограничено idle_timeout stage (30м default): каждая попытка ≈ agent-runtime,
 // так что реально успевает меньше — idle_timeout добьёт лишнее.
+//
+// См. RetryBackoff: фиксируется в Orchestrator.maxRetries при New.
 var MaxRetries = 15
 
 // runWithRetry wraps an agent function with automatic retry on rate limit errors.
@@ -70,7 +78,7 @@ var MaxRetries = 15
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error) {
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	for attempt := 0; attempt <= MaxRetries; attempt++ {
+	for attempt := 0; attempt <= o.maxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 {
 			retryCtx = buildRetryContext(stageDir, phase)
@@ -90,7 +98,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// появится, onUserAnswered перезапустит агента и он допишет план.
 			// Без этой ветки стадия падала с "missing artifact or incomplete"
 			// ровно на таком выходе агента в ожидании.
-			if s.Interactive && o.hasOpenQuestion(s.ID, phase) {
+			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {
 				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingUserInput {
 					o.Trigger(s.ID, EvAskUser, GuardCtx{Phase: phase}, "")
 				}
@@ -137,15 +145,15 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		// remain on disk and are re-read immediately by the agent's bash loop.
 		_ = os.Remove(sessionFile(stageDir, phase))
 
-		if attempt < MaxRetries {
+		if attempt < o.maxRetries {
 			o.Trigger(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
 			o.ui.Publish(Event{
 				Type:    EventRetryScheduled,
 				StageID: s.ID,
-				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, MaxRetries, RetryBackoff),
+				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, o.maxRetries, o.retryBackoff),
 			})
 			select {
-			case <-time.After(RetryBackoff):
+			case <-time.After(o.retryBackoff):
 			case <-ctx.Done():
 				o.Trigger(s.ID, EvFail, GuardCtx{}, "cancelled during retry")
 				o.failBlockedStages()

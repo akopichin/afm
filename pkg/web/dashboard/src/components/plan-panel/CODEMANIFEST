@@ -1,5 +1,5 @@
 Imports:
-  - Types: [Stage, PlanComment]
+  - Types: [Stage]
     Usages: [dashboard-data-types]
     From: pkg/web/dashboard/src/types
 
@@ -11,8 +11,18 @@ Usages:
 Annotations: |
   Use `conventions` for code writing rules and testing. Use `react` (раздел markdown-it фиксирует конфиг и
   переход на npm-зависимость; поведение режима ревью плана перенесено из renderPlanReview/formatLine/
-  decorateCheckboxes текущего app.js). Use `typescript` for naming and strict typing. Use `Stage`, `PlanComment`
-  from Imports. Use `dashboard-data-types` from Imports for guidance on consuming `Stage`/`PlanComment`.
+  decorateCheckboxes текущего app.js). Use `typescript` for naming and strict typing. Use `Stage` from Imports.
+  Use `dashboard-data-types` from Imports for guidance on consuming `Stage`.
+
+  Клетка также использует Maximizable/PanelFrame (src/components/layout, src/components/panel-frame) для
+  рамки с заголовком/разворотом — эти клетки пока без собственного CODEMANIFEST (см. отдельную рекомендацию
+  в отчёте acceptance).
+
+  markdown.ts — публичный модуль клетки (renderMarkdown, renderInline, formatLine, escapeHtml,
+  isSpecialSection, isHeading2, тип SpecialSection), используемый и `MarkdownRenderer`, и напрямую `PlanPanel`
+  для построчного рендера режима ревью; ссылки в выводе принудительно получают target="_blank" rel="noopener".
+  Комментарии к строкам плана — внутреннее клиентское состояние PlanPanel (Record<номер строки, текст>), не
+  общий тип PlanComment из src/types (тот сейчас этой клеткой не используется).
 
 ---
 
@@ -43,9 +53,10 @@ Annotations: |
       (визуальная подсветка, стадия ждёт approve/revision)
     `element`: разметка панели
 
-    Разметка плана загружается запросом GET /api/stages/{stage.id}/plan (plain text) и рендерится: в обычном
-    режиме — через MarkdownRenderer, в режиме ревью (stage.status === 'awaiting_approval') — построчно с
-    номерами строк и комментариями.
+    Разметка плана загружается запросом GET /api/stages/{stage.id}/plan (plain text, пропускается для
+    sentinel-стадии с пустым id) и рендерится: в обычном режиме — через renderMarkdown из markdown.ts
+    (та же реализация, что и в `MarkdownRenderer`, но выведена инлайн, без делегирования компоненту), в
+    режиме ревью (stage.status === 'awaiting_approval') — построчно с номерами строк и комментариями.
 
     Requirements:
     - Режим ревью (awaiting_approval): спецсекции «## Assumptions»/«## Acceptance Criteria» сворачиваемые, каждая
@@ -53,21 +64,23 @@ Annotations: |
       открывает форму комментария
     - При stage.status === 'done' все «- [ ]» заменяются на «- [x]» (mark-all-done, как в текущем app.js)
     - Действия Approve/Send revision показываются только для awaiting_approval; Retry — только для failed
+    - Кнопки действий блокируются (disabled) на время выполнения запроса (busy)
 
   properties:
     "planMarkdown -> string": |
       Markdown-текст плана, загруженный из GET /api/stages/{stage.id}/plan (внутреннее состояние).
-    "comments -> PlanComment[]": |
-      Комментарии к строкам плана (внутреннее клиентское состояние режима ревью; накапливаются и отправляются
-      одним feedback-полем ревизии, а не через отдельный API комментариев).
+    "comments -> Record<number, string>": |
+      Комментарии к строкам плана, ключ — номер строки (внутреннее клиентское состояние режима ревью;
+      накапливаются и отправляются одним feedback-полем ревизии, а не через отдельный API комментариев).
   methods:
     "approve() -> done:Promise<void>": |
       Отправляет подтверждение плана (POST /api/stages/{stage.id}/approve).
 
       Обновление состояния — через хук состояния флоу, без оптимистичного апдейта.
     "sendRevision() -> done:Promise<void>": |
-      Отправляет запрос на доработку (POST /api/stages/{stage.id}/revise). Собирает feedback из накопленных
-      комментариев к строкам (формат «Line N: text», как buildFeedbackString в текущем app.js).
+      Отправляет запрос на доработку (POST /api/stages/{stage.id}/revise), только если есть хотя бы один
+      комментарий. Собирает feedback из накопленных комментариев к строкам (формат «Line N: text», как
+      buildFeedbackString в текущем app.js) и очищает comments после успешной отправки.
     "retry() -> done:Promise<void>": |
       Запрашивает повтор стадии (POST /api/stages/{stage.id}/retry).
 

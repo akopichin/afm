@@ -17,6 +17,7 @@ import (
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
@@ -83,6 +84,14 @@ func newRunCmd() *cobra.Command {
 					// агент без секрета заблокировал бы весь запуск, а секреты
 					// неиспользуемых агентов попадали бы в контейнер (least-privilege).
 					recipes = docker.UsedRecipes(f, cfg.Client.Command, cfg.Docker.Agents)
+					// supervisor_command может быть recipe-агентом вне stage-команд —
+					// его секрет тоже нужен (иначе в контейнере враппер supervisor'а
+					// не получит токен → RunJSONQuery упадёт).
+					if supCmd := resolveSupervisorCommand(f, cfg); supCmd != "" {
+						if recipe, isRecipe := cfg.Docker.Agents[supCmd]; isRecipe {
+							recipes[supCmd] = recipe
+						}
+					}
 					// generatedForMount — то же самое множество ключей, чтобы
 					// ScanCommands (mount) и ReExec (secret) работали с одним набором.
 					generatedForMount = make(map[string]bool, len(recipes))
@@ -151,13 +160,23 @@ func newRunCmd() *cobra.Command {
 			// Единый wrapper-dir: generated-врапперы (autoShim, только внутри
 			// контейнера). На хосте врапперы не генерируются — реальные бинарники
 			// используются напрямую.
+			// Resolve supervisor command (см. resolveSupervisorCommand).
+			// Резолвим ДО генерации wrappers: враппер supervisor_command тоже нужен, даже
+			// если ни одна стадия эту команду не использует (иначе RunJSONQuery не найдёт
+			// бинарник в контейнере → вечный fallback супервизора).
+			supervisorCmd := resolveSupervisorCommand(f, cfg)
+
 			var wrapperSpecs []docker.WrapperSpec
 			generatedAgents := map[string]bool{}
 			if os.Getenv("AFM_IN_DOCKER") == "1" && cfg.Docker.IsAutoShim() {
 				if err := cfg.Docker.ValidateAgents(); err != nil {
 					return err
 				}
-				for cmd := range docker.UsedRecipeCommands(f, cfg.Client.Command, cfg.Docker.Agents) {
+				used := docker.UsedRecipeCommands(f, cfg.Client.Command, cfg.Docker.Agents)
+				if _, isRecipe := cfg.Docker.Agents[supervisorCmd]; isRecipe {
+					used[supervisorCmd] = true // supervisor_command может не быть среди stage-команд
+				}
+				for cmd := range used {
 					generatedAgents[cmd] = true
 					wrapperSpecs = append(wrapperSpecs, buildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
 				}
@@ -172,16 +191,26 @@ func newRunCmd() *cobra.Command {
 				defer os.RemoveAll(wd) //nolint:errcheck
 			}
 
+			supervisorWrapperDir := ""
+			if generatedAgents[supervisorCmd] {
+				supervisorWrapperDir = wrapperDir
+			}
+			supervisorRunner := executor.New(executor.Config{
+				Command:    supervisorCmd,
+				WrapperDir: supervisorWrapperDir,
+			})
+
 			orch := orchestrator.New(orchestrator.Options{
-				RunDir:          runDir,
-				Stages:          f.Stages,
-				Store:           store,
-				Config:          cfg,
-				Prompts:         prompts,
-				WrapperDir:      wrapperDir,
-				GeneratedAgents: generatedAgents,
-				GlobalPrompt:    f.Prompt,
-				RequireApproval: requireApproval,
+				RunDir:           runDir,
+				Stages:           f.Stages,
+				Store:            store,
+				Config:           cfg,
+				Prompts:          prompts,
+				WrapperDir:       wrapperDir,
+				GeneratedAgents:  generatedAgents,
+				GlobalPrompt:     f.Prompt,
+				RequireApproval:  requireApproval,
+				SupervisorRunner: supervisorRunner,
 			})
 
 			// Disable interactive flags when dashboard is not running
@@ -386,7 +415,7 @@ func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
 }
 
 func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
-	names := []string{"planning.md", "implementation.md", "review.md", "summary.md"}
+	names := []string{"planning.md", "implementation.md", "review.md", "summary.md", "autonomous.md"}
 	texts := make([]string, len(names))
 	for i, name := range names {
 		text, err := assets.ReadPrompt(name, overrideDir)
@@ -400,6 +429,7 @@ func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 		Implementation: texts[1],
 		Review:         texts[2],
 		Summary:        texts[3],
+		Autonomous:     texts[4],
 	}, nil
 }
 
@@ -408,6 +438,21 @@ func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 // цикла в run.go, чтобы быть тестируемым без поднятия Docker. Все поля WrapperSpec,
 // включая Type и Bare, заполняются здесь — контейнерный цикл больше не
 // собирает литерал вручную.
+// resolveSupervisorCommand определяет команду супервизора с приоритетом:
+// flow.supervisor_command > config.supervisor.command > config.client.command.
+// Используется и в host-ветке (резолв секрета recipe), и в container-ветке
+// (генерация wrapper'а) — чтобы supervisor-only команда (не у stage) тоже получала
+// и секрет, и wrapper.
+func resolveSupervisorCommand(f *flow.Flow, cfg config.Config) string {
+	if f != nil && f.SupervisorCommand != "" {
+		return f.SupervisorCommand
+	}
+	if cfg.Supervisor.Command != "" {
+		return cfg.Supervisor.Command
+	}
+	return cfg.Client.Command
+}
+
 func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.WrapperSpec {
 	return docker.WrapperSpec{
 		Type:         recipe.Type,

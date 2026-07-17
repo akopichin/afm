@@ -192,14 +192,20 @@ func (d DockerConfig) GetImage() string {
 	return "akopichin/afm:latest"
 }
 
+// SupervisorConfig настраивает агента-супервизора.
+type SupervisorConfig struct {
+	Command string `yaml:"command"`
+}
+
 // Config is the merged configuration for afm.
 type Config struct {
-	Client     ClientConfig   `yaml:"client"`
-	Executor   ExecutorConfig `yaml:"executor"`
-	Server     ServerConfig   `yaml:"server"`
-	Docker     DockerConfig   `yaml:"docker"`
-	PromptsDir string         `yaml:"prompts_dir"`
-	Theme      string         `yaml:"theme"`
+	Client     ClientConfig     `yaml:"client"`
+	Executor   ExecutorConfig   `yaml:"executor"`
+	Server     ServerConfig     `yaml:"server"`
+	Docker     DockerConfig     `yaml:"docker"`
+	Supervisor SupervisorConfig `yaml:"supervisor"`
+	PromptsDir string           `yaml:"prompts_dir"`
+	Theme      string           `yaml:"theme"`
 }
 
 // Default returns the built-in default configuration.
@@ -307,6 +313,9 @@ func mergeFile(dst *Config, path string) error {
 		for k, v := range overlay.Docker.Agents {
 			dst.Docker.Agents[k] = v // per-key overlay: проектный слой дополняет/переопределяет глобальный
 		}
+	}
+	if overlay.Supervisor.Command != "" {
+		dst.Supervisor.Command = overlay.Supervisor.Command
 	}
 	return nil
 }

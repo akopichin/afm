@@ -25,14 +25,23 @@ func CollectDependencyPlans(runDir string, stage flow.Stage, allStages []flow.St
 	buf.WriteString("\n\n## Context from dependent stages\n")
 
 	for _, depID := range stage.DependsOn {
-		planPath := filepath.Join(runDir, depID, "plan.md")
-		data, err := os.ReadFile(planPath)
+		stageDir := filepath.Join(runDir, depID)
 		name := nameIndex[depID]
 		if name == "" {
 			name = depID
 		}
 		fmt.Fprintf(&buf, "\n### Stage: %s (%s)\n\n", name, depID)
-		if err != nil {
+
+		// Если стадия прошла автономный трек — читаем execution_summary.md,
+		// иначе plan.md как обычно.
+		var data []byte
+		if _, err := os.Stat(filepath.Join(stageDir, "autonomous.flag")); err == nil {
+			data, _ = os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
+		} else {
+			data, _ = os.ReadFile(filepath.Join(stageDir, "plan.md"))
+		}
+
+		if len(data) == 0 {
 			buf.WriteString("(plan not available)\n")
 			continue
 		}

@@ -2,7 +2,6 @@ Imports:
   - Types:
       - Config
       - DockerConfig
-      - ProxyConfig
     From: pkg/config
   - Types:
       - ReExecConfig
@@ -23,11 +22,6 @@ Imports:
       - Prompts
     From: pkg/orchestrator
   - Types:
-      - Proxy
-      - BuildTransforms
-      - CreateShim
-    From: pkg/proxy
-  - Types:
       - Server
     From: pkg/server
   - Types:
@@ -44,11 +38,6 @@ Imports:
       - SkillsFS
       - ReadPrompt
     From: assets
-  - Types:
-      - Accountant
-    Usages:
-      - query_usage
-    From: pkg/accounting
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -92,9 +81,7 @@ Annotations: |
   location: run.go
   annotations: |
     Запускает флоу: разрешает путь к flow-файлу, парсит его через `ParseFile` (импорт pkg/flow),
-    загружает `Config` (pkg/config, LoadFrom),
-    инициализирует ран, стартует встроенный `Proxy` (pkg/proxy, если задан upstream) через
-    `BuildTransforms` + shim (`CreateShim`), опционально перезапускает себя в Docker через `ReExecConfig`
+    загружает `Config` (pkg/config, LoadFrom), опционально перезапускает себя в Docker через `ReExecConfig`
     (pkg/docker, см. `docker_privilege_drop`), запускает `Orchestrator` с `Options` (pkg/orchestrator)
     и `Server` (с настройками HTTP-дашборда из pkg/server; тема дашборда — из
     pkg/config.EffectiveTheme). По умолчанию (open_browser=false) браузер НЕ открывается — в лог печатается
@@ -102,27 +89,13 @@ Annotations: |
     хост-side opener, запущенный до re-exec). И передаёт значение Prompt из `Flow` в поле
     GlobalPrompt при построении `Options`.
 
-    Algorithm (built-in reverse proxy, см. CLAUDE.md «Built-in Reverse Proxy»):
-    1. Proxy запускается только если Config.Proxy (`ProxyConfig`).IsEnabled() (nil/absent Enabled →
-       включено по умолчанию); внутри этого гейта upstream разрешается: Config.Proxy.Upstream, иначе
-       ANTHROPIC_BASE_URL; если оба пусты — proxy пропускается (no-op, печатается сообщение); если
-       IsEnabled() ложно — proxy пропускается полностью без вывода
-    2. Ошибка Proxy.Start — фатальна; ошибка `CreateShim` — не фатальна (предупреждение, инъекция
-       env-переменных всё равно работает)
-    2b. Proxy строится с новым usageLogPath-аргументом (filepath.Join(runDir, "usage.jsonl")) — см.
-        pkg/proxy New; после старта Proxy конструируется `Accountant` (accounting.NewAccountant,
-        импорт нового pkg/accounting, см. `query_usage` для паттерна конструирования) из
-        runDir/store/cfg.Pricing/cfg.Accounting.GetBucketMinutes() и передаётся в server.Config — см.
-        pkg/server server_facade
-    3. Proxy и shim останавливаются через defer (Shutdown, удаление shim-директории)
-
     Requirements:
     - Docker-режим (Config.Docker — `DockerConfig`, IsDockerEnabled): проверяется сразу после парсинга
-      флоу, до инициализации рана и до запуска proxy — при включении вызывается
+      флоу, до инициализации рана — при включении вызывается
       `CheckClaudeDockerAuth` (фатальная ошибка, если command: claude без поддерживаемого auth env var),
       затем собирается `CommandMount` для нестандартных агентов (`ScanCommands`) и вызывается `ReExec`
       с заполненным `ReExecConfig` (см. `docker_privilege_drop` из Imports); ReExec замещает процесс
-      (syscall.Exec) — код после этой ветки (run-инициализация, proxy, Orchestrator, Server) в этом
+      (syscall.Exec) — код после этой ветки (run-инициализация, Orchestrator, Server) в этом
       процессе не выполняется
 
 "resolveFlowPath(args []string) -> path:string, err:error":

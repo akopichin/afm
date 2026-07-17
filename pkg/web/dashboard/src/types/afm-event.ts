@@ -14,6 +14,7 @@ export const AFM_EVENT_TYPES = [
   'user_answered',
   'agent_action',
   'agent_completed',
+  'supervisor_decision',
 ] as const
 
 export type AfmEventType = (typeof AFM_EVENT_TYPES)[number]

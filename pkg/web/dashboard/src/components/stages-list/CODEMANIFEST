@@ -13,6 +13,10 @@ Annotations: |
   `typescript` for naming and strict typing. Use `Stage` from Imports. Use `dashboard-data-types` from
   Imports for guidance on consuming `Stage`.
 
+  Список также использует ATTENTION_STATUSES из src/hooks/use-attention (клетка пока без собственного
+  CODEMANIFEST — см. отдельную рекомендацию в отчёте acceptance) для пометки стадий, ждущих действия
+  пользователя.
+
 ---
 
 "StagesList(stages: Stage[], selectedStageId: string | null, onSelect: (stageId: string) -> void) -> element: ReactElement":
@@ -26,9 +30,11 @@ Annotations: |
     `element`: разметка
 
     Requirements:
-    - Стадия с идентификатором, равным selectedStageId, выделяется классом selected
+    - Стадия с идентификатором, равным selectedStageId, выделяется классом active
+    - Стадия со статусом из ATTENTION_STATUSES помечается data-attention='true' (CSS-пульс); стадия со
+      статусом awaiting_user_input дополнительно получает значок 💬 (dialog-badge)
     - Сохраняется id stages-list
-    - Отображаемые подписи статусов берутся из полного набора статусов afm (см. dashboard-data-types)
+    - Пустое имя стадии (stage.name === '') не рендерится вовсе, остаётся только id
 
 ---
 

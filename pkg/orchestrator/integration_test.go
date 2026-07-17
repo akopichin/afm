@@ -163,6 +163,11 @@ func (r *doneCreatingRunner) RunAgent(ctx context.Context, agentType, stageName,
 	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("test completion"), 0644)
 }
 
+// RunJSONQuery делегируется обёрнутому Runner-у; mock-обёрткам JSON-запросы не нужны.
+func (r *doneCreatingRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
 // phaseDispatchRunner uses a different runner for planning vs other phases.
 type phaseDispatchRunner struct {
 	planning executor.Runner
@@ -175,6 +180,10 @@ func (r *phaseDispatchRunner) RunPlanning(ctx context.Context, stageName, prompt
 
 func (r *phaseDispatchRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
 	return r.other.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *phaseDispatchRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.other.RunJSONQuery(ctx, prompt)
 }
 
 // promptCapturingRunner wraps a Runner and captures the prompt passed to RunPlanning.
@@ -192,6 +201,10 @@ func (r *promptCapturingRunner) RunPlanning(ctx context.Context, stageName, prom
 
 func (r *promptCapturingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *promptCapturingRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // callRecordingRunner wraps a Runner and records the order of calls
@@ -222,6 +235,10 @@ func (r *callRecordingRunner) RunPlanning(ctx context.Context, stageName, prompt
 func (r *callRecordingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
 	r.record("agent", stageName)
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *callRecordingRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // planCreatingDoneRunner wraps a Runner and creates a plan file + .done.
@@ -255,6 +272,10 @@ func (r *planCreatingDoneRunner) RunAgent(ctx context.Context, agentType, stageN
 	}
 	stageDir := filepath.Dir(logFile)
 	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("test completion"), 0644)
+}
+
+func (r *planCreatingDoneRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // TestIntegration_FullSingleStage verifies the full lifecycle of one stage:
@@ -600,6 +621,10 @@ func (r *eagerProbeRunner) RunPlanning(ctx context.Context, stageName, prompt, o
 
 func (r *eagerProbeRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *eagerProbeRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
 // TestIntegration_EagerPlanningStartsImmediately verifies that a stage with

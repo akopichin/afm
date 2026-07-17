@@ -21,7 +21,7 @@ Imports:
     From: pkg/web/dashboard/src/hooks/use-stage-log
   - Types: [useElapsed]
     From: pkg/web/dashboard/src/hooks/use-elapsed
-  - Types: [Stage]
+  - Types: [Stage, ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS]
     Usages: [dashboard-data-types]
     From: pkg/web/dashboard/src/types
 
@@ -34,6 +34,11 @@ Annotations: |
   Use `conventions` for code writing rules and testing. Use `react` — только функциональные компоненты,
   состояние в хуках верхнего компонента, без Redux/Zustand/Context. Use `typescript` for naming and strict
   typing. Use `dashboard-data-types` from Imports for guidance on consuming `Stage`.
+
+  App также рендерит SupervisorDecision (src/components/supervisor-decision), компонует разметку через
+  MaximizeProvider/DashboardLayout (src/components/layout) и использует useAttention/anyAwaiting
+  (src/hooks/use-attention) и useTitleFlash (src/hooks/use-title-flash) — эти клетки пока без собственного
+  CODEMANIFEST, поэтому не вынесены в формальный Imports (см. отдельную рекомендацию в отчёте acceptance).
 
 ---
 
@@ -49,17 +54,28 @@ Annotations: |
     1. Получить состояние флоу через `useStatus` (flowName, stages, startedAt, refresh), ленту событий и статус
        соединения через `useEventFeed`, лог выбранной стадии через `useStageLog`, прошедшее время через
        `useElapsed`
-    2. Хранить selectedStageId; при его отсутствии — автовыбор активной стадии (статусы planning, running,
-       revising, retrying, awaiting_user_input), иначе первая стадия со статусом failed
-    3. Распределить данные по клеткам: flowName во `FlowHeader`, stages в `StagesList`/`Footer`,
-       события в `EventFeedPanel`, лог в `LogPanel`, план через `PlanPanel` и диалог через
-       `DialogChannel` — по выбранной стадии, elapsedMs в `Footer`
-    4. При значимых WebSocket-событиях (смена статуса стадии, approved, revised, retry_scheduled,
-       retry_exhausted, manual_retry, ask_user, user_answered, agent_completed и т.д.) вызывать
-       метод refresh() хука `useStatus` для ре-запроса состояния флоу и ре-рендера
+    2. Хранить selectedStageId; при его отсутствии — автовыбор активной стадии (статусы из
+       `ACTIVE_STAGE_STATUSES`), иначе первая стадия со статусом failed. Когда выбранная стадия переходит
+       в статус done — автоматически продвинуться к следующей активной стадии по списку
+    3. Вычислить attention выбранной стадии через useAttention (kind='dialog' при awaiting_user_input,
+       'plan' при awaiting_approval) и anyAttention по всем стадиям через anyAwaiting; кормить
+       useTitleFlash для мигания заголовка вкладки и прокручивать к панели, которой нужно действие,
+       при переходе kind null → 'plan'/'dialog'
+    4. Распределить данные по клеткам через DashboardLayout: flowName и anyAttention во `FlowHeader`,
+       stages в `StagesList`/`Footer`, события в `EventFeedPanel`, лог в `LogPanel`, план через `PlanPanel`
+       и диалог через `DialogChannel` (обе панели всегда смонтированы — при отсутствии выбранной стадии им
+       передаётся нейтральный sentinel вместо null, чтобы не терять id панелей в resizable-лейауте),
+       elapsedMs в `Footer`; заголовок выбранной стадии (статус через `STAGE_STATUS_LABELS`) и
+       SupervisorDecision рендерятся в слоте stageHeader
+    5. При значимых WebSocket-событиях (`SIGNIFICANT_EVENT_TYPES`: смена статуса стадии, approved, revised,
+       retry_scheduled, retry_exhausted, manual_retry, ask_user, user_answered, supervisor_decision,
+       agent_completed и т.д.) вызывать метод refresh() хука `useStatus` для ре-запроса состояния флоу —
+       не чаще одного раза на пачку новых событий
 
     Requirements:
     - Лог стадии — отдельный источник (useStageLog), а не фильтрация WebSocket-событий
+    - PlanPanel/DialogChannel остаются смонтированными независимо от выбора стадии (sentinel-стадия вместо
+      условного рендера)
 
 ---
 

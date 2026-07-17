@@ -5,8 +5,8 @@ Usages:
 
 Annotations: |
   Загрузка и мердж конфигурации afm (.afm/config.yaml, ~/.afm/config.yaml). Использует `yaml_v3` для
-  парсинга — опциональность полей выражена указателем + методом-геттером с дефолтом (см. `yaml_v3`).
-  `PricingConfig` следует тому же паттерну, что `ProxyConfig`/`ServerConfig`.
+  парсинга — опциональность полей выражена указателем + методом-геттером с дефолтом (см. `yaml_v3`,
+  паттерн `ServerConfig`).
 
   Use `conventions` for code writing rules and testing. Use `golang` for implementation.
 
@@ -28,7 +28,7 @@ Annotations: |
     - Отсутствующие файлы молча игнорируются, применяются дефолты
     - Использовать `yaml_v3` для парсинга YAML
 
-"Config(client ClientConfig, executor ExecutorConfig, server ServerConfig, proxy ProxyConfig, docker DockerConfig, pricing PricingConfig, accounting AccountingConfig, promptsDir string, theme string)":
+"Config(client ClientConfig, executor ExecutorConfig, server ServerConfig, docker DockerConfig, promptsDir string, theme string)":
   location: config.go
   annotations: |
     Смерженная конфигурация afm целиком.
@@ -39,14 +39,8 @@ Annotations: |
       Параметры выполнения агентов.
     "Server -> ServerConfig": |
       Настройки веб-дашборда.
-    "Proxy -> ProxyConfig": |
-      Настройки встроенного reverse-proxy.
     "Docker -> DockerConfig": |
       Настройки Docker-режима.
-    "Pricing -> PricingConfig": |
-      Опциональная таблица цен по модели для дерайва стоимости потребления.
-    "Accounting -> AccountingConfig": |
-      Настройки временной агрегации потребления (ширина бакета).
     "PromptsDir -> string": |
       Переопределение директории system-промптов.
     "Theme -> string": |
@@ -101,31 +95,6 @@ Annotations: |
     "IsOpenBrowser() -> enabled:bool": |
       Возвращает OpenBrowser, либо false, если не задан.
 
-"ProxyConfig(enabled bool, upstream string, port int, transforms TransformOverrides)":
-  location: config.go
-  annotations: |
-    Настройки встроенного reverse-proxy для агентского HTTP-трафика.
-  properties:
-    "Enabled -> bool": |
-      nil → включено по умолчанию (см. IsEnabled).
-    "Upstream -> string": |
-      Upstream-адрес (иначе читается из ANTHROPIC_BASE_URL).
-    "Port -> int": |
-      Порт proxy (0 = случайный свободный).
-    "Transforms -> TransformOverrides": |
-      Переопределения по конкретным трансформам.
-  methods:
-    "IsEnabled() -> enabled:bool": |
-      true по умолчанию (nil Enabled → enabled).
-
-"TransformOverrides(zai bool)":
-  location: config.go
-  annotations: |
-    Управляет тем, какие proxy-трансформы применяются.
-  properties:
-    "ZAI -> bool": |
-      nil = автоопределение по upstream-хосту (api.z.ai), true = всегда, false = никогда.
-
 "DockerConfig(enabled bool, image string, extraMounts []string)":
   location: config.go
   annotations: |
@@ -145,48 +114,9 @@ Annotations: |
       true, если нужно использовать Docker-режим. AFM_IN_DOCKER=1 всегда даёт false (уже внутри
       контейнера).
 
-"PricingConfig(models map[string]ModelPricing)":
-  location: config.go
-  annotations: |
-    Опциональная таблица цен по модели. Models nil/пусто → метрика денег скрыта полностью (не
-    показывается частично).
-  properties:
-    "Models -> map[string]ModelPricing": |
-      Ставки по имени модели, ключ — точное имя модели.
-  methods:
-    "GetModelPricing(model string) -> pricing:ModelPricing, ok:bool": |
-      Точный поиск по имени модели.
-
-      Constraints:
-      - Без fuzzy/prefix-подбора — неизвестное имя модели даёт ok:false, не ближайшее совпадение
-
-"ModelPricing(inputPerMtok float64, outputPerMtok float64, cachePerMtok float64)":
-  location: config.go
-  annotations: |
-    Цены модели в $ за миллион токенов, по категориям.
-  properties:
-    "InputPerMtok -> float64": |
-      Цена за 1M входных токенов.
-    "OutputPerMtok -> float64": |
-      Цена за 1M выходных токенов.
-    "CachePerMtok -> float64": |
-      Цена за 1M кэш-токенов (cache read/write не различаются на уровне цены в этой версии).
-
-"AccountingConfig(bucketMinutes int)":
-  location: config.go
-  annotations: |
-    Настройки временной агрегации потребления ресурсов (см. pkg/accounting Aggregate).
-  properties:
-    "BucketMinutes -> int": |
-      Ширина временного бакета в минутах, используемая pkg/accounting при группировке агрегатов
-      потребления по времени (nil/0 → дефолт 5, см. GetBucketMinutes).
-  methods:
-    "GetBucketMinutes() -> minutes:int": |
-      Возвращает BucketMinutes, либо 5, если не задан.
-
 ---
 
 Author: Goga
 CreatedAt: 03/07/26
 Description: |
-  Загрузка и мердж конфигурации afm из глобального и проектного YAML, включая опциональный pricing.
+  Загрузка и мердж конфигурации afm из глобального и проектного YAML.

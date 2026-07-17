@@ -60,18 +60,28 @@
    чинит сломанный после React-миграции лейаут. Ниже — только те правки, которыми
    goga сознательно отличается от Nova Corps. */
 
-/* Логотип-слово: goga показывает «goga», не «afm» (скрываем текст h1 и выводим
-   свой через ::after, чтобы не делать React-компонент тема-зависимым). */
+/* Логотип-слово: goga-тема показывает wordmark «QArium» как на qarium.ru —
+   «QA» цветом teal (--mint), «rium» белым (--ink), тем же системным sans-serif,
+   что и на сайте. Текст h1 («afm») скрыт (font-size:0); слово собираем из
+   ::before/::after, чтобы не делать React-компонент тема-зависимым. */
 .theme-goga #header h1 {
   font-size: 0;
+  letter-spacing: 0;
+  text-transform: none;
 }
-.theme-goga #header h1::after {
-  content: 'goga';
+.theme-goga #header h1::before {
+  content: 'QA';
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.3em;
-  text-transform: lowercase;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--mint);
+}
+.theme-goga #header h1::after {
+  content: 'rium';
+  font-size: 13px;
+  font-weight: 600;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
 }
 
 /* Чистый фон goga: убираем novacorps-клетку (background-image на #main) и
@@ -84,11 +94,88 @@
   background: var(--bg-elev);
 }
 
+/* Хедер и футер — тот же --bg-elev что и панели (в novacorps они темнее через --bg). */
+.theme-goga #header,
+.theme-goga #footer {
+  background: var(--bg-elev);
+}
+
+/* Текст PROGRESS/STARTED/ELAPSED — mint (светло-голубой), как «goga» в хедере. */
+.theme-goga #progress-text,
+.theme-goga #started-at,
+.theme-goga #elapsed {
+  color: var(--mint);
+}
+
 /* Панели (stages/detail/feed): в Nova Corps у них хардкод-фон rgba(8,20,26,0.88)
    (teal-тинт), под goga он не адаптируется. В goga панели — сплошной --bg-elev. */
 .theme-goga #stages-panel,
 .theme-goga #detail-panel,
 .theme-goga #feed-panel {
   background: var(--bg-elev);
+}
+
+/* === Логотип: заменяем анимированный AFM-хексагон на quarium-логотип === */
+.theme-goga .logo > span {
+  display: none;
+}
+.theme-goga .logo {
+  background-image: url('./quarium-logo.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* === Перекраска хардкодных novacorps-цветов под goga-палитру.
+   Nova Corps: rgba(111,212,204,X) = mint #6fd4cc, rgba(229,212,66,X) = amber #e5d442
+   Goga:       rgba(32,212,191,X)  = mint #20D4BF, rgba(56,130,246,X)  = amber #3882F6
+   rgba(8,20,26,X) = novacorps bg → rgba(10,14,26,X) = goga bg #0A0E1A              === */
+
+::selection { background: rgba(56, 130, 246, 0.35); }
+
+/* Footer progress bar */
+.progress-bar    { background: rgba(32, 212, 191, 0.12); }
+.progress-fill   { background: linear-gradient(90deg, rgba(56, 130, 246, 0.15), var(--amber)); }
+
+/* Stage list */
+.stage-item       { border-bottom-color: rgba(32, 212, 191, 0.06); }
+.stage-item:hover { background: rgba(32, 212, 191, 0.06); }
+.stage-item.active {
+  background: linear-gradient(90deg, rgba(56, 130, 246, 0.06), transparent);
+}
+.stage-item.active::after {
+  background: linear-gradient(90deg, transparent, rgba(56, 130, 246, 0.7), transparent);
+}
+
+/* Plan view */
+.plan-line:hover             { background: rgba(32, 212, 191, 0.06); }
+.plan-line.has-comment       { background: rgba(56, 130, 246, 0.07); }
+.plan-line.has-comment:hover { background: rgba(56, 130, 246, 0.12); }
+.plan-section-wrapper                          { background: rgba(32, 212, 191, 0.04); }
+.plan-section-wrapper.plan-section-assumptions { background: rgba(56, 130, 246, 0.05); }
+.plan-section-wrapper.plan-section-criteria    { background: rgba(32, 212, 191, 0.05); }
+
+/* Dialog */
+.dialog-history .qa      { border-left-color: rgba(32, 212, 191, 0.2); }
+.phase-divider           { border-bottom-color: rgba(32, 212, 191, 0.12); }
+.dialog-pending .dialog-custom {
+  background: rgba(10, 14, 26, 0.6);
+  border-color: rgba(32, 212, 191, 0.2);
+}
+
+/* Event feed */
+.feed-entry       { border-bottom-color: rgba(32, 212, 191, 0.05); }
+.feed-entry:hover { background: rgba(32, 212, 191, 0.05); }
+
+/* Usage sidebar */
+.usage-toggle:hover  { box-shadow: -3px 0 14px rgba(32, 212, 191, 0.28); }
+.usage-metric:hover  { background: rgba(32, 212, 191, 0.06); }
+.jump-latest         { background: rgba(32, 212, 191, 0.15); }
+.icon-btn            { border-color: rgba(32, 212, 191, 0.4); }
+
+/* Attention pulse — переопределяем keyframe под goga amber (#3882F6) */
+@keyframes attentionPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 130, 246, 0); }
+  50%      { box-shadow: 0 0 12px 2px rgba(56, 130, 246, 0.65); }
 }
 

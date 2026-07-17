@@ -1,5 +1,7 @@
-name: web-accept
+name: accept-01
 description: "init web dashboard on goga"
+
+supervisor_command: glm52
 
 prompt: |
   if goga binary not installed - install it with `pip install goga && goga connect claude`
@@ -8,12 +10,15 @@ prompt: |
 stages:
   - id: accept
     name: "accept"
+    supervisor: true
+    supervisor_prompt: скилл может сам все сделать - нужен autonomous режим.
     interactive: true
-    agents: [planning, implementation]
+    agents: [planning]
     description: |
       засинкать codemanifest-ы с кодом.
     prompt: |
-      сделать goga-accept чтобы манифесты синхронизировались с кодом.
+      сделать goga-accept чтобы манифесты фронта обновились по коду.
     skills:
       - goga-accept
+    command: glm52
 

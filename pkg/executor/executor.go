@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -386,6 +387,54 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 		return fmt.Errorf("%s: %w", firstErr, runErr)
 	}
 	return runErr
+}
+
+// RunJSONQuery запускает команду с одним промптом в JSON-режиме.
+// Не использует stream-json — просто захватывает stdout через cmd.Output().
+// Используется Supervisor для однократных LLM-вызовов (без логирования действий).
+// Возвращает сырые байты stdout; парсинг конверта/полей остаётся за вызывающей стороной.
+func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	// Чистая one-shot JSON-инвокация. Намеренно НЕ наследуем e.cfg.ExtraArgs:
+	// executor.New дефолтит их в DefaultClaudeArgs (--print --output-format stream-json
+	// --verbose --dangerously-skip-permissions). Этот stream-json конфликтовал бы с
+	// нашим --output-format json и триггерил --include-partial-messages во враппере
+	// (→ claude exit 1: "requires --output-format=stream-json").
+	args := []string{"-p", prompt, "--output-format", "json"}
+
+	// Команда может лежать в WrapperDir; exec.LookPath в текущем процессе его не
+	// видит, поэтому резолвим абсолютный путь сами — как в e.run.
+	cmdPath := e.cfg.Command
+	if e.cfg.WrapperDir != "" {
+		if resolved, err := exec.LookPath(filepath.Join(e.cfg.WrapperDir, e.cfg.Command)); err == nil {
+			cmdPath = resolved
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, cmdPath, args...)
+	if e.cfg.WrapperDir != "" {
+		env := os.Environ()
+		filtered := make([]string, 0, len(env)+1)
+		pathSet := false
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "PATH=") {
+				filtered = append(filtered, "PATH="+e.cfg.WrapperDir+string(os.PathListSeparator)+kv[5:])
+				pathSet = true
+				continue
+			}
+			filtered = append(filtered, kv)
+		}
+		if !pathSet {
+			filtered = append(filtered, "PATH="+e.cfg.WrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+		cmd.Env = filtered
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("RunJSONQuery %q: %w; stderr: %s", e.cfg.Command, err, stderr.String())
+	}
+	return out, nil
 }
 
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls

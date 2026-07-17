@@ -4,6 +4,7 @@ import { StagesList } from '../components/stages-list'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { LogPanel } from '../components/log-panel'
+import { SupervisorDecision } from '../components/supervisor-decision'
 import { EventFeedPanel } from '../components/event-feed'
 import { Footer } from '../components/footer'
 import { MaximizeProvider } from '../components/layout/Maximizable'
@@ -121,6 +122,7 @@ export function App(): ReactElement {
                   <span id="detail-status" className="status-badge" data-status={selectedStage.status}>
                     {STAGE_STATUS_LABELS[selectedStage.status]}
                   </span>
+                  {selectedStageId != null && <SupervisorDecision stageId={selectedStageId} />}
                   <span className="ornament" aria-hidden="true">
                     <svg viewBox="0 0 100 100" fill="none" stroke="#6fd4cc" strokeWidth="1">
                       <circle cx="50" cy="50" r="46" />

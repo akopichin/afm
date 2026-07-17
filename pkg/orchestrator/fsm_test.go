@@ -38,6 +38,7 @@ func TestFSM_Apply_LegalTransitions(t *testing.T) {
 		{"running->failed", state.StatusRunning, EvFail, state.StatusFailed, true},
 		{"failed->pending(manual)", state.StatusFailed, EvManualRetry, state.StatusPending, true},
 		{"pending->failed(blocked)", state.StatusPending, EvBlockedByDep, state.StatusFailed, true},
+		{"planning->ready(supervisor)", state.StatusPlanning, EvSupervisorApproved, state.StatusReady, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

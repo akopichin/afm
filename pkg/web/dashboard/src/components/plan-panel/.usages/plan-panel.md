@@ -5,9 +5,10 @@ Domain: рендер панели плана (загрузка markdown, дей�
 
 ```tsx
 import { PlanPanel } from '../../components/plan-panel'
+import type { Stage } from '../../types'
 
-function DetailPanel({ stageId }: { stageId: string }) {
-  return <PlanPanel stageId={stageId} />
+function DetailPanel({ stage }: { stage: Stage }) {
+  return <PlanPanel stage={stage} attention={false} />
 }
 ```
 
@@ -26,4 +27,5 @@ import { MarkdownRenderer } from '../../components/plan-panel'
 - approve/sendRevision/retry — асинхронные сетевые операции; вызывающий код сам решает, как обрабатывать
   состояние загрузки/ошибки (контракт клеточки этого не навязывает). После успешного действия состояние флоу
   обновляется через хук состояния, не оптимистично.
-- comments приходят пропсами (не запрашиваются панелью самостоятельно) — источник правды dialog-channel через App.
+- comments — внутреннее состояние самой панели (Record<номер строки, текст>), не пропс; панель не запрашивает
+  их извне и не делится ими с dialog-channel — комментарии живут только внутри PlanPanel до отправки revision.
