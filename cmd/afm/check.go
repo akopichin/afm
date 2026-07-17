@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -64,15 +63,9 @@ func newCheckCmd() *cobra.Command {
 			slices.Sort(dirs)
 			latest := dirs[len(dirs)-1]
 
-			// Read state.json directly for check — no need for full Store.
-			sf := filepath.Join(latest, "state.json")
-			sd, err := os.ReadFile(sf)
+			rs, err := state.LoadRunState(latest)
 			if err != nil {
 				return fmt.Errorf("load state: %w", err)
-			}
-			var rs state.RunState
-			if err := json.Unmarshal(sd, &rs); err != nil {
-				return fmt.Errorf("parse state: %w", err)
 			}
 
 			fmt.Printf("Run: %s\n\n", filepath.Base(latest))

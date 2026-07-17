@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -27,22 +28,30 @@ func chdirTemp(t *testing.T) string {
 	return dir
 }
 
-// makeRunState creates .afm/runs/{runName}/state.json with the given stage.
+// makeRunState creates .afm/runs/{runName}/events.jsonl with a single
+// transition into status for stageID. events.jsonl (not state.json) is the
+// source LoadRunState/FindLatestRunForStage read from, so tests must seed it
+// directly rather than the legacy snapshot.
 func makeRunState(t *testing.T, runName, stageID string, status state.StageStatus) string {
 	t.Helper()
 	runDir := filepath.Join(".afm", "runs", runName)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	rs := state.NewRunState([]string{stageID})
-	rs.FlowName = runName
-	rs.SetStageStatus(stageID, status)
-	sf := filepath.Join(runDir, "state.json")
-	data, err := json.MarshalIndent(rs, "", "  ")
+	tr := state.Transition{
+		Seq:     1,
+		Time:    time.Now(),
+		StageID: stageID,
+		From:    state.StatusPending,
+		To:      status,
+		Event:   "test_setup",
+	}
+	data, err := json.Marshal(tr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(sf, data, 0644); err != nil {
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(runDir, "events.jsonl"), data, 0644); err != nil {
 		t.Fatal(err)
 	}
 	return runDir

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -15,12 +17,15 @@ func newRetryCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stageID := args[0]
-			runDir, stageIDs, err := findLatestRunDir(stageID)
+			runDir, stageIDs, err := state.FindLatestRunForStage(filepath.Join(fmDir(), "runs"), stageID)
 			if err != nil {
 				return err
 			}
 			store, err := state.Open(runDir, stageIDs)
 			if err != nil {
+				if errors.Is(err, state.ErrRunLocked) {
+					return errors.New("run is active — retry via the dashboard, or stop `afm run` first")
+				}
 				return fmt.Errorf("open store: %w", err)
 			}
 			defer store.Close()

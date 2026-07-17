@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -122,6 +123,54 @@ type Orchestrator struct {
 	// race с runWithRetry (см. retry.go).
 	retryBackoff time.Duration
 	maxRetries   int
+
+	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
+	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
+	// сбой стораджа (StorageError) должен останавливать run, а не безобидный
+	// CAS-mismatch между конкурентными переходами.
+	fatalMu   sync.Mutex
+	fatalErr  error
+	cancelRun context.CancelFunc
+
+	// agentWG учитывает все агентские горутины, запущенные через spawnAgent.
+	// waitAgents дожидается его опустошения на выходе из Run — иначе горутины,
+	// ещё пишущие в Store, переживают Run и рискуют использовать Store после Close.
+	agentWG sync.WaitGroup
+
+	// runMu/runCtx хранят долгоживущий контекст event loop (см. Run), который
+	// HTTP-инициированные Approve/Revise/Retry подставляют вместо request-ctx
+	// перед спавном агента (см. runContext). net/http отменяет r.Context() сразу
+	// после возврата хэндлера — если передать его в spawnAgent как есть, только
+	// что запущенный агент будет убит немедленно (exec.CommandContext убивает
+	// процесс на <-ctx.Done()). Мьютекс нужен, т.к. HTTP-сервер начинает слушать
+	// ДО вызова Run (см. cmd/afm/run.go) — запрос может прийти раньше, чем Run
+	// проставит runCtx.
+	runMu  sync.Mutex
+	runCtx context.Context
+}
+
+// agentDrainTimeout — сколько ждём завершения агентских горутин на выходе Run,
+// прежде чем вернуться (агентские процессы уже убиты отменой ctx; ожидание
+// защищает Store от использования после Close).
+const agentDrainTimeout = 10 * time.Second
+
+// setFatal фиксирует первую storage-fatal ошибку и отменяет run-контекст,
+// чтобы event loop завершился и Run вернул ошибку.
+func (o *Orchestrator) setFatal(err error) {
+	o.fatalMu.Lock()
+	if o.fatalErr == nil {
+		o.fatalErr = err
+	}
+	o.fatalMu.Unlock()
+	if o.cancelRun != nil {
+		o.cancelRun()
+	}
+}
+
+func (o *Orchestrator) loadFatal() error {
+	o.fatalMu.Lock()
+	defer o.fatalMu.Unlock()
+	return o.fatalErr
 }
 
 // New creates an Orchestrator.
@@ -195,6 +244,16 @@ func (o *Orchestrator) UIBus() *UIBus { return o.ui }
 func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, bool) {
 	to, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 	if err != nil {
+		var se *StorageError
+		if errors.As(err, &se) {
+			// Storage-fatal: authoritative log write failed — нельзя продолжать
+			// принимать решения против сломанного лога. Завершаем run.
+			log.Printf("FATAL: storage failure applying %s/%s: %v", stageID, ev, err)
+			o.setFatal(err)
+			return o.currentStatus(stageID), false
+		}
+		// Не-storage ошибка (напр. ErrNoRule — неизвестное событие, баг в коде):
+		// логируем и роняем переход, но НЕ валим весь run.
 		log.Printf("CRITICAL: FSM Apply %s/%s: %v", stageID, ev, err)
 		return o.currentStatus(stageID), false
 	}
@@ -232,6 +291,39 @@ func (o *Orchestrator) markAgentDone(stageID string) { o.activeAgents.Delete(sta
 func (o *Orchestrator) isAgentActive(stageID string) bool {
 	_, ok := o.activeAgents.Load(stageID)
 	return ok
+}
+
+// spawnAgent запускает агентскую горутину под семафором команды, помечает стадию
+// активной и учитывает горутину в WaitGroup. Единственная точка запуска —
+// заменяет ~10 копий одинакового boilerplate и гарантирует чистый shutdown.
+func (o *Orchestrator) spawnAgent(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
+	o.agentWG.Add(1)
+	go func() {
+		defer o.agentWG.Done()
+		sem := o.semFor(s)
+		sem.acquire()
+		o.markAgentActive(s.ID)
+		defer func() {
+			o.markAgentDone(s.ID)
+			sem.release()
+		}()
+		run(ctx, s)
+	}()
+}
+
+// waitAgents дожидается завершения всех агентских горутин (с ограничением),
+// чтобы Run не вернулся, пока горутины ещё пишут в Store.
+func (o *Orchestrator) waitAgents() {
+	done := make(chan struct{})
+	go func() {
+		o.agentWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(agentDrainTimeout):
+		log.Printf("WARN: agent drain timed out after %v", agentDrainTimeout)
+	}
 }
 
 // NotifyAnswer is called by the HTTP handler when the user submits an answer.
@@ -352,16 +444,30 @@ func (o *Orchestrator) semFor(s flow.Stage) interface {
 
 // Run starts the event-driven orchestrator loop.
 func (o *Orchestrator) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	o.cancelRun = cancel
+	o.runMu.Lock()
+	o.runCtx = ctx
+	o.runMu.Unlock()
+	defer o.waitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
+	defer cancel()
+
 	o.startPlanningForPending(ctx)
 	o.startQuestionPoller(ctx) // file-based dialog poller
 
 	for {
 		select {
 		case <-ctx.Done():
+			if ferr := o.loadFatal(); ferr != nil {
+				return ferr
+			}
 			return ctx.Err()
 		case ev := <-o.critical.Recv():
 			if err := o.handleEvent(ctx, ev); err != nil {
 				return err
+			}
+			if ferr := o.loadFatal(); ferr != nil {
+				return ferr
 			}
 			if o.shouldExit() {
 				return nil
@@ -567,19 +673,81 @@ func pathInside(file, dir string) bool {
 	return strings.HasPrefix(absFile+string(filepath.Separator), absDir)
 }
 
-// Approve approves a stage plan.
+// approveStage долговечно переводит стадию из awaiting_approval и запускает
+// побочные эффекты. Вызывается СИНХРОННО (из HTTP-обработчика и из headless
+// auto-approve), поэтому переход фиксируется в Store до возврата — краш после
+// approve не теряет интент (recovery резюмит ready/done). Идемпотентна: если
+// стадия уже не в awaiting_approval, только до-запускает побочные эффекты.
+func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
+	if o.currentStatus(stageID) == state.StatusAwaitingApproval {
+		stage := o.graph.Stage(stageID)
+		if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
+			o.Trigger(stageID, EvComplete, GuardCtx{}, "planning-only stage")
+		} else {
+			o.Trigger(stageID, EvApprove, GuardCtx{}, "")
+		}
+	}
+	o.startPlanningForUnblocked(ctx)
+	o.startReadyStages(ctx)
+	o.tryActivatePrePlanned(ctx)
+}
+
+// runContext returns the long-lived run-scoped context for spawning agents from
+// HTTP-initiated actions. Agents MUST NOT inherit the HTTP request context: net/http
+// cancels it when the handler returns, which would kill the just-spawned agent.
+// Falls back to context.WithoutCancel(fallback) if Run hasn't set runCtx yet
+// (tiny window before Run starts) so the agent still isn't bound to the request.
+func (o *Orchestrator) runContext(fallback context.Context) context.Context {
+	o.runMu.Lock()
+	defer o.runMu.Unlock()
+	if o.runCtx != nil {
+		return o.runCtx
+	}
+	return context.WithoutCancel(fallback)
+}
+
+// Approve approves a stage plan (синхронно и долговечно). ctx приходит от
+// вызывающей стороны (HTTP request context у dashboard-инициированного approve
+// или Run ctx у headless auto-approve) — подставляем run ctx перед спавном
+// агента, см. runContext.
 func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
-	return o.critical.Publish(ctx, Event{Type: EventApproved, StageID: stageID})
+	o.approveStage(o.runContext(ctx), stageID)
+	return nil
 }
 
-// Revise sends feedback to re-plan a stage.
-func (o *Orchestrator) Revise(ctx context.Context, stageID, feedback string) error {
-	return o.critical.Publish(ctx, Event{Type: EventRevised, StageID: stageID, Data: feedback})
+// Revise sends feedback to re-plan a stage (синхронно и долговечно): переход
+// в revising фиксируется в Store до возврата — краш после Revise не теряет
+// интент (recovery резюмит revising через тот же путь, что и planning).
+func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) error {
+	if o.currentStatus(stageID) != state.StatusAwaitingApproval {
+		return nil
+	}
+
+	if _, ok := o.Trigger(stageID, EvRevise, GuardCtx{}, feedback); !ok {
+		return nil
+	}
+
+	stageDir := filepath.Join(o.opts.RunDir, stageID)
+	if _, err := state.VersionPlan(stageDir); err != nil {
+		return fmt.Errorf("version plan for %s: %w", stageID, err)
+	}
+	if err := state.SaveFeedback(stageDir, feedback); err != nil {
+		return fmt.Errorf("save feedback for %s: %w", stageID, err)
+	}
+
+	if stage := o.graph.Stage(stageID); stage != nil {
+		// Спавним под run ctx, а не reqCtx: HTTP-хэндлер отменит reqCtx сразу
+		// после возврата ответа, и агент был бы убит немедленно (см. runContext).
+		o.spawnAgent(o.runContext(reqCtx), *stage, o.runPlanningWithFeedback)
+	}
+	return nil
 }
 
-// Retry retries a failed stage by transitioning it to pending and restarting.
+// Retry retries a failed stage by transitioning it to pending and restarting
+// (синхронно и долговечно).
 func (o *Orchestrator) Retry(ctx context.Context, stageID string) error {
-	return o.critical.Publish(ctx, Event{Type: EventManualRetry, StageID: stageID})
+	o.retryStage(o.runContext(ctx), stageID)
+	return nil
 }
 
 // handleEvent dispatches events to the appropriate handler.
@@ -587,12 +755,6 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev Event) error {
 	switch ev.Type {
 	case EventAgentCompleted:
 		return o.onAgentCompleted(ctx, ev)
-	case EventApproved:
-		return o.onApproved(ctx, ev)
-	case EventRevised:
-		return o.onRevised(ctx, ev)
-	case EventManualRetry:
-		return o.onManualRetry(ctx, ev)
 	case EventUserAnswered:
 		return o.onUserAnswered(ctx, ev)
 	}
@@ -630,7 +792,8 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 				return nil
 			}
 			log.Printf("headless: auto-approving plan for stage %q", ev.StageID)
-			_ = o.critical.Publish(ctx, Event{Type: EventApproved, StageID: ev.StageID})
+			o.approveStage(ctx, ev.StageID)
+			return nil
 		}
 		o.tryActivatePrePlanned(ctx)
 	case phaseImplementation, phaseAutonomous:
@@ -722,125 +885,36 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 	switch phase {
 	case phasePlanning:
 		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phasePlanning}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runPlanningAgent(ctx, st)
-		}(*stage)
+		o.spawnAgent(ctx, *stage, o.runPlanningAgent)
 	case phaseImplementation:
 		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseImplementation}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runImplementationAgent(ctx, st)
-		}(*stage)
+		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
 	case phaseReview:
 		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseReview}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runReviewAgent(ctx, st)
-		}(*stage)
+		o.spawnAgent(ctx, *stage, o.runReviewAgent)
 	case phaseAutonomous:
 		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseAutonomous}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runAutonomousAgent(ctx, st)
-		}(*stage)
+		o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)
 	}
 	return nil
 }
 
-func (o *Orchestrator) onApproved(ctx context.Context, ev Event) error {
-	if o.currentStatus(ev.StageID) != state.StatusAwaitingApproval {
-		return nil
-	}
-	stage := o.graph.Stage(ev.StageID)
-	if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
-		// Planning-only stage — nothing to implement, mark as done.
-		o.Trigger(ev.StageID, EvComplete, GuardCtx{}, "planning-only stage")
-		o.startPlanningForUnblocked(ctx)
-		o.startReadyStages(ctx)
-		o.tryActivatePrePlanned(ctx)
-		return nil
-	}
-	o.Trigger(ev.StageID, EvApprove, GuardCtx{}, "")
-	o.startReadyStages(ctx)
-	o.tryActivatePrePlanned(ctx)
-	return nil
-}
-
-func (o *Orchestrator) onRevised(ctx context.Context, ev Event) error {
-	stageID := ev.StageID
-
-	if o.currentStatus(stageID) != state.StatusAwaitingApproval {
-		return nil
-	}
-
-	feedback, _ := ev.Data.(string)
-
-	o.Trigger(stageID, EvRevise, GuardCtx{}, feedback)
-
-	stageDir := filepath.Join(o.opts.RunDir, stageID)
-	if _, err := state.VersionPlan(stageDir); err != nil {
-		return fmt.Errorf("version plan for %s: %w", stageID, err)
-	}
-	if err := state.SaveFeedback(stageDir, feedback); err != nil {
-		return fmt.Errorf("save feedback for %s: %w", stageID, err)
-	}
-
-	stage := o.graph.Stage(stageID)
-	if stage != nil {
-		s := *stage
-		sem := o.semFor(s)
-		go func() {
-			sem.acquire()
-			o.markAgentActive(stageID)
-			defer func() {
-				o.markAgentDone(stageID)
-				sem.release()
-			}()
-			o.runPlanningWithFeedback(ctx, s)
-		}()
-	}
-	return nil
-}
-
-func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
-	stageID := ev.StageID
-
+// retryStage долговечно переводит проваленную стадию из failed и перезапускает
+// её (планирование или implementation, в зависимости от наличия plan.md).
+// Вызывается СИНХРОННО из Retry (HTTP-обработчик) — переход в Store фиксируется
+// до возврата, краш после Retry не теряет интент (recovery резюмит по логу).
+func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 	current := o.currentStatus(stageID)
 
 	if current != state.StatusFailed {
-		return nil
+		return
 	}
 
 	stage := o.graph.Stage(stageID)
 	if stage == nil {
-		return nil
+		return
 	}
 
 	// Manual retry of an interactive stage must start a fresh Claude session:
@@ -862,7 +936,7 @@ func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 	}
 
 	if _, ok := o.Trigger(stageID, EvManualRetry, GuardCtx{}, ""); !ok {
-		return nil
+		return
 	}
 
 	if !stage.NeedsPlanning() {
@@ -871,76 +945,54 @@ func (o *Orchestrator) onManualRetry(ctx context.Context, ev Event) error {
 		if _, err := os.Stat(planPath); err != nil {
 			// plan.md not yet on disk — try to copy it from stage.Plan source.
 			if !o.depsDone(*stage) {
-				return nil
+				return
 			}
 			if stage.Plan == "" {
 				o.Trigger(stageID, EvFail, GuardCtx{}, "no plan.md and no plan source configured")
-				return nil
+				return
 			}
 			if err := os.MkdirAll(stageDir, 0755); err != nil {
 				o.Trigger(stageID, EvFail, GuardCtx{}, "mkdir failed")
-				return nil
+				return
 			}
 			if err := copyFile(resolvePlanSource(o.opts.RunDir, *stage), planPath); err != nil {
 				o.Trigger(stageID, EvFail, GuardCtx{}, "copy plan failed: "+err.Error())
-				return nil
+				return
 			}
 		}
 		o.Trigger(stageID, EvReady, GuardCtx{}, "")
-		o.Trigger(stageID, EvStartRun, GuardCtx{}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runImplementationAgent(ctx, st)
-		}(*stage)
+		// Synchronous transition guards against a concurrent event-loop path
+		// (e.g. startReadyStages) also winning EvStartRun for this stage.
+		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+			return
+		}
+		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
 		o.startReadyStages(ctx)
-		return nil
+		return
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
 	planPath := filepath.Join(stageDir, "plan.md")
 	if _, err := os.Stat(planPath); err == nil {
 		o.Trigger(stageID, EvReady, GuardCtx{}, "")
-		o.Trigger(stageID, EvStartRun, GuardCtx{}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runImplementationAgent(ctx, st)
-		}(*stage)
+		// Same CAS guard as above: only the winner spawns.
+		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+			return
+		}
+		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
 	} else {
 		// Deps not done — stay pending; planning starts automatically
 		// via startPlanningForUnblocked once dependencies complete.
 		if !stage.EagerPlanning && !o.depsDone(*stage) {
-			return nil
+			return
 		}
 		// Synchronous transition guards against double start
 		// (matches startPlanningForUnblocked pattern).
 		if _, ok := o.Trigger(stageID, EvStartPlanning, GuardCtx{Stage: *stage}, "manual retry"); !ok {
-			return nil
+			return
 		}
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runPlanningAgent(ctx, st)
-		}(*stage)
+		o.spawnAgent(ctx, *stage, o.runPlanningAgent)
 	}
-
-	return nil
 }
 
 // depsDone checks whether all dependencies of a stage are in StatusDone.
@@ -1007,15 +1059,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 		if _, ok := o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "deps done"); !ok {
 			continue
 		}
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-
+		o.spawnAgent(ctx, s, func(ctx context.Context, st flow.Stage) {
 			phases := o.DetermineStagePhases(ctx, st)
 			if len(phases) == 1 && phases[0] == "autonomous_execution" {
 				stageDir := filepath.Join(o.opts.RunDir, st.ID)
@@ -1030,7 +1074,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 			} else {
 				o.runPlanningAgent(ctx, st)
 			}
-		}(s)
+		})
 	}
 }
 
@@ -1048,17 +1092,10 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		if stage == nil {
 			continue
 		}
-		o.Trigger(id, EvStartRun, GuardCtx{}, "")
-		go func(st flow.Stage) {
-			sem := o.semFor(st)
-			sem.acquire()
-			o.markAgentActive(st.ID)
-			defer func() {
-				o.markAgentDone(st.ID)
-				sem.release()
-			}()
-			o.runImplementationAgent(ctx, st)
-		}(*stage)
+		if _, ok := o.Trigger(id, EvStartRun, GuardCtx{}, ""); !ok {
+			continue
+		}
+		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
 	}
 }
 
@@ -1142,9 +1179,6 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 }
 
 func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
-	o.markAgentActive(s.ID)
-	defer o.markAgentDone(s.ID)
-
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 
 	o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "")

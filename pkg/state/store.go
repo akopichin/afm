@@ -3,12 +3,15 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/akopichin/afm/pkg/progress"
 )
 
 type Transition struct {
@@ -21,12 +24,26 @@ type Transition struct {
 	Reason  string      `json:"reason,omitempty"`
 }
 
+// ErrRunLocked означает, что run-директория уже открыта другим процессом afm.
+// flock освобождается ОС при завершении процесса, поэтому упавший ранее run
+// не оставляет «залипшей» блокировки.
+var ErrRunLocked = errors.New("run directory is locked by another afm process")
+
+// ErrCorruptLog означает битую строку в середине events.jsonl (есть валидные
+// записи после неё). Оригинал НЕ усекается — копируется в .corrupt-<ts> для разбора.
+var ErrCorruptLog = errors.New("events.jsonl is corrupted mid-log")
+
+// ErrConcurrentChange — статус стадии изменился между чтением и Apply (CAS-mismatch).
+// Доброкачественно: ожидаемо при конкурентных переходах, НЕ storage-ошибка.
+var ErrConcurrentChange = errors.New("concurrent change")
+
 type Store struct {
 	runDir    string
 	eventsLog *os.File
 	snapshot  *RunState
 	lastSeq   uint64
 	history   []Transition
+	lock      *progress.Lock
 	mu        sync.Mutex
 }
 
@@ -34,6 +51,18 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir runDir: %w", err)
 	}
+
+	lock, _ := progress.NewLock(filepath.Join(runDir, ".lock"))
+	if err := lock.TryLock(); err != nil {
+		return nil, ErrRunLocked
+	}
+	locked := true
+	defer func() {
+		if locked {
+			lock.Unlock()
+		}
+	}()
+
 	rs := NewRunState(stageIDs)
 
 	eventsPath := filepath.Join(runDir, "events.jsonl")
@@ -50,9 +79,16 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		}
 	}
 
-	history, lastSeq, lastGoodOffset, err := replayEvents(eventsPath, rs)
+	history, lastSeq, lastGoodOffset, corrupted, err := replayEvents(eventsPath, rs)
 	if err != nil {
 		return nil, fmt.Errorf("replay: %w", err)
+	}
+	if corrupted {
+		quarantine := fmt.Sprintf("%s.corrupt-%d", eventsPath, time.Now().UnixNano())
+		if data, rerr := os.ReadFile(eventsPath); rerr == nil {
+			_ = os.WriteFile(quarantine, data, 0644)
+		}
+		return nil, fmt.Errorf("%w: quarantined to %s", ErrCorruptLog, quarantine)
 	}
 
 	f, err := os.OpenFile(eventsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
@@ -72,6 +108,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		snapshot:  rs,
 		lastSeq:   lastSeq,
 		history:   history,
+		lock:      lock,
 	}
 
 	// if started from legacy fallback — write synthetic events
@@ -104,6 +141,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		}
 	}
 
+	locked = false
 	return s, nil
 }
 
@@ -119,47 +157,41 @@ func loadLegacyState(path string) (*RunState, error) {
 	return &rs, nil
 }
 
-func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint64, lastGoodOffset int64, err error) {
+func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint64, lastGoodOffset int64, corrupted bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, 0, 0, nil
+			return nil, 0, 0, false, nil
 		}
-		return nil, 0, 0, err
+		return nil, 0, 0, false, err
 	}
+	lines := splitLines(data)
+	endsWithNewline := len(data) > 0 && data[len(data)-1] == '\n'
 	var offset int64
 	var goodOffset int64
-	for _, line := range bytesLines(data) {
+	for i, line := range lines {
+		isLast := i == len(lines)-1
 		offset += int64(len(line)) + 1 // +1 на \n
 		if len(bytes.TrimSpace(line)) == 0 {
 			goodOffset = offset
 			continue
 		}
 		var t Transition
-		if err := json.Unmarshal(line, &t); err != nil {
-			break
+		if uerr := json.Unmarshal(line, &t); uerr != nil {
+			// Последняя строка без завершающего \n — это оборванная запись
+			// (crash в момент append): безопасно усечь до последнего хорошего offset.
+			if isLast && !endsWithNewline {
+				return history, lastSeq, goodOffset, false, nil
+			}
+			// Иначе это битая ПОЛНАЯ строка в середине лога — повреждение.
+			return history, lastSeq, goodOffset, true, nil
 		}
-		rs.SetStageStatus(t.StageID, t.To)
+		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
 		history = append(history, t)
 		lastSeq = t.Seq
 		goodOffset = offset
 	}
-	return history, lastSeq, goodOffset, nil
-}
-
-func bytesLines(data []byte) [][]byte {
-	var out [][]byte
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			out = append(out, data[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		out = append(out, data[start:])
-	}
-	return out
+	return history, lastSeq, goodOffset, false, nil
 }
 
 func (s *Store) Get(stageID string) StageStatus {
@@ -218,12 +250,16 @@ func (s *Store) SetStageNames(names map[string]string) {
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
 	if s.eventsLog != nil {
-		err := s.eventsLog.Close()
+		err = s.eventsLog.Close()
 		s.eventsLog = nil
-		return err
 	}
-	return nil
+	if s.lock != nil {
+		s.lock.Unlock()
+		s.lock = nil
+	}
+	return err
 }
 
 // applyHook is for tests only. Called after fsync but before snapshot rewrite.
@@ -244,8 +280,8 @@ func (s *Store) Apply(t Transition) error {
 
 	current := s.snapshot.Stages[t.StageID].Status
 	if current != t.From {
-		return fmt.Errorf("concurrent change: stage %q is in %q, expected %q",
-			t.StageID, current, t.From)
+		return fmt.Errorf("%w: stage %q is in %q, expected %q",
+			ErrConcurrentChange, t.StageID, current, t.From)
 	}
 
 	s.lastSeq++
@@ -275,6 +311,7 @@ func (s *Store) Apply(t Transition) error {
 	}
 
 	s.snapshot.SetStageStatus(t.StageID, t.To)
+	s.snapshot.LastSeq = s.lastSeq
 
 	if err := s.writeSnapshot(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: snapshot write failed: %v\n", err)
@@ -297,8 +334,21 @@ func (s *Store) writeSnapshot() error {
 		f.Close()
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// fsync директории — иначе rename может быть недолговечен при потере питания.
+	dir, err := os.Open(s.runDir)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

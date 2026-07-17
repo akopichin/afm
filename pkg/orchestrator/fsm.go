@@ -100,6 +100,9 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (s
 		Reason:  reason,
 	}
 	if err := f.store.Apply(tr); err != nil {
+		if errors.Is(err, state.ErrConcurrentChange) {
+			return from, false, nil // доброкачественный CAS-mismatch, не storage-fatal
+		}
 		return from, false, &StorageError{Inner: err}
 	}
 	return to, true, nil

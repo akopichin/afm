@@ -4,6 +4,18 @@
 
 By default afm stores runs, flows, and config under `.afm/` in the working directory. The parent directory is resolved in `PersistentPreRunE` (`cmd/afm/main.go`) with priority **flag > env > `.`**: the `--dir` persistent flag, else the `AFM_DIR` env variable, else the current directory. All subcommands read the effective `.afm` path via `fmDir()` (`filepath.Join(rootDir, ".afm")`); `state.FindLatestRunDir(base, flowName)` takes the runs base as an explicit argument instead of hardcoding the path.
 
+## State persistence & run lifecycle (reliability core)
+
+Событийный лог `.afm/runs/<run_id>/events.jsonl` — **единственный доверенный источник правды**. `state.json` — производный кэш (несёт `last_seq`), пути чтения (`afm check`, поиск run) читают состояние из лога через `state.LoadRunState` (без flock), не доверяя снапшоту.
+
+- **flock между процессами.** `state.Open` берёт эксклюзивный `flock` на `<runDir>/.lock` на всё время жизни `Store`. Живой `afm run` держит его; CLI `approve`/`retry`/`revise` при активном run падают с `state.ErrRunLocked` и понятным сообщением. flock освобождается ОС при завершении процесса — упавший run не оставляет «залипшей» блокировки. `afm check` (read-only, без flock) живым run не блокируется.
+- **Недеструктивный replay.** Оборванный хвост (последняя запись без `\n`, crash при append) безопасно усекается. Битая **полная** строка в середине лога (валидные записи после неё) → карантин в `events.jsonl.corrupt-<ts>` + `state.ErrCorruptLog`, оригинал НЕ трогается (никогда не усекаем разрушительно).
+- **Долговечный snapshot.** `writeSnapshot` делает `f.Sync()` перед Close и fsync родительской директории после Rename. Ошибка записи снапшота нефатальна (это кэш), но read-пути всё равно берут состояние из лога.
+- **Уникальный run-id** — `<flow>-<timestamp>-<rand4hex>` (нет коллизий в одну секунду). `state.FindLatestRunDir` якорит префикс (после `<flow>-` обязана быть цифра — `foo` не матчит `foo-bar`); `state.FindLatestRunForStage` — единая точка поиска run по стадии из лога.
+- **Storage-fatal завершает run.** `Trigger` через `errors.As(*StorageError)` различает реальный сбой записи лога (→ `setFatal` + отмена run-ctx → `Run` возвращает ошибку) от доброкачественного `ErrConcurrentChange` (CAS-mismatch, тихий no-op) и `ErrNoRule` (log-and-drop, не валит run).
+- **Чистый shutdown.** Все агентские горутины запускаются через `spawnAgent` (семафор + маркер активности + `agentWG`). На выходе `Run`: `cancel()` (LIFO — раньше) → `waitAgents()` (bounded 10s) → потом `store.Close()`. Завершения агентов публикуются под run-ctx (не `context.Background()`) — не блокируются навсегда на мёртвой шине.
+- **Долговечный approve/revise/retry.** `Approve`/`Revise`/`Retry` синхронны: durable-переход фиксируется в логе ДО возврата (краш не теряет интент — recovery резюмит `ready`/`revising`/`running`). Headless auto-approve обрабатывается inline (нет блокирующего self-publish в event-loop). **Важно:** HTTP-инициированные approve/revise/retry спавнят агента под **run-scoped ctx** (`runContext`), а не под `r.Context()` — иначе net/http отменяет ctx при возврате хэндлера и агент убивается мгновенно. Спавны, достижимые и из HTTP-горутины, и из event-loop, guard'ятся по CAS-результату `Trigger` (нет двойного запуска).
+
 ## File-Based Dialog Protocol (Interactive Stages)
 
 The interactive dialog system was refactored from an MCP HTTP server to a file-based protocol starting with the planning-depends-on-ref branch. This enables agents to ask users questions and receive answers through simple file I/O instead of HTTP.

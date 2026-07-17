@@ -105,12 +105,12 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				return
 			}
 			if completionCheck == nil {
-				_ = o.critical.Publish(context.Background(), Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
+				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			checkErr := completionCheck()
 			if checkErr == nil {
-				_ = o.critical.Publish(context.Background(), Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
+				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			// Incomplete work — retry once without backoff
@@ -168,7 +168,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		} else {
 			o.Trigger(s.ID, EvFail, GuardCtx{}, "retries exhausted")
 			o.failBlockedStages()
-			_ = o.critical.Publish(context.Background(), Event{Type: EventRetryExhausted, StageID: s.ID})
+			_ = o.critical.Publish(ctx, Event{Type: EventRetryExhausted, StageID: s.ID})
 		}
 	}
 }

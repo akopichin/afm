@@ -24,7 +24,7 @@ func TestFindLatestRunDirCorrectFlow(t *testing.T) {
 	// flow-b — новее (позже по алфавиту/времени), содержит "b-stage"
 	makeRunState(t, "flow-b-20260101-120000", "b-stage", state.StatusAwaitingApproval)
 
-	dir, _, err := findLatestRunDir("a-stage")
+	dir, _, err := state.FindLatestRunForStage(filepath.Join(".afm", "runs"), "a-stage")
 	if err != nil {
 		t.Fatalf("findLatestRunDir: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestFindLatestRunDirNewestWins(t *testing.T) {
 	makeRunState(t, "flow-20260101-100000", "init", state.StatusDone)
 	makeRunState(t, "flow-20260101-120000", "init", state.StatusAwaitingApproval)
 
-	dir, _, err := findLatestRunDir("init")
+	dir, _, err := state.FindLatestRunForStage(filepath.Join(".afm", "runs"), "init")
 	if err != nil {
 		t.Fatalf("findLatestRunDir: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestFindLatestRunDirNotFound(t *testing.T) {
 
 	makeRunState(t, "flow-20260101-120000", "other-stage", state.StatusAwaitingApproval)
 
-	_, _, err := findLatestRunDir("nonexistent-stage")
+	_, _, err := state.FindLatestRunForStage(filepath.Join(".afm", "runs"), "nonexistent-stage")
 	if err == nil {
 		t.Fatal("ожидалась ошибка, но её нет")
 	}

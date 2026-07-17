@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -405,8 +408,7 @@ func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
 		}
 	}
 
-	ts := time.Now().Format("20060102-150405")
-	runDir = filepath.Join(base, f.Name+"-"+ts)
+	runDir = filepath.Join(base, newRunID(f.Name))
 	if err = os.MkdirAll(runDir, 0755); err != nil {
 		return
 	}
@@ -414,15 +416,36 @@ func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
 	return
 }
 
+// newRunID строит уникальный id run: timestamp секундной гранулярности плюс
+// короткий случайный суффикс, чтобы два запуска в одну секунду не делили
+// одну директорию и один events.jsonl.
+func newRunID(flowName string) string {
+	ts := time.Now().Format("20060102-150405")
+	b := make([]byte, 2)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%s-%s-%s", flowName, ts, hex.EncodeToString(b))
+}
+
 func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 	names := []string{"planning.md", "implementation.md", "review.md", "summary.md", "autonomous.md"}
 	texts := make([]string, len(names))
+	var custom, embedded []string
 	for i, name := range names {
-		text, err := assets.ReadPrompt(name, overrideDir)
+		text, fromOverride, err := assets.ReadPrompt(name, overrideDir)
 		if err != nil {
 			return orchestrator.Prompts{}, fmt.Errorf("read prompt %s: %w", name, err)
 		}
 		texts[i] = text
+		if fromOverride {
+			custom = append(custom, name)
+		} else {
+			embedded = append(embedded, name)
+		}
+	}
+	// Кастомная prompts_dir может быть неполной — сообщаем, что взято из неё,
+	// а что подхвачено из вкомпиленных дефолтов (вместо падения на нехватке).
+	if overrideDir != "" {
+		log.Printf("prompts: from %s: %v; embedded defaults: %v", overrideDir, custom, embedded)
 	}
 	return orchestrator.Prompts{
 		Planning:       texts[0],

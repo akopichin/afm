@@ -1,9 +1,11 @@
 package state
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -40,6 +42,10 @@ type RunState struct {
 	// and only emits the field when it has been populated.
 	StageNames map[string]string     `json:"stage_names,omitempty"`
 	Stages     map[string]StageState `json:"stages"`
+	// LastSeq is the Seq of the last transition applied to this run,
+	// mirrored from the event log so consumers of the snapshot alone
+	// (e.g. UI) can detect staleness without replaying events.jsonl.
+	LastSeq uint64 `json:"last_seq"`
 }
 
 // NewRunState creates an initial RunState with all stages pending.
@@ -55,9 +61,17 @@ func NewRunState(stageIDs []string) *RunState {
 	return rs
 }
 
-// SetStageStatus updates a stage status and its timestamp.
+// SetStageStatus updates a stage status, stamping the current time.
 func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
-	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: time.Now()}
+	rs.SetStageStatusAt(stageID, status, time.Now())
+}
+
+// SetStageStatusAt updates a stage status, stamping it with the given time t
+// instead of time.Now(). Used when replaying events.jsonl (LoadRunState,
+// replayEvents) so a stage's UpdatedAt reflects the real transition time
+// (Transition.Time) rather than the moment of replay.
+func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
+	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t}
 }
 
 // AllDone returns true when every stage has StatusDone.
@@ -70,24 +84,102 @@ func (rs *RunState) AllDone() bool {
 	return true
 }
 
-// FindLatestRunDir finds the most recent run directory for a given flow name
-// under base/.
+// LoadRunState восстанавливает состояние run-директории из events.jsonl —
+// авторитетного источника. Snapshot (state.json) НЕ используется: он лишь
+// производный кэш и может отставать при сбое записи. Не берёт flock: путь
+// только для чтения (check, поиск run) и не должен блокироваться живым run.
+func LoadRunState(runDir string) (RunState, error) {
+	rs := RunState{Stages: map[string]StageState{}}
+	data, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		return rs, err
+	}
+	for _, line := range splitLines(data) {
+		if len(strings.TrimSpace(string(line))) == 0 {
+			continue
+		}
+		var t Transition
+		if err := json.Unmarshal(line, &t); err != nil {
+			break // оборванный/битый хвост — читаем валидный префикс
+		}
+		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+		rs.LastSeq = t.Seq
+	}
+	return rs, nil
+}
+
+// splitLines разбивает данные на строки по \n, не включая сам разделитель.
+// Единственная реализация этого алгоритма в пакете — используется и при
+// восстановлении Store (replayEvents), и при read-only чтении LoadRunState.
+func splitLines(data []byte) [][]byte {
+	var out [][]byte
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			out = append(out, data[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		out = append(out, data[start:])
+	}
+	return out
+}
+
+// FindLatestRunDir возвращает самую свежую run-директорию для flowName под base.
+// Имя run: "<flowName>-<timestamp>...". Чтобы "foo" не матчил "foo-bar", после
+// префикса требуется цифра (начало timestamp'а). Сортировка имён совпадает с
+// хронологией благодаря формату timestamp'а.
 func FindLatestRunDir(base, flowName string) (string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return "", fmt.Errorf("read runs dir: %w", err)
 	}
-	var latest string
 	prefix := flowName + "-"
+	var names []string
 	for _, e := range entries {
-		if e.IsDir() && len(e.Name()) > len(prefix) && e.Name()[:len(prefix)] == prefix {
-			latest = filepath.Join(base, e.Name())
+		n := e.Name()
+		if e.IsDir() && len(n) > len(prefix) && n[:len(prefix)] == prefix && n[len(prefix)] >= '0' && n[len(prefix)] <= '9' {
+			names = append(names, n)
 		}
 	}
-	if latest == "" {
+	if len(names) == 0 {
 		return "", fmt.Errorf("no run found for flow %q", flowName)
 	}
-	return latest, nil
+	slices.Sort(names)
+	return filepath.Join(base, names[len(names)-1]), nil
+}
+
+// FindLatestRunForStage возвращает последнюю run-директорию, содержащую stageID,
+// и все её stage id. Состояние читается из events.jsonl (LoadRunState), не из
+// state.json, чтобы не доверять возможно устаревшему снапшоту.
+func FindLatestRunForStage(base, stageID string) (string, []string, error) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return "", nil, fmt.Errorf("read runs dir: %w", err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	slices.SortFunc(dirs, func(a, b string) int { return strings.Compare(b, a) }) // новые первыми
+	for _, name := range dirs {
+		runDir := filepath.Join(base, name)
+		rs, lerr := LoadRunState(runDir)
+		if lerr != nil {
+			continue
+		}
+		if _, ok := rs.Stages[stageID]; ok {
+			ids := make([]string, 0, len(rs.Stages))
+			for id := range rs.Stages {
+				ids = append(ids, id)
+			}
+			return runDir, ids, nil
+		}
+	}
+	return "", nil, fmt.Errorf("no active run found for stage %q", stageID)
 }
 
 // SaveFeedback appends feedback to a stage's feedback.md with revision separators.

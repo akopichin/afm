@@ -411,6 +411,10 @@ func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 	SetApplyHook(func(tr Transition) {
 		if tr.Seq == 2 {
 			store1.eventsLog.Close()
+			// A real crash exits the process, and the OS releases the flock
+			// along with every fd. Release it here too so the simulated
+			// crash matches that behavior instead of leaving the lock held.
+			store1.lock.Unlock()
 			panic("simulated crash")
 		}
 	})

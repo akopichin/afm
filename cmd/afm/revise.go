@@ -34,13 +34,16 @@ func newReviseCmd() *cobra.Command {
 				return errors.New("feedback is required (use --feedback or stdin)")
 			}
 
-			runDir, stageIDs, err := findLatestRunDir(stageID)
+			runDir, stageIDs, err := state.FindLatestRunForStage(filepath.Join(fmDir(), "runs"), stageID)
 			if err != nil {
 				return err
 			}
 
 			store, err := state.Open(runDir, stageIDs)
 			if err != nil {
+				if errors.Is(err, state.ErrRunLocked) {
+					return errors.New("run is active — revise via the dashboard, or stop `afm run` first")
+				}
 				return fmt.Errorf("open store: %w", err)
 			}
 			defer store.Close()

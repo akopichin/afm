@@ -64,12 +64,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady:
 			continue
 		case state.StatusAwaitingUserInput:
-			go func(st flow.Stage) {
-				sem := o.semFor(st)
-				sem.acquire()
-				defer sem.release()
-				o.resumeInteractiveAgent(ctx, st)
-			}(s)
+			o.spawnAgent(ctx, s, o.resumeInteractiveAgent)
 		case state.StatusRetrying:
 			// Interrupted retry — check completion or restart
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -83,24 +78,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			}
 			// Restart planning from scratch
 			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "restart after retry")
-			go func(stage flow.Stage) {
-				sem := o.semFor(stage)
-				sem.acquire()
-				o.markAgentActive(stage.ID)
-				defer func() {
-					o.markAgentDone(stage.ID)
-					sem.release()
-				}()
-				o.runPlanningAgent(ctx, stage)
-			}(s)
+			o.spawnAgent(ctx, s, o.runPlanningAgent)
 		case state.StatusRevising:
 			// Interrupted revision — restart with feedback
-			go func() {
-				sem := o.semFor(s)
-				sem.acquire()
-				defer sem.release()
-				o.runPlanningWithFeedback(ctx, s)
-			}()
+			o.spawnAgent(ctx, s, o.runPlanningWithFeedback)
 		case state.StatusRunning:
 			// Check if .done exists (agent completed but orchestrator missed the event)
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -112,16 +93,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered execution_summary.md")
 					continue
 				}
-				go func(st flow.Stage) {
-					sem := o.semFor(st)
-					sem.acquire()
-					o.markAgentActive(st.ID)
-					defer func() {
-						o.markAgentDone(st.ID)
-						sem.release()
-					}()
-					o.runAutonomousAgent(ctx, st)
-				}(s)
+				o.spawnAgent(ctx, s, o.runAutonomousAgent)
 				continue
 			}
 			if err := checkCompletion(stageDir, ".", s); err == nil {
@@ -129,16 +101,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue
 			}
 			// Interrupted implementation — restart with existing plan
-			go func(st flow.Stage) {
-				sem := o.semFor(st)
-				sem.acquire()
-				o.markAgentActive(st.ID)
-				defer func() {
-					o.markAgentDone(st.ID)
-					sem.release()
-				}()
-				o.runImplementationAgent(ctx, st)
-			}(s)
+			o.spawnAgent(ctx, s, o.runImplementationAgent)
 		default:
 			// Pending, planning, or unknown — check if planning already completed
 			if s.NeedsPlanning() {
@@ -154,17 +117,9 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue
 			}
 			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "")
-			go func(stage flow.Stage) {
-				sem := o.semFor(stage)
-				sem.acquire()
-				o.markAgentActive(stage.ID)
-				defer func() {
-					o.markAgentDone(stage.ID)
-					sem.release()
-				}()
-
+			o.spawnAgent(ctx, s, func(ctx context.Context, stage flow.Stage) {
 				phases := o.DetermineStagePhases(ctx, stage)
-				if len(phases) == 1 && phases[0] == "autonomous_execution" {
+				if len(phases) == 1 && phases[0] == phaseAutonomous {
 					stageDir := filepath.Join(o.opts.RunDir, stage.ID)
 					if err := os.MkdirAll(stageDir, 0755); err != nil {
 						o.Trigger(stage.ID, EvFail, GuardCtx{}, "mkdir failed")
@@ -177,7 +132,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				} else {
 					o.runPlanningAgent(ctx, stage)
 				}
-			}(s)
+			})
 		}
 	}
 
@@ -199,9 +154,6 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 // session.json exists most recently. The phase is detected by looking at
 // mtimes of <phase>.session.json files in the stage directory.
 func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage) {
-	o.markAgentActive(s.ID)
-	defer o.markAgentDone(s.ID)
-
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	phase := o.detectInterruptedPhase(stageDir)
 
