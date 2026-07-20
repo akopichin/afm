@@ -12,9 +12,9 @@ import (
 // вариант «dashboard/*» утягивал бы в бинарь ~96 МБ зависимостей и исходников
 // фронтенда. Набор путей = набор публичных веб-путей дашборда.
 //
-//go:embed dashboard/index.html dashboard/favicon.svg dashboard/quarium-logo.png dashboard/style.css dashboard/style-goga.css dashboard/assets
+//go:embed dashboard/index.html dashboard/favicon.svg dashboard/quarium-logo.png dashboard/skins dashboard/assets
 var embedded embed.FS
 
 // FS serves the dashboard assets rooted at their original web paths
-// (index.html, style.css, ...), independent of the dashboard/ subdirectory on disk.
+// (index.html, skins/novacorps/index.css, ...), independent of the dashboard/ subdirectory on disk.
 var FS, _ = fs.Sub(embedded, "dashboard")

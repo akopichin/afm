@@ -49,14 +49,25 @@ export function App(): ReactElement {
     lastKind.current = attention.kind
   }, [attention.kind])
 
-  // Панели (PlanPanel/DialogChannel) требуют Stage, а не Stage | null, но в
-  // resizable-лейауте они должны быть смонтированы всегда — иначе id панелей
-  // скачут и сохранённый layout (afm-rows) перестаёт совпадать. Когда стадия
-  // не выбрана, рендерим панели с нейтральным sentinel'ом: они уходят в пустое
-  // состояние (GET /api/stages//plan → 404 → early-return), а stageHeader
-  // остаётся null и показывает заглушку «выберите стадию».
-  const NO_STAGE: Stage = { id: '', name: '', status: 'pending', updatedAt: '' }
+  // Панели (PlanPanel/DialogChannel) требуют Stage, а не Stage | null. Sentinel
+  // NO_STAGE нужен только на случай, когда стадия не выбрана: тогда обе панели
+  // видимы (см. showPlan/showDialog ниже) и им нужен непустой Stage — рендерим
+  // их с нейтральным sentinel'ом, они уходят в пустое состояние (GET
+  // /api/stages//plan → 404 → early-return), а stageHeader остаётся null и
+  // показывает заглушку «выберите стадию». При выбранной стадии видимость
+  // панелей (монтировать/скрыть) решают showPlan/showDialog.
+  const NO_STAGE: Stage = { id: '', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false }
   const stageForPanels = selectedStage ?? NO_STAGE
+
+  // Видимость панелей для выбранной стадии. Когда стадия не выбрана — показываем обе
+  // (нейтральное состояние). plan скрыт у автономной стадии (нет plan.md) — КРОМЕ
+  // случая failed: кнопка Retry (общее действие восстановления после сбоя, не
+  // привязанное к наличию плана) живёт внутри PlanPanel, и должна быть доступна для
+  // любой упавшей стадии, а не только для стадий с планом. dialog скрыт только когда
+  // диалог невозможен: не interactive и не autonomous (автономный трек диалоговый
+  // даже при interactive:false).
+  const showPlan = selectedStage === null || !selectedStage.autonomous || selectedStage.status === 'failed'
+  const showDialog = selectedStage === null || selectedStage.interactive || selectedStage.autonomous
 
   const logEntries = useStageLog(selectedStageId)
   const elapsedMs = useElapsed(startedAt)
@@ -119,10 +130,12 @@ export function App(): ReactElement {
               selectedStage === null ? null : (
                 <>
                   <h2 id="detail-title">{selectedStage.name !== '' ? selectedStage.name : selectedStage.id}</h2>
-                  <span id="detail-status" className="status-badge" data-status={selectedStage.status}>
-                    {STAGE_STATUS_LABELS[selectedStage.status]}
+                  <span className="status-badge-wrap">
+                    <span id="detail-status" className="status-badge" data-status={selectedStage.status}>
+                      {STAGE_STATUS_LABELS[selectedStage.status]}
+                    </span>
+                    {selectedStageId != null && <SupervisorDecision stageId={selectedStageId} />}
                   </span>
-                  {selectedStageId != null && <SupervisorDecision stageId={selectedStageId} />}
                   <span className="ornament" aria-hidden="true">
                     <svg viewBox="0 0 100 100" fill="none" stroke="#6fd4cc" strokeWidth="1">
                       <circle cx="50" cy="50" r="46" />
@@ -135,8 +148,8 @@ export function App(): ReactElement {
                 </>
               )
             }
-            plan={<PlanPanel stage={stageForPanels} attention={attention.kind === 'plan'} />}
-            dialog={<DialogChannel stage={stageForPanels} attention={attention.kind === 'dialog'} />}
+            plan={showPlan ? <PlanPanel stage={stageForPanels} attention={attention.kind === 'plan'} /> : null}
+            dialog={showDialog ? <DialogChannel stage={stageForPanels} attention={attention.kind === 'dialog'} /> : null}
             log={<LogPanel entries={logEntries} />}
             feed={<EventFeedPanel events={events} />}
           />

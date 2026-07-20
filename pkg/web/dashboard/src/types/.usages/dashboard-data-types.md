@@ -44,6 +44,18 @@ function isActive(status: Stage['status']): boolean {
 }
 ```
 
+## Флаги видимости панелей (interactive/autonomous)
+
+`Stage.interactive` и `Stage.autonomous` — не просто данные, а входные флаги для логики видимости панелей
+в корневой композиции App: диалоговая панель показывается, если стадия интерактивна либо автономна;
+панель плана скрывается для автономных стадий (автономная стадия всегда показывает диалог, даже когда
+interactive равен false):
+
+```ts
+const showPlan = selectedStage === null || !selectedStage.autonomous
+const showDialog = selectedStage === null || selectedStage.interactive || selectedStage.autonomous
+```
+
 ## Готовые константы вместо ручных списков
 
 Не дублируйте наборы статусов/типов событий вручную — используйте готовые константы клеточки:

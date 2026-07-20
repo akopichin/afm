@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,24 +17,74 @@ import (
 	"github.com/akopichin/afm/pkg/web"
 )
 
-// themeGoga — имя goga-темы (см. pkg/config.Config.EffectiveTheme).
-// Любое другое значение cfg.Theme (включая пустую строку) — default novacorps.
-const themeGoga = "goga"
+// Имена скинов. themeGoga/themeNovacorps соответствуют pkg/config.Config.EffectiveTheme();
+// themeCustom — активный skin_dir.
+const (
+	themeGoga      = "goga"
+	themeNovacorps = "novacorps"
+	themeCustom    = "custom"
+)
+
+// Имена файлов внутри директории скина (встроенной или skin_dir).
+const skinIndexFile = "index.css"
+
+// skinFaviconCandidates — имена favicon-файлов скина в порядке поиска;
+// расширение первого найденного определяет <link type="..."> (svg/png).
+var skinFaviconCandidates = []string{"favicon.svg", "favicon.png"}
+
+const skinTitleFile = "title.txt"
+
+// mimeSVG — MIME-тип favicon по умолчанию (favicon.svg и общий дефолт).
+const mimeSVG = "image/svg+xml"
+
+// faviconMIME возвращает MIME-тип favicon по имени файла (расширению).
+func faviconMIME(name string) string {
+	if strings.HasSuffix(name, ".png") {
+		return "image/png"
+	}
+	return mimeSVG
+}
+
+// defaultFaviconHref — общий дефолтный favicon, используется, когда у активного
+// скина нет своего favicon.svg/favicon.png.
+const defaultFaviconHref = "./favicon.svg"
+
+// customSkinRoute — префикс маршрута, отдающего skin_dir с диска.
+const customSkinRoute = "/skins/custom/"
+
+// skinHrefFor возвращает относительный href на стиль встроенного скина по имени.
+func skinHrefFor(name string) string {
+	return "./skins/" + name + "/" + skinIndexFile
+}
+
+// findSkinFavicon ищет favicon скина через statFn (embed или диск) по
+// skinFaviconCandidates. Возвращает относительный href, MIME и true, если
+// нашёл; иначе false — вызывающий использует дефолт.
+func findSkinFavicon(base string, statFn func(name string) bool) (href, mime string, found bool) {
+	for _, name := range skinFaviconCandidates {
+		if statFn(name) {
+			return base + "/" + name, faviconMIME(name), true
+		}
+	}
+	return "", "", false
+}
 
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
-	runDir         string
-	store          *state.Store
-	uiBus          *orchestrator.UIBus
-	approveFn      func(ctx context.Context, stageID string) error
-	reviseFn       func(ctx context.Context, stageID, feedback string) error
-	retryFn        func(ctx context.Context, stageID string) error
-	dialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
-	dialogCancelFn func(stageID string) error
-	theme          string       // "goga" или "" (default novacorps)
-	indexBytes     []byte       // предподготовленный index.html (с заменами для goga)
-	fileServer     http.Handler // отдаёт статику (style.css, app.js, ...)
-	httpSrv        *http.Server
+	runDir           string
+	stageInteractive map[string]bool // id стадии → interactive (статический конфиг флоу)
+	store            *state.Store
+	uiBus            *orchestrator.UIBus
+	approveFn        func(ctx context.Context, stageID string) error
+	reviseFn         func(ctx context.Context, stageID, feedback string) error
+	retryFn          func(ctx context.Context, stageID string) error
+	dialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
+	dialogCancelFn   func(stageID string) error
+	theme            string       // "goga" или "" (default novacorps)
+	indexBytes       []byte       // предподготовленный index.html (с заменами скина/favicon)
+	fileServer       http.Handler // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer http.Handler // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	httpSrv          *http.Server
 	// Keepalive-таймауты вебсокета. Immutable: задаются один раз в New и не
 	// мутируются после (хранение в полях, а не в глобальных переменных, убирает
 	// data race между тестами и readPump/writePump — см. websocket.go).
@@ -44,16 +95,18 @@ type Server struct {
 
 // Config holds server settings.
 type Config struct {
-	Port           int
-	RunDir         string
-	Store          *state.Store
-	UIBus          *orchestrator.UIBus
-	ApproveFn      func(ctx context.Context, stageID string) error
-	ReviseFn       func(ctx context.Context, stageID, feedback string) error
-	RetryFn        func(ctx context.Context, stageID string) error
-	DialogAnswerFn func(stageID, phase, qID, answer string, fromOptions bool) error
-	DialogCancelFn func(stageID string) error
-	Theme          string
+	Port             int
+	RunDir           string
+	StageInteractive map[string]bool
+	Store            *state.Store
+	UIBus            *orchestrator.UIBus
+	ApproveFn        func(ctx context.Context, stageID string) error
+	ReviseFn         func(ctx context.Context, stageID, feedback string) error
+	RetryFn          func(ctx context.Context, stageID string) error
+	DialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
+	DialogCancelFn   func(stageID string) error
+	Theme            string
+	SkinDir          string
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
 	WSPongWait   time.Duration
 	WSPingPeriod time.Duration
@@ -76,41 +129,77 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		runDir:         cfg.RunDir,
-		store:          cfg.Store,
-		uiBus:          cfg.UIBus,
-		approveFn:      cfg.ApproveFn,
-		reviseFn:       cfg.ReviseFn,
-		retryFn:        cfg.RetryFn,
-		dialogAnswerFn: cfg.DialogAnswerFn,
-		dialogCancelFn: cfg.DialogCancelFn,
-		theme:          cfg.Theme,
-		wsPongWait:     pongWait,
-		wsPingPeriod:   pingPeriod,
-		wsWriteWait:    writeWait,
-		fileServer:     http.FileServer(http.FS(web.FS)),
+		runDir:           cfg.RunDir,
+		stageInteractive: cfg.StageInteractive,
+		store:            cfg.Store,
+		uiBus:            cfg.UIBus,
+		approveFn:        cfg.ApproveFn,
+		reviseFn:         cfg.ReviseFn,
+		retryFn:          cfg.RetryFn,
+		dialogAnswerFn:   cfg.DialogAnswerFn,
+		dialogCancelFn:   cfg.DialogCancelFn,
+		theme:            cfg.Theme,
+		wsPongWait:       pongWait,
+		wsPingPeriod:     pingPeriod,
+		wsWriteWait:      writeWait,
+		fileServer:       http.FileServer(http.FS(web.FS)),
 	}
 
-	// Предподготовка index.html: при theme=="goga" подменяем ссылку на CSS и класс
-	// body. Замены строковые — файл style-goga.css для этого не нужен (embed отдаст
-	// его позже через fileServer). Ошибка чтения embed невозможна на практике, но
-	// обрабатываем: при nil serveIndex делегирует на fileServer.
+	skinName := s.builtinSkinName()
+	skinHref := skinHrefFor(skinName)
+	faviconHref, faviconMimeType, faviconFound := s.embeddedFavicon(skinName)
+	if !faviconFound {
+		faviconHref, faviconMimeType = defaultFaviconHref, mimeSVG
+	}
+	titleText := ""
+	if data, err := fs.ReadFile(web.FS, "skins/"+skinName+"/"+skinTitleFile); err == nil {
+		titleText = strings.TrimSpace(string(data))
+	}
+
+	// skin_dir полностью подменяет активный скин (аналогично prompts_dir):
+	// нужен index.css внутри директории, иначе — предупреждение и fallback на
+	// встроенный скин (theme/novacorps). Дашборд не критичен для работы флоу
+	// (в отличие от промптов), поэтому сервер не падает при плохом skin_dir.
+	if cfg.SkinDir != "" {
+		if _, err := os.Stat(filepath.Join(cfg.SkinDir, skinIndexFile)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skin_dir %q has no %s, using skin %q\n", cfg.SkinDir, skinIndexFile, skinName)
+		} else {
+			s.customSkinServer = http.FileServer(http.FS(os.DirFS(cfg.SkinDir)))
+			skinName = themeCustom
+			skinHref = skinHrefFor(themeCustom)
+			faviconHref, faviconMimeType = defaultFaviconHref, mimeSVG
+			if href, mime, ok := findSkinFavicon("./skins/custom", func(name string) bool {
+				_, err := os.Stat(filepath.Join(cfg.SkinDir, name))
+				return err == nil
+			}); ok {
+				faviconHref, faviconMimeType = href, mime
+			}
+			titleText = ""
+			if data, err := os.ReadFile(filepath.Join(cfg.SkinDir, skinTitleFile)); err == nil {
+				titleText = strings.TrimSpace(string(data))
+			}
+		}
+	}
+
+	// Предподготовка index.html: подменяем ссылку на CSS, класс body, favicon
+	// (href + type) и, если у скина есть title.txt, <title>. Замены строковые —
+	// сами файлы скина отдаст fileServer/customSkinServer позже. Ошибка чтения
+	// embed невозможна на практике, но обрабатываем: при nil serveIndex
+	// делегирует на fileServer.
 	indexBytes, err := fs.ReadFile(web.FS, "index.html")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
 	} else {
-		if cfg.Theme == themeGoga {
-			// Vite собирает index.html с относительными путями (base: './'),
-			// поэтому ссылка на стиль — href="./style.css". Подменяем на goga-стиль.
+		indexBytes = bytes.ReplaceAll(indexBytes,
+			[]byte(`href="`+skinHrefFor(themeNovacorps)+`"`), []byte(`href="`+skinHref+`"`))
+		indexBytes = bytes.ReplaceAll(indexBytes,
+			[]byte(`class="theme-`+themeNovacorps+`"`), []byte(`class="theme-`+skinName+`"`))
+		indexBytes = bytes.ReplaceAll(indexBytes,
+			[]byte(`type="`+mimeSVG+`" href="`+defaultFaviconHref+`"`),
+			[]byte(`type="`+faviconMimeType+`" href="`+faviconHref+`"`))
+		if titleText != "" {
 			indexBytes = bytes.ReplaceAll(indexBytes,
-				[]byte(`href="./style.css"`), []byte(`href="./style-goga.css"`))
-			indexBytes = bytes.ReplaceAll(indexBytes,
-				[]byte(`class="theme-novacorps"`), []byte(`class="theme-goga"`))
-			indexBytes = bytes.ReplaceAll(indexBytes,
-				[]byte(`<title>afm Dashboard</title>`), []byte(`<title>QArium</title>`))
-			indexBytes = bytes.ReplaceAll(indexBytes,
-				[]byte(`type="image/svg+xml" href="./favicon.svg"`),
-				[]byte(`type="image/png" href="./quarium-logo.png"`))
+				[]byte(`<title>afm Dashboard</title>`), []byte(`<title>`+titleText+`</title>`))
 		}
 		s.indexBytes = indexBytes
 	}
@@ -119,6 +208,9 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	if s.customSkinServer != nil {
+		mux.Handle(customSkinRoute, http.StripPrefix(customSkinRoute, s.customSkinServer))
+	}
 	mux.HandleFunc("/", s.serveStatic)
 
 	s.httpSrv = &http.Server{
@@ -129,7 +221,25 @@ func New(cfg Config) *Server {
 	return s
 }
 
-// serveStatic отдаёт index.html (с подставленной темой) для "/" и "/index.html",
+// builtinSkinName нормализует Theme до имени встроенного скина: "goga" или
+// default "novacorps".
+func (s *Server) builtinSkinName() string {
+	if s.theme == themeGoga {
+		return themeGoga
+	}
+	return themeNovacorps
+}
+
+// embeddedFavicon ищет favicon встроенного скина среди skinFaviconCandidates
+// (skins/<name>/favicon.svg или favicon.png в embed).
+func (s *Server) embeddedFavicon(skinName string) (href, mime string, found bool) {
+	return findSkinFavicon("./skins/"+skinName, func(name string) bool {
+		_, err := fs.Stat(web.FS, "skins/"+skinName+"/"+name)
+		return err == nil
+	})
+}
+
+// serveStatic отдаёт index.html (с подставленным скином) для "/" и "/index.html",
 // остальную статику делегирует на FileServer.
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" || r.URL.Path == "/index.html" {

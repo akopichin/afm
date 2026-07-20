@@ -1,0 +1,156 @@
+/* pkg/web/dashboard/public/skins/novacorps/index.css — Nova Corps skin
+   Hi-tech holographic UI: neon accents, scanlines, ray-sweep decor.
+   Structure comes from ../base/*.css; this file supplies only tokens + decor. */
+
+@import url("../base/reset.css");
+@import url("../base/header.css");
+@import url("../base/layout.css");
+@import url("../base/stages-list.css");
+@import url("../base/plan-panel.css");
+@import url("../base/log-panel.css");
+@import url("../base/dialog-channel.css");
+@import url("../base/event-feed.css");
+@import url("../base/markdown.css");
+
+:root[data-theme="dark"] {
+  /* base surfaces — идентичны текущему style.css:23-56 */
+  --bg:        #08141a;
+  --bg-elev:   #0c1c24;
+  --panel-bg:  rgba(8, 20, 26, 0.88);
+
+  /* text */
+  --ink:       #cfeeea;
+  --ink-hi:    #e7faf7;
+  --ink-dim:   #4a8a85;
+
+  /* accents */
+  --mint:      #6fd4cc;
+  --mint-soft: rgba(111, 212, 204, 0.22);
+  --grid:      rgba(111, 212, 204, 0.04);
+  --amber:     #e5d442;
+  --violet:    #b787ff;
+  --coral:     #ff6b5a;
+
+  /* dialog/supervisor accents (dark-mode-tuned pale hues, как раньше) */
+  --qa-answer:              #9fe0d8;
+  --dialog-option-text:     #d4baff;
+  --btn-cancel-dialog-text: #ff8a7a;
+  --supervisor-accent:      #c084fc;
+
+  /* status map */
+  --c-pending:        var(--ink-dim);
+  --c-planning:       var(--mint);
+  --c-awaiting:       var(--amber);
+  --c-revising:       var(--amber);
+  --c-ready:          var(--mint);
+  --c-running:        var(--amber);
+  --c-done:           var(--mint);
+  --c-failed:         var(--coral);
+  --c-retrying:       var(--amber);
+  --c-awaiting-user:  var(--violet);
+
+  /* legacy aliases used by inline styles */
+  --text:    var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+:root[data-theme="light"] {
+  /* base surfaces — новая светлая палитра, того же характера (тёплый нейтраль + teal) */
+  --bg:        #f4f9f8;
+  --bg-elev:   #ffffff;
+  --panel-bg:  rgba(255, 255, 255, 0.88);
+
+  /* text */
+  --ink:       #16302c;
+  --ink-hi:    #08201c;
+  --ink-dim:   #5c8f88;
+
+  /* accents — сдвинуты темнее относительно dark-варианта для контраста на светлом фоне */
+  --mint:      #1f8f86;
+  --mint-soft: rgba(31, 143, 134, 0.18);
+  --grid:      rgba(31, 143, 134, 0.05);
+  --amber:     #a6790a;
+  --violet:    #7c3aed;
+  --coral:     #c2410c;
+
+  /* dialog/supervisor accents — переподобраны под светлый фон */
+  --qa-answer:              #0f766e;
+  --dialog-option-text:     #6d28d9;
+  --btn-cancel-dialog-text: #b91c1c;
+  --supervisor-accent:      #9333ea;
+
+  /* status map */
+  --c-pending:        var(--ink-dim);
+  --c-planning:       var(--mint);
+  --c-awaiting:       var(--amber);
+  --c-revising:       var(--amber);
+  --c-ready:          var(--mint);
+  --c-running:        var(--amber);
+  --c-done:           var(--mint);
+  --c-failed:         var(--coral);
+  --c-retrying:       var(--amber);
+  --c-awaiting-user:  var(--violet);
+
+  /* legacy aliases used by inline styles */
+  --text:    var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+/* === Scanlines overlay on body (novacorps-only decor) === */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.014) 0px,
+    rgba(255, 255, 255, 0.014) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* === Yellow scanner ray on grid lines (novacorps-only decor) === */
+.ray {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  -webkit-mask-image:
+    linear-gradient(rgba(0, 0, 0, 1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 1) 1px, transparent 1px);
+  -webkit-mask-size: 24px 24px;
+          mask-image:
+    linear-gradient(rgba(0, 0, 0, 1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 1) 1px, transparent 1px);
+          mask-size: 24px 24px;
+}
+.ray::before {
+  content: "";
+  position: absolute;
+  top: -40%;
+  left: -40%;
+  width: 60%;
+  height: 180%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(229, 212, 66, 0.55) 0%,
+    rgba(229, 212, 66, 0.20) 25%,
+    transparent 60%
+  );
+  transform: rotate(20deg) translate(-30%, -30%);
+  filter: blur(2px);
+  animation: raySweep 9s linear infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes raySweep {
+  0%   { transform: rotate(20deg) translate(-30%, -30%); opacity: 0; }
+  8%   { opacity: 1; }
+  45%  { opacity: 1; }
+  60%  { transform: rotate(20deg) translate(160%, 70%); opacity: 0; }
+  100% { transform: rotate(20deg) translate(160%, 70%); opacity: 0; }
+}

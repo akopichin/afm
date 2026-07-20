@@ -1,0 +1,147 @@
+/* pkg/web/dashboard/public/skins/base/stages-list.css
+   Sidebar stage list, status dots, active-stage indicator. */
+
+#stages-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stage-item {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid rgba(111, 212, 204, 0.06);
+  cursor: pointer;
+  position: relative;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  text-transform: uppercase;
+  transition: background 0.15s;
+}
+
+.stage-item:hover {
+  background: rgba(111, 212, 204, 0.06);
+}
+
+/* Средняя ячейка сетки .stage-item: id крупно + name мелко под ним.
+   .stage-id наследует font-size/text-transform/letter-spacing от .stage-item. */
+.stage-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stage-id {
+  font-weight: 600;
+}
+
+.stage-name {
+  font-size: 9px;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* status-dot стилизуется как кольцо */
+.status-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--c-pending);
+  position: relative;
+  flex-shrink: 0;
+  background: transparent;
+}
+.status-dot::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-dot[data-status="pending"]              { color: var(--c-pending);       border-color: var(--c-pending); }
+.status-dot[data-status="pending"]::after       { background: transparent; }
+.status-dot[data-status="planning"]             { color: var(--c-planning);      border-color: var(--c-planning); }
+.status-dot[data-status="awaiting_approval"]    { color: var(--c-awaiting);      border-color: var(--c-awaiting); }
+.status-dot[data-status="revising"]             { color: var(--c-revising);      border-color: var(--c-revising); }
+.status-dot[data-status="ready"]                { color: var(--c-ready);         border-color: var(--c-ready); }
+.status-dot[data-status="running"]              { color: var(--c-running);       border-color: var(--c-running); }
+.status-dot[data-status="done"]                 { color: var(--c-done);          border-color: var(--c-done); }
+.status-dot[data-status="failed"]               { color: var(--c-failed);        border-color: var(--c-failed); }
+.status-dot[data-status="retrying"]             { color: var(--c-retrying);      border-color: var(--c-retrying); }
+.status-dot[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); border-color: var(--c-awaiting-user); }
+
+/* "running" rings — pulse */
+.status-dot[data-status="running"],
+.status-dot[data-status="planning"],
+.status-dot[data-status="revising"],
+.status-dot[data-status="retrying"] {
+  animation: runRing 1.6s ease-in-out infinite;
+}
+.status-dot[data-status="awaiting_user_input"] {
+  animation: askPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes runRing {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50%      { box-shadow: 0 0 0 4px transparent; }
+}
+@keyframes askPulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50%      { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* Dialog badge на стадии с awaiting_user_input */
+.dialog-badge {
+  font-size: 11px;
+  margin-left: 4px;
+  color: var(--c-awaiting-user);
+}
+
+/* === Active stage === */
+.stage-item.active {
+  background: linear-gradient(90deg, rgba(229, 212, 66, 0.06), transparent);
+}
+.stage-item.active::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--amber);
+  box-shadow: 0 0 8px var(--amber);
+  animation: activeBar 2.4s ease-in-out infinite;
+}
+.stage-item.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(229, 212, 66, 0.7), transparent);
+  animation: scanlineX 3s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes activeBar {
+  0%, 100% { box-shadow: 0 0 4px var(--amber); opacity: 0.85; }
+  50%      { box-shadow: 0 0 12px var(--amber); opacity: 1; }
+}
+@keyframes scanlineX {
+  0%   { transform: translateY(0); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateY(34px); opacity: 0; }
+}

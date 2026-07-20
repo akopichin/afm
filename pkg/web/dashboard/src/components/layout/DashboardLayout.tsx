@@ -1,20 +1,23 @@
-import { type ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { Group, Panel, Separator, useDefaultLayout, type Layout } from 'react-resizable-panels'
 
 type Props = {
   stages: ReactNode
   // Заголовок выбранной стадии (имя + статус-бейдж) над plan; null, когда стадия не выбрана.
   stageHeader: ReactNode
-  plan: ReactNode
-  dialog: ReactNode
+  // null — панель скрыта (автономная стадия для plan; недиалоговая для dialog).
+  plan: ReactNode | null
+  dialog: ReactNode | null
   log: ReactNode
   feed: ReactNode
 }
 
 // Локальный persistence-хук для одной группы панелей: восстанавливает layout
-// из localStorage (afm-cols / afm-rows) при монтировании и сохраняет его после
-// ручного ресайза. react-resizable-panels v4 не имеет autoSaveId — persistence
-// реализуется через useDefaultLayout({ id, storage }).
+// из localStorage при монтировании и сохраняет его после ручного ресайза.
+// Ключ для колонок фиксирован (afm-cols); для строк — зависит от набора
+// видимых панелей: afm-rows-<ids> (напр. afm-rows-plan-dialog-log). react-
+// resizable-panels v4 не имеет autoSaveId — persistence реализуется через
+// useDefaultLayout({ id, storage }).
 //
 // ВАЖНО: при пустом storage useDefaultLayout всё равно возвращает вычисленный
 // layout (равные доли), поэтому по самому объекту не отличить «свечая загрузка»
@@ -34,7 +37,11 @@ function useSavedLayout(id: string, fallback: Layout) {
 // Применяется только когда в storage нет сохранённого layout (свежая загрузка);
 // после ручного ресайза восстанавливается сохранённое значение.
 const DEFAULT_COLS: Layout = { stages: 15, detail: 60, feed: 25 }
-const DEFAULT_ROWS: Layout = { plan: 30, dialog: 45, log: 25 }
+
+type RowId = 'plan' | 'dialog' | 'log'
+
+// Доли строк для полного набора; при скрытии панелей берутся только присутствующие id.
+const ROW_SHARES: Record<RowId, number> = { plan: 30, dialog: 45, log: 25 }
 
 // Трёхколоночный resizable-лейаут: StagesList | центральная колонка (detail) | EventFeed.
 // Центральная колонка — flex-col: detail-header сверху, под ним вертикальная Group
@@ -44,7 +51,20 @@ const DEFAULT_ROWS: Layout = { plan: 30, dialog: 45, log: 25 }
 // (в задаче упоминался v2-style autoSaveId/PanelResizeHandle, но установлен v4.12.2).
 export function DashboardLayout({ stages, stageHeader, plan, dialog, log, feed }: Props) {
   const cols = useSavedLayout('afm-cols', DEFAULT_COLS)
-  const rows = useSavedLayout('afm-rows', DEFAULT_ROWS)
+
+  // Присутствующие строки в порядке plan → dialog → log. plan/dialog опускаются,
+  // когда проп null (автономная/неинтерактивная стадия). log присутствует всегда.
+  const rowPanels: Array<{ id: RowId; node: ReactNode; minSize: string }> = []
+  if (plan !== null) rowPanels.push({ id: 'plan', node: plan, minSize: '15' })
+  if (dialog !== null) rowPanels.push({ id: 'dialog', node: dialog, minSize: '15' })
+  rowPanels.push({ id: 'log', node: log, minSize: '10' })
+
+  // Storage-ключ и defaultLayout зависят от набора панелей: у каждого набора
+  // своя сохранённая раскладка, ключи всегда совпадают с присутствующими id
+  // (иначе react-resizable-panels распределяет доли по несуществующим панелям).
+  const rowsStorageId = `afm-rows-${rowPanels.map((p) => p.id).join('-')}`
+  const rowsFallback: Layout = Object.fromEntries(rowPanels.map((p) => [p.id, ROW_SHARES[p.id]]))
+  const rows = useSavedLayout(rowsStorageId, rowsFallback)
 
   return (
     <Group
@@ -61,14 +81,17 @@ export function DashboardLayout({ stages, stageHeader, plan, dialog, log, feed }
           <Group
             orientation="vertical"
             className="detail-rows"
-            defaultLayout={rows.defaultLayout ?? DEFAULT_ROWS}
+            defaultLayout={rows.defaultLayout ?? rowsFallback}
             onLayoutChanged={rows.onLayoutChanged}
           >
-            <Panel id="plan" minSize="15">{plan}</Panel>
-            <Separator className="resize-handle resize-handle-h" />
-            <Panel id="dialog" minSize="15">{dialog}</Panel>
-            <Separator className="resize-handle resize-handle-h" />
-            <Panel id="log" minSize="10">{log}</Panel>
+            {rowPanels.map((p, i) => (
+              <Fragment key={p.id}>
+                {i > 0 && <Separator className="resize-handle resize-handle-h" />}
+                <Panel id={p.id} minSize={p.minSize}>
+                  {p.node}
+                </Panel>
+              </Fragment>
+            ))}
           </Group>
         </div>
       </Panel>

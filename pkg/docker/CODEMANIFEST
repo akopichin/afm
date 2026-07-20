@@ -48,11 +48,14 @@ Annotations: |
       каталог пользователя (нужен для монтирования ~/.claude, ~/.afm); при успехе управление не
       возвращается (syscall.Exec)
 
-"ScanCommands(f Flow, globalCmd string) -> mounts:[]CommandMount":
+"ScanCommands(f Flow, globalCmd string, generated map[string]bool) -> mounts:[]CommandMount":
   location: launcher.go
   annotations: |
     Возвращает список нестандартных (не claude) агентов из флоу для монтирования в контейнер.
     `f`: описание флоу (импортировано из pkg/flow), указатель на Flow, передаётся по указателю
+    `generated`: команды, уже покрытые autoShim-генерируемыми врапперами (см. Docker autoShim в
+    CLAUDE.md) — такие команды не монтируются как хостовые бинарники, чтобы не конфликтовать с
+    сгенерированным враппером внутри контейнера
 
     Constraints:
     - Бинарники, не найденные в PATH на хосте, молча пропускаются

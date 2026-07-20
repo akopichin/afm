@@ -1,0 +1,319 @@
+/* pkg/web/dashboard/public/skins/base/layout.css
+   #main grid/panels, footer, resizable panel layout, attention signal. */
+
+#main {
+  display: grid;
+  grid-template-columns: 240px 1fr 280px;
+  gap: 20px;
+  padding: 18px 20px;
+  height: calc(100vh - 56px - 50px);
+  overflow: hidden;
+  position: relative;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Panel base */
+#stages-panel,
+#detail-panel,
+#feed-panel {
+  position: relative;
+  z-index: 1;
+  background: var(--panel-bg);
+  border: 1px solid var(--mint-soft);
+  padding: 14px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Лента событий занимает всю высоту панели и скроллится сама:
+   без display:flex у #feed-panel flex:1 на .event-feed-scroll игнорируется,
+   контейнер не ограничивается по высоте, не переполняется — и автоскролл
+   с кнопкой «↓ к последнему» остаются инертными. */
+#feed-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+/* Notched corner accents */
+#stages-panel::before,
+#detail-panel::before,
+#feed-panel::before,
+#stages-panel::after,
+#detail-panel::after,
+#feed-panel::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--mint);
+  pointer-events: none;
+}
+#stages-panel::before,
+#detail-panel::before,
+#feed-panel::before {
+  top: -1px; left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+#stages-panel::after,
+#detail-panel::after,
+#feed-panel::after {
+  bottom: -1px; right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* Pane titles */
+#stages-panel h2,
+#feed-panel h2 {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--ink-hi);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--mint-soft);
+}
+
+/* === Footer === */
+#footer {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 22px;
+  padding: 10px 20px;
+  background: var(--bg);
+  border-top: 1px solid var(--mint-soft);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.footer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.footer-label { color: var(--ink-dim); }
+
+/* === Footer progress bar with shimmer === */
+.progress-bar {
+  width: 180px;
+  height: 4px;
+  background: rgba(111, 212, 204, 0.12);
+  position: relative;
+  overflow: hidden;
+}
+.progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: linear-gradient(90deg, rgba(229, 212, 66, 0.15), var(--amber));
+  transition: width 0.4s ease;
+}
+.progress-fill::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  animation: shimmer 2.2s linear infinite;
+}
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(330%); }
+}
+.progress-fill::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--amber);
+  box-shadow: 0 0 10px var(--amber);
+  animation: tipPulse 1.2s ease-in-out infinite;
+}
+@keyframes tipPulse {
+  0%, 100% { box-shadow: 0 0 6px var(--amber); }
+  50%      { box-shadow: 0 0 16px var(--amber); }
+}
+
+#progress-text,
+#started-at,
+#elapsed {
+  color: var(--ink-hi);
+  letter-spacing: 0.1em;
+}
+
+/* === Auto-scroll: диалог и фид (useStickToBottom) === */
+.dialog-scroll,
+.event-feed-scroll {
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Диалог заполняет всю высоту panel-frame-body (и весь оверлей при maximize) —
+   без фиксированного потолка. Прокрутка — внутри .dialog-scroll. */
+.dialog-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Лента занимает всё доступное место панели, но не выталкивает заголовок */
+.event-feed-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.jump-latest {
+  position: sticky;
+  bottom: 6px;
+  margin-left: auto;
+  display: block;
+  background: rgba(111, 212, 204, 0.15);
+  border: 1px solid var(--mint);
+  color: var(--ink);
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+/* === Resizable dashboard layout (react-resizable-panels) ===
+   #main становится flex-контейнером для горизонтального PanelGroup.
+   Внутри центральной колонки — .detail-column (flex-col): detail-header сверху,
+   под ним вертикальный PanelGroup (.detail-rows) из plan/dialog/log.
+   Переопределяет grid выше (равная специфичность #main, более поздний порядок
+   в этом же файле — побеждает); размеры панелей сохраняются в localStorage
+   (afm-cols / afm-rows). */
+#main {
+  display: flex;
+  min-height: 0;
+}
+
+.detail-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  /* Внутренние отступы центральной колонки, чтобы панели не «прилипали» к краям. */
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+/* Вертикальный PanelGroup занимает остаток высоты под detail-header.
+   Важно flex:1 1 0 + min-height:0, иначе внутренние панели не скроллятся. */
+.detail-rows {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* resize-хендлы: тонкая полоса, подсвечивается при hover/active. */
+.resize-handle {
+  flex: 0 0 4px;
+  background: rgba(183, 135, 255, 0.2);
+  transition: background 0.15s;
+}
+.resize-handle:hover,
+.resize-handle[data-resize-handle-active] {
+  background: var(--violet);
+}
+.resize-handle-v {
+  cursor: col-resize;
+  width: 4px;
+}
+.resize-handle-h {
+  cursor: row-resize;
+  height: 4px;
+}
+
+/* Каркас панели: заголовок сверху, тело скроллится. */
+.panel-frame {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.panel-frame-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-frame-body {
+  flex: 1;
+  min-height: 0;
+  /* flex-колонка: внутренний scroll-контейнер (dialog/event-feed) заполняет высоту;
+     для панелей без такого контейнера (plan/log) содержимое скроллится самим body. */
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+/* Прямой ребёнок body (внешний враппер панели — #dialog-section, #feed-panel и т.п.)
+   заполняет высоту и сам становится flex-колонкой, иначе внутренний scroll-контейнер
+   (.dialog-scroll/.event-feed-scroll) не получит высоту и схлопнется. */
+.panel-frame-body > * {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Иконочные кнопки (maximize, mode-toggle) — аскетичный контурный стиль. */
+.icon-btn {
+  background: transparent;
+  border: 1px solid rgba(111, 212, 204, 0.4);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.icon-btn:hover {
+  border-color: var(--mint);
+}
+
+/* Полноэкранный оверлей для максимизированной панели (портал в <body>). */
+.maximize-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* === Attention-сигнал ===
+   Когда стадия ждёт действия пользователя (awaiting_user_input / awaiting_approval),
+   подсвечиваем её в трёх местах: элемент списка стадий (сайдбар), точка в шапке и
+   рамка соответствующей панели (plan/dialog). */
+@keyframes attentionPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 212, 66, 0); }
+  50%      { box-shadow: 0 0 12px 2px rgba(229, 212, 66, 0.65); }
+}
+
+.panel-frame.attention {
+  border: 1px solid var(--amber);
+  animation: attentionPulse 1.6s ease-in-out infinite;
+}
+
+.stages-list [data-attention='true'] {
+  animation: attentionPulse 1.6s ease-in-out infinite;
+}
+
+.attention-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: attentionPulse 1.2s ease-in-out infinite;
+}

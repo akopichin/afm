@@ -24,17 +24,19 @@ type EvaluationResult struct {
 // Supervisor оценивает стадию и решает, можно ли выполнить её автономно.
 type Supervisor struct {
 	runner executor.Runner
-	// retryBackoff/maxRetries — снимок package-level RetryBackoff/MaxRetries на
-	// момент NewSupervisor (см. retry.go). Читаются из immutable-полей, а не из
-	// package var в EvaluateStage: иначе мутация package var в t.Cleanup теста
-	// даёт data race с горутиной супервизора (как у Orchestrator, cd7c65f).
-	retryBackoff time.Duration
+	// maxRetries/retryBackoff — снапшоты globals (см. Orchestrator): EvaluateStage
+	// ретраит transient-ошибки и может выполняться в горутине, переживая Run().
 	maxRetries   int
+	retryBackoff time.Duration
 }
 
 // NewSupervisor создаёт Supervisor с заданным runner.
 func NewSupervisor(r executor.Runner) *Supervisor {
-	return &Supervisor{runner: r, retryBackoff: RetryBackoff, maxRetries: MaxRetries}
+	return &Supervisor{
+		runner:       r,
+		maxRetries:   MaxRetries,
+		retryBackoff: RetryBackoff,
+	}
 }
 
 // supervisorPromptTmpl — системный промпт на английском (экономия токенов).

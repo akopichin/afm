@@ -22,6 +22,8 @@ export type Stage = {
   name: string
   status: StageStatus
   updatedAt: string
+  interactive: boolean
+  autonomous: boolean
 }
 
 // Человекочитаемые подписи статусов для списка стадий и панели деталей.

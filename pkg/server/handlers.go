@@ -24,10 +24,30 @@ const (
 	keyStatus           = "status"
 )
 
+// statusResponse расширяет снапшот двумя per-stage картами для UI:
+// stage_interactive (статический конфиг флоу) и stage_autonomous (рантайм,
+// по наличию autonomous.flag в директории стадии).
+type statusResponse struct {
+	state.RunState
+	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
+	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	rs := s.store.Snapshot()
+	autonomous := make(map[string]bool, len(rs.Stages))
+	for id := range rs.Stages {
+		if _, err := os.Stat(filepath.Join(s.runDir, id, "autonomous.flag")); err == nil {
+			autonomous[id] = true
+		}
+	}
+	resp := statusResponse{
+		RunState:         rs,
+		StageInteractive: s.stageInteractive,
+		StageAutonomous:  autonomous,
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rs)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {

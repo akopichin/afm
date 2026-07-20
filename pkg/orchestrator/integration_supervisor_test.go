@@ -190,5 +190,120 @@ func TestIntegration_SupervisorStandard(t *testing.T) {
 	}
 }
 
+// TestIntegration_StaleAutonomousFlagClearedOnPlanning воспроизводит баг: стадия
+// на предыдущей попытке ушла в autonomous-трек (создан autonomous.flag), autonomous-
+// агент не завершил её, и на retry/повторе стадия пошла по стандартному planning-треку
+// и дошла до awaiting_approval с реальным plan.md. Флаг обязан быть снят: иначе
+// stage_autonomous в /api/status оставался бы true, и дашборд прятал бы plan-панель
+// (approve-кнопку не видно — стадия «висит» на awaiting_approval без UI).
+func TestIntegration_StaleAutonomousFlagClearedOnPlanning(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "s1", Name: "Stage 1", Description: "planning track after stale autonomous attempt", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	// Стандартный planning-раннер (пишет plan.md), без supervisor и без autoApprove —
+	// хотим остановиться ровно на awaiting_approval и проверить состояние.
+	runner := mockRunner(t, mockPlanningScript)
+	orch, runDir, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+
+	// Непустой DashboardURL → headless auto-approve не срабатывает, стадия стабильно
+	// стоит на awaiting_approval (как при реально запущенном дашборде).
+	orch.SetDashboardURL("http://127.0.0.1:0")
+
+	// Пред-сеем устаревший autonomous.flag от «прошлой» автономной попытки.
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Стадия проходит planning и встаёт на awaiting_approval (approve никто не жмёт).
+	waitForStatus(t, stateFile, "s1", state.StatusAwaitingApproval, 10*time.Second)
+
+	// plan.md появился — стадия реально шла по стандартному треку.
+	if _, err := os.Stat(filepath.Join(stageDir, "plan.md")); err != nil {
+		t.Errorf("plan.md should exist after standard planning: %v", err)
+	}
+
+	// Устаревший autonomous.flag снят — stage_autonomous станет false, plan-панель
+	// с approve-кнопкой видна.
+	if _, err := os.Stat(filepath.Join(stageDir, "autonomous.flag")); err == nil {
+		t.Error("stale autonomous.flag should have been cleared by the planning track")
+	} else if !os.IsNotExist(err) {
+		t.Errorf("unexpected error checking autonomous.flag: %v", err)
+	}
+}
+
+// TestIntegration_RetryFailedAutonomousStaysAutonomous: упавшая autonomous-стадия
+// (на диске autonomous.flag) при manual retry перезапускается в автономном треке,
+// а НЕ сваливается в planning. Раньше retryStage игнорировал флаг и всегда уводил
+// planning-способную стадию в planning (баг: пользователь видел неожиданный
+// planning + awaiting_approval вместо повторного автономного запуска).
+func TestIntegration_RetryFailedAutonomousStaysAutonomous(t *testing.T) {
+	decision := []byte(`{"can_execute_autonomously":true,"reason":"skill handles it","recommended_phases":["autonomous_execution"]}`)
+	stages := []flow.Stage{
+		{
+			ID:          "s1",
+			Name:        "S1",
+			Description: "autonomous stage that failed and is retried",
+			Supervisor:  true,
+			Agents:      []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
+			Skills:      []string{"goga:apply"},
+		},
+	}
+
+	orch, runDir := setupSupervisorOrch(t, stages, decision)
+	// DashboardURL непустой → Run не выходит на failed-стадии (терминальной), а ждёт
+	// AllDone; это даёт время вызвать Retry (и совпадает с реальным сценарием — дашборд запущен).
+	orch.SetDashboardURL("http://127.0.0.1:9876")
+
+	// Пред-состояние: стадия уже ушла в autonomous-трек (flag на диске) и упала
+	// (напр. autonomous-агент был прерван рестартом → context canceled → failed).
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	store := orchestrator.StoreFromOrch(orch)
+	if err := store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusFailed, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Retry упавшей autonomous-стадии.
+	if err := orch.Retry(context.Background(), "s1"); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	// Успешно завершилась через autonomous-трек (а не застряла на awaiting_approval,
+	// куда привёл бы ошибочный planning-fallback).
+	waitForStatus(t, stateFile, "s1", state.StatusDone, 10*time.Second)
+
+	// execution_summary.md написан → шёл автономный агент.
+	if _, err := os.Stat(filepath.Join(stageDir, "execution_summary.md")); err != nil {
+		t.Errorf("execution_summary.md missing — retry did NOT re-run the autonomous track: %v", err)
+	}
+	// plan.md отсутствует → в planning не сваливались.
+	if _, err := os.Stat(filepath.Join(stageDir, "plan.md")); err == nil {
+		t.Error("plan.md exists — retry wrongly fell back to the planning track")
+	}
+	// autonomous.flag сохранён → стадия осталась автономной.
+	if _, err := os.Stat(filepath.Join(stageDir, "autonomous.flag")); err != nil {
+		t.Errorf("autonomous.flag should be preserved on autonomous retry: %v", err)
+	}
+}
+
 // compile-time check that supervisorTestRunner satisfies executor.Runner.
 var _ executor.Runner = (*supervisorTestRunner)(nil)

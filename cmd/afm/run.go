@@ -233,15 +233,21 @@ func newRunCmd() *cobra.Command {
 
 			// Start HTTP server if port > 0
 			if cfg.Server.GetPort() > 0 {
+				stageInteractive := make(map[string]bool, len(f.Stages))
+				for _, st := range f.Stages {
+					stageInteractive[st.ID] = st.Interactive
+				}
 				srv := server.New(server.Config{
-					Port:      cfg.Server.GetPort(),
-					RunDir:    runDir,
-					Store:     store,
-					Theme:     cfg.EffectiveTheme(),
-					UIBus:     orch.UIBus(),
-					ApproveFn: orch.Approve,
-					ReviseFn:  orch.Revise,
-					RetryFn:   orch.Retry,
+					Port:             cfg.Server.GetPort(),
+					RunDir:           runDir,
+					StageInteractive: stageInteractive,
+					Store:            store,
+					Theme:            cfg.EffectiveTheme(),
+					SkinDir:          cfg.SkinDir,
+					UIBus:            orch.UIBus(),
+					ApproveFn:        orch.Approve,
+					ReviseFn:         orch.Revise,
+					RetryFn:          orch.Retry,
 					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
 						return orch.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
 					},

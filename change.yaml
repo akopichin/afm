@@ -1,7 +1,7 @@
-name: change-logo
-description: "mini change"
+name: some change
+description: "theme switch change"
 
-supervisor_command: glm52
+supervisor_command: claude
 
 prompt: |
   if goga binary not installed - install it with `pip install goga && goga connect claude`
@@ -17,10 +17,10 @@ stages:
     description: |
       засинкать codemanifest-ы с кодом.
     prompt: |
-      сделать goga-change нужно в theme: goga лого заменить с гога на quarium причем написанное также 2мя цветами и тем же шрифтом, что и на сайте https://qarium.ru.
+      сделать goga-change нужно перенести во всех скинах иконку смену темы вправо вверх. Обычно все иконки смены темы там находятся.
     skills:
       - goga-change
-    command: glm52
+    command: claude
   - id: accept
     name: "accept"
     supervisor: true
@@ -33,7 +33,7 @@ stages:
       сделать goga-accept прочекать что все ок по арх с помощью него.
     skills:
       - goga-accept
-    command: glm52
+    command: claude
     depends_on: [change]
 
   - id: commit
@@ -45,8 +45,8 @@ stages:
     description: |
       сделать коммит.
     prompt: |
-      прогнать линт
-      прогнать билд
+      прогони lint/build
+      обнови доку по этому изменению, напиши релиз нотсы.
       закоммитить все если все хорошо. Если нет - починить.
-    command: glm52
+    command: claude
     depends_on: [accept]

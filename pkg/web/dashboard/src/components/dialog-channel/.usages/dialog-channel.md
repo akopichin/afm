@@ -19,5 +19,7 @@ function DetailPanel({ stage }: { stage: Stage }) {
 - `sendAnswer` не принимает параметров — берёт customText/selectedOption из внутреннего состояния компонента.
 - `cancel` отменяет текущий диалог (POST /api/stages/{id}/dialog/cancel) после `window.confirm('Cancel stage?')`
   — соответствует кнопке отмены в текущем app.js.
+- Markdown-рендер (`MarkdownRenderer`) применяется только к вопросам — текущему pending-вопросу и вопросам в
+  истории; ответы в истории всегда выводятся как обычный текст («→ answer»), без markdown-рендера.
 - Комментарии к строкам плана здесь не реализованы — эта функциональность (`addLineComment` и т.п.), ранее
   упомянутая в этом документе, в коде отсутствует.

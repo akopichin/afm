@@ -2,18 +2,40 @@
 
 Новые возможности — сверху, дальше вниз по устареванию. Даты — по коммитам в `fix`/`master`.
 
-## 2026-07-17
+## 2026-07-20
 
-### Диалог: авто-релокейт misplaced question вместо fail-fast
-- Интерактивный (в т.ч. autonomous) агент, записавший `*.question.json` **вне** `$AFM_STAGE_DIR` (GLM-4.7 bug: путь строится из CWD, а не из env var), больше не валит стадию причиной `dialog protocol violation` — поллер сам переносит файл в stageDir (`relocateMisplacedQuestions`), стадия переходит в `awaiting_user_input`, вопрос виден в UI. По неверному пути остаётся dangling-симлинк `<id>.answer.json → <stageDir>/<id>.answer.json` — bash-polling-loop агента находит ответ по своему пути.
-- Autonomous-фаза сканируется по правильному имени лога (`autonomous.jsonl`); в `<interactive_rules>` системного промпта — жёсткий constraint писать question.json только через `echo … > "$AFM_STAGE_DIR/…"`.
-- Дашборд: неотвеченный вопрос виден всегда — фолбэк на `question.json` в `buildDialogEntries`, даже если он ещё не попал в `dialog.jsonl`.
+### Fix: `startReadyStages` мог запустить implementation-агента для autonomous-стадии
+- Retry упавшей autonomous-стадии (`retryStage`) переводит её `Pending → Ready` через `EvReady`, а следом сам берёт `EvStartRun`. В узком окне между этими двумя переходами конкурентный вызов `startReadyStages` из другой ветки event-loop (например, `onAgentCompleted` соседней стадии) мог выиграть CAS на `EvStartRun` первым — а `startReadyStages` слепо запускал `runImplementationAgent` для любой Ready-стадии, не проверяя `autonomous.flag`. `runImplementationAgent` читает `plan.md`, которого у autonomous-стадии нет → стадия падала с `open .../plan.md: no such file or directory` вместо повторного автономного прогона.
+- **Фикс:** `startReadyStages` перед спавном проверяет `isAutonomousStage` и для таких стадий запускает `runAutonomousAgent` — симметрично уже существующим проверкам в `recovery.go` и в `retryStage`.
+- Регрессия воспроизводилась стабильно (5/5) в `TestIntegration_RetryFailedAutonomousStaysAutonomous`; после фикса тест зелёный (5/5 подряд, `-race`).
 
-### Тема goga: wordmark «QArium»
-- Лого quarium + wordmark «QArium» (QA — teal, rium — белый) в хедере, title вкладки, favicon; хедер/футер на `--bg-elev`, текст прогресса — mint.
+### goga-accept: синхронизация CODEMANIFEST (второй проход)
+- `assets.ReadPrompt`: манифест не отражал третий возврат `fromOverride bool` (источник промпта для логирования).
+- `pkg/docker.ScanCommands`: манифест не отражал третий параметр `generated map[string]bool` (команды, покрытые autoShim-враппером).
+- `pkg/orchestrator.Orchestrator.Retry`: аннотация не описывала ветку retry для autonomous-стадий и очистку session/jsonl для интерактивных.
+- `cmd/afm`: манифест документировал несуществующий локальный хелпер `findLatestRunDir(stageID)` — approve/retry/revise реально вызывают `state.FindLatestRunForStage` (добавлена в `pkg/state/CODEMANIFEST`).
+- `pkg/web/dashboard/src/app`: `App()` не документировал исключение `status === 'failed'` для скрытия `showPlan` у autonomous-стадии — кнопка Retry в PlanPanel должна быть доступна и для упавшей autonomous-стадии.
 
-### Стабилизация тестов и супервизора
-- Устранены data race в тестах (`-race` зелёный): keepalive-таймауты WebSocket — immutable-поля `Server`; `RetryBackoff`/`MaxRetries` фиксируются снимком при создании `Orchestrator` **и `Supervisor`** (мутация package var после создания не влияет). Retry-цикл супервизора покрыт тестами (transient 529 → успех / exhausted / снапшот).
+### UI: переключатель темы перенесён из футера в шапку
+- Кнопка dark/light (`useThemeMode`, иконка ☾/☀) переехала из `Footer.tsx` в `FlowHeader.tsx` — теперь она в правом верхнем углу шапки, рядом с индикатором WS-соединения, а не в футере снизу. Поведение и внешний вид не изменились (тот же `.icon-btn`, тот же `aria-label`, то же сохранение в `localStorage`), поменялось только место рендера.
+- `skins/base/header.css` (источник — `public/skins/base/header.css`, копируется в корень `vite build`'ом): добавлена колонка в `#header { grid-template-columns }` и отступ `#header .icon-btn { margin-left: 4px }` под новую кнопку.
+- `Footer.test.tsx`/`FlowHeader.test.tsx`: тест переключения темы перенесён вместе с кнопкой.
+- CODEMANIFEST `footer`/`flow-header` синхронизированы с кодом (`goga lint`/`goga contract` подтверждают отсутствие дрейфа).
+
+### Data race на package-level globals (websocket keepalive + retry)
+- **`pkg/server` (websocket):** `wsPongWait`/`wsPingPeriod`/`wsWriteWait` — package-level `var`, которые тесты мутировали между соединениями. Серверные горутины (`PongHandler` в `readPump`, тикер в `writePump`) читали их на каждой итерации → data race с записью в тестах (даже горутины от прошлого соединения ещё были живы). **Фикс:** снапшот значений в локалы на старте `readPump`/`writePump` (keepalive фиксирован на время жизни соединения — перечитывать globals не нужно). `TestWebSocket_ClosesSilentClient` под `-race` теперь зелёный.
+- **`pkg/orchestrator` (retry):** `RetryBackoff`/`MaxRetries` — те же грабли. Агентские горутины (`runWithRetry`) переживают возврат `Run()` (он не дожидается их), а тесты восстанавливали globals в `t.Cleanup` → race в `TestIntegration_RetryExhausted` под `-race`. **Фикс:** `RetryBackoff`/`MaxRetries` снимаются в снапшот на инстанс в `New()`/`NewSupervisor()` (`Orchestrator.maxRetries`/`retryBackoff`, `Supervisor.maxRetries`/`retryBackoff`); `runWithRetry` и `EvaluateStage` читают immutable-поля инстанса, а не globals. Package-level `RetryBackoff`/`MaxRetries` остаются как дефолты и для тестов.
+
+### Lint: goconst + identical-switch-branches
+- `supervisor.go`: литерал `"autonomous_execution"` заменён на константу `phaseAutonomous` (goconst).
+- `orchestrator.go`: идентичные ветки `case phaseImplementation` и `case phaseAutonomous` (обе делали running→done) объединены (revive `identical-switch-branches`).
+- `golangci-lint run ./...` = 0 issues; `setstatuslinter` чист.
+
+### Test: устаревший `TestIntegration_DialogViolationDetected` → relocate
+- Тест проверял **старое** поведение (fail-fast через `detectDialogViolation` при записи `question.json` вне stageDir), заменённое на авто-релокейт в коммите `2a759dd`. Из-за этого мок (эмитил Write-событие без реального файла) заставлял стадию висеть → таймаут 15с. **Фикс:** тест переписан как `TestIntegration_MisplacedQuestionRelocated` — мок создаёт файл в неверной директории, проверяется, что poller релокейтит его в stageDir и стадия уходит в `awaiting_user_input`. Дока в `CLAUDE.md` обновлена под актуальное поведение relocate.
+
+### goga-accept: синхронизация CODEMANIFEST
+- `pkg/state/CODEMANIFEST`: `SetApplyHook(h TransitionCallback)` → `SetApplyHook(h)` — тип `TransitionCallback` отсутствует в коде (висячая ссылка, реальная сигнатура `func SetApplyHook(h func(Transition))`); выравнено с конвенцией sibling `SetExecFunc(f)`.
 
 ## 2026-07-16
 
@@ -36,8 +58,6 @@
 - **Решение супервизора публикуется в UI для обоих треков** (`EventSupervisorDecision` + `supervisor.jsonl`); раньше standard не публиковался — UI не видел резолюцию. В дашборде `supervisor_decision` выделен отдельной подсветкой (`.feed-entry.supervisor`) в Event feed.
 - **Логи autonomous-агента видны в средней "Log" панели**: `handleLog` (`/api/stages/<id>/log`) и `buildDialogEntries` читают `autonomous.log`/`autonomous.jsonl` (раньше только planning/implementation/review → панель была пуста для autonomous-стадий).
 - **Autonomous-фаза диалоговая**: `phaseAutonomous = "autonomous_execution"` — единая фаза без planning/impl/review (скилл всё делает сам, пишет `execution_summary.md`), НО скилл может спрашивать пользователя через тот же file-based dialog protocol (вопросы `autonomous_execution.q<N>.*`, валидная фаза, resume через `onUserAnswered`). Раннер получает `AFM_STAGE_DIR`, промпт включает `<interactive_rules>`.
-- **Персистентный supervisor-decision badge** в хедере стадии в дашборде (решение видно и после ухода события из фида).
-- **Fix host-режима `supervisor_command`**: wrapper генерируется, даже если ни одна стадия не использует команду как агента; секрет резолвится и в host-ветке (`UsedRecipes`).
 
 ## 2026-07-15
 

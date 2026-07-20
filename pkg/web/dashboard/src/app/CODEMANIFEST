@@ -1,29 +1,29 @@
 Imports:
   - Types: [FlowHeader]
-    From: pkg/web/dashboard/src/components/flow-header
+    From: src/components/flow-header
   - Types: [StagesList]
-    From: pkg/web/dashboard/src/components/stages-list
+    From: src/components/stages-list
   - Types: [PlanPanel]
-    From: pkg/web/dashboard/src/components/plan-panel
+    From: src/components/plan-panel
   - Types: [DialogChannel]
-    From: pkg/web/dashboard/src/components/dialog-channel
+    From: src/components/dialog-channel
   - Types: [LogPanel]
-    From: pkg/web/dashboard/src/components/log-panel
+    From: src/components/log-panel
   - Types: [EventFeedPanel]
-    From: pkg/web/dashboard/src/components/event-feed
+    From: src/components/event-feed
   - Types: [Footer]
-    From: pkg/web/dashboard/src/components/footer
+    From: src/components/footer
   - Types: [useStatus]
-    From: pkg/web/dashboard/src/hooks/use-status
+    From: src/hooks/use-status
   - Types: [useEventFeed]
-    From: pkg/web/dashboard/src/hooks/use-event-feed
+    From: src/hooks/use-event-feed
   - Types: [useStageLog]
-    From: pkg/web/dashboard/src/hooks/use-stage-log
+    From: src/hooks/use-stage-log
   - Types: [useElapsed]
-    From: pkg/web/dashboard/src/hooks/use-elapsed
+    From: src/hooks/use-elapsed
   - Types: [Stage, ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS]
     Usages: [dashboard-data-types]
-    From: pkg/web/dashboard/src/types
+    From: src/types
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -60,13 +60,18 @@ Annotations: |
     3. Вычислить attention выбранной стадии через useAttention (kind='dialog' при awaiting_user_input,
        'plan' при awaiting_approval) и anyAttention по всем стадиям через anyAwaiting; кормить
        useTitleFlash для мигания заголовка вкладки и прокручивать к панели, которой нужно действие,
-       при переходе kind null → 'plan'/'dialog'
-    4. Распределить данные по клеткам через DashboardLayout: flowName и anyAttention во `FlowHeader`,
-       stages в `StagesList`/`Footer`, события в `EventFeedPanel`, лог в `LogPanel`, план через `PlanPanel`
-       и диалог через `DialogChannel` (обе панели всегда смонтированы — при отсутствии выбранной стадии им
-       передаётся нейтральный sentinel вместо null, чтобы не терять id панелей в resizable-лейауте),
-       elapsedMs в `Footer`; заголовок выбранной стадии (статус через `STAGE_STATUS_LABELS`) и
-       SupervisorDecision рендерятся в слоте stageHeader
+       при смене kind на новое не-null значение (переход null → 'plan'/'dialog', либо смена самой
+       панели 'plan' ↔ 'dialog')
+    4. Распределить данные по компонентам: `FlowHeader` и `Footer` рендерятся напрямую вне
+       DashboardLayout (src/components/layout) — flowName, connected и anyAttention во `FlowHeader`;
+       stages, startedAt и elapsedMs в `Footer`. Остальные панели идут через слоты DashboardLayout:
+       stages в `StagesList`, события в `EventFeedPanel`, лог в `LogPanel`, план через `PlanPanel` и диалог
+       через `DialogChannel` (пока стадия не выбрана — обеим передаётся нейтральный sentinel вместо
+       null, чтобы не терять id панелей в resizable-лейауте; при выбранной стадии видимость решают
+       showPlan/showDialog: plan скрыт для автономной стадии, КРОМЕ статуса failed — кнопка Retry
+       живёт внутри PlanPanel и должна быть доступна для любой упавшей стадии независимо от наличия
+       плана; dialog скрыт только когда стадия не interactive и не autonomous); заголовок выбранной
+       стадии (статус через `STAGE_STATUS_LABELS`) и SupervisorDecision рендерятся в слоте stageHeader
     5. При значимых WebSocket-событиях (`SIGNIFICANT_EVENT_TYPES`: смена статуса стадии, approved, revised,
        retry_scheduled, retry_exhausted, manual_retry, ask_user, user_answered, supervisor_decision,
        agent_completed и т.д.) вызывать метод refresh() хука `useStatus` для ре-запроса состояния флоу —
@@ -74,8 +79,9 @@ Annotations: |
 
     Requirements:
     - Лог стадии — отдельный источник (useStageLog), а не фильтрация WebSocket-событий
-    - PlanPanel/DialogChannel остаются смонтированными независимо от выбора стадии (sentinel-стадия вместо
-      условного рендера)
+    - Пока стадия не выбрана, PlanPanel/DialogChannel получают нейтральный sentinel-стадию вместо null
+      (а не условный рендер по null) — так сохраняются id панелей в resizable-лейауте; при выбранной
+      стадии их видимость определяют showPlan/showDialog (autonomous/interactive стадии)
 
 ---
 

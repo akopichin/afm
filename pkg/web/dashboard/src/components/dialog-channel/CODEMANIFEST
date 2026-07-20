@@ -1,9 +1,9 @@
 Imports:
   - Types: [Stage]
     Usages: [dashboard-data-types]
-    From: pkg/web/dashboard/src/types
+    From: src/types
   - Types: [MarkdownRenderer]
-    From: pkg/web/dashboard/src/components/plan-panel
+    From: src/components/plan-panel
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -55,7 +55,8 @@ Annotations: |
     - Опции currentQuestion — массив строк (label одновременно является значением ответа); allow_custom разрешает
       свободный текст; выбор опции и ввод текста взаимоисключающие
     - Видимость: канал показан, если есть история либо stage.status === 'awaiting_user_input'
-    - Вопрос и ответы в истории рендерятся как markdown (через `MarkdownRenderer`)
+    - Текущий вопрос и вопрос в истории рендерятся как markdown (через `MarkdownRenderer`); ответ в истории
+      выводится как обычный текст («→ answer»), без markdown-рендера
 
   properties:
     "entries -> DialogEntry[]": |

@@ -1,0 +1,209 @@
+/* pkg/web/dashboard/public/skins/goga/index.css — Goga skin
+   Тёмная tech-тема по мотивам qarium.ru/goga: system sans-serif, плоские панели,
+   без неоновой декорации novacorps. Структура — из ../base/*.css.
+
+   Правила ниже (после @import) при равной специфичности с base побеждают за счёт
+   более позднего порядка в каскаде — .theme-goga-скоупинг больше не нужен. */
+
+@import url("../base/reset.css");
+@import url("../base/header.css");
+@import url("../base/layout.css");
+@import url("../base/stages-list.css");
+@import url("../base/plan-panel.css");
+@import url("../base/log-panel.css");
+@import url("../base/dialog-channel.css");
+@import url("../base/event-feed.css");
+@import url("../base/markdown.css");
+
+:root[data-theme="dark"] {
+  /* base surfaces — идентичны текущему style-goga.css:14-30 */
+  --bg:        #0A0E1A;
+  --bg-elev:   #121830;
+  --panel-bg:  var(--bg-elev);
+
+  /* text */
+  --ink:       #FFFFFF;
+  --ink-hi:    #FFFFFF;
+  --ink-dim:   #A0AEC0;
+
+  /* accents: teal primary, blue secondary */
+  --mint:      #20D4BF;
+  --mint-soft: rgba(255, 255, 255, 0.08);
+  --grid:      rgba(255, 255, 255, 0.03);
+  --amber:     #3882F6;
+  --violet:    #3882F6;
+  --coral:     #FF6B5A;
+
+  /* dialog/supervisor accents — goga их не переопределял и сегодня, сохраняем
+     дословные значения novacorps (текущее поведение — унаследованные через
+     старый @import — не меняется) */
+  --qa-answer:              #9fe0d8;
+  --dialog-option-text:     #d4baff;
+  --btn-cancel-dialog-text: #ff8a7a;
+  --supervisor-accent:      #c084fc;
+
+  /* status map */
+  --c-pending:        var(--ink-dim);
+  --c-planning:       var(--mint);
+  --c-awaiting:       var(--amber);
+  --c-revising:       var(--amber);
+  --c-ready:          var(--mint);
+  --c-running:        var(--amber);
+  --c-done:           var(--mint);
+  --c-failed:         var(--coral);
+  --c-retrying:       var(--amber);
+  --c-awaiting-user:  var(--violet);
+
+  /* legacy aliases */
+  --text:     var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+:root[data-theme="light"] {
+  /* base surfaces */
+  --bg:        #F7F9FC;
+  --bg-elev:   #FFFFFF;
+  --panel-bg:  var(--bg-elev);
+
+  /* text */
+  --ink:       #0F172A;
+  --ink-hi:    #000000;
+  --ink-dim:   #64748B;
+
+  /* accents: teal primary, blue secondary — сдвинуты темнее для контраста на белом */
+  --mint:      #0E9488;
+  --mint-soft: rgba(15, 23, 42, 0.06);
+  --grid:      rgba(15, 23, 42, 0.03);
+  --amber:     #2563EB;
+  --violet:    #2563EB;
+  --coral:     #E11D48;
+
+  /* dialog/supervisor accents — переподобраны под светлый фон */
+  --qa-answer:              #0f766e;
+  --dialog-option-text:     #2563eb;
+  --btn-cancel-dialog-text: #b91c1c;
+  --supervisor-accent:      #7e22ce;
+
+  /* status map */
+  --c-pending:        var(--ink-dim);
+  --c-planning:       var(--mint);
+  --c-awaiting:       var(--amber);
+  --c-revising:       var(--amber);
+  --c-ready:          var(--mint);
+  --c-running:        var(--amber);
+  --c-done:           var(--mint);
+  --c-failed:         var(--coral);
+  --c-retrying:       var(--amber);
+  --c-awaiting-user:  var(--violet);
+
+  /* legacy aliases */
+  --text:     var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+/* === goga-специфика поверх base ===
+   Base-партиалы импортированы выше — эти правила автоматически побеждают
+   одноимённые правила base (равная специфичность, более поздний порядок в
+   каскаде), без .theme-goga-скоупинга старой архитектуры. */
+
+/* Логотип-слово: goga показывает двухцветный wordmark «QArium» (как на
+   qarium.ru) — «QA» цветом --mint (teal), «rium» цветом --ink (белый),
+   системным sans-serif. Текст h1 («afm») скрыт (font-size:0); слово
+   собирается из ::before/::after, чтобы не делать React-компонент
+   тема-зависимым. */
+#header h1 {
+  font-size: 0;
+  letter-spacing: 0;
+  text-transform: none;
+}
+#header h1::before {
+  content: 'QA';
+  font-size: 13px;
+  font-weight: 600;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--mint);
+}
+#header h1::after {
+  content: 'rium';
+  font-size: 13px;
+  font-weight: 600;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+}
+
+/* Логотип: заменяем анимированный SVG-шестигранник на quarium-картинку. */
+.logo > span {
+  display: none;
+}
+.logo {
+  background-image: url('./quarium-logo.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* Чистый фон goga: без novacorps-клетки (background-image на #main). */
+#main {
+  background-image: none;
+  background: var(--bg-elev);
+}
+
+/* Хедер и футер — тот же --bg-elev что и панели (в novacorps они темнее через --bg). */
+#header,
+#footer {
+  background: var(--bg-elev);
+}
+
+/* Текст PROGRESS/STARTED/ELAPSED — mint, как «QA» в хедере. */
+#progress-text,
+#started-at,
+#elapsed {
+  color: var(--mint);
+}
+
+/* === Перекраска хардкодных novacorps low-alpha заливок под goga-палитру.
+   Эти оттенки не токенизированы в base/*.css (сознательное решение дизайна —
+   см. спек, "Что НЕ делаем"), поэтому goga переопределяет каждый селектор
+   явно. Nova Corps: rgba(111,212,204,X) = mint, rgba(229,212,66,X) = amber.
+   Goga:            rgba(32,212,191,X)  = mint, rgba(56,130,246,X)  = amber. */
+
+::selection { background: rgba(56, 130, 246, 0.35); }
+
+/* base/layout.css: footer progress bar, jump-latest, icon-btn, attention */
+.progress-bar { background: rgba(32, 212, 191, 0.12); }
+.progress-fill { background: linear-gradient(90deg, rgba(56, 130, 246, 0.15), var(--amber)); }
+.jump-latest { background: rgba(32, 212, 191, 0.15); }
+.icon-btn { border-color: rgba(32, 212, 191, 0.4); }
+@keyframes attentionPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 130, 246, 0); }
+  50%      { box-shadow: 0 0 12px 2px rgba(56, 130, 246, 0.65); }
+}
+
+/* base/stages-list.css */
+.stage-item { border-bottom-color: rgba(32, 212, 191, 0.06); }
+.stage-item:hover { background: rgba(32, 212, 191, 0.06); }
+.stage-item.active {
+  background: linear-gradient(90deg, rgba(56, 130, 246, 0.06), transparent);
+}
+.stage-item.active::after {
+  background: linear-gradient(90deg, transparent, rgba(56, 130, 246, 0.7), transparent);
+}
+
+/* base/plan-panel.css */
+.plan-line:hover { background: rgba(32, 212, 191, 0.06); }
+.plan-line.has-comment { background: rgba(56, 130, 246, 0.07); }
+.plan-line.has-comment:hover { background: rgba(56, 130, 246, 0.12); }
+.plan-section-wrapper { background: rgba(32, 212, 191, 0.04); }
+.plan-section-wrapper.plan-section-assumptions { background: rgba(56, 130, 246, 0.05); }
+.plan-section-wrapper.plan-section-criteria { background: rgba(32, 212, 191, 0.05); }
+
+/* base/dialog-channel.css — .dialog-pending .dialog-custom's *background* is
+   already goga-correct via --panel-bg: var(--bg-elev) (set in the token
+   block above), only its hardcoded border-color still needs recoloring. */
+.dialog-history .qa { border-left-color: rgba(32, 212, 191, 0.2); }
+.phase-divider { border-bottom-color: rgba(32, 212, 191, 0.12); }
+.dialog-pending .dialog-custom { border-color: rgba(32, 212, 191, 0.2); }
+
+/* base/event-feed.css */
+.feed-entry { border-bottom-color: rgba(32, 212, 191, 0.05); }
+.feed-entry:hover { background: rgba(32, 212, 191, 0.05); }

@@ -7,13 +7,26 @@ pkg/web/dashboard/
 ├── index.html          # root HTML page (built by Vite: references ./assets/index-<hash>.js, mounts #root)
 ├── index.dev.html      # source dev template for index.html (restored into index.html before build)
 ├── assets/             # Vite build output (index-<hash>.js; hash in name, recreated each build)
-├── style.css           # dashboard styles (default novacorps theme)
-├── style-goga.css      # goga theme styles (linked server-side when theme=goga, see pkg/server)
-├── quarium-logo.png    # quarium logo in the goga theme header
+├── skins/              # skin system: skins/base/*.css (shared structural partials, one per
+│                       # dashboard component) + skins/<name>/index.css (novacorps/goga —
+│                       # tokens for data-theme=dark/light + decor, @import base) + optional
+│                       # skins/<name>/favicon.svg OR favicon.png override + optional
+│                       # skins/<name>/title.txt (first line becomes <title>). goga ships its
+│                       # own skins/goga/quarium-logo.png (referenced as the .logo
+│                       # background-image in skins/goga/index.css) and skins/goga/favicon.png
+│                       # (a duplicate of the same file, under the favicon convention name) +
+│                       # skins/goga/title.txt = "QArium". Server picks the active skin
+│                       # (theme:/skin_dir: config, skin_dir fully overrides) and rewrites
+│                       # index.html's stylesheet href/body class/favicon href+type/title
+│                       # accordingly (see pkg/server/server.go)
+├── quarium-logo.png    # unused legacy asset at this root path (kept embedded, not referenced by
+│                       # any component) — NOT the same reference as skins/goga/quarium-logo.png
+│                       # above, which is a separate copy that IS used by the goga skin
 ├── favicon.svg         # browser tab icon
 ├── src/                # React/Vite/TypeScript SPA sources (entry: src/main.tsx → src/app/App); see src/ cells
-└── app.js              # legacy vanilla-JS client (behavioural parity rewritten into src/); still embedded
-                        # by pkg/web via //go:embed dashboard/*, but no longer the active entry point
+└── app.js              # legacy vanilla-JS client (behavioural parity rewritten into src/); kept on
+                        # disk for reference but NOT embedded (embed.go's explicit file list omits it)
+                        # and not the active entry point
 ```
 
 The active dashboard is a React/Vite/TypeScript SPA whose sources live in `src/` (entry `src/main.tsx` →
@@ -33,11 +46,12 @@ root. Markdown rendering uses the npm dependency `markdown-it` (imported in
 
 ## How `pkg/web` consumes this directory
 
-`pkg/web/embed.go` embeds this directory with `//go:embed dashboard/*` and re-roots it with `fs.Sub`
-so consumers see the same paths as before the split (`index.html`, not `dashboard/index.html`):
+`pkg/web/embed.go` embeds an explicit file list (not a `dashboard/*` wildcard — that would pull in
+node_modules/src/public and bloat the binary) and re-roots it with `fs.Sub` so consumers see the same
+paths as before the split (`index.html`, not `dashboard/index.html`):
 
 ```go
-//go:embed dashboard/*
+//go:embed dashboard/index.html dashboard/favicon.svg dashboard/quarium-logo.png dashboard/skins dashboard/assets
 var embedded embed.FS
 
 var FS, _ = fs.Sub(embedded, "dashboard")

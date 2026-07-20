@@ -1,0 +1,99 @@
+/* pkg/web/dashboard/public/skins/base/header.css
+   Top bar: logo mark, flow name, WS status. */
+
+#header {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--mint-soft);
+}
+
+#header .icon-btn {
+  margin-left: 4px;
+}
+
+#header h1 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ink-hi);
+}
+
+.flow-name {
+  font-size: 11px;
+  color: var(--mint);
+}
+
+.ws-status {
+  padding: 3px 10px;
+  border: 1px solid currentColor;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+}
+.ws-status.connected    { color: var(--mint); }
+.ws-status.disconnected { color: var(--coral); }
+
+/* === Animated logo === */
+.logo {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.logo > span {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.logo svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Цвета кольца/дуги/ядра логотипа — токены, а не хардкод в JSX (см. FlowHeader.tsx),
+   иначе перекраска скина не затрагивала бы логотип. */
+.logo .l-ring svg { stroke: var(--mint); }
+.logo .l-arc svg  { stroke: var(--amber); }
+.logo .l-core svg { fill: var(--mint); }
+
+.logo .l-ring { animation: spinSlow 14s linear infinite; }
+.logo .l-arc  { animation: spinFast 4s linear infinite; }
+.logo .l-core { animation: corePulse 2.4s ease-in-out infinite; transform-origin: center; }
+
+@keyframes spinSlow { to { transform: rotate(360deg); } }
+@keyframes spinFast { to { transform: rotate(-360deg); } }
+@keyframes corePulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.18); }
+}
+
+/* === WS indicator с пульсом === */
+.ws-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.ws-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ws-status.connected::before {
+  box-shadow: 0 0 8px currentColor;
+  animation: wsBlink 2s ease-in-out infinite;
+}
+@keyframes wsBlink {
+  0%, 100% { box-shadow: 0 0 4px currentColor; }
+  50%      { box-shadow: 0 0 12px currentColor; }
+}

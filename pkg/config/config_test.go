@@ -254,6 +254,30 @@ func TestThemeEmptyDoesNotOverride(t *testing.T) {
 	}
 }
 
+func TestSkinDirMerge(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "skin_dir: /tmp/my-skin\n")
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkinDir != "/tmp/my-skin" {
+		t.Errorf("skin_dir: got %q, want %q", cfg.SkinDir, "/tmp/my-skin")
+	}
+}
+
+func TestSkinDirEmptyDoesNotOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "skin_dir: \"\"\n")
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkinDir != "" {
+		t.Errorf("empty skin_dir should stay empty: got %q", cfg.SkinDir)
+	}
+}
+
 func TestEffectiveTheme(t *testing.T) {
 	cases := []struct {
 		name  string

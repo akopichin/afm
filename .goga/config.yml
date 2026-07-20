@@ -1,6 +1,6 @@
 language: golang
+image: qarium/goga-golang-1.26:1.0
 build:
-  image: qarium/goga-golang-1.26:1.0
   task_executor:
     agent: claude
 codemanifest:

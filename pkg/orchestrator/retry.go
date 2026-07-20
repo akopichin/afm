@@ -78,7 +78,11 @@ var MaxRetries = 15
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error) {
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	for attempt := 0; attempt <= o.maxRetries; attempt++ {
+	// maxRetries/retryBackoff — снапшоты с инстанса (см. Orchestrator-комментарий):
+	// эта горутина может пережить возврат Run(), поэтому globals не читаем.
+	maxRetries := o.maxRetries
+	retryBackoff := o.retryBackoff
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 {
 			retryCtx = buildRetryContext(stageDir, phase)
@@ -145,15 +149,15 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		// remain on disk and are re-read immediately by the agent's bash loop.
 		_ = os.Remove(sessionFile(stageDir, phase))
 
-		if attempt < o.maxRetries {
+		if attempt < maxRetries {
 			o.Trigger(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
 			o.ui.Publish(Event{
 				Type:    EventRetryScheduled,
 				StageID: s.ID,
-				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, o.maxRetries, o.retryBackoff),
+				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff),
 			})
 			select {
-			case <-time.After(o.retryBackoff):
+			case <-time.After(retryBackoff):
 			case <-ctx.Done():
 				o.Trigger(s.ID, EvFail, GuardCtx{}, "cancelled during retry")
 				o.failBlockedStages()

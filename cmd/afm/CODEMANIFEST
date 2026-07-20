@@ -30,6 +30,7 @@ Imports:
       - RunState
       - Open
       - FindLatestRunDir
+      - FindLatestRunForStage
       - VersionPlan
       - SaveFeedback
       - StageStatus
@@ -156,26 +157,24 @@ Annotations: |
 "newApproveCmd() -> cmd:cobra.Command":
   location: approve.go
   annotations: |
-    Утверждает план стадии (вызывает Orchestrator.Approve). Открывает хранилище состояния через
-    `Open` (импорт pkg/state).
-
-"findLatestRunDir(stageID string) -> runDir:string, stageIDs:[]string, err:error":
-  location: approve.go
-  annotations: |
-    Находит последнюю директорию рана, содержащую указанную стадию.
+    Утверждает план стадии (вызывает Orchestrator.Approve). Находит последний ран, содержащий
+    стадию, через `FindLatestRunForStage`, и открывает хранилище состояния через `Open` (оба —
+    импорт pkg/state).
 
 "newReviseCmd() -> cmd:cobra.Command":
   location: revise.go
   annotations: |
-    Отправляет фидбек на повторное планирование стадии (вызывает Orchestrator.Revise). Открывает
-    хранилище состояния через `Open` (импорт pkg/state), версионирует текущий план через
-    `VersionPlan` и сохраняет фидбек через `SaveFeedback` (оба — импорт pkg/state).
+    Отправляет фидбек на повторное планирование стадии (вызывает Orchestrator.Revise). Находит
+    последний ран, содержащий стадию, через `FindLatestRunForStage`, открывает хранилище состояния
+    через `Open`, версионирует текущий план через `VersionPlan` и сохраняет фидбек через
+    `SaveFeedback` (все — импорт pkg/state).
 
 "newRetryCmd() -> cmd:cobra.Command":
   location: retry.go
   annotations: |
-    Повторяет проваленную стадию (вызывает Orchestrator.Retry). Открывает хранилище состояния
-    через `Open` (импорт pkg/state).
+    Повторяет проваленную стадию (вызывает Orchestrator.Retry). Находит последний ран, содержащий
+    стадию, через `FindLatestRunForStage`, и открывает хранилище состояния через `Open` (оба —
+    импорт pkg/state).
 
 "newListCmd() -> cmd:cobra.Command":
   location: list.go

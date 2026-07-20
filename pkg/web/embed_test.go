@@ -16,12 +16,13 @@ import (
 // отдельный markdown-it.min.js больше не раздаётся.
 //
 // fs.Sub(embedded, "dashboard") ре-рутит embed: потребители работают с корневыми
-// веб-путями (index.html, style.css, assets/...) и не знают про on-disk подкаталог.
+// веб-путями (index.html, skins/<name>/index.css, assets/...) и не знают про
+// on-disk подкаталог.
 func TestEmbed_ServesReactDashboardAtRootPaths(t *testing.T) {
 	files := []string{
 		"index.html",
-		"style.css",
-		"style-goga.css",
+		"skins/novacorps/index.css",
+		"skins/goga/index.css",
 		"favicon.svg",
 		"quarium-logo.png",
 	}

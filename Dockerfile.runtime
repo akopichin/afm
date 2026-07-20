@@ -12,8 +12,8 @@ RUN npm run build
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 COPY . .
-# Перекрываем dashboard свежим билдом из stage web: точка входа, бандл, стили, иконки.
-COPY --from=web /dash/index.html /dash/assets /dash/style.css /dash/style-goga.css /dash/favicon.svg /dash/quarium-logo.png ./pkg/web/dashboard/
+# Перекрываем dashboard свежим билдом из stage web: точка входа, бандл, скины, иконки.
+COPY --from=web /dash/index.html /dash/assets /dash/skins /dash/favicon.svg /dash/quarium-logo.png ./pkg/web/dashboard/
 ARG AFM_VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-X main.version=$AFM_VERSION" -o /afm ./cmd/afm
 

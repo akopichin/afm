@@ -11,12 +11,14 @@ Annotations: |
 
 ---
 
-"ReadPrompt(name string, overrideDir string) -> prompt:string, err:error":
+"ReadPrompt(name string, overrideDir string) -> prompt:string, fromOverride:bool, err:error":
   location: assets.go
   annotations: |
     Возвращает промпт по имени файла.
     `name`: имя файла промпта
     `overrideDir`: если непусто — читать из этой директории вместо встроенных файлов
+    `fromOverride`: true, если промпт реально прочитан из `overrideDir` (а не из встроенных
+    дефолтов) — используется вызывающей стороной для логирования источника каждого промпта
 
 "FS() -> fs:embed.FS":
   location: assets.go

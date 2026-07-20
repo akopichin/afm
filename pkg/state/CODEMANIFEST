@@ -20,6 +20,13 @@ Annotations: |
   annotations: |
     Находит самую свежую директорию рана для указанного имени флоу под base/.
 
+"FindLatestRunForStage(base string, stageID string) -> runDir:string, stageIDs:[]string, err:error":
+  location: state.go
+  annotations: |
+    Находит самую свежую директорию рана, содержащую указанную стадию, и все её stage id.
+    Состояние читается из events.jsonl, а не из снимка state.json, чтобы не доверять потенциально
+    устаревшему кэшу.
+
 "SaveFeedback(stageDir string, feedback string) -> err:error":
   location: state.go
   annotations: |
@@ -30,7 +37,7 @@ Annotations: |
   annotations: |
     Переименовывает plan.md в `plan.v{N}.md` и возвращает N.
 
-"SetApplyHook(h TransitionCallback)":
+"SetApplyHook(h)":
   location: store.go
   annotations: |
     Устанавливает тестовый хук, вызываемый внутри Apply между fsync и перезаписью снапшота.

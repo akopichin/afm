@@ -1,7 +1,7 @@
 Imports:
   - Types: [LogEntry]
     Usages: [dashboard-data-types]
-    From: pkg/web/dashboard/src/types
+    From: src/types
 
 Usages:
   conventions: .goga/usages/conventions.md
@@ -12,6 +12,9 @@ Annotations: |
   Use `conventions` for code writing rules and testing. Use `react` — only functional components. Use
   `typescript` for naming and strict typing. Use `LogEntry` from Imports. Use `dashboard-data-types` from
   Imports for guidance on consuming `LogEntry`.
+
+  Панель также использует PanelFrame (src/components/panel-frame) для рамки с заголовком «Log» — эта клетка
+  пока без собственного CODEMANIFEST (см. отдельную рекомендацию в отчёте acceptance).
 
 ---
 

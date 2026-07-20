@@ -1,7 +1,7 @@
 Imports:
   - Types: [LogEntry]
     Usages: [dashboard-data-types]
-    From: pkg/web/dashboard/src/types
+    From: src/types
 
 Usages:
   conventions: .goga/usages/conventions.md

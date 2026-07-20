@@ -99,14 +99,15 @@ Annotations: |
     - Корень (/) и /index.html отдаются через serveIndex (предподготовленный index.html), прочая
       статика — через http.FileServer из `FS` (импорт pkg/web); serveIndex при пустом indexBytes
       fallback'ит на FileServer (защита от регрессии embed)
-    - При theme=="goga" метод New предподготавливает index.html: заменяет href="style.css" →
-      href="style-goga.css" и class="theme-novacorps" → class="theme-goga" (тема пришла из
-      pkg/config через server.Config.Theme, см. EffectiveTheme)
+    - New предподготавливает index.html под активный скин: href стилей/класс body/favicon href+type/
+      title подменяются на skins/<name>/... (embedded novacorps/goga из pkg/web, или skin_dir с диска,
+      если задан — skin_dir полностью переопределяет theme, с fallback+warning при отсутствии
+      index.css). Тема/skin_dir пришли из pkg/config через server.Config.Theme/SkinDir
   methods:
     "New(cfg Config) -> server:Server": |
       Создаёт сервер.
 
-      При theme=="goga" предподготавливает index.html (замена CSS-ссылки и body-класса); ошибка
+      Предподготавливает index.html под активный скин (CSS-ссылка, body-класс, favicon, title); ошибка
       чтения embed — предупреждение в stderr, indexBytes остаётся пустым (fallback на FileServer).
     "Start() -> addr:string, err:error": |
       Запускает HTTP-сервер, возвращает фактический адрес.

@@ -32,4 +32,23 @@ describe('useElapsed', () => {
 
     expect(result.current).toBe(0)
   })
+
+  test('clears the interval on unmount and stops updating', () => {
+    vi.useFakeTimers({ now: new Date('2026-07-10T10:00:00Z').getTime() })
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+
+    const { result, unmount } = renderHook(() => useElapsed('2026-07-10T09:59:58Z'))
+
+    expect(result.current).toBe(2000)
+
+    unmount()
+
+    expect(clearIntervalSpy).toHaveBeenCalled()
+
+    act(() => {
+      vi.advanceTimersByTime(5000)
+    })
+    // Компонент размонтирован — значение из последнего рендера не меняется.
+    expect(result.current).toBe(2000)
+  })
 })

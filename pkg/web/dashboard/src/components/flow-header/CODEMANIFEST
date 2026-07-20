@@ -23,6 +23,7 @@ Annotations: |
     Requirements:
     - Индикатор отображает текст LINK, когда connected истинно, и OFFLINE — когда ложно
     - Разметка сохраняет id flow-name и id ws-status для совместимости с темой goga
+    - Шапка содержит кнопку-переключатель dark/light (useThemeMode), не связанную с props компонента
 
 ---
 

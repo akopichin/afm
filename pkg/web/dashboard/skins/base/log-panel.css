@@ -1,0 +1,20 @@
+/* pkg/web/dashboard/public/skins/base/log-panel.css
+   Stage execution log viewer. */
+
+.log-content {
+  background: var(--bg-elev);
+  border: 1px solid var(--mint-soft);
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.55;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink-dim);
+}
+.log-content:empty { display: none; }
+
+.log-text-line  { color: var(--ink); font-weight: 500; }
+.log-error-line { color: var(--coral); }

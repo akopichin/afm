@@ -166,4 +166,92 @@ describe('useEventFeed', () => {
     expect(FakeWebSocket.last().closed).toBe(true)
     expect(result.current.connected).toBe(false)
   })
+
+  test('ignores invalid JSON messages without throwing or changing events', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+
+    expect(() => {
+      act(() => {
+        FakeWebSocket.last().onmessage?.({ data: '{not valid json' })
+      })
+    }).not.toThrow()
+
+    expect(result.current.events).toHaveLength(0)
+  })
+
+  test('caps the event feed at 200 entries, keeping the most recent', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+
+    act(() => {
+      for (let i = 0; i < 205; i += 1) {
+        FakeWebSocket.last().emitMessage({ type: 'agent_action', data: i, stage_id: `s${i}` })
+      }
+    })
+
+    expect(result.current.events).toHaveLength(200)
+    expect(result.current.events[0]?.stageId).toBe('s5')
+    expect(result.current.events[199]?.stageId).toBe('s204')
+  })
+
+  test('backoff climbs to and stays at the 10000ms ceiling across repeated reconnects', () => {
+    vi.useFakeTimers()
+    renderHook(() => useEventFeed('/ws'))
+
+    // Задержки без успешного open между ними удваиваются: 1000 -> 2000 -> 4000 -> 8000 -> 10000 (потолок).
+    const delays = [1000, 2000, 4000, 8000, 10000]
+
+    for (const delay of delays) {
+      act(() => {
+        FakeWebSocket.last().emitClose()
+      })
+      const countBefore = FakeWebSocket.instances.length
+      vi.advanceTimersByTime(delay - 1)
+      expect(FakeWebSocket.instances).toHaveLength(countBefore)
+      vi.advanceTimersByTime(1)
+      expect(FakeWebSocket.instances).toHaveLength(countBefore + 1)
+    }
+
+    // Ещё один цикл на потолке — задержка остаётся 10000ms, не растёт дальше.
+    act(() => {
+      FakeWebSocket.last().emitClose()
+    })
+    const countBefore = FakeWebSocket.instances.length
+    vi.advanceTimersByTime(9999)
+    expect(FakeWebSocket.instances).toHaveLength(countBefore)
+    vi.advanceTimersByTime(1)
+    expect(FakeWebSocket.instances).toHaveLength(countBefore + 1)
+  })
+
+  test('activity within the silence window resets the watchdog and keeps the socket open', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+
+    // 60с тишины, затем сообщение сбрасывает lastMessageAt.
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'agent_action', stage_id: 's1' })
+    })
+
+    // Ещё 60с (суммарно 120с от начала, но только 60с с последней активности) — меньше порога 75с.
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+
+    expect(FakeWebSocket.last().closed).toBe(false)
+    expect(result.current.connected).toBe(true)
+  })
 })

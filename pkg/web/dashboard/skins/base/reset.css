@@ -1,0 +1,33 @@
+/* pkg/web/dashboard/public/skins/base/reset.css
+   Box-sizing reset, reduced-motion gate, base typography/link/selection. */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--mint); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+::selection { background: rgba(229, 212, 66, 0.35); color: var(--ink-hi); }
+
+.hidden { display: none !important; }

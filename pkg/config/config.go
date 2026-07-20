@@ -206,6 +206,7 @@ type Config struct {
 	Supervisor SupervisorConfig `yaml:"supervisor"`
 	PromptsDir string           `yaml:"prompts_dir"`
 	Theme      string           `yaml:"theme"`
+	SkinDir    string           `yaml:"skin_dir"`
 }
 
 // Default returns the built-in default configuration.
@@ -284,6 +285,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Theme != "" {
 		dst.Theme = overlay.Theme
+	}
+	if overlay.SkinDir != "" {
+		dst.SkinDir = overlay.SkinDir
 	}
 	if overlay.Server.Port != nil {
 		dst.Server.Port = overlay.Server.Port

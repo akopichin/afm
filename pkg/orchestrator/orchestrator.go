@@ -117,12 +117,12 @@ type Orchestrator struct {
 	// supervisor оценивает, можно ли выполнить стадию автономно.
 	// nil, если SupervisorRunner не задан в Options.
 	supervisor *Supervisor
-	// retryBackoff/maxRetries — снимок package-level RetryBackoff/MaxRetries на
-	// момент New. Хранятся в immutable-полях, а не читаются из package var в
-	// горутинах агентов: иначе мутация package var в t.Cleanup теста даёт data
-	// race с runWithRetry (см. retry.go).
-	retryBackoff time.Duration
+	// maxRetries/retryBackoff — снапшоты package-level RetryBackoff/MaxRetries,
+	// снятые в New(). Агентские горутины могут пережить возврат Run(), поэтому
+	// прямое чтение этих globals гонится с мутацией в тестах (data race).
+	// Снапшот на инстансе устраняет гонку: горутины читают immutable-поля.
 	maxRetries   int
+	retryBackoff time.Duration
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
@@ -231,8 +231,8 @@ func New(opts Options) *Orchestrator {
 		sems:           sems,
 		violationCache: make(map[string]violationCacheEntry),
 		supervisor:     sup,
-		retryBackoff:   RetryBackoff,
 		maxRetries:     MaxRetries,
+		retryBackoff:   RetryBackoff,
 	}
 }
 
@@ -797,8 +797,8 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 		}
 		o.tryActivatePrePlanned(ctx)
 	case phaseImplementation, phaseAutonomous:
-		// Завершение implementation-агента или autonomous-трека
-		// (для autonomous execution_summary.md уже написан) → done.
+		// Фаза завершена: implementation-агент дошёл до конца, либо
+		// autonomous-трек написал execution_summary.md → переводим в done.
 		if current != state.StatusRunning && current != state.StatusRetrying {
 			return nil
 		}
@@ -936,6 +936,23 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 	}
 
 	if _, ok := o.Trigger(stageID, EvManualRetry, GuardCtx{}, ""); !ok {
+		return
+	}
+
+	// Autonomous-стадия (супервизор ранее выбрал автономный трек — на диске лежит
+	// autonomous.flag): retry чтит это решение и перезапускает автономный агент
+	// напрямую, а не «сваливается» в planning. Супервизор повторно НЕ опрашивается —
+	// симметрично resume-on-restart в recovery.go, который тоже чтит флаг. Переход
+	// pending → ready → running зеркалит ветку «plan.md уже есть» ниже (EvReady →
+	// EvStartRun), только агент — автономный (без plan.md/approval).
+	if isAutonomousStage(filepath.Join(o.opts.RunDir, stageID)) {
+		o.Trigger(stageID, EvReady, GuardCtx{}, "manual retry: autonomous")
+		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
+		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+			return
+		}
+		o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+		o.startReadyStages(ctx)
 		return
 	}
 
@@ -1095,6 +1112,16 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		if _, ok := o.Trigger(id, EvStartRun, GuardCtx{}, ""); !ok {
 			continue
 		}
+		// Autonomous-стадия могла оказаться в Ready через retryStage (retry
+		// упавшей autonomous-стадии) в узком окне между EvReady и её собственным
+		// EvStartRun. Без этой проверки конкурентный вызов startReadyStages из
+		// другой стадии event-loop'а мог выиграть CAS на EvStartRun первым и
+		// запустить runImplementationAgent — тот читает plan.md, которого у
+		// autonomous-стадии нет, и стадия падает "no such file or directory".
+		if isAutonomousStage(filepath.Join(o.opts.RunDir, id)) {
+			o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+			continue
+		}
 		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
 	}
 }
@@ -1105,6 +1132,13 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
 		return
 	}
+
+	// Планирование = стандартный (не автономный) трек. Если от предыдущей попытки
+	// (или от неудавшегося autonomous-запуска до retry) остался autonomous.flag —
+	// он теперь устарел: стадия пройдёт planning и получит настоящий plan.md с
+	// approve/revise. Без снятия флага stage_autonomous в /api/status оставался бы
+	// true, а дашборд прятал бы plan-панель (нет approve-кнопки на awaiting_approval).
+	clearStaleAutonomousFlag(stageDir)
 
 	// Defensive: may be a no-op if the caller already transitioned
 	// the stage to "planning" (e.g. startPlanningForUnblocked).
@@ -1450,6 +1484,16 @@ func copyFile(src, dst string) error {
 func isAutonomousStage(stageDir string) bool {
 	_, err := os.Stat(filepath.Join(stageDir, "autonomous.flag"))
 	return err == nil
+}
+
+// clearStaleAutonomousFlag удаляет autonomous.flag, оставшийся от более раннего
+// решения супервизора (или от неудавшейся автономной попытки), когда текущая
+// попытка идёт по стандартному треку (planning). Без этого isAutonomousStage
+// (и производный от неё stage_autonomous в /api/status) навсегда считал бы
+// стадию автономной — даже после того, как она реально прошла planning и
+// получила настоящий plan.md, ожидающий approve/revise в дашборде.
+func clearStaleAutonomousFlag(stageDir string) {
+	_ = os.Remove(filepath.Join(stageDir, "autonomous.flag"))
 }
 
 // logSupervisorDecision записывает решение супервизора в <runDir>/supervisor.jsonl

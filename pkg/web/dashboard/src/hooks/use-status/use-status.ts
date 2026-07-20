@@ -60,7 +60,7 @@ export function useStatus(): FlowStatus & { refresh: () => void } {
   return { ...status, refresh }
 }
 
-function normalizeStatus(raw: unknown): FlowStatus {
+export function normalizeStatus(raw: unknown): FlowStatus {
   const obj = isRecord(raw) ? raw : {}
 
   const flowName = typeof obj.flow_name === 'string' ? obj.flow_name : ''
@@ -68,10 +68,14 @@ function normalizeStatus(raw: unknown): FlowStatus {
 
   const stagesObj = isRecord(obj.stages) ? obj.stages : {}
   const namesObj = isRecord(obj.stage_names) ? obj.stage_names : {}
+  const interactiveObj = isRecord(obj.stage_interactive) ? obj.stage_interactive : {}
+  const autonomousObj = isRecord(obj.stage_autonomous) ? obj.stage_autonomous : {}
 
   const order = resolveOrder(obj.stage_order, stagesObj)
 
-  const stages: Stage[] = order.map((id) => toStage(id, stagesObj[id], namesObj[id]))
+  const stages: Stage[] = order.map((id) =>
+    toStage(id, stagesObj[id], namesObj[id], interactiveObj[id] === true, autonomousObj[id] === true),
+  )
 
   return { flowName, stages, startedAt }
 }
@@ -85,14 +89,20 @@ function resolveOrder(stageOrder: unknown, stagesObj: Record<string, unknown>): 
   return Object.keys(stagesObj).sort()
 }
 
-function toStage(id: string, raw: unknown, nameRaw: unknown): Stage {
+function toStage(
+  id: string,
+  raw: unknown,
+  nameRaw: unknown,
+  interactive: boolean,
+  autonomous: boolean,
+): Stage {
   const obj = isRecord(raw) ? raw : {}
 
   const status: StageStatus = isStageStatus(obj.status) ? obj.status : 'pending'
   const updatedAt = typeof obj.updated_at === 'string' ? obj.updated_at : ''
   const name = typeof nameRaw === 'string' ? nameRaw : ''
 
-  return { id, name, status, updatedAt }
+  return { id, name, status, updatedAt, interactive, autonomous }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

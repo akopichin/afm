@@ -1,7 +1,5 @@
-name: accept-02
-description: "accept go code flowmanager"
-
-supervisor_command: glm52
+name: accept-01
+description: "accept"
 
 prompt: |
   if goga binary not installed - install it with `pip install goga && goga connect claude`
@@ -11,7 +9,7 @@ stages:
   - id: accept
     name: "accept"
     supervisor: true
-    supervisor_prompt: скилл может сам все сделать - нужен autonomous режим.
+    supervisor_prompt: сделай автономным этот стейдж
     interactive: true
     agents: [planning]
     description: |
@@ -20,5 +18,21 @@ stages:
       сделать goga-accept чтобы манифесты flowmanager обновились т.к. много кода поменялось.
     skills:
       - goga-accept
-    command: glm52
+    command: claude
 
+  - id: commit
+    name: "commit"
+    supervisor: true
+    supervisor_prompt: сделай автономным этот стейдж
+    interactive: true
+    agents: [planning]
+    description: |
+      привести в порядок и закоммитить все.
+    prompt: |
+      прогнать lint
+      прогнать test
+      починить их при ошибках
+      обновить доку
+      обновить release notes
+      сделать коммит
+    depends_on: [accept]

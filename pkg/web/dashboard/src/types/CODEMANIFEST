@@ -33,6 +33,13 @@ Annotations: |
       Текущий статус стадии из полного набора статусов afm.
     "updatedAt -> string": |
       Время последнего обновления стадии в формате ISO 8601.
+    "interactive -> boolean": |
+      Допускает ли стадия диалоговый канал (карта stage_interactive ответа GET /api/status, по id стадии).
+      Вместе с полем autonomous определяет видимость панели диалога в корневой композиции App.
+    "autonomous -> boolean": |
+      Автономна ли стадия (карта stage_autonomous ответа GET /api/status, по id стадии). Автономная стадия
+      скрывает панель плана и всегда показывает диалоговый канал в корневой композиции App, даже когда
+      interactive равно false.
 
 "AfmEvent()":
   location: afm-event.ts
@@ -129,13 +136,13 @@ Annotations: |
     Источник производного строкового типа StageStatus и массив для проверки распознанных статусов
     в useStatus и extractStageStatus.
 
-"STAGE_STATUS_LABELS() -> labels: Record<string, string>":
+"STAGE_STATUS_LABELS() -> labels: Record<StageStatus, string>":
   location: stage.ts
   annotations: |
     Человекочитаемые подписи статусов для списка стадий и панели деталей. Потребляется корневой
     композицией App для подписи статуса выбранной стадии в заголовке stageHeader.
 
-"ACTIVE_STAGE_STATUSES() -> active: ReadonlySet<string>":
+"ACTIVE_STAGE_STATUSES() -> active: ReadonlySet<StageStatus>":
   location: stage.ts
   annotations: |
     Подмножество статусов «стадия в работе» (running, planning, revising, retrying,

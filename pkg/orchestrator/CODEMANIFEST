@@ -336,7 +336,16 @@ Annotations: |
     "Revise(ctx string, stageID string, feedback string) -> err:error": |
       Отправляет фидбек на повторное планирование стадии.
     "Retry(ctx string, stageID string) -> err:error": |
-      Повторяет проваленную стадию, переводя её в pending и перезапуская.
+      Повторяет проваленную (StatusFailed) стадию. Для интерактивной стадии сначала очищает
+      сессии всех фаз (иначе claude падает на "No conversation found" по фантомному session-файлу)
+      и обнуляет её .jsonl-лог (иначе устаревший *.question.json мгновенно триггерит повторное
+      обнаружение диалога). Дальше маршрут зависит от того, как стадия шла раньше:
+      - если на диске лежит autonomous.flag (супервизор ранее выбрал автономный трек) — retry
+        чтит это решение и перезапускает автономный агент напрямую (pending → ready → running,
+        без planning/approval), супервизор повторно не опрашивается;
+      - иначе — стандартный трек: если план уже не нужен (NeedsPlanning() == false) и plan.md
+        отсутствует на диске, копирует его из stage.Plan перед перезапуском; при отсутствующих
+        зависимостях или источнике плана перезапуск откладывается/проваливается явной ошибкой.
     "FailStage(stageID string, reason string)": |
       Помечает стадию проваленной с указанной причиной.
     "Trigger(stageID string, ev string, ctx GuardCtx, reason string) -> status:string, applied:bool": |
