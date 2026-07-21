@@ -128,7 +128,7 @@ Common patterns:
 - **Answer received:** Both `*.question.json` and `*.answer.json` exist, agent should have exited
 - **Dialog history:** Check `*.dialog.jsonl` for full Q&A history (safe to ignore if missing)
 - **Agent error / hung:** Agent stdout (tool actions) is in `<phase>.log`; agent **stderr** (claude diagnostics, e.g. `stream-json requires --verbose`) is in `<phase>.stderr.log`. The bash polling loop times out after the executor's idle timeout (30 min default).
-- **Misplaced question (auto-relocate):** если интерактивный агент написал `*.question.json` ВНЕ `$AFM_STAGE_DIR` (баг GLM-4.7: путь из CWD вместо env), poller авто-релокейтит файл внутрь stageDir (`relocateMisplacedQuestions` в `pkg/orchestrator/orchestrator.go`, читает Write-события из `<phase>.jsonl`) и создаёт dangling-симлинк `<wrongDir>/<id>.answer.json → <stageDir>/<id>.answer.json`, чтобы bash-polling-loop агента нашёл ответ по своему пути. Стадия уходит в `awaiting_user_input`, а не зависает. (Прежнее поведение — fail-fast через `detectDialogViolation` — заменено relocate.) На ручном retry `<phase>.session.json` и `<phase>.jsonl` очищаются.
+- **Misplaced question (auto-relocate/normalize):** `relocateMisplacedQuestions` (`pkg/orchestrator/orchestrator.go`, читает Write-события из `<phase>.jsonl`) чинит два способа «спрятать» файл вопроса от поллера, оба ведут к вечному зависанию стадии: **(1) неверная директория** — `*.question.json` записан ВНЕ `$AFM_STAGE_DIR` (баг GLM-4.7: путь из CWD вместо env); **(2) неверный префикс** — файл внутри stageDir, но назван по id стадии (напр. `commit-changes.q1.question.json`) вместо канонической фазы (`planning.q1.question.json`), а `FindUnansweredQuestions` матчит только `planning`/`implementation`/`review`/`autonomous_execution`. В обоих случаях файл нормализуется к каноническому имени `<phase>.<id>.question.json` (правильная фаза берётся из того, в чьём `<phase>.jsonl` найден Write, а не из неверного префикса) + создаётся dangling-симлинк по пути, который опрашивает агент (его директория + его префикс), → канонический `<stageDir>/<phase>.<id>.answer.json`, чтобы bash-polling-loop нашёл ответ. Стадия уходит в `awaiting_user_input`, а не зависает. Первый слой защиты — сам промпт (`pkg/prompts/builder.go`, `<interactive_rules>`) с адресным constraint-ом «префикс — это фаза, а НЕ id стадии». (Прежнее поведение — fail-fast через `detectDialogViolation` — заменено relocate.) На ручном retry `<phase>.session.json` и `<phase>.jsonl` очищаются.
 
 ### Polling Latency
 
@@ -143,7 +143,7 @@ When adding new interactive features:
 1. Ensure agent writes `<phase>.<id>.question.json` in correct format
 2. Ensure agent polls correctly: `while [ ! -f "$AFM_STAGE_DIR/<phase>.<id>.answer.json" ]; do sleep 30; done`
 3. Update handler validation in `pkg/server/handlers.go` if phase names change
-4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_DialogViolationDetected`), not `eagerProbeRunner` (which only applies to non-interactive stages)
+4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_MisplacedQuestionRelocated`), not `eagerProbeRunner` (which only applies to non-interactive stages)
 5. Verify atomic write pattern (O_EXCL) is preserved in handlers
 
 ## Docker Mode
@@ -210,7 +210,9 @@ make release-major   # v1.2.3 → v2.0.0  (breaking change)
 
 `scripts/release.sh` читает последний SemVer git-тег, бампит уровень, собирает имидж с двумя тегами и пушит оба; после успешного пуша образа создаёт локальный git-тег **и сразу пушит его в remote** (`git push origin vX.Y.Z`). Сбой пуша тега (нет сети/auth) не валит релиз — образ уже опубликован, тег пушится вручную. Версия вшита в бинарник: `docker run akopichin/afm:vX.Y.Z afm --version` покажет тег.
 
-`make docker-push` — dev-only, пушит только `:latest` (быстрая итерация без релиза). Чтобы выдать конкретную версию — используй `:vX.Y.Z` нужного релиза.
+**Релиз всегда мультиарх (`linux/amd64` + `linux/arm64`).** `release.sh` собирает и пушит через `docker buildx build --platform linux/amd64,linux/arm64 --push` одним шагом (раздельный `docker push` для манифест-листа не годится — образы не грузятся в локальный daemon). Обязателен билдер с драйвером `docker-container` (драйвер `docker` не умеет манифест-листы) — скрипт создаёт именованный `afm-multiarch` идемпотентно, если его нет. amd64-ветка на arm64-хосте собирается через QEMU-эмуляцию (медленно, но корректно). **Зачем:** обычный `docker build` на Mac (arm64) даёт single-arch образ → у тех, кто делает `FROM akopichin/afm` на amd64, сборка падает `no match for platform in manifest: not found`.
+
+`make docker-push` — dev-only, пушит только `:latest` **single-arch** (быстрая итерация без релиза, без эмуляции). Для раздачи вовне всегда используй `make release-*` (мультиарх) и тег `:vX.Y.Z`.
 
 ### Отладка
 

@@ -58,6 +58,8 @@
 - **Решение супервизора публикуется в UI для обоих треков** (`EventSupervisorDecision` + `supervisor.jsonl`); раньше standard не публиковался — UI не видел резолюцию. В дашборде `supervisor_decision` выделен отдельной подсветкой (`.feed-entry.supervisor`) в Event feed.
 - **Логи autonomous-агента видны в средней "Log" панели**: `handleLog` (`/api/stages/<id>/log`) и `buildDialogEntries` читают `autonomous.log`/`autonomous.jsonl` (раньше только planning/implementation/review → панель была пуста для autonomous-стадий).
 - **Autonomous-фаза диалоговая**: `phaseAutonomous = "autonomous_execution"` — единая фаза без planning/impl/review (скилл всё делает сам, пишет `execution_summary.md`), НО скилл может спрашивать пользователя через тот же file-based dialog protocol (вопросы `autonomous_execution.q<N>.*`, валидная фаза, resume через `onUserAnswered`). Раннер получает `AFM_STAGE_DIR`, промпт включает `<interactive_rules>`.
+- **Персистентный supervisor-decision badge** в хедере стадии в дашборде (решение видно и после ухода события из фида).
+- **Fix host-режима `supervisor_command`**: wrapper генерируется, даже если ни одна стадия не использует команду как агента; секрет резолвится и в host-ветке (`UsedRecipes`).
 
 ## 2026-07-15
 

@@ -602,12 +602,22 @@ func jsonlFileForPhase(phase string) string {
 	return phase + ".jsonl"
 }
 
-// relocateMisplacedQuestions ищет question.json файлы, записанные агентом вне stageDir,
-// и автоматически перемещает их внутрь. Для каждого перемещённого файла создаётся
-// dangling-симлинк <wrongDir>/answer.json → <stageDir>/answer.json, чтобы агентский
-// bash-polling-loop нашёл ответ по своему (неверному) пути.
+// relocateMisplacedQuestions чинит два способа, которыми агент может «спрятать»
+// файл вопроса от поллера, и оба ведут к вечному зависанию стадии:
 //
-// Это защита от GLM-4.7 bug: модель конструирует путь из CWD вместо $AFM_STAGE_DIR.
+//  1. Неверная ДИРЕКТОРИЯ: question.json записан вне stageDir (GLM-4.7 bug —
+//     модель конструирует путь из CWD вместо $AFM_STAGE_DIR).
+//  2. Неверный ПРЕФИКС: файл лежит внутри stageDir, но назван по id стадии
+//     (напр. "commit-changes.q1.question.json") вместо канонической фазы
+//     ("planning.q1.question.json"). FindUnansweredQuestions матчит только
+//     planning/implementation/review/autonomous_execution → такой файл невидим.
+//
+// В обоих случаях файл нормализуется к каноническому имени "<phase>.<id>.question.json".
+// Правильная фаза берётся не из (возможно неверного) префикса, а из того, в чьём
+// <phase>.jsonl нашёлся Write этого файла — это авторитетный признак. Для каждого
+// нормализованного файла создаётся dangling-симлинк по ПУТИ, который опрашивает
+// агент (его директория + его префикс), → канонический answer.json в stageDir,
+// чтобы bash-polling-loop нашёл ответ, даже если агент ошибся и с папкой, и с префиксом.
 func (o *Orchestrator) relocateMisplacedQuestions(stageDir string) {
 	phases := []string{phasePlanning, phaseImplementation, phaseReview}
 	if isAutonomousStage(stageDir) {
@@ -616,39 +626,46 @@ func (o *Orchestrator) relocateMisplacedQuestions(stageDir string) {
 	for _, phase := range phases {
 		jsonlPath := filepath.Join(stageDir, jsonlFileForPhase(phase))
 		for _, f := range executor.WrittenFiles(jsonlPath) {
-			if !strings.HasSuffix(filepath.Base(f), ".question.json") {
+			base := filepath.Base(f)
+			if !strings.HasSuffix(base, ".question.json") {
 				continue
 			}
-			if pathInside(f, stageDir) {
-				continue // уже в правильном месте
+			// Разбираем "<prefix>.<id>.question.json" → id.
+			trimmed := strings.TrimSuffix(base, ".question.json")
+			dot := strings.Index(trimmed, ".")
+			if dot < 0 || trimmed[dot+1:] == "" {
+				continue // не формат <prefix>.<id> — не наш файл
 			}
-			// Файл написан в неправильную директорию.
+			id := trimmed[dot+1:]
+			dstBase := phase + "." + id + ".question.json"
+			dst := filepath.Join(stageDir, dstBase)
+
+			// Файл уже на своём каноническом месте — поллер подхватит штатно.
+			if pathInside(f, stageDir) && base == dstBase {
+				continue
+			}
 			if _, err := os.Stat(f); err != nil {
 				continue // файл не существует — агент ещё не дошёл до записи
 			}
-			dst := filepath.Join(stageDir, filepath.Base(f))
 			if _, err := os.Stat(dst); err == nil {
-				continue // уже скопирован ранее
+				continue // уже нормализован ранее
 			}
 			data, err := os.ReadFile(f)
 			if err != nil {
-				log.Printf("WARN: relocate question %s: read: %v", f, err)
+				log.Printf("WARN: normalize question %s: read: %v", f, err)
 				continue
 			}
 			if err := os.WriteFile(dst, data, 0644); err != nil {
-				log.Printf("WARN: relocate question %s → %s: write: %v", f, dst, err)
+				log.Printf("WARN: normalize question %s → %s: write: %v", f, dst, err)
 				continue
 			}
-			// Создаём симлинк wrongDir/answer.json → stageDir/answer.json (dangling),
-			// чтобы агентский polling-loop нашёл ответ по своему неверному пути.
-			answerBase := strings.TrimSuffix(filepath.Base(f), ".question.json") + ".answer.json"
-			wrongAnswer := filepath.Join(filepath.Dir(f), answerBase)
-			rightAnswer := filepath.Join(stageDir, answerBase)
+			wrongAnswer := filepath.Join(filepath.Dir(f), trimmed+".answer.json")
+			rightAnswer := filepath.Join(stageDir, phase+"."+id+".answer.json")
 			if _, err := os.Lstat(wrongAnswer); err != nil {
 				_ = os.MkdirAll(filepath.Dir(wrongAnswer), 0755)
 				_ = os.Symlink(rightAnswer, wrongAnswer)
 			}
-			log.Printf("INFO: relocated misplaced question %s → %s (symlink answer)", f, dst)
+			log.Printf("INFO: normalized misplaced question %s → %s (symlink answer)", f, dst)
 		}
 	}
 }

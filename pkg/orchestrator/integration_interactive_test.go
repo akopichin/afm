@@ -356,6 +356,77 @@ func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 	}
 }
 
+// TestIntegration_MisprefixedQuestionNormalized: интерактивный агент пишет
+// question.json ВНУТРЬ stageDir, но с префиксом = id стадии ("commit-changes")
+// вместо канонической фазы ("planning"). Poller такой префикс не распознаёт
+// (FindUnansweredQuestions матчит только planning/implementation/review/
+// autonomous_execution) → без нормализации вопрос невидим в UI и стадия зависает.
+// Оркестратор должен нормализовать файл к каноническому имени фазы и создать
+// symlink на answer.json по неверному (agent-poll'ящемуся) пути.
+func TestIntegration_MisprefixedQuestionNormalized(t *testing.T) {
+	dir := t.TempDir()
+
+	// Скрипт пишет вопрос ВНУТРЬ $AFM_STAGE_DIR, но с префиксом id стадии.
+	// Эмитит stream-json Write tool_use с тем же путём (poller узнаёт путь через
+	// planning.jsonl), затем спит, имитируя зависший bash-polling-loop.
+	scriptPath := filepath.Join(dir, "misprefixedagent.sh")
+	script := "#!/bin/bash\n" +
+		`q="$AFM_STAGE_DIR/commit-changes.q1.question.json"` + "\n" +
+		`echo '{"id":"q1","question":"ready?","options":["a","b"]}' > "$q"` + "\n" +
+		`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"'"$q"'","content":"..."}}]}}'` + "\n" +
+		"sleep 30\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "commit-changes",
+		Name:        "Commit changes",
+		Description: "interactive planning that writes question with stage-id prefix",
+		Agents:      []flow.AgentType{flow.AgentPlanning},
+		Interactive: true,
+		Command:     scriptPath,
+	}}
+
+	store, err := state.Open(dir, []string{"commit-changes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Mis-prefixed вопрос нормализуется → poller находит его → EvAskUser.
+	waitForStatus(t, stateFile, "commit-changes", state.StatusAwaitingUserInput, 15*time.Second)
+
+	stageDir := filepath.Join(dir, "commit-changes")
+
+	// Файл нормализован к каноническому имени фазы — вопрос виден в UI.
+	if _, err := os.Stat(filepath.Join(stageDir, "planning.q1.question.json")); err != nil {
+		t.Errorf("normalized question missing in stageDir: %v", err)
+	}
+	// По неверному (agent-poll'ящемуся) пути создан dangling-symlink на будущий
+	// канонический answer.json — bash-polling-loop агента найдёт ответ.
+	wrongAnswer := filepath.Join(stageDir, "commit-changes.q1.answer.json")
+	link, err := os.Readlink(wrongAnswer)
+	if err != nil {
+		t.Errorf("expected answer symlink at %s: %v", wrongAnswer, err)
+	} else if link != filepath.Join(stageDir, "planning.q1.answer.json") {
+		t.Errorf("answer symlink points to %q, want %q", link, filepath.Join(stageDir, "planning.q1.answer.json"))
+	}
+}
+
 // TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit воспроизводит afm bug:
 // интерактивный planning-агент задал вопрос и ВЫШЕЛ (claude завершился), не
 // дождавшись ответа пользователя и не написав plan.md. Раньше такое завершение

@@ -43,10 +43,24 @@ if git rev-parse -q --verify "refs/tags/$next" >/dev/null; then
 fi
 
 echo "releasing $next (latest was ${latest:-none})"
-docker build --build-arg AFM_VERSION="$next" \
-    -t akopichin/afm:"$next" -t akopichin/afm:latest -f Dockerfile.runtime .
-docker push akopichin/afm:"$next"
-docker push akopichin/afm:latest
+# Мультиарх-релиз: buildx собирает под amd64+arm64 и пушит манифест-лист одним
+# шагом. Обычный `docker build` на arm64-хосте даёт single-arch образ → у тех, кто
+# делает FROM akopichin/afm на amd64, сборка падает "no match for platform in
+# manifest: not found". Раздельный `docker push` для мультиарха не подходит: образы
+# не грузятся в локальный daemon, манифест-лист публикует сам buildx через --push.
+# docker-container-драйвер обязателен (драйвер `docker` не умеет манифест-листы) —
+# создаём именованный билдер идемпотентно, если его ещё нет.
+PLATFORMS="linux/amd64,linux/arm64"
+BUILDER="afm-multiarch"
+if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+    docker buildx create --name "$BUILDER" --driver docker-container --bootstrap >/dev/null
+fi
+docker buildx build --builder "$BUILDER" \
+    --platform "$PLATFORMS" \
+    --build-arg AFM_VERSION="$next" \
+    -t akopichin/afm:"$next" -t akopichin/afm:latest \
+    -f Dockerfile.runtime \
+    --push .
 
 # git-тег — только после успешного пуша образа (орфан-тег при сбое пуша исключён).
 git tag -a "$next" -m "Release $next"

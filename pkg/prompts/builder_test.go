@@ -108,6 +108,40 @@ func TestBuild_InteractiveRobustnessInstructions(t *testing.T) {
 	}
 }
 
+// TestBuild_InteractivePrefixIsPhaseNotStageID locks in the constraint added to
+// fix the dialog-stall bug where the agent used the stage id as the filename
+// prefix (e.g. "commit-changes.q1.question.json") instead of the phase
+// ("planning.q1.question.json"). The poller only recognises canonical phase
+// prefixes, so a stage-id-prefixed question is invisible → the stage hangs.
+// The prompt must name the trap explicitly with the real stage id inline.
+func TestBuild_InteractivePrefixIsPhaseNotStageID(t *testing.T) {
+	in := Inputs{
+		Template:    "RULES",
+		Stage:       flow.Stage{ID: "commit-changes", Name: "Commit", Description: "ask user"},
+		PhaseAgent:  AgentPlanning,
+		StageDir:    t.TempDir(),
+		Interactive: true,
+	}
+	out := Build(in)
+
+	for _, want := range []string{
+		// Явно называет ловушку: префикс — это фаза, не id стадии.
+		`the prefix is EXACTLY "planning". It is NOT the stage id`,
+		// Инлайн-пример с реальным id текущей стадии.
+		`This stage is called "commit-changes" — but the file prefix is still "planning"`,
+		`FORBIDDEN: writing "commit-changes".q<N>.question.json`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("interactive prompt should contain %q:\n%s", want, out)
+		}
+	}
+	// Плейсхолдер <phase> не должен утечь в финальный промпт — он всегда
+	// подставлен конкретной фазой.
+	if strings.Contains(out, "<phase>") {
+		t.Errorf("interactive prompt must not contain the literal <phase> placeholder:\n%s", out)
+	}
+}
+
 func TestBuild_PromptBlockAppearsAfterStage(t *testing.T) {
 	in := Inputs{
 		Template:   "RULES",

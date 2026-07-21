@@ -61,13 +61,23 @@ func Build(in Inputs) string {
 		}
 		sb.WriteString("\n\n<interactive_rules>\n")
 		sb.WriteString("Use the file-based dialog protocol to ask the user questions.\n")
-		fmt.Fprintf(&sb, "Your stage directory is AFM_STAGE_DIR=%q\n", stageDir)
+		fmt.Fprintf(&sb, "Your stage directory is AFM_STAGE_DIR=%q\n\n", stageDir)
+		// Полностью развёрнутые имена файлов + адресный constraint против
+		// подстановки id стадии вместо фазы (afm bug: агент писал
+		// "<stage-id>.q1.question.json" вместо "<phase>.q1.question.json",
+		// поллер такой префикс не распознаёт → вопрос не виден в UI → зависание).
+		sb.WriteString("The dialog files use a FIXED filename prefix that is ALWAYS the literal phase word below.\n")
+		fmt.Fprintf(&sb, "  Question file: %s.q<N>.question.json\n", in.PhaseAgent)
+		fmt.Fprintf(&sb, "  Answer file:   %s.q<N>.answer.json\n", in.PhaseAgent)
+		fmt.Fprintf(&sb, "CONSTRAINT: the prefix is EXACTLY %q. It is NOT the stage id, stage name, or feature name.\n", in.PhaseAgent)
+		fmt.Fprintf(&sb, "  This stage is called %q — but the file prefix is still %q, not the stage id.\n", in.Stage.ID, in.PhaseAgent)
+		fmt.Fprintf(&sb, "  FORBIDDEN: writing %q.q<N>.question.json or any prefix other than %q.\n", in.Stage.ID, in.PhaseAgent)
 		sb.WriteString("Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).\n\n")
 		sb.WriteString("For each question:\n")
 		sb.WriteString("0. BEFORE writing any question file, read the real stage dir from the environment:\n")
 		sb.WriteString("   Run Bash: echo \"$AFM_STAGE_DIR\"\n")
 		sb.WriteString("   Capture the printed value (call it STAGE_DIR). Example output: /some/path/runs/my-flow-20240101-120000/my-stage\n")
-		sb.WriteString("   CONSTRAINT: you MUST write the question file to exactly STAGE_DIR/<phase>.q<N>.question.json.\n")
+		fmt.Fprintf(&sb, "   CONSTRAINT: you MUST write the question file to exactly STAGE_DIR/%s.q<N>.question.json.\n", in.PhaseAgent)
 		sb.WriteString("   FORBIDDEN: writing to any path you did not obtain from echo above.\n")
 		sb.WriteString("   FORBIDDEN: constructing or guessing the path from cwd, flow name, or timestamps.\n")
 		sb.WriteString("1. Write the question file using the Write tool:\n")
@@ -79,7 +89,7 @@ func Build(in Inputs) string {
 		fmt.Fprintf(&sb, "   while [ ! -f \"$AFM_STAGE_DIR/%s.qN.answer.json\" ]; do sleep 15; done && cat \"$AFM_STAGE_DIR/%s.qN.answer.json\"\n", in.PhaseAgent, in.PhaseAgent)
 		sb.WriteString("3. The polling loop may be cut short by a command timeout after a few minutes — this is EXPECTED and is NOT a signal to stop.\n")
 		sb.WriteString("   When that happens, immediately run the EXACT SAME polling-loop command again. Keep re-launching it until the answer file appears.\n")
-		sb.WriteString("4. You MUST keep waiting until $AFM_STAGE_DIR/<phase>.qN.answer.json exists. Do NOT end your turn, do NOT stop, do NOT write \"I'll wait\" and return control.\n")
+		fmt.Fprintf(&sb, "4. You MUST keep waiting until $AFM_STAGE_DIR/%s.qN.answer.json exists. Do NOT end your turn, do NOT stop, do NOT write \"I'll wait\" and return control.\n", in.PhaseAgent)
 		sb.WriteString("5. Do NOT use ScheduleWakeup, background tasks, async waits, or \"wait for a notification\" — those mechanisms DO NOT EXIST here. The ONLY way to receive the user's answer is the blocking Bash polling loop above.\n")
 		sb.WriteString("6. Do NOT write to plan.md / output artifact yet — finish waiting for and processing all answers first, then produce the artifact in one go.\n")
 		sb.WriteString("Ask ONE question at a time.\n")
