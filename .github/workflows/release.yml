@@ -11,6 +11,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,6 +22,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -39,11 +45,11 @@ jobs:
             -t akopichin/afm:latest \
             --push .
 
-      - name: Release binaries + Homebrew formula
+      - name: Release binaries + Homebrew cask
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          version: 2.17.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

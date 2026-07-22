@@ -209,11 +209,28 @@ make release-minor   # v1.2.3 → v1.3.0  (новая фича, обратная
 make release-major   # v1.2.3 → v2.0.0  (breaking change)
 ```
 
-`scripts/release.sh` читает последний SemVer git-тег, бампит уровень, собирает имидж с двумя тегами и пушит оба; после успешного пуша образа создаёт локальный git-тег **и сразу пушит его в remote** (`git push origin vX.Y.Z`). Сбой пуша тега (нет сети/auth) не валит релиз — образ уже опубликован, тег пушится вручную. Версия вшита в бинарник: `docker run akopichin/afm:vX.Y.Z afm --version` покажет тег.
+`scripts/release.sh` читает последний SemVer git-тег, бампит уровень и
+**только** создаёт+пушит новый git-тег (`git push origin vX.Y.Z`) — сама
+сборка (docker-образ, бинарники, GitHub Release, Homebrew cask) в скрипте
+больше не происходит. Пуш тега триггерит `.github/workflows/release.yml`,
+который и делает всю фактическую работу. Дополнительно: любой push в
+`main` автоматически бампает и пушит следующий patch-тег через
+`.github/workflows/ci.yml` (`auto-release-tag` job) — `make release-patch`
+вручную нужен редко, в основном для minor/major.
 
-**Релиз всегда мультиарх (`linux/amd64` + `linux/arm64`).** `release.sh` собирает и пушит через `docker buildx build --platform linux/amd64,linux/arm64 --push` одним шагом (раздельный `docker push` для манифест-листа не годится — образы не грузятся в локальный daemon). Обязателен билдер с драйвером `docker-container` (драйвер `docker` не умеет манифест-листы) — скрипт создаёт именованный `afm-multiarch` идемпотентно, если его нет. amd64-ветка на arm64-хосте собирается через QEMU-эмуляцию (медленно, но корректно). **Зачем:** обычный `docker build` на Mac (arm64) даёт single-arch образ → у тех, кто делает `FROM akopichin/afm` на amd64, сборка падает `no match for platform in manifest: not found`.
+**Релиз всегда мультиарх (`linux/amd64` + `linux/arm64`).**
+`release.yml` собирает и пушит через `docker buildx build --platform
+linux/amd64,linux/arm64 --push` одним шагом (раздельный `docker push` для
+манифест-листа не годится — образы не грузятся в локальный daemon), с
+предварительной регистрацией QEMU (`docker/setup-qemu-action`) для
+эмуляции arm64 на amd64-раннере GitHub Actions. Версия вшита в бинарник
+через `--build-arg AFM_VERSION`: `docker run akopichin/afm:vX.Y.Z afm
+--version` покажет тег.
 
-`make docker-push` — dev-only, пушит только `:latest` **single-arch** (быстрая итерация без релиза, без эмуляции). Для раздачи вовне всегда используй `make release-*` (мультиарх) и тег `:vX.Y.Z`.
+`make docker-build`/`docker-push` — dev-only, локальная сборка **single-arch**
+(быстрая итерация без релиза). Для реального релиза (мультиарх + бинарники +
+Homebrew) достаточно запушить тег `vX.Y.Z` (вручную через `make release-*`
+или автоматически при push в `main`) — остальное берёт на себя CI.
 
 ### Отладка
 

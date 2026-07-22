@@ -93,8 +93,8 @@ DOCKER_TAG   := latest
 .PHONY: docker-build docker-push docker-run
 
 # docker-build не зависит от web: Dockerfile.runtime сам собирает React-дашборд
-# в node-стадии (см. stage web) — это же использует release.sh, так что релизный
-# образ всегда получает свежий фронт из исходников.
+# в node-стадии (см. stage web) — это же использует release.yml в CI, так что
+# релизный образ всегда получает свежий фронт из исходников.
 docker-build:
 	docker build --build-arg AFM_VERSION=$(VERSION) -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
