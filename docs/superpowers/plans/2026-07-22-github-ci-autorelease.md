@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Тег `v0.5.6` на текущий HEAD в `afm`, плюс GitHub Actions пайплайн: валидация (build+test+lint) на любую ветку, и полный авто-релиз (patch-версия, мультиарх docker-образ, бинарники, GitHub Release, Homebrew formula) на каждый push в `main`.
+**Goal:** Тег `v0.5.6` на текущий HEAD в `afm`, плюс GitHub Actions пайплайн: валидация (build+test+lint) на любую ветку, и полный авто-релиз (patch-версия, мультиарх docker-образ, бинарники, GitHub Release, Homebrew cask) на каждый push в `main`.
 
 **Architecture:** Тег — единственная точка входа в реальный релиз. `ci.yml` валидирует всегда и на push в main дополнительно бампает+пушит следующий patch-тег (через PAT, не дефолтный `GITHUB_TOKEN` — иначе тег не запустит другой workflow). `release.yml`, триггерясь по любому тегу `v*.*.*` (авто или ручной), делает всю фактическую сборку: docker multi-arch push + goreleaser (бинарники + GitHub Release + Homebrew tap).
 
@@ -15,7 +15,8 @@
 - Коммиты — на русском языке, без `Co-Authored-By`.
 - Не пушить в `origin main` до последнего таска этого плана — до тех пор, пока не заведены секреты `RELEASE_TOKEN`/`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` и не создан репозиторий `akopichin/homebrew-afm`, push в main запустит `auto-release-tag`, который упадёт на отсутствующих секретах/репозитории. Локальные коммиты между тасками — нормально, `git push origin main` — только в Task 8.
 - `flowManager` и `sync-upstream.sh` не трогать — вне рамок задачи.
-- Формула Homebrew — без поля `license` (в репозитории нет файла `LICENSE`).
+- Homebrew cask (`homebrew_casks:`, не `brews:` — deprecated в GoReleaser 2.17) — без поля `license` (в репозитории нет файла `LICENSE`). Установка — `brew install --cask akopichin/afm`.
+- Все таски выполняются на ветке `releaser`, слияние в `main` — только в Task 8 (по решению пользователя, вместо коммитов прямо на main).
 
 ---
 
@@ -308,7 +309,17 @@ EOF
 
 ---
 
-### Task 5: Homebrew formula в .goreleaser.yml
+### Task 5: Homebrew cask в .goreleaser.yml
+
+**⚠️ Ревизия:** изначально планировалась секция `brews:` (Homebrew Formula,
+`brew install akopichin/afm` без флагов). GoReleaser 2.17 (установленная
+версия) помечает `brews:` как deprecated — `goreleaser check` падает с
+exit 2 ("should not be used anymore"). Заменено на актуальный
+`homebrew_casks:`. Побочный эффект: команда установки меняется на
+`brew install --cask akopichin/afm` (с флагом `--cask`) — подтверждено
+пользователем как приемлемый компромисс взамен использования
+deprecated-механизма, который рискует быть удалён в будущих версиях
+goreleaser.
 
 **Files:**
 - Modify: `.goreleaser.yml`
@@ -316,8 +327,8 @@ EOF
 **Interfaces:**
 - Consumes: репозиторий `akopichin/homebrew-afm` (Task 2), секрет
   `RELEASE_TOKEN` (передаётся в env `release.yml`, Task 6).
-- Produces: goreleaser при релизе публикует `Formula/afm.rb` в
-  `akopichin/homebrew-afm` — именно это делает рабочим `brew install
+- Produces: goreleaser при релизе публикует `Casks/afm.rb` в
+  `akopichin/homebrew-afm` — именно это делает рабочим `brew install --cask
   akopichin/afm`.
 
 - [ ] **Step 1: Дополнить .goreleaser.yml**
@@ -326,11 +337,13 @@ EOF
 добавляется:
 
 ```yaml
-brews:
+homebrew_casks:
   - name: afm
-    directory: Formula
+    binaries:
+      - afm
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
+    directory: Casks
     repository:
       owner: akopichin
       name: homebrew-afm
@@ -339,11 +352,19 @@ brews:
     commit_author:
       name: afm-release-bot
       email: afm-release-bot@users.noreply.github.com
-    install: |
-      bin.install "afm"
-    test: |
-      system "#{bin}/afm", "--version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm"]
+          end
 ```
+
+(Пост-install хук ad-hoc подписывает бинарник на macOS — без этого
+распакованный из архива бинарник получает xattr-карантин Gatekeeper и
+падает с "afm is damaged and cannot be opened", та же проблема, что уже
+задокументирована в `Makefile` для локальной установки через `codesign -f
+-s -`.)
 
 Полный файл после правки:
 ```yaml
@@ -378,11 +399,13 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-brews:
+homebrew_casks:
   - name: afm
-    directory: Formula
+    binaries:
+      - afm
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
+    directory: Casks
     repository:
       owner: akopichin
       name: homebrew-afm
@@ -391,10 +414,12 @@ brews:
     commit_author:
       name: afm-release-bot
       email: afm-release-bot@users.noreply.github.com
-    install: |
-      bin.install "afm"
-    test: |
-      system "#{bin}/afm", "--version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm"]
+          end
 ```
 
 - [ ] **Step 2: Установить goreleaser локально для проверки конфига**
@@ -405,20 +430,22 @@ Expected: goreleaser доступен, `goreleaser --version` печатает �
 - [ ] **Step 3: Проверить конфиг**
 
 Run: `RELEASE_TOKEN=dummy goreleaser check`
-Expected: `1 configuration file(s) validated` без ошибок (значение `RELEASE_TOKEN`
-не важно для `check` — команда не резолвит шаблон `.Env.RELEASE_TOKEN`
-фактическим сетевым вызовом, только валидирует структуру YAML).
+Expected: exit code 0, вывод без строк `DEPRECATED` и без `error=`.
 
 - [ ] **Step 4: Закоммитить**
 
 ```bash
 git add .goreleaser.yml
 git commit -m "$(cat <<'EOF'
-feat: добавить Homebrew formula в .goreleaser.yml
+feat: добавить Homebrew cask в .goreleaser.yml
 
-Публикует Formula/afm.rb в akopichin/homebrew-afm при каждом релизе —
-это то, что делает рабочим `brew install akopichin/afm`. Без license:
-в репозитории пока нет файла LICENSE.
+Публикует Casks/afm.rb в akopichin/homebrew-afm при каждом релизе — это
+то, что делает рабочим `brew install --cask akopichin/afm`. brews:
+(Homebrew Formula) не используется — GoReleaser 2.17 помечает его
+deprecated. Post-install хук ad-hoc подписывает бинарник на macOS
+(Gatekeeper иначе блокирует нераспакованный из архива бинарник), той же
+техникой, что уже применяется в Makefile для локальной установки. Без
+license: в репозитории пока нет файла LICENSE.
 EOF
 )"
 ```
@@ -601,13 +628,15 @@ Expected: строки `"architecture": "amd64"` и `"architecture": "arm64"`.
 
 - [ ] **Step 7: Проверить результат — Homebrew tap**
 
-Run: `gh api repos/akopichin/homebrew-afm/contents/Formula/afm.rb --jq .name`
+Run: `gh api repos/akopichin/homebrew-afm/contents/Casks/afm.rb --jq .name`
 Expected: `afm.rb`
 
 - [ ] **Step 8: Проверить установку через brew**
 
-Run: `brew install akopichin/afm && afm --version`
-Expected: устанавливается без ошибок, версия соответствует `v0.5.7`.
+Run: `brew install --cask akopichin/afm && afm --version`
+Expected: устанавливается без ошибок (пост-install хук ad-hoc подписывает
+бинарник — без него macOS Gatekeeper заблокировал бы запуск), версия
+соответствует `v0.5.7`.
 
 Если что-то из шагов 3–8 упало: `main` всё равно содержит рабочий код
 (`validate` уже был зелёным до попытки релиза) — чинить проблему и
