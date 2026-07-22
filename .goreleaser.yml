@@ -29,11 +29,13 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-brews:
+homebrew_casks:
   - name: afm
-    directory: Formula
+    binaries:
+      - afm
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
+    directory: Casks
     repository:
       owner: akopichin
       name: homebrew-afm
@@ -42,7 +44,9 @@ brews:
     commit_author:
       name: afm-release-bot
       email: afm-release-bot@users.noreply.github.com
-    install: |
-      bin.install "afm"
-    test: |
-      system "#{bin}/afm", "--version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm"]
+          end
