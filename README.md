@@ -480,6 +480,16 @@ pending → (supervisor) → running(autonomous_execution) → done
 
 ## Разработка
 
+Один раз после клонирования — включить pre-commit хук (lint + build + test перед каждым коммитом):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Хук лежит в `.githooks/pre-commit` и версионируется вместе с репозиторием, но сама настройка
+`core.hooksPath` — локальная git-конфигурация, поэтому её нужно применить в каждом клоне отдельно.
+Пропустить разово: `git commit --no-verify`.
+
 ```bash
 make build        # собрать (bin/afm)
 make test         # тесты (с -race)
