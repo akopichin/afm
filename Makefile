@@ -47,6 +47,13 @@ lint: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
 	$(GOENV) $(GOLANGCI_BIN) run --fix ./...
 	$(SETSTATUSLINTER_BIN) ./pkg/...
 
+# lint-ci — то же самое, но без --fix: CI должен падать явно на проблемах,
+# а не молча их чинить и зеленеть.
+.PHONY: lint-ci
+lint-ci: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
+	$(GOENV) $(GOLANGCI_BIN) run ./...
+	$(SETSTATUSLINTER_BIN) ./pkg/...
+
 clean:
 	rm -rf $(LOCAL_BIN)/
 
@@ -86,8 +93,8 @@ DOCKER_TAG   := latest
 .PHONY: docker-build docker-push docker-run
 
 # docker-build не зависит от web: Dockerfile.runtime сам собирает React-дашборд
-# в node-стадии (см. stage web) — это же использует release.sh, так что релизный
-# образ всегда получает свежий фронт из исходников.
+# в node-стадии (см. stage web) — это же использует release.yml в CI, так что
+# релизный образ всегда получает свежий фронт из исходников.
 docker-build:
 	docker build --build-arg AFM_VERSION=$(VERSION) -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 

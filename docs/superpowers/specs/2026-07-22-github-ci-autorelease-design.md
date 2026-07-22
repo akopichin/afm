@@ -29,8 +29,8 @@
    - на **любую** ветку (push/PR) — сборка + тесты + линт;
    - на **push в main** — то же самое, плюс автоматический релиз: бамп
      patch-версии, docker-образ (мультиарх) в Docker Hub, бинарники и
-     GitHub Release, обновление Homebrew tap — чтобы `brew install akopichin/afm`
-     всегда ставил актуальную версию.
+     GitHub Release, обновление Homebrew tap — чтобы `brew install --cask
+     akopichin/afm` всегда ставил актуальную версию.
 3. Дальнейшая разработка ведётся в afm (GitHub) как в основном репозитории.
    `flowManager`/`sync-upstream.sh` не трогаем — остаются как есть, вне
    рамок этой задачи.
@@ -52,8 +52,8 @@ push тега vX.Y.Z (авто ИЛИ ручной minor/major) ──► releas
                                     ┌───────────────────┼───────────────────┐
                                     ▼                    ▼                   ▼
                               docker buildx        goreleaser          goreleaser
-                              (мультиарх push      (бинарники +        (brews: пуш
-                               в Docker Hub)         GitHub Release)     формулы в
+                              (мультиарх push      (бинарники +        (homebrew_casks:
+                               в Docker Hub)         GitHub Release)     пуш cask в
                                                                          homebrew-afm)
 ```
 
@@ -146,14 +146,21 @@ Node/npm в этом workflow не нужен.
 
 ### `.goreleaser.yml` (дополняется)
 
-Существующие `builds`/`archives`/`checksum` не меняются. Добавляется:
+Существующие `builds`/`archives`/`checksum` не меняются. Изначально
+планировалась секция `brews:` (Homebrew Formula), но GoReleaser 2.17
+(текущая установленная версия) помечает `brews:` как deprecated —
+`goreleaser check` падает с exit 2 на "should not be used anymore".
+Актуальная замена — `homebrew_casks:`; переключение подтверждено отдельным
+решением (см. ниже про последствия для `brew install`). Добавляется:
 
 ```yaml
-brews:
+homebrew_casks:
   - name: afm
-    directory: Formula
+    binaries:
+      - afm
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
+    directory: Casks
     repository:
       owner: akopichin
       name: homebrew-afm
@@ -162,19 +169,36 @@ brews:
     commit_author:
       name: afm-release-bot
       email: afm-release-bot@users.noreply.github.com
-    test: |
-      system "#{bin}/afm", "--version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm"]
+          end
 ```
 
 `license` не указывается — в репозитории пока нет файла `LICENSE`; можно добавить
 позже отдельной задачей.
 
+Пост-install хук ad-hoc подписывает бинарник (`codesign -f -s -`) на macOS —
+без этого нераспакованный из архива бинарник получает xattr-карантин
+Gatekeeper и падает с "afm is damaged and cannot be opened", та же проблема,
+что уже задокументирована в `Makefile` (`install:`-таргет) для локальной
+установки.
+
 ### Homebrew tap: `akopichin/homebrew-afm`
 
 Новый пустой публичный репозиторий. Заполняется автоматически goreleaser при
-первом релизе (создаёт `Formula/afm.rb`). После этого `brew install
+первом релизе (создаёт `Casks/afm.rb`). После этого `brew install --cask
 akopichin/afm` (Homebrew-соглашение `user/repo` → тап `user/homebrew-repo`)
 работает и подтягивает актуальную версию при каждом релизе.
+
+**Важное отличие от исходного запроса:** casks устанавливаются флагом
+`--cask` (`brew install --cask akopichin/afm`), а не просто `brew install
+akopichin/afm`, как изначально просилось — это плата за то, что `brews:`
+считается устаревшим механизмом в текущей версии GoReleaser. Альтернатива
+(остаться на `brews:`) обсуждалась и отклонена пользователем: deprecated-путь
+рискует быть удалён в будущих версиях goreleaser.
 
 ## Секреты и разовая настройка (репозиторий `akopichin/afm` → Settings → Secrets and variables → Actions)
 
@@ -211,9 +235,9 @@ akopichin/homebrew-afm --public`) тоже до первого релиза.
 
 - Локально: `./scripts/release.sh --dry-run patch` — печатает следующую версию
   без побочных эффектов (эта логика уже существует и не меняется).
-- `.goreleaser.yml` можно проверить локально: `goreleaser release --snapshot
-  --clean` (без пуша, без тега) — убеждаемся, что бинарники собираются и
-  brews-конфиг синтаксически валиден.
+- `.goreleaser.yml` можно проверить локально: `goreleaser check` — убеждаемся,
+  что конфиг (включая `homebrew_casks:`) синтаксически валиден и не содержит
+  deprecated-полей.
 - End-to-end: сам push шага 5 выше — если `v0.5.7` появился на Docker Hub,
   в GitHub Releases и в `akopichin/homebrew-afm`, пайплайн подтверждён рабочим.
 - Проверка отката: если `auto-release-tag` или `release` job упадёт — `main`

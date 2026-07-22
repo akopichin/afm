@@ -480,4 +480,4 @@ make docker-build     # собрать Docker-образ
 make clean        # удалить артефакты
 ```
 
-Версионированный релиз образа: `make release-patch` / `release-minor` / `release-major` (авто-бамп SemVer-тега, пуш `:vX.Y.Z` + `:latest`).
+Версионированный релиз: `make release-patch` / `release-minor` / `release-major` бампает SemVer-тег и пушит его; сама сборка (docker-образ `:vX.Y.Z` + `:latest`, бинарники, GitHub Release, Homebrew cask) происходит в GitHub Actions (`.github/workflows/release.yml`) по факту пуша тега. На push в `main` patch-версия релизится автоматически — `make release-patch` вручную нужен редко.
