@@ -51,5 +51,6 @@ homebrew_casks:
       post:
         install: |
           if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/afm"]
             system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm"]
           end
