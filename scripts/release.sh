@@ -1,7 +1,10 @@
 #!/bin/sh
-# Версионированный релиз docker-имиджа: бампит SemVer от последнего git-тега,
-# собирает :vX.Y.Z + :latest, пушит оба, и только после успеха создаёт локальный тег.
-# --dry-run: только напечатать следующую версию (без build/push/tag).
+# Бампит SemVer от последнего git-тега и пушит новый тег vX.Y.Z.
+# Сама сборка (docker-образ, бинарники, Homebrew formula) происходит в
+# GitHub Actions (.github/workflows/release.yml), которая реагирует на пуш
+# этого тага — единая точка входа в релиз что для авто-патча из CI (push в
+# main), что для ручного minor/major отсюда.
+# --dry-run: только напечатать следующую версию (без git tag/push).
 set -e
 
 if [ "$1" = "--dry-run" ]; then dry=1; shift; else dry=0; fi
@@ -42,33 +45,7 @@ if git rev-parse -q --verify "refs/tags/$next" >/dev/null; then
     exit 1
 fi
 
-echo "releasing $next (latest was ${latest:-none})"
-# Мультиарх-релиз: buildx собирает под amd64+arm64 и пушит манифест-лист одним
-# шагом. Обычный `docker build` на arm64-хосте даёт single-arch образ → у тех, кто
-# делает FROM akopichin/afm на amd64, сборка падает "no match for platform in
-# manifest: not found". Раздельный `docker push` для мультиарха не подходит: образы
-# не грузятся в локальный daemon, манифест-лист публикует сам buildx через --push.
-# docker-container-драйвер обязателен (драйвер `docker` не умеет манифест-листы) —
-# создаём именованный билдер идемпотентно, если его ещё нет.
-PLATFORMS="linux/amd64,linux/arm64"
-BUILDER="afm-multiarch"
-if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
-    docker buildx create --name "$BUILDER" --driver docker-container --bootstrap >/dev/null
-fi
-docker buildx build --builder "$BUILDER" \
-    --platform "$PLATFORMS" \
-    --build-arg AFM_VERSION="$next" \
-    -t akopichin/afm:"$next" -t akopichin/afm:latest \
-    -f Dockerfile.runtime \
-    --push .
-
-# git-тег — только после успешного пуша образа (орфан-тег при сбое пуша исключён).
+echo "tagging $next (latest was ${latest:-none})"
 git tag -a "$next" -m "Release $next"
-
-# Пушим git-тег в remote автоматически. Образ уже опубликован, поэтому сбой пуша
-# тега (нет сети/auth) НЕ валит релиз — предупреждаем и оставляем пушить вручную.
-if git push origin "$next"; then
-    echo "released $next (image + git tag pushed)"
-else
-    echo "released $next (image pushed; git tag $next is LOCAL — push manually: git push origin $next)" >&2
-fi
+git push origin "$next"
+echo "tagged and pushed $next — release.yml will build+publish it"
