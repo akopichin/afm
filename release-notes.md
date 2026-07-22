@@ -2,6 +2,15 @@
 
 Новые возможности — сверху, дальше вниз по устареванию. Даты — по коммитам в `fix`/`master`.
 
+## 2026-07-22
+
+### GitHub CI + автоматический релиз при push в main
+- Тег `v0.5.6` синхронизирован с upstream; дальнейшая разработка ведётся в этом (публичном GitHub) репозитории.
+- `.github/workflows/ci.yml`: job `validate` (build+test+lint) на любой push/PR; на push в `main` — job `auto-release-tag` автоматически бампает patch-версию и пушит тег через `RELEASE_TOKEN` (не дефолтный `GITHUB_TOKEN` — иначе тег не триггерит другой workflow, защита GitHub от циклов).
+- `.github/workflows/release.yml`: реагирует на любой тег `v*.*.*` (авто или ручной `make release-minor/major`) — мультиарх (`linux/amd64`+`linux/arm64`, с `docker/setup-qemu-action`) docker-образ в Docker Hub, плюс `goreleaser`: кросс-платформенные бинарники, GitHub Release, Homebrew cask.
+- `scripts/release.sh` упрощён — больше не собирает docker сам, только бампает версию и пушит тег; вся сборка теперь в `release.yml` (единая точка входа в релиз, независимо от источника тега).
+- Новое: `brew install --cask akopichin/afm` (тап `akopichin/homebrew-afm`, `.goreleaser.yml` → `homebrew_casks:`). Post-install хук снимает `com.apple.quarantine` и ad-hoc подписывает бинарник (`codesign -f -s -`) — без обоих шагов macOS убивает скачанный бинарник (`SIGKILL`), одного codesign недостаточно.
+
 ## 2026-07-21
 
 ### Жёсткий автономный трек: `agents: [auto]`

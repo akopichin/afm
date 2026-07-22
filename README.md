@@ -19,6 +19,16 @@ CLI-инструмент для оркестрации многостадийн�
 
 ## Установка
 
+**Через Homebrew (рекомендуется):**
+```bash
+brew install --cask akopichin/afm
+afm install-skills   # опционально: /afm, /afm-check и др. в Claude Code
+```
+
+Бинарник обновляется через `brew upgrade --cask afm`; скиллы при обновлении
+переустанавливать не обязательно, но можно повторить `afm install-skills`,
+если появились новые.
+
 **Из исходников:**
 ```bash
 make build        # собрать в bin/afm
