@@ -1,0 +1,13 @@
+#!/bin/sh
+# Прогоняет lint, build и test перед коммитом. Любой шаг с ненулевым кодом
+# выхода прерывает commit (see `git commit --no-verify` to bypass).
+set -e
+
+echo "==> make lint"
+make lint
+
+echo "==> make build"
+make build
+
+echo "==> make test"
+make test
