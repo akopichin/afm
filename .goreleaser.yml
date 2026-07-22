@@ -28,3 +28,21 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+brews:
+  - name: afm
+    directory: Formula
+    homepage: "https://github.com/akopichin/afm"
+    description: "AI flow manager — orchestrates multi-stage agent runs"
+    repository:
+      owner: akopichin
+      name: homebrew-afm
+      branch: main
+      token: "{{ .Env.RELEASE_TOKEN }}"
+    commit_author:
+      name: afm-release-bot
+      email: afm-release-bot@users.noreply.github.com
+    install: |
+      bin.install "afm"
+    test: |
+      system "#{bin}/afm", "--version"
