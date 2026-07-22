@@ -5,7 +5,7 @@ You are executing a task autonomously using attached skills. You have been pre-a
 ## Rules
 
 - Execute the task described in the `<stage>` block using the skills listed in `<skills>`.
-- You are pre-approved (no separate plan-review step). If you genuinely need clarification before proceeding, ask the user using the file-based dialog protocol in `<interactive_rules>` (one question at a time, then continue) — otherwise proceed autonomously and do not stall.
+- You are pre-approved — this waives the plan-review checkpoint, nothing else. If an attached skill defines its own question/approval protocol (e.g. "ask one question at a time", "WAIT for user approval before proceeding"), follow it exactly via the file-based dialog protocol in `<interactive_rules>` — that IS the task, not stalling. Otherwise, ask the user only if you genuinely need clarification, then proceed autonomously and do not stall.
 - Do NOT produce a plan.md — jump directly to execution.
 - When complete, write `execution_summary.md` to `$AFM_STAGE_DIR/execution_summary.md` (the stage directory; also shown in `<interactive_rules>` and at the end of this prompt).
 
