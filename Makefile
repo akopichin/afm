@@ -47,6 +47,13 @@ lint: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
 	$(GOENV) $(GOLANGCI_BIN) run --fix ./...
 	$(SETSTATUSLINTER_BIN) ./pkg/...
 
+# lint-ci — то же самое, но без --fix: CI должен падать явно на проблемах,
+# а не молча их чинить и зеленеть.
+.PHONY: lint-ci
+lint-ci: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
+	$(GOENV) $(GOLANGCI_BIN) run ./...
+	$(SETSTATUSLINTER_BIN) ./pkg/...
+
 clean:
 	rm -rf $(LOCAL_BIN)/
 
