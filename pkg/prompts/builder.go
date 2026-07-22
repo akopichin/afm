@@ -8,13 +8,16 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-type Agent string
+// Agent — фаза выполнения (алиас доменного flow.Phase). Значения приходят из
+// единого источника pkg/flow; локальные имена сохранены для читаемости
+// вызовов prompts.AgentPlanning и т.п.
+type Agent = flow.Phase
 
 const (
-	AgentPlanning       Agent = "planning"
-	AgentImplementation Agent = "implementation"
-	AgentReview         Agent = "review"
-	AgentAutonomous     Agent = "autonomous_execution"
+	AgentPlanning       = flow.PhasePlanning
+	AgentImplementation = flow.PhaseImplementation
+	AgentReview         = flow.PhaseReview
+	AgentAutonomous     = flow.PhaseAutonomous
 )
 
 type Inputs struct {

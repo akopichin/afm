@@ -132,6 +132,26 @@ func TestHandleStatus_IncludesInteractiveAndAutonomous(t *testing.T) {
 	}
 }
 
+func TestHandleStatus_IncludesDescription(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.Description = "Мой флоу для тестов"
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var resp statusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Description != "Мой флоу для тестов" {
+		t.Errorf("description = %q, want %q", resp.Description, "Мой флоу для тестов")
+	}
+}
+
 func TestHandlePlan(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/plan", nil)

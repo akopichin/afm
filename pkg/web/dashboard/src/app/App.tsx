@@ -22,7 +22,7 @@ import type { Stage } from '../types'
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, refresh } = useStatus()
 
   const wsUrl = buildWebSocketUrl()
   const { events, connected } = useEventFeed(wsUrl)
@@ -118,7 +118,7 @@ export function App(): ReactElement {
 
   return (
     <>
-      <FlowHeader flowName={flowName} connected={connected} attention={anyAttention} />
+      <FlowHeader flowName={flowName} connected={connected} attention={anyAttention} description={description} />
 
       <main id="main">
         <div className="ray" aria-hidden="true" />

@@ -78,6 +78,27 @@ describe('useStatus', () => {
     expect(stages.map((s) => s.id)).toEqual(['a', 'b'])
   })
 
+  test('normalizes the optional description field when present', () => {
+    const raw = {
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stages: { s1: { status: 'pending' } },
+      description: 'Проект X: очистка изображений',
+    }
+    const status = normalizeStatus(raw)
+    expect(status.description).toBe('Проект X: очистка изображений')
+  })
+
+  test('leaves description undefined when the backend does not send it', () => {
+    const raw = {
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stages: { s1: { status: 'pending' } },
+    }
+    const status = normalizeStatus(raw)
+    expect(status.description).toBeUndefined()
+  })
+
   test('normalizes an unrecognized stage status to "pending"', () => {
     const raw = {
       flow_name: 'demo',

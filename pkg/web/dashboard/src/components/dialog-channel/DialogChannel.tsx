@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import type { Stage } from '../../types'
-import { Maximizable } from '../layout/Maximizable'
+import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { MarkdownRenderer } from '../plan-panel'
+import { formatLine } from '../plan-panel/markdown'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
+
+type QuestionLine = { line: number; html: string }
 
 type DialogChannelProps = {
   stage: Stage
@@ -30,10 +33,23 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   const [customText, setCustomText] = useState('')
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
 
+  // Комментарии к строкам pending-вопроса — тот же паттерн, что у PlanPanel
+  // (comments/activeCommentLine/draft): клик по строке открывает форму
+  // add/update/delete, комментарии живут только до отправки feedback.
+  const [comments, setComments] = useState<Record<number, string>>({})
+  const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
+  const [draft, setDraft] = useState('')
+
   // Автоскролл канала к хвосту при появлении новых сообщений/вопросов,
   // пока пользователь сам не уехал вверх. Контейнер охватывает и историю,
   // и pending-вопрос — кнопка «↓ к последнему» возвращает к актуальному.
   const feed = useStickToBottom<HTMLDivElement>()
+
+  // Признак «панель dialog развёрнута на весь экран» берём прямо из контекста
+  // Maximizable (useMaximize уже экспортирован публично и предназначен именно для
+  // этого — см. его использование в PanelFrame) — расширять Maximizable не нужно.
+  const { maximizedKey } = useMaximize()
+  const maximized = maximizedKey === 'dialog'
 
   // Грузим диалог при открытии стадии и опрашиваем каждые 2 c — агент может
   // дописать новый вопрос/answer в любой момент, и канал должен обновляться live.
@@ -51,6 +67,8 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     setEntries([])
     setSelectedOption(null)
     setCustomText('')
+    setComments({})
+    setActiveCommentLine(null)
 
     const refresh = (): void => {
       void loadDialog(stage.id).then((data) => {
@@ -61,6 +79,8 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
           lastPendingId = nextPendingId
           setSelectedOption(null)
           setCustomText('')
+          setComments({})
+          setActiveCommentLine(null)
         }
       })
     }
@@ -78,6 +98,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   const hasContent = entries.length > 0 || stage.status === 'awaiting_user_input'
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
   const jumpToBottom = feed.jumpToBottom
+  const commentCount = Object.keys(comments).length
 
   // Ждущий ответа вопрос — всегда в конце истории. Проматываем к нему диалог:
   // и при загрузке страницы (пользователь сразу видит опции ответа), и при
@@ -89,6 +110,16 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     return () => cancelAnimationFrame(handle)
   }, [pending?.id, jumpToBottom])
 
+  // При разворачивании панели на весь экран (Maximizable-портал меняет высоту
+  // контейнера) канал должен показать хвост диалога, а не то место, на котором
+  // застал скролл в компактном режиме. rAF — после layout оверлея, чтобы
+  // scrollHeight уже отражал итоговую (полноэкранную) высоту.
+  useEffect(() => {
+    if (!maximized) return
+    const handle = requestAnimationFrame(() => jumpToBottom())
+    return () => cancelAnimationFrame(handle)
+  }, [maximized, jumpToBottom])
+
   if (!hasContent) return <></>
 
   async function reload() {
@@ -96,6 +127,8 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     setEntries(data)
     setSelectedOption(null)
     setCustomText('')
+    setComments({})
+    setActiveCommentLine(null)
   }
 
   async function sendAnswer() {
@@ -126,6 +159,61 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     await reload()
   }
 
+  // Как только у вопроса есть хотя бы один комментарий, ответ пользователя —
+  // это сами комментарии (killer feature #2): опции и свободный ответ прячутся,
+  // единственное действие — отправить собранный feedback тем же эндпоинтом
+  // /dialog/answer, что и обычный ответ (from_options всегда false — это не
+  // выбор из options).
+  async function sendFeedback() {
+    const question = pending
+    if (question === null || question.id === undefined) return
+
+    const feedback = buildFeedback(comments, question.question ?? '')
+    if (feedback === '') return
+
+    await postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/answer`, {
+      id: question.id,
+      phase: question.phase ?? '',
+      answer: feedback,
+      from_options: false,
+    })
+
+    await reload()
+  }
+
+  function handleLineClick(line: number) {
+    if (activeCommentLine === line) {
+      setActiveCommentLine(null)
+      return
+    }
+
+    setActiveCommentLine(line)
+    setDraft(comments[line] ?? '')
+  }
+
+  function saveComment(line: number) {
+    const text = draft.trim()
+    setComments((prev) => {
+      const next = { ...prev }
+      if (text === '') {
+        delete next[line]
+      } else {
+        next[line] = text
+      }
+      return next
+    })
+    setActiveCommentLine(null)
+  }
+
+  function deleteComment(line: number) {
+    setComments((prev) => {
+      const next = { ...prev }
+      delete next[line]
+      return next
+    })
+    setActiveCommentLine(null)
+  }
+
   function cancel() {
     if (!window.confirm('Cancel stage?')) return
     void postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/cancel`, null)
@@ -143,6 +231,64 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     }
   }
 
+  // Строка вопроса рендерится как строка ревью-плана (renderPlanLine в PlanPanel) —
+  // те же CSS-классы (plan-line/line-num/line-content/line-comment-*) ради
+  // визуальной консистентности между комментариями к плану и к вопросу.
+  function renderQuestionLine(item: QuestionLine): ReactNode {
+    const hasComment = comments[item.line] !== undefined
+
+    return (
+      <div
+        key={`q-line-${item.line}`}
+        className={`plan-line${hasComment ? ' has-comment' : ''}`}
+        data-line={item.line}
+        onClick={() => handleLineClick(item.line)}
+      >
+        <span className="line-num">{item.line}</span>
+        <span className="line-content" dangerouslySetInnerHTML={{ __html: item.html }} />
+        <span className="line-comment-marker">●</span>
+
+        {hasComment && (
+          <div className="line-comment-form line-comment-display" onClick={(event) => event.stopPropagation()}>
+            <div style={{ color: 'var(--c-awaiting)', fontSize: '12px', marginBottom: '4px' }}>
+              {`Comment on line ${item.line}`}
+            </div>
+            <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{comments[item.line]}</div>
+          </div>
+        )}
+
+        {activeCommentLine === item.line && (
+          <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
+            <textarea
+              placeholder={`Comment on line ${item.line}...`}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  e.preventDefault()
+                  saveComment(item.line)
+                }
+              }}
+            />
+            <div className="comment-actions">
+              <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
+                {hasComment ? 'Update' : 'Add'}
+              </button>
+              {hasComment && (
+                <button className="btn btn-cancel" type="button" onClick={() => deleteComment(item.line)}>
+                  Delete
+                </button>
+              )}
+              <button className="btn btn-cancel" type="button" onClick={() => setActiveCommentLine(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <Maximizable id="dialog">
       <PanelFrame title="Communication channel" maximizeId="dialog" attention={attention}>
@@ -155,36 +301,52 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
             {pending !== null && (
               <div id="dialog-pending" className="dialog-pending">
                 <div className="dialog-question">
-                  <MarkdownRenderer source={pending.question ?? ''} />
+                  {parseQuestionLines(pending.question ?? '').map((item) => renderQuestionLine(item))}
                 </div>
 
-                <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
-                  {(pending.options ?? []).map((option, index) => (
-                    <button
-                      key={option}
-                      type="button"
-                      className={selectedOption === option ? 'selected' : ''}
-                      aria-pressed={selectedOption === option}
-                      style={{ animationDelay: `${index * 40}ms` }}
-                      onClick={() => selectOption(option)}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
+                {commentCount === 0 && (
+                  <>
+                    <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
+                      {(pending.options ?? []).map((option, index) => (
+                        <button
+                          key={option}
+                          type="button"
+                          className={selectedOption === option ? 'selected' : ''}
+                          aria-pressed={selectedOption === option}
+                          style={{ animationDelay: `${index * 40}ms` }}
+                          onClick={() => selectOption(option)}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
 
-                <textarea
-                  className="dialog-custom"
-                  placeholder="Or type your own answer…"
-                  value={customText}
-                  disabled={pending.allow_custom !== true}
-                  onChange={(event) => onCustomInput(event.target.value)}
-                />
+                    <textarea
+                      className="dialog-custom"
+                      placeholder="Or type your own answer…"
+                      value={customText}
+                      disabled={pending.allow_custom !== true}
+                      onChange={(event) => onCustomInput(event.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault()
+                          void sendAnswer()
+                        }
+                      }}
+                    />
+                  </>
+                )}
 
                 <div className="dialog-actions">
-                  <button className="btn btn-send" type="button" onClick={sendAnswer}>
-                    ▸ SEND
-                  </button>
+                  {commentCount === 0 ? (
+                    <button className="btn btn-send" type="button" onClick={sendAnswer}>
+                      ▸ SEND
+                    </button>
+                  ) : (
+                    <button className="btn btn-send" type="button" onClick={sendFeedback}>
+                      {`Send feedback (${commentCount})`}
+                    </button>
+                  )}
                   <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
                     CANCEL STAGE
                   </button>
@@ -197,7 +359,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
             {!feed.stick && (
               <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>
-                ↓ к последнему
+                ↓ latest
               </button>
             )}
           </div>
@@ -216,6 +378,26 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
       </PanelFrame>
     </Maximizable>
   )
+}
+
+// Разбивает вопрос на пронумерованные строки для кликабельного рендера
+// (аналог parseReviewPlan в PlanPanel, но без секций/код-блоков — вопросы не
+// имеют такой структуры, только текст).
+function parseQuestionLines(question: string): QuestionLine[] {
+  return question.split('\n').map((line, index) => ({ line: index + 1, html: formatLine(line) }))
+}
+
+// Собирает текст ответа из комментариев к строкам вопроса — аналог buildFeedback
+// в PlanPanel: для каждой прокомментированной строки цитата исходной строки
+// вопроса + «Line N: комментарий», отсортировано по номеру строки.
+function buildFeedback(comments: Record<number, string>, question: string): string {
+  const lines = question.split('\n')
+
+  return Object.keys(comments)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((line) => `> ${lines[line - 1] ?? ''}\nLine ${line}: ${comments[line]}`)
+    .join('\n\n')
 }
 
 function renderHistory(entries: DialogEntry[]): ReactNode[] {

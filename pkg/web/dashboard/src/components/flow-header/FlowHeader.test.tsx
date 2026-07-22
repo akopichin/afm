@@ -36,6 +36,25 @@ describe('FlowHeader', () => {
     expect(screen.queryByLabelText('Нужно действие')).not.toBeInTheDocument()
   })
 
+  test('renders the passed description under the flow name', () => {
+    render(<FlowHeader flowName="demo" connected={true} description="Проект X: очистка изображений" />)
+
+    const description = screen.getByText('Проект X: очистка изображений')
+    expect(description).toBeInTheDocument()
+    expect(description).toHaveAttribute('id', 'flow-description')
+  })
+
+  test('hides the description block when omitted or empty', () => {
+    const { container, rerender } = render(<FlowHeader flowName="demo" connected={true} />)
+    expect(container.querySelector('#flow-description')).not.toBeInTheDocument()
+
+    rerender(<FlowHeader flowName="demo" connected={true} description="" />)
+    expect(container.querySelector('#flow-description')).not.toBeInTheDocument()
+
+    rerender(<FlowHeader flowName="demo" connected={true} description="   " />)
+    expect(container.querySelector('#flow-description')).not.toBeInTheDocument()
+  })
+
   test('toggles theme mode on click', () => {
     document.documentElement.dataset.theme = 'dark'
     render(<FlowHeader flowName="demo" connected={true} />)

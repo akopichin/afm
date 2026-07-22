@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,17 +96,11 @@ func LoadRunState(runDir string) (RunState, error) {
 	if err != nil {
 		return rs, err
 	}
-	for _, line := range splitLines(data) {
-		if len(strings.TrimSpace(string(line))) == 0 {
-			continue
-		}
-		var t Transition
-		if err := json.Unmarshal(line, &t); err != nil {
-			break // оборванный/битый хвост — читаем валидный префикс
-		}
-		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
-		rs.LastSeq = t.Seq
+	res := parseEventLog(data, &rs)
+	if res.corrupted {
+		return rs, ErrCorruptLog
 	}
+	rs.LastSeq = res.lastSeq
 	return rs, nil
 }
 
@@ -124,6 +120,48 @@ func splitLines(data []byte) [][]byte {
 		out = append(out, data[start:])
 	}
 	return out
+}
+
+// replayResult — итог разбора events.jsonl, общий для обоих путей чтения лога:
+// replayEvents (Open, с усечением по goodOffset) и LoadRunState (read-only check).
+type replayResult struct {
+	history    []Transition
+	lastSeq    uint64
+	goodOffset int64 // байтовый конец последней ЗАФИКСИРОВАННОЙ (newline-terminated) записи
+	corrupted  bool  // битая ПОЛНАЯ строка в середине лога (есть валидные записи после)
+}
+
+// parseEventLog — единственный парсер events.jsonl. Применяет переходы к rs.
+// Оборванный/незакоммиченный хвост (последняя строка без \n) усекается и НЕ
+// считается порчей. Битая полная строка в середине → corrupted=true.
+func parseEventLog(data []byte, rs *RunState) replayResult {
+	lines := splitLines(data)
+	endsWithNewline := len(data) > 0 && data[len(data)-1] == '\n'
+	var offset, goodOffset int64
+	var res replayResult
+	for i, line := range lines {
+		isLast := i == len(lines)-1
+		if isLast && !endsWithNewline {
+			break // незакоммиченный хвост без \n — усечь (см. durability-решение плана)
+		}
+		offset += int64(len(line)) + 1 // +1 на \n (у не-последних строк он всегда есть)
+		if len(bytes.TrimSpace(line)) == 0 {
+			goodOffset = offset
+			continue
+		}
+		var t Transition
+		if json.Unmarshal(line, &t) != nil {
+			res.goodOffset = goodOffset
+			res.corrupted = true
+			return res
+		}
+		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+		res.history = append(res.history, t)
+		res.lastSeq = t.Seq
+		goodOffset = offset
+	}
+	res.goodOffset = goodOffset
+	return res
 }
 
 // FindLatestRunDir возвращает самую свежую run-директорию для flowName под base.
@@ -169,7 +207,12 @@ func FindLatestRunForStage(base, stageID string) (string, []string, error) {
 		runDir := filepath.Join(base, name)
 		rs, lerr := LoadRunState(runDir)
 		if lerr != nil {
-			continue
+			if errors.Is(lerr, ErrCorruptLog) {
+				// Битый лог нельзя тихо пропустить: иначе approve/retry/revise
+				// уйдёт в более старый run с тем же stage id. Surface, как Open.
+				return "", nil, fmt.Errorf("run %s: %w", name, lerr)
+			}
+			continue // прочие (напр. нет events.jsonl) — доброкачественно пропускаем
 		}
 		if _, ok := rs.Stages[stageID]; ok {
 			ids := make([]string, 0, len(rs.Stages))

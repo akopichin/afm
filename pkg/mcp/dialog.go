@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/akopichin/afm/pkg/flow"
 )
 
 // Question is the record written when an agent calls ask_user.
@@ -207,7 +209,7 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 		}
 		phase, id := base[:dot], base[dot+1:]
 
-		if phase != "planning" && phase != "implementation" && phase != "review" && phase != "autonomous_execution" {
+		if !flow.IsValidPhase(phase) {
 			continue
 		}
 

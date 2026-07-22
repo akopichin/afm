@@ -16,14 +16,16 @@ Annotations: |
 
 ---
 
-"useStatus() -> status: { flowName: string, stages: Stage[], startedAt: string, refresh: () => void }":
+"useStatus() -> status: { flowName: string, stages: Stage[], startedAt: string, description?: string, refresh: () => void }":
   location: use-status.ts
   annotations: |
     Хук состояния флоу через GET /api/status: периодический опрос плюс возможность немедленного обновления.
     Возвращает объект `status` — единый источник этих данных для всей композиции (как loadState в текущем
     app.js). Поля: flowName — имя флоу (поле flow_name ответа), stages — список стадий (нормализованный из
     объекта по id с учётом stage_order и stage_names, как в app.js), startedAt — время старта в ISO 8601,
-    refresh — функция немедленного ре-запроса состояния. Форма status без refresh (flowName, stages, startedAt)
+    description — опциональное описание флоу (поле description ответа, если бэкенд его прислал; иначе
+    undefined — читается защитно, без нового API-вызова, специально под FlowHeader), refresh — функция
+    немедленного ре-запроса состояния. Форма status без refresh (flowName, stages, startedAt, description)
     дополнительно ре-экспортируется facade index.ts как именованный тип FlowStatus.
 
     `refresh`: триггер немедленного обновления; вызывается корневой композицией при значимых WebSocket-событиях

@@ -305,5 +305,114 @@ func TestIntegration_RetryFailedAutonomousStaysAutonomous(t *testing.T) {
 	}
 }
 
+// TestIntegration_AutoStageRunsAutonomousIgnoringSupervisor: стадия agents:[auto]
+// исполняется автономно напрямую. Решение супервизора умышленно "НЕ автономно" —
+// auto обязан его игнорировать (нет LLM, нет фолбэка на planning).
+func TestIntegration_AutoStageRunsAutonomousIgnoringSupervisor(t *testing.T) {
+	decision := []byte(`{"can_execute_autonomously":false,"reason":"no","recommended_phases":["planning","implementation"]}`)
+
+	stages := []flow.Stage{
+		{
+			ID:          "auto-stage",
+			Description: "hard autonomous",
+			Agents:      []flow.AgentType{flow.AgentAuto},
+		},
+	}
+
+	orch, runDir := setupSupervisorOrch(t, stages, decision)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := orch.Run(ctx); err != nil && err != context.DeadlineExceeded {
+		t.Fatalf("orch.Run: %v", err)
+	}
+
+	stageDir := filepath.Join(runDir, "auto-stage")
+
+	if st := orchestrator.StoreFromOrch(orch).Get("auto-stage"); st != state.StatusDone {
+		t.Errorf("expected done, got %s", st)
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "autonomous.flag")); err != nil {
+		t.Errorf("autonomous.flag missing: %v", err)
+	}
+	// autonomous-агент отработал (мок пишет execution_summary.md для autonomous_execution).
+	if _, err := os.Stat(filepath.Join(stageDir, "execution_summary.md")); err != nil {
+		t.Errorf("execution_summary.md missing — autonomous agent did not run: %v", err)
+	}
+	// planning пропущен → plan.md нет.
+	if _, err := os.Stat(filepath.Join(stageDir, "plan.md")); err == nil {
+		t.Error("plan.md should NOT exist for auto stage")
+	}
+}
+
+// TestIntegration_AutoInteractiveStageHasNoPlanMD: zero-dependency стадия
+// agents:[auto] + interactive:true не должна получать plan.md ни при каком пути
+// активации. Баг: startPlanningForPending (recovery.go) активирует стадию БЕЗ
+// зависимостей на старте Run() раньше, чем tryActivatePrePlanned успевает
+// вмешаться — и её default-ветка для no-planning стадий писала plan.md из
+// Description для любой Interactive-стадии, не проверяя IsAuto(). Интерактивные
+// стадии используют РЕАЛЬНЫЙ executor (driven by stage.Command), а не
+// инжектированный Runner — поэтому здесь, как и в TestFullDialogCycle /
+// TestIntegration_MisplacedQuestionRelocated, поднимается bash-скрипт вместо мока.
+func TestIntegration_AutoInteractiveStageHasNoPlanMD(t *testing.T) {
+	dir := t.TempDir()
+
+	// Мок-агент: подтверждает наличие AFM_STAGE_DIR и пишет execution_summary.md,
+	// как и полагается автономному треку (checkAutonomousCompletion), затем эмитит
+	// stream-json успех.
+	agentScript := filepath.Join(dir, "auto-interactive-agent.sh")
+	script := "#!/bin/bash\n" +
+		"STAGE_DIR=\"$AFM_STAGE_DIR\"\n" +
+		"if [ -z \"$STAGE_DIR\" ]; then echo 'no AFM_STAGE_DIR' >&2; exit 1; fi\n" +
+		"printf '## Summary\\nDone autonomously.\\n## Changes\\n- none\\n## Result\\nSuccess.\\n' > \"$STAGE_DIR/execution_summary.md\"\n" +
+		"echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'\n" +
+		"echo '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
+	if err := os.WriteFile(agentScript, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "auto-interactive",
+		Name:        "Auto Interactive",
+		Description: "hard autonomous stage that is also marked interactive",
+		Agents:      []flow.AgentType{flow.AgentAuto},
+		Interactive: true,
+		Command:     agentScript,
+	}}
+
+	store, err := state.Open(dir, []string{"auto-interactive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "auto-interactive", state.StatusDone, 15*time.Second)
+
+	stageDir := filepath.Join(dir, "auto-interactive")
+
+	if _, err := os.Stat(filepath.Join(stageDir, "autonomous.flag")); err != nil {
+		t.Errorf("autonomous.flag missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "execution_summary.md")); err != nil {
+		t.Errorf("execution_summary.md missing — autonomous agent did not run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "plan.md")); err == nil {
+		t.Error("plan.md exists — recovery wrote a stray plan.md for an auto+interactive stage")
+	}
+}
+
 // compile-time check that supervisorTestRunner satisfies executor.Runner.
 var _ executor.Runner = (*supervisorTestRunner)(nil)

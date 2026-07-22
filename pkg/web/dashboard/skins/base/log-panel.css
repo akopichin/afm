@@ -8,7 +8,10 @@
   font-family: inherit;
   font-size: 11px;
   line-height: 1.55;
-  max-height: 300px;
+  /* Раньше было 300px — слишком мало видно за раз в компактной панели.
+     Поднято, но всё ещё ограничено: строки лога прокручиваются внутри
+     .log-content, а не растягивают всю панель детали. */
+  max-height: 480px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -18,3 +21,12 @@
 
 .log-text-line  { color: var(--ink); font-weight: 500; }
 .log-error-line { color: var(--coral); }
+
+/* Maximized-режим (портал Maximizable в <body>, см. .maximize-overlay в layout.css):
+   фиксированный потолок высоты снимается — лог занимает всё доступное место
+   оверлея, полные строки видны без лишней обрезки/двойного скролла. */
+.maximize-overlay .log-content {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}

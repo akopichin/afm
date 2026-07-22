@@ -13,8 +13,9 @@ Annotations: |
   `typescript` for naming and strict typing. Use `LogEntry` from Imports. Use `dashboard-data-types` from
   Imports for guidance on consuming `LogEntry`.
 
-  Панель также использует PanelFrame (src/components/panel-frame) для рамки с заголовком «Log» — эта клетка
-  пока без собственного CODEMANIFEST (см. отдельную рекомендацию в отчёте acceptance).
+  Панель также использует PanelFrame (src/components/panel-frame) и Maximizable (src/components/layout) для
+  рамки с заголовком «Log» и разворота на весь экран (maximizeId="logs") — эти клетки пока без собственного
+  CODEMANIFEST (см. отдельную рекомендацию в отчёте acceptance).
 
 ---
 
@@ -25,6 +26,11 @@ Annotations: |
 
     `entries`: список строк лога
     `element`: разметка лога
+
+    Панель обёрнута в `Maximizable id="logs"` и использует `PanelFrame maximizeId="logs"` — даёт кнопку
+    «на весь экран» (симметрично plan/dialog). Высота `#log-content` в компактном режиме ограничена CSS
+    (max-height, см. skins/base/log-panel.css); в maximized-режиме (`.maximize-overlay .log-content`)
+    ограничение снимается — лог занимает всё доступное место оверлея.
 
     Requirements:
     - Хронологический порядок, без пересортировки

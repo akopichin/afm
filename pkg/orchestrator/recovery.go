@@ -36,6 +36,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					continue
 				}
 
+				if o.activateAutoStage(s) {
+					continue
+				}
+
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if err := os.MkdirAll(stageDir, 0755); err != nil {
 					o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
@@ -88,7 +92,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Autonomous track resume: if this is an autonomous stage, look for
 			// execution_summary.md instead of .done, and restart the autonomous
 			// agent rather than the standard implementation agent.
-			if isAutonomousStage(stageDir) {
+			if isAutonomousStage(stageDir) || s.IsAuto() {
 				if checkAutonomousCompletion(stageDir) == nil {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered execution_summary.md")
 					continue
@@ -117,22 +121,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue
 			}
 			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "")
-			o.spawnAgent(ctx, s, func(ctx context.Context, stage flow.Stage) {
-				phases := o.DetermineStagePhases(ctx, stage)
-				if len(phases) == 1 && phases[0] == phaseAutonomous {
-					stageDir := filepath.Join(o.opts.RunDir, stage.ID)
-					if err := os.MkdirAll(stageDir, 0755); err != nil {
-						o.Trigger(stage.ID, EvFail, GuardCtx{}, "mkdir failed")
-						return
-					}
-					_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
-					o.Trigger(stage.ID, EvSupervisorApproved, GuardCtx{}, "supervisor: autonomous")
-					o.Trigger(stage.ID, EvStartRun, GuardCtx{}, "")
-					o.runAutonomousAgent(ctx, stage)
-				} else {
-					o.runPlanningAgent(ctx, stage)
-				}
-			})
+			o.spawnAgent(ctx, s, o.startWithSupervisor)
 		}
 	}
 

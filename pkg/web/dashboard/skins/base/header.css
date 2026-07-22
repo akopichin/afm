@@ -23,9 +23,27 @@
   color: var(--ink-hi);
 }
 
+.flow-name-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .flow-name {
   font-size: 11px;
   color: var(--mint);
+}
+
+/* Подзаголовок с описанием флоу/проекта — под именем, чтобы отличать несколько
+   параллельно запущенных пайплайнов. Не режем длинный текст лейаутом хедера. */
+.flow-description {
+  font-size: 9px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32ch;
 }
 
 .ws-status {

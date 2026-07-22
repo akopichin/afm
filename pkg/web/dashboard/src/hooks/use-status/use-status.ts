@@ -11,6 +11,11 @@ export type FlowStatus = {
   flowName: string
   stages: Stage[]
   startedAt: string
+  // Описание флоу (из корня flow.yaml) — опциональное поле GET /api/status для
+  // подзаголовка в шапке (см. FlowHeader). Бэкенд пока его не отдаёт, поле
+  // читается защитно (undefined, если отсутствует), без нового API-вызова —
+  // как только бэкенд начнёт присылать description, подзаголовок появится сам.
+  description?: string
 }
 
 const EMPTY_STATUS: FlowStatus = { flowName: '', stages: [], startedAt: '' }
@@ -65,6 +70,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
 
   const flowName = typeof obj.flow_name === 'string' ? obj.flow_name : ''
   const startedAt = typeof obj.started_at === 'string' ? obj.started_at : ''
+  const description = typeof obj.description === 'string' ? obj.description : undefined
 
   const stagesObj = isRecord(obj.stages) ? obj.stages : {}
   const namesObj = isRecord(obj.stage_names) ? obj.stage_names : {}
@@ -77,7 +83,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     toStage(id, stagesObj[id], namesObj[id], interactiveObj[id] === true, autonomousObj[id] === true),
   )
 
-  return { flowName, stages, startedAt }
+  return { flowName, stages, startedAt, description }
 }
 
 function resolveOrder(stageOrder: unknown, stagesObj: Record<string, unknown>): string[] {

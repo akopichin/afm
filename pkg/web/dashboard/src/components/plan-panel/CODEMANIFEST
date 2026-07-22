@@ -21,6 +21,9 @@ Annotations: |
   markdown.ts — публичный модуль клетки (renderMarkdown, renderInline, formatLine, escapeHtml,
   isSpecialSection, isHeading2, тип SpecialSection), используемый и `MarkdownRenderer`, и напрямую `PlanPanel`
   для построчного рендера режима ревью; ссылки в выводе принудительно получают target="_blank" rel="noopener".
+  `formatLine` также импортируется напрямую соседней клеткой `dialog-channel` (без code-блоков/секций
+  `parseReviewPlan` — там строится упрощённый построчный рендер pending-вопроса для комментариев к вопросу,
+  killer feature #2; см. её CODEMANIFEST).
   Комментарии к строкам плана — внутреннее клиентское состояние PlanPanel (Record<номер строки, текст>), не
   общий тип PlanComment из src/types (тот сейчас этой клеткой не используется).
 

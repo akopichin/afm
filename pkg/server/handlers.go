@@ -11,17 +11,14 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/state"
 )
 
 const (
-	phasePlanning       = "planning"
-	phaseImplementation = "implementation"
-	phaseReview         = "review"
-	phaseAutonomous     = "autonomous_execution"
-	keyStageID          = "stage_id"
-	keyStatus           = "status"
+	keyStageID = "stage_id"
+	keyStatus  = "status"
 )
 
 // statusResponse расширяет снапшот двумя per-stage картами для UI:
@@ -29,6 +26,7 @@ const (
 // по наличию autonomous.flag в директории стадии).
 type statusResponse struct {
 	state.RunState
+	Description      string          `json:"description,omitempty"`
 	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
 	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
 }
@@ -43,6 +41,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	resp := statusResponse{
 		RunState:         rs,
+		Description:      s.Description,
 		StageInteractive: s.stageInteractive,
 		StageAutonomous:  autonomous,
 	}
@@ -245,15 +244,6 @@ type dialogUIEntry struct {
 	FromOptions bool     `json:"from_options,omitempty"`
 }
 
-// phaseStreamLogs — stream-json логи каждой фазы в хронологическом порядке
-// запусков (см. имена logFile в orchestrator).
-var phaseStreamLogs = map[string][]string{
-	phasePlanning:       {"planning.jsonl", "planning-reprompt.jsonl", "planning-revision.jsonl"},
-	phaseImplementation: {"implementation.jsonl"},
-	phaseReview:         {"review.jsonl"},
-	phaseAutonomous:     {"autonomous.jsonl"},
-}
-
 // buildDialogEntries собирает диалоговую ленту стейджа: вопросы/ответы из
 // <phase>.dialog.jsonl, перемежённые текстовыми сообщениями агента из
 // stream-json логов. Порядок берётся из stream-лога — там и текст, и вызовы
@@ -262,8 +252,8 @@ var phaseStreamLogs = map[string][]string{
 // панель на обычных стейджах.
 func buildDialogEntries(stageDir string) []dialogUIEntry {
 	var out []dialogUIEntry
-	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview, phaseAutonomous} {
-		entries, err := mcp.ReadDialog(filepath.Join(stageDir, phase+".dialog.jsonl"))
+	for _, p := range flow.Phases() {
+		entries, err := mcp.ReadDialog(filepath.Join(stageDir, string(p)+".dialog.jsonl"))
 		if err != nil || len(entries) == 0 {
 			continue
 		}
@@ -272,10 +262,10 @@ func buildDialogEntries(stageDir string) []dialogUIEntry {
 			byID[e.ID] = e
 		}
 		emitted := map[string]bool{}
-		for _, logName := range phaseStreamLogs[phase] {
+		for _, logName := range flow.PhaseStreamLogs(p) {
 			for _, it := range executor.DialogTranscript(filepath.Join(stageDir, logName)) {
 				if it.Text != "" {
-					out = append(out, dialogUIEntry{Type: typeAgentText, Phase: phase, Text: it.Text})
+					out = append(out, dialogUIEntry{Type: typeAgentText, Phase: string(p), Text: it.Text})
 					continue
 				}
 				e, ok := byID[it.AskUserID]
@@ -283,14 +273,14 @@ func buildDialogEntries(stageDir string) []dialogUIEntry {
 					continue // вопрос ещё не записан в dialog-файл
 				}
 				emitted[e.ID] = true
-				out = append(out, questionUIEntry(phase, e))
+				out = append(out, questionUIEntry(string(p), e))
 			}
 		}
 		// Вопросы, не найденные в stream-логе (например, лог недоступен),
 		// добавляем в конце фазы — прежнее поведение без текстов агента.
 		for _, e := range entries {
 			if !emitted[e.ID] {
-				out = append(out, questionUIEntry(phase, e))
+				out = append(out, questionUIEntry(string(p), e))
 			}
 		}
 	}
@@ -349,7 +339,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id, phase, answer required", http.StatusBadRequest)
 		return
 	}
-	if req.Phase != phasePlanning && req.Phase != phaseImplementation && req.Phase != phaseReview && req.Phase != phaseAutonomous {
+	if !flow.IsValidPhase(req.Phase) {
 		http.Error(w, "invalid phase", http.StatusBadRequest)
 		return
 	}

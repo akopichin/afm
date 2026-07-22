@@ -240,6 +240,7 @@ func newRunCmd() *cobra.Command {
 				srv := server.New(server.Config{
 					Port:             cfg.Server.GetPort(),
 					RunDir:           runDir,
+					Description:      f.Description,
 					StageInteractive: stageInteractive,
 					Store:            store,
 					Theme:            cfg.EffectiveTheme(),

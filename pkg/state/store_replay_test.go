@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -49,5 +50,35 @@ func TestOpen_MidCorruptionQuarantines(t *testing.T) {
 	matches, _ := filepath.Glob(filepath.Join(dir, "events.jsonl.corrupt-*"))
 	if len(matches) != 1 {
 		t.Fatalf("want 1 quarantine copy, got %d", len(matches))
+	}
+}
+
+// Валидный JSON в последней строке, но БЕЗ завершающего \n (потерян при crash):
+// запись незакоммичена, должна усечься. Лог НЕ должен расшириться нулевым байтом.
+func TestOpen_ValidLastLineWithoutNewline_TruncatedNotCorrupted(t *testing.T) {
+	dir := t.TempDir()
+	committed := `{"seq":1,"stage_id":"a","from":"pending","to":"planning","event":"x"}` + "\n"
+	uncommitted := `{"seq":2,"stage_id":"a","from":"planning","to":"done","event":"y"}` // без \n
+	orig := []byte(committed + uncommitted)
+	p := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(p, orig, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: want success, got %v", err)
+	}
+	defer s.Close()
+
+	after, _ := os.ReadFile(p)
+	if len(after) != len(committed) {
+		t.Fatalf("events.jsonl size after Open: want %d (усечён до закоммиченной), got %d", len(committed), len(after))
+	}
+	if bytes.IndexByte(after, 0) >= 0 {
+		t.Fatal("events.jsonl содержит NUL-байт после Open (порча B2)")
+	}
+	if got := s.Get("a"); got != StatusPlanning {
+		t.Fatalf("state: want planning (незакоммиченная отброшена), got %q", got)
 	}
 }

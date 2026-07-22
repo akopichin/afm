@@ -59,7 +59,7 @@ export function EventFeedPanel({ events }: EventFeedPanelProps): ReactElement {
             })}
             {!feed.stick && (
               <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>
-                ↓ к последнему
+                ↓ latest
               </button>
             )}
           </div>

@@ -15,6 +15,9 @@ const (
 	AgentPlanning       AgentType = "planning"
 	AgentImplementation AgentType = "implementation"
 	AgentReview         AgentType = "review"
+	// AgentAuto — псевдо-агент: стадия исполняется автономным агентом напрямую,
+	// без supervisor/LLM-решения и без фолбэка. Должен быть единственным агентом.
+	AgentAuto AgentType = "auto"
 )
 
 // Artifact describes a file that a stage produces for other stages.
@@ -91,6 +94,9 @@ func isBuiltIn(a AgentType) bool {
 // HasAgent reports whether the stage uses a specific agent type.
 // For AgentImplementation, any custom (non-built-in) agent also counts.
 func (s *Stage) HasAgent(a AgentType) bool {
+	if s.IsAuto() {
+		return false // auto-стадия не имеет planning/implementation/review-агентов
+	}
 	for _, ag := range s.Agents {
 		if ag == a {
 			return true
@@ -110,6 +116,9 @@ func (s *Stage) HasAgent(a AgentType) bool {
 // ImplAgent returns the agent type used for the implementation phase.
 // Custom agents take priority; falls back to AgentImplementation.
 func (s *Stage) ImplAgent() AgentType {
+	if s.IsAuto() {
+		return AgentImplementation // defensive: auto не исполняется как implementation-команда
+	}
 	for _, ag := range s.Agents {
 		if !isBuiltIn(ag) {
 			return ag
@@ -121,6 +130,11 @@ func (s *Stage) ImplAgent() AgentType {
 // NeedsPlanning reports whether a planning agent will run for this stage.
 func (s *Stage) NeedsPlanning() bool {
 	return s.Plan == "" && s.HasAgent(AgentPlanning)
+}
+
+// IsAuto сообщает, что стадия жёстко помечена автономной (agents: [auto]).
+func (s *Stage) IsAuto() bool {
+	return len(s.Agents) == 1 && s.Agents[0] == AgentAuto
 }
 
 // Flow is the top-level structure parsed from a flow YAML file.
@@ -172,8 +186,27 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
-		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive {
+		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() {
 			return fmt.Errorf("stage %q: must have planning agent or a plan path", s.ID)
+		}
+	}
+
+	for _, s := range f.Stages {
+		hasAuto := false
+		for _, a := range s.Agents {
+			if a == AgentAuto {
+				hasAuto = true
+				break
+			}
+		}
+		if !hasAuto {
+			continue
+		}
+		if len(s.Agents) != 1 {
+			return fmt.Errorf("stage %q: \"auto\" must be the only agent", s.ID)
+		}
+		if s.Supervisor {
+			return fmt.Errorf("stage %q: \"auto\" is incompatible with supervisor: true", s.ID)
 		}
 	}
 

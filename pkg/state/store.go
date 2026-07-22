@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -165,33 +164,8 @@ func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint
 		}
 		return nil, 0, 0, false, err
 	}
-	lines := splitLines(data)
-	endsWithNewline := len(data) > 0 && data[len(data)-1] == '\n'
-	var offset int64
-	var goodOffset int64
-	for i, line := range lines {
-		isLast := i == len(lines)-1
-		offset += int64(len(line)) + 1 // +1 на \n
-		if len(bytes.TrimSpace(line)) == 0 {
-			goodOffset = offset
-			continue
-		}
-		var t Transition
-		if uerr := json.Unmarshal(line, &t); uerr != nil {
-			// Последняя строка без завершающего \n — это оборванная запись
-			// (crash в момент append): безопасно усечь до последнего хорошего offset.
-			if isLast && !endsWithNewline {
-				return history, lastSeq, goodOffset, false, nil
-			}
-			// Иначе это битая ПОЛНАЯ строка в середине лога — повреждение.
-			return history, lastSeq, goodOffset, true, nil
-		}
-		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
-		history = append(history, t)
-		lastSeq = t.Seq
-		goodOffset = offset
-	}
-	return history, lastSeq, goodOffset, false, nil
+	res := parseEventLog(data, rs)
+	return res.history, res.lastSeq, res.goodOffset, res.corrupted, nil
 }
 
 func (s *Store) Get(stageID string) StageStatus {

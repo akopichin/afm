@@ -9,7 +9,7 @@ Annotations: |
 
 ---
 
-"FlowHeader(flowName: string, connected: boolean, attention: boolean) -> element: ReactElement":
+"FlowHeader(flowName: string, connected: boolean, attention: boolean, description: string) -> element: ReactElement":
   location: FlowHeader.tsx
   annotations: |
     Шапка дашборда: декоративный логотип «afm», название флоу и индикатор состояния WebSocket-соединения.
@@ -18,6 +18,9 @@ Annotations: |
     `connected`: true, если соединение открыто
     `attention`: опциональный (по умолчанию false) — если true, рядом с именем флоу горит пульсирующая
       amber-точка: хотя бы одна стадия ждёт действия пользователя
+    `description`: опциональный подзаголовок (описание флоу/проекта) — рендерится второй строкой под
+      именем флоу (`#flow-description`), помогает отличить несколько параллельно запущенных пайплайнов;
+      скрыт, если не передан или пустая строка
     `element`: разметка шапки
 
     Requirements:

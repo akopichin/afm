@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -173,6 +175,105 @@ func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 	if !strings.Contains(string(data), "Existing Plan") {
 		t.Error("plan.md was overwritten by re-planning, expected 'Existing Plan' content")
+	}
+}
+
+// capturingPlanningRunner wraps a Runner and records every prompt passed to
+// RunPlanning — used to verify that runPlanningWithFeedback (recovery.go,
+// StatusRevising branch) actually reads feedback.md and forwards its content
+// into the prompt, as opposed to a "fresh" planning restart which would not
+// carry any feedback text.
+type capturingPlanningRunner struct {
+	delegate executor.Runner
+	mu       sync.Mutex
+	prompts  []string
+}
+
+func (r *capturingPlanningRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	r.mu.Lock()
+	r.prompts = append(r.prompts, prompt)
+	r.mu.Unlock()
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *capturingPlanningRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *capturingPlanningRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
+// TestIntegration_ResumeFromRevising verifies that a stage stuck in "revising"
+// status (process killed while the agent was re-planning after review
+// feedback) resumes via runPlanningWithFeedback (recovery.go, StatusRevising
+// branch) rather than restarting planning from scratch: the pre-existing
+// feedback.md must be read and its content forwarded into the new planning
+// prompt, and the stage must progress past awaiting_approval (auto-approved)
+// all the way to done.
+func TestIntegration_ResumeFromRevising(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "revise-stuck", Name: "Revise Stuck", Description: "was revising", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "revise-stuck")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Seed the artifacts a real Revise leaves behind: a previously rejected
+	// plan version and the reviewer's feedback.
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.v1.md"), []byte("# Plan v1\n\nold content\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("please add error handling for edge case X"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.Open(runDir, []string{"revise-stuck"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	_ = store.Apply(state.Transition{StageID: "revise-stuck", From: state.StatusPending, To: state.StatusRevising, Event: "test_setup"})
+	stateFile := filepath.Join(runDir, "state.json")
+
+	capture := &capturingPlanningRunner{delegate: mockRunner(t, mockPlanningScript)}
+	runner := &doneCreatingRunner{delegate: capture}
+
+	cfg := config.Default()
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  cfg,
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
+	})
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ctxCancel()
+
+	if err := orch.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["revise-stuck"].Status != state.StatusDone {
+		t.Errorf("expected done after resume from revising, got %v", final.Stages["revise-stuck"].Status)
+	}
+
+	capture.mu.Lock()
+	prompts := append([]string{}, capture.prompts...)
+	capture.mu.Unlock()
+	if len(prompts) == 0 {
+		t.Fatal("expected at least one RunPlanning call via runPlanningWithFeedback")
+	}
+	if !strings.Contains(prompts[0], "please add error handling for edge case X") {
+		t.Errorf("expected planning prompt to include feedback.md content (proves runPlanningWithFeedback resume path), got: %s", prompts[0])
 	}
 }
 

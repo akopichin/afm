@@ -11,7 +11,7 @@
         try { stored = localStorage.getItem('afm-mode'); } catch (e) {}
         var mode = stored === 'dark' || stored === 'light'
           ? stored
-          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          : 'dark';
         document.documentElement.dataset.theme = mode;
       })();
     </script>

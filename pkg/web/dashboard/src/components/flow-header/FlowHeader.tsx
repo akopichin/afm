@@ -5,6 +5,7 @@ type FlowHeaderProps = {
   flowName: string
   connected: boolean
   attention?: boolean
+  description?: string
 }
 
 // Шапка дашборда: декоративный логотип, имя флоу и индикатор WebSocket-соединения.
@@ -13,7 +14,11 @@ type FlowHeaderProps = {
 // Когда attention=true — хотя бы одна стадия ждёт действия пользователя — рядом с
 // именем флоу загорается пульсирующая amber-точка. Плюс переключатель dark/light —
 // не зависит от пропсов компонента и активного скина.
-export function FlowHeader({ flowName, connected, attention = false }: FlowHeaderProps): ReactElement {
+// description — опциональный подзаголовок (описание флоу из его конфигурации),
+// помогает отличить несколько параллельно запущенных пайплайнов друг от друга;
+// рендерится второй строкой под именем флоу, не добавляя новую колонку в грид шапки.
+export function FlowHeader({ flowName, connected, attention = false, description }: FlowHeaderProps): ReactElement {
+  const hasDescription = description !== undefined && description.trim() !== ''
   const statusText = connected ? 'LINK' : 'OFFLINE'
   const statusClass = connected ? 'connected' : 'disconnected'
   const { mode, toggle } = useThemeMode()
@@ -38,7 +43,10 @@ export function FlowHeader({ flowName, connected, attention = false }: FlowHeade
         </span>
       </span>
       <h1>afm</h1>
-      <div id="flow-name" className="flow-name">{flowName}</div>
+      <div className="flow-name-wrap">
+        <div id="flow-name" className="flow-name">{flowName}</div>
+        {hasDescription && <div id="flow-description" className="flow-description">{description}</div>}
+      </div>
       {attention && <span className="attention-dot" aria-label="Нужно действие" />}
       <div id="ws-status" className={`ws-status ${statusClass}`} title="WebSocket">{statusText}</div>
       <button

@@ -11,12 +11,12 @@
         try { stored = localStorage.getItem('afm-mode'); } catch (e) {}
         var mode = stored === 'dark' || stored === 'light'
           ? stored
-          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          : 'dark';
         document.documentElement.dataset.theme = mode;
       })();
     </script>
     <link rel="stylesheet" href="./skins/novacorps/index.css">
-  <script type="module" crossorigin src="./assets/index-CAWWJYry.js"></script>
+  <script type="module" crossorigin src="./assets/index-BF-XPRYo.js"></script>
 </head>
 <body class="theme-novacorps">
     <div id="root"></div>
