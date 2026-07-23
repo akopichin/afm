@@ -32,6 +32,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Executor.MaxParallel != 0 {
 		t.Errorf("default max_parallel: got %d", cfg.Executor.MaxParallel)
 	}
+	if cfg.Executor.TruncateOutput != 0 {
+		t.Errorf("default truncate_output: got %d", cfg.Executor.TruncateOutput)
+	}
 }
 
 func TestClientConfig_IsClaudeBare(t *testing.T) {
@@ -73,6 +76,50 @@ client:
 	}
 	if cfg.Executor.IdleTimeout != 10*time.Minute {
 		t.Errorf("global idle_timeout should carry over: got %v", cfg.Executor.IdleTimeout)
+	}
+}
+
+func TestTruncateOutputCarriesFromGlobal(t *testing.T) {
+	globalDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	writeYAML(t, globalDir, "config.yaml", `
+executor:
+  truncate_output: 50
+`)
+	writeYAML(t, projectDir, "config.yaml", `
+client:
+  command: gemini
+`)
+
+	cfg, err := config.LoadFrom(globalDir, projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Executor.TruncateOutput != 50 {
+		t.Errorf("global truncate_output should carry over: got %d", cfg.Executor.TruncateOutput)
+	}
+}
+
+func TestTruncateOutputProjectOverridesGlobal(t *testing.T) {
+	globalDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	writeYAML(t, globalDir, "config.yaml", `
+executor:
+  truncate_output: 50
+`)
+	writeYAML(t, projectDir, "config.yaml", `
+executor:
+  truncate_output: 200
+`)
+
+	cfg, err := config.LoadFrom(globalDir, projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Executor.TruncateOutput != 200 {
+		t.Errorf("project truncate_output should override global: got %d", cfg.Executor.TruncateOutput)
 	}
 }
 

@@ -35,8 +35,9 @@ func (c ClientConfig) IsClaudeBare() bool {
 
 // ExecutorConfig controls agent execution parameters.
 type ExecutorConfig struct {
-	IdleTimeout time.Duration `yaml:"idle_timeout"`
-	MaxParallel int           `yaml:"max_parallel"`
+	IdleTimeout    time.Duration `yaml:"idle_timeout"`
+	MaxParallel    int           `yaml:"max_parallel"`
+	TruncateOutput int           `yaml:"truncate_output"`
 }
 
 // ServerConfig configures the web dashboard server.
@@ -279,6 +280,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Executor.MaxParallel != 0 {
 		dst.Executor.MaxParallel = overlay.Executor.MaxParallel
+	}
+	if overlay.Executor.TruncateOutput != 0 {
+		dst.Executor.TruncateOutput = overlay.Executor.TruncateOutput
 	}
 	if overlay.PromptsDir != "" {
 		dst.PromptsDir = overlay.PromptsDir
