@@ -2,6 +2,20 @@
 
 A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML file, break it into stages — afm runs AI agents sequentially or in parallel, waits for your approval of plans, and automatically carries out the implementation. Works with `claude` and with any claude-compatible agents (GLM, DeepSeek, Cursor, etc.).
 
+## Contents
+
+- [How It Works](#how-it-works)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage in Claude Code](#usage-in-claude-code)
+- [The flow.yaml File](#the-flowyaml-file)
+- [Supervisor and Autonomous Track](#supervisor-and-autonomous-track)
+- [Stage Lifecycle](#stage-lifecycle)
+- [Configuration](#configuration)
+- [Web Dashboard](#web-dashboard)
+- [Directory Structure](#directory-structure)
+- [Development](#development)
+
 ## How It Works
 
 Each stage goes through phases by default:
