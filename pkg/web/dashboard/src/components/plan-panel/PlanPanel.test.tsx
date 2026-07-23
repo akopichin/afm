@@ -112,6 +112,30 @@ describe('PlanPanel', () => {
     })
   })
 
+  test('the X on a saved comment removes it without opening the edit form', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+
+    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    // Add a comment on line 1.
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: 'please fix' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    // The comment is saved: display bubble present, revise button counts it.
+    expect(container.querySelector('.line-comment-display')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Send revision (1)' })).not.toBeDisabled()
+
+    // Click the X on the comment: it's removed and no edit form is opened.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove comment on line 1' }))
+    expect(container.querySelector('.line-comment-display')).toBeNull()
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled()
+  })
+
   test('retry section is hidden unless the stage failed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 

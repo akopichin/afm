@@ -364,6 +364,32 @@
   background: var(--bg-elev);
 }
 
+.comment-display-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+/* Крестик для быстрого удаления комментария прямо из его отображения,
+   без открытия формы редактирования. Контурный стиль как у .icon-btn;
+   coral на hover сигнализирует деструктивное действие (ср. .feed-msg.error). */
+.comment-remove {
+  background: transparent;
+  border: 1px solid rgba(111, 212, 204, 0.4);
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+.comment-remove:hover {
+  border-color: var(--coral);
+  color: var(--coral);
+}
+
 .comment-hint {
   margin-top: 8px;
   font-size: 10px;

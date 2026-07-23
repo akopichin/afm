@@ -332,6 +332,41 @@ describe('DialogChannel', () => {
     expect(container.querySelector('textarea.dialog-custom')).not.toBeNull()
   })
 
+  test('the X on a saved comment removes it without opening the edit form', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: 'please clarify' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    expect(container.querySelector('.line-comment-display')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove comment on line 1' }))
+
+    expect(container.querySelector('.line-comment-display')).toBeNull()
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    // Removing the last comment flips the action back from "Send feedback" to
+    // the normal answer UI: options + the ▸ SEND button reappear.
+    expect(screen.queryByRole('button', { name: /Send feedback/ })).toBeNull()
+    expect(screen.getByRole('button', { name: '▸ SEND' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
+    expect(container.querySelector('textarea.dialog-custom')).not.toBeNull()
+  })
+
   test('Send feedback posts comments as the answer with from_options:false', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {

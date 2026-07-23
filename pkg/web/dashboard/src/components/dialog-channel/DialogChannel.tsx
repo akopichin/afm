@@ -250,8 +250,17 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
         {hasComment && (
           <div className="line-comment-form line-comment-display" onClick={(event) => event.stopPropagation()}>
-            <div style={{ color: 'var(--c-awaiting)', fontSize: '12px', marginBottom: '4px' }}>
-              {`Comment on line ${item.line}`}
+            <div className="comment-display-header">
+              <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{`Comment on line ${item.line}`}</span>
+              <button
+                type="button"
+                className="comment-remove"
+                aria-label={`Remove comment on line ${item.line}`}
+                title="Remove comment"
+                onClick={() => deleteComment(item.line)}
+              >
+                ✕
+              </button>
             </div>
             <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{comments[item.line]}</div>
           </div>
