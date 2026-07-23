@@ -26,6 +26,7 @@ func TestParseToolAction(t *testing.T) {
 	tests := []struct {
 		name       string
 		line       string
+		limit      int
 		wantTool   string
 		wantDetail string
 		wantOK     bool
@@ -90,17 +91,35 @@ func TestParseToolAction(t *testing.T) {
 			wantOK:     true,
 		},
 		{
-			name:       "text truncation over 100 chars",
+			name:       "text truncation over 100 chars when limit is 100",
 			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}`, strings.Repeat("x", 120)),
+			limit:      100,
 			wantTool:   testTypeText,
 			wantDetail: strings.Repeat("x", 100) + "...",
 			wantOK:     true,
 		},
 		{
-			name:       "bash truncation over 80 chars",
+			name:       "bash truncation over 80 chars when limit is 80",
 			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"%s"}}]}}`, strings.Repeat("echo ", 20)),
+			limit:      80,
 			wantTool:   testToolBash,
 			wantDetail: strings.Repeat("echo ", 16), // 80 chars
+			wantOK:     true,
+		},
+		{
+			name:       "text NOT truncated when limit is 0 (default)",
+			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}`, strings.Repeat("x", 120)),
+			limit:      0,
+			wantTool:   testTypeText,
+			wantDetail: strings.Repeat("x", 120),
+			wantOK:     true,
+		},
+		{
+			name:       "bash NOT truncated when limit is 0 (default)",
+			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"%s"}}]}}`, strings.Repeat("echo ", 20)),
+			limit:      0,
+			wantTool:   testToolBash,
+			wantDetail: strings.Repeat("echo ", 20), // full 100 chars, not cut
 			wantOK:     true,
 		},
 		{
@@ -119,7 +138,7 @@ func TestParseToolAction(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tool, detail, ok := executor.ParseToolAction(tc.line)
+			tool, detail, ok := executor.ParseToolAction(tc.line, tc.limit)
 			if ok != tc.wantOK {
 				t.Fatalf("ok=%v, want %v", ok, tc.wantOK)
 			}

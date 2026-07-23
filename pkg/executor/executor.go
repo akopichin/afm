@@ -18,15 +18,16 @@ import (
 
 // Config configures the executor.
 type Config struct {
-	Command     string
-	ExtraArgs   []string
-	IdleTimeout time.Duration
-	OnAction    func(tool, detail string) // called for each parsed agent action (may be nil)
-	SessionID   string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume      bool                      // if true, --resume <SessionID> is used instead of --session-id
-	StageDir    string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	WrapperDir  string                    // if set, prepended to PATH in agent env so generated wrapper scripts resolve
-	Dir         string                    // if set, agent runs with this working directory (project root from flow.root_dir)
+	Command        string
+	ExtraArgs      []string
+	IdleTimeout    time.Duration
+	TruncateOutput int                       // 0 = no truncation; max chars for logged agent text/Bash-command detail
+	OnAction       func(tool, detail string) // called for each parsed agent action (may be nil)
+	SessionID      string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume         bool                      // if true, --resume <SessionID> is used instead of --session-id
+	StageDir       string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	WrapperDir     string                    // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir            string                    // if set, agent runs with this working directory (project root from flow.root_dir)
 }
 
 const defaultCommand = "claude"
@@ -114,13 +115,13 @@ type toolInput struct {
 
 // ParseToolAction parses a single stream-json line and returns a human-readable
 // tool name and detail. Returns ok=false for events we don't log (result, system, etc.).
-func ParseToolAction(line string) (toolName, detail string, ok bool) {
+func ParseToolAction(line string, limit int) (toolName, detail string, ok bool) {
 	ev, parsed := parseStreamEvent(line)
 	if !parsed {
 		return "", "", false
 	}
 	for _, c := range ev.Message.Content {
-		if tool, detail, actionOK := contentToAction(c); actionOK {
+		if tool, detail, actionOK := contentToAction(c, limit); actionOK {
 			return tool, detail, true
 		}
 	}
@@ -159,15 +160,15 @@ func isErrorLine(line string) bool {
 }
 
 // contentToAction converts a single content block to a loggable action.
-func contentToAction(c streamContent) (toolName, detail string, ok bool) {
+func contentToAction(c streamContent, limit int) (toolName, detail string, ok bool) {
 	switch c.Type {
 	case contentTypeText:
 		if c.Text == "" {
 			return "", "", false
 		}
 		d := c.Text
-		if len(d) > 100 {
-			d = d[:100] + "..."
+		if limit > 0 && len(d) > limit {
+			d = d[:limit] + "..."
 		}
 		return contentTypeText, d, true
 	case contentTypeToolUse:
@@ -185,8 +186,8 @@ func contentToAction(c streamContent) (toolName, detail string, ok bool) {
 			return c.Name, fp, true
 		case toolNameBash:
 			cmd := inp.Command
-			if len(cmd) > 80 {
-				cmd = cmd[:80] + "..."
+			if limit > 0 && len(cmd) > limit {
+				cmd = cmd[:limit] + "..."
 			}
 			return toolNameBash, cmd, true
 		default:
@@ -199,8 +200,8 @@ func contentToAction(c streamContent) (toolName, detail string, ok bool) {
 			}
 			if d == "" {
 				d = string(c.Input)
-				if len(d) > 80 {
-					d = d[:80] + "..."
+				if limit > 0 && len(d) > limit {
+					d = d[:limit] + "..."
 				}
 			}
 			return c.Name, d, true
@@ -277,7 +278,7 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 					agentWroteOutFile = true
 				}
 			}
-			if tool, detail, actionOK := contentToAction(c); actionOK {
+			if tool, detail, actionOK := contentToAction(c, e.cfg.TruncateOutput); actionOK {
 				lg.LogAction(tool, detail)
 				if e.cfg.OnAction != nil {
 					e.cfg.OnAction(tool, detail)
@@ -374,7 +375,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 			return
 		}
 		for _, c := range ev.Message.Content {
-			if tool, detail, actionOK := contentToAction(c); actionOK {
+			if tool, detail, actionOK := contentToAction(c, e.cfg.TruncateOutput); actionOK {
 				lg.LogAction(tool, detail)
 				if e.cfg.OnAction != nil {
 					e.cfg.OnAction(tool, detail)
