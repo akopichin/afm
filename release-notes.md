@@ -4,6 +4,18 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ## 2026-07-23
 
+### Dashboard: remove a line comment with an ✕
+- A comment left on a plan line (or a dialog question line) now has an ✕ button in its header — click it to remove the comment in one click, without reopening the edit form. Previously the only way to drop a comment was: click the line → open the form → "Delete".
+- In the dialog, removing the last remaining comment brings back the normal answer UI (option buttons + ▸ SEND) instead of "Send feedback" — the switch is driven by the comment count.
+
+### Fix: retry context no longer clipped by `truncate_output`
+- When a stage was retried (after a rate-limit / server error), the "previously completed actions" block in the retry prompt was built from the human-readable `<phase>.log`, whose per-action detail is truncated by `executor.truncate_output`. With a small `truncate_output`, a retried agent saw an abbreviated view of its own prior work.
+- **Fix:** retry context is now built from the raw, untruncated `<phase>.jsonl` stream. `truncate_output` still applies to the log and dashboard event feed as designed — only the retry continuation prompt sees the full detail.
+
+### New: explicit warning when a dependency's plan is missing
+- `CollectDependencyPlans` used to silently substitute `(plan not available)` into a stage's prompt when a dependency's `plan.md` / `execution_summary.md` was missing or empty — the operator had no way to notice the downstream stage was running with degraded context.
+- A `context_warning` event is now published to the dashboard event feed (distinct amber styling), naming the dependency whose plan was missing. The stage still runs; the loss of context is just no longer invisible.
+
 ### New config: `executor.truncate_output` (default: no truncation)
 - Agent tool-action output (text blocks, Bash commands) logged to `<phase>.log` and the `agent_action` event feed was previously always truncated at hardcoded lengths (100 chars for text, 80 for Bash/other tool details) — permanently, not just a display convenience (the full-screen dashboard view and the API don't recover it; only the raw `<phase>.jsonl` stream kept the untruncated original).
 - New `executor.truncate_output` config (default `0` = no truncation; set to `N` to cap logged text/Bash-command detail at `N` chars, matching the old hardcoded behavior when set to 100 or 80).
