@@ -56,6 +56,16 @@ per the prior translation work). The internal anchor link to
 `#supervisor-and-autonomous-track` (in the "How It Works" intro) is
 unaffected since that heading's text and slug don't change.
 
+## Additional fix: Homebrew install command
+
+`README.md:24` currently reads `brew install --cask akopichin/afm`, which
+does not actually work — the correct, working invocation is
+`brew install --cask akopichin/afm/afm` (full `<tap>/<cask>` form, tap
+`akopichin/afm`, cask `afm`). Fix this line while touching the Installation
+section for the reorder. The `brew upgrade --cask afm` line (`README.md:28`)
+is left as-is — untouched by this report, and Homebrew resolves the
+already-installed cask by its short name for upgrades.
+
 ## Verification
 
 - Every `##` heading has a corresponding TOC entry, and every TOC link
