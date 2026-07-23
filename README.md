@@ -263,9 +263,9 @@ stages: ...
 
 By default the agent inherits the CWD of the `afm` process, and `afm` assumes the project root matches the afm root (the parent of `.afm/`). If that's not the case — for example, in a Docker setup where the sources are mounted at `/workspace` but `.afm/` lives in a different directory — relative project paths (`docs/arch/…`, etc.) resolve to different roots for different stages: one stage writes a file, another can't find it. `root_dir` fixes a single root for all stages. Dialog paths (`AFM_STAGE_DIR`) stay anchored to the afm root regardless of `root_dir`.
 
-### Передача контекста между стадиями
+### Passing Context Between Stages
 
-Планы (и `execution_summary.md` автономных стадий) зависимых стадий автоматически добавляются в промпт через `depends_on`. Для передачи файловых артефактов — `artifacts` + `inputs`:
+Plans (and the `execution_summary.md` of autonomous stages) of dependent stages are automatically added to the prompt via `depends_on`. To pass file artifacts, use `artifacts` + `inputs`:
 
 ```yaml
 stages:
@@ -275,37 +275,37 @@ stages:
         path: docs/api-contract.yaml
         description: "OpenAPI schema"
       - name: db-schema
-        path: ./schema.sql           # ./ = stage-директория в run
-        description: "SQL миграция"
-        inline: false                 # передать путь, не содержимое
+        path: ./schema.sql           # ./ = the stage directory in the run
+        description: "SQL migration"
+        inline: false                 # pass the path, not the content
 
   - id: frontend
     depends_on: [backend]
     inputs:
-      - backend.api-contract          # обязательный артефакт
-      - ref: backend.db-schema        # опциональный
+      - backend.api-contract          # required artifact
+      - ref: backend.db-schema        # optional
         optional: true
 ```
 
-- `inline: true` (по умолчанию) — содержимое файла вставляется в промпт
-- `inline: false` — в промпт передаётся путь к файлу
-- `optional: true` — если файл не найден, стадия запускается без него
+- `inline: true` (default) — the file's content is inserted into the prompt
+- `inline: false` — the file's path is passed into the prompt instead
+- `optional: true` — if the file isn't found, the stage runs without it
 
-### Интерактивные стадии
+### Interactive Stages
 
-Стадия с `interactive: true` получает файловый протокол для диалога с пользователем через dashboard. Агенту передаётся env-переменная `AFM_STAGE_DIR` (путь к stage-директории). Чтобы задать вопрос, агент пишет файл `<phase>.q<N>.question.json` (`<phase>` — `planning`/`implementation`/`review`; `N` растёт: q1, q2, …), а затем ждёт появления `<phase>.q<N>.answer.json` через bash-цикл. В dashboard появляется секция «Диалог», где пользователь отвечает. Пока ответа нет, стадия в статусе `awaiting_user_input`; после ответа выполнение продолжается.
+A stage with `interactive: true` gets a file-based protocol for dialog with the user through the dashboard. The agent receives the `AFM_STAGE_DIR` env variable (the path to the stage directory). To ask a question, the agent writes a `<phase>.q<N>.question.json` file (`<phase>` is `planning`/`implementation`/`review`; `N` increments: q1, q2, …), then waits for `<phase>.q<N>.answer.json` to appear via a bash loop. A "Dialog" section appears in the dashboard where the user answers. While there's no answer, the stage sits in `awaiting_user_input` status; once answered, execution continues.
 
-Для запуска `claude` всегда добавляются флаги `--print --output-format stream-json --verbose --dangerously-skip-permissions` (`--verbose` обязателен для stream-json в Claude Code 2.1.x). Если интерактивный агент по ошибке запишет `question.json` вне `$AFM_STAGE_DIR` (баг GLM-4.7: путь из CWD вместо env), poller авто-релокейтит файл внутрь stageDir и создаёт симлинк для ответа — стадия уходит в `awaiting_user_input`, а не зависает.
+When launching `claude`, the flags `--print --output-format stream-json --verbose --dangerously-skip-permissions` are always added (`--verbose` is required for stream-json in Claude Code 2.1.x). If an interactive agent mistakenly writes `question.json` outside `$AFM_STAGE_DIR` (a GLM-4.7 bug: path taken from CWD instead of the env var), the poller auto-relocates the file into stageDir and creates a symlink for the answer — the stage moves into `awaiting_user_input` instead of hanging.
 
 ```yaml
 stages:
   - id: discovery
-    name: "Сбор требований"
+    name: "Gather Requirements"
     description: |
-      Спроси у пользователя preferred language через файловый протокол (id: q1):
-      запиши $AFM_STAGE_DIR/implementation.q1.question.json и дождись
-      ответа $AFM_STAGE_DIR/implementation.q1.answer.json.
-      После ответа запиши итог в ./summary.md.
+      Ask the user for their preferred language via the file protocol (id: q1):
+      write $AFM_STAGE_DIR/implementation.q1.question.json and wait for
+      the answer at $AFM_STAGE_DIR/implementation.q1.answer.json.
+      After the answer, write the result to ./summary.md.
     agents: [implementation]
     interactive: true
     artifacts:
@@ -313,90 +313,90 @@ stages:
         path: ./summary.md
 ```
 
-Полный пример: `example-flow-interactive.yaml`.
+Full example: `example-flow-interactive.yaml`.
 
-> **Ожидание ответа и idle-timeout.** Пока стадия ждёт ответа, агент простаивает и не пишет в stdout. По умолчанию `executor.idle_timeout` = 30 мин — если не ответить за это время, ждущий агент может быть убит. Для долгих ожиданий подними таймаут: `executor: { idle_timeout: 24h }`.
+> **Waiting for an answer and idle-timeout.** While a stage waits for an answer, the agent is idle and writes nothing to stdout. By default `executor.idle_timeout` = 30 min — if you don't answer within that time, the waiting agent may be killed. For long waits, raise the timeout: `executor: { idle_timeout: 24h }`.
 
-## Супервизор и автономный трек
+## Supervisor and Autonomous Track
 
-Супервизор — это отдельный LLM-агент, который перед запуском стадии решает, нужен ли ей полный цикл planning→approval→implementation, или её можно выполнить автономно за один шаг.
+The supervisor is a separate LLM agent that, before a stage starts, decides whether it needs the full planning→approval→implementation cycle, or whether it can be executed autonomously in a single step.
 
-Включается для стадии, когда:
-1. в конфиге/флоу задана команда супервизора (`supervisor.command` в config или `supervisor_command` во флоу), и
-2. у стадии стоит `supervisor: true`.
+It's enabled for a stage when:
+1. a supervisor command is set in config/flow (`supervisor.command` in config or `supervisor_command` in the flow), and
+2. the stage has `supervisor: true`.
 
-Если супервизор решает `can_execute_autonomously`, стадия переводится на трек `autonomous_execution`: агент со скиллами делает работу сразу (без `plan.md` и без одобрения) и обязан написать `execution_summary.md` — он служит артефактом для зависимых стадий вместо плана. Иначе стадия идёт обычным циклом.
+If the supervisor decides `can_execute_autonomously`, the stage is moved to the `autonomous_execution` track: an agent with skills does the work right away (no `plan.md` and no approval) and is required to write `execution_summary.md` — it serves as the artifact for dependent stages instead of a plan. Otherwise the stage follows the regular cycle.
 
-- Решение супервизора публикуется в дашборд и пишется в `.afm/runs/<run>/supervisor.jsonl` (аудит).
-- Любая ошибка LLM/парсинга → безопасный фолбэк на базовые фазы (флоу не падает).
-- Стадия с inline-артефактом всегда идёт обычным циклом (агенту нужен контекст артефакта в плане).
+- The supervisor's decision is published to the dashboard and written to `.afm/runs/<run>/supervisor.jsonl` (audit).
+- Any LLM/parsing error → safe fallback to the base phases (the flow doesn't fail).
+- A stage with an inline artifact always follows the regular cycle (the agent needs the artifact's context in the plan).
 
 ```yaml
 # config.yaml
 supervisor:
-  command: glm51        # команда агента-супервизора
+  command: glm51        # the supervisor agent's command
 
 # flow.yaml
 stages:
   - id: rename-var
-    description: "Переименовать переменную foo → bar во всём модуле"
+    description: "Rename the foo → bar variable across the whole module"
     agents: [planning, implementation]
-    supervisor: true     # разрешить супервизору схлопнуть в автономный шаг
+    supervisor: true     # let the supervisor collapse this into an autonomous step
 ```
 
-### Жёсткий автономный трек: `agents: [auto]`
+### Hard Autonomous Track: `agents: [auto]`
 
-Если ты заранее знаешь, что стадия должна идти автономным треком (супервизор не всегда угадывает), укажи `agents: [auto]` — стадия сразу исполняется автономным агентом, **без LLM-решения супервизора и без фолбэка** на обычные фазы. Ведёт себя как supervisor-автономная стадия (нет `plan.md`, нет одобрения, доступен диалог, пишет `execution_summary.md`), только решение статическое — из YAML.
+If you know in advance that a stage should follow the autonomous track (the supervisor doesn't always guess right), set `agents: [auto]` — the stage is immediately executed by an autonomous agent, **with no LLM decision from the supervisor and no fallback** to the regular phases. It behaves like a supervisor-autonomous stage (no `plan.md`, no approval, dialog available, writes `execution_summary.md`), except the decision is static — from YAML.
 
 ```yaml
 stages:
   - id: sync-manifests
-    description: "Засинкать CODEMANIFEST-ы с кодом"
-    agents: [auto]        # жёстко автономно, без супервизора
+    description: "Sync the CODEMANIFEST files with the code"
+    agents: [auto]        # hard autonomous, no supervisor
 ```
 
-`auto` должен быть единственным агентом стадии; `auto` + `supervisor: true` — ошибка конфигурации (противоречивые интенты, ловится при парсинге флоу).
+`auto` must be the stage's only agent; `auto` + `supervisor: true` is a configuration error (conflicting intents, caught during flow parsing).
 
-## Конфигурация
+## Configuration
 
-Создай `.afm/config.yaml` в проекте или `~/.afm/config.yaml` глобально (полный пример — `config.example.yaml`):
+Create `.afm/config.yaml` in the project or `~/.afm/config.yaml` globally (full example — `config.example.yaml`):
 
 ```yaml
 client:
-  command: claude           # AI-команда (по умолчанию: claude)
-  # extra_args: [--my-flag] # доп. аргументы
-  # claude_bare: false      # true → добавлять --bare в генерируемые обёртки (меньше нагрузка,
-                            #        но отключает auto-discovery скиллов). Default: false
+  command: claude           # the AI command (default: claude)
+  # extra_args: [--my-flag] # extra arguments
+  # claude_bare: false      # true → add --bare to generated wrappers (lighter load,
+                            #        but disables skill auto-discovery). Default: false
 
 executor:
-  idle_timeout: 30m         # таймаут простоя агента
-  max_parallel: 4           # макс. параллельных стадий (0 = без ограничений)
+  idle_timeout: 30m         # agent idle timeout
+  max_parallel: 4           # max parallel stages (0 = unlimited)
 
 server:
-  port: 9876                # порт веб-дашборда
-  open_browser: false       # открывать браузер при старте (default: false)
+  port: 9876                # web dashboard port
+  open_browser: false       # open the browser on startup (default: false)
 
 supervisor:
-  command: glm51            # команда агента-супервизора (для stages с supervisor: true)
+  command: glm51            # the supervisor agent's command (for stages with supervisor: true)
 
-# theme: goga               # тема дашборда: goga | novacorps (default: novacorps)
-# prompts_dir: .afm/prompts/  # кастомные шаблоны промптов
+# theme: goga               # dashboard theme: goga | novacorps (default: novacorps)
+# prompts_dir: .afm/prompts/  # custom prompt templates
 
 docker:
-  enabled: false            # true / env AFM_USE_DOCKER=1 — перезапуск в контейнере
+  enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
   # image: akopichin/afm:latest
-  # autoShim: true          # генерировать claude-обёртки для agents.<cmd> в контейнере
-  # extra_mounts: [~/.ai-free]  # доп. хост-пути в контейнер (:ro)
-  # agents:                 # рецепты для autoShim (см. config.example.yaml)
+  # autoShim: true          # generate claude wrappers for agents.<cmd> inside the container
+  # extra_mounts: [~/.ai-free]  # extra host paths into the container (:ro)
+  # agents:                 # recipes for autoShim (see config.example.yaml)
   #   glm51: { model: glm-5.1, url: https://api.z.ai/api/anthropic,
   #            auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" } }
 ```
 
-Приоритет настроек (от высокого к низкому):
-1. CLI-флаги (`--max-parallel`, `--port`, `--require-approval`)
-2. `.afm/config.yaml` проекта
-3. `~/.afm/config.yaml` глобальный
-4. Значения по умолчанию
+Settings priority (highest to lowest):
+1. CLI flags (`--max-parallel`, `--port`, `--require-approval`)
+2. The project's `.afm/config.yaml`
+3. The global `~/.afm/config.yaml`
+4. Default values
 
 ## Веб-дашборд
 
