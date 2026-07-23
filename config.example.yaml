@@ -48,6 +48,11 @@ executor:
   # Default: 0
   # max_parallel: 4
 
+  # Max chars for agent text/Bash-command detail logged to <phase>.log and the
+  # agent_action event feed (0 = no limit — the full text/command is kept).
+  # Default: 0
+  # truncate_output: 100
+
 # Directory with custom prompt templates (overrides embedded defaults).
 # Files needed: planning.md, implementation.md, review.md, summary.md
 # Default: "" (use embedded prompts)

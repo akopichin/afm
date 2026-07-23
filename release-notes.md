@@ -4,6 +4,10 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ## 2026-07-23
 
+### New config: `executor.truncate_output` (default: no truncation)
+- Agent tool-action output (text blocks, Bash commands) logged to `<phase>.log` and the `agent_action` event feed was previously always truncated at hardcoded lengths (100 chars for text, 80 for Bash/other tool details) — permanently, not just a display convenience (the full-screen dashboard view and the API don't recover it; only the raw `<phase>.jsonl` stream kept the untruncated original).
+- New `executor.truncate_output` config (default `0` = no truncation; set to `N` to cap logged text/Bash-command detail at `N` chars, matching the old hardcoded behavior when set to 100 or 80).
+
 ### Fix: empty stage badge in dashboard event feed
 - For a stage without its own `command` (uses the default client), `agent_action` events (Bash/Read/Skill/text) went out with an empty `stageId` — the dashboard didn't render the stage badge, even though status-change rows had one. Cause: `runnerFor` returned a shared runner whose `OnAction` was bound to an empty stageID.
 - **Fix:** each stage now gets a per-stage runner with the correct stageID (the injected runner stays test-only). This also fixes attribution for parallel stages.

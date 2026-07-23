@@ -418,6 +418,7 @@ client:
 executor:
   idle_timeout: 30m         # agent idle timeout
   max_parallel: 4           # max parallel stages (0 = unlimited)
+  truncate_output: 0        # max chars for logged agent text/Bash commands (0 = no limit, default)
 
 server:
   port: 9876                # web dashboard port

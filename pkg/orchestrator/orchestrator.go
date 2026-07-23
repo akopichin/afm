@@ -144,11 +144,12 @@ func New(opts Options) *Orchestrator {
 	r := opts.Runner
 	if r == nil {
 		r = executor.New(executor.Config{
-			Command:     opts.Config.Client.Command,
-			ExtraArgs:   opts.Config.Client.ExtraArgs,
-			IdleTimeout: opts.Config.Executor.IdleTimeout,
-			OnAction:    uiActionPublisher(ui, ""),
-			WrapperDir:  wrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
+			Command:        opts.Config.Client.Command,
+			ExtraArgs:      opts.Config.Client.ExtraArgs,
+			IdleTimeout:    opts.Config.Executor.IdleTimeout,
+			TruncateOutput: opts.Config.Executor.TruncateOutput,
+			OnAction:       uiActionPublisher(ui, ""),
+			WrapperDir:     wrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
 		})
 	}
 

@@ -38,12 +38,13 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			extraArgs = o.opts.Config.Client.ExtraArgs
 		}
 		cfg := executor.Config{
-			Command:     cmd,
-			ExtraArgs:   extraArgs,
-			IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-			OnAction:    uiActionPublisher(o.ui, s.ID),
-			WrapperDir:  wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-			Dir:         o.opts.RootDir,
+			Command:        cmd,
+			ExtraArgs:      extraArgs,
+			IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
+			TruncateOutput: o.opts.Config.Executor.TruncateOutput,
+			OnAction:       uiActionPublisher(o.ui, s.ID),
+			WrapperDir:     wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+			Dir:            o.opts.RootDir,
 		}
 		// Autonomous-фаза диалоговая: агенту нужен AFM_STAGE_DIR, чтобы писать
 		// question.json и писать execution_summary.md в каталог стадии.
@@ -69,15 +70,16 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
 	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
 	return executor.New(executor.Config{
-		Command:     cmd,
-		ExtraArgs:   extraArgs,
-		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		OnAction:    uiActionPublisher(o.ui, s.ID),
-		SessionID:   sessionID,
-		Resume:      resume,
-		StageDir:    stageDir,
-		WrapperDir:  wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		Dir:         o.opts.RootDir,
+		Command:        cmd,
+		ExtraArgs:      extraArgs,
+		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
+		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
+		OnAction:       uiActionPublisher(o.ui, s.ID),
+		SessionID:      sessionID,
+		Resume:         resume,
+		StageDir:       stageDir,
+		WrapperDir:     wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Dir:            o.opts.RootDir,
 	})
 }
 
@@ -86,10 +88,11 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 		return o.runner
 	}
 	return executor.New(executor.Config{
-		Command:     s.Command,
-		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		OnAction:    uiActionPublisher(o.ui, s.ID),
-		WrapperDir:  wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Command:        s.Command,
+		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
+		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
+		OnAction:       uiActionPublisher(o.ui, s.ID),
+		WrapperDir:     wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
 	})
 }
 
