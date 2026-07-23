@@ -19,6 +19,7 @@ const (
 	EventAskUser            EventType = "ask_user"
 	EventUserAnswered       EventType = "user_answered"
 	EventSupervisorDecision EventType = "supervisor_decision"
+	EventContextWarning     EventType = "context_warning"
 )
 
 type Event struct {

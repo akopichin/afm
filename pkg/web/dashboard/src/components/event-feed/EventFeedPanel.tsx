@@ -134,6 +134,10 @@ function toFeedLine(event: AfmEvent): FeedLine {
       entryClass = 'supervisor'
       break
     }
+    case 'context_warning':
+      msg = `context warning: ${stringify(data)}`
+      msgClass = 'feed-msg warning'
+      break
     default:
       msg = event.type
   }

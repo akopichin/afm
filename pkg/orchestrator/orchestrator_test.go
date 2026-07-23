@@ -96,7 +96,7 @@ func TestCollectDependencyPlans(t *testing.T) {
 		{ID: "frontend", Name: "Frontend", Description: "frontend", DependsOn: []string{"backend"}},
 	}
 
-	result := orchestrator.CollectDependencyPlans(runDir, stages[1], stages)
+	result := orchestrator.CollectDependencyPlans(runDir, stages[1], stages, nil)
 	if result == "" {
 		t.Fatal("expected non-empty dependency plans")
 	}

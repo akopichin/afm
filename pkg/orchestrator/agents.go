@@ -40,7 +40,9 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "")
 
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
-		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		})
 		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
 			log.Printf("WARN: collect artifacts for %s planning: %v", s.ID, artErr)
@@ -131,7 +133,9 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 			}
 		}
 
-		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		})
 		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
 			log.Printf("WARN: collect artifacts for %s revise: %v", s.ID, artErr)
@@ -185,7 +189,9 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			return err
 		}
 
-		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		})
 		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
 			log.Printf("WARN: collect artifacts for %s impl: %v", s.ID, artErr)
@@ -264,7 +270,9 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 		return
 	}
 
-	depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+	depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+		o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+	})
 	artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 	if artErr != nil {
 		log.Printf("WARN: collect artifacts for %s review: %v", s.ID, artErr)
@@ -304,7 +312,9 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 		if artErr != nil {
 			log.Printf("WARN: collect artifacts for %s autonomous: %v", s.ID, artErr)
 		}
-		depCtx := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages)
+		depCtx := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		})
 
 		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
 		prompt := prompts.Build(prompts.Inputs{

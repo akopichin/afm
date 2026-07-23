@@ -33,6 +33,7 @@
 }
 .feed-msg.action { color: var(--ink-dim); }
 .feed-msg.error  { color: var(--coral); }
+.feed-msg.warning { color: var(--amber); }
 
 /* Supervisor decisions — выделены из общего лога: акцентный фон + левая полоса. */
 .feed-entry.supervisor {

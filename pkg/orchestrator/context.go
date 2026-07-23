@@ -10,8 +10,11 @@ import (
 )
 
 // CollectDependencyPlans reads plan.md from each stage in DependsOn
-// and returns a formatted prompt section. Missing plans produce a warning comment.
-func CollectDependencyPlans(runDir string, stage flow.Stage, allStages []flow.Stage) string {
+// and returns a formatted prompt section. Missing plans produce a warning
+// comment in the prompt AND, if warn is non-nil, a callback invocation so the
+// caller can surface a visible signal (e.g. an event-feed warning) — a
+// missing dependency plan means the stage silently loses context otherwise.
+func CollectDependencyPlans(runDir string, stage flow.Stage, allStages []flow.Stage, warn func(depID, msg string)) string {
 	if len(stage.DependsOn) == 0 {
 		return ""
 	}
@@ -43,6 +46,9 @@ func CollectDependencyPlans(runDir string, stage flow.Stage, allStages []flow.St
 
 		if len(data) == 0 {
 			buf.WriteString("(plan not available)\n")
+			if warn != nil {
+				warn(depID, "dependency stage plan is missing or empty — downstream stage sees no context from it")
+			}
 			continue
 		}
 		buf.WriteString(string(data))
