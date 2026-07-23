@@ -198,6 +198,15 @@
   overflow-y: auto;
 }
 
+/* Maximized-режим (портал Maximizable в <body>, см. .maximize-overlay в layout.css):
+   тот же приём, что и для .log-content (см. log-panel.css) — фиксированный
+   потолок высоты снимается, план занимает всё доступное место оверлея. */
+.maximize-overlay #plan-content {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}
+
 .plan-line {
   display: grid;
   grid-template-columns: 36px 1fr 24px;
@@ -423,4 +432,13 @@
   display: flex;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+/* .panel-frame-body > * (layout.css) даёт flex: 1 1 0 каждому прямому ребёнку —
+   верно для одно-child панелей (dialog/log), но у плана несколько соседей:
+   #plan-section должен забирать всё доступное место, а кнопки одобрения/ретрая —
+   оставаться на своей естественной высоте, а не делить место с планом поровну. */
+#actions-section,
+#retry-section {
+  flex: 0 0 auto;
 }
