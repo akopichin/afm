@@ -398,74 +398,74 @@ Settings priority (highest to lowest):
 3. The global `~/.afm/config.yaml`
 4. Default values
 
-## Веб-дашборд
+## Web Dashboard
 
-При запуске (если `server.open_browser: true`) открывается дашборд; иначе его URL печатается в лог.
+On startup (if `server.open_browser: true`) the dashboard opens; otherwise its URL is printed to the log.
 
-- **Левая панель** — список стадий с цветными статус-индикаторами; под `id` показывается `name` стадии (если задано). В заголовке центральной панели — тоже `name`, иначе `id`
-- **Центральная панель** — план с построчным ревью и inline-комментариями, лог агента (markdown), секция «Диалог» для интерактивных стадий
-- **Правая панель** — лента событий со всех стадий с бейджами источников (включая решения супервизора)
-- **Прогресс-бар** — внизу, сколько стадий завершено
+- **Left panel** — list of stages with colored status indicators; the stage's `name` is shown under `id` (if set). The center panel's header also shows `name`, otherwise `id`
+- **Center panel** — the plan with line-by-line review and inline comments, the agent log (markdown), a "Dialog" section for interactive stages
+- **Right panel** — an event feed from all stages with source badges (including supervisor decisions)
+- **Progress bar** — at the bottom, showing how many stages are complete
 
-### Inline-комментарии к плану
+### Inline Plan Comments
 
-Когда стадия в `awaiting_approval`:
-1. Кликни на строку плана — откроется форма комментария
-2. Напиши замечание — строка подсветится жёлтым
-3. Нажми «Отправить правку (N)» — все комментарии отправятся агенту с номерами строк
+When a stage is in `awaiting_approval`:
+1. Click a plan line — a comment form opens
+2. Write a remark — the line highlights yellow
+3. Click "Send Revision (N)" — all comments are sent to the agent with line numbers
 
-### Resume при перезапуске
+### Resume On Restart
 
-При повторном запуске `afm run` инструмент автоматически:
-- Пропускает завершённые стадии (`done`)
-- Сохраняет стадии, ожидающие одобрения (`awaiting_approval`)
-- Перезапускает прерванные стадии (`planning`, `running`, `revising`, `retrying`)
-- Восстанавливает автономные стадии (по `execution_summary.md` / `autonomous.flag`)
-- Сохраняет стадии в `awaiting_user_input`: файлы вопросов/ответов переживают перезапуск, незакрытый вопрос снова показывается в dashboard, после ответа стадия продолжается
+On a repeated `afm run`, the tool automatically:
+- Skips completed stages (`done`)
+- Preserves stages awaiting approval (`awaiting_approval`)
+- Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
+- Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
+- Preserves stages in `awaiting_user_input`: question/answer files survive the restart, an unanswered question is shown again in the dashboard, and once answered the stage continues
 
-Одобрение/правка/ретрай фиксируются в логе долговечно (fsync) до того, как управление вернётся — краш сразу после одобрения не теряет интент, recovery продолжит с корректного состояния.
+Approve/revise/retry are durably recorded in the log (fsync) before control returns — a crash right after approval doesn't lose the intent; recovery continues from the correct state.
 
-## Структура директорий
+## Directory Structure
 
 ```
 .afm/
-  flows/           # flow.yaml файлы
+  flows/           # flow.yaml files
   runs/
-    <flow>-<ts>-<rand>/    # данные одного запуска (rand — чтобы не было коллизий)
-      events.jsonl   # событийный лог переходов — ИСТОЧНИК ПРАВДЫ (append + fsync)
-      state.json     # производный снапшот статусов (кэш; читатели берут правду из лога)
-      .lock          # flock активного afm run
-      supervisor.jsonl       # решения супервизора (если включён)
+    <flow>-<ts>-<rand>/    # data for a single run (rand — avoids collisions)
+      events.jsonl   # event log of transitions — SOURCE OF TRUTH (append + fsync)
+      state.json     # derived status snapshot (cache; readers take the truth from the log)
+      .lock          # flock of the active afm run
+      supervisor.jsonl       # supervisor decisions (if enabled)
       <stage-id>/
-        plan.md          # план стадии
-        planning.log     # лог агента планирования (stdout: tool actions)
+        plan.md          # stage plan
+        planning.log     # planning agent log (stdout: tool actions)
         planning.jsonl   # raw stream-json
-        planning.stderr.log  # stderr агента (диагностика claude)
+        planning.stderr.log  # agent stderr (claude diagnostics)
         implementation.log
         review.log
-        .done                # маркер завершения реализации
-        # автономный трек (если супервизор перевёл стадию):
-        autonomous.flag      # маркер автономной стадии
+        .done                # implementation-completion marker
+        # autonomous track (if the supervisor switched the stage over):
+        autonomous.flag      # autonomous-stage marker
         autonomous.log
-        execution_summary.md # итог автономной работы (артефакт для зависимых)
-        # файлы интерактивного диалога (interactive: true):
-        <phase>.q<N>.question.json   # вопрос агента
-        <phase>.q<N>.answer.json     # ответ пользователя
-        <phase>.dialog.jsonl         # история диалога для UI
-  config.yaml      # конфиг проекта (опционально)
+        execution_summary.md # summary of the autonomous work (artifact for dependents)
+        # interactive dialog files (interactive: true):
+        <phase>.q<N>.question.json   # agent's question
+        <phase>.q<N>.answer.json     # user's answer
+        <phase>.dialog.jsonl         # dialog history for the UI
+  config.yaml      # project config (optional)
 ```
 
-## Использование в Claude Code
+## Usage in Claude Code
 
-После `./install.sh` доступны скиллы:
+After `./install.sh` the following skills are available:
 
-- `/afm` — запускает flow, мониторит и запрашивает одобрения планов прямо в чате
-- `/afm-check` — показывает статус текущего запуска
-- `/afm-init` — создаёт flow.yaml интерактивно
-- `/afm-retry` — перезапускает упавшую стадию
-- `/afm-review` — просмотр плана стадии с фидбэком/одобрением
+- `/afm` — runs a flow, monitors it, and requests plan approvals right in the chat
+- `/afm-check` — shows the status of the current run
+- `/afm-init` — creates flow.yaml interactively
+- `/afm-retry` — retries a failed stage
+- `/afm-review` — view a stage plan with feedback/approval
 
-## Жизненный цикл стадии
+## Stage Lifecycle
 
 ```
 pending → planning → awaiting_approval → ready → running → done
@@ -474,40 +474,40 @@ pending → planning → awaiting_approval → ready → running → done
          ↑                                         ↓
          └───────── revising ←────────────────────┘
 
-# автономный трек (супервизор):
+# autonomous track (supervisor):
 pending → (supervisor) → running(autonomous_execution) → done
 ```
 
-- `pending` — ещё не запущена; planning стартует после завершения всех `depends_on` (если нет `eager_planning: true`)
-- `planning` — AI строит план (или супервизор оценивает стадию)
-- `awaiting_approval` — план готов, ждёт одобрения (веб или CLI)
-- `ready` — план одобрен, ждёт своей очереди
-- `running` — AI реализует план (или выполняет автономный трек)
-- `awaiting_user_input` — интерактивная стадия ждёт ответа пользователя; после ответа возвращается в фазу, где был задан вопрос
-- `revising` — отправлены правки, AI переделывает план
-- `retrying` — временная ошибка (rate limit / 5xx), автоповтор с бэкоффом
-- `done` / `failed` — завершена
+- `pending` — not started yet; planning starts once all `depends_on` are complete (unless `eager_planning: true`)
+- `planning` — the AI builds a plan (or the supervisor assesses the stage)
+- `awaiting_approval` — the plan is ready, awaiting approval (web or CLI)
+- `ready` — the plan is approved, waiting its turn
+- `running` — the AI implements the plan (or runs the autonomous track)
+- `awaiting_user_input` — an interactive stage is waiting for a user answer; once answered, it returns to the phase where the question was asked
+- `revising` — revisions were sent, the AI is reworking the plan
+- `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
+- `done` / `failed` — complete
 
-## Разработка
+## Development
 
-Один раз после клонирования — включить pre-commit хук (lint + build + test перед каждым коммитом):
+Once after cloning — enable the pre-commit hook (lint + build + test before every commit):
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-Хук лежит в `.githooks/pre-commit` и версионируется вместе с репозиторием, но сама настройка
-`core.hooksPath` — локальная git-конфигурация, поэтому её нужно применить в каждом клоне отдельно.
-Пропустить разово: `git commit --no-verify`.
+The hook lives in `.githooks/pre-commit` and is versioned with the repository, but the
+`core.hooksPath` setting itself is local git configuration, so it must be applied separately
+in each clone. To skip it once: `git commit --no-verify`.
 
 ```bash
-make build        # собрать (bin/afm)
-make test         # тесты (с -race)
-make lint         # линтер
+make build        # build (bin/afm)
+make test         # tests (with -race)
+make lint         # linter
 make install      # go install
-make install-skills   # установить /afm-* скиллы в ~/.claude
-make docker-build     # собрать Docker-образ
-make clean        # удалить артефакты
+make install-skills   # install the /afm-* skills into ~/.claude
+make docker-build     # build the Docker image
+make clean        # remove build artifacts
 ```
 
-Версионированный релиз: `make release-patch` / `release-minor` / `release-major` бампает SemVer-тег и пушит его; сама сборка (docker-образ `:vX.Y.Z` + `:latest`, бинарники, GitHub Release, Homebrew cask) происходит в GitHub Actions (`.github/workflows/release.yml`) по факту пуша тега. На push в `main` patch-версия релизится автоматически — `make release-patch` вручную нужен редко.
+Versioned release: `make release-patch` / `release-minor` / `release-major` bumps the SemVer tag and pushes it; the actual build (docker image `:vX.Y.Z` + `:latest`, binaries, GitHub Release, Homebrew cask) happens in GitHub Actions (`.github/workflows/release.yml`) once the tag is pushed. A push to `main` releases a patch version automatically — running `make release-patch` by hand is rarely needed.
