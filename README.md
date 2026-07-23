@@ -1,48 +1,48 @@
 # afm
 
-CLI-инструмент для оркестрации многостадийных AI-задач. Описываешь задачу в YAML-файле, разбиваешь на стадии — afm запускает AI-агентов последовательно или параллельно, ждёт твоего одобрения планов и автоматически выполняет реализацию. Работает с `claude` и с любыми claude-совместимыми агентами (GLM, DeepSeek, Cursor и т.п.).
+A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML file, break it into stages — afm runs AI agents sequentially or in parallel, waits for your approval of plans, and automatically carries out the implementation. Works with `claude` and with any claude-compatible agents (GLM, DeepSeek, Cursor, etc.).
 
-## Как это работает
+## How It Works
 
-Каждая стадия по умолчанию проходит через фазы:
+Each stage goes through phases by default:
 
 ```
-1. Planning   — AI строит план стадии → ты просматриваешь и одобряешь (или правишь)
-2. Execution  — AI реализует по одобренному плану (+ опциональный code review)
+1. Planning   — AI builds a stage plan → you review and approve (or revise)
+2. Execution  — AI implements the approved plan (+ optional code review)
 ```
 
-Стадии могут запускаться параллельно; зависимости через `depends_on` гарантируют правильный порядок. Планы и артефакты зависимых стадий автоматически подставляются в промпт.
+Stages can run in parallel; dependencies via `depends_on` guarantee the correct order. Plans and artifacts of dependent stages are automatically substituted into the prompt.
 
-**Автономный трек (опционально).** Если для стадии включён супервизор, agent-супервизор (LLM) сам оценивает, нужен ли полный цикл. Для простых стадий он схлопывает planning/implementation/review в один шаг `autonomous_execution` — агент со скиллами делает работу сразу и пишет `execution_summary.md`, без плана и без одобрения. При любой ошибке LLM — безопасный откат на обычные фазы. Можно и жёстко задать автономный трек без супервизора — `agents: [auto]`. См. [Супервизор и автономный трек](#супервизор-и-автономный-трек).
+**Autonomous track (optional).** If a supervisor is enabled for a stage, an agent-supervisor (LLM) decides for itself whether the full cycle is needed. For simple stages it collapses planning/implementation/review into a single `autonomous_execution` step — an agent with skills does the work right away and writes `execution_summary.md`, without a plan and without approval. On any LLM error, there's a safe fallback to the regular phases. The autonomous track can also be forced without a supervisor — `agents: [auto]`. See [Supervisor and Autonomous Track](#supervisor-and-autonomous-track).
 
-**Надёжность.** Состояние каждого запуска пишется в событийный лог `.afm/runs/<run>/events.jsonl` (append + fsync) — это единственный источник правды. Если запуск прервать, `afm run` автоматически продолжит с того же места: завершённые стадии пропускаются, прерванные перезапускаются. Пока `afm run` активен, он держит эксклюзивную блокировку run-директории (`.lock`) — параллельный `afm approve/retry/revise` из другого процесса не сможет повредить живой лог.
+**Reliability.** The state of every run is written to an event log `.afm/runs/<run>/events.jsonl` (append + fsync) — this is the single source of truth. If a run is interrupted, `afm run` automatically resumes from the same point: completed stages are skipped, interrupted ones are retried. While `afm run` is active, it holds an exclusive lock on the run directory (`.lock`) — a concurrent `afm approve/retry/revise` from another process can't corrupt the live log.
 
-## Установка
+## Installation
 
-**Через Homebrew (рекомендуется):**
+**Via Homebrew (recommended):**
 ```bash
 brew install --cask akopichin/afm
-afm install-skills   # опционально: /afm, /afm-check и др. в Claude Code
+afm install-skills   # optional: /afm, /afm-check, etc. in Claude Code
 ```
 
-Бинарник обновляется через `brew upgrade --cask afm`; скиллы при обновлении
-переустанавливать не обязательно, но можно повторить `afm install-skills`,
-если появились новые.
+The binary is updated via `brew upgrade --cask afm`; skills don't need to be
+reinstalled on update, but you can re-run `afm install-skills` if new ones
+have appeared.
 
-**Из исходников:**
+**From source:**
 ```bash
-make build        # собрать в bin/afm
-make install      # установить через go install
+make build        # build into bin/afm
+make install      # install via go install
 ```
 
-**Готовый бинарник + Claude-скиллы:**
+**Prebuilt binary + Claude skills:**
 ```bash
 ./install.sh
 ```
 
-Скрипт копирует бинарник в `/usr/local/bin` и устанавливает скиллы для Claude Code (`/afm`, `/afm-check`, `/afm-init`, `/afm-retry`, `/afm-review`).
+The script copies the binary to `/usr/local/bin` and installs skills for Claude Code (`/afm`, `/afm-check`, `/afm-init`, `/afm-retry`, `/afm-review`).
 
-### Запуск в Docker (без локальной установки)
+### Running in Docker (without a local install)
 
 ```bash
 docker run --rm -it \
@@ -55,7 +55,7 @@ docker run --rm -it \
   run flow.yaml
 ```
 
-Или включить автоматический Docker-режим в конфиге — тогда обычная команда `afm run` сама перезапустится в контейнере:
+Or enable automatic Docker mode in the config — then the plain `afm run` command will restart itself inside the container:
 
 ```yaml
 # .afm/config.yaml
@@ -63,19 +63,19 @@ docker:
   enabled: true
 ```
 
-Образ включает: claude CLI, Node 22, Python 3.12, Go 1.26, git. Контейнер стартует под root, но entrypoint (`gosu`) сразу дропает привилегии до твоего хостового uid/gid — файлы в томах принадлежат тебе, а не root.
+The image includes: claude CLI, Node 22, Python 3.12, Go 1.26, git. The container starts as root, but the entrypoint (`gosu`) immediately drops privileges to your host uid/gid — files in the mounted volumes belong to you, not root.
 
-#### Аутентификация в Docker-режиме
+#### Authentication in Docker Mode
 
-Docker-контейнер — Linux, у него нет доступа к macOS Keychain, где хранятся OAuth-сессии claude. Поэтому нужно передать токен явно через переменную окружения — afm пробросит его в контейнер автоматически.
+The Docker container is Linux — it has no access to the macOS Keychain where claude's OAuth sessions are stored. So the token needs to be passed explicitly via an environment variable — afm forwards it into the container automatically.
 
-**Claude Pro/Max (подписка claude.ai)**
+**Claude Pro/Max (claude.ai subscription)**
 
 ```bash
-# Один раз: сгенерировать долгоживущий токен
+# One-time: generate a long-lived token
 claude setup-token
 
-# Добавить в ~/.zshrc / ~/.bashrc
+# Add to ~/.zshrc / ~/.bashrc
 export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
@@ -85,14 +85,14 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 export ANTHROPIC_API_KEY=sk-ant-api-...
 ```
 
-Также поддерживаются `ANTHROPIC_AUTH_TOKEN` и `ANTHROPIC_BASE_URL` — все пробрасываются в bare-форме (`-e KEY` без значения), чтобы секрет не светился в `ps`/history.
+`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are also supported — all of these are forwarded in bare form (`-e KEY` with no value), so the secret doesn't leak into `ps`/history.
 
-#### Нестандартные агенты в Docker (autoShim)
+#### Non-Standard Agents in Docker (autoShim)
 
-Если стадия использует не-claude команду (`command: glm51`, `command: deepseek` и т.п.), в Docker есть два варианта:
+If a stage uses a non-claude command (`command: glm51`, `command: deepseek`, etc.), Docker offers two options:
 
-- **Монтирование:** afm находит бинарник через `which` и монтирует его в контейнер (`:ro`). Подходит, если у агента нет внешних зависимостей.
-- **autoShim (рекомендуется):** по `docker.autoShim: true` afm генерирует claude-совместимую обёртку прямо в контейнере из рецепта `docker.agents.<cmd>` — без монтирования бинарника и без проброса токенов файлами. Секрет читается на хосте и передаётся transient-env. Поддерживаются типы `claude` (по умолчанию), `openai` (DeepSeek/OpenAI-совместимые) и `cursor` (Cursor Cloud Agents API).
+- **Mounting:** afm locates the binary via `which` and mounts it into the container (`:ro`). Works if the agent has no external dependencies.
+- **autoShim (recommended):** with `docker.autoShim: true`, afm generates a claude-compatible wrapper right inside the container from the `docker.agents.<cmd>` recipe — without mounting the binary and without passing tokens through files. The secret is read on the host and passed in as a transient env var. Supported types are `claude` (default), `openai` (DeepSeek/OpenAI-compatible), and `cursor` (Cursor Cloud Agents API).
 
 ```yaml
 docker:
@@ -104,7 +104,7 @@ docker:
       auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" }
 ```
 
-Подробности и примеры — в `config.example.yaml`, `example-flow-cursor.yaml` и `CLAUDE.md` (раздел Docker Mode).
+Details and examples are in `config.example.yaml`, `example-flow-cursor.yaml`, and `CLAUDE.md` (Docker Mode section).
 
 ## Быстрый старт
 
