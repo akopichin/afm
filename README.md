@@ -168,7 +168,7 @@ integration-tests     pending                15:31:02
 
 Or in real time via the web dashboard — stages, progress bar, event feed, logs.
 
-## Specifying the working directory
+## Specifying the Working Directory
 
 By default `.afm/` is created in the current folder. To move it elsewhere:
 
@@ -183,7 +183,7 @@ afm run
 
 All commands (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) respect `--dir`. Priority: `--dir` flag > `AFM_DIR` env var > current directory.
 
-## The flow.yaml file
+## The flow.yaml File
 
 ```yaml
 name: my-feature
@@ -412,9 +412,9 @@ On startup (if `server.open_browser: true`) the dashboard opens; otherwise its U
 When a stage is in `awaiting_approval`:
 1. Click a plan line — a comment form opens
 2. Write a remark — the line highlights yellow
-3. Click "Send Revision (N)" — all comments are sent to the agent with line numbers
+3. Click "Send revision (N)" — all comments are sent to the agent with line numbers
 
-### Resume On Restart
+### Resume on Restart
 
 On a repeated `afm run`, the tool automatically:
 - Skips completed stages (`done`)
