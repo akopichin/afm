@@ -106,51 +106,51 @@ docker:
 
 Details and examples are in `config.example.yaml`, `example-flow-cursor.yaml`, and `CLAUDE.md` (Docker Mode section).
 
-## Быстрый старт
+## Quick Start
 
-### 1. Создать flow
+### 1. Create a flow
 
 ```bash
 afm init
 ```
 
-Интерактивно задаёт вопросы и создаёт `.afm/flows/<name>.yaml`. Или написать вручную — см. пример ниже.
+Interactively asks questions and creates `.afm/flows/<name>.yaml`. Or write it by hand — see the example below.
 
-### 2. Запустить
+### 2. Run
 
 ```bash
 afm run flow.yaml
 
-# Если flow лежит в .afm/flows/ — можно без аргумента:
+# If the flow lives in .afm/flows/ — you can omit the argument:
 afm run
 ```
 
-По умолчанию поднимается веб-дашборд (`http://localhost:9876`); в лог печатается его URL.
+By default a web dashboard comes up (`http://localhost:9876`); its URL is printed to the log.
 
-### 3. Одобрить планы
+### 3. Approve plans
 
-После фазы планирования каждая стадия переходит в `awaiting_approval`. Есть два способа:
+After the planning phase, each stage transitions to `awaiting_approval`. There are two ways to do this:
 
-**Через веб-дашборд** — открой `http://localhost:9876`, выбери стадию, просмотри план с построчным ревью, оставь inline-комментарии к конкретным строкам (как в MR) и нажми «Одобрить» или «Отправить правку».
+**Via the web dashboard** — open `http://localhost:9876`, select a stage, review the plan line by line, leave inline comments on specific lines (like in an MR), and click "Approve" or "Send revision".
 
-**Через CLI:**
+**Via the CLI:**
 ```bash
-# Посмотреть план
+# View the plan
 cat .afm/runs/<run-dir>/<stage-id>/plan.md
 
-# Одобрить
+# Approve
 afm approve backend-auth
 
-# Не нравится — попросить переделать
-afm revise backend-auth --feedback "Нужно добавить Redis для блеклиста токенов"
+# Not happy with it — ask for a redo
+afm revise backend-auth --feedback "Need to add Redis for the token blacklist"
 
-# Перезапустить упавшую стадию
+# Retry a failed stage
 afm retry backend-auth
 ```
 
-> CLI-мутации (`approve`/`revise`/`retry`) работают, когда `afm run` НЕ запущен (headless-сценарий). При активном `afm run` одобряй через дашборд — иначе команда сообщит, что run заблокирован.
+> CLI mutations (`approve`/`revise`/`retry`) work when `afm run` is NOT running (headless scenario). While `afm run` is active, approve through the dashboard — otherwise the command will report that the run is locked.
 
-### 4. Следить за прогрессом
+### 4. Follow progress
 
 ```bash
 afm check
@@ -166,102 +166,102 @@ frontend-login        running                15:31:45
 integration-tests     pending                15:31:02
 ```
 
-Или в реальном времени через веб-дашборд — стадии, прогресс-бар, лента событий, логи.
+Or in real time via the web dashboard — stages, progress bar, event feed, logs.
 
-## Указание рабочей директории
+## Specifying the working directory
 
-По умолчанию `.afm/` создаётся в текущей папке. Чтобы вынести её в другое место:
+By default `.afm/` is created in the current folder. To move it elsewhere:
 
 ```bash
-# Флаг (разовый запуск)
+# Flag (one-off run)
 afm --dir ~/my-flows run
 
-# Переменная окружения (постоянно)
+# Environment variable (persistent)
 export AFM_DIR=~/my-flows
 afm run
 ```
 
-Все команды (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) уважают `--dir`. Приоритет: флаг `--dir` > env `AFM_DIR` > текущая директория.
+All commands (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) respect `--dir`. Priority: `--dir` flag > `AFM_DIR` env var > current directory.
 
-## Файл flow.yaml
+## The flow.yaml file
 
 ```yaml
 name: my-feature
-description: "Краткое описание задачи"
-# supervisor_command: glm51    # опц. — команда агента-супервизора для всего флоу
+description: "Short task description"
+# supervisor_command: glm51    # optional — supervisor agent command for the whole flow
 
 stages:
 
-  - id: backend          # уникальный ID стадии
+  - id: backend          # unique stage ID
     name: "Backend API"
     description: |
-      Что нужно сделать — подробно.
-      AI будет ориентироваться на этот текст при планировании и реализации.
+      What needs to be done — in detail.
+      The AI will use this text as guidance during planning and implementation.
     agents: [planning, implementation, review]
-    skills:              # опционально — скиллы Claude
+    skills:              # optional — Claude skills
       - superpowers:test-driven-development
-    command: claude      # опционально — своя AI-команда для этой стадии
-    max_parallel: 2      # опционально — лимит параллельности для этой команды
-    artifacts:           # файлы, которые стадия передаёт дальше
+    command: claude      # optional — custom AI command for this stage
+    max_parallel: 2      # optional — parallelism limit for this command
+    artifacts:           # files this stage passes on to other stages
       - name: api-contract
         path: docs/api-contract.yaml
-        description: "OpenAPI спецификация"
+        description: "OpenAPI specification"
       - name: db-schema
-        path: ./schema.sql        # ./ = относительно stage-директории в run
-        description: "SQL миграция"
-        inline: false             # передать путь, не содержимое
+        path: ./schema.sql        # ./ = relative to the stage directory in the run
+        description: "SQL migration"
+        inline: false             # pass the path, not the contents
 
   - id: frontend
     name: "Frontend"
-    description: "Реализовать UI по API-контракту"
+    description: "Implement the UI against the API contract"
     agents: [planning, implementation]
-    depends_on: [backend]         # запустится только после завершения backend
-    inputs:                       # артефакты из зависимых стадий
-      - backend.api-contract      # содержимое файла подставится в промпт
-      - ref: backend.db-schema    # опциональный — не блокирует если файла нет
+    depends_on: [backend]         # will only start after backend completes
+    inputs:                       # artifacts from dependency stages
+      - backend.api-contract      # the file's contents will be substituted into the prompt
+      - ref: backend.db-schema    # optional — doesn't block if the file is missing
         optional: true
 
   - id: db-migration
     name: "DB Migration"
-    description: "Применить миграцию"
+    description: "Apply the migration"
     agents: [implementation]
-    plan: docs/plans/migration.md   # готовый план — planning agent не запускается
-    verify: "make test"             # команда-гейт: exit != 0 — стадия не done
+    plan: docs/plans/migration.md   # ready-made plan — the planning agent doesn't run
+    verify: "make test"             # gate command: exit != 0 — stage is not marked done
 ```
 
-**Поля стадии:**
+**Stage fields:**
 
-| Поле | Обязательно | Описание |
+| Field | Required | Description |
 |------|-------------|----------|
-| `id` | да | Уникальный идентификатор (алфавит/цифры/`_`/`-`) |
-| `name` | нет | Человекочитаемое название для логов и дашборда (если пусто — показывается `id`) |
-| `description` | да | Задача для AI (фон/контекст) |
-| `prompt` | нет | Явная инструкция агенту — отдельный блок `<prompt>` после контекста. В отличие от `description`, это прямое указание что делать. Экранируется, не может внедрять XML-теги |
-| `agents` | да | Комбинация из `planning`, `implementation`, `review` |
-| `depends_on` | нет | ID стадий, которые должны завершиться раньше |
-| `eager_planning` | нет | `true` — planning стартует сразу при запуске flow, не дожидаясь `depends_on` |
-| `skills` | нет | Claude-скиллы для агента |
-| `plan` | нет | Путь к готовому план-файлу (пропускает planning) |
-| `command` | нет | AI-команда для этой стадии (переопределяет `client.command` из конфига) |
-| `max_parallel` | нет | Лимит параллельных стадий для этой команды |
-| `interactive` | нет | `true` — включает файловый протокол диалога с пользователем через dashboard (см. ниже) |
-| `supervisor` | нет | `true` — разрешить супервизору оценить стадию и, возможно, перевести её на автономный трек (нужен `supervisor_command`) |
-| `supervisor_prompt` | нет | Доп. контекст для супервизора при оценке этой стадии |
-| `artifacts` | нет | Файлы, которые стадия производит для других стадий |
-| `inputs` | нет | Артефакты из зависимых стадий (`stage.artifact`) |
-| `verify` | нет | Shell-команда после `.done`. Exit ≠ 0 — стадия не засчитывается: один ретрай с выводом команды в промпте, затем `failed`. Защита от ложного «done» |
+| `id` | yes | Unique identifier (letters/digits/`_`/`-`) |
+| `name` | no | Human-readable name for logs and the dashboard (if empty — `id` is shown) |
+| `description` | yes | Task description for the AI (background/context) |
+| `prompt` | no | Explicit instruction for the agent — a separate `<prompt>` block after the context. Unlike `description`, this is a direct instruction on what to do. It's escaped and cannot inject XML tags |
+| `agents` | yes | Combination of `planning`, `implementation`, `review` |
+| `depends_on` | no | IDs of stages that must complete first |
+| `eager_planning` | no | `true` — planning starts immediately when the flow runs, without waiting for `depends_on` |
+| `skills` | no | Claude skills for the agent |
+| `plan` | no | Path to a ready-made plan file (skips planning) |
+| `command` | no | AI command for this stage (overrides `client.command` from the config) |
+| `max_parallel` | no | Limit on parallel stages for this command |
+| `interactive` | no | `true` — enables the file-based dialog protocol with the user via the dashboard (see below) |
+| `supervisor` | no | `true` — allow the supervisor to evaluate the stage and possibly move it to the autonomous track (requires `supervisor_command`) |
+| `supervisor_prompt` | no | Extra context for the supervisor when evaluating this stage |
+| `artifacts` | no | Files the stage produces for other stages |
+| `inputs` | no | Artifacts from dependency stages (`stage.artifact`) |
+| `verify` | no | Shell command run after `.done`. Exit ≠ 0 — the stage is not counted as complete: one retry with the command's output in the prompt, then `failed`. Guards against a false "done" |
 
-**Поля флоу (верхний уровень):** `name`, `description`, `prompt` (глобальная инструкция во все стадии), `max_parallel`, `supervisor_command` (команда агента-супервизора), `root_dir` (корень проекта = рабочая директория агентов, см. ниже), `stages`.
+**Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `supervisor_command` (supervisor agent command), `root_dir` (project root = agents' working directory, see below), `stages`.
 
-**`root_dir` — корень проекта для агентов.** Задаёт рабочую директорию (CWD), в которой запускаются агенты стадий:
+**`root_dir` — the project root for agents.** Sets the working directory (CWD) in which stage agents run:
 
 ```yaml
 name: my-feature
-root_dir: /workspace      # относительный путь резолвится от afm-корня (--dir); пусто — CWD процесса afm
+root_dir: /workspace      # a relative path is resolved from the afm root (--dir); empty — CWD of the afm process
 stages: ...
 ```
 
-По умолчанию агент наследует CWD процесса `afm`, а `afm` предполагает, что корень проекта совпадает с afm-корнем (родитель `.afm/`). Если это не так — например, в Docker-сетапе исходники смонтированы в `/workspace`, а `.afm/` лежит в другом каталоге — относительные пути проекта (`docs/arch/…` и т.п.) у разных стадий резолвятся в разных корнях: одна стадия пишет файл, другая его «не находит». `root_dir` фиксирует единый корень для всех стадий. Пути диалога (`AFM_STAGE_DIR`) остаются привязаны к afm-корню независимо от `root_dir`.
+By default the agent inherits the CWD of the `afm` process, and `afm` assumes the project root matches the afm root (the parent of `.afm/`). If that's not the case — for example, in a Docker setup where the sources are mounted at `/workspace` but `.afm/` lives in a different directory — relative project paths (`docs/arch/…`, etc.) resolve to different roots for different stages: one stage writes a file, another can't find it. `root_dir` fixes a single root for all stages. Dialog paths (`AFM_STAGE_DIR`) stay anchored to the afm root regardless of `root_dir`.
 
 ### Передача контекста между стадиями
 
