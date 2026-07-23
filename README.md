@@ -21,7 +21,7 @@ Stages can run in parallel; dependencies via `depends_on` guarantee the correct 
 
 **Via Homebrew (recommended):**
 ```bash
-brew install --cask akopichin/afm
+brew install --cask akopichin/afm/afm
 afm install-skills   # optional: /afm, /afm-check, etc. in Claude Code
 ```
 
@@ -168,20 +168,15 @@ integration-tests     pending                15:31:02
 
 Or in real time via the web dashboard — stages, progress bar, event feed, logs.
 
-## Specifying the Working Directory
+## Usage in Claude Code
 
-By default `.afm/` is created in the current folder. To move it elsewhere:
+After `./install.sh` the following skills are available:
 
-```bash
-# Flag (one-off run)
-afm --dir ~/my-flows run
-
-# Environment variable (persistent)
-export AFM_DIR=~/my-flows
-afm run
-```
-
-All commands (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) respect `--dir`. Priority: `--dir` flag > `AFM_DIR` env var > current directory.
+- `/afm` — runs a flow, monitors it, and requests plan approvals right in the chat
+- `/afm-check` — shows the status of the current run
+- `/afm-init` — creates flow.yaml interactively
+- `/afm-retry` — retries a failed stage
+- `/afm-review` — view a stage plan with feedback/approval
 
 ## The flow.yaml File
 
@@ -357,7 +352,45 @@ stages:
 
 `auto` must be the stage's only agent; `auto` + `supervisor: true` is a configuration error (conflicting intents, caught during flow parsing).
 
+## Stage Lifecycle
+
+```
+pending → planning → awaiting_approval → ready → running → done
+                ↓                                     ↓        ↘ failed
+                └────→ awaiting_user_input ←──────────┘
+         ↑                                         ↓
+         └───────── revising ←────────────────────┘
+
+# autonomous track (supervisor):
+pending → (supervisor) → running(autonomous_execution) → done
+```
+
+- `pending` — not started yet; planning starts once all `depends_on` are complete (unless `eager_planning: true`)
+- `planning` — the AI builds a plan (or the supervisor assesses the stage)
+- `awaiting_approval` — the plan is ready, awaiting approval (web or CLI)
+- `ready` — the plan is approved, waiting its turn
+- `running` — the AI implements the plan (or runs the autonomous track)
+- `awaiting_user_input` — an interactive stage is waiting for a user answer; once answered, it returns to the phase where the question was asked
+- `revising` — revisions were sent, the AI is reworking the plan
+- `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
+- `done` / `failed` — complete
+
 ## Configuration
+
+### Working Directory
+
+By default `.afm/` is created in the current folder. To move it elsewhere:
+
+```bash
+# Flag (one-off run)
+afm --dir ~/my-flows run
+
+# Environment variable (persistent)
+export AFM_DIR=~/my-flows
+afm run
+```
+
+All commands (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) respect `--dir`. Priority: `--dir` flag > `AFM_DIR` env var > current directory.
 
 Create `.afm/config.yaml` in the project or `~/.afm/config.yaml` globally (full example — `config.example.yaml`):
 
@@ -454,39 +487,6 @@ Approve/revise/retry are durably recorded in the log (fsync) before control retu
         <phase>.dialog.jsonl         # dialog history for the UI
   config.yaml      # project config (optional)
 ```
-
-## Usage in Claude Code
-
-After `./install.sh` the following skills are available:
-
-- `/afm` — runs a flow, monitors it, and requests plan approvals right in the chat
-- `/afm-check` — shows the status of the current run
-- `/afm-init` — creates flow.yaml interactively
-- `/afm-retry` — retries a failed stage
-- `/afm-review` — view a stage plan with feedback/approval
-
-## Stage Lifecycle
-
-```
-pending → planning → awaiting_approval → ready → running → done
-                ↓                                     ↓        ↘ failed
-                └────→ awaiting_user_input ←──────────┘
-         ↑                                         ↓
-         └───────── revising ←────────────────────┘
-
-# autonomous track (supervisor):
-pending → (supervisor) → running(autonomous_execution) → done
-```
-
-- `pending` — not started yet; planning starts once all `depends_on` are complete (unless `eager_planning: true`)
-- `planning` — the AI builds a plan (or the supervisor assesses the stage)
-- `awaiting_approval` — the plan is ready, awaiting approval (web or CLI)
-- `ready` — the plan is approved, waiting its turn
-- `running` — the AI implements the plan (or runs the autonomous track)
-- `awaiting_user_input` — an interactive stage is waiting for a user answer; once answered, it returns to the phase where the question was asked
-- `revising` — revisions were sent, the AI is reworking the plan
-- `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
-- `done` / `failed` — complete
 
 ## Development
 
