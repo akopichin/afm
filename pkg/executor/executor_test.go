@@ -448,6 +448,37 @@ func TestRunSetsStageDir(t *testing.T) {
 	}
 }
 
+// TestRunAgentRunsInConfiguredDir проверяет фикс косяка №2: агент должен
+// выполняться в рабочей директории Config.Dir (project root из flow.root_dir),
+// а не наследовать CWD процесса afm. Иначе относительные пути проекта (docs/arch)
+// резолвятся в чужом корне (в Docker-сетапе goga: /workspace вместо afm-root).
+func TestRunAgentRunsInConfiguredDir(t *testing.T) {
+	// Изолируем CWD во временный каталог: без фикса маркер упал бы сюда, а не в Dir.
+	t.Chdir(t.TempDir())
+
+	dir := t.TempDir()
+	logFile := filepath.Join(t.TempDir(), "impl.log")
+
+	// Скрипт пишет маркер по ОТНОСИТЕЛЬНОМУ пути — он приземлится в CWD процесса.
+	script := "printf 'ran' > marker.txt\n" +
+		`echo '{"type":"result","subtype":"success"}'`
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		Dir:         dir,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "marker.txt")); err != nil {
+		t.Errorf("agent did not run in Config.Dir: marker.txt missing in %s: %v", dir, err)
+	}
+}
+
 func TestNoExtraFlagsWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")

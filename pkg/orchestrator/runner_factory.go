@@ -24,14 +24,26 @@ func wrapperDirFor(cmd string, wrapperDir string, generated map[string]bool) str
 // configured with --session-id / --resume and AFM_STAGE_DIR env.
 func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	if !s.Interactive {
-		if s.Command == "" {
+		// Инъектированный runner (тесты) используется только для дефолтной команды.
+		if o.opts.Runner != nil && s.Command == "" {
 			return o.runner
 		}
+		// Per-stage runner. Для дефолтной команды берём клиент из конфига (+ его
+		// ExtraArgs) — иначе разделяемый o.runner привязывал OnAction к пустому
+		// stageID, и события agent_action уходили без бейджа стадии (косяк №1).
+		cmd := s.Command
+		var extraArgs []string
+		if cmd == "" {
+			cmd = o.opts.Config.Client.Command
+			extraArgs = o.opts.Config.Client.ExtraArgs
+		}
 		cfg := executor.Config{
-			Command:     s.Command,
+			Command:     cmd,
+			ExtraArgs:   extraArgs,
 			IdleTimeout: o.opts.Config.Executor.IdleTimeout,
 			OnAction:    uiActionPublisher(o.ui, s.ID),
-			WrapperDir:  wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
+			WrapperDir:  wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+			Dir:         o.opts.RootDir,
 		}
 		// Autonomous-фаза диалоговая: агенту нужен AFM_STAGE_DIR, чтобы писать
 		// question.json и писать execution_summary.md в каталог стадии.
@@ -65,6 +77,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		Resume:      resume,
 		StageDir:    stageDir,
 		WrapperDir:  wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Dir:         o.opts.RootDir,
 	})
 }
 

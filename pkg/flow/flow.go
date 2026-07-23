@@ -146,6 +146,12 @@ type Flow struct {
 	// change behavior.
 	Prompt      string `yaml:"prompt"`
 	MaxParallel int    `yaml:"max_parallel"`
+	// RootDir — корень проекта, в котором выполняются агенты (их CWD). Нужен,
+	// когда рабочая директория процесса afm не совпадает с корнем проекта
+	// (напр. Docker-сетап: исходники в /workspace, а .afm — в другом каталоге).
+	// Без него агенты наследуют CWD afm и резолвят относительные пути проекта
+	// (docs/arch и т.п.) в чужом корне. Пусто → поведение не меняется.
+	RootDir string `yaml:"root_dir,omitempty"`
 	// SupervisorCommand задаёт команду для агента-супервизора (как command у стадии).
 	// Default: значение из config.Supervisor.Command или config.Client.Command.
 	SupervisorCommand string  `yaml:"supervisor_command,omitempty"`

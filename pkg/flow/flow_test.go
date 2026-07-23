@@ -80,6 +80,26 @@ func TestParseValidFlow(t *testing.T) {
 	}
 }
 
+func TestParseRootDir(t *testing.T) {
+	const yaml = `
+name: rooted-flow
+description: "flow with root_dir"
+root_dir: /workspace
+stages:
+  - id: backend
+    name: "Backend"
+    description: "do backend"
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.RootDir != "/workspace" {
+		t.Errorf("root_dir: got %q want %q", f.RootDir, "/workspace")
+	}
+}
+
 func TestValidateCycle(t *testing.T) {
 	path := writeTemp(t, cycleYAML)
 	_, err := flow.ParseFile(path)

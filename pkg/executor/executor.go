@@ -26,6 +26,7 @@ type Config struct {
 	Resume      bool                      // if true, --resume <SessionID> is used instead of --session-id
 	StageDir    string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
 	WrapperDir  string                    // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir         string                    // if set, agent runs with this working directory (project root from flow.root_dir)
 }
 
 const defaultCommand = "claude"
@@ -463,6 +464,11 @@ func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lin
 	}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
+	// Пин рабочей директории агента к project root (flow.root_dir), чтобы
+	// относительные пути проекта резолвились в одном корне для всех стадий.
+	if e.cfg.Dir != "" {
+		cmd.Dir = e.cfg.Dir
+	}
 
 	// Strip CLAUDECODE to allow nested sessions, expose stage directory and
 	// wrapper-dir (prepended to PATH so generated wrapper scripts resolve).

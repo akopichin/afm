@@ -4,6 +4,10 @@
 
 By default afm stores runs, flows, and config under `.afm/` in the working directory. The parent directory is resolved in `PersistentPreRunE` (`cmd/afm/main.go`) with priority **flag > env > `.`**: the `--dir` persistent flag, else the `AFM_DIR` env variable, else the current directory. All subcommands read the effective `.afm` path via `fmDir()` (`filepath.Join(rootDir, ".afm")`); `state.FindLatestRunDir(base, flowName)` takes the runs base as an explicit argument instead of hardcoding the path.
 
+**Корень проекта для агентов: `flow.root_dir`.** afm предполагает, что afm-корень (родитель `.afm/`) == корень проекта. Если это не так (напр. Docker: исходники в `/workspace`, `.afm/` в другом каталоге), агенты, наследуя CWD процесса afm, резолвят относительные пути проекта (`docs/arch/…`) в чужом корне — стадии расходятся: одна пишет файл, другая его не находит. Поле `root_dir` в `flow.yaml` (`flow.Flow.RootDir`) задаёт CWD агентов: относительный путь резолвится от afm-корня в `cmd/afm/run.go`, прокидывается `orchestrator.Options.RootDir` → `executor.Config.Dir` → `cmd.Dir` в `executor.run`. Пусто → прежнее поведение (наследование CWD). `AFM_STAGE_DIR` (файлы диалога) остаётся привязан к afm-корню независимо от `root_dir`.
+
+**Атрибуция `agent_action` к стадии.** События tool-действий агента получают `stageID` из `OnAction`-замыкания per-stage runner'а (`runnerFor`, `runner_factory.go`). Инъектированный `o.runner` (тесты, пустой stageID) используется ТОЛЬКО когда `opts.Runner != nil` и у стадии нет своего `command`; в проде каждая стадия всегда получает per-stage runner с правильным `s.ID` — иначе бейдж стадии в event feed дашборда пропадал (`EventFeedPanel.tsx` рисует бейдж только при непустом `stageId`).
+
 ## State persistence & run lifecycle (reliability core)
 
 Событийный лог `.afm/runs/<run_id>/events.jsonl` — **единственный доверенный источник правды**. `state.json` — производный кэш (несёт `last_seq`), пути чтения (`afm check`, поиск run) читают состояние из лога через `state.LoadRunState` (без flock), не доверяя снапшоту.

@@ -203,6 +203,14 @@ func newRunCmd() *cobra.Command {
 				WrapperDir: supervisorWrapperDir,
 			})
 
+			// Корень проекта для агентов (их CWD). Относительный root_dir
+			// резолвится относительно afm-корня (--dir); пустой — агенты
+			// наследуют CWD процесса afm (прежнее поведение).
+			agentRootDir := f.RootDir
+			if agentRootDir != "" && !filepath.IsAbs(agentRootDir) {
+				agentRootDir = filepath.Join(rootDir, agentRootDir)
+			}
+
 			orch := orchestrator.New(orchestrator.Options{
 				RunDir:           runDir,
 				Stages:           f.Stages,
@@ -212,6 +220,7 @@ func newRunCmd() *cobra.Command {
 				WrapperDir:       wrapperDir,
 				GeneratedAgents:  generatedAgents,
 				GlobalPrompt:     f.Prompt,
+				RootDir:          agentRootDir,
 				RequireApproval:  requireApproval,
 				SupervisorRunner: supervisorRunner,
 			})
