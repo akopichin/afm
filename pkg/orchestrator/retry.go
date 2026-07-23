@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -17,27 +18,25 @@ func isRetryableError(err error) bool {
 	return Classify(err) == ClassRetryable
 }
 
-// buildRetryContext reads the last N lines from the agent log file
-// and formats them as a continuation context for the retry prompt.
+// buildRetryContext reads the last N lines from the agent's raw stream-json
+// log and formats them as a continuation context for the retry prompt.
 func buildRetryContext(stageDir, phase string) string {
-	var logName string
+	var jsonlName string
 	switch phase {
 	case phasePlanning:
-		logName = "planning.log"
+		jsonlName = "planning.jsonl"
 	case phaseReview:
-		logName = "review.log"
+		jsonlName = "review.jsonl"
 	case phaseAutonomous:
-		logName = "autonomous.log"
+		jsonlName = "autonomous.jsonl"
 	default:
-		logName = "implementation.log"
+		jsonlName = "implementation.jsonl"
 	}
 
-	data, err := os.ReadFile(filepath.Join(stageDir, logName))
-	if err != nil {
+	lines := executor.RenderActions(filepath.Join(stageDir, jsonlName))
+	if len(lines) == 0 {
 		return ""
 	}
-
-	lines := strings.Split(string(data), "\n")
 	const maxLines = 200
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
