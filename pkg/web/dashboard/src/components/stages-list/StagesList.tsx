@@ -77,7 +77,8 @@ export function StagesList({ stages, selectedStageId, onSelect }: StagesListProp
               <span className="stage-id">{stage.id}</span>
               {stage.name !== '' && <span className="stage-name">{stage.name}</span>}
             </span>
-            {stage.status === 'awaiting_user_input' && <span className="dialog-badge">💬</span>}
+            {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
+            {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
             {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
           </li>
         ))}

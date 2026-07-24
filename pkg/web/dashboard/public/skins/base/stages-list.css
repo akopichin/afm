@@ -108,6 +108,15 @@
   color: var(--c-awaiting-user);
 }
 
+/* Badge на стадии, ожидающей апрува плана (awaiting_approval) — тот же слот, что
+   у .dialog-badge, но янтарный (--c-awaiting) во всех темах. Пульс всей строки
+   даёт data-attention (ATTENTION_STATUSES включает awaiting_approval). */
+.approval-badge {
+  font-size: 11px;
+  margin-left: 4px;
+  color: var(--c-awaiting);
+}
+
 /* === Active stage === */
 .stage-item.active {
   background: linear-gradient(90deg, rgba(229, 212, 66, 0.06), transparent);

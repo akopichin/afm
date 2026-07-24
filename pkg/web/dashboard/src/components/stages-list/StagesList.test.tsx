@@ -33,7 +33,7 @@ describe('StagesList', () => {
     expect(item.querySelector('.dialog-badge')).toBeInTheDocument()
   })
 
-  test('marks awaiting_approval stage with attention but no dialog badge', () => {
+  test('marks awaiting_approval stage with attention and an approval badge (not a dialog badge)', () => {
     const stages: Stage[] = [
       { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false },
     ]
@@ -42,6 +42,7 @@ describe('StagesList', () => {
 
     const item = screen.getByRole('listitem')
     expect(item).toHaveAttribute('data-attention', 'true')
+    expect(item.querySelector('.approval-badge')).toBeInTheDocument()
     expect(item.querySelector('.dialog-badge')).not.toBeInTheDocument()
   })
 
