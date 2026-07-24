@@ -272,6 +272,33 @@ describe('App', () => {
     expect(document.getElementById('detail-title')).toHaveTextContent('Propose')
   })
 
+  test('sets the browser tab title from the flow description', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      description: 'Build the login flow',
+      stage_order: ['s1'],
+      stage_names: { s1: 'Propose' },
+      stages: { s1: { status: 'running', updated_at: '' } },
+    }))
+
+    render(<App />)
+
+    await waitFor(() => expect(document.title).toBe('Build the login flow'))
+  })
+
+  test('tab title falls back to the flow name when description is absent', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo-flow',
+      stage_order: ['s1'],
+      stage_names: { s1: 'Propose' },
+      stages: { s1: { status: 'running', updated_at: '' } },
+    }))
+
+    render(<App />)
+
+    await waitFor(() => expect(document.title).toBe('demo-flow'))
+  })
+
   test('WARNING: falls back to a failed stage when no stage is active', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

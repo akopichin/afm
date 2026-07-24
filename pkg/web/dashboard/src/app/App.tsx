@@ -37,6 +37,13 @@ export function App(): ReactElement {
   const anyAttention = anyAwaiting(stages)
   useTitleFlash(attention.needsAttention)
 
+  // Заголовок вкладки берём из description флоу (из flow.yaml), иначе имя флоу,
+  // иначе дефолт. useTitleFlash мигает вокруг текущего title и восстанавливает
+  // его, поэтому базовый заголовок можно менять здесь без конфликта.
+  useEffect(() => {
+    document.title = (description ?? '').trim() || flowName || 'afm Dashboard'
+  }, [description, flowName])
+
   // Единожды прокрутить центральную колонку к панели, которой нужно действие,
   // в момент перехода kind null→'plan'/'dialog' (или смены самой панели).
   // PanelFrame ставит data-panel={maximizeId} на <section> — по нему и ищем.
