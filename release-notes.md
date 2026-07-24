@@ -4,6 +4,11 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ## 2026-07-24
 
+### New default dashboard theme: `coffee` (кофейно-ламповый)
+- The dashboard's default skin is now **`coffee`** — a warm coffee palette with a "valve-glow" amber dark mode (glowing filament accents on active stages, progress, and running status) and a cream "latte" light mode; the user-dialog accent is a matcha green. Light/dark is toggled inside the dashboard, independent of the theme.
+- All three built-in themes are selectable via `theme:` in `.afm/config.yaml`: `coffee` (default), `goga`, `novacorps`. Empty/unknown falls back to `coffee`. The previous default `novacorps` is still available with `theme: novacorps`.
+- Implementation notes: a skin is a single token file (`skins/coffee/index.css`) that imports the shared `base/*.css` and supplies the palette plus a recolor of base's hardcoded accent fills. The server's skin selection (`pkg/server`, `pkg/config` `EffectiveTheme`) was updated so the baked-in default and the `theme:`-driven rewrite agree on `coffee`, and so `goga`/`novacorps`/custom `skin_dir` all keep working.
+
 ### Fix: dialog question and review plan no longer mangle code blocks / tables
 - The pending dialog question and the review-mode plan render markdown **line by line** (so each line is clickable for comments). That path only handled inline markdown, so multi-line blocks broke: the dialog question had **no** fenced-code handling at all — an agent's ` ```diff `/YAML contract came out as stray literal `` ```diff ``/`-old`/`` ``` `` paragraphs, so it looked "cut" and no contract was readable; markdown tables (in both the plan and the question) rendered each `| … |` row as a separate paragraph with the `|---|` separator shown literally ("мешанина"). This regressed when per-line commenting replaced the old full-markdown rendering of the question.
 - **Fix:** a shared block parser (`parseLineBlocks`/`nextLineBlock` in `plan-panel/markdown.ts`) now collapses fenced code **and** GFM tables into a single block (full `md.render`), anchored to their first source line — click-to-comment is preserved, and code/tables render intact in both the dialog question and the review plan. Added `.line-content table` styling.

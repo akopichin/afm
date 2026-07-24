@@ -427,7 +427,7 @@ server:
 supervisor:
   command: glm51            # the supervisor agent's command (for stages with supervisor: true)
 
-# theme: goga               # dashboard theme: goga | novacorps (default: novacorps)
+# theme: coffee             # dashboard theme: coffee | goga | novacorps (default: coffee)
 # prompts_dir: .afm/prompts/  # custom prompt templates
 
 docker:
@@ -454,6 +454,16 @@ On startup (if `server.open_browser: true`) the dashboard opens; otherwise its U
 - **Center panel** — the plan with line-by-line review and inline comments, the agent log (markdown), a "Dialog" section for interactive stages
 - **Right panel** — an event feed from all stages with source badges (including supervisor decisions)
 - **Progress bar** — at the bottom, showing how many stages are complete
+
+### Themes
+
+The dashboard ships with three built-in themes; choose one with `theme:` in `.afm/config.yaml`:
+
+- **`coffee`** (default) — warm coffee palette: a "valve-glow" amber dark mode and a cream "latte" light mode, with a matcha accent for user-dialog states.
+- **`goga`** — flat dark tech theme (teal accent, sans-serif, Goga wordmark).
+- **`novacorps`** — the previous hi-tech theme (mint accent, monospace, scanline/neon decor).
+
+Empty or unknown values fall back to `coffee` (an unknown value logs a warning to stderr). Light vs. dark mode is toggled inside the dashboard itself and is independent of the theme choice. A fully custom skin can be supplied via the top-level `skin_dir:` config option (a directory containing `index.css`), which overrides the built-in theme.
 
 ### Inline Plan Comments
 
