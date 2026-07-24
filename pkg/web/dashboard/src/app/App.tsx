@@ -148,6 +148,14 @@ export function App(): ReactElement {
                     <span id="detail-status" className="status-badge" data-status={selectedStage.status}>
                       {STAGE_STATUS_LABELS[selectedStage.status]}
                     </span>
+                    {selectedStage.status === 'running' && (
+                      <span className="thinking" aria-hidden="true">
+                        <span className="td" />
+                        <span className="td" />
+                        <span className="td" />
+                        thinking
+                      </span>
+                    )}
                     {selectedStageId != null && <SupervisorDecision stageId={selectedStageId} />}
                   </span>
                   <span className="ornament" aria-hidden="true">
