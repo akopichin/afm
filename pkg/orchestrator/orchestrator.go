@@ -56,6 +56,7 @@ type Options struct {
 	GlobalPrompt    string          // Flow.Prompt, forwarded to every prompts.Build call
 	RootDir         string          // Flow.RootDir: project root as agent CWD (empty = inherit afm CWD)
 	RequireApproval bool            // headless: fail instead of auto-approve on awaiting_approval
+	Debug           bool            // if true, executors log the exact agent input to debug logs
 	// SupervisorRunner — runner для вызовов Supervisor.EvaluateStage.
 	// nil = Supervisor отключён глобально (DetermineStagePhases всегда вернёт базовые фазы).
 	SupervisorRunner executor.Runner

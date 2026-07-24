@@ -68,3 +68,26 @@ func TestRootVersionOutput(t *testing.T) {
 		t.Errorf("--version output=%q, want it to contain %q", got, version)
 	}
 }
+
+// TestResolveDebug проверяет приоритет определения debug-режима:
+// флаг --debug важнее переменной AFM_DEBUG.
+func TestResolveDebug(t *testing.T) {
+	cases := []struct {
+		flag bool
+		env  string
+		want bool
+	}{
+		{true, "", true},
+		{true, "0", true}, // флаг важнее env
+		{false, "1", true},
+		{false, "true", true},
+		{false, "ON", true},
+		{false, "", false},
+		{false, "nope", false},
+	}
+	for _, c := range cases {
+		if got := resolveDebug(c.flag, c.env); got != c.want {
+			t.Errorf("resolveDebug(%v,%q)=%v want %v", c.flag, c.env, got, c.want)
+		}
+	}
+}

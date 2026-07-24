@@ -45,6 +45,8 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			OnAction:       uiActionPublisher(o.ui, s.ID),
 			WrapperDir:     wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 			Dir:            o.opts.RootDir,
+			Debug:          o.opts.Debug,
+			RunDir:         o.opts.RunDir,
 		}
 		// Autonomous-фаза диалоговая: агенту нужен AFM_STAGE_DIR, чтобы писать
 		// question.json и писать execution_summary.md в каталог стадии.
@@ -80,6 +82,8 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		StageDir:       stageDir,
 		WrapperDir:     wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Dir:            o.opts.RootDir,
+		Debug:          o.opts.Debug,
+		RunDir:         o.opts.RunDir,
 	})
 }
 
@@ -93,6 +97,8 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
 		WrapperDir:     wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Debug:          o.opts.Debug,
+		RunDir:         o.opts.RunDir,
 	})
 }
 

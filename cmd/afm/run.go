@@ -201,6 +201,8 @@ func newRunCmd() *cobra.Command {
 			supervisorRunner := executor.New(executor.Config{
 				Command:    supervisorCmd,
 				WrapperDir: supervisorWrapperDir,
+				Debug:      debugEnabled,
+				RunDir:     runDir,
 			})
 
 			// Корень проекта для агентов (их CWD). Относительный root_dir
@@ -222,6 +224,7 @@ func newRunCmd() *cobra.Command {
 				GlobalPrompt:     f.Prompt,
 				RootDir:          agentRootDir,
 				RequireApproval:  requireApproval,
+				Debug:            debugEnabled,
 				SupervisorRunner: supervisorRunner,
 			})
 
