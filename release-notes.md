@@ -4,7 +4,13 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ## 2026-07-24
 
-### New default dashboard theme: `coffee` (кофейно-ламповый)
+### Dashboard micro-animations (subtle, informative, cross-theme)
+- Added a layer of small, one-shot-on-event animations that carry information (what changed / where to look / that work is progressing), not decoration. All live in the shared `base/*.css` via design tokens, so every theme (coffee/goga/novacorps) inherits them; all respect `prefers-reduced-motion` (motion off, functionality intact).
+- **Flow clarity:** a stage's status dot animates when it finishes (fill + check + flash) with a pulse "travelling" down the connector to the next stage; new event-feed rows fade in; the newly-active stage fades in. (The progress bar's smooth fill + shimmer already existed.)
+- **Feedback on your actions:** Approve/Send/Retry buttons show a ripple + "✓" success morph; a plan/dialog line's comment marker pops and its amber border slides in; the dialog frame glows once when the agent asks a new question.
+- **Atmosphere:** the palette cross-fades when you toggle light/dark; a compact "thinking" indicator appears while the selected stage is running; the connection dot pulses while the WebSocket is reconnecting.
+
+### New default dashboard theme: `coffee` (warm coffee / valve-glow)
 - The dashboard's default skin is now **`coffee`** — a warm coffee palette with a "valve-glow" amber dark mode (glowing filament accents on active stages, progress, and running status) and a cream "latte" light mode; the user-dialog accent is a matcha green. Light/dark is toggled inside the dashboard, independent of the theme.
 - All three built-in themes are selectable via `theme:` in `.afm/config.yaml`: `coffee` (default), `goga`, `novacorps`. Empty/unknown falls back to `coffee`. The previous default `novacorps` is still available with `theme: novacorps`.
 - Implementation notes: a skin is a single token file (`skins/coffee/index.css`) that imports the shared `base/*.css` and supplies the palette plus a recolor of base's hardcoded accent fills. The server's skin selection (`pkg/server`, `pkg/config` `EffectiveTheme`) was updated so the baked-in default and the `theme:`-driven rewrite agree on `coffee`, and so `goga`/`novacorps`/custom `skin_dir` all keep working.
