@@ -17,12 +17,14 @@ import (
 	"github.com/akopichin/afm/pkg/web"
 )
 
-// Имена скинов. themeGoga/themeNovacorps соответствуют pkg/config.Config.EffectiveTheme();
-// themeCustom — активный skin_dir.
+// Имена скинов. themeGoga соответствует pkg/config.Config.EffectiveTheme() == "goga";
+// themeCoffee — дефолтный встроенный скин, захардкоженный в index.html
+// (любое другое значение EffectiveTheme, включая "novacorps"/пусто/неизвестное,
+// схлопывается в него — см. builtinSkinName); themeCustom — активный skin_dir.
 const (
-	themeGoga      = "goga"
-	themeNovacorps = "novacorps"
-	themeCustom    = "custom"
+	themeGoga   = "goga"
+	themeCoffee = "coffee"
+	themeCustom = "custom"
 )
 
 // Имена файлов внутри директории скина (встроенной или skin_dir).
@@ -81,7 +83,7 @@ type Server struct {
 	retryFn          func(ctx context.Context, stageID string) error
 	dialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
 	dialogCancelFn   func(stageID string) error
-	theme            string       // "goga" или "" (default novacorps)
+	theme            string       // "goga" или "" (default coffee)
 	indexBytes       []byte       // предподготовленный index.html (с заменами скина/favicon)
 	fileServer       http.Handler // отдаёт встроенную статику (skins/, assets, ...)
 	customSkinServer http.Handler // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
@@ -161,7 +163,7 @@ func New(cfg Config) *Server {
 
 	// skin_dir полностью подменяет активный скин (аналогично prompts_dir):
 	// нужен index.css внутри директории, иначе — предупреждение и fallback на
-	// встроенный скин (theme/novacorps). Дашборд не критичен для работы флоу
+	// встроенный скин (theme/coffee). Дашборд не критичен для работы флоу
 	// (в отличие от промптов), поэтому сервер не падает при плохом skin_dir.
 	if cfg.SkinDir != "" {
 		if _, err := os.Stat(filepath.Join(cfg.SkinDir, skinIndexFile)); err != nil {
@@ -194,9 +196,9 @@ func New(cfg Config) *Server {
 		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
 	} else {
 		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`href="`+skinHrefFor(themeNovacorps)+`"`), []byte(`href="`+skinHref+`"`))
+			[]byte(`href="`+skinHrefFor(themeCoffee)+`"`), []byte(`href="`+skinHref+`"`))
 		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`class="theme-`+themeNovacorps+`"`), []byte(`class="theme-`+skinName+`"`))
+			[]byte(`class="theme-`+themeCoffee+`"`), []byte(`class="theme-`+skinName+`"`))
 		indexBytes = bytes.ReplaceAll(indexBytes,
 			[]byte(`type="`+mimeSVG+`" href="`+defaultFaviconHref+`"`),
 			[]byte(`type="`+faviconMimeType+`" href="`+faviconHref+`"`))
@@ -225,12 +227,12 @@ func New(cfg Config) *Server {
 }
 
 // builtinSkinName нормализует Theme до имени встроенного скина: "goga" или
-// default "novacorps".
+// default "coffee".
 func (s *Server) builtinSkinName() string {
 	if s.theme == themeGoga {
 		return themeGoga
 	}
-	return themeNovacorps
+	return themeCoffee
 }
 
 // embeddedFavicon ищет favicon встроенного скина среди skinFaviconCandidates
