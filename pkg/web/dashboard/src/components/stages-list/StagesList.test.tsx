@@ -65,4 +65,16 @@ describe('StagesList', () => {
 
     expect(screen.getByRole('listitem').querySelector('.stage-name')).not.toBeInTheDocument()
   })
+
+  test('переход стадии в done навешивает one-shot класс just-done', async () => {
+    const base: Stage[] = [
+      { id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
+    ]
+    const { container, rerender } = render(<StagesList stages={base} selectedStageId={null} onSelect={() => {}} />)
+    expect(container.querySelector('.stage-item.just-done')).toBeNull()
+
+    const done: Stage[] = [{ ...base[0]!, status: 'done' }]
+    rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />)
+    expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
+  })
 })

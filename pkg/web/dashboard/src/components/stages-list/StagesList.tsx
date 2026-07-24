@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { Stage } from '../../types'
 import { ATTENTION_STATUSES } from '../../hooks/use-attention'
 
@@ -8,31 +8,62 @@ type StagesListProps = {
   onSelect: (stageId: string) => void
 }
 
-// Левая панель: список стадий с выбором активной. Разметка и классы (stage-item,
-// active, status-dot, stage-label, stage-id, stage-name, dialog-badge) совпадают с
-// renderStages в текущем app.js — селекторы тем работают без изменений.
-// На стадиях, ожидающих действия пользователя, ставим data-attention='true' —
-// CSS анимирует их (attention-пульс в --amber).
+// Левая панель: список стадий с выбором активной. На переходе стадии в done
+// показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
+// — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
+// just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
 export function StagesList({ stages, selectedStageId, onSelect }: StagesListProps): ReactElement {
+  const prevStatus = useRef<Record<string, string>>({})
+  const [justDone, setJustDone] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    const newly: string[] = []
+    for (const stage of stages) {
+      const prev = prevStatus.current[stage.id]
+      if (prev !== undefined && prev !== 'done' && stage.status === 'done') {
+        newly.push(stage.id)
+      }
+      prevStatus.current[stage.id] = stage.status
+    }
+    if (newly.length === 0) return
+
+    setJustDone((prev) => {
+      const next = new Set(prev)
+      newly.forEach((id) => next.add(id))
+      return next
+    })
+    const timer = window.setTimeout(() => {
+      setJustDone((prev) => {
+        const next = new Set(prev)
+        newly.forEach((id) => next.delete(id))
+        return next
+      })
+    }, 700)
+    return () => window.clearTimeout(timer)
+  }, [stages])
+
   return (
     <aside id="stages-panel">
       <h2>Stages</h2>
       <ul id="stages-list" className="stages-list">
-        {stages.map((stage) => (
+        {stages.map((stage, index) => (
           <li
             key={stage.id}
-            className={`stage-item${stage.id === selectedStageId ? ' active' : ''}`}
+            className={`stage-item${stage.id === selectedStageId ? ' active' : ''}${justDone.has(stage.id) ? ' just-done' : ''}`}
             data-stage-id={stage.id}
             data-status={stage.status}
             data-attention={ATTENTION_STATUSES.has(stage.status) ? 'true' : undefined}
             onClick={() => onSelect(stage.id)}
           >
-            <span className="status-dot" data-status={stage.status} />
+            <span className="status-dot" data-status={stage.status}>
+              <span className="dot-check" aria-hidden="true">✓</span>
+            </span>
             <span className="stage-label">
               <span className="stage-id">{stage.id}</span>
               {stage.name !== '' && <span className="stage-name">{stage.name}</span>}
             </span>
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge">💬</span>}
+            {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
           </li>
         ))}
       </ul>
