@@ -28,6 +28,8 @@ type Config struct {
 	StageDir       string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
 	WrapperDir     string                    // if set, prepended to PATH in agent env so generated wrapper scripts resolve
 	Dir            string                    // if set, agent runs with this working directory (project root from flow.root_dir)
+	Debug          bool                      // if true, log the exact agent input (prompt) to debug logs
+	RunDir         string                    // run directory root; with Debug, <RunDir>/debug.log gets every agent input
 }
 
 const defaultCommand = "claude"
@@ -255,7 +257,8 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	var textBuf strings.Builder
 	var firstErr string
 	var agentWroteOutFile bool
-	runErr := e.run(ctx, prompt, stderr, func(line string) {
+	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -362,7 +365,8 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	lg.LogStart(agentType, stageName)
 
 	var firstErr string
-	runErr := e.run(ctx, prompt, stderr, func(line string) {
+	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -396,6 +400,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 // Используется Supervisor для однократных LLM-вызовов (без логирования действий).
 // Возвращает сырые байты stdout; парсинг конверта/полей остаётся за вызывающей стороной.
 func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	e.logAgentInput("supervisor", prompt)
 	// Чистая one-shot JSON-инвокация. Намеренно НЕ наследуем e.cfg.ExtraArgs:
 	// executor.New дефолтит их в DefaultClaudeArgs (--print --output-format stream-json
 	// --verbose --dangerously-skip-permissions). Этот stream-json конфликтовал бы с
@@ -441,7 +446,8 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls
 // lineCallback for each stdout line. Respects idle timeout.
-func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lineCallback func(string)) error {
+func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) error {
+	e.logAgentInput(phase, prompt)
 	args := append([]string{}, e.cfg.ExtraArgs...)
 	if e.cfg.SessionID != "" {
 		if e.cfg.Resume {
@@ -540,5 +546,43 @@ func (e *Executor) run(ctx context.Context, prompt string, stderr io.Writer, lin
 		<-done // wait for stdout reader to finish
 		_ = cmd.Wait()
 		return ctx.Err()
+	}
+}
+
+// logAgentInput пишет точный промпт, уходящий в агента (stdin), в debug-логи —
+// единый <RunDir>/debug.log (хронологически по всем стадиям) и по-стейджно
+// <StageDir>/<phase>.prompt.log. Активно только при Config.Debug. Best-effort:
+// ошибки записи не прерывают run (debug — вспомогательный тракт).
+func (e *Executor) logAgentInput(phase, prompt string) {
+	if !e.cfg.Debug {
+		return
+	}
+	stage := ""
+	if e.cfg.StageDir != "" {
+		stage = filepath.Base(e.cfg.StageDir)
+	}
+	entry := fmt.Sprintf(
+		"=== [%s] stage=%s phase=%s cmd=%s session=%s resume=%t ===\n--- BEGIN PROMPT ---\n%s\n--- END PROMPT ---\n\n",
+		time.Now().UTC().Format(time.RFC3339Nano), stage, phase, e.cfg.Command, e.cfg.SessionID, e.cfg.Resume, prompt,
+	)
+	if e.cfg.RunDir != "" {
+		appendDebug(filepath.Join(e.cfg.RunDir, "debug.log"), entry)
+	}
+	if e.cfg.StageDir != "" {
+		appendDebug(filepath.Join(e.cfg.StageDir, phase+".prompt.log"), entry)
+	}
+}
+
+// appendDebug дописывает строку в файл (создаёт при отсутствии). Ошибки —
+// в stderr, без прерывания.
+func appendDebug(path, s string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "debug: cannot open %s: %v\n", path, err)
+		return
+	}
+	defer f.Close() //nolint:errcheck
+	if _, err := f.WriteString(s); err != nil {
+		fmt.Fprintf(os.Stderr, "debug: cannot write %s: %v\n", path, err)
 	}
 }
