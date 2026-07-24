@@ -225,20 +225,24 @@ func Default() Config {
 const (
 	themeGoga      = "goga"
 	themeNovacorps = "novacorps"
+	themeCoffee    = "coffee"
 )
 
 // EffectiveTheme returns the normalized dashboard theme name.
-// "goga" activates the goga theme; any other value (incl. empty/"novacorps")
-// falls back to the default "novacorps". Unknown values log a warning to stderr.
+// "goga"/"novacorps" activate those built-in skins; empty or unknown values
+// fall back to the default "coffee" (unknown logs a warning to stderr).
 func (c Config) EffectiveTheme() string {
-	t := strings.ToLower(strings.TrimSpace(c.Theme))
-	if t == themeGoga {
+	switch strings.ToLower(strings.TrimSpace(c.Theme)) {
+	case themeGoga:
 		return themeGoga
+	case themeNovacorps:
+		return themeNovacorps
+	case themeCoffee, "":
+		return themeCoffee
+	default:
+		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, themeCoffee)
+		return themeCoffee
 	}
-	if c.Theme != "" && t != themeNovacorps {
-		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, themeNovacorps)
-	}
-	return themeNovacorps
 }
 
 // LoadFrom loads and merges config from explicit global and project dirs.

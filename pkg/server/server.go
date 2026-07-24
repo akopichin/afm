@@ -17,14 +17,15 @@ import (
 	"github.com/akopichin/afm/pkg/web"
 )
 
-// Имена скинов. themeGoga соответствует pkg/config.Config.EffectiveTheme() == "goga";
-// themeCoffee — дефолтный встроенный скин, захардкоженный в index.html
-// (любое другое значение EffectiveTheme, включая "novacorps"/пусто/неизвестное,
-// схлопывается в него — см. builtinSkinName); themeCustom — активный skin_dir.
+// Имена скинов. themeGoga/themeNovacorps соответствуют
+// pkg/config.Config.EffectiveTheme() == "goga"/"novacorps"; themeCoffee —
+// дефолтный встроенный скин, захардкоженный в index.html (пустое/неизвестное
+// значение EffectiveTheme схлопывается в него); themeCustom — активный skin_dir.
 const (
-	themeGoga   = "goga"
-	themeCoffee = "coffee"
-	themeCustom = "custom"
+	themeGoga      = "goga"
+	themeNovacorps = "novacorps"
+	themeCoffee    = "coffee"
+	themeCustom    = "custom"
 )
 
 // Имена файлов внутри директории скина (встроенной или skin_dir).
@@ -226,13 +227,17 @@ func New(cfg Config) *Server {
 	return s
 }
 
-// builtinSkinName нормализует Theme до имени встроенного скина: "goga" или
-// default "coffee".
+// builtinSkinName нормализует Theme до имени встроенного скина: "goga",
+// "novacorps" или дефолт "coffee".
 func (s *Server) builtinSkinName() string {
-	if s.theme == themeGoga {
+	switch s.theme {
+	case themeGoga:
 		return themeGoga
+	case themeNovacorps:
+		return themeNovacorps
+	default:
+		return themeCoffee
 	}
-	return themeCoffee
 }
 
 // embeddedFavicon ищет favicon встроенного скина среди skinFaviconCandidates

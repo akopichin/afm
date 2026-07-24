@@ -143,6 +143,32 @@ func TestServer_IndexGogaTheme(t *testing.T) {
 	}
 }
 
+func TestServer_IndexNovacorpsTheme(t *testing.T) {
+	srv := New(Config{Theme: themeNovacorps})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `class="theme-novacorps"`) {
+		t.Error("novacorps скин должен ставить class theme-novacorps")
+	}
+	if strings.Contains(body, "theme-coffee") {
+		t.Error("novacorps скин не должен содержать theme-coffee")
+	}
+	if !strings.Contains(body, `href="./skins/novacorps/index.css"`) {
+		t.Error("novacorps скин должен ссылаться на ./skins/novacorps/index.css")
+	}
+	if strings.Contains(body, `href="./skins/coffee/index.css"`) {
+		t.Error("novacorps скин не должен ссылаться на дефолтный coffee")
+	}
+}
+
 func TestServer_ServesGogaStylesheet(t *testing.T) {
 	srv := New(Config{Theme: themeGoga})
 	handler := srv.Handler()
