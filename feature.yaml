@@ -11,7 +11,7 @@ stages:
   - id: propose
     name: "Propose"
     interactive: true
-    agents: [planning, implementation]
+    agents: [auto]
     description: |
       Выяснение что делать.
     prompt: |
@@ -26,7 +26,7 @@ stages:
       Review the task `<git branch --show-current>.md`
     prompt: |
       Review the task `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-review-task
     depends_on: [propose]
@@ -40,7 +40,7 @@ stages:
     prompt: |
       Use the task `<git branch --show-current>.md`
       Save the architecture plan as `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-brainstorm
     depends_on: [propose-review]
@@ -52,7 +52,7 @@ stages:
       Review the architecture plan `<git branch --show-current>.md`
     prompt: |
       Review the architecture plan `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-review-arch
     depends_on: [brainstorm]
@@ -63,7 +63,7 @@ stages:
       Apply the architecture plan `<git branch --show-current>.md`
     prompt: |
       Apply the architecture plan `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-apply
     depends_on: [brainstorm-review]
@@ -75,7 +75,7 @@ stages:
       Save the design document as `<git branch --show-current>.md`
     prompt: |
       Save the design document as `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-design
     depends_on: [apply]
@@ -88,7 +88,7 @@ stages:
     prompt: |
       Review the design document `<git branch --show-current>.md`
       If goga isn't installed install it with pip install goga && goga connect claude
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-review-design
     depends_on: [design]
@@ -102,7 +102,7 @@ stages:
     prompt: |
       Use the design document `<git branch --show-current>.md`
       Save the plan as `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-plan
     depends_on: [design-review]
@@ -114,7 +114,7 @@ stages:
       Review the plan `<git branch --show-current>.md`
     prompt: |
       Review the plan `<git branch --show-current>.md`
-    agents: [planning, implementation]
+    agents: [auto]
     skills:
       - goga-review-plan
     depends_on: [plan]

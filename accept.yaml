@@ -8,10 +8,8 @@ prompt: |
 stages:
   - id: accept
     name: "accept"
-    supervisor: true
-    supervisor_prompt: сделай автономным этот стейдж
     interactive: true
-    agents: [planning]
+    agents: [auto]
     description: |
       засинкать codemanifest-ы с кодом.
     prompt: |
@@ -22,10 +20,8 @@ stages:
 
   - id: commit
     name: "commit"
-    supervisor: true
-    supervisor_prompt: сделай автономным этот стейдж
     interactive: true
-    agents: [planning]
+    agents: [auto]
     description: |
       привести в порядок и закоммитить все.
     prompt: |
