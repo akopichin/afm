@@ -47,6 +47,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			Dir:            o.opts.RootDir,
 			Debug:          o.opts.Debug,
 			RunDir:         o.opts.RunDir,
+			StageID:        s.ID,
 		}
 		// Autonomous-фаза диалоговая: агенту нужен AFM_STAGE_DIR, чтобы писать
 		// question.json и писать execution_summary.md в каталог стадии.
@@ -84,6 +85,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		Dir:            o.opts.RootDir,
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
+		StageID:        s.ID,
 	})
 }
 

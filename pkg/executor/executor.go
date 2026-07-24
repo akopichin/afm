@@ -30,6 +30,7 @@ type Config struct {
 	Dir            string                    // if set, agent runs with this working directory (project root from flow.root_dir)
 	Debug          bool                      // if true, log the exact agent input (prompt) to debug logs
 	RunDir         string                    // run directory root; with Debug, <RunDir>/debug.log gets every agent input
+	StageID        string                    // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
 }
 
 const defaultCommand = "claude"
@@ -551,25 +552,25 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 
 // logAgentInput пишет точный промпт, уходящий в агента (stdin), в debug-логи —
 // единый <RunDir>/debug.log (хронологически по всем стадиям) и по-стейджно
-// <StageDir>/<phase>.prompt.log. Активно только при Config.Debug. Best-effort:
-// ошибки записи не прерывают run (debug — вспомогательный тракт).
+// <RunDir>/<StageID>/<phase>.prompt.log. Активно только при Config.Debug.
+// StageID намеренно отделён от StageDir/AFM_STAGE_DIR: StageDir задаётся только
+// для interactive/autonomous стадий (файловый диалоговый протокол), а StageID —
+// для КАЖДОЙ стадии, иначе обычные (не-interactive) стадии теряли бы per-stage
+// prompt.log и тег stage= в debug.log. Best-effort: ошибки записи не прерывают
+// run (debug — вспомогательный тракт).
 func (e *Executor) logAgentInput(phase, prompt string) {
 	if !e.cfg.Debug {
 		return
 	}
-	stage := ""
-	if e.cfg.StageDir != "" {
-		stage = filepath.Base(e.cfg.StageDir)
-	}
 	entry := fmt.Sprintf(
 		"=== [%s] stage=%s phase=%s cmd=%s session=%s resume=%t ===\n--- BEGIN PROMPT ---\n%s\n--- END PROMPT ---\n\n",
-		time.Now().UTC().Format(time.RFC3339Nano), stage, phase, e.cfg.Command, e.cfg.SessionID, e.cfg.Resume, prompt,
+		time.Now().UTC().Format(time.RFC3339Nano), e.cfg.StageID, phase, e.cfg.Command, e.cfg.SessionID, e.cfg.Resume, prompt,
 	)
 	if e.cfg.RunDir != "" {
 		appendDebug(filepath.Join(e.cfg.RunDir, "debug.log"), entry)
 	}
-	if e.cfg.StageDir != "" {
-		appendDebug(filepath.Join(e.cfg.StageDir, phase+".prompt.log"), entry)
+	if e.cfg.RunDir != "" && e.cfg.StageID != "" {
+		appendDebug(filepath.Join(e.cfg.RunDir, e.cfg.StageID, phase+".prompt.log"), entry)
 	}
 }
 

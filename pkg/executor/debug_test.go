@@ -13,7 +13,7 @@ func TestLogAgentInput_WritesBothFiles(t *testing.T) {
 	if err := os.Mkdir(stage, 0755); err != nil {
 		t.Fatal(err)
 	}
-	e := New(Config{Debug: true, Command: "claude", RunDir: run, StageDir: stage, SessionID: "s1"})
+	e := New(Config{Debug: true, Command: "claude", RunDir: run, StageID: "brainstorm", SessionID: "s1"})
 
 	e.logAgentInput("planning", "HELLO PROMPT")
 	e.logAgentInput("planning", "SECOND PROMPT")
@@ -46,13 +46,13 @@ func TestLogAgentInput_DisabledWritesNothing(t *testing.T) {
 	e := New(Config{Debug: false, Command: "claude", RunDir: run})
 	e.logAgentInput("planning", "X")
 	if _, err := os.Stat(filepath.Join(run, "debug.log")); !os.IsNotExist(err) {
-		t.Errorf("debug.log должен отсутствовать при Debug=false")
+		t.Error("debug.log должен отсутствовать при Debug=false")
 	}
 }
 
-func TestLogAgentInput_NoStageDirOnlyDebugLog(t *testing.T) {
+func TestLogAgentInput_NoStageIDOnlyDebugLog(t *testing.T) {
 	run := t.TempDir()
-	e := New(Config{Debug: true, Command: "glm51", RunDir: run}) // StageDir пуст (supervisor)
+	e := New(Config{Debug: true, Command: "glm51", RunDir: run}) // StageID пуст (supervisor)
 	e.logAgentInput("supervisor", "SUP PROMPT")
 	if _, err := os.Stat(filepath.Join(run, "debug.log")); err != nil {
 		t.Errorf("debug.log должен существовать: %v", err)
