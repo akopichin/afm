@@ -151,6 +151,8 @@ func New(opts Options) *Orchestrator {
 			TruncateOutput: opts.Config.Executor.TruncateOutput,
 			OnAction:       uiActionPublisher(ui, ""),
 			WrapperDir:     wrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
+			Debug:          opts.Debug,
+			RunDir:         opts.RunDir,
 		})
 	}
 
