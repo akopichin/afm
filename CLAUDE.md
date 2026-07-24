@@ -99,6 +99,7 @@ The interactive dialog system was refactored from an MCP HTTP server to a file-b
 |----------|---------|--------|
 | `AFM_STAGE_DIR` | Stage directory for question/answer files | `executor.New()` when `StageDir` configured |
 | `AFM_DIR` | Parent directory for `.afm` (used when `--dir` is not set) | CLI flag `--dir` / env, resolved in `PersistentPreRunE` |
+| `AFM_DEBUG` | Log the exact agent input (prompt) to `<run>/debug.log` + per-stage `<run>/<stage>/<phase>.prompt.log`. Off by default. | CLI flag `--debug` / env (flag > env), resolved in `PersistentPreRunE`; wired via `Options.Debug` → `executor.Config.Debug`/`RunDir`/`StageID` |
 
 ### Testing File-Based Dialog Locally
 
@@ -198,6 +199,7 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 | `AFM_IN_DOCKER=1` | Выставляется внутри контейнера — предотвращает рекурсию (не трогать) |
 | `AFM_HOST_UID` / `AFM_HOST_GID` | Передаются внутрь; entrypoint дропает root до этого uid/gid (`gosu`), чтобы записи в тома принадлежали пользователю хоста |
 | `AFM_DOCKER_IMAGE` | Переопределить образ (например, для локальной сборки) |
+| `AFM_DEBUG` | Пробрасывается в контейнер значением (`-e AFM_DEBUG=…`, не секрет), чтобы re-exec внутри тоже логировал вход агента; на хосте выставляется флагом `--debug` в `PersistentPreRunE` |
 | `ANTHROPIC_API_KEY` | Пробрасывается в bare-форме `-e KEY` (без значения — не светится в `ps aux`/history) |
 | `ANTHROPIC_AUTH_TOKEN` | То же самое |
 | `ANTHROPIC_BASE_URL` | То же самое |
