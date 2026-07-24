@@ -1,0 +1,185 @@
+/* pkg/web/dashboard/public/skins/coffee/index.css — Coffee skin
+   Кофейно-ламповая тема: тёплый тёмный фон и янтарное «свечение радиолампы»
+   (dark), кремовое латте (light). Структура — из ../base/*.css; этот файл даёт
+   только палитру токенов + тёплую перекраску захардкоженных заливок.
+
+   Правила после @import при равной специфичности с base побеждают за счёт более
+   позднего порядка в каскаде (как в goga) — .theme-скоупинг не нужен. */
+
+@import url("../base/reset.css");
+@import url("../base/header.css");
+@import url("../base/layout.css");
+@import url("../base/stages-list.css");
+@import url("../base/plan-panel.css");
+@import url("../base/log-panel.css");
+@import url("../base/dialog-channel.css");
+@import url("../base/event-feed.css");
+@import url("../base/markdown.css");
+
+:root[data-theme="dark"] {
+  /* base surfaces — тёмная обжарка */
+  --bg:        #150d07;
+  --bg-elev:   #1e140b;
+  --panel-bg:  rgba(21, 13, 7, 0.92);
+
+  /* text */
+  --ink:       #f0e2c6;
+  --ink-hi:    #fff3d6;
+  --ink-dim:   #a07d4f;
+
+  /* accents */
+  --mint:      #e8b25e;   /* карамель — ready/done/planning */
+  --mint-soft: rgba(255, 154, 52, 0.22);
+  --grid:      rgba(255, 180, 90, 0.05);
+  --amber:     #ff9a34;   /* нить накала — running/attention/retrying */
+  --violet:    #a6c188;   /* матча — awaiting_user / диалог */
+  --coral:     #e85a28;   /* обжаренный красный — failed */
+
+  /* dialog/supervisor accents */
+  --qa-answer:              #d8b98a;
+  --dialog-option-text:     #c2d6a6;
+  --btn-cancel-dialog-text: #ff8a5a;
+  --supervisor-accent:      #f0b45e;
+
+  /* status map */
+  --c-pending:        var(--ink-dim);
+  --c-planning:       var(--mint);
+  --c-awaiting:       var(--amber);
+  --c-revising:       var(--amber);
+  --c-ready:          var(--mint);
+  --c-running:        var(--amber);
+  --c-done:           var(--mint);
+  --c-failed:         var(--coral);
+  --c-retrying:       var(--amber);
+  --c-awaiting-user:  var(--violet);
+
+  /* legacy aliases */
+  --text:     var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+:root[data-theme="light"] {
+  /* base surfaces — латте */
+  --bg:        #efe4d4;
+  --bg-elev:   #fbf5ec;
+  --panel-bg:  rgba(251, 245, 236, 0.94);
+
+  /* text */
+  --ink:       #3c2c20;
+  --ink-hi:    #241812;
+  --ink-dim:   #937b63;
+
+  /* accents */
+  --mint:      #a4682a;
+  --mint-soft: rgba(60, 44, 32, 0.14);
+  --grid:      rgba(60, 44, 32, 0.03);
+  --amber:     #c07f24;
+  --violet:    #5e7f3c;   /* тёмная матча — читаема на кремовом */
+  --coral:     #bf4a24;
+
+  /* dialog/supervisor accents */
+  --qa-answer:              #7a5320;
+  --dialog-option-text:     #5e7f3c;
+  --btn-cancel-dialog-text: #b23a1a;
+  --supervisor-accent:      #9a6a1e;
+
+  /* status map */
+  --c-pending:        var(--ink-dim);
+  --c-planning:       var(--mint);
+  --c-awaiting:       var(--amber);
+  --c-revising:       var(--amber);
+  --c-ready:          var(--mint);
+  --c-running:        var(--amber);
+  --c-done:           var(--mint);
+  --c-failed:         var(--coral);
+  --c-retrying:       var(--amber);
+  --c-awaiting-user:  var(--violet);
+
+  /* legacy aliases */
+  --text:     var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+/* === coffee-специфика поверх base ===
+   Захардкоженные в base neon-заливки перекрашиваем под кофейную палитру.
+   novacorps-исходники:  rgba(111,212,204,X)=teal mint · rgba(229,212,66,X)=жёлтый amber
+                         · rgba(183,135,255,X)=violet.
+   coffee-акценты (rgb): карамель 232,178,94 · накал 255,154,52 · матча 166,193,136.
+   Правила после @import побеждают base по порядку каскада. */
+
+::selection { background: rgba(255, 154, 52, 0.30); }
+
+/* «Ламповое» свечение фона — только dark (в light ровный кремовый фон). */
+:root[data-theme="dark"] #main {
+  background-image: radial-gradient(120% 90% at 20% -10%, rgba(255, 154, 52, 0.10), transparent 55%);
+  background-color: var(--bg);
+}
+:root[data-theme="light"] #main {
+  background-image: none;
+  background-color: var(--bg);
+}
+
+/* base/layout.css: прогресс-бар, jump-latest, icon-btn, attention-пульс */
+.progress-bar { background: rgba(255, 154, 52, 0.12); }
+.progress-fill {
+  background: linear-gradient(90deg, rgba(232, 178, 94, 0.35), var(--amber));
+  box-shadow: 0 0 10px rgba(255, 154, 52, 0.45);
+}
+.jump-latest { background: rgba(255, 154, 52, 0.15); }
+.icon-btn { border-color: rgba(232, 178, 94, 0.4); }
+@keyframes attentionPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 154, 52, 0); }
+  50%      { box-shadow: 0 0 12px 2px rgba(255, 154, 52, 0.65); }
+}
+
+/* base/stages-list.css */
+.stage-item { border-bottom-color: rgba(232, 178, 94, 0.08); }
+.stage-item:hover { background: rgba(255, 154, 52, 0.06); }
+.stage-item.active { background: linear-gradient(90deg, rgba(255, 154, 52, 0.08), transparent); }
+.stage-item.active::after { background: linear-gradient(90deg, transparent, rgba(255, 154, 52, 0.7), transparent); }
+
+/* base/plan-panel.css (перекраска только захардкоженных bg; border-left уже на токенах) */
+.plan-line:hover { background: rgba(255, 154, 52, 0.06); }
+.plan-line.has-comment { background: rgba(232, 178, 94, 0.09); }
+.plan-line.has-comment:hover { background: rgba(232, 178, 94, 0.14); }
+.plan-section-wrapper { background: rgba(255, 154, 52, 0.04); }
+.plan-section-wrapper.plan-section-assumptions { background: rgba(255, 154, 52, 0.06); }
+.plan-section-wrapper.plan-section-criteria { background: rgba(166, 193, 136, 0.06); }
+
+/* base/dialog-channel.css — teal/violet-акценты → матча/янтарь */
+#dialog-section { border-color: rgba(166, 193, 136, 0.35); }
+#dialog-section h3 { border-bottom-color: rgba(166, 193, 136, 0.25); }
+.dialog-history .qa { border-left-color: rgba(232, 178, 94, 0.2); }
+.phase-divider { border-bottom-color: rgba(232, 178, 94, 0.12); }
+.dialog-pending .dialog-custom { border-color: rgba(232, 178, 94, 0.2); }
+.dialog-pending .dialog-options button { border-color: rgba(166, 193, 136, 0.55); }
+@keyframes pendingBreathe {
+  0%, 100% { box-shadow: inset 0 0 18px rgba(166, 193, 136, 0.08), 0 0 12px rgba(166, 193, 136, 0.10); }
+  50%      { box-shadow: inset 0 0 30px rgba(166, 193, 136, 0.16), 0 0 22px rgba(166, 193, 136, 0.22); }
+}
+@keyframes dialogFlash {
+  0%   { box-shadow: 0 0 0 2px var(--violet), 0 0 50px rgba(166, 193, 136, 0.9), inset 0 0 30px rgba(166, 193, 136, 0.3); }
+  40%  { box-shadow: 0 0 0 1px rgba(166, 193, 136, 0.6), 0 0 30px rgba(166, 193, 136, 0.5), inset 0 0 20px rgba(166, 193, 136, 0.15); }
+  100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent, inset 0 0 0 transparent; }
+}
+/* base/dialog-channel.css — доп. захардкоженные заливки, не покрытые grep-списком
+   из брифа (найдены при верификации Step 2): фон .dialog-pending и hover/selected
+   состояния кнопок-опций были на чистом rgba(183,135,255,X), без var(--*). */
+.dialog-pending { background: linear-gradient(180deg, rgba(166, 193, 136, 0.10), rgba(166, 193, 136, 0.02)); }
+.dialog-pending .dialog-options button:hover { box-shadow: 0 0 8px rgba(166, 193, 136, 0.45); }
+.dialog-pending .dialog-options button.selected {
+  background: rgba(166, 193, 136, 0.18);
+  box-shadow: 0 0 12px rgba(166, 193, 136, 0.5);
+}
+
+/* base/event-feed.css */
+.feed-entry { border-bottom-color: rgba(232, 178, 94, 0.05); }
+.feed-entry:hover { background: rgba(255, 154, 52, 0.05); }
+
+/* base/layout.css — .resize-handle не входит в grep-список брифа, но использует
+   чистый rgba(183,135,255,X) (не var), поэтому перекрашиваем в матчу. */
+.resize-handle { background: rgba(166, 193, 136, 0.2); }
+
+/* base/plan-panel.css — .comment-remove (недавняя фича, добавлена после брифа)
+   использует чистый rgba(111,212,204,X) (teal mint), не var — перекрашиваем в карамель. */
+.comment-remove { border-color: rgba(232, 178, 94, 0.4); }
