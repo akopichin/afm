@@ -147,9 +147,13 @@
 .plan-section-wrapper.plan-section-criteria { background: rgba(166, 193, 136, 0.06); }
 
 /* base/dialog-channel.css — teal/violet-акценты → матча/янтарь */
-#dialog-section { border-color: rgba(166, 193, 136, 0.35); }
+#dialog-section {
+  border-color: rgba(166, 193, 136, 0.35);
+  background: radial-gradient(circle at top right, rgba(166, 193, 136, 0.08), transparent 60%);
+}
 #dialog-section h3 { border-bottom-color: rgba(166, 193, 136, 0.25); }
 .dialog-history .qa { border-left-color: rgba(232, 178, 94, 0.2); }
+.dialog-history .agent-msg { border-left-color: rgba(232, 178, 94, 0.25); }
 .phase-divider { border-bottom-color: rgba(232, 178, 94, 0.12); }
 .dialog-pending .dialog-custom { border-color: rgba(232, 178, 94, 0.2); }
 .dialog-pending .dialog-options button { border-color: rgba(166, 193, 136, 0.55); }
