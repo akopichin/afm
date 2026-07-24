@@ -263,6 +263,11 @@ func ReExec(cfg ReExecConfig) error {
 		"-e", "AFM_HOST_UID="+strconv.Itoa(os.Getuid()),
 		"-e", "AFM_HOST_GID="+strconv.Itoa(os.Getgid()),
 	)
+	// AFM_DEBUG — не секрет, передаём значением, чтобы --debug/AFM_DEBUG на
+	// хосте включал логирование промптов и внутри контейнера.
+	if os.Getenv("AFM_DEBUG") != "" {
+		args = append(args, "-e", "AFM_DEBUG="+os.Getenv("AFM_DEBUG"))
+	}
 	// Передаём секреты только в bare-форме `-e KEY` (без значения): docker-клиент
 	// наследует окружение afm (см. os.Environ() в вызове execFunc ниже) и сам
 	// подставит значение. Так секрет никогда не попадает в argv `docker run` и

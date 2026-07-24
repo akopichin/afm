@@ -12,6 +12,7 @@ A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML f
 - [Supervisor and Autonomous Track](#supervisor-and-autonomous-track)
 - [Stage Lifecycle](#stage-lifecycle)
 - [Configuration](#configuration)
+  - [Debugging: `--debug`](#debugging---debug)
 - [Web Dashboard](#web-dashboard)
 - [Directory Structure](#directory-structure)
 - [Development](#development)
@@ -405,6 +406,14 @@ afm run
 ```
 
 All commands (`run`, `check`, `approve`, `revise`, `retry`, `init`, `list`) respect `--dir`. Priority: `--dir` flag > `AFM_DIR` env var > current directory.
+
+### Debugging: `--debug`
+
+Run with `--debug` (or `AFM_DEBUG=1`) to log the **exact prompt sent to each agent** (stdin), with timestamps and stage/phase tags:
+- `.afm/runs/<run>/debug.log` — one chronological log across all stages/phases;
+- `.afm/runs/<run>/<stage>/<phase>.prompt.log` — per-stage/phase (appends across retries).
+
+Off by default. The logs contain full project context passed to the agent (not secrets/env) — they live under `.afm/runs/` and aren't committed. Only the input is logged; agent output is already in `<phase>.jsonl`/`.log`. In Docker mode, `--debug`/`AFM_DEBUG` on the host is passed through into the container automatically.
 
 Create `.afm/config.yaml` in the project or `~/.afm/config.yaml` globally (full example — `config.example.yaml`):
 
