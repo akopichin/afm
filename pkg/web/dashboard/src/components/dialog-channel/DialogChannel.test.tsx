@@ -72,6 +72,13 @@ describe('DialogChannel', () => {
     expect(textarea).not.toBeDisabled()
   })
 
+  test('новый pending-вопрос даёт one-shot класс dialog-flash', async () => {
+    const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelector('#dialog-pending.dialog-flash')).not.toBeNull())
+  })
+
   test('free-input field is disabled when allow_custom is false', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',

@@ -23,11 +23,17 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   const [draft, setDraft] = useState('')
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
+  const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | null>(null)
 
   const isReview = stage.status === 'awaiting_approval'
   const showActions = isReview
   const showRetry = stage.status === 'failed'
   const commentCount = Object.keys(comments).length
+
+  function flashButton(which: 'approve' | 'revise' | 'retry') {
+    setClicked(which)
+    window.setTimeout(() => setClicked(null), 1200)
+  }
 
   useEffect(() => {
     // NO_STAGE sentinel: панель смонтирована для стабильности лейаута, но
@@ -110,6 +116,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }
 
   async function approve() {
+    flashButton('approve')
     setBusy(true)
     try {
       await postJson(`/api/stages/${encodeURIComponent(stage.id)}/approve`, null)
@@ -119,6 +126,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }
 
   async function sendRevision() {
+    flashButton('revise')
     const feedback = buildFeedback(comments)
     if (feedback === '') return
 
@@ -133,6 +141,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }
 
   async function retry() {
+    flashButton('retry')
     setBusy(true)
     try {
       await postJson(`/api/stages/${encodeURIComponent(stage.id)}/retry`, null)
@@ -154,17 +163,27 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
         {showActions && (
           <div id="actions-section" className="section">
             <div className="actions-row">
-              <button id="btn-approve" className="btn btn-approve" type="button" disabled={busy} onClick={approve}>
-                Approve
+              <button
+                id="btn-approve"
+                className={`btn btn-approve${clicked === 'approve' ? ' ok' : ''}`}
+                type="button"
+                disabled={busy}
+                onClick={approve}
+              >
+                <span className="btn-ripple" aria-hidden="true" />
+                <span className="btn-label">Approve</span>
+                <span className="btn-done" aria-hidden="true">✓ Approved</span>
               </button>
               <button
                 id="btn-revise"
-                className="btn btn-revise"
+                className={`btn btn-revise${clicked === 'revise' ? ' ok' : ''}`}
                 type="button"
                 disabled={busy || commentCount === 0}
                 onClick={sendRevision}
               >
-                {commentCount > 0 ? `Send revision (${commentCount})` : 'Send revision'}
+                <span className="btn-ripple" aria-hidden="true" />
+                <span className="btn-label">{commentCount > 0 ? `Send revision (${commentCount})` : 'Send revision'}</span>
+                <span className="btn-done" aria-hidden="true">✓ Sent</span>
               </button>
             </div>
             <div id="comment-hint" className="comment-hint">Click a plan line to comment</div>
@@ -174,8 +193,10 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
         {showRetry && (
           <div id="retry-section" className="section">
             <div className="actions-row">
-              <button id="btn-retry" className="btn btn-retry" type="button" disabled={busy} onClick={retry}>
-                Retry
+              <button id="btn-retry" className={`btn btn-retry${clicked === 'retry' ? ' ok' : ''}`} type="button" disabled={busy} onClick={retry}>
+                <span className="btn-ripple" aria-hidden="true" />
+                <span className="btn-label">Retry</span>
+                <span className="btn-done" aria-hidden="true">✓</span>
               </button>
             </div>
           </div>

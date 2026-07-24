@@ -37,6 +37,8 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   const [comments, setComments] = useState<Record<number, string>>({})
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const [clickedSend, setClickedSend] = useState(false)
+  const [flash, setFlash] = useState(false)
 
   // Автоскролл канала к хвосту при появлении новых сообщений/вопросов,
   // пока пользователь сам не уехал вверх. Контейнер охватывает и историю,
@@ -108,6 +110,15 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     return () => cancelAnimationFrame(handle)
   }, [pending?.id, jumpToBottom])
 
+  // One-shot glow рамки диалога при появлении нового pending-вопроса (B3):
+  // класс dialog-flash навешивается на смену pending.id и снимается через 1.4s.
+  useEffect(() => {
+    if (pending === null) return
+    setFlash(true)
+    const t = window.setTimeout(() => setFlash(false), 1400)
+    return () => window.clearTimeout(t)
+  }, [pending?.id])
+
   // При разворачивании панели на весь экран (Maximizable-портал меняет высоту
   // контейнера) канал должен показать хвост диалога, а не то место, на котором
   // застал скролл в компактном режиме. rAF — после layout оверлея, чтобы
@@ -130,6 +141,9 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }
 
   async function sendAnswer() {
+    setClickedSend(true)
+    window.setTimeout(() => setClickedSend(false), 1200)
+
     const question = pending
     if (question === null || question.id === undefined) return
 
@@ -163,6 +177,9 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   // /dialog/answer, что и обычный ответ (from_options всегда false — это не
   // выбор из options).
   async function sendFeedback() {
+    setClickedSend(true)
+    window.setTimeout(() => setClickedSend(false), 1200)
+
     const question = pending
     if (question === null || question.id === undefined) return
 
@@ -306,7 +323,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
             </div>
 
             {pending !== null && (
-              <div id="dialog-pending" className="dialog-pending">
+              <div id="dialog-pending" className={`dialog-pending${flash ? ' dialog-flash' : ''}`}>
                 <div className="dialog-question">
                   {parseLineBlocks(pending.question ?? '').map((item) => renderQuestionLine(item))}
                 </div>
@@ -346,12 +363,16 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
                 <div className="dialog-actions">
                   {commentCount === 0 ? (
-                    <button className="btn btn-send" type="button" onClick={sendAnswer}>
-                      ▸ SEND
+                    <button className={`btn btn-send${clickedSend ? ' ok' : ''}`} type="button" onClick={sendAnswer}>
+                      <span className="btn-ripple" aria-hidden="true" />
+                      <span className="btn-label">▸ SEND</span>
+                      <span className="btn-done" aria-hidden="true">✓ Sent</span>
                     </button>
                   ) : (
-                    <button className="btn btn-send" type="button" onClick={sendFeedback}>
-                      {`Send feedback (${commentCount})`}
+                    <button className={`btn btn-send${clickedSend ? ' ok' : ''}`} type="button" onClick={sendFeedback}>
+                      <span className="btn-ripple" aria-hidden="true" />
+                      <span className="btn-label">{`Send feedback (${commentCount})`}</span>
+                      <span className="btn-done" aria-hidden="true">✓ Sent</span>
                     </button>
                   )}
                   <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
