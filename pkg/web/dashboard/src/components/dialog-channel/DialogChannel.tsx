@@ -111,11 +111,12 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }, [pending?.id, jumpToBottom])
 
   // One-shot glow рамки диалога при появлении нового pending-вопроса (B3):
-  // класс dialog-flash навешивается на смену pending.id и снимается через 1.4s.
+  // класс dialog-flash навешивается на смену pending.id и снимается через 2.5s
+  // (совпадает с длительностью CSS-анимации .dialog-flash, чтобы глоу успевал доиграть).
   useEffect(() => {
     if (pending === null) return
     setFlash(true)
-    const t = window.setTimeout(() => setFlash(false), 1400)
+    const t = window.setTimeout(() => setFlash(false), 2500)
     return () => window.clearTimeout(t)
   }, [pending?.id])
 
@@ -141,9 +142,6 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }
 
   async function sendAnswer() {
-    setClickedSend(true)
-    window.setTimeout(() => setClickedSend(false), 1200)
-
     const question = pending
     if (question === null || question.id === undefined) return
 
@@ -161,6 +159,9 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
       return
     }
 
+    setClickedSend(true)
+    window.setTimeout(() => setClickedSend(false), 1200)
+
     await postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/answer`, {
       id: question.id,
       phase: question.phase ?? '',
@@ -177,14 +178,14 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   // /dialog/answer, что и обычный ответ (from_options всегда false — это не
   // выбор из options).
   async function sendFeedback() {
-    setClickedSend(true)
-    window.setTimeout(() => setClickedSend(false), 1200)
-
     const question = pending
     if (question === null || question.id === undefined) return
 
     const feedback = buildFeedback(comments, question.question ?? '')
     if (feedback === '') return
+
+    setClickedSend(true)
+    window.setTimeout(() => setClickedSend(false), 1200)
 
     await postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/answer`, {
       id: question.id,

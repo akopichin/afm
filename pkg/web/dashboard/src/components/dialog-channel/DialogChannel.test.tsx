@@ -137,6 +137,15 @@ describe('DialogChannel', () => {
     })
   })
 
+  test('▸ SEND без выбора не показывает success-морф (нет класса ok)', async () => {
+    const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+    render(<DialogChannel stage={makeStage()} />)
+    const send = await screen.findByRole('button', { name: '▸ SEND' })
+    fireEvent.click(send)
+    expect(send.className).not.toContain('ok')
+  })
+
   test('free text takes priority over a previously selected option (from_options:false)', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
