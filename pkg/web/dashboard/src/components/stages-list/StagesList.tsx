@@ -23,6 +23,7 @@ export function StagesList({ stages, selectedStageId, onSelect }: StagesListProp
             key={stage.id}
             className={`stage-item${stage.id === selectedStageId ? ' active' : ''}`}
             data-stage-id={stage.id}
+            data-status={stage.status}
             data-attention={ATTENTION_STATUSES.has(stage.status) ? 'true' : undefined}
             onClick={() => onSelect(stage.id)}
           >

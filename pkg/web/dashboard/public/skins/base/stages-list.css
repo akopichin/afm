@@ -135,6 +135,21 @@
   pointer-events: none;
 }
 
+/* У завершённой/провальной выбранной стадии индикатор выбора статичен: убираем
+   бесконечную пульсацию полосы и бегущую сканлайн-строку — иначе завершённый
+   флоу вечно выглядит «в процессе» на последней (выбранной) стадии. Сам факт
+   выбора (амбер-полоса + подложка) сохраняется, просто без анимации активности. */
+.stage-item.active[data-status="done"]::before,
+.stage-item.active[data-status="failed"]::before {
+  animation: none;
+  box-shadow: 0 0 4px var(--amber);
+  opacity: 0.7;
+}
+.stage-item.active[data-status="done"]::after,
+.stage-item.active[data-status="failed"]::after {
+  display: none;
+}
+
 @keyframes activeBar {
   0%, 100% { box-shadow: 0 0 4px var(--amber); opacity: 0.85; }
   50%      { box-shadow: 0 0 12px var(--amber); opacity: 1; }

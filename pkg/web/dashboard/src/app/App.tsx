@@ -74,8 +74,16 @@ export function App(): ReactElement {
 
   const refreshedForEvent = useRef<number>(-1)
 
-  // Автовыбор активной стадии (иначе первая failed); продвижение к следующей активной,
-  // когда выбранная завершилась (done). Соответствует loadState/handleEvent в app.js.
+  // Отслеживаем предыдущий выбор и его статус, чтобы отличить «стадию только что
+  // выбрал пользователь» от «выбранная стадия сама завершилась». Автопродвижение
+  // должно срабатывать только во втором случае.
+  const prevSelectedId = useRef<string | null>(null)
+  const prevSelectedStatus = useRef<Stage['status'] | null>(null)
+
+  // Автовыбор активной стадии (иначе первая failed); продвижение к следующей активной
+  // только когда ТЕКУЩАЯ выбранная стадия сама перешла в done. Ручной выбор уже
+  // завершённой стадии не перекидывает пользователя — иначе во время работы флоу
+  // нельзя открыть логи/план/диалог завершённого стейджа (он мгновенно «убегает»).
   useEffect(() => {
     if (stages.length === 0) return
 
@@ -93,7 +101,13 @@ export function App(): ReactElement {
       return
     }
 
-    if (current.status === 'done') {
+    const sameStage = prevSelectedId.current === selectedStageId
+    const justFinished = sameStage && prevSelectedStatus.current !== 'done' && current.status === 'done'
+
+    prevSelectedId.current = selectedStageId
+    prevSelectedStatus.current = current.status
+
+    if (justFinished) {
       const fromIndex = stages.findIndex((stage) => stage.id === selectedStageId)
       const nextActive = stages.slice(fromIndex + 1).find((stage) => ACTIVE_STAGE_STATUSES.has(stage.status)) ?? null
 

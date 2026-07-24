@@ -4,7 +4,7 @@ Imports:
     From: src/types
   - Types: [MarkdownRenderer]
     From: src/components/plan-panel
-  - Types: [formatLine]
+  - Types: [parseLineBlocks, LineBlock]
     From: src/components/plan-panel/markdown
 
 Usages:
@@ -16,8 +16,8 @@ Annotations: |
   Use `conventions` for code writing rules and testing. Use `react`. Use `typescript` for naming and strict
   typing. Use `Stage` from Imports. Use `dashboard-data-types` from Imports for guidance on consuming `Stage`
   and the /api/stages/{id}/dialog source. Use `MarkdownRenderer` from Imports to render question/answer text
-  in history. Use `formatLine` from Imports (публичный модуль markdown.ts клетки plan-panel — см. её `react`
-  usages) to render each pending-question line in review-comment mode.
+  in history. Use `parseLineBlocks`/`LineBlock` from Imports (публичный модуль markdown.ts клетки plan-panel —
+  см. её `react` usages) to split the pending question into кликабельные строки/блоки in review-comment mode.
 
   Канал также использует Maximizable/PanelFrame (src/components/layout, src/components/panel-frame) для
   рамки с заголовком/разворотом и useStickToBottom (src/hooks/use-stick-to-bottom) для автопрокрутки — эти
@@ -33,8 +33,9 @@ Annotations: |
   те же CSS-классы (`plan-line`/`line-num`/`line-content`/`line-comment-marker`/`line-comment-form`) и тот
   же состав состояния (`comments`/`activeCommentLine`/`draft`), только цель — не revision плана, а ответ на
   вопрос. В отличие от истории (markdown через `MarkdownRenderer`), сам pending-вопрос в этом режиме
-  построчно форматируется через `formatLine` (без секций/код-блоков `parseReviewPlan` — вопросы не имеют
-  такой структуры).
+  разбивается на кликабельные строки через общий `parseLineBlocks` (та же основа, что и review-план
+  PlanPanel): обычные строки — инлайн, а fenced-код и markdown-таблицы схлопываются в один блок, чтобы
+  yaml-контракт/дифф в вопросе не «резался» построчно (регресс #1/#4).
 
 ---
 
@@ -78,9 +79,10 @@ Annotations: |
     - Видимость: канал показан, если есть история либо stage.status === 'awaiting_user_input'
     - Вопрос в истории рендерится как markdown (через `MarkdownRenderer`); ответ в истории выводится как
       обычный текст («→ answer»), без markdown-рендера
-    - Pending-вопрос рендерится построчно (`formatLine` на каждую строку `question.split('\n')`) как
-      пронумерованные кликабельные строки (CSS `plan-line`, как в PlanPanel) — клик открывает форму
-      add/update/delete комментария к строке
+    - Pending-вопрос разбивается на блоки через `parseLineBlocks` (обычные строки — инлайн, fenced-код и
+      markdown-таблицы схлопнуты в один блок и заякорены на первой строке) и рендерится как пронумерованные
+      кликабельные строки (CSS `plan-line`, как в PlanPanel) — клик открывает форму add/update/delete
+      комментария к строке
     - commentCount === 0 → показаны options + `dialog-custom` textarea + кнопка «▸ SEND» (обычный ответ);
       commentCount > 0 → options и textarea скрыты, единственное действие — «Send feedback (N)»
 

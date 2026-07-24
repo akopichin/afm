@@ -57,7 +57,14 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
 
         // Единственная точка приведения типа для данных входящего сообщения.
         const event = toEvent(raw)
-        setEvents((prev) => [...prev, event].slice(-MAX_EVENTS))
+        setEvents((prev) => {
+          // Схлопываем подряд идущие одинаковые смены статуса одной стадии
+          // (напр. поток «TASK-REVIEW → ready»): бэкенд фиксирует переход один
+          // раз, но повторы (реконнект/дребезг) не должны засорять ленту.
+          const last = prev[prev.length - 1]
+          if (last !== undefined && isSameStatusEvent(last, event)) return prev
+          return [...prev, event].slice(-MAX_EVENTS)
+        })
       }
     }
 
@@ -85,6 +92,24 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
 
 function isHeartbeat(raw: unknown): boolean {
   return typeof raw === 'object' && raw !== null && (raw as { type?: unknown }).type === 'heartbeat'
+}
+
+// Два события — это один и тот же переход статуса стадии (та же стадия, тот же
+// целевой статус). Используется для схлопывания подряд идущих дубликатов в ленте.
+function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
+  return (
+    a.type === 'stage_status_changed' &&
+    b.type === 'stage_status_changed' &&
+    a.stageId === b.stageId &&
+    statusOf(a) === statusOf(b)
+  )
+}
+
+function statusOf(event: AfmEvent): string {
+  const data = event.payload
+  if (typeof data === 'string') return data
+  if (isRecord(data) && typeof data.status === 'string') return data.status
+  return ''
 }
 
 function toEvent(raw: unknown): AfmEvent {

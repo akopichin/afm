@@ -19,11 +19,16 @@ Annotations: |
   в отчёте acceptance).
 
   markdown.ts — публичный модуль клетки (renderMarkdown, renderInline, formatLine, escapeHtml,
-  isSpecialSection, isHeading2, тип SpecialSection), используемый и `MarkdownRenderer`, и напрямую `PlanPanel`
-  для построчного рендера режима ревью; ссылки в выводе принудительно получают target="_blank" rel="noopener".
-  `formatLine` также импортируется напрямую соседней клеткой `dialog-channel` (без code-блоков/секций
-  `parseReviewPlan` — там строится упрощённый построчный рендер pending-вопроса для комментариев к вопросу,
-  killer feature #2; см. её CODEMANIFEST).
+  isSpecialSection, isHeading2, тип SpecialSection, а также parseLineBlocks/nextLineBlock и тип LineBlock),
+  используемый и `MarkdownRenderer`, и напрямую `PlanPanel` для построчного рендера режима ревью; ссылки в
+  выводе принудительно получают target="_blank" rel="noopener".
+  `parseLineBlocks`/`nextLineBlock` — общая основа построчного (комментируемого) рендера: обычные строки
+  форматируются инлайн через formatLine, а многострочные блоки (fenced-код ``` и markdown-таблицы)
+  схлопываются в один блок (md.render) и якорятся на своей первой строке — иначе renderInline разваливает
+  их построчно (в диалоге «резался» yaml-контракт, в review-плане таблицы превращались в мешанину).
+  Тот же `parseLineBlocks` импортирует соседняя клетка `dialog-channel` для рендера pending-вопроса
+  (комментарии к строкам вопроса, killer feature #2; см. её CODEMANIFEST) — так код/таблицы в вопросе
+  и в плане ведут себя одинаково.
   Комментарии к строкам плана — внутреннее клиентское состояние PlanPanel (Record<номер строки, текст>), не
   общий тип PlanComment из src/types (тот сейчас этой клеткой не используется).
 

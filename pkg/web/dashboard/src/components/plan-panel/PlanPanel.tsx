@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import type { Stage } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
-import { escapeHtml, formatLine, isHeading2, isSpecialSection, renderMarkdown, type SpecialSection } from './markdown'
+import { isHeading2, isSpecialSection, nextLineBlock, renderMarkdown, type SpecialSection } from './markdown'
 
 type PlanPanelProps = {
   stage: Stage
@@ -10,9 +10,8 @@ type PlanPanelProps = {
 }
 
 type LineItem = { kind: 'line'; line: number; html: string }
-type CodeItem = { kind: 'code'; line: number; html: string }
-type SectionItem = { kind: 'section'; section: SpecialSection; body: Array<LineItem | CodeItem> }
-type ReviewItem = LineItem | CodeItem | SectionItem
+type SectionItem = { kind: 'section'; section: SpecialSection; body: LineItem[] }
+type ReviewItem = LineItem | SectionItem
 
 // Панель плана стадии: загрузка markdown, рендер (обычный или review с номерами строк
 // и комментариями), действия Approve/Send revision/Retry. Поведение перенесено из
@@ -213,7 +212,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
     return renderPlanLine(item, `line-${sectionIndex}`)
   }
 
-  function renderPlanLine(item: LineItem | CodeItem, key: string): ReactNode {
+  function renderPlanLine(item: LineItem, key: string): ReactNode {
     const hasComment = comments[item.line] !== undefined
 
     return (
@@ -273,11 +272,8 @@ function parseReviewPlan(text: string): ReviewItem[] {
   const lines = text.split('\n')
   const items: ReviewItem[] = []
   let currentSection: SectionItem | null = null
-  let inCode = false
-  let codeStart = 0
-  let codeLines: string[] = []
 
-  const pushLeaf = (item: LineItem | CodeItem) => {
+  const pushLeaf = (item: LineItem) => {
     if (currentSection !== null) {
       currentSection.body.push(item)
     } else {
@@ -285,55 +281,37 @@ function parseReviewPlan(text: string): ReviewItem[] {
     }
   }
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (line === undefined) continue
-    const lineNum = i + 1
+  for (let i = 0; i < lines.length; ) {
+    const line = lines[i] ?? ''
 
-    if (line.trim().startsWith('```')) {
-      if (!inCode) {
-        inCode = true
-        codeStart = i
-        codeLines = [line]
-        continue
-      }
-
-      inCode = false
-      codeLines.push(line)
-      pushLeaf({ kind: 'code', line: codeStart + 1, html: `<pre><code>${escapeHtml(codeLines.join('\n').trim())}</code></pre>` })
-      continue
-    }
-
-    if (inCode) {
-      codeLines.push(line)
-      continue
-    }
-
+    // Спецсекция (## Assumptions / ## Acceptance Criteria) — заголовок в одну
+    // строку; открывает сворачиваемую обёртку.
     const section = isSpecialSection(line)
     if (section !== null) {
       if (currentSection !== null) {
         items.push(currentSection)
-        currentSection = null
       }
-
       currentSection = { kind: 'section', section, body: [] }
+      i++
       continue
     }
 
+    // Любой другой заголовок ## закрывает открытую спецсекцию (сам заголовок
+    // всё равно отрендерится ниже как обычная строка).
     if (currentSection !== null && isHeading2(line)) {
       items.push(currentSection)
       currentSection = null
     }
 
-    pushLeaf({ kind: 'line', line: lineNum, html: formatLine(line) })
+    // Обычная строка ИЛИ схлопнутый блок (fenced-код / таблица) — nextLineBlock
+    // сам решает, сколько строк поглотить, и якорит блок на первой строке.
+    const { block, next } = nextLineBlock(lines, i)
+    pushLeaf({ kind: 'line', line: block.line, html: block.html })
+    i = next
   }
 
   if (currentSection !== null) {
     items.push(currentSection)
-  }
-
-  if (inCode && codeLines.length > 0) {
-    items.push({ kind: 'code', line: codeStart + 1, html: `<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>` })
   }
 
   return items

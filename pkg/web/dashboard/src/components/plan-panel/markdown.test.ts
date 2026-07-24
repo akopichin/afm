@@ -4,6 +4,7 @@ import {
   formatLine,
   isHeading2,
   isSpecialSection,
+  parseLineBlocks,
   renderInline,
   renderMarkdown,
 } from './markdown'
@@ -72,6 +73,46 @@ describe('formatLine', () => {
 
   test('обычные строки становятся параграфами', () => {
     expect(formatLine('plain text')).toBe('<p>plain text</p>')
+  })
+})
+
+describe('parseLineBlocks', () => {
+  test('обычные строки — по одному блоку на строку, номера от 1', () => {
+    const blocks = parseLineBlocks('First line\nSecond line')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[1]).toMatchObject({ line: 2 })
+    expect(blocks[0]?.html).toContain('First line')
+  })
+
+  test('fenced-код схлопывается в один блок <pre>, заякоренный на строке ```', () => {
+    // Регресс #1: раньше в диалоге код-блок разваливался построчно (```diff как
+    // отдельный <p>), и yaml-контракт «резался». Теперь это один <pre>.
+    const blocks = parseLineBlocks('Before\n```diff\n-old\n+new\n```\nAfter')
+    expect(blocks).toHaveLength(3) // Before | код-блок | After
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[1]?.line).toBe(2) // блок заякорен на строке открывающего ```
+    expect(blocks[1]?.html).toContain('<pre>')
+    expect(blocks[1]?.html).toContain('-old')
+    expect(blocks[1]?.html).toContain('+new')
+    expect(blocks[2]).toMatchObject({ line: 6 }) // After — после закрывающего ```
+    expect(blocks[2]?.html).toContain('After')
+  })
+
+  test('markdown-таблица схлопывается в один блок <table>', () => {
+    // Регресс #4: раньше таблица в review-плане рендерилась «мешаниной» — каждая
+    // |-строка отдельным <p>, разделитель |---| голым текстом.
+    const blocks = parseLineBlocks('| A | B |\n|---|---|\n| 1 | 2 |')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<table>')
+    expect(blocks[0]?.html).toContain('<td>1</td>')
+  })
+
+  test('одиночная |-строка без разделителя таблицей не считается', () => {
+    const blocks = parseLineBlocks('value | with pipe')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]?.html).not.toContain('<table>')
   })
 })
 

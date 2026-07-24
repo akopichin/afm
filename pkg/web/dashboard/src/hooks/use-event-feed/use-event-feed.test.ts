@@ -77,6 +77,35 @@ describe('useEventFeed', () => {
     expect(result.current.events[0]?.stageId).toBe('s1')
   })
 
+  test('collapses consecutive duplicate status changes for the same stage', () => {
+    // Регресс #2: лента засорялась потоком одинаковых «TASK-REVIEW → ready».
+    // Бэкенд фиксирует переход один раз; подряд идущие повторы схлопываются.
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', data: 'ready', stage_id: 'task-review' })
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', data: 'ready', stage_id: 'task-review' })
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', data: 'ready', stage_id: 'task-review' })
+    })
+
+    expect(result.current.events).toHaveLength(1)
+
+    // Смена статуса той же стадии (ready → running) — уже не дубликат, добавляется.
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', data: 'running', stage_id: 'task-review' })
+    })
+    expect(result.current.events).toHaveLength(2)
+
+    // Тот же статус, но другая стадия — тоже не дубликат.
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', data: 'running', stage_id: 'plan' })
+    })
+    expect(result.current.events).toHaveLength(3)
+  })
+
   test('reconnects with exponential backoff', () => {
     vi.useFakeTimers()
     renderHook(() => useEventFeed('/ws'))

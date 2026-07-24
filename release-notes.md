@@ -2,6 +2,21 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-07-24
+
+### Fix: dialog question and review plan no longer mangle code blocks / tables
+- The pending dialog question and the review-mode plan render markdown **line by line** (so each line is clickable for comments). That path only handled inline markdown, so multi-line blocks broke: the dialog question had **no** fenced-code handling at all — an agent's ` ```diff `/YAML contract came out as stray literal `` ```diff ``/`-old`/`` ``` `` paragraphs, so it looked "cut" and no contract was readable; markdown tables (in both the plan and the question) rendered each `| … |` row as a separate paragraph with the `|---|` separator shown literally ("мешанина"). This regressed when per-line commenting replaced the old full-markdown rendering of the question.
+- **Fix:** a shared block parser (`parseLineBlocks`/`nextLineBlock` in `plan-panel/markdown.ts`) now collapses fenced code **and** GFM tables into a single block (full `md.render`), anchored to their first source line — click-to-comment is preserved, and code/tables render intact in both the dialog question and the review plan. Added `.line-content table` styling.
+
+### Fix: event feed no longer floods with duplicate status rows
+- Consecutive identical stage-status changes (e.g. a stream of "TASK-REVIEW → ready") are now collapsed in the feed. The backend records each transition once; reconnect/debounce repeats no longer pile up as separate rows with drifting timestamps.
+
+### Fix: a completed stage stays selected when you click it
+- The auto-advance logic fired on every selection change and yanked you off any `done` stage, so clicking an earlier finished stage during a run bounced you straight back to the active one — you couldn't inspect its log/plan/dialog. It now advances only when the **currently selected** stage itself transitions to `done`; manually opening a finished stage sticks.
+
+### Fix: finished flow no longer shows the last stage as "in progress"
+- The animated amber selection indicator in the sidebar (pulsing bar + running scanline) played for any selected stage regardless of status, so after a flow finished its last (selected) stage looked perpetually in progress. The selection indicator is now static for `done`/`failed` stages (selection is still visible, just without the activity animation).
+
 ## 2026-07-23
 
 ### Dashboard: remove a line comment with an ✕

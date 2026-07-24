@@ -3,10 +3,8 @@ import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { MarkdownRenderer } from '../plan-panel'
-import { formatLine } from '../plan-panel/markdown'
+import { parseLineBlocks, type LineBlock } from '../plan-panel/markdown'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
-
-type QuestionLine = { line: number; html: string }
 
 type DialogChannelProps = {
   stage: Stage
@@ -234,7 +232,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   // Строка вопроса рендерится как строка ревью-плана (renderPlanLine в PlanPanel) —
   // те же CSS-классы (plan-line/line-num/line-content/line-comment-*) ради
   // визуальной консистентности между комментариями к плану и к вопросу.
-  function renderQuestionLine(item: QuestionLine): ReactNode {
+  function renderQuestionLine(item: LineBlock): ReactNode {
     const hasComment = comments[item.line] !== undefined
 
     return (
@@ -310,7 +308,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
             {pending !== null && (
               <div id="dialog-pending" className="dialog-pending">
                 <div className="dialog-question">
-                  {parseQuestionLines(pending.question ?? '').map((item) => renderQuestionLine(item))}
+                  {parseLineBlocks(pending.question ?? '').map((item) => renderQuestionLine(item))}
                 </div>
 
                 {commentCount === 0 && (
@@ -387,13 +385,6 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
       </PanelFrame>
     </Maximizable>
   )
-}
-
-// Разбивает вопрос на пронумерованные строки для кликабельного рендера
-// (аналог parseReviewPlan в PlanPanel, но без секций/код-блоков — вопросы не
-// имеют такой структуры, только текст).
-function parseQuestionLines(question: string): QuestionLine[] {
-  return question.split('\n').map((line, index) => ({ line: index + 1, html: formatLine(line) }))
 }
 
 // Собирает текст ответа из комментариев к строкам вопроса — аналог buildFeedback

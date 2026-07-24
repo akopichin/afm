@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 
@@ -212,6 +212,64 @@ describe('App', () => {
     })
 
     expect(document.getElementById('btn-retry')).not.toBeNull()
+  })
+
+  test('advances selection to the next active stage when the selected stage completes', async () => {
+    // Регресс-защита существующего поведения после рефактора автопродвижения (#3a):
+    // когда ВЫБРАННАЯ стадия сама завершается, выбор переходит к следующей активной.
+    let done = false
+    mockFetchForStatus(() =>
+      done
+        ? {
+            flow_name: 'demo',
+            stage_order: ['s1', 's2'],
+            stage_names: { s1: 'Propose', s2: 'Plan' },
+            stages: { s1: { status: 'done', updated_at: '' }, s2: { status: 'running', updated_at: '' } },
+          }
+        : {
+            flow_name: 'demo',
+            stage_order: ['s1', 's2'],
+            stage_names: { s1: 'Propose', s2: 'Plan' },
+            stages: { s1: { status: 'running', updated_at: '' }, s2: { status: 'pending', updated_at: '' } },
+          },
+    )
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    // s1 завершилась, s2 стала активной; значимое WS-событие триггерит рефетч статуса.
+    done = true
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
+    })
+
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Plan'))
+  })
+
+  test('manually selecting a completed stage keeps it selected instead of bouncing to the active one', async () => {
+    // Ядро фикса #3a: клик по завершённой стадии во время работы флоу должен
+    // оставить её выбранной (иначе нельзя посмотреть её логи/план/диалог).
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stage_order: ['s1', 's2'],
+      stage_names: { s1: 'Propose', s2: 'Plan' },
+      stages: { s1: { status: 'done', updated_at: '' }, s2: { status: 'running', updated_at: '' } },
+    }))
+
+    render(<App />)
+    // Автовыбор активной s2.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Plan'))
+
+    // Клик по завершённой s1 — выбор должен «прилипнуть», а не отскочить обратно на s2.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"]') as HTMLElement)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    // Даём эффектам/поллингу шанс (ошибочно) перекинуть выбор — он обязан остаться на s1.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    expect(document.getElementById('detail-title')).toHaveTextContent('Propose')
   })
 
   test('WARNING: falls back to a failed stage when no stage is active', async () => {

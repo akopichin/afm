@@ -271,6 +271,29 @@
 .line-content strong { color: var(--ink-hi); font-weight: 600; }
 .line-content li { margin-left: 18px; }
 
+/* Таблицы в построчном рендере (review-план и pending-вопрос диалога): схлопнуты
+   в один блок nextLineBlock'ом, поэтому стилизуем их как в .md (см. markdown.css),
+   иначе GFM-таблица выглядела бы «мешаниной» из голого текста. */
+.line-content table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 11px;
+}
+.line-content th,
+.line-content td {
+  border: 1px solid var(--mint-soft);
+  padding: 3px 8px;
+  text-align: left;
+}
+.line-content th {
+  color: var(--ink-hi);
+  background: var(--bg-elev);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+.line-content tr:nth-child(even) td { background: var(--grid); }
+
 .line-comment-marker {
   text-align: center;
   font-size: 9px;
