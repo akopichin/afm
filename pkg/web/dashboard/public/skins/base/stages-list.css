@@ -160,3 +160,69 @@
   90%  { opacity: 1; }
   100% { transform: translateY(34px); opacity: 0; }
 }
+
+/* === Motion (A1/A4/D) — one-shot переходы, токены/currentColor === */
+
+/* A1 — статус-точка при переходе стадии в done: заливка + галочка + вспышка */
+.status-dot .dot-check {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  color: var(--bg);
+  opacity: 0;
+  transform: scale(0.4);
+  pointer-events: none;
+}
+.stage-item.just-done .status-dot { animation: dotComplete 0.6s ease; }
+.stage-item.just-done .status-dot::after { transform: scale(1); }
+.stage-item.just-done .status-dot .dot-check { animation: dotCheck 0.6s ease forwards; }
+@keyframes dotComplete {
+  0%   { box-shadow: 0 0 0 0 currentColor; }
+  40%  { box-shadow: 0 0 0 5px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes dotCheck {
+  0%   { opacity: 0; transform: scale(0.4); }
+  55%  { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* A4 — вход активной стадии */
+.stage-item.active { animation: stageActivate 0.4s ease; }
+@keyframes stageActivate {
+  from { opacity: 0.35; transform: translateX(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* D — коннектор между стадиями + одноразовое «пробегание» импульса при done.
+   Явный дочерний элемент (не ::before/::after — те заняты .active-декором).
+   left подобран под центр status-dot; при визуальной проверке допускается нудж. */
+.stage-connector {
+  position: absolute;
+  left: 10px;
+  top: 26px;
+  width: 2px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--mint-soft);
+  pointer-events: none;
+}
+.stage-connector::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber);
+  opacity: 0;
+}
+.stage-item.just-done .stage-connector::after { animation: connTravel 0.6s ease-in; }
+@keyframes connTravel {
+  0%   { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(14px); opacity: 0; }
+}

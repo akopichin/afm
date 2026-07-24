@@ -115,3 +115,7 @@
   0%, 100% { box-shadow: 0 0 4px currentColor; }
   50%      { box-shadow: 0 0 12px currentColor; }
 }
+
+/* C3 — мягкий пульс индикатора соединения, пока WS не подключён */
+#ws-status.disconnected { animation: wsReconnect 1.1s ease-in-out infinite; }
+@keyframes wsReconnect { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }

@@ -491,3 +491,57 @@
 #retry-section {
   flex: 0 0 auto;
 }
+
+/* B2 — плавный въезд границы комментария + pop маркера (общие классы плана и диалога) */
+.plan-line { transition: background 0.1s, border-color 0.25s ease, margin-left 0.25s ease, padding-left 0.25s ease; }
+.plan-line.has-comment .line-comment-marker { animation: markerPop 0.35s ease; }
+@keyframes markerPop {
+  0%   { transform: scale(0.3); }
+  60%  { transform: scale(1.4); }
+  100% { transform: scale(1); }
+}
+
+/* B1 — success-морф кнопок (класс .ok навешивается из React на ~1.2с) */
+.btn { position: relative; overflow: hidden; }
+.btn .btn-label { transition: opacity 0.2s; }
+.btn .btn-done {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.btn.ok .btn-label { opacity: 0; }
+.btn.ok .btn-done { opacity: 1; }
+.btn .btn-ripple {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 45%, transparent);
+  transform: translate(-50%, -50%) scale(0);
+  pointer-events: none;
+}
+.btn.ok .btn-ripple { animation: btnRipple 0.5s ease-out; }
+@keyframes btnRipple {
+  to { transform: translate(-50%, -50%) scale(30); opacity: 0; }
+}
+
+/* C2 — индикатор «агент думает» (в шапке детали при running) */
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.thinking .td { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: thinkBlink 1s infinite; }
+.thinking .td:nth-child(2) { animation-delay: 0.15s; }
+.thinking .td:nth-child(3) { animation-delay: 0.3s; }
+@keyframes thinkBlink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }

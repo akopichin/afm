@@ -317,3 +317,8 @@
   background: var(--amber);
   animation: attentionPulse 1.2s ease-in-out infinite;
 }
+
+/* C1 — плавный кроссфейд при смене темы (data-theme) на крупных поверхностях */
+#main, #header, #footer, #stages-panel, #plan-section, #dialog-section, #feed-panel, .markdown-body {
+  transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease;
+}
