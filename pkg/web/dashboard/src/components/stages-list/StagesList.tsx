@@ -14,6 +14,7 @@ type StagesListProps = {
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
 export function StagesList({ stages, selectedStageId, onSelect }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
+  const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
 
   useEffect(() => {
@@ -32,15 +33,29 @@ export function StagesList({ stages, selectedStageId, onSelect }: StagesListProp
       newly.forEach((id) => next.add(id))
       return next
     })
-    const timer = window.setTimeout(() => {
-      setJustDone((prev) => {
-        const next = new Set(prev)
-        newly.forEach((id) => next.delete(id))
-        return next
-      })
-    }, 700)
-    return () => window.clearTimeout(timer)
+    // Отдельный таймер на каждую стадию (в ref), чтобы повторный прогон эффекта
+    // от обычного поллинга (новый массив stages каждые 3с) не отменял отложенную
+    // очистку другой стадии — иначе just-done залипал бы навсегда.
+    newly.forEach((id) => {
+      if (timers.current[id] !== undefined) window.clearTimeout(timers.current[id])
+      timers.current[id] = window.setTimeout(() => {
+        delete timers.current[id]
+        setJustDone((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      }, 700)
+    })
   }, [stages])
+
+  // Чистим все висящие таймеры только при размонтировании.
+  useEffect(() => {
+    const t = timers.current
+    return () => {
+      Object.values(t).forEach((id) => window.clearTimeout(id))
+    }
+  }, [])
 
   return (
     <aside id="stages-panel">

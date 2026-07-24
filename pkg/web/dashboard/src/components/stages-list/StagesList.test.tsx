@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import type { Stage } from '../../types'
 import { StagesList } from './StagesList'
@@ -76,5 +76,23 @@ describe('StagesList', () => {
     const done: Stage[] = [{ ...base[0]!, status: 'done' }]
     rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />)
     expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
+  })
+
+  test('just-done очищается через 700мс даже при промежуточном обновлении stages без нового перехода', () => {
+    vi.useFakeTimers()
+    try {
+      const running: Stage[] = [{ id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false }]
+      const { container, rerender } = render(<StagesList stages={running} selectedStageId={null} onSelect={() => {}} />)
+      const done: Stage[] = [{ ...running[0]!, status: 'done' }]
+      act(() => { rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />) })
+      expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
+      // промежуточное обновление stages (новый массив, без нового перехода) через 300мс
+      act(() => { vi.advanceTimersByTime(300); rerender(<StagesList stages={[{ ...done[0]! }]} selectedStageId={null} onSelect={() => {}} />) })
+      // к 700мс от перехода класс должен уйти
+      act(() => { vi.advanceTimersByTime(500) })
+      expect(container.querySelector('.stage-item.just-done')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
