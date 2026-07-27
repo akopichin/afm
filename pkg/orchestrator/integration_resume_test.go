@@ -277,6 +277,69 @@ func TestIntegration_ResumeFromRevising(t *testing.T) {
 	}
 }
 
+// TestResume_RevisingAutonomousStageUsesAutonomousFeedback подтверждает, что
+// краш в revising для АВТОНОМНОЙ стадии резюмится через
+// runAutonomousWithFeedback, а не жёстко через runPlanningWithFeedback (баг
+// до этой правки: detectInterruptedPhase не проверял
+// autonomous_execution.session.json, поэтому не находил активную фазу и
+// recovery.go шёл в default-ветку planning, которая упала бы — у автономной
+// стадии нет plan.md).
+func TestResume_RevisingAutonomousStageUsesAutonomousFeedback(t *testing.T) {
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "auto")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Имитируем прерванную автономную стадию: autonomous.flag +
+	// autonomous_execution.session.json (свежий) + feedback.md — как если бы
+	// Revise уже сработал, но процесс упал до перезапуска.
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous_execution.session.json"), []byte(`{"session_id":"test-session"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("keep going"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{ID: "auto", Name: "auto", Agents: []flow.AgentType{flow.AgentAuto}}}
+	store, err := state.Open(runDir, []string{"auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "auto", From: state.StatusPending, To: state.StatusRevising, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	runner := &blockingThenFeedbackRunner{stageID: "auto"}
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
+	})
+	runner.orch = orch
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// blockingThenFeedbackRunner.calls==1 при первом вызове блокируется на
+	// ctx.Done() — здесь нам нужно, чтобы recovery СРАЗУ вызвала
+	// runAutonomousWithFeedback (calls становится 1, читает feedback.md,
+	// но т.к. это ПЕРВЫЙ вызов раннера в этом тесте — он блокируется). Чтобы
+	// проверить именно ДИСПЕТЧИНГ (не полный цикл), достаточно убедиться,
+	// что стадия дошла до "running" (recovery успешно нашла autonomous-фазу
+	// и не упала на попытке прочитать несуществующий plan.md) в разумное
+	// время — а не осталась в revising/failed.
+	waitForStatus(t, stateFile, "auto", state.StatusRunning, 10*time.Second)
+}
+
 // TestResumeAfterCrash verifies that when afm crashes while a stage is
 // in awaiting_user_input, and both question.json and answer.json already exist
 // on disk, the orchestrator on restart resumes the interactive agent, which

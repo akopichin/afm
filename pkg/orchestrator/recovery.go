@@ -22,8 +22,14 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			switch current {
 			case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval:
 				continue
-			case state.StatusRunning, state.StatusReady, state.StatusAwaitingUserInput:
-				// Let these fall through to the normal resume logic below.
+			case state.StatusRunning, state.StatusReady, state.StatusAwaitingUserInput, state.StatusRevising:
+				// Let these fall through to the normal resume logic below. Revising
+				// must fall through too (not hit default→activateAutoStage below):
+				// an auto stage revised mid-run has no plan.md and isn't Pending, so
+				// treating it as a fresh activation candidate would fire a no-op
+				// EvReady (invalid from Revising, silently dropped) and strand the
+				// stage in Revising forever instead of resuming via
+				// runAutonomousWithFeedback below.
 			case state.StatusRetrying:
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if err := checkCompletion(stageDir, ".", s); err == nil {
@@ -84,8 +90,21 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "restart after retry")
 			o.spawnAgent(ctx, s, o.runPlanningAgent)
 		case state.StatusRevising:
-			// Interrupted revision — restart with feedback
-			o.spawnAgent(ctx, s, o.runPlanningWithFeedback)
+			// Interrupted revision — restart with feedback, using whichever phase
+			// was actually interrupted (agent_suggest can revise any active phase,
+			// not only planning — detectInterruptedPhase looks at *.session.json
+			// mtimes, same helper resumeInteractiveAgent already uses).
+			stageDir := filepath.Join(o.opts.RunDir, s.ID)
+			switch o.detectInterruptedPhase(stageDir) {
+			case phaseImplementation:
+				o.spawnAgent(ctx, s, o.runImplementationWithFeedback)
+			case phaseReview:
+				o.spawnAgent(ctx, s, o.runReviewWithFeedback)
+			case phaseAutonomous:
+				o.spawnAgent(ctx, s, o.runAutonomousWithFeedback)
+			default:
+				o.spawnAgent(ctx, s, o.runPlanningWithFeedback)
+			}
 		case state.StatusRunning:
 			// Check if .done exists (agent completed but orchestrator missed the event)
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -164,7 +183,7 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 func (o *Orchestrator) detectInterruptedPhase(stageDir string) string {
 	var latestPhase string
 	var latestMtime time.Time
-	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview} {
+	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview, phaseAutonomous} {
 		fi, err := os.Stat(sessionFile(stageDir, phase))
 		if err != nil {
 			continue
