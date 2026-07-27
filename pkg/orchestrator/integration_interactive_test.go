@@ -290,20 +290,20 @@ func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 // создаёт symlink на answer.json (чтобы агентский polling-loop нашёл ответ).
 func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 	dir := t.TempDir()
+	rootDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(rootDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
-	// «Неправильная» директория, куда агент по ошибке кладёт вопрос.
-	wrongDir := filepath.Join(dir, "wrong-stages", "propose")
-	wrongQuestion := filepath.Join(wrongDir, "planning.q1.question.json")
-	wrongAnswer := filepath.Join(wrongDir, "planning.q1.answer.json")
+	// «Неправильная» директория: агент по CWD-багу пишет вопрос прямо в
+	// верхний уровень root_dir (см. дизайн: bare-relative-write паттерн),
+	// а не в $AFM_STAGE_DIR.
+	wrongQuestion := filepath.Join(rootDir, "planning.q1.question.json")
+	wrongAnswer := filepath.Join(rootDir, "planning.q1.answer.json")
 
-	// Скрипт: РЕАЛЬНО создаёт misplaced question.json и эмитит stream-json Write
-	// tool_use с тем же путём (poller узнаёт путь через <phase>.jsonl), затем спит,
-	// имитируя зависший bash-polling-loop агента.
 	scriptPath := filepath.Join(dir, "misplacedagent.sh")
 	script := "#!/bin/bash\n" +
-		fmt.Sprintf("mkdir -p %q\n", wrongDir) +
 		fmt.Sprintf(`echo '{"id":"q1","question":"where?","options":["a","b"]}' > %q`+"\n", wrongQuestion) +
-		fmt.Sprintf(`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":%q,"content":"..."}}]}}'`+"\n", wrongQuestion) +
 		"sleep 30\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -331,28 +331,88 @@ func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 		Store:   store,
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
+		RootDir: rootDir,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	go func() { _ = orch.Run(ctx) }()
 
-	// misplaced question relocate'ится в stageDir → poller находит её → EvAskUser.
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
 
 	stageDir := filepath.Join(dir, "propose")
 
-	// Файл скопирован в правильное место — вопрос виден в UI.
 	if _, err := os.Stat(filepath.Join(stageDir, "planning.q1.question.json")); err != nil {
 		t.Errorf("relocated question missing in stageDir: %v", err)
 	}
-	// По неверному пути создан dangling-символ на будущий answer.json в stageDir —
-	// агентский polling-loop найдёт ответ, когда пользователь ответит.
 	link, err := os.Readlink(wrongAnswer)
 	if err != nil {
 		t.Errorf("expected answer symlink at %s: %v", wrongAnswer, err)
 	} else if link != filepath.Join(stageDir, "planning.q1.answer.json") {
 		t.Errorf("answer symlink points to %q, want %q", link, filepath.Join(stageDir, "planning.q1.answer.json"))
+	}
+}
+
+// TestIntegration_BareQuestionFilenameNormalized: агент пишет вопрос вообще
+// без префикса ("q1.question.json" вместо "planning.q1.question.json") прямо
+// в root_dir. relocateMisplacedQuestions должен считать всё имя целиком id и
+// подставить активную фазу (planning — единственный <phase>.jsonl, который
+// успел появиться на диске к этому моменту).
+func TestIntegration_BareQuestionFilenameNormalized(t *testing.T) {
+	dir := t.TempDir()
+	rootDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(rootDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	wrongQuestion := filepath.Join(rootDir, "q1.question.json")
+	wrongAnswer := filepath.Join(rootDir, "q1.answer.json")
+
+	scriptPath := filepath.Join(dir, "bareagent.sh")
+	script := "#!/bin/bash\n" +
+		fmt.Sprintf(`echo '{"id":"q1","question":"where?","options":["a","b"]}' > %q`+"\n", wrongQuestion) +
+		"sleep 30\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "propose",
+		Name:        "Propose",
+		Description: "interactive planning that writes a bare-named question file",
+		Agents:      []flow.AgentType{flow.AgentPlanning},
+		Interactive: true,
+		Command:     scriptPath,
+	}}
+
+	store, err := state.Open(dir, []string{"propose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+		RootDir: rootDir,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
+
+	stageDir := filepath.Join(dir, "propose")
+	if _, err := os.Stat(filepath.Join(stageDir, "planning.q1.question.json")); err != nil {
+		t.Errorf("bare-named question was not normalized into stageDir: %v", err)
+	}
+	if _, err := os.Readlink(wrongAnswer); err != nil {
+		t.Errorf("expected answer symlink at %s: %v", wrongAnswer, err)
 	}
 }
 
@@ -366,14 +426,12 @@ func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 func TestIntegration_MisprefixedQuestionNormalized(t *testing.T) {
 	dir := t.TempDir()
 
-	// Скрипт пишет вопрос ВНУТРЬ $AFM_STAGE_DIR, но с префиксом id стадии.
-	// Эмитит stream-json Write tool_use с тем же путём (poller узнаёт путь через
-	// planning.jsonl), затем спит, имитируя зависший bash-polling-loop.
+	// Скрипт пишет вопрос ВНУТРЬ $AFM_STAGE_DIR, но с префиксом id стадии,
+	// затем спит, имитируя зависший bash-polling-loop.
 	scriptPath := filepath.Join(dir, "misprefixedagent.sh")
 	script := "#!/bin/bash\n" +
 		`q="$AFM_STAGE_DIR/commit-changes.q1.question.json"` + "\n" +
 		`echo '{"id":"q1","question":"ready?","options":["a","b"]}' > "$q"` + "\n" +
-		`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"'"$q"'","content":"..."}}]}}'` + "\n" +
 		"sleep 30\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

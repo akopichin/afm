@@ -193,10 +193,14 @@ func writeSynthAgent(t *testing.T, spec AgentSpec) string {
 			qExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/$STAGE_PREFIX.%s.question.json"`, q.ID)
 			aExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/$STAGE_PREFIX.%s.answer.json"`, q.ID)
 		case FaultWrongFolder:
-			fmt.Fprintf(&b, `WRONG_DIR="$AFM_STAGE_DIR/../wrong-%s"`+"\n", q.ID)
-			b.WriteString(`mkdir -p "$WRONG_DIR"` + "\n")
-			qExpr = fmt.Sprintf(`"$WRONG_DIR/%s.%s.question.json"`, q.Phase, q.ID)
-			aExpr = fmt.Sprintf(`"$WRONG_DIR/%s.%s.answer.json"`, q.Phase, q.ID)
+			// Верхний уровень root_dir (= runDir харнесса, см. Options.RootDir в
+			// runScenarioUpToAssert) — как и предписывает дизайн
+			// relocateMisplacedQuestions (Task 2): скан root_dir идёт по его
+			// ВЕРХНЕМУ уровню без рекурсии, поэтому файл должен оказаться
+			// прямо в корне проекта ($AFM_STAGE_DIR/.. резолвится в runDir),
+			// а не в произвольной вложенной поддиректории.
+			qExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/../%s.%s.question.json"`, q.Phase, q.ID)
+			aExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/../%s.%s.answer.json"`, q.Phase, q.ID)
 		default: // FaultNone
 			qExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/%s.%s.question.json"`, q.Phase, q.ID)
 			aExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/%s.%s.answer.json"`, q.Phase, q.ID)
@@ -327,6 +331,11 @@ func runScenarioUpToAssert(t *testing.T, sc Scenario) (*orchestrator.Orchestrato
 		Prompts:          orchestrator.DefaultPrompts(),
 		Runner:           runner,
 		SupervisorRunner: runner,
+		// RootDir — верхний уровень "root_dir" для FaultWrongFolder (Task 2):
+		// relocateMisplacedQuestions сканирует top-level root_dir только когда
+		// он задан, поэтому харнесс использует runDir как root_dir, соответствуя
+		// реальному использованию (root_dir — родитель stageDir).
+		RootDir: runDir,
 	})
 
 	// config.Default() задаёт 30-минутный idle-timeout — намного больше, чем

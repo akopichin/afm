@@ -45,6 +45,23 @@ func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 // EventAskUser to transition the stage to awaiting_user_input.
 func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 	snap := o.opts.Store.Snapshot()
+
+	// activeInteractiveCount считает interactive-стадии, активные прямо сейчас
+	// (см. relocateMisplacedQuestions: файл в root_dir не несёт stageID, поэтому
+	// скан root_dir безопасен, только когда однозначно ясно, кому он принадлежит).
+	activeInteractiveCount := 0
+	for id, st := range snap.Stages {
+		switch st.Status {
+		case state.StatusPlanning, state.StatusRunning, state.StatusRevising,
+			state.StatusRetrying, state.StatusAwaitingUserInput:
+		default:
+			continue
+		}
+		if stage := o.graph.Stage(id); stage != nil && stage.Interactive {
+			activeInteractiveCount++
+		}
+	}
+
 	for stageID, st := range snap.Stages {
 		switch st.Status {
 		case state.StatusPlanning, state.StatusRunning, state.StatusRevising,
@@ -95,7 +112,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 		// Auto-relocate the misplaced file so the dialog becomes visible in the UI.
 		if len(questions) == 0 {
 			if stage := o.graph.Stage(stageID); stage != nil && stage.Interactive {
-				o.relocateMisplacedQuestions(stageDir)
+				o.relocateMisplacedQuestions(stageID, stageDir, activeInteractiveCount <= 1)
 			}
 		}
 	}
@@ -152,69 +169,129 @@ func dialogPhases(stageDir string) []string {
 	return phases
 }
 
+// relocateScanInterval — throttle для скана root_dir внутри
+// relocateMisplacedQuestions: это запасная сеть, а не основной путь, лишняя
+// частота (раз в секунду, как основной poll-тик) не нужна.
+const relocateScanInterval = 5 * time.Second
+
+// activeDialogPhase возвращает фазу, чей <phase>.jsonl изменялся последним
+// среди dialogPhases(stageDir) — это и есть фаза, в которой сейчас реально
+// работает агент (одновременно активна только одна). Пустая строка, если
+// агент ещё не начал писать ни в одну фазу (ни один <phase>.jsonl не создан).
+func activeDialogPhase(stageDir string) string {
+	var latest string
+	var latestMod time.Time
+	for _, phase := range dialogPhases(stageDir) {
+		info, err := os.Stat(filepath.Join(stageDir, jsonlFileForPhase(phase)))
+		if err != nil {
+			continue
+		}
+		if latest == "" || info.ModTime().After(latestMod) {
+			latest = phase
+			latestMod = info.ModTime()
+		}
+	}
+	return latest
+}
+
+// collectQuestionFiles добавляет в into абсолютные пути всех *.question.json
+// в верхнем уровне dir (без рекурсии в поддиректории).
+func collectQuestionFiles(dir string, into map[string]bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".question.json") {
+			continue
+		}
+		into[filepath.Join(dir, e.Name())] = true
+	}
+}
+
 // relocateMisplacedQuestions чинит два способа, которыми агент может «спрятать»
 // файл вопроса от поллера, и оба ведут к вечному зависанию стадии:
 //
-//  1. Неверная ДИРЕКТОРИЯ: question.json записан вне stageDir (GLM-4.7 bug —
-//     модель конструирует путь из CWD вместо $AFM_STAGE_DIR).
-//  2. Неверный ПРЕФИКС: файл лежит внутри stageDir, но назван по id стадии
-//     (напр. "commit-changes.q1.question.json") вместо канонической фазы
-//     ("planning.q1.question.json"). FindUnansweredQuestions матчит только
-//     planning/implementation/review/autonomous_execution → такой файл невидим.
+//  1. Неверная ДИРЕКТОРИЯ: question.json записан вне stageDir (агент строит
+//     путь из CWD вместо $AFM_STAGE_DIR).
+//  2. Неверный ПРЕФИКС: файл лежит внутри stageDir, но назван не по
+//     канонической фазе (напр. "commit-changes.q1.question.json" или вообще
+//     без префикса "q1.question.json").
 //
-// В обоих случаях файл нормализуется к каноническому имени "<phase>.<id>.question.json".
-// Правильная фаза берётся не из (возможно неверного) префикса, а из того, в чьём
-// <phase>.jsonl нашёлся Write этого файла — это авторитетный признак. Для каждого
-// нормализованного файла создаётся dangling-симлинк по ПУТИ, который опрашивает
-// агент (его директория + его префикс), → канонический answer.json в stageDir,
-// чтобы bash-polling-loop нашёл ответ, даже если агент ошибся и с папкой, и с префиксом.
-func (o *Orchestrator) relocateMisplacedQuestions(stageDir string) {
-	phases := dialogPhases(stageDir)
-	for _, phase := range phases {
-		jsonlPath := filepath.Join(stageDir, jsonlFileForPhase(phase))
-		for _, f := range executor.WrittenFiles(jsonlPath) {
-			base := filepath.Base(f)
-			if !strings.HasSuffix(base, ".question.json") {
-				continue
-			}
-			// Разбираем "<prefix>.<id>.question.json" → id.
-			trimmed := strings.TrimSuffix(base, ".question.json")
-			dot := strings.Index(trimmed, ".")
-			if dot < 0 || trimmed[dot+1:] == "" {
-				continue // не формат <prefix>.<id> — не наш файл
-			}
-			id := trimmed[dot+1:]
-			dstBase := phase + "." + id + ".question.json"
-			dst := filepath.Join(stageDir, dstBase)
+// В отличие от прежней реализации, НЕ парсит stream-json лог агента в поисках
+// вызова инструмента Write — сканирует файловую систему напрямую, поэтому не
+// зависит от того, каким инструментом (Write, Bash echo/heredoc, кастомный
+// скилл-скрипт) агент создал файл.
+//
+// Скан stageDir (случай 2) выполняется всегда — дёшево, там всего несколько
+// файлов. Скан root_dir (случай 1, allowRootScan) — throttled раз в
+// relocateScanInterval на стадию и ТОЛЬКО когда allowRootScan=true: если
+// параллельно активно ≥2 interactive-стадий без открытого вопроса, у файла в
+// root_dir нет однозначного адресата (в имени только phase+id, без stageID) —
+// безопаснее оставить стадию висеть ещё один тик поллера, чем угадать неверно
+// (см. дизайн-документ, "Безопасность при нескольких параллельных
+// interactive-стадиях").
+func (o *Orchestrator) relocateMisplacedQuestions(stageID, stageDir string, allowRootScan bool) {
+	phase := activeDialogPhase(stageDir)
+	if phase == "" {
+		return // агент ещё не начал писать ни в одну фазу — сканировать нечего
+	}
 
-			// Файл уже на своём каноническом месте — поллер подхватит штатно.
-			if pathInside(f, stageDir) && base == dstBase {
-				continue
-			}
-			if _, err := os.Stat(f); err != nil {
-				continue // файл не существует — агент ещё не дошёл до записи
-			}
-			if _, err := os.Stat(dst); err == nil {
-				continue // уже нормализован ранее
-			}
-			data, err := os.ReadFile(f)
-			if err != nil {
-				log.Printf("WARN: normalize question %s: read: %v", f, err)
-				continue
-			}
-			if err := os.WriteFile(dst, data, 0644); err != nil {
-				log.Printf("WARN: normalize question %s → %s: write: %v", f, dst, err)
-				continue
-			}
-			wrongAnswer := filepath.Join(filepath.Dir(f), trimmed+".answer.json")
-			rightAnswer := filepath.Join(stageDir, phase+"."+id+".answer.json")
-			if _, err := os.Lstat(wrongAnswer); err != nil {
-				_ = os.MkdirAll(filepath.Dir(wrongAnswer), 0755)
-				_ = os.Symlink(rightAnswer, wrongAnswer)
-			}
-			log.Printf("INFO: normalized misplaced question %s → %s (symlink answer)", f, dst)
+	candidates := map[string]bool{}
+	collectQuestionFiles(stageDir, candidates)
+
+	if allowRootScan && o.opts.RootDir != "" && !pathInside(o.opts.RootDir, stageDir) {
+		last, seen := o.lastRootScan[stageID]
+		if !seen || time.Since(last) >= relocateScanInterval {
+			o.lastRootScan[stageID] = time.Now()
+			collectQuestionFiles(o.opts.RootDir, candidates)
 		}
 	}
+
+	for f := range candidates {
+		o.normalizeMisplacedQuestion(f, stageDir, phase)
+	}
+}
+
+// normalizeMisplacedQuestion нормализует один найденный файл в канонический
+// путь "<phase>.<id>.question.json" внутри stageDir и создаёт dangling-симлинк
+// на будущий answer.json по (неверному) пути, который опрашивает агент.
+//
+// Разбор имени: "<prefix>.<id>.question.json" → id (префикс отбрасывается,
+// неважно, стадии он или фазы). Если в имени нет точки-разделителя вообще
+// (агент написал голый "q1.question.json") — id это всё имя целиком.
+func (o *Orchestrator) normalizeMisplacedQuestion(f, stageDir, phase string) {
+	base := filepath.Base(f)
+	trimmed := strings.TrimSuffix(base, ".question.json")
+	id := trimmed
+	if dot := strings.Index(trimmed, "."); dot >= 0 {
+		id = trimmed[dot+1:]
+	}
+	if id == "" {
+		return
+	}
+	dstBase := phase + "." + id + ".question.json"
+	dst := filepath.Join(stageDir, dstBase)
+
+	if _, err := os.Stat(dst); err == nil {
+		return // уже на каноническом месте (либо f==dst, либо нормализовано ранее)
+	}
+	data, err := os.ReadFile(f)
+	if err != nil {
+		log.Printf("WARN: normalize question %s: read: %v", f, err)
+		return
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		log.Printf("WARN: normalize question %s → %s: write: %v", f, dst, err)
+		return
+	}
+	wrongAnswer := filepath.Join(filepath.Dir(f), trimmed+".answer.json")
+	rightAnswer := filepath.Join(stageDir, phase+"."+id+".answer.json")
+	if _, err := os.Lstat(wrongAnswer); err != nil {
+		_ = os.MkdirAll(filepath.Dir(wrongAnswer), 0755)
+		_ = os.Symlink(rightAnswer, wrongAnswer)
+	}
+	log.Printf("INFO: normalized misplaced question %s → %s (symlink answer)", f, dst)
 }
 
 // pathInside reports whether file is located inside dir. Both are resolved to

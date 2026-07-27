@@ -83,6 +83,9 @@ type Orchestrator struct {
 	// violationCache кешует stat .jsonl-файлов для detectDialogViolation.
 	// Доступен только из горутины поллера — мьютекс не нужен.
 	violationCache map[string]violationCacheEntry // key: путь к .jsonl
+	// lastRootScan хранит время последнего скана root_dir на стадию (throttle
+	// в relocateMisplacedQuestions). Доступен только из горутины поллера.
+	lastRootScan map[string]time.Time
 	// supervisor оценивает, можно ли выполнить стадию автономно.
 	// nil, если SupervisorRunner не задан в Options.
 	supervisor *Supervisor
@@ -197,6 +200,7 @@ func New(opts Options) *Orchestrator {
 		fsm:            NewFSM(opts.Store),
 		sems:           sems,
 		violationCache: make(map[string]violationCacheEntry),
+		lastRootScan:   make(map[string]time.Time),
 		supervisor:     sup,
 		maxRetries:     MaxRetries,
 		retryBackoff:   RetryBackoff,
