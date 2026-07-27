@@ -342,6 +342,27 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 		}
 		o.tryActivatePrePlanned(ctx)
 	case phaseImplementation, phaseAutonomous:
+		// agent_suggest race: агент завершился ЕСТЕСТВЕННО (вернул nil) в
+		// момент, почти совпадающий с Revise() (running -> revising) —
+		// SIGINT/сигнал в interruptChans так и не был замечен субпроцессом
+		// (он уже возвращался), поэтому onUserInterrupted не сработал, и
+		// runWithRetry дошёл сюда обычным успешным путём. current уже
+		// StatusRevising, а не Running/Retrying — без реконсиляции стадия
+		// осталась бы в revising до конца live-рана (тот же кейс для краша
+		// уже решён в recovery.go/startPlanningForPending). Диспатчим тем
+		// же способом: перезапуск с фидбеком, уже сохранённым на диске.
+		if current == state.StatusRevising {
+			stage := o.graph.Stage(ev.StageID)
+			if stage == nil {
+				return nil
+			}
+			if agentType == phaseAutonomous {
+				o.spawnAgent(ctx, *stage, o.runAutonomousWithFeedback)
+			} else {
+				o.spawnAgent(ctx, *stage, o.runImplementationWithFeedback)
+			}
+			return nil
+		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
 		if current != state.StatusRunning && current != state.StatusRetrying {
