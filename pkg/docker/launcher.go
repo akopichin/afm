@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 
@@ -94,13 +96,41 @@ func (e *SubprocessExitError) Error() string {
 // смену образа между разными code identities. exec.Command обходит это
 // ограничение: docker запускается дочерним процессом, а не заменяет текущий.
 // Возвращает *SubprocessExitError — caller обязан завершить процесс с этим кодом.
+//
+// SIGINT/SIGTERM хостовому процессу (Ctrl-C, kill) без явной обработки просто
+// убивали САМ ЭТОТ процесс дефолтной Go/OS-диспозицией — docker run (дочерний
+// процесс, exec.Command его не форвардит сигналы автоматически) оставался
+// сиротой и продолжал крутить контейнер бесконечно, никак не зная о смерти
+// родителя. Ловим сигнал сами и форвардим его в docker run: тот в foreground-
+// режиме (без -d, как здесь), получив SIGINT/SIGTERM, сам штатно останавливает
+// контейнер — остаётся просто дождаться его настоящего завершения.
 var defaultExecFunc = func(argv0 string, argv []string, envv []string) error {
 	c := exec.Command(argv0, argv[1:]...) //nolint:gosec
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Env = envv
-	if err := c.Run(); err != nil {
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	if err := c.Start(); err != nil {
+		return err
+	}
+
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- c.Wait() }()
+
+	var err error
+	select {
+	case sig := <-sigCh:
+		_ = c.Process.Signal(sig)
+		err = <-waitErr
+	case err = <-waitErr:
+	}
+
+	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			return &SubprocessExitError{Code: exitErr.ExitCode()}
