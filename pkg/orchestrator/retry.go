@@ -108,11 +108,13 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				return
 			}
 			if completionCheck == nil {
+				appendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
 				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			checkErr := completionCheck()
 			if checkErr == nil {
+				appendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
 				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
