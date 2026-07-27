@@ -137,6 +137,39 @@ describe('useStatus', () => {
     expect(result.current.stages).toEqual([])
   })
 
+  test('CRITICAL: discards a stale response that resolves after a newer request was issued', async () => {
+    // Живой баг: несколько значимых WS-событий подряд (напр. стадия A завершилась
+    // И стадия B тут же стала running) issue несколько независимых fetch('/api/status').
+    // Сетевые ответы могут прийти НЕ в порядке отправки — если более старый (issued
+    // раньше) запрос резолвится ПОСЛЕ более нового, он откатывает состояние назад
+    // (напр. стадия B снова выглядит pending) и одноразовый auto-advance в App
+    // навсегда теряет свой шанс сработать.
+    let callIndex = 0
+    const deferred: Array<(data: unknown) => void> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      const idx = callIndex++
+      return new Promise<Response>((resolve) => {
+        deferred[idx] = (data) => resolve({ ok: true, json: async () => data } as Response)
+      })
+    })
+
+    const { result } = renderHook(() => useStatus())
+    await waitFor(() => expect(deferred[0]).toBeDefined())
+
+    // Второй (более новый) запрос issued до того, как первый успел резолвиться.
+    result.current.refresh()
+    await waitFor(() => expect(deferred[1]).toBeDefined())
+
+    // Резолвим НЕ по порядку: новый запрос отвечает первым.
+    deferred[1]!({ flow_name: 'newer', stages: {} })
+    await waitFor(() => expect(result.current.flowName).toBe('newer'))
+
+    // Устаревший запрос отвечает последним — не должен откатить состояние назад.
+    deferred[0]!({ flow_name: 'stale', stages: {} })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(result.current.flowName).toBe('newer')
+  })
+
   test('refresh() triggers a fresh fetch on demand (WS refresh channel)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

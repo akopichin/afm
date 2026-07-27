@@ -30,8 +30,18 @@ const EMPTY_STATUS: FlowStatus = { flowName: '', stages: [], startedAt: '', agen
 export function useStatus(): FlowStatus & { refresh: () => void } {
   const [status, setStatus] = useState<FlowStatus>(EMPTY_STATUS)
   const cancelledRef = useRef(false)
+  // Поллинг и WS-триггерный refresh() issue независимые fetch('/api/status') —
+  // несколько запросов могут быть в полёте одновременно (напр. burst значимых
+  // событий), а сетевые ответы приходят не обязательно в порядке отправки.
+  // latestRequestId — счётчик поколений: каждый load() запоминает свой номер
+  // ДО await и применяет ответ, только если он всё ещё самый свежий issued
+  // запрос — иначе более старый (но позже резолвившийся) ответ откатил бы
+  // состояние назад (реальный баг: пропущенный auto-advance стадии в App).
+  const latestRequestId = useRef(0)
 
   const load = useCallback(async () => {
+    const requestId = ++latestRequestId.current
+
     let response: Response
     try {
       response = await fetch('/api/status')
@@ -44,6 +54,7 @@ export function useStatus(): FlowStatus & { refresh: () => void } {
     // Единственная точка приведения типа для внешнего JSON.
     const data: unknown = await response.json()
     if (cancelledRef.current) return
+    if (requestId !== latestRequestId.current) return
 
     setStatus(normalizeStatus(data))
   }, [])

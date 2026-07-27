@@ -82,6 +82,49 @@ describe('StagesList', () => {
     expect(screen.queryAllByRole('button', { name: /more actions/i })).toHaveLength(0)
   })
 
+  test('CRITICAL: kebab menu portals to document.body so the scrollable #stages-panel cannot clip it', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+
+    const menuItem = screen.getByText('Добавить поправку агенту')
+    const menu = menuItem.closest('ul')
+    expect(menu).not.toBeNull()
+    // #stages-panel has overflow-y: auto (layout.css) — any descendant that opens
+    // below the visible viewport gets clipped. The menu must live outside it.
+    expect(document.getElementById('stages-panel')?.contains(menu)).toBe(false)
+    expect(document.body.contains(menu)).toBe(true)
+  })
+
+  test('clicking outside the open kebab menu closes it', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    expect(screen.getByText('Добавить поправку агенту')).toBeInTheDocument()
+
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByText('Добавить поправку агенту')).not.toBeInTheDocument()
+  })
+
+  test('scrolling the page closes the open kebab menu', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    expect(screen.getByText('Добавить поправку агенту')).toBeInTheDocument()
+
+    fireEvent.scroll(window)
+    expect(screen.queryByText('Добавить поправку агенту')).not.toBeInTheDocument()
+  })
+
   test('переход стадии в done навешивает one-shot класс just-done', async () => {
     const base: Stage[] = [
       { id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },

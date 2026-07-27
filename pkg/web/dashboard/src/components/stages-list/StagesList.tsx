@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import type { Stage } from '../../types'
 import { ATTENTION_STATUSES } from '../../hooks/use-attention'
+
+// Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
+// иначе right-выравнивание относительно кнопки съедет.
+const KEBAB_MENU_WIDTH = 200
 
 type StagesListProps = {
   stages: Stage[]
@@ -28,6 +33,42 @@ export function StagesList({ stages, selectedStageId, onSelect, agentSuggestEnab
   // пользователь описал двухуровневое взаимодействие меню→пункт, рассчитанное
   // на будущие пункты меню).
   const [openMenuStageId, setOpenMenuStageId] = useState<string | null>(null)
+  // #stages-panel скроллится (overflow-y: auto, layout.css) — абсолютно
+  // спозиционированное меню внутри него обрезалось бы краем панели, если
+  // строка стадии оказывается ближе к низу видимой области (реальный баг,
+  // замечен на живом флоу). Меню рендерится порталом в document.body с
+  // координатами, посчитанными от кнопки — тем же приёмом, что и полноэкранный
+  // Maximizable. menuPos живёт, пока меню открыто; закрывается кликом вне
+  // (mousedown-слушатель на document) или скроллом (иначе меню зависает
+  // визуально не на своём месте — перепозиционировать при скролле избыточно
+  // для меню с одним пунктом).
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const menuRef = useRef<HTMLUListElement | null>(null)
+  const openButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    if (openMenuStageId === null) return
+
+    const close = () => {
+      setOpenMenuStageId(null)
+      setMenuPos(null)
+    }
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (openButtonRef.current?.contains(target)) return
+      if (menuRef.current?.contains(target)) return
+      close()
+    }
+
+    document.addEventListener('mousedown', onMouseDown)
+    // capture:true — скролл не всплывает у скроллящихся контейнеров, но
+    // capture-фаза проходит через них независимо от bubbles.
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [openMenuStageId])
 
   useEffect(() => {
     const newly: string[] = []
@@ -92,40 +133,50 @@ export function StagesList({ stages, selectedStageId, onSelect, agentSuggestEnab
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
             {agentSuggestEnabled && KEBAB_STATUSES.has(stage.status) && (
-              <span
-                className="stage-kebab-wrap"
-                onBlur={(e) => {
-                  // Закрыть меню, когда фокус уходит за пределы обёртки (клик вне) —
-                  // relatedTarget пуст при клике вне документа/скролле, тогда тоже закрываем.
-                  if (!e.currentTarget.contains(e.relatedTarget)) setOpenMenuStageId(null)
-                }}
-              >
+              <span className="stage-kebab-wrap">
                 <button
                   type="button"
                   className="stage-kebab"
                   aria-label="More actions"
                   onClick={(e) => {
                     e.stopPropagation() // не триггерить onSelect клика по строке
-                    setOpenMenuStageId((current) => (current === stage.id ? null : stage.id))
+                    if (openMenuStageId === stage.id) {
+                      setOpenMenuStageId(null)
+                      setMenuPos(null)
+                      return
+                    }
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    openButtonRef.current = e.currentTarget
+                    setMenuPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - KEBAB_MENU_WIDTH) })
+                    setOpenMenuStageId(stage.id)
                   }}
                 >
                   ⋮
                 </button>
-                {openMenuStageId === stage.id && (
-                  <ul className="stage-kebab-menu" onClick={(e) => e.stopPropagation()}>
-                    <li>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenuStageId(null)
-                          onAddNote?.(stage.id)
-                        }}
-                      >
-                        Добавить поправку агенту
-                      </button>
-                    </li>
-                  </ul>
-                )}
+                {openMenuStageId === stage.id &&
+                  menuPos !== null &&
+                  createPortal(
+                    <ul
+                      className="stage-kebab-menu"
+                      ref={menuRef}
+                      style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <li>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenuStageId(null)
+                            setMenuPos(null)
+                            onAddNote?.(stage.id)
+                          }}
+                        >
+                          Добавить поправку агенту
+                        </button>
+                      </li>
+                    </ul>,
+                    document.body,
+                  )}
               </span>
             )}
             {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
