@@ -1,0 +1,109 @@
+/* pkg/web/dashboard/public/skins/base/agent-note-modal.css
+   Модалка «Добавить поправку агенту» (agent_suggest, Task 8): кебаб-меню в
+   StagesList + центрированная модалка поверх всего (включая maximize-overlay,
+   z-index: 1000 в layout.css). Только токены переменных из skins/<name>/index.css —
+   без хардкода цвета, чтобы работать во всех скинах и обеих темах. */
+
+/* === Кебаб-кнопка на строке стадии === */
+.stage-kebab-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.stage-kebab {
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.stage-kebab:hover {
+  color: var(--ink);
+  background: var(--mint-soft);
+}
+
+.stage-kebab-menu {
+  list-style: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  min-width: 200px;
+  background: var(--panel-bg);
+  border: 1px solid var(--mint-soft);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 10;
+  padding: 4px;
+}
+
+.stage-kebab-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  padding: 8px 10px;
+  border-radius: 3px;
+}
+.stage-kebab-menu button:hover {
+  background: var(--mint-soft);
+}
+
+/* === Модалка «Добавить поправку агенту» === */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 16px;
+}
+
+.modal-content {
+  background: var(--panel-bg);
+  border: 1px solid var(--mint-soft);
+  border-radius: 6px;
+  padding: 20px;
+  max-width: 480px;
+  width: 100%;
+}
+
+.agent-note-warning {
+  color: var(--amber);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.agent-note-textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--mint-soft);
+  border-radius: 4px;
+  padding: 10px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+  margin-bottom: 14px;
+}
+.agent-note-textarea:focus {
+  outline: none;
+  border-color: var(--mint);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

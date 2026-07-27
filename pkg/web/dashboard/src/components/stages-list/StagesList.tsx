@@ -6,16 +6,28 @@ type StagesListProps = {
   stages: Stage[]
   selectedStageId: string | null
   onSelect: (stageId: string) => void
+  agentSuggestEnabled: boolean
+  onAddNote?: (stageId: string) => void // вызывается при клике на пункт меню
 }
+
+// Статусы, при которых у стадии доступен кебаб (agent_suggest): агент ещё
+// выполняется (running) или ждёт одобрения плана (awaiting_approval) — оба
+// случая, когда POST /api/stages/{id}/revise принимает поправку (см. Task 7).
+const KEBAB_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, agentSuggestEnabled, onAddNote }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
+  // Какая стадия сейчас показывает открытое кебаб-меню (option (a) из брифа —
+  // маленькое выпадающее меню с одним пунктом, а не прямое открытие модалки:
+  // пользователь описал двухуровневое взаимодействие меню→пункт, рассчитанное
+  // на будущие пункты меню).
+  const [openMenuStageId, setOpenMenuStageId] = useState<string | null>(null)
 
   useEffect(() => {
     const newly: string[] = []
@@ -79,6 +91,43 @@ export function StagesList({ stages, selectedStageId, onSelect }: StagesListProp
             </span>
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
+            {agentSuggestEnabled && KEBAB_STATUSES.has(stage.status) && (
+              <span
+                className="stage-kebab-wrap"
+                onBlur={(e) => {
+                  // Закрыть меню, когда фокус уходит за пределы обёртки (клик вне) —
+                  // relatedTarget пуст при клике вне документа/скролле, тогда тоже закрываем.
+                  if (!e.currentTarget.contains(e.relatedTarget)) setOpenMenuStageId(null)
+                }}
+              >
+                <button
+                  type="button"
+                  className="stage-kebab"
+                  aria-label="More actions"
+                  onClick={(e) => {
+                    e.stopPropagation() // не триггерить onSelect клика по строке
+                    setOpenMenuStageId((current) => (current === stage.id ? null : stage.id))
+                  }}
+                >
+                  ⋮
+                </button>
+                {openMenuStageId === stage.id && (
+                  <ul className="stage-kebab-menu" onClick={(e) => e.stopPropagation()}>
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuStageId(null)
+                          onAddNote?.(stage.id)
+                        }}
+                      >
+                        Добавить поправку агенту
+                      </button>
+                    </li>
+                  </ul>
+                )}
+              </span>
+            )}
             {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
           </li>
         ))}

@@ -15,6 +15,7 @@
 @import url("../base/dialog-channel.css");
 @import url("../base/event-feed.css");
 @import url("../base/markdown.css");
+@import url("../base/agent-note-modal.css");
 
 :root[data-theme="dark"] {
   /* base surfaces — тёмная обжарка */

@@ -16,9 +16,13 @@ export type FlowStatus = {
   // читается защитно (undefined, если отсутствует), без нового API-вызова —
   // как только бэкенд начнёт присылать description, подзаголовок появится сам.
   description?: string
+  // Гейт экспериментальной фичи agent_suggest (config.Experimental, Task 1..7):
+  // из него зависит видимость кебаб-меню «Добавить поправку агенту» в StagesList
+  // (см. Task 8). Поле — statusResponse.AgentSuggestEnabled (`agent_suggest_enabled`).
+  agentSuggestEnabled: boolean
 }
 
-const EMPTY_STATUS: FlowStatus = { flowName: '', stages: [], startedAt: '' }
+const EMPTY_STATUS: FlowStatus = { flowName: '', stages: [], startedAt: '', agentSuggestEnabled: false }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
 // объект по id, порядок — в stage_order, имена — в stage_names (как в текущем app.js).
@@ -71,6 +75,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const flowName = typeof obj.flow_name === 'string' ? obj.flow_name : ''
   const startedAt = typeof obj.started_at === 'string' ? obj.started_at : ''
   const description = typeof obj.description === 'string' ? obj.description : undefined
+  const agentSuggestEnabled = obj.agent_suggest_enabled === true
 
   const stagesObj = isRecord(obj.stages) ? obj.stages : {}
   const namesObj = isRecord(obj.stage_names) ? obj.stage_names : {}
@@ -83,7 +88,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     toStage(id, stagesObj[id], namesObj[id], interactiveObj[id] === true, autonomousObj[id] === true),
   )
 
-  return { flowName, stages, startedAt, description }
+  return { flowName, stages, startedAt, description, agentSuggestEnabled }
 }
 
 function resolveOrder(stageOrder: unknown, stagesObj: Record<string, unknown>): string[] {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
+import { AgentNoteModal } from '../components/agent-note-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { LogPanel } from '../components/log-panel'
@@ -22,7 +23,22 @@ import type { Stage } from '../types'
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, agentSuggestEnabled, refresh } = useStatus()
+
+  // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
+  // (agent_suggest, Task 8); null — модалка скрыта.
+  const [noteModalStageId, setNoteModalStageId] = useState<string | null>(null)
+
+  async function handleSubmitNote(note: string): Promise<void> {
+    if (noteModalStageId === null) return
+
+    await fetch(`/api/stages/${encodeURIComponent(noteModalStageId)}/revise`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback: note }),
+    })
+    setNoteModalStageId(null)
+  }
 
   const wsUrl = buildWebSocketUrl()
   const { events, connected } = useEventFeed(wsUrl)
@@ -146,7 +162,15 @@ export function App(): ReactElement {
 
         <MaximizeProvider>
           <DashboardLayout
-            stages={<StagesList stages={stages} selectedStageId={selectedStageId} onSelect={setSelectedStageId} />}
+            stages={
+              <StagesList
+                stages={stages}
+                selectedStageId={selectedStageId}
+                onSelect={setSelectedStageId}
+                agentSuggestEnabled={agentSuggestEnabled}
+                onAddNote={setNoteModalStageId}
+              />
+            }
             stageHeader={
               selectedStage === null ? null : (
                 <>
@@ -186,6 +210,14 @@ export function App(): ReactElement {
       </main>
 
       <Footer stages={stages} startedAt={startedAt} elapsedMs={elapsedMs} />
+
+      {noteModalStageId !== null && (
+        <AgentNoteModal
+          stageId={noteModalStageId}
+          onCancel={() => setNoteModalStageId(null)}
+          onSubmit={handleSubmitNote}
+        />
+      )}
     </>
   )
 }
