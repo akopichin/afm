@@ -14,7 +14,7 @@ func TestLoadRunState_RebuildsFromLogWhenSnapshotStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "x"}); err != nil {
+	if err := s.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

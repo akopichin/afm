@@ -45,7 +45,7 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if err := store.Apply(state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingApproval, Event: "test_setup"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingApproval, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -218,7 +218,7 @@ func TestHandleRevise(t *testing.T) {
 func TestHandleRetry(t *testing.T) {
 	var retriedID string
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test_fail"}); err != nil {
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test_fail"}); err != nil {
 		t.Fatal(err)
 	}
 	srv.retryFn = func(ctx context.Context, id string) error { retriedID = id; return nil }
@@ -446,7 +446,7 @@ func TestDialogCancelAwaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if err := store.Apply(state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -477,7 +477,7 @@ func TestDialogCancelRejectsNonAwaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if err := store.Apply(state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 

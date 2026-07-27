@@ -82,17 +82,21 @@ func phaseDispatch(ctx GuardCtx) state.StageStatus {
 	return state.StatusRunning
 }
 
-func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, bool, error) {
+// Apply возвращает вместе со статусом и seq применённой transition (0, если
+// переход не применился) — единственный надёжный источник seq для Trigger,
+// который прикладывает его к live-событию (дедуп истории /api/events с
+// live-потоком на фронте по стабильному ключу, а не по содержимому).
+func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, uint64, bool, error) {
 	rule, ok := f.rules[ev]
 	if !ok {
-		return "", false, ErrNoRule
+		return "", 0, false, ErrNoRule
 	}
 	from := f.store.Get(stageID)
 	if !ruleAllowsFrom(rule.From, from) {
-		return from, false, nil
+		return from, 0, false, nil
 	}
 	to := rule.To(ctx)
-	tr := state.Transition{
+	tr := &state.Transition{
 		StageID: stageID,
 		From:    from,
 		To:      to,
@@ -101,11 +105,11 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (s
 	}
 	if err := f.store.Apply(tr); err != nil {
 		if errors.Is(err, state.ErrConcurrentChange) {
-			return from, false, nil // доброкачественный CAS-mismatch, не storage-fatal
+			return from, 0, false, nil // доброкачественный CAS-mismatch, не storage-fatal
 		}
-		return from, false, &StorageError{Inner: err}
+		return from, 0, false, &StorageError{Inner: err}
 	}
-	return to, true, nil
+	return to, tr.Seq, true, nil
 }
 
 func ruleAllowsFrom(allowed []state.StageStatus, from state.StageStatus) bool {

@@ -151,11 +151,12 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		_ = os.Remove(sessionFile(stageDir, phase))
 
 		if attempt < maxRetries {
-			o.Trigger(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
+			_, seq, _ := o.triggerWithSeq(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
 			o.ui.Publish(Event{
 				Type:    EventRetryScheduled,
 				StageID: s.ID,
 				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff),
+				Seq:     seq,
 			})
 			select {
 			case <-time.After(retryBackoff):
@@ -171,9 +172,9 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				o.Trigger(s.ID, EvResumeAfterRetry, GuardCtx{Phase: phaseImplementation}, "")
 			}
 		} else {
-			o.Trigger(s.ID, EvFail, GuardCtx{}, "retries exhausted")
+			_, seq, _ := o.triggerWithSeq(s.ID, EvFail, GuardCtx{}, "retries exhausted")
 			o.failBlockedStages()
-			_ = o.critical.Publish(ctx, Event{Type: EventRetryExhausted, StageID: s.ID})
+			_ = o.critical.Publish(ctx, Event{Type: EventRetryExhausted, StageID: s.ID, Seq: seq})
 		}
 	}
 }

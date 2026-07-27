@@ -66,7 +66,7 @@ func newReviseCmd() *cobra.Command {
 			}
 
 			// Transition to revising
-			if err := store.Apply(state.Transition{
+			if err := store.Apply(&state.Transition{
 				StageID: stageID,
 				From:    state.StatusAwaitingApproval,
 				To:      state.StatusRevising,

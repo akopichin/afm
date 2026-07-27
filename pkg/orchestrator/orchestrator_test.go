@@ -248,7 +248,7 @@ func TestResumeInteractiveAgent_PlanningPhase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if err := store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 	stateFile := filepath.Join(dir, "state.json")
@@ -310,7 +310,7 @@ func TestResumeInteractiveAgent_ImplementationPhase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if err := store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 	stateFile := filepath.Join(dir, "state.json")

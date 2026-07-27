@@ -90,7 +90,15 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 					AllowCustom: q.AllowCustom,
 				})
 			}
-			// Notify UI and transition stage status.
+			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
+			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал
+			// "review" вместо "planning") — при EvUserAnswered используем сохранённую
+			// фазу, а не ту что в файле вопроса.
+			o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
+			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию
+			// реальный seq этой transition — фронт дедуплицирует по нему live-
+			// событие с историческим двойником из /api/events.
+			_, seq, _ := o.triggerWithSeq(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
 			o.ui.Publish(Event{
 				Type:    EventAskUser,
 				StageID: stageID,
@@ -98,13 +106,8 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 					keyID: q.ID, keyPhase: q.Phase, "question": q.Question,
 					"options": q.Options, "allow_custom": q.AllowCustom,
 				},
+				Seq: seq,
 			})
-			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
-			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал
-			// "review" вместо "planning") — при EvUserAnswered используем сохранённую
-			// фазу, а не ту что в файле вопроса.
-			o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
-			o.Trigger(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
 		}
 		// No open question in stageDir: if this is an interactive stage, check
 		// whether the agent wrote one elsewhere (GLM-4.7 hallucination bug: agent

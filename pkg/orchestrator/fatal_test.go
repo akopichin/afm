@@ -40,7 +40,7 @@ func TestStore_ApplyConcurrentChangeSentinel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	err = store.Apply(state.Transition{StageID: "a", From: state.StatusRunning, To: state.StatusDone, Event: "x"})
+	err = store.Apply(&state.Transition{StageID: "a", From: state.StatusRunning, To: state.StatusDone, Event: "x"})
 	if !errors.Is(err, state.ErrConcurrentChange) {
 		t.Fatalf("want ErrConcurrentChange, got %v", err)
 	}

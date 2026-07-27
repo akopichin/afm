@@ -16,7 +16,7 @@ func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 	// events.jsonl уже содержит одну transition из setupTestServerWithWS
 	// (StatusPending → StatusAwaitingApproval, Event: "test_setup") — плюс
 	// добавим ask_user, чтобы проверить, что она реплеится как отдельный тип.
-	if err := srv.store.Apply(state.Transition{
+	if err := srv.store.Apply(&state.Transition{
 		StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusAwaitingUserInput,
 		Event: "ask_user",
 	}); err != nil {
@@ -78,7 +78,7 @@ func TestHandleEvents_CapsAt200(t *testing.T) {
 		if i == 249 {
 			to = state.StatusDone
 		}
-		if err := srv.store.Apply(state.Transition{StageID: testStageID, From: from, To: to, Event: "noop"}); err != nil {
+		if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: from, To: to, Event: "noop"}); err != nil {
 			// CAS может не совпасть при таком синтетическом чередовании —
 			// тесту важно только итоговое количество записей в логе, не
 			// валидность каждого перехода, поэтому игнорируем ошибку CAS.

@@ -213,7 +213,19 @@ func (o *Orchestrator) UIBus() *UIBus { return o.ui }
 // Trigger applies an FSM event to transition a stage's status.
 // Returns the new status and whether the transition was applied.
 func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, bool) {
-	to, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
+	to, _, ok := o.triggerWithSeq(stageID, ev, ctx, reason)
+	return to, ok
+}
+
+// triggerWithSeq — как Trigger, но дополнительно возвращает seq применённой
+// transition (0, если переход не применился). Нужен только тем call site'ам,
+// что публикуют СВОЙ, более специфичный тип UI-события рядом с этим же
+// переходом (ask_user/user_answered/retry_scheduled/retry_exhausted) — им
+// нужен тот же реальный seq, чтобы фронт дедуплицировал историю из
+// /api/events с live-потоком по стабильному ключу, а не по содержимому.
+// Остальные ~60 call site'ов Trigger в этом не нуждаются и не меняются.
+func (o *Orchestrator) triggerWithSeq(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, uint64, bool) {
+	to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 	if err != nil {
 		var se *StorageError
 		if errors.As(err, &se) {
@@ -221,23 +233,23 @@ func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason
 			// принимать решения против сломанного лога. Завершаем run.
 			log.Printf("FATAL: storage failure applying %s/%s: %v", stageID, ev, err)
 			o.setFatal(err)
-			return o.currentStatus(stageID), false
+			return o.currentStatus(stageID), 0, false
 		}
 		// Не-storage ошибка (напр. ErrNoRule — неизвестное событие, баг в коде):
 		// логируем и роняем переход, но НЕ валим весь run.
 		log.Printf("CRITICAL: FSM Apply %s/%s: %v", stageID, ev, err)
-		return o.currentStatus(stageID), false
+		return o.currentStatus(stageID), 0, false
 	}
 	if ok {
-		ev := Event{Type: EventStageStatusChanged, StageID: stageID, Data: string(to)}
-		o.ui.Publish(ev)
+		pubEv := Event{Type: EventStageStatusChanged, StageID: stageID, Data: string(to), Seq: seq}
+		o.ui.Publish(pubEv)
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		select {
-		case o.critical.ch <- ev:
+		case o.critical.ch <- pubEv:
 		default:
 		}
 	}
-	return to, ok
+	return to, seq, ok
 }
 
 // SetDashboardURL sets the dashboard URL after the server starts listening.

@@ -34,7 +34,7 @@ func newApproveCmd() *cobra.Command {
 			if current != state.StatusAwaitingApproval {
 				return fmt.Errorf("stage %q is %v, not awaiting_approval", stageID, current)
 			}
-			if err := store.Apply(state.Transition{
+			if err := store.Apply(&state.Transition{
 				StageID: stageID,
 				From:    state.StatusAwaitingApproval,
 				To:      state.StatusReady,

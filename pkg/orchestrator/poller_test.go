@@ -52,7 +52,7 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Apply(state.Transition{StageID: stageID, From: state.StatusPending, To: state.StatusRunning, Event: "test"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: stageID, From: state.StatusPending, To: state.StatusRunning, Event: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	orch := orchestrator.New(orchestrator.Options{

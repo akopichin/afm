@@ -41,7 +41,7 @@ func TestIntegration_ResumeWithDoneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	_ = store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
 	stateFile := filepath.Join(runDir, "state.json")
 
 	// Use a failing runner — if the agent runs, the test should fail
@@ -85,7 +85,7 @@ func TestIntegration_ResumeFromRetrying(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	_ = store.Apply(state.Transition{StageID: "retry-stuck", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "retry-stuck", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"})
 	stateFile := filepath.Join(runDir, "state.json")
 
 	base := mockRunner(t, mockPlanningScript)
@@ -139,7 +139,7 @@ func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	_ = store.Apply(state.Transition{StageID: "planned", From: state.StatusPending, To: state.StatusPlanning, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "planned", From: state.StatusPending, To: state.StatusPlanning, Event: "test_setup"})
 	stateFile := filepath.Join(runDir, "state.json")
 
 	// Use a failing runner for planning — if planning re-runs, the test fails
@@ -235,7 +235,7 @@ func TestIntegration_ResumeFromRevising(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	_ = store.Apply(state.Transition{StageID: "revise-stuck", From: state.StatusPending, To: state.StatusRevising, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "revise-stuck", From: state.StatusPending, To: state.StatusRevising, Event: "test_setup"})
 	stateFile := filepath.Join(runDir, "state.json")
 
 	capture := &capturingPlanningRunner{delegate: mockRunner(t, mockPlanningScript)}
@@ -341,7 +341,7 @@ func TestResumeAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	_ = store.Apply(state.Transition{StageID: "discovery", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "discovery", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
 	stateFile := filepath.Join(dir, "state.json")
 
 	cfg := config.Default()

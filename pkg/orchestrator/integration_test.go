@@ -484,7 +484,7 @@ func TestIntegration_PlanningPromptIncludesDependencyPlan(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 	// Mark first stage as done so second starts planning
-	_ = store.Apply(state.Transition{StageID: "first", From: state.StatusPending, To: state.StatusDone, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "first", From: state.StatusPending, To: state.StatusDone, Event: "test_setup"})
 
 	cfg := config.Default()
 	orch := orchestrator.New(orchestrator.Options{

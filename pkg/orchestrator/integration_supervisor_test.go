@@ -273,7 +273,7 @@ func TestIntegration_RetryFailedAutonomousStaysAutonomous(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := orchestrator.StoreFromOrch(orch)
-	if err := store.Apply(state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusFailed, Event: "test_setup"}); err != nil {
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusFailed, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 	stateFile := filepath.Join(runDir, "state.json")

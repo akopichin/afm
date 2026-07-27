@@ -248,7 +248,13 @@ func SetApplyHook(h func(Transition)) {
 	applyHookMu.Unlock()
 }
 
-func (s *Store) Apply(t Transition) error {
+// Apply принимает *Transition (не значение): помимо CAS-проверки и durable-
+// записи, заполняет t.Seq/t.Time присвоенными значениями ДО возврата — это
+// единственный безопасный способ узнать реальный seq конкретной transition
+// (нужен вызывающему коду, чтобы приложить его к live-событию для дедупа на
+// фронте). Читать snapshot.LastSeq ПОСЛЕ Apply было бы гонкой: конкурентный
+// Apply другой стадии мог успеть увеличить lastSeq между вызовами.
+func (s *Store) Apply(t *Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -275,13 +281,13 @@ func (s *Store) Apply(t Transition) error {
 		return fmt.Errorf("fsync events.jsonl: %w", err)
 	}
 
-	s.history = append(s.history, t)
+	s.history = append(s.history, *t)
 
 	applyHookMu.Lock()
 	hook := applyHook
 	applyHookMu.Unlock()
 	if hook != nil {
-		hook(t)
+		hook(*t)
 	}
 
 	s.snapshot.SetStageStatus(t.StageID, t.To)

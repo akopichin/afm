@@ -26,6 +26,11 @@ type Event struct {
 	Type    EventType `json:"type"`
 	StageID string    `json:"stage_id"`
 	Data    any       `json:"data,omitempty"`
+	// Seq — реальный seq FSM-transition (0, если событие не привязано к
+	// transition, напр. EventContextWarning/EventAgentCompleted). Позволяет
+	// фронту дедуплицировать историю из /api/events с live-потоком WS по
+	// стабильному ключу вместо содержимого.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 type CriticalBus struct {

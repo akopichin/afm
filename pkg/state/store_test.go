@@ -42,7 +42,7 @@ func TestApply_AppendsToEventsLog(t *testing.T) {
 		To:      StatusPlanning,
 		Event:   "start_planning",
 	}
-	if err := store.Apply(tr); err != nil {
+	if err := store.Apply(&tr); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestApply_RejectsWrongFrom(t *testing.T) {
 	defer store.Close()
 
 	tr := Transition{StageID: "a", From: StatusRunning, To: StatusDone, Event: "complete"}
-	err := store.Apply(tr)
+	err := store.Apply(&tr)
 	if err == nil {
 		t.Fatal("Apply with wrong From: want error, got nil")
 	}
@@ -84,8 +84,8 @@ func TestOpen_ReplaysExistingEvents(t *testing.T) {
 	dir := t.TempDir()
 
 	store1, _ := Open(dir, []string{"a"})
-	_ = store1.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
-	_ = store1.Apply(Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"})
+	_ = store1.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
+	_ = store1.Apply(&Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"})
 	store1.Close()
 
 	store2, err := Open(dir, []string{"a"})
@@ -98,7 +98,7 @@ func TestOpen_ReplaysExistingEvents(t *testing.T) {
 		t.Errorf("after replay Get(a) = %q, want %q", got, StatusAwaitingApproval)
 	}
 
-	if err := store2.Apply(Transition{StageID: "a", From: StatusAwaitingApproval, To: StatusReady, Event: "approve"}); err != nil {
+	if err := store2.Apply(&Transition{StageID: "a", From: StatusAwaitingApproval, To: StatusReady, Event: "approve"}); err != nil {
 		t.Fatalf("Apply after replay: %v", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "events.jsonl"))
@@ -117,7 +117,7 @@ func TestOpen_TruncatesPartialLine(t *testing.T) {
 	dir := t.TempDir()
 
 	store1, _ := Open(dir, []string{"a"})
-	_ = store1.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
+	_ = store1.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
 	store1.Close()
 
 	// дописываем битую строку (имитация crash посреди записи)
@@ -138,7 +138,7 @@ func TestOpen_TruncatesPartialLine(t *testing.T) {
 	}
 
 	// новый Apply должен идти с Seq=2, не Seq=3
-	_ = store2.Apply(Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"})
+	_ = store2.Apply(&Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"})
 	lines := strings.Split(strings.TrimRight(string(mustReadFile(t, dir)), "\n"), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2", len(lines))
@@ -159,7 +159,7 @@ func TestApply_WritesSnapshotJSON(t *testing.T) {
 	store, _ := Open(dir, []string{"a"})
 	defer store.Close()
 
-	_ = store.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
+	_ = store.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
 
 	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if err != nil {
@@ -209,7 +209,7 @@ func TestSnapshot_ReturnsCopy(t *testing.T) {
 	store, _ := Open(dir, []string{"a", "b"})
 	defer store.Close()
 
-	_ = store.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
+	_ = store.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
 
 	snap := store.Snapshot()
 	if snap.Stages["a"].Status != StatusPlanning {
@@ -305,7 +305,7 @@ func TestStore_HistoryReturnsOrderedTransitions(t *testing.T) {
 		{StageID: "a", From: StatusAwaitingApproval, To: StatusReady, Event: "approve"},
 	}
 	for _, tr := range steps {
-		if err := store1.Apply(tr); err != nil {
+		if err := store1.Apply(&tr); err != nil {
 			t.Fatalf("Apply: %v", err)
 		}
 	}
@@ -386,7 +386,7 @@ func TestStore_HistoryReflectsInSessionApply(t *testing.T) {
 		t.Fatalf("initial History len = %d, want 0", len(transitions))
 	}
 
-	if err := store.Apply(Transition{
+	if err := store.Apply(&Transition{
 		StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning",
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -420,10 +420,10 @@ func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 	})
 	defer SetApplyHook(nil)
 
-	_ = store1.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
+	_ = store1.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"})
 	func() {
 		defer func() { _ = recover() }()
-		_ = store1.Apply(Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"})
+		_ = store1.Apply(&Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"})
 	}()
 
 	// Open again — should recover state from events.jsonl

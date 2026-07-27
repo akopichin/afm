@@ -23,10 +23,10 @@ func (o *Orchestrator) FailStage(stageID, reason string) {
 func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
 	if o.isAgentActive(stageID) {
 		guardPhase := o.popPreAskPhase(stageID, phase)
-		o.Trigger(stageID, EvUserAnswered, GuardCtx{Phase: guardPhase}, "")
+		_, seq, _ := o.triggerWithSeq(stageID, EvUserAnswered, GuardCtx{Phase: guardPhase}, "")
 		o.ui.Publish(Event{Type: EventUserAnswered, StageID: stageID, Data: map[string]any{
 			keyID: qID, keyPhase: phase, keyAnswer: answer,
-		}})
+		}, Seq: seq})
 		return nil
 	}
 	return o.critical.Publish(context.Background(), Event{

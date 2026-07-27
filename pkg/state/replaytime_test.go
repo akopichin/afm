@@ -21,7 +21,7 @@ func TestLoadRunState_PreservesTransitionTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply(Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"}); err != nil {
+	if err := s.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

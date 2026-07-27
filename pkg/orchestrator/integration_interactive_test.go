@@ -102,7 +102,7 @@ func TestFullDialogCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	_ = store.Apply(state.Transition{StageID: "discovery", From: state.StatusPending, To: state.StatusReady, Event: "test_setup"})
+	_ = store.Apply(&state.Transition{StageID: "discovery", From: state.StatusPending, To: state.StatusReady, Event: "test_setup"})
 	stateFile := filepath.Join(dir, "state.json")
 
 	cfg := config.Default()

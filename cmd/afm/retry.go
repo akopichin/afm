@@ -34,7 +34,7 @@ func newRetryCmd() *cobra.Command {
 			if current != state.StatusFailed {
 				return fmt.Errorf("stage %q is %v, not failed", stageID, current)
 			}
-			if err := store.Apply(state.Transition{
+			if err := store.Apply(&state.Transition{
 				StageID: stageID,
 				From:    state.StatusFailed,
 				To:      state.StatusPending,
