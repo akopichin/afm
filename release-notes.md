@@ -2,6 +2,33 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-07-27
+
+### New (experimental): `agent_suggest` — send a note to a running stage
+- Previously `Revise` only worked at the `awaiting_approval` checkpoint. With the new `experimental.agent_suggest` config flag (or env `AFM_EXP_AGENT_SUGGEST=1`), a stage can also be redirected while it's actively `running`, via the dashboard's new kebab (⋮) menu or `POST /api/stages/{id}/revise`.
+- **Mechanism:** the FSM's `EvRevise` now also accepts `running` (previously only `awaiting_approval`). `Revise` durably transitions the stage to `revising`, saves the note to `feedback.md`, and signals a fresh per-attempt interrupt channel (`Orchestrator.interruptChans`). The executor forwards a real `SIGINT` to the agent subprocess (`executor.Config.InterruptCh`, sentinel `executor.ErrUserInterrupted`) instead of the abrupt SIGKILL a context-cancel would give — the agent finishes its current step, then exits cleanly. `runWithRetry` detects the sentinel and restarts the same phase through one of three new `run<Phase>WithFeedback` functions (implementation/review/autonomous — planning already had one), folding the note into the phase's retry context.
+- **Recovery, and a live-run race, closed:** crash-recovery (`recovery.go`) now detects which phase was actually interrupted (by `*.session.json` mtime, extended to the autonomous track) instead of always assuming planning. A subtler race — the agent completing naturally at almost the same instant a note was sent — used to strand the stage in `revising` forever until the next process restart; `onAgentCompleted` now reconciles that case the same way crash-recovery already did.
+- Off by default. With the flag off, the dashboard doesn't show the kebab menu and the HTTP endpoint rejects `running` with 400 — behavior for `awaiting_approval` is unchanged either way. `/api/status` gained `agent_suggest_enabled` to drive the frontend gate.
+- Verified live end-to-end with a real `afm` binary and a real subprocess (not just `go test`): a real `SIGINT` was delivered (not SIGKILL), `feedback.md` was persisted with the exact note, the restarted phase's agent actually saw the note, and a concurrent double-click on "send" was rejected cleanly (second call gets 400, no double-signal, no corrupted feedback file).
+- Spec/plan: `docs/superpowers/specs/2026-07-27-agent-suggest-design.md`, `docs/superpowers/plans/2026-07-27-agent-suggest.md`.
+
+### Fix: a stage further down a failed dependency chain couldn't be retried
+- `runAutonomousAgent` never created its own stage directory or wrote `autonomous.flag` (unlike `runPlanningAgent`/`runReviewAgent`, which both do). When a stage failed and cascaded a `blocked_by_dep` failure to stages further down the chain, retrying those downstream stages hit `open .../plan.md: no such file or directory` for any that were on the autonomous track — the directory/flag it needed simply didn't exist yet.
+- **Fix:** `runAutonomousAgent` now creates its `stageDir` and writes `autonomous.flag` up front, mirroring the other phase runners.
+
+### Fix: misplaced `question.json` no longer hangs a stage forever
+- `relocateMisplacedQuestions` used to find a misplaced dialog question by parsing `Write` tool-use events out of the agent's stream-json log — so a question wasn't found (and the stage hung forever in what looked like `running`) whenever the agent created the file via Bash (`echo`/heredoc) instead of the `Write` tool, or a wrapper's console-diagnostics happened to interleave badly with the parser.
+- **Fix:** the poller now scans the filesystem directly (stage dir + the flow's `root_dir`, non-recursive, throttled) for both known ways an agent can hide a question file from it: writing outside `$AFM_STAGE_DIR` entirely, or naming it by the stage's own ID instead of the canonical phase prefix (`planning`/`implementation`/`review`/`autonomous_execution`). Either way, the file is normalized to the canonical name plus a dangling symlink at the path the agent is actually polling, so the bash wait-loop finds its answer. A follow-up fix (`ownAnswer` check) stops the poller from reopening a question from a *previous* phase that was already answered.
+
+### Fix: dashboard event feed no longer empties on page refresh
+- The event feed lived only in the browser's WebSocket session state — reloading the dashboard (or a flaky connection) lost all history, even though the run was still going.
+- **Fix:** new `GET /api/events` replays history from `events.jsonl` (+ a new `notices.jsonl` sidecar for `agent_completed`/`context_warning`, which — like `supervisor.jsonl` — doesn't touch the durable `events.jsonl` source of truth) and the frontend now fetches it on mount, merging with whatever the live WebSocket already delivered (capped at 200 entries, deduplicated).
+- **Live events now carry a real sequence number.** `Store.Apply`/`FSM.Apply` thread the transition's actual log-assigned `seq` all the way to the WebSocket-published event (previously only the REST replay had it), so the frontend's merge/dedup keys on the real `seq` when present — a firmer join than the earlier content-based fallback (still used for event types with no underlying transition, like `agent_action`).
+
+### Fix: Docker mode no longer orphans the container on Ctrl-C
+- When `afm` runs in Docker mode and the host process received `SIGINT`/`SIGTERM`, the signal wasn't forwarded into the container — the host process could exit while the container (and the agents inside it) kept running, orphaned.
+- **Fix:** the Docker launcher now installs a signal handler before starting the container process and forwards `SIGINT`/`SIGTERM` to it, then waits for it to actually exit before returning.
+
 ## 2026-07-24
 
 ### Dashboard micro-animations (subtle, informative, cross-theme)

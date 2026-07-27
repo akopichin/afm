@@ -61,6 +61,17 @@ executor:
 # Default: "" (use embedded prompts)
 # prompts_dir: .afm/prompts/
 
+# Experimental features — off by default, opt in explicitly.
+# experimental:
+#   # agent_suggest: let a user add a corrective note to a stage that's
+#   # currently `running` (not only at the `awaiting_approval` checkpoint),
+#   # via the dashboard's kebab (⋮) menu or POST /api/stages/{id}/revise.
+#   # The agent finishes its current step, gets SIGINT, and restarts the
+#   # same phase with the note folded into its context.
+#   # nil/absent → falls back to $AFM_EXP_AGENT_SUGGEST (1 = on).
+#   # Default: false
+#   # agent_suggest: true
+
 # Docker mode — запускать afm и агентов внутри Docker-контейнера.
 # Включается через конфиг или переменную окружения AFM_USE_DOCKER=1.
 # docker:

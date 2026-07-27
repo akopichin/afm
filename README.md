@@ -386,7 +386,7 @@ pending → (supervisor) → running(autonomous_execution) → done
 - `ready` — the plan is approved, waiting its turn
 - `running` — the AI implements the plan (or runs the autonomous track)
 - `awaiting_user_input` — an interactive stage is waiting for a user answer; once answered, it returns to the phase where the question was asked
-- `revising` — revisions were sent, the AI is reworking the plan
+- `revising` — feedback was sent and the AI is reworking: either the plan (from `awaiting_approval`), or — with the experimental `agent_suggest` flag on — a `running` stage that just got a note and a graceful interrupt (see "Suggesting a Note to a Running Stage" below)
 - `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
 - `done` / `failed` — complete
 
@@ -436,6 +436,10 @@ server:
 supervisor:
   command: glm51            # the supervisor agent's command (for stages with supervisor: true)
 
+experimental:
+  agent_suggest: false      # true / env AFM_EXP_AGENT_SUGGEST=1 — allow adding a note
+                            # to a stage while it's running (see "Suggesting a Note...")
+
 # theme: coffee             # dashboard theme: coffee | goga | novacorps (default: coffee)
 # prompts_dir: .afm/prompts/  # custom prompt templates
 
@@ -481,6 +485,16 @@ When a stage is in `awaiting_approval`:
 2. Write a remark — the line highlights yellow
 3. Click "Send revision (N)" — all comments are sent to the agent with line numbers
 
+### Suggesting a Note to a Running Stage (experimental)
+
+Normally you can only redirect a stage at the `awaiting_approval` checkpoint (see "Inline Plan Comments" above). With the experimental `agent_suggest` flag enabled (`experimental.agent_suggest: true` in config, or `AFM_EXP_AGENT_SUGGEST=1`), you can also do it while a stage is actively `running`:
+
+1. Click the kebab (⋮) menu on a `running` (or `awaiting_approval`) stage row and choose "Add a note for the agent".
+2. Type the note and send — the agent finishes its current step, then receives SIGINT (a graceful interrupt, not a kill).
+3. The stage moves through `revising` and restarts the same phase (planning/implementation/review/autonomous) with your note folded into its context, then continues toward `done`.
+
+Without the flag (the default), the kebab menu isn't shown and the equivalent `POST /api/stages/{id}/revise` call on a `running` stage is rejected with 400 — behavior is unchanged from before this feature existed.
+
 ### Resume on Restart
 
 On a repeated `afm run`, the tool automatically:
@@ -505,6 +519,7 @@ Approve/revise/retry are durably recorded in the log (fsync) before control retu
       supervisor.jsonl       # supervisor decisions (if enabled)
       <stage-id>/
         plan.md          # stage plan
+        feedback.md      # revision notes (plan revise, or agent_suggest on a running stage)
         planning.log     # planning agent log (stdout: tool actions)
         planning.jsonl   # raw stream-json
         planning.stderr.log  # agent stderr (claude diagnostics)
