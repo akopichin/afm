@@ -634,3 +634,29 @@ func TestDockerAutoShim_MergeLayers(t *testing.T) {
 		t.Errorf("merge: expected 2 agents, got %d", len(cfg.Docker.Agents))
 	}
 }
+
+func TestIsAgentSuggestEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	cases := []struct {
+		name string
+		cfg  config.ExperimentalConfig
+		env  string
+		want bool
+	}{
+		{"nil + no env", config.ExperimentalConfig{}, "", false},
+		{"nil + env=1", config.ExperimentalConfig{}, "1", true},
+		{"nil + env=true", config.ExperimentalConfig{}, "true", true},
+		{"explicit true overrides no env", config.ExperimentalConfig{AgentSuggest: &trueVal}, "", true},
+		{"explicit false overrides env=1", config.ExperimentalConfig{AgentSuggest: &falseVal}, "1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_EXP_AGENT_SUGGEST", tc.env)
+			if got := tc.cfg.IsAgentSuggestEnabled(); got != tc.want {
+				t.Errorf("IsAgentSuggestEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
