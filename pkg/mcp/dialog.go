@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,7 +230,22 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 			AllowCustom *bool    `json:"allow_custom"`
 		}
 		if err := json.Unmarshal(raw, &qf); err != nil {
-			continue
+			// Частая ошибка агента: буквальная незаэкранированная `"` внутри
+			// строкового значения (напр. question с цитатой в кавычках) ломает
+			// JSON. Раньше эта ошибка проглатывалась молча (continue) — стадия
+			// зависала в awaiting-forever без единого следа в логах, потому что
+			// файл вопроса просто пропадал из вида поллера. Пробуем починить и
+			// логируем результат в любом случае, чтобы такой сбой был виден.
+			repaired := repairUnescapedQuotes(raw)
+			if err2 := json.Unmarshal(repaired, &qf); err2 != nil {
+				log.Printf("WARN: %s: invalid JSON, skipping question (repair also failed): %v", qPath, err)
+				continue
+			}
+			if writeErr := os.WriteFile(qPath, repaired, 0644); writeErr != nil {
+				log.Printf("WARN: %s: repaired invalid JSON in memory but failed to persist fix: %v", qPath, writeErr)
+			} else {
+				log.Printf("INFO: %s: repaired invalid JSON (unescaped quote in string value): %v", qPath, err)
+			}
 		}
 		actualID := qf.ID
 		if actualID == "" {
@@ -248,4 +264,66 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 		})
 	}
 	return out, nil
+}
+
+// repairUnescapedQuotes fixes a common agent authoring mistake: a literal,
+// unescaped '"' character inside a JSON string value (the agent hand-writes
+// the question file and quotes a word instead of escaping it, e.g.
+// `"вопрос про "цитату" в тексте"`). It walks the raw bytes tracking
+// string/escape state; a '"' encountered inside a string is treated as the
+// real closing quote only if the next non-whitespace byte can legally follow
+// a closing quote in JSON (':', ',', '}', ']', or end of input) — otherwise
+// it is escaped as a literal quote and the string is considered to continue.
+func repairUnescapedQuotes(raw []byte) []byte {
+	out := make([]byte, 0, len(raw)+16)
+	inString := false
+	escaped := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if !inString {
+			out = append(out, c)
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		if escaped {
+			out = append(out, c)
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			out = append(out, c)
+			escaped = true
+			continue
+		}
+		if c != '"' {
+			out = append(out, c)
+			continue
+		}
+		if isRealStringEnd(raw[i+1:]) {
+			inString = false
+			out = append(out, c)
+		} else {
+			out = append(out, '\\', '"')
+		}
+	}
+	return out
+}
+
+// isRealStringEnd reports whether the bytes following a candidate closing
+// quote look like valid JSON continuation (i.e. the quote really does close
+// a string), skipping any whitespace first.
+func isRealStringEnd(after []byte) bool {
+	for _, c := range after {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case ':', ',', '}', ']':
+			return true
+		default:
+			return false
+		}
+	}
+	return true // end of buffer
 }

@@ -1,6 +1,7 @@
 package mcp_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,6 +215,52 @@ func TestFindUnansweredQuestions(t *testing.T) {
 	// allow_custom defaults to true when omitted.
 	if !got[0].AllowCustom {
 		t.Error("allow_custom should default to true when not present in JSON")
+	}
+}
+
+// TestFindUnansweredQuestions_RepairsUnescapedQuote locks in the fallback for
+// a common agent authoring mistake: a literal, unescaped '"' inside a JSON
+// string value (agent hand-writes the question file and quotes a word
+// instead of escaping it). Before this fix, such a file failed
+// json.Unmarshal and was skipped silently — the question never surfaced to
+// the poller or the UI, and the stage hung forever with no diagnostic.
+func TestFindUnansweredQuestions_RepairsUnescapedQuote(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "planning.q1.question.json")
+	broken := `{"id":"q1","question":"нужно решить, должно ли "скрытие" сохраняться","options":["да","нет"],"allow_custom":true}`
+	if err := os.WriteFile(path, []byte(broken), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 repaired question, got %d: %v", len(got), got)
+	}
+	want := `нужно решить, должно ли "скрытие" сохраняться`
+	if got[0].Question != want {
+		t.Fatalf("question text mismatch:\n got:  %q\n want: %q", got[0].Question, want)
+	}
+	if got[0].ID != "q1" || len(got[0].Options) != 2 {
+		t.Fatalf("unexpected entry: %+v", got[0])
+	}
+
+	// The fix is persisted back to disk — a second read parses cleanly
+	// without needing the repair path again.
+	fixed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Question string `json:"question"`
+	}
+	if err := json.Unmarshal(fixed, &probe); err != nil {
+		t.Fatalf("repaired file on disk is still invalid JSON: %v", err)
+	}
+	if probe.Question != want {
+		t.Fatalf("persisted question text mismatch: %q", probe.Question)
 	}
 }
 
