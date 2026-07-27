@@ -18,6 +18,25 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
+    let cancelledFetch = false
+    // Открываем WebSocket СРАЗУ (см. ниже, connect() вызывается как и раньше)
+    // — live-события накапливаются в events через обычный путь setEvents.
+    // Историю фетчим ПАРАЛЛЕЛЬНО и, когда она придёт, мержим в уже
+    // накопленные live-события по seq (mergeHistory) — так гарантированно
+    // нет ни дыры (WS слушает с самого начала), ни устойчивого дубля
+    // (дедуп по seq для FSM-событий).
+    fetch('/api/events')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((raw: unknown) => {
+        if (cancelledFetch || !Array.isArray(raw)) return
+        const history = raw.map(toEvent)
+        setEvents((prev) => mergeHistory(history, prev))
+      })
+      .catch(() => {
+        // /api/events недоступен (старая сборка сервера, сетевая ошибка) —
+        // деградируем к чистому live-потоку, как было до этой правки.
+      })
+
     let socket: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
     let watchdogTimer: ReturnType<typeof setInterval> | undefined
@@ -80,6 +99,7 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
     connect()
 
     return () => {
+      cancelledFetch = true
       cancelled = true
       if (reconnectTimer !== undefined) clearTimeout(reconnectTimer)
       if (watchdogTimer !== undefined) clearInterval(watchdogTimer)
@@ -105,6 +125,18 @@ function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
   )
 }
 
+// mergeHistory сливает историю из /api/events (history) с уже накопленными
+// live-событиями (live), дедуплицируя по seq: если live-событие с тем же seq
+// уже пришло по WS (могло случиться в гонке между открытием сокета и
+// резолвом REST-фетча), историческая запись с тем же seq отбрасывается.
+// События без seq (agent_action и т.п.) не дедуплицируются этим механизмом —
+// см. дизайн-документ, принятый компромисс для узкого окна гонки.
+function mergeHistory(history: AfmEvent[], live: AfmEvent[]): AfmEvent[] {
+  const seenSeq = new Set(live.map((e) => e.seq).filter((s): s is number => s !== undefined))
+  const deduped = history.filter((e) => e.seq === undefined || !seenSeq.has(e.seq))
+  return [...deduped, ...live].slice(-MAX_EVENTS)
+}
+
 function statusOf(event: AfmEvent): string {
   const data = event.payload
   if (typeof data === 'string') return data
@@ -115,11 +147,18 @@ function statusOf(event: AfmEvent): string {
 function toEvent(raw: unknown): AfmEvent {
   const obj = isRecord(raw) ? raw : {}
 
+  // timestamp — из payload, если сервер его прислал (реплей истории из
+  // /api/events, Task 4); live WS-сообщения его не несут — падаем на время
+  // приёма, как и раньше.
+  const timestamp = typeof obj.timestamp === 'string' ? obj.timestamp : new Date().toISOString()
+  const seq = typeof obj.seq === 'number' ? obj.seq : undefined
+
   return {
     type: typeof obj.type === 'string' ? obj.type : '',
     payload: obj.data,
     stageId: typeof obj.stage_id === 'string' ? obj.stage_id : '',
-    timestamp: new Date().toISOString(),
+    timestamp,
+    seq,
   }
 }
 

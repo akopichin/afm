@@ -19,15 +19,20 @@ export const AFM_EVENT_TYPES = [
 
 export type AfmEventType = (typeof AFM_EVENT_TYPES)[number]
 
-// Событие, приходящее через WebSocket /ws.
-//   payload  — произвольные данные события (соответствует полю data сервера; тип зависит от type);
-//   stageId  — стадия, к которой относится событие (поле stage_id сервера);
-//   timestamp — время приёма на клиенте в ISO 8601 (сервер не присылает время события).
+// Событие, приходящее через WebSocket /ws или из истории /api/events.
+//   payload   — произвольные данные события (соответствует полю data сервера; тип зависит от type);
+//   stageId   — стадия, к которой относится событие (поле stage_id сервера);
+//   timestamp — реальное время события в ISO 8601, если его прислал сервер
+//               (только реплей истории из /api/events — Task 4); иначе время
+//               приёма на клиенте (live WS-сообщения timestamp не несут).
+//   seq       — стабильный ключ дедупликации для событий, производных от
+//               реальной FSM-transition (только история из /api/events).
 export type AfmEvent = {
   type: string
   payload: unknown
   stageId: string
   timestamp: string
+  seq?: number
 }
 
 // Значимые типы событий — канал обновления состояния: по ним корневая композиция

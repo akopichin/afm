@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { useEventFeed } from './use-event-feed'
 
@@ -282,5 +282,39 @@ describe('useEventFeed', () => {
 
     expect(FakeWebSocket.last().closed).toBe(false)
     expect(result.current.connected).toBe(true)
+  })
+
+  test('seeds history from /api/events on mount and merges without duplicating live events by seq', async () => {
+    const historyPayload = [
+      { type: 'stage_status_changed', stage_id: 's1', data: 'running', timestamp: '2026-07-27T10:00:00.000Z', seq: 1 },
+      { type: 'stage_status_changed', stage_id: 's1', data: 'done', timestamp: '2026-07-27T10:05:00.000Z', seq: 2 },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(historyPayload),
+      }),
+    )
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    // Живое сообщение с тем же seq=2 приходит по WS ДО того, как REST-фетч
+    // резолвится (гонка) — после merge не должно быть дубля.
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', stage_id: 's1', data: 'done', seq: 2 })
+    })
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.seq === 2)).toHaveLength(1)
+    })
+    // История (seq=1) должна присутствовать — не потеряна.
+    expect(result.current.events.some((e) => e.seq === 1)).toBe(true)
+    // Timestamp из истории — реальный, не "сейчас".
+    const historic = result.current.events.find((e) => e.seq === 1)
+    expect(historic?.timestamp).toBe('2026-07-27T10:00:00.000Z')
   })
 })
