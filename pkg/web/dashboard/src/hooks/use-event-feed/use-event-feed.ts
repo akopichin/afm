@@ -22,9 +22,9 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
     // Открываем WebSocket СРАЗУ (см. ниже, connect() вызывается как и раньше)
     // — live-события накапливаются в events через обычный путь setEvents.
     // Историю фетчим ПАРАЛЛЕЛЬНО и, когда она придёт, мержим в уже
-    // накопленные live-события по seq (mergeHistory) — так гарантированно
-    // нет ни дыры (WS слушает с самого начала), ни устойчивого дубля
-    // (дедуп по seq для FSM-событий).
+    // накопленные live-события по содержимому (mergeHistory) — так
+    // гарантированно нет ни дыры (WS слушает с самого начала), ни устойчивого
+    // дубля (дедуп по type+stageId+payload).
     fetch('/api/events')
       .then((r) => (r.ok ? r.json() : []))
       .then((raw: unknown) => {
@@ -125,15 +125,28 @@ function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
   )
 }
 
+// dedupeKey — стабильный ключ дедупликации между историей из /api/events и
+// live-событиями WebSocket. seq для этого не годится: live-события его вообще
+// не несут (orchestrator.Event на бэкенде не содержит Seq — см. bus.go/
+// orchestrator.go), поэтому дедуп по seq был бы всегда пустым на практике.
+// Вместо этого ключ строится из (type, stageId, payload) — для
+// stage_status_changed это тип целевого статуса, который меняется при каждом
+// реальном переходе; коллизия возможна только если один и тот же переход
+// произошёл дважды в узком окне гонки между открытием WS и резолвом REST — в
+// этом случае показать одну запись вместо двух корректнее, чем не
+// дедуплицировать вовсе.
+function dedupeKey(e: AfmEvent): string {
+  return `${e.type}|${e.stageId}|${JSON.stringify(e.payload)}`
+}
+
 // mergeHistory сливает историю из /api/events (history) с уже накопленными
-// live-событиями (live), дедуплицируя по seq: если live-событие с тем же seq
-// уже пришло по WS (могло случиться в гонке между открытием сокета и
-// резолвом REST-фетча), историческая запись с тем же seq отбрасывается.
-// События без seq (agent_action и т.п.) не дедуплицируются этим механизмом —
-// см. дизайн-документ, принятый компромисс для узкого окна гонки.
+// live-событиями (live), дедуплицируя по содержимому: если live-событие с тем
+// же (type, stageId, payload) уже пришло по WS (могло случиться в гонке между
+// открытием сокета и резолвом REST-фетча), историческая запись-дубликат
+// отбрасывается.
 function mergeHistory(history: AfmEvent[], live: AfmEvent[]): AfmEvent[] {
-  const seenSeq = new Set(live.map((e) => e.seq).filter((s): s is number => s !== undefined))
-  const deduped = history.filter((e) => e.seq === undefined || !seenSeq.has(e.seq))
+  const liveKeys = new Set(live.map(dedupeKey))
+  const deduped = history.filter((e) => !liveKeys.has(dedupeKey(e)))
   return [...deduped, ...live].slice(-MAX_EVENTS)
 }
 

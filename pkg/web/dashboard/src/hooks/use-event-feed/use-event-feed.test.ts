@@ -284,7 +284,7 @@ describe('useEventFeed', () => {
     expect(result.current.connected).toBe(true)
   })
 
-  test('seeds history from /api/events on mount and merges without duplicating live events by seq', async () => {
+  test('seeds history from /api/events on mount and merges without duplicating live events by content', async () => {
     const historyPayload = [
       { type: 'stage_status_changed', stage_id: 's1', data: 'running', timestamp: '2026-07-27T10:00:00.000Z', seq: 1 },
       { type: 'stage_status_changed', stage_id: 's1', data: 'done', timestamp: '2026-07-27T10:05:00.000Z', seq: 2 },
@@ -299,22 +299,31 @@ describe('useEventFeed', () => {
 
     const { result } = renderHook(() => useEventFeed('/ws'))
 
-    // Живое сообщение с тем же seq=2 приходит по WS ДО того, как REST-фетч
-    // резолвится (гонка) — после merge не должно быть дубля.
+    // Живое сообщение, дублирующее последнюю историческую запись (тот же
+    // stage_status_changed s1 → done), приходит по WS ДО того, как
+    // REST-фетч резолвится (гонка между открытием WS и /api/events). Форма
+    // сообщения — реальная: живые события orchestrator.Event НЕ несут ни
+    // seq, ни timestamp (см. bus.go/orchestrator.go) — только
+    // {type, stage_id, data}. После merge не должно быть дубля.
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
     act(() => {
-      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', stage_id: 's1', data: 'done', seq: 2 })
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', stage_id: 's1', data: 'done' })
     })
 
     await waitFor(() => {
-      expect(result.current.events.filter((e) => e.seq === 2)).toHaveLength(1)
+      expect(result.current.events.filter((e) => e.type === 'stage_status_changed' && e.stageId === 's1' && e.payload === 'done')).toHaveLength(1)
     })
-    // История (seq=1) должна присутствовать — не потеряна.
-    expect(result.current.events.some((e) => e.seq === 1)).toBe(true)
+    // История (running, seq=1) должна присутствовать — не потеряна, т.к. это
+    // другое логическое событие (другой payload), а не дубликат.
+    expect(result.current.events.some((e) => e.seq === 1 && e.payload === 'running')).toBe(true)
     // Timestamp из истории — реальный, не "сейчас".
     const historic = result.current.events.find((e) => e.seq === 1)
     expect(historic?.timestamp).toBe('2026-07-27T10:00:00.000Z')
+    // Live-событие (без seq) заменяет собой историческую запись-дубликат —
+    // итоговая запись "done" не несёт seq (это и есть live-версия).
+    const live = result.current.events.find((e) => e.payload === 'done')
+    expect(live?.seq).toBeUndefined()
   })
 })

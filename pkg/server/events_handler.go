@@ -150,17 +150,31 @@ func reconstructAgentActions(runDir, stageID string) []feedEvent {
 	return out
 }
 
+// maxLinesPerLog bounds how many trailing lines readLines keeps per file —
+// only the last maxReplayEvents (200) events survive the final cap across
+// ALL sources anyway, so reading an unbounded number of lines per phase log
+// (agent stream-json logs routinely run multi-MB) wastes memory/CPU on every
+// request without ever being used. 500 gives generous headroom above 200
+// while bounding worst case regardless of total log size.
+const maxLinesPerLog = 500
+
+// readLines reads path and keeps only the last maxLinesPerLog lines (a
+// sliding window, not the whole file) — bounds memory even for very large
+// logs. Returns nil if the file doesn't exist or can't be opened.
 func readLines(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	var lines []string
+	lines := make([]string, 0, maxLinesPerLog)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		lines = append(lines, sc.Text())
+		if len(lines) > maxLinesPerLog {
+			lines = lines[1:]
+		}
 	}
 	return lines
 }
