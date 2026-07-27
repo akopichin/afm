@@ -327,7 +327,12 @@ func TestResume_RevisingAutonomousStageUsesAutonomousFeedback(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	var runWG sync.WaitGroup
+	runWG.Add(1)
+	go func() {
+		defer runWG.Done()
+		_ = orch.Run(ctx)
+	}()
 
 	// blockingThenFeedbackRunner.calls==1 при первом вызове блокируется на
 	// ctx.Done() — здесь нам нужно, чтобы recovery СРАЗУ вызвала
@@ -338,6 +343,15 @@ func TestResume_RevisingAutonomousStageUsesAutonomousFeedback(t *testing.T) {
 	// и не упала на попытке прочитать несуществующий plan.md) в разумное
 	// время — а не осталась в revising/failed.
 	waitForStatus(t, stateFile, "auto", state.StatusRunning, 10*time.Second)
+
+	// Явно останавливаем фоновую горутину orch.Run и дожидаемся её
+	// завершения ДО возврата из теста: иначе разблокированный ctx.Done()
+	// в blockingThenFeedbackRunner.RunAgent пытается зафейлить стадию через
+	// store уже ПОСЛЕ того, как t.Cleanup закрыл его (store.Close) — гонка,
+	// проявляющаяся как шумная "FATAL: storage failure applying auto/fail:
+	// ..." в логе теста (см. task-6-report.md, раздел "Fix round").
+	cancel()
+	runWG.Wait()
 }
 
 // TestResumeAfterCrash verifies that when afm crashes while a stage is
