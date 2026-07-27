@@ -299,6 +299,52 @@ describe('App', () => {
     await waitFor(() => expect(document.title).toBe('demo-flow'))
   })
 
+  test('CRITICAL: a failed /revise POST from AgentNoteModal keeps the modal open instead of closing silently', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stage_order: ['s1'],
+            stage_names: { s1: 'Propose' },
+            stages: { s1: { status: 'running', updated_at: '' } },
+            agent_suggest_enabled: true,
+          }),
+        } as Response
+      }
+      // Стадия ушла из ожидаемого статуса за время, пока юзер печатал заметку.
+      if (url.includes('/revise')) {
+        return { ok: false, status: 409, json: async () => ({}) } as Response
+      }
+      if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    fireEvent.click(screen.getByText('Добавить поправку агенту'))
+    fireEvent.change(screen.getByPlaceholderText(/what should the agent take into account/i), {
+      target: { value: 'test note' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /send/i }))
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalled())
+
+    // Модалка не закрылась молча — текст заметки не потерян, юзер может повторить попытку.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/what should the agent take into account/i)).toHaveValue('test note')
+  })
+
   test('WARNING: falls back to a failed stage when no stage is active', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

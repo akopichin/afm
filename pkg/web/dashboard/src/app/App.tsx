@@ -32,12 +32,29 @@ export function App(): ReactElement {
   async function handleSubmitNote(note: string): Promise<void> {
     if (noteModalStageId === null) return
 
-    await fetch(`/api/stages/${encodeURIComponent(noteModalStageId)}/revise`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feedback: note }),
-    })
-    setNoteModalStageId(null)
+    const url = `/api/stages/${encodeURIComponent(noteModalStageId)}/revise`
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feedback: note }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`POST ${url} -> ${response.status}`)
+      }
+
+      setNoteModalStageId(null)
+    } catch (err) {
+      // Стадия могла уйти из ожидаемого статуса за время, пока юзер печатал
+      // (или сеть отвалилась) — не закрываем модалку молча, будто заметка
+      // ушла: оставляем noteModalStageId как есть, юзер видит модалку с
+      // введённым текстом всё ещё открытой и может повторить попытку.
+      // AgentNoteModal.onSubmit — не-async проп (вызывается без await из
+      // onClick), поэтому здесь обязателен свой catch, а не пробрасывание
+      // наверх как unhandled rejection.
+      console.error('Failed to submit agent note:', err)
+    }
   }
 
   const wsUrl = buildWebSocketUrl()

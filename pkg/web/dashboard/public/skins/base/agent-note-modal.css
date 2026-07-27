@@ -2,7 +2,13 @@
    Модалка «Добавить поправку агенту» (agent_suggest, Task 8): кебаб-меню в
    StagesList + центрированная модалка поверх всего (включая maximize-overlay,
    z-index: 1000 в layout.css). Только токены переменных из skins/<name>/index.css —
-   без хардкода цвета, чтобы работать во всех скинах и обеих темах. */
+   без хардкода цвета, чтобы работать во всех скинах и обеих темах.
+
+   Затемняющий scrim и тень кебаб-меню используют общий --overlay-scrim-rgb
+   (RGB-триплет, определён в index.css каждого скина) вместо хардкода
+   rgba(0, 0, 0, X) — см. rgba(var(--overlay-scrim-rgb), <alpha>) ниже. Триплет,
+   а не готовый rgba(), чтобы сохранить обе исходные альфы (0.5 у оверлея,
+   0.35 у тени) одним общим токеном, не меняя внешний вид. */
 
 /* === Кебаб-кнопка на строке стадии === */
 .stage-kebab-wrap {
@@ -35,7 +41,7 @@
   background: var(--panel-bg);
   border: 1px solid var(--mint-soft);
   border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 16px rgba(var(--overlay-scrim-rgb), 0.35);
   z-index: 10;
   padding: 4px;
 }
@@ -65,7 +71,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(var(--overlay-scrim-rgb), 0.5);
   padding: 16px;
 }
 

@@ -38,6 +38,11 @@
   --btn-cancel-dialog-text: #ff8a7a;
   --supervisor-accent:      #c084fc;
 
+  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет,
+     чёрная затемняющая вуаль, одинаковая во всех темах/скинах (не тонируется
+     под палитру, как --bg) */
+  --overlay-scrim-rgb: 0, 0, 0;
+
   /* status map */
   --c-pending:        var(--ink-dim);
   --c-planning:       var(--mint);
@@ -79,6 +84,10 @@
   --dialog-option-text:     #6d28d9;
   --btn-cancel-dialog-text: #b91c1c;
   --supervisor-accent:      #9333ea;
+
+  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
+     чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
+  --overlay-scrim-rgb: 0, 0, 0;
 
   /* status map */
   --c-pending:        var(--ink-dim);
