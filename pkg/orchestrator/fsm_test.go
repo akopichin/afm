@@ -88,6 +88,20 @@ func TestFSM_Apply_RetryingStartPlanning(t *testing.T) {
 	}
 }
 
+func TestFSM_Apply_ReviseFromRunning(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
+
+	to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{}, "feedback text")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !ok || to != state.StatusRevising {
+		t.Errorf("running->revising: got (%v, %v), want (revising, true)", to, ok)
+	}
+}
+
 func TestFSM_Apply_AskUser(t *testing.T) {
 	fsm, store := newTestFSM(t, []string{"a"})
 	defer store.Close()

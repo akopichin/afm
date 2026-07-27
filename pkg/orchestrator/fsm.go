@@ -54,7 +54,7 @@ func NewFSM(store *state.Store) *FSM {
 			EvStartPlanning: {From: []state.StageStatus{state.StatusPending, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusPlanning)},
 			EvPlanReady:     {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying}, To: to(state.StatusAwaitingApproval)},
 			EvApprove:       {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
-			EvRevise:        {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusRevising)},
+			EvRevise:        {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning}, To: to(state.StatusRevising)},
 			EvStartRun:      {From: []state.StageStatus{state.StatusReady}, To: to(state.StatusRunning)},
 			EvComplete:      {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying}, To: to(state.StatusDone)},
 			EvFail:          {From: nil, To: to(state.StatusFailed)},
