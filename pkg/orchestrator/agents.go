@@ -84,7 +84,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 		return nil
 	}, func() error {
 		return checkPlanCompletionFor(stageDir, s.Interactive)
-	})
+	}, func() { o.spawnAgent(ctx, s, o.runPlanningWithFeedback) })
 }
 
 func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage, prevPlan string, missing []string, outFile string) error {
@@ -179,7 +179,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 		return nil
 	}, func() error {
 		return checkPlanCompletionFor(stageDir, s.Interactive)
-	})
+	}, func() { o.spawnAgent(ctx, s, o.runPlanningWithFeedback) })
 }
 
 func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage) {
@@ -263,7 +263,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		return nil
 	}, func() error {
 		return checkCompletion(stageDir, ".", s)
-	})
+	}, func() { o.spawnAgent(ctx, s, o.runImplementationWithFeedback) })
 }
 
 func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
@@ -299,7 +299,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 	}, func() error {
 		return checkCompletion(stageDir, ".", s)
-	})
+	}, func() { o.spawnAgent(ctx, s, o.runReviewWithFeedback) })
 }
 
 // runAutonomousAgent выполняет стадию в автономном треке — без plan.md и approval.
@@ -352,5 +352,179 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
 	}, func() error {
 		return checkAutonomousCompletion(stageDir)
+	}, func() { o.spawnAgent(ctx, s, o.runAutonomousWithFeedback) })
+}
+
+// runImplementationWithFeedback перезапускает implementation-фазу с фидбеком
+// пользователя (agent_suggest) — как runImplementationAgent, но с добавленной
+// в контекст фразой из feedback.md. Идёт через тот же runnerFor: если стадия
+// Interactive, автоматически получает --resume <session-id> (существующий
+// sessionExists/loadOrCreateSession в runnerFor не меняется).
+func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
+	feedbackNote := ""
+	if len(feedbackData) > 0 {
+		feedbackNote = "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
+	}
+
+	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
+		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
+		if err != nil {
+			return err
+		}
+
+		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+			appendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		})
+		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+		if artErr != nil {
+			log.Printf("WARN: collect artifacts for %s impl (feedback restart): %v", s.ID, artErr)
+		}
+
+		if len(s.Artifacts) > 0 {
+			var buf strings.Builder
+			buf.WriteString("\n\nRequired output artifacts (MUST exist at these paths when stage finishes):\n\n")
+			for _, art := range s.Artifacts {
+				dst := art.Path
+				if strings.HasPrefix(art.Path, "./") {
+					dst = filepath.Join(stageDir, art.Path[2:])
+				}
+				desc := ""
+				if art.Description != "" {
+					desc = " — " + art.Description
+				}
+				fmt.Fprintf(&buf, "- %s%s → %s\n", art.Name, desc, dst)
+			}
+			artCtx += buf.String()
+		}
+
+		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
+		if s.Verify != "" {
+			stageDirNote += fmt.Sprintf("\n\nVerify command (runs automatically after you finish; it MUST exit 0, "+
+				"so run it yourself before creating .done):\n%s", s.Verify)
+		}
+		prompt := prompts.Build(prompts.Inputs{
+			Template:        o.opts.Prompts.Implementation,
+			Stage:           s,
+			PhaseAgent:      prompts.AgentImplementation,
+			DependencyPlans: depPlans,
+			Artifacts:       artCtx,
+			Plan:            string(planData),
+			StageDir:        stageDir,
+			Interactive:     s.Interactive,
+			RetryContext:    retryContext + stageDirNote + feedbackNote,
+			GlobalPrompt:    o.opts.GlobalPrompt,
+		})
+		logFile := filepath.Join(stageDir, "implementation-feedback.log")
+
+		r := o.runnerFor(s, phaseImplementation)
+		if err := r.RunAgent(ctx, string(s.ImplAgent()), s.Name, prompt, logFile); err != nil {
+			return err
+		}
+
+		if s.HasAgent(flow.AgentReview) {
+			reviewPrompt := prompts.Build(prompts.Inputs{
+				Template:        o.opts.Prompts.Review,
+				Stage:           s,
+				PhaseAgent:      prompts.AgentReview,
+				DependencyPlans: depPlans,
+				Artifacts:       artCtx,
+				StageDir:        stageDir,
+				Interactive:     s.Interactive,
+				GlobalPrompt:    o.opts.GlobalPrompt,
+			})
+			reviewLog := filepath.Join(stageDir, "review.log")
+			rr := o.runnerFor(s, phaseReview)
+			if err := rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, func() error {
+		return checkCompletion(stageDir, ".", s)
+	}, func() { o.spawnAgent(ctx, s, o.runImplementationWithFeedback) })
+}
+
+// runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
+func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
+	feedbackNote := ""
+	if len(feedbackData) > 0 {
+		feedbackNote = "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
+	}
+
+	depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+		appendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+		o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 	})
+	artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+	if artErr != nil {
+		log.Printf("WARN: collect artifacts for %s review (feedback restart): %v", s.ID, artErr)
+	}
+
+	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
+		reviewPrompt := prompts.Build(prompts.Inputs{
+			Template:        o.opts.Prompts.Review,
+			Stage:           s,
+			PhaseAgent:      prompts.AgentReview,
+			DependencyPlans: depPlans,
+			Artifacts:       artCtx,
+			StageDir:        stageDir,
+			Interactive:     s.Interactive,
+			RetryContext:    retryContext + feedbackNote,
+			GlobalPrompt:    o.opts.GlobalPrompt,
+		})
+		reviewLog := filepath.Join(stageDir, "review-feedback.log")
+		rr := o.runnerFor(s, phaseReview)
+		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
+	}, func() error {
+		return checkCompletion(stageDir, ".", s)
+	}, func() { o.spawnAgent(ctx, s, o.runReviewWithFeedback) })
+}
+
+// runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в
+// контексте. Зеркалит тело runAutonomousAgent один в один (лог, аргументы
+// RunAgent, текст summaryNote) и добавляет только feedbackNote поверх
+// RetryContext; MkdirAll/autonomous.flag не повторяются — стадия уже была
+// активирована исходным runAutonomousAgent до прерывания.
+func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
+	feedbackNote := ""
+	if len(feedbackData) > 0 {
+		feedbackNote = "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
+	}
+
+	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
+		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+		if artErr != nil {
+			log.Printf("WARN: collect artifacts for %s autonomous (feedback restart): %v", s.ID, artErr)
+		}
+		depCtx := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+			appendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		})
+
+		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
+		prompt := prompts.Build(prompts.Inputs{
+			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
+			Autonomous:      o.opts.Prompts.Autonomous,
+			Stage:           s,
+			PhaseAgent:      prompts.AgentAutonomous,
+			Interactive:     true, // dialog protocol — autonomous-скилл может спрашивать пользователя
+			Artifacts:       artCtx,
+			DependencyPlans: depCtx,
+			StageDir:        stageDir,
+			GlobalPrompt:    o.opts.GlobalPrompt,
+			RetryContext:    retryContext + summaryNote + feedbackNote,
+		})
+		logFile := filepath.Join(stageDir, "autonomous-feedback.log")
+		r := o.runnerFor(s, phaseAutonomous)
+		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
+	}, func() error {
+		return checkAutonomousCompletion(stageDir)
+	}, func() { o.spawnAgent(ctx, s, o.runAutonomousWithFeedback) })
 }

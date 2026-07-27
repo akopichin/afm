@@ -54,6 +54,9 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		if phase == phaseAutonomous {
 			cfg.StageDir = filepath.Join(o.opts.RunDir, s.ID)
 		}
+		if ch, ok := o.interruptChans.Load(s.ID); ok {
+			cfg.InterruptCh = ch.(chan struct{})
+		}
 		return executor.New(cfg)
 	}
 
@@ -72,7 +75,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	// Interactive stages always need the claude stream-json flags (incl. --verbose,
 	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
 	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
-	return executor.New(executor.Config{
+	cfg := executor.Config{
 		Command:        cmd,
 		ExtraArgs:      extraArgs,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
@@ -86,7 +89,11 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 		StageID:        s.ID,
-	})
+	}
+	if ch, ok := o.interruptChans.Load(s.ID); ok {
+		cfg.InterruptCh = ch.(chan struct{})
+	}
+	return executor.New(cfg)
 }
 
 func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {

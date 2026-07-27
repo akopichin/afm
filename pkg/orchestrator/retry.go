@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,7 +75,11 @@ var MaxRetries = 15
 // runWithRetry wraps an agent function with automatic retry on rate limit errors.
 // On rate limit: sets status to retrying, waits with backoff, then retries.
 // After exhausting all retries: publishes EventRetryExhausted.
-func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error) {
+func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
+	interruptCh := make(chan struct{}, 1)
+	o.interruptChans.Store(s.ID, interruptCh)
+	defer o.interruptChans.Delete(s.ID)
+
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// maxRetries/retryBackoff — снапшоты с инстанса (см. Orchestrator-комментарий):
@@ -131,6 +136,11 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// Missing artifact or second incomplete attempt — fail
 			o.Trigger(s.ID, EvFail, GuardCtx{}, "missing artifact or incomplete")
 			o.failBlockedStages()
+			return
+		}
+
+		if errors.Is(err, executor.ErrUserInterrupted) {
+			onUserInterrupted()
 			return
 		}
 

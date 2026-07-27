@@ -75,6 +75,12 @@ type Orchestrator struct {
 		release()
 	} // per-command semaphores
 	activeAgents sync.Map // stageID → struct{}: set while an agent goroutine runs
+	// interruptChans хранит канал прерывания (stageID → chan struct{}, буфер
+	// 1) на время КОНКРЕТНОЙ попытки RunAgent — создаётся в начале
+	// runWithRetry, удаляется по её завершении (успешном или нет). Revise
+	// (agent_suggest) шлёт в этот канал, чтобы запросить graceful-прерывание
+	// текущего вызова агента через executor.Config.InterruptCh.
+	interruptChans sync.Map
 	// preAskPhase хранит корректную фазу в момент EvAskUser (stageID → phase string).
 	// Используется при EvUserAnswered вместо фазы из имени файла вопроса:
 	// агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
