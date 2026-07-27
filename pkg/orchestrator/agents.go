@@ -304,8 +304,21 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 //
 // Трек отличается от runImplementationAgent: нет чтения plan.md, нет .done,
 // фаза — "autonomous_execution", используется Autonomous-шаблон промпта.
+//
+// MkdirAll + запись autonomous.flag в начале — тот же защитный паттерн, что
+// уже есть в runPlanningAgent/runReviewAgent (см. их начало): стадия могла
+// быть каскадно помечена failed через failBlockedStages/blocked_by_dep, так и
+// не получив stageDir на диске (директория создаётся только при реальной
+// активации). Без этого ручной retry такой стадии падал с
+// "open log file: ... no such file or directory" — фикс в единой точке
+// покрывает retry, resume-после-рестарта (recovery.go) и любой будущий caller.
 func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		return
+	}
+	_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 
 	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
 		artCtx, artErr := CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
