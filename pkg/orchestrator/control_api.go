@@ -78,19 +78,42 @@ func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
 	return nil
 }
 
-// Revise sends feedback to re-plan a stage (синхронно и долговечно): переход
-// в revising фиксируется в Store до возврата — краш после Revise не теряет
-// интент (recovery резюмит revising через тот же путь, что и planning).
+// Revise sends feedback to re-plan a stage, ИЛИ (agent_suggest, running)
+// запрашивает graceful-прерывание текущего вызова агента фразой в контексте
+// (синхронно и долговечно): переход в revising фиксируется в Store до
+// возврата — краш после Revise не теряет интент (recovery резюмит revising
+// через тот же путь, что и planning).
+//
+// running-ветка ничего не спаунит сама — перезапуск с фидбеком делает
+// onUserInterrupted изнутри уже идущего runWithRetry, когда SIGINT реально
+// завершит текущий subprocess (см. pkg/executor: Config.InterruptCh).
 func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) error {
-	if o.currentStatus(stageID) != state.StatusAwaitingApproval {
+	current := o.currentStatus(stageID)
+	if current != state.StatusAwaitingApproval && current != state.StatusRunning {
+		return nil
+	}
+
+	stageDir := filepath.Join(o.opts.RunDir, stageID)
+
+	if current == state.StatusRunning {
+		if _, ok := o.Trigger(stageID, EvRevise, GuardCtx{}, feedback); !ok {
+			return nil
+		}
+		if err := state.SaveFeedback(stageDir, feedback); err != nil {
+			return fmt.Errorf("save feedback for %s: %w", stageID, err)
+		}
+		if ch, ok := o.interruptChans.Load(stageID); ok {
+			select {
+			case ch.(chan struct{}) <- struct{}{}:
+			default: // канал уже сигнализирован (двойной клик) — не блокируемся
+			}
+		}
 		return nil
 	}
 
 	if _, ok := o.Trigger(stageID, EvRevise, GuardCtx{}, feedback); !ok {
 		return nil
 	}
-
-	stageDir := filepath.Join(o.opts.RunDir, stageID)
 	if _, err := state.VersionPlan(stageDir); err != nil {
 		return fmt.Errorf("version plan for %s: %w", stageID, err)
 	}

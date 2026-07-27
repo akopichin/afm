@@ -55,9 +55,14 @@ func NewFSM(store *state.Store) *FSM {
 			EvPlanReady:     {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying}, To: to(state.StatusAwaitingApproval)},
 			EvApprove:       {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
 			EvRevise:        {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning}, To: to(state.StatusRevising)},
-			EvStartRun:      {From: []state.StageStatus{state.StatusReady}, To: to(state.StatusRunning)},
-			EvComplete:      {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying}, To: to(state.StatusDone)},
-			EvFail:          {From: nil, To: to(state.StatusFailed)},
+			// Revising тоже разрешён здесь: run<Phase>WithFeedback (кроме
+			// planning-варианта, у которого свой EvStartPlanning) переводит
+			// стадию обратно в Running этим же событием ПЕРЕД повторным
+			// runWithRetry — без этого стадия застревала бы в Revising
+			// навсегда (onAgentCompleted и EvComplete ждут Running/Retrying).
+			EvStartRun: {From: []state.StageStatus{state.StatusReady, state.StatusRevising}, To: to(state.StatusRunning)},
+			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying}, To: to(state.StatusDone)},
+			EvFail:     {From: nil, To: to(state.StatusFailed)},
 			// EvAskUser must be reachable from any state the question poller scans
 			// (planning, running, plus the retry/revision cycles where an agent can
 			// ask mid-flight). Without retrying/revising here the transition is

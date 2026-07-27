@@ -362,6 +362,11 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 // sessionExists/loadOrCreateSession в runnerFor не меняется).
 func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// Возвращаемся в Running (могли прийти из Revising — Revise() перевёл
+	// сюда стадию, чтобы доставить прерывание). Без этого onAgentCompleted и
+	// EvComplete не увидели бы подходящий статус, и стадия зависла бы в
+	// Revising даже после успешного завершения агента.
+	o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	feedbackNote := ""
 	if len(feedbackData) > 0 {
@@ -450,6 +455,8 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 // runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
 func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
+	o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	feedbackNote := ""
 	if len(feedbackData) > 0 {
@@ -492,6 +499,8 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 // активирована исходным runAutonomousAgent до прерывания.
 func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
+	o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	feedbackNote := ""
 	if len(feedbackData) > 0 {

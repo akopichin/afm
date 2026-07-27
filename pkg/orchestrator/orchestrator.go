@@ -439,3 +439,18 @@ func copyFile(src, dst string) error {
 
 // StoreFromOrch возвращает Store оркестратора. Только для тестов.
 func StoreFromOrch(o *Orchestrator) *state.Store { return o.opts.Store }
+
+// InterruptChanForTest возвращает канал прерывания текущей попытки RunAgent
+// для стадии (см. interruptChans), если он зарегистрирован. Только для
+// тестов: позволяет инъектированному mock-раннеру (пакет orchestrator_test)
+// самому дождаться того же сигнала, который Revise() шлёт для running-стадии
+// — без этого accessor'а мок не смог бы отличить "прервали фразой" от
+// обычной отмены ctx, а runWithRetry.onUserInterrupted никогда бы не
+// сработал в тесте.
+func InterruptChanForTest(o *Orchestrator, stageID string) (chan struct{}, bool) {
+	ch, ok := o.interruptChans.Load(stageID)
+	if !ok {
+		return nil, false
+	}
+	return ch.(chan struct{}), true
+}
