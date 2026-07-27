@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/akopichin/afm/pkg/progress"
@@ -31,9 +33,24 @@ type Config struct {
 	Debug          bool                      // if true, log the exact agent input (prompt) to debug logs
 	RunDir         string                    // run directory root; with Debug, <RunDir>/debug.log gets every agent input
 	StageID        string                    // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	// InterruptCh, if set, is watched during RunAgent: a signal on this channel
+	// sends SIGINT to the subprocess (not SIGKILL, not ctx cancellation) —
+	// graceful, user-requested interrupt (agent_suggest), distinct from idle
+	// timeout / full-run shutdown. nil channel is safe (select never fires).
+	InterruptCh <-chan struct{}
 }
 
 const defaultCommand = "claude"
+
+// ErrUserInterrupted signals that the agent process was stopped because the
+// user requested an interrupt (via Config.InterruptCh) — not a real failure.
+// Callers (runWithRetry) must distinguish this from retry/failure handling.
+var ErrUserInterrupted = errors.New("user interrupted")
+
+// interruptGracePeriod bounds how long we wait for the subprocess to exit
+// gracefully after SIGINT before force-killing it as a safety net against a
+// hung/misbehaving process.
+const interruptGracePeriod = 15 * time.Second
 
 const (
 	contentTypeText    = "text"
@@ -547,6 +564,22 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		<-done // wait for stdout reader to finish
 		_ = cmd.Wait()
 		return ctx.Err()
+	case <-e.cfg.InterruptCh:
+		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно
+		// завершает текущую атомарную операцию (запись файла — один syscall,
+		// его практически не рвёт сигналом на середине) и выходит.
+		_ = cmd.Process.Signal(syscall.SIGINT)
+		select {
+		case <-done:
+			_ = cmd.Wait()
+			return ErrUserInterrupted
+		case <-time.After(interruptGracePeriod):
+			// Не среагировал на SIGINT вовремя — принудительно, как страховка.
+			cmd.Process.Kill()
+			<-done
+			_ = cmd.Wait()
+			return ErrUserInterrupted
+		}
 	}
 }
 
