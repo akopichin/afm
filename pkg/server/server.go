@@ -212,6 +212,7 @@ func New(cfg Config) *Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {
