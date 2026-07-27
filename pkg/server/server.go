@@ -74,21 +74,22 @@ func findSkinFavicon(base string, statFn func(name string) bool) (href, mime str
 
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
-	runDir           string
-	Description      string          // корневой description флоу (для хедера дашборда)
-	stageInteractive map[string]bool // id стадии → interactive (статический конфиг флоу)
-	store            *state.Store
-	uiBus            *orchestrator.UIBus
-	approveFn        func(ctx context.Context, stageID string) error
-	reviseFn         func(ctx context.Context, stageID, feedback string) error
-	retryFn          func(ctx context.Context, stageID string) error
-	dialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
-	dialogCancelFn   func(stageID string) error
-	theme            string       // "goga" или "" (default coffee)
-	indexBytes       []byte       // предподготовленный index.html (с заменами скина/favicon)
-	fileServer       http.Handler // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer http.Handler // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
-	httpSrv          *http.Server
+	runDir              string
+	Description         string          // корневой description флоу (для хедера дашборда)
+	stageInteractive    map[string]bool // id стадии → interactive (статический конфиг флоу)
+	store               *state.Store
+	uiBus               *orchestrator.UIBus
+	approveFn           func(ctx context.Context, stageID string) error
+	reviseFn            func(ctx context.Context, stageID, feedback string) error
+	retryFn             func(ctx context.Context, stageID string) error
+	dialogAnswerFn      func(stageID, phase, qID, answer string, fromOptions bool) error
+	dialogCancelFn      func(stageID string) error
+	agentSuggestEnabled bool
+	theme               string       // "goga" или "" (default coffee)
+	indexBytes          []byte       // предподготовленный index.html (с заменами скина/favicon)
+	fileServer          http.Handler // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer    http.Handler // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	httpSrv             *http.Server
 	// Keepalive-таймауты вебсокета. Immutable: задаются один раз в New и не
 	// мутируются после (хранение в полях, а не в глобальных переменных, убирает
 	// data race между тестами и readPump/writePump — см. websocket.go).
@@ -99,19 +100,20 @@ type Server struct {
 
 // Config holds server settings.
 type Config struct {
-	Port             int
-	RunDir           string
-	Description      string // корневой description флоу (для хедера дашборда)
-	StageInteractive map[string]bool
-	Store            *state.Store
-	UIBus            *orchestrator.UIBus
-	ApproveFn        func(ctx context.Context, stageID string) error
-	ReviseFn         func(ctx context.Context, stageID, feedback string) error
-	RetryFn          func(ctx context.Context, stageID string) error
-	DialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
-	DialogCancelFn   func(stageID string) error
-	Theme            string
-	SkinDir          string
+	Port                int
+	RunDir              string
+	Description         string // корневой description флоу (для хедера дашборда)
+	StageInteractive    map[string]bool
+	Store               *state.Store
+	UIBus               *orchestrator.UIBus
+	ApproveFn           func(ctx context.Context, stageID string) error
+	ReviseFn            func(ctx context.Context, stageID, feedback string) error
+	RetryFn             func(ctx context.Context, stageID string) error
+	DialogAnswerFn      func(stageID, phase, qID, answer string, fromOptions bool) error
+	DialogCancelFn      func(stageID string) error
+	AgentSuggestEnabled bool // gate for agent_suggest experimental feature (config.Experimental.IsAgentSuggestEnabled())
+	Theme               string
+	SkinDir             string
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
 	WSPongWait   time.Duration
 	WSPingPeriod time.Duration
@@ -134,21 +136,22 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		runDir:           cfg.RunDir,
-		Description:      cfg.Description,
-		stageInteractive: cfg.StageInteractive,
-		store:            cfg.Store,
-		uiBus:            cfg.UIBus,
-		approveFn:        cfg.ApproveFn,
-		reviseFn:         cfg.ReviseFn,
-		retryFn:          cfg.RetryFn,
-		dialogAnswerFn:   cfg.DialogAnswerFn,
-		dialogCancelFn:   cfg.DialogCancelFn,
-		theme:            cfg.Theme,
-		wsPongWait:       pongWait,
-		wsPingPeriod:     pingPeriod,
-		wsWriteWait:      writeWait,
-		fileServer:       http.FileServer(http.FS(web.FS)),
+		runDir:              cfg.RunDir,
+		Description:         cfg.Description,
+		stageInteractive:    cfg.StageInteractive,
+		store:               cfg.Store,
+		uiBus:               cfg.UIBus,
+		approveFn:           cfg.ApproveFn,
+		reviseFn:            cfg.ReviseFn,
+		retryFn:             cfg.RetryFn,
+		dialogAnswerFn:      cfg.DialogAnswerFn,
+		dialogCancelFn:      cfg.DialogCancelFn,
+		agentSuggestEnabled: cfg.AgentSuggestEnabled,
+		theme:               cfg.Theme,
+		wsPongWait:          pongWait,
+		wsPingPeriod:        pingPeriod,
+		wsWriteWait:         writeWait,
+		fileServer:          http.FileServer(http.FS(web.FS)),
 	}
 
 	skinName := s.builtinSkinName()
