@@ -577,3 +577,114 @@ func TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit(t *testing.T) {
 	// План дописан, approved (autoApprove), planning-only стадия → done.
 	waitForStatus(t, stateFile, "propose", state.StatusDone, 10*time.Second)
 }
+
+// TestIntegration_StaleAnsweredQuestionNotReopened воспроизводит баг:
+// relocateMisplacedQuestions пере-открывал уже отвеченный вопрос ПРЕДЫДУЩЕЙ
+// фазы под именем ТЕКУЩЕЙ активной фазы. У многофазной interactive-стадии
+// (planning → implementation) planning.q1.question.json/planning.q1.answer.json
+// остаются лежать в stageDir навсегда (ничто их не удаляет). Когда
+// implementation.jsonl становится самым свежим <phase>.jsonl,
+// activeDialogPhase() переключается на "implementation" — но
+// collectQuestionFiles всё ещё находит СТАРЫЙ planning.q1.question.json как
+// кандидата. Без проверки на уже существующий answer.json под его СОБСТВЕННЫМ
+// именем normalizeMisplacedQuestion копировал его содержимое в свежесозданный
+// implementation.q1.question.json, спонтанно создавая "вопрос", на который
+// никто не отвечает — стадия зависала в awaiting_user_input.
+func TestIntegration_StaleAnsweredQuestionNotReopened(t *testing.T) {
+	dir := t.TempDir()
+
+	// Interactive-стадии игнорируют инъектированный Runner — runnerFor всегда
+	// строит executor.New(stage.Command) (см. CLAUDE.md), поэтому ОДИН bash-
+	// скрипт обслуживает обе фазы. executor.RunAgent создаёт implementation.log
+	// (progress.NewLogger) ДО спавна подпроцесса, так что его наличие в stageDir —
+	// надёжный признак того, что текущий запуск — implementation, а не planning.
+	scriptPath := filepath.Join(dir, "twophase.sh")
+	script := "#!/bin/bash\n" +
+		`STAGE="$AFM_STAGE_DIR"` + "\n" +
+		`if [ -f "$STAGE/implementation.log" ]; then` + "\n" +
+		`  sleep 3` + "\n" +
+		`  echo done > "$STAGE/.done"` + "\n" +
+		`  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"implementation done"}]}}'` + "\n" +
+		`  echo '{"type":"result","subtype":"success"}'` + "\n" +
+		`  exit 0` + "\n" +
+		`fi` + "\n" +
+		`A="$STAGE/planning.q1.answer.json"` + "\n" +
+		`if [ ! -f "$A" ]; then` + "\n" +
+		`  printf '{"id":"q1","question":"proceed?"}' > "$STAGE/planning.q1.question.json"` + "\n" +
+		`  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"waiting for q1"}]}}'` + "\n" +
+		`  echo '{"type":"result","subtype":"success"}'` + "\n" +
+		`  exit 0` + "\n" +
+		`fi` + "\n" +
+		`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\n\n- [ ] do it\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] works\n"}]}}'` + "\n" +
+		`echo '{"type":"result","subtype":"success"}'` + "\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "propose",
+		Name:        "Propose",
+		Description: "interactive two-phase stage with a leftover answered planning question",
+		Agents:      []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
+		Interactive: true,
+		Command:     scriptPath,
+	}}
+
+	store, err := state.Open(dir, []string{"propose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	cancelApprove := autoApprove(orch)
+	defer cancelApprove()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Планирование задаёт вопрос и ждёт ответа.
+	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 10*time.Second)
+
+	stageDir := filepath.Join(dir, "propose")
+	answerPath := filepath.Join(stageDir, "planning.q1.answer.json")
+	payload, _ := json.Marshal(map[string]any{"id": "q1", "answer": "go ahead", "from_options": false})
+	tmp := answerPath + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, answerPath); err != nil {
+		t.Fatal(err)
+	}
+	dialogPath := filepath.Join(stageDir, "planning.dialog.jsonl")
+	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q1", Answer: "go ahead"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.NotifyAnswer("propose", "planning", "q1", "go ahead", false); err != nil {
+		t.Fatalf("NotifyAnswer: %v", err)
+	}
+
+	// Планирование дописывает валидный план → auto-approve → implementation
+	// стартует. Скрипт implementation-фазы спит 3с, давая поллеру (тик раз в
+	// секунду) несколько проходов relocateMisplacedQuestions, пока старые
+	// planning.q1.question.json/planning.q1.answer.json ещё лежат в stageDir.
+	waitForStatus(t, stateFile, "propose", state.StatusDone, 20*time.Second)
+
+	// Баг: relocateMisplacedQuestions копировал уже отвеченный вопрос прошлой
+	// фазы под именем текущей активной фазы. implementation.q1.question.json
+	// не должен появиться — ничто в implementation-фазе не спрашивает q1.
+	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.question.json")); err == nil {
+		t.Error("implementation.q1.question.json spuriously created from stale answered planning question")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat implementation.q1.question.json: %v", err)
+	}
+}

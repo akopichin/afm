@@ -270,6 +270,16 @@ func (o *Orchestrator) normalizeMisplacedQuestion(f, stageDir, phase string) {
 	if id == "" {
 		return
 	}
+	// Файл уже разрешён под СВОИМ (возможно другим) именем — не трогаем.
+	// Отсекает случай, когда предыдущая фаза интерактивной стадии уже
+	// задала вопрос и получила ответ: activeDialogPhase() к этому моменту
+	// может указывать на следующую фазу, но старый
+	// <старая-фаза>.<id>.question.json остаётся лежать в stageDir и не
+	// должен копироваться под именем новой фазы, будто это новый вопрос.
+	ownAnswer := strings.TrimSuffix(f, ".question.json") + ".answer.json"
+	if _, err := os.Stat(ownAnswer); err == nil {
+		return
+	}
 	dstBase := phase + "." + id + ".question.json"
 	dst := filepath.Join(stageDir, dstBase)
 
