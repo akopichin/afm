@@ -76,10 +76,12 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	stageDir := filepath.Join(s.runDir, stageID)
 
 	var logContent string
-	for _, name := range []string{"planning.log", "planning-revision.log", "implementation.log", "review.log", "autonomous.log"} {
-		data, err := os.ReadFile(filepath.Join(stageDir, name))
-		if err == nil {
-			logContent += string(data)
+	for _, p := range flow.Phases() {
+		for _, name := range flow.PhaseLogFiles(p) {
+			data, err := os.ReadFile(filepath.Join(stageDir, name))
+			if err == nil {
+				logContent += string(data)
+			}
 		}
 	}
 	if logContent == "" {

@@ -181,6 +181,32 @@ func TestHandleLog(t *testing.T) {
 	}
 }
 
+func TestHandleLog_IncludesReviewAndAutonomousPhases(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+	stageDir := filepath.Join(runDir, testStageID)
+	if err := os.WriteFile(filepath.Join(stageDir, "review.log"), []byte("review phase output"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.log"), []byte("autonomous phase output"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/log", nil)
+	w := httptest.NewRecorder()
+	srv.handleLog(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "review phase output") {
+		t.Errorf("expected review.log content in response, got: %s", body)
+	}
+	if !strings.Contains(body, "autonomous phase output") {
+		t.Errorf("expected autonomous.log content in response, got: %s", body)
+	}
+}
+
 func TestHandleApprove(t *testing.T) {
 	approved := ""
 	srv, _ := setupTestServer(t)

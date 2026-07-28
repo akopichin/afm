@@ -152,3 +152,39 @@ func TestCheckNoRuns(t *testing.T) {
 		t.Fatal("expected error when no runs exist")
 	}
 }
+
+func TestLastLogAction_OnlyPlanning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "planning.log"), []byte("line one\nplanning last line"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := lastLogAction(dir)
+	if got != "planning last line" {
+		t.Errorf("got %q, want %q", got, "planning last line")
+	}
+}
+
+func TestLastLogAction_ImplementationBeatsPlanning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "planning.log"), []byte("planning last line"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "implementation.log"), []byte("implementation last line"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := lastLogAction(dir)
+	if got != "implementation last line" {
+		t.Errorf("got %q, want %q — later phase must win", got, "implementation last line")
+	}
+}
+
+func TestLastLogAction_ReviewOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "review.log"), []byte("review last line"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := lastLogAction(dir)
+	if got != "review last line" {
+		t.Errorf("got %q, want %q — review.log was not covered before this fix", got, "review last line")
+	}
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -103,19 +104,21 @@ func newCheckCmd() *cobra.Command {
 }
 
 func lastLogAction(stageDir string) string {
-	for _, name := range []string{"implementation.log", "planning.log"} {
-		data, err := os.ReadFile(filepath.Join(stageDir, name))
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-		if len(lines) > 0 {
-			last := lines[len(lines)-1]
-			if len(last) > 60 {
-				last = last[:60] + "..."
+	var last string
+	for _, p := range flow.Phases() {
+		for _, name := range flow.PhaseLogFiles(p) {
+			data, err := os.ReadFile(filepath.Join(stageDir, name))
+			if err != nil || len(data) == 0 {
+				continue
 			}
-			return last
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if len(lines) > 0 && lines[len(lines)-1] != "" {
+				last = lines[len(lines)-1]
+			}
 		}
 	}
-	return ""
+	if len(last) > 60 {
+		last = last[:60] + "..."
+	}
+	return last
 }
