@@ -194,6 +194,16 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 	// pending → ready → running зеркалит ветку «plan.md уже есть» ниже (EvReady →
 	// EvStartRun), только агент — автономный (без plan.md/approval).
 	if isAutonomousStage(filepath.Join(o.opts.RunDir, stageID)) || stage.IsAuto() {
+		// Незавершённая зависимость: стадия остаётся pending (уже сделано выше
+		// через EvManualRetry) — её подхватит обычный deps-aware путь
+		// (startPlanningForUnblocked/tryActivatePrePlanned/startReadyStages),
+		// который onAgentCompleted вызывает по завершении зависимости. Без этой
+		// проверки retry безусловно спавнил агента, даже когда депенденси ещё
+		// running (баг: ретраенные вниз по графу стадии стартовали параллельно
+		// с ещё не завершившимся предком).
+		if !o.depsDone(*stage) {
+			return
+		}
 		o.Trigger(stageID, EvReady, GuardCtx{}, "manual retry: autonomous")
 		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
