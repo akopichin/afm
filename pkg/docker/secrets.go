@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/akopichin/afm/pkg/config"
 )
 
 // homeDir возвращает домашний каталог хоста (best-effort).
@@ -104,8 +106,8 @@ func LoadSecretLayers(override, projectDir string) (map[string]string, error) {
 		files = []string{override}
 	} else {
 		files = []string{
-			filepath.Join(homeDir(), ".afm", "secrets.env"),
-			filepath.Join(projectDir, ".afm", "secrets.env"),
+			filepath.Join(homeDir(), config.AfmDir, "secrets.env"),
+			filepath.Join(projectDir, config.AfmDir, "secrets.env"),
 		}
 	}
 	return LoadSecrets(files)
