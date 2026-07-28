@@ -66,11 +66,20 @@ func (s ServerConfig) GetPort() int {
 // agent command (e.g. glm51) inside Docker, so the host binary is not mounted.
 // See docs/superpowers/specs/2026-07-14-docker-autoshim-design.md.
 
-// Допустимые значения AgentRecipe.Type.
+// ClaudeCommand — каноническое имя CLI-агента по умолчанию. Одновременно:
+// (а) имя реального бинарника, который ищется в PATH/exec'ается, когда
+// команда стадии не указана явно; (б) значение AgentRecipe.Type/
+// WrapperSpec.Type для «claude»-рецепта (пустой Type тоже означает claude) —
+// это не совпадение, а один и тот же референт: recipe-тип "claude" в
+// буквальном смысле означает «сгенерировать враппер, exec'ающий этот бинарник».
+const ClaudeCommand = "claude"
+
+// RecipeTypeOpenAI/RecipeTypeCursor — остальные допустимые значения
+// AgentRecipe.Type/WrapperSpec.Type (экспортированы, чтобы pkg/docker/wrapper.go
+// могло их переиспользовать вместо собственных WrapperTypeOpenAI/WrapperTypeCursor).
 const (
-	recipeTypeClaude = "claude"
-	recipeTypeOpenAI = "openai"
-	recipeTypeCursor = "cursor" // Cursor Cloud Agents API (async run-based, не chat completions)
+	RecipeTypeOpenAI = "openai"
+	RecipeTypeCursor = "cursor" // Cursor Cloud Agents API (async run-based, не chat completions)
 )
 
 type AgentRecipe struct {
@@ -113,7 +122,7 @@ func (r AgentRecipe) Validate() error {
 	// type — allow-list; неизвестное значение (напр. опечатка "openapi") молча
 	// трактовалось бы как claude, что ведёт к некорректной генерации обёртки.
 	switch r.Type {
-	case "", recipeTypeClaude, recipeTypeOpenAI, recipeTypeCursor:
+	case "", ClaudeCommand, RecipeTypeOpenAI, RecipeTypeCursor:
 	default:
 		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", or \"cursor\"; got %q", r.Type)
 	}
@@ -125,7 +134,7 @@ func (r AgentRecipe) Validate() error {
 	}
 	// openai и cursor — внешние шлюзы: url обязателен, auth.to не ограничен ClaudeAuthEnvVars
 	// (используют свои env vars: OPENAI_API_KEY, CURSOR_API_KEY и т.д.).
-	if r.Type == recipeTypeOpenAI || r.Type == recipeTypeCursor {
+	if r.Type == RecipeTypeOpenAI || r.Type == RecipeTypeCursor {
 		if r.URL == "" {
 			return fmt.Errorf("recipe: url is required for type: %s", r.Type)
 		}
@@ -233,7 +242,7 @@ func Default() Config {
 	openBrowser := false
 	port := 9876
 	return Config{
-		Client:   ClientConfig{Command: "claude"},
+		Client:   ClientConfig{Command: ClaudeCommand},
 		Executor: ExecutorConfig{IdleTimeout: 30 * time.Minute, MaxParallel: 0},
 		Server:   ServerConfig{Port: &port, OpenBrowser: &openBrowser},
 	}

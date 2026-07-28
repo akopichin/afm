@@ -567,6 +567,54 @@ func TestAgentRecipe_CursorType(t *testing.T) {
 	}
 }
 
+func TestAgentRecipe_ClaudeType(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string // пустая строка → ожидаем PASS
+	}{
+		{
+			name: "empty Type behaves as claude",
+			recipe: config.AgentRecipe{
+				Type:  "",
+				Model: "claude-sonnet-4-5",
+				Auth:  config.RecipeAuth{From: "env:TOKEN", To: "env:CLAUDE_CODE_OAUTH_TOKEN"},
+			},
+		},
+		{
+			name: "explicit ClaudeCommand as Type behaves the same as empty",
+			recipe: config.AgentRecipe{
+				Type:  config.ClaudeCommand,
+				Model: "claude-sonnet-4-5",
+				Auth:  config.RecipeAuth{From: "env:TOKEN", To: "env:CLAUDE_CODE_OAUTH_TOKEN"},
+			},
+		},
+		{
+			name: "claude: auth.to restricted to ClaudeAuthEnvVars (unlike openai/cursor)",
+			recipe: config.AgentRecipe{
+				Type:  config.ClaudeCommand,
+				Model: "claude-sonnet-4-5",
+				Auth:  config.RecipeAuth{From: "env:TOKEN", To: "env:SOME_OTHER_VAR"},
+			},
+			errSub: "is not one of",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.recipe.Validate()
+			if tc.errSub == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.errSub) {
+				t.Errorf("Validate() = %v, want error containing %q", err, tc.errSub)
+			}
+		})
+	}
+}
+
 func TestDockerAutoShim_ParseOpenAIType(t *testing.T) {
 	dir := t.TempDir()
 	cfgYAML := `
