@@ -154,7 +154,7 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 	var mounts []CommandMount
 
 	addCmd := func(cmd string) {
-		if cmd == "" || cmd == "claude" || generated[cmd] || seen[cmd] {
+		if cmd == "" || cmd == config.ClaudeCommand || generated[cmd] || seen[cmd] {
 			return
 		}
 		seen[cmd] = true
