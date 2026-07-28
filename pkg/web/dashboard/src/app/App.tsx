@@ -16,6 +16,7 @@ import { useStageLog } from '../hooks/use-stage-log'
 import { useElapsed } from '../hooks/use-elapsed'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
 import { useTitleFlash } from '../hooks/use-title-flash'
+import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
 import type { Stage } from '../types'
 
@@ -65,10 +66,12 @@ export function App(): ReactElement {
 
   // Attention-сигнал выбранной стадии: kind='dialog' (awaiting_user_input) или
   // 'plan' (awaiting_approval). needsAttention кормит title-flash для фоновой
-  // вкладки, anyAttention — точку в шапке (хотя бы одна стадия ждёт юзера).
+  // вкладки, anyAttention — точку в шапке И пульс favicon (хотя бы одна
+  // стадия прогона ждёт юзера, а не только выбранная).
   const attention = useAttention(selectedStage)
   const anyAttention = anyAwaiting(stages)
   useTitleFlash(attention.needsAttention)
+  useFaviconPulse(anyAttention)
 
   // Заголовок вкладки берём из description флоу (из flow.yaml), иначе имя флоу,
   // иначе дефолт. useTitleFlash мигает вокруг текущего title и восстанавливает
