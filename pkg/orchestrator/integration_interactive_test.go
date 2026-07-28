@@ -485,6 +485,135 @@ func TestIntegration_MisprefixedQuestionNormalized(t *testing.T) {
 	}
 }
 
+// TestIntegration_BrokenQuestionStillSurfaces воспроизводит реальный инцидент:
+// агент (glm-5.2, autonomous_execution) записал question.json с пропущенной
+// открывающей кавычкой у ключа "options" — `...,options":[...]` вместо
+// `...,"options":[...]`. До фикса FindUnansweredQuestions делал continue на
+// любой ошибке json.Unmarshal без единого лога — файл вопроса пропадал из
+// вида поллера, стадия висела в "running" 12+ минут без единого следа в UI.
+// Теперь jsonrepair чинит такой класс ошибок и стадия почти сразу доходит до
+// awaiting_user_input с корректно распарсенными question/options.
+func TestIntegration_BrokenQuestionStillSurfaces(t *testing.T) {
+	dir := t.TempDir()
+
+	scriptPath := filepath.Join(dir, "brokenagent.sh")
+	script := "#!/bin/bash\n" +
+		`printf '{"id":"q10","question":"...последний cell Phase 7.",options":["Утверждаю","Правки"]}' > "$AFM_STAGE_DIR/planning.q10.question.json"` + "\n" +
+		"sleep 30\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "brainstorm",
+		Name:        "Brainstorm",
+		Description: "interactive planning that writes a question.json with a missing key quote",
+		Agents:      []flow.AgentType{flow.AgentPlanning},
+		Interactive: true,
+		Command:     scriptPath,
+	}}
+
+	store, err := state.Open(dir, []string{"brainstorm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "brainstorm", state.StatusAwaitingUserInput, 10*time.Second)
+
+	stageDir := filepath.Join(dir, "brainstorm")
+	questions, err := mcp.FindUnansweredQuestions(stageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(questions) != 1 {
+		t.Fatalf("want 1 surfaced question, got %d: %+v", len(questions), questions)
+	}
+	q := questions[0]
+	if q.ID != "q10" || q.Question != "...последний cell Phase 7." {
+		t.Fatalf("question was repaired incorrectly: %+v", q)
+	}
+	if want := []string{"Утверждаю", "Правки"}; len(q.Options) != 2 || q.Options[0] != want[0] || q.Options[1] != want[1] {
+		t.Fatalf("options mismatch after repair: got %v, want %v", q.Options, want)
+	}
+}
+
+// TestIntegration_UnrepairableQuestionFallsBackToStub покрывает last-resort
+// fallback: агент пишет question.json настолько сломанный, что даже jsonrepair
+// не может его починить. Стадия всё равно должна дойти до
+// awaiting_user_input — с вопросом-заглушкой вместо вечного зависания в
+// "running" без единого следа.
+func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
+	dir := t.TempDir()
+
+	scriptPath := filepath.Join(dir, "garbageagent.sh")
+	script := "#!/bin/bash\n" +
+		`printf 'not json at all {{{' > "$AFM_STAGE_DIR/planning.q1.question.json"` + "\n" +
+		"sleep 30\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{
+		ID:          "propose",
+		Name:        "Propose",
+		Description: "interactive planning that writes an unrepairable question.json",
+		Agents:      []flow.AgentType{flow.AgentPlanning},
+		Interactive: true,
+		Command:     scriptPath,
+	}}
+
+	store, err := state.Open(dir, []string{"propose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(dir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  dir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 10*time.Second)
+
+	stageDir := filepath.Join(dir, "propose")
+	questions, err := mcp.FindUnansweredQuestions(stageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(questions) != 1 {
+		t.Fatalf("want 1 fallback stub question, got %d: %+v", len(questions), questions)
+	}
+	q := questions[0]
+	if q.ID != "q1" {
+		t.Fatalf("fallback stub must keep the id from the filename, got %q", q.ID)
+	}
+	if q.Question == "" || len(q.Options) != 2 || !q.AllowCustom {
+		t.Fatalf("unexpected fallback stub: %+v", q)
+	}
+}
+
 // TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit воспроизводит afm bug:
 // интерактивный planning-агент задал вопрос и ВЫШЕЛ (claude завершился), не
 // дождавшись ответа пользователя и не написав plan.md. Раньше такое завершение

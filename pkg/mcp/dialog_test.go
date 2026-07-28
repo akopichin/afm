@@ -199,7 +199,9 @@ func TestFindUnansweredQuestions(t *testing.T) {
 		t.Fatalf("want 1 unanswered (implementation), got %v", got)
 	}
 
-	// Malformed JSON → skipped silently, does not error.
+	// Malformed, unrepairable JSON → surfaced as a fallback stub, not
+	// dropped silently (a dropped question hangs the stage forever with no
+	// diagnostic — see TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub).
 	bad := filepath.Join(dir, "review.q1.question.json")
 	if err := os.WriteFile(bad, []byte(`not json`), 0644); err != nil {
 		t.Fatal(err)
@@ -208,8 +210,8 @@ func TestFindUnansweredQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("malformed JSON must be skipped; want 1, got %d", len(got))
+	if len(got) != 2 {
+		t.Fatalf("malformed JSON must surface as a fallback stub; want 2, got %d: %+v", len(got), got)
 	}
 
 	// allow_custom defaults to true when omitted.
@@ -218,7 +220,7 @@ func TestFindUnansweredQuestions(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_RepairsUnescapedQuote locks in the fallback for
+// TestFindUnansweredQuestions_RepairsUnescapedQuote locks in the repair for
 // a common agent authoring mistake: a literal, unescaped '"' inside a JSON
 // string value (agent hand-writes the question file and quotes a word
 // instead of escaping it). Before this fix, such a file failed
@@ -261,6 +263,84 @@ func TestFindUnansweredQuestions_RepairsUnescapedQuote(t *testing.T) {
 	}
 	if probe.Question != want {
 		t.Fatalf("persisted question text mismatch: %q", probe.Question)
+	}
+}
+
+// TestFindUnansweredQuestions_MissingKeyQuote_Repaired locks in the repair
+// for the actual incident that motivated this fix: the agent dropped the
+// opening quote before the "options" key
+// (`...,options":[...]` instead of `...,"options":[...]`). This is a
+// different failure shape from the unescaped-quote case above — it must be
+// repaired without corrupting the surrounding Cyrillic text.
+func TestFindUnansweredQuestions_MissingKeyQuote_Repaired(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "planning.q10.question.json")
+	broken := `{"id":"q10","question":"...последний cell Phase 7.",options":["Утверждаю","Правки"]}`
+	if err := os.WriteFile(path, []byte(broken), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 repaired question, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != "q10" || got[0].Question != "...последний cell Phase 7." {
+		t.Fatalf("unexpected entry: %+v", got[0])
+	}
+	if want := []string{"Утверждаю", "Правки"}; len(got[0].Options) != 2 || got[0].Options[0] != want[0] || got[0].Options[1] != want[1] {
+		t.Fatalf("options mismatch: got %v, want %v", got[0].Options, want)
+	}
+
+	// The fix is persisted back to disk.
+	fixed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Options []string `json:"options"`
+	}
+	if err := json.Unmarshal(fixed, &probe); err != nil {
+		t.Fatalf("repaired file on disk is still invalid JSON: %v", err)
+	}
+	if len(probe.Options) != 2 {
+		t.Fatalf("persisted options mismatch: %v", probe.Options)
+	}
+}
+
+// TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub locks in the
+// last-resort fallback: a question file so broken that even jsonrepair
+// cannot recover it must still surface to the poller as a stub question
+// instead of vanishing. Before this fix, an unrepairable file was silently
+// dropped (continue) and the stage hung in "running" forever with no trace
+// in the UI or logs.
+func TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "planning.q5.question.json")
+	if err := os.WriteFile(path, []byte(`not json at all {{{`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 fallback stub, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != "q5" {
+		t.Fatalf("fallback stub must keep the id from the filename, got %q", got[0].ID)
+	}
+	if got[0].Question == "" {
+		t.Fatal("fallback stub must carry a non-empty explanatory question")
+	}
+	if len(got[0].Options) != 2 {
+		t.Fatalf("fallback stub must offer Continue/Cancel options, got %v", got[0].Options)
+	}
+	if !got[0].AllowCustom {
+		t.Fatal("fallback stub must allow a custom answer")
 	}
 }
 
