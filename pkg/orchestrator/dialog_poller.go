@@ -165,9 +165,12 @@ func jsonlFileForPhase(phase string) string {
 // если стадия исполняется в автономном треке (в stageDir есть autonomous.flag).
 // Единый источник для сканов, ранее собиравшихся вручную в нескольких местах.
 func dialogPhases(stageDir string) []string {
-	phases := []string{phasePlanning, phaseImplementation, phaseReview}
-	if isAutonomousStage(stageDir) {
-		phases = append(phases, phaseAutonomous)
+	var phases []string
+	for _, p := range flow.Phases() {
+		if p == flow.PhaseAutonomous && !isAutonomousStage(stageDir) {
+			continue
+		}
+		phases = append(phases, string(p))
 	}
 	return phases
 }

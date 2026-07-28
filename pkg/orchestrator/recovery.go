@@ -183,7 +183,8 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 func (o *Orchestrator) detectInterruptedPhase(stageDir string) string {
 	var latestPhase string
 	var latestMtime time.Time
-	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview, phaseAutonomous} {
+	for _, p := range flow.Phases() {
+		phase := string(p)
 		fi, err := os.Stat(sessionFile(stageDir, phase))
 		if err != nil {
 			continue

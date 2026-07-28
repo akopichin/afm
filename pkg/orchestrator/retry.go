@@ -22,17 +22,7 @@ func isRetryableError(err error) bool {
 // buildRetryContext reads the last N lines from the agent's raw stream-json
 // log and formats them as a continuation context for the retry prompt.
 func buildRetryContext(stageDir, phase string) string {
-	var jsonlName string
-	switch phase {
-	case phasePlanning:
-		jsonlName = "planning.jsonl"
-	case phaseReview:
-		jsonlName = "review.jsonl"
-	case phaseAutonomous:
-		jsonlName = "autonomous.jsonl"
-	default:
-		jsonlName = "implementation.jsonl"
-	}
+	jsonlName := flow.PhaseJSONL(flow.Phase(phase))
 
 	lines := executor.RenderActions(filepath.Join(stageDir, jsonlName))
 	if len(lines) == 0 {
