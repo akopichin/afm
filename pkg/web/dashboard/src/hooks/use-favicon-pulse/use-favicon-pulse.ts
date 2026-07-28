@@ -31,7 +31,13 @@ export function useFaviconPulse(active: boolean): void {
       }
       void compositeAttentionBadge(original)
         .then((badgeHref) => {
-          if (cancelled || !document.hidden) return
+          // timer !== undefined — защита от orphaned-таймера: если между
+          // первым и вторым вызовом onVisibility() (hidden→visible→hidden,
+          // пока промис ещё в полёте) уже успел зарезолвиться другой .then
+          // на том же кешированном промисе и запустить интервал, второй
+          // .then не должен перезаписать timer, потеряв ссылку на первый
+          // (и оставив его тикать вечно, даже когда вкладка снова видима).
+          if (cancelled || !document.hidden || timer !== undefined) return
           timer = setInterval(() => {
             toggle = !toggle
             link.href = toggle ? badgeHref : original

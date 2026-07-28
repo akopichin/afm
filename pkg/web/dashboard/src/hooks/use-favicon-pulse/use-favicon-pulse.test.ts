@@ -115,4 +115,40 @@ describe('useFaviconPulse', () => {
     await vi.advanceTimersByTimeAsync(3000)
     expect(mockComposite).not.toHaveBeenCalled()
   })
+
+  it('не создаёт orphaned-интервал при hidden→visible→hidden, пока compositeAttentionBadge ещё в полёте', async () => {
+    vi.useFakeTimers()
+    setIconLink('/favicon.svg')
+
+    const resolvers: Array<(value: string) => void> = []
+    mockComposite.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvers.push(resolve)
+        }),
+    )
+
+    renderHook(() => useFaviconPulse(true))
+    expect(mockComposite).toHaveBeenCalledTimes(1) // первая активация onVisibility() при монтировании (hidden=true)
+
+    // Вкладка на мгновение стала видимой: onVisibility -> stop(), но timer
+    // ещё не создан (первый промис всё ещё в полёте) — no-op.
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    // И снова скрыта до того, как первый промис успел зарезолвиться —
+    // второй вызов onVisibility запускает второй compositeAttentionBadge.
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(mockComposite).toHaveBeenCalledTimes(2)
+
+    // Оба промиса резолвятся, пока вкладка всё ещё скрыта — оба .then
+    // проходят проверку `!document.hidden`, но без guard'а по timer
+    // второй .then перезаписал бы ссылку на первый интервал, оставив его
+    // тикать вечно (orphaned timer).
+    resolvers.forEach((resolve) => resolve(BADGE_HREF))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(vi.getTimerCount()).toBe(1)
+  })
 })

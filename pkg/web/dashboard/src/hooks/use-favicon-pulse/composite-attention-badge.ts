@@ -11,6 +11,9 @@ function readAmberColor(): string {
   return value !== '' ? value : FALLBACK_AMBER
 }
 
+// Предполагает, что href всегда same-origin (статичный ./favicon.svg или
+// скиновая иконка того же origin): canvas.toDataURL() ниже кидает
+// SecurityError на cross-origin-«tainted» canvas.
 function loadImage(href: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
