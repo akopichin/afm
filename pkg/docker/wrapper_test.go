@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akopichin/afm/pkg/config"
 )
 
 func TestEnvName(t *testing.T) {
@@ -143,7 +145,7 @@ func TestCreateWrappers_OpenAITemplate(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // claude нет в PATH
 
 	dir, err := CreateWrappers([]WrapperSpec{{
-		Type:    WrapperTypeOpenAI,
+		Type:    config.RecipeTypeOpenAI,
 		Command: "cursor",
 		AuthTo:  "OPENAI_API_KEY",
 		BaseURL: "https://api2.cursor.sh/v1",
@@ -182,7 +184,7 @@ func TestCreateWrappers_OpenAINoClaudeRequired(t *testing.T) {
 	t.Setenv("PATH", emptyDir) // нет claude, нет docker, ничего
 
 	_, err := CreateWrappers([]WrapperSpec{
-		{Type: WrapperTypeOpenAI, Command: "cursor", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
+		{Type: config.RecipeTypeOpenAI, Command: "cursor", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
 	})
 	if err != nil {
 		t.Errorf("openai-only wrappers must not fail when claude absent: %v", err)
@@ -195,7 +197,7 @@ func TestCreateWrappers_MixedTypes_RequiresClaude(t *testing.T) {
 	t.Setenv("PATH", emptyDir)
 
 	_, err := CreateWrappers([]WrapperSpec{
-		{Type: WrapperTypeOpenAI, Command: "cursor", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
+		{Type: config.RecipeTypeOpenAI, Command: "cursor", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
 		{Command: "glm51", Model: "glm-5.1", AuthTo: "ANTHROPIC_AUTH_TOKEN"}, // claude-тип
 	})
 	if err == nil {
@@ -208,7 +210,7 @@ func TestCreateWrappers_CursorTemplate(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // claude нет в PATH
 
 	dir, err := CreateWrappers([]WrapperSpec{{
-		Type:    WrapperTypeCursor,
+		Type:    config.RecipeTypeCursor,
 		Command: "cursor",
 		AuthTo:  "CURSOR_API_KEY",
 		BaseURL: "https://api.cursor.com/v1",
@@ -249,7 +251,7 @@ func TestCreateWrappers_CursorNoClaudeRequired(t *testing.T) {
 	t.Setenv("PATH", emptyDir) // нет claude, нет docker, ничего
 
 	_, err := CreateWrappers([]WrapperSpec{
-		{Type: WrapperTypeCursor, Command: "cursor", Model: "auto", BaseURL: "http://x", AuthTo: "CURSOR_API_KEY"},
+		{Type: config.RecipeTypeCursor, Command: "cursor", Model: "auto", BaseURL: "http://x", AuthTo: "CURSOR_API_KEY"},
 	})
 	if err != nil {
 		t.Errorf("cursor-only wrappers must not fail when claude absent: %v", err)

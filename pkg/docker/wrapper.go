@@ -7,17 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/akopichin/afm/pkg/config"
 )
-
-// WrapperTypeOpenAI — WrapperSpec.Type value that selects the OpenAI-compatible
-// template (OPENAI_* vars + exec openai-as-claude). Empty / "claude" selects the
-// claude template.
-const WrapperTypeOpenAI = "openai"
-
-// WrapperTypeCursor — Cursor Cloud Agents API template (CURSOR_* vars + exec
-// cursor-as-claude). Cursor не имеет синхронного /chat/completions — это
-// асинхронный run-based API, поэтому использует свой адаптер, не claude.
-const WrapperTypeCursor = "cursor"
 
 // envName sanitizes a command name into an uppercase env-var suffix: only
 // [A-Z0-9_] allowed, everything else → '_'. Used for AFM_SECRET_<NAME> and
@@ -63,8 +55,8 @@ func CreateWrappers(specs []WrapperSpec) (string, error) {
 	// оба используют собственные адаптеры, не вызывающие claude).
 	var realClaude string
 	for _, s := range specs {
-		if s.Type != WrapperTypeOpenAI && s.Type != WrapperTypeCursor {
-			p, err := exec.LookPath("claude")
+		if s.Type != config.RecipeTypeOpenAI && s.Type != config.RecipeTypeCursor {
+			p, err := exec.LookPath(config.ClaudeCommand)
 			if err != nil {
 				return "", fmt.Errorf("claude not found in PATH (required for wrapper generation): %w", err)
 			}
@@ -98,7 +90,7 @@ func generateWrapper(s WrapperSpec, realClaude string) (string, error) {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 
-	if s.Type == WrapperTypeOpenAI {
+	if s.Type == config.RecipeTypeOpenAI {
 		// openai-compatible: OPENAI_* vars + exec openai-as-claude.
 		// realClaude не нужен — openai-as-claude не вызывает claude.
 		if s.AuthTo != "" {
@@ -115,7 +107,7 @@ func generateWrapper(s WrapperSpec, realClaude string) (string, error) {
 		return b.String(), nil
 	}
 
-	if s.Type == WrapperTypeCursor {
+	if s.Type == config.RecipeTypeCursor {
 		// cursor Cloud Agents API: CURSOR_* vars + exec cursor-as-claude.
 		// realClaude не нужен — cursor-as-claude не вызывает claude.
 		if s.AuthTo != "" {
