@@ -42,11 +42,11 @@ func newInitCmd() *cobra.Command {
 				})
 			}
 
-			flowsDir := filepath.Join(fmDir(), "flows")
-			if err := os.MkdirAll(flowsDir, 0755); err != nil {
+			dir := flowsDir()
+			if err := os.MkdirAll(dir, 0755); err != nil {
 				return fmt.Errorf("create flows dir: %w", err)
 			}
-			outPath := filepath.Join(flowsDir, name+".yaml")
+			outPath := filepath.Join(dir, name+".yaml")
 
 			var sb strings.Builder
 			sb.WriteString("name: " + name + "\n")

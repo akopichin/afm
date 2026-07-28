@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -17,7 +16,7 @@ func newApproveCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stageID := args[0]
-			runDir, stageIDs, err := state.FindLatestRunForStage(filepath.Join(fmDir(), "runs"), stageID)
+			runDir, stageIDs, err := state.FindLatestRunForStage(runsDir(), stageID)
 			if err != nil {
 				return err
 			}

@@ -46,7 +46,7 @@ func newCheckCmd() *cobra.Command {
 		Use:   "check",
 		Short: "Show status of the latest flow run",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			base := filepath.Join(fmDir(), "runs")
+			base := runsDir()
 			entries, err := os.ReadDir(base)
 			if err != nil {
 				return fmt.Errorf("no runs found in %s", base)

@@ -13,7 +13,7 @@ func newListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List available flow files in .afm/flows/",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := filepath.Join(fmDir(), "flows")
+			dir := flowsDir()
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				fmt.Println("No flows found (create one with `afm init`)")

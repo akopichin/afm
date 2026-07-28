@@ -34,7 +34,7 @@ func newReviseCmd() *cobra.Command {
 				return errors.New("feedback is required (use --feedback or stdin)")
 			}
 
-			runDir, stageIDs, err := state.FindLatestRunForStage(filepath.Join(fmDir(), "runs"), stageID)
+			runDir, stageIDs, err := state.FindLatestRunForStage(runsDir(), stageID)
 			if err != nil {
 				return err
 			}

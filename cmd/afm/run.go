@@ -38,7 +38,7 @@ func newRunCmd() *cobra.Command {
 		Short: "Run a flow (or resume the latest run)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home, _ := os.UserHomeDir()
-			cfg, err := config.LoadFrom(filepath.Join(home, ".afm"), fmDir())
+			cfg, err := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
 			if err != nil {
 				return err
 			}
@@ -384,18 +384,18 @@ func resolveFlowPath(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	entries, err := os.ReadDir(filepath.Join(fmDir(), "flows"))
+	entries, err := os.ReadDir(flowsDir())
 	if err != nil {
-		return "", errors.New("no flow file provided and " + fmDir() + "/flows/ not found")
+		return "", errors.New("no flow file provided and " + flowsDir() + "/ not found")
 	}
 	var yamls []string
 	for _, e := range entries {
 		if !e.IsDir() && (filepath.Ext(e.Name()) == extYAML || filepath.Ext(e.Name()) == extYML) {
-			yamls = append(yamls, filepath.Join(fmDir(), "flows", e.Name()))
+			yamls = append(yamls, filepath.Join(flowsDir(), e.Name()))
 		}
 	}
 	if len(yamls) == 0 {
-		return "", errors.New("no flow YAML files found in " + fmDir() + "/flows/")
+		return "", errors.New("no flow YAML files found in " + flowsDir() + "/")
 	}
 	if len(yamls) == 1 {
 		return yamls[0], nil
@@ -404,7 +404,7 @@ func resolveFlowPath(args []string) (string, error) {
 }
 
 func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
-	base := filepath.Join(fmDir(), "runs")
+	base := runsDir()
 
 	stageIDs := make([]string, len(f.Stages))
 	for i, s := range f.Stages {
