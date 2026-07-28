@@ -277,6 +277,72 @@ func TestIntegration_ResumeFromRevising(t *testing.T) {
 	}
 }
 
+// TestIntegration_ReviseFeedsBackOriginalPlanContent — полный живой путь
+// Revise (не восстановление после краша): реальный plan.md, реальный вызов
+// orch.Revise, реальная версионация через VersionPlan, реальное чтение через
+// LatestPlanVersion. Закрывает пробел, который не закрывают ни
+// TestRevise_DurableTransition (approve_test.go — блокирует спавн
+// семафором, runPlanningWithFeedback не успевает выполниться), ни
+// TestIntegration_ResumeFromRevising (plan.v1.md разложен тестом вручную,
+// VersionPlan вообще не вызывается) — здесь же проверяется, что байты
+// ОРИГИНАЛЬНОГО plan.md, написанного первым проходом planning, доходят до
+// промпта ревизии в неизменном виде через полную цепочку VersionPlan →
+// LatestPlanVersion.
+func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
+	stages := []flow.Stage{{
+		ID: "a", Name: "A", Description: "revise round-trip",
+		Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
+	}}
+
+	capture := &capturingPlanningRunner{delegate: mockRunner(t, mockPlanningScript)}
+	runner := &doneCreatingRunner{delegate: capture}
+
+	orch, runDir, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+
+	// Непустой DashboardURL → headless auto-approve не срабатывает, стадия
+	// стабильно стоит на awaiting_approval вместо мгновенного авто-апрува
+	// (иначе planning->approve->implementation->done проходит быстрее, чем
+	// поллинг state.json успевает застать промежуточный статус).
+	orch.SetDashboardURL("http://127.0.0.1:0")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Первый проход planning: стадия доходит до awaiting_approval с реальным
+	// plan.md, написанным mockPlanningScript (никто его вручную не раскладывает).
+	waitForStatus(t, stateFile, "a", state.StatusAwaitingApproval, 10*time.Second)
+
+	if err := orch.Revise(context.Background(), "a", "please add error handling for edge case X"); err != nil {
+		t.Fatalf("Revise: %v", err)
+	}
+
+	// После Revise planning перезапускается с фидбеком и снова доходит до
+	// awaiting_approval — к этому моменту runPlanningWithFeedback уже
+	// отработал и capture успел записать второй промпт.
+	waitForStatus(t, stateFile, "a", state.StatusAwaitingApproval, 10*time.Second)
+
+	stageDir := filepath.Join(runDir, "a")
+	if _, err := os.Stat(filepath.Join(stageDir, "plan.v1.md")); err != nil {
+		t.Fatalf("expected plan.v1.md to exist after Revise (VersionPlan should have archived it): %v", err)
+	}
+
+	capture.mu.Lock()
+	prompts := append([]string{}, capture.prompts...)
+	capture.mu.Unlock()
+	if len(prompts) < 2 {
+		t.Fatalf("expected at least 2 RunPlanning calls (initial + revise), got %d: %v", len(prompts), prompts)
+	}
+
+	revisePrompt := prompts[1]
+	if !strings.Contains(revisePrompt, "Step 1: implement feature") {
+		t.Errorf("expected revise prompt to include the ORIGINAL plan.md content (via VersionPlan -> LatestPlanVersion round-trip), got: %s", revisePrompt)
+	}
+	if !strings.Contains(revisePrompt, "please add error handling for edge case X") {
+		t.Errorf("expected revise prompt to include the feedback note, got: %s", revisePrompt)
+	}
+}
+
 // TestResume_RevisingAutonomousStageUsesAutonomousFeedback подтверждает, что
 // краш в revising для АВТОНОМНОЙ стадии резюмится через
 // runAutonomousWithFeedback, а не жёстко через runPlanningWithFeedback (баг
