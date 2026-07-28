@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/progress"
 )
 
@@ -39,8 +40,6 @@ type Config struct {
 	// timeout / full-run shutdown. nil channel is safe (select never fires).
 	InterruptCh <-chan struct{}
 }
-
-const defaultCommand = "claude"
 
 // ErrUserInterrupted signals that the agent process was stopped because the
 // user requested an interrupt (via Config.InterruptCh) — not a real failure.
@@ -94,7 +93,7 @@ type Executor struct {
 // New creates an Executor.
 func New(cfg Config) *Executor {
 	if cfg.Command == "" {
-		cfg.Command = defaultCommand
+		cfg.Command = config.ClaudeCommand
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = 30 * time.Minute
