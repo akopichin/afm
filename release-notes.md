@@ -2,6 +2,21 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-07-28
+
+### New: pulsing browser-tab favicon while a stage waits for you
+- Previously the only signal that a stage needed your input while the dashboard tab was in the background was a flashing `document.title` (`useTitleFlash`) — easy to miss unless you were already scanning your browser's tab list.
+- **New:** while at least one stage in the run is `awaiting_user_input`/`awaiting_approval` (the same global `anyAwaiting(stages)` signal already driving the header's attention dot) *and* the tab is backgrounded (`document.hidden`), the tab's favicon now pulses — an amber (`--amber`, so it matches whatever skin is active) badge circle blinks on/off over whatever the current favicon happens to be, every 700ms. Stops and restores immediately the moment the tab regains focus.
+- **Mechanism:** `compositeAttentionBadge` (`pkg/web/dashboard/src/hooks/use-favicon-pulse/composite-attention-badge.ts`) draws the badge onto a 32×32 canvas over the current `<link rel="icon">`'s image and returns a `toDataURL()` data URL, cached per href. `useFaviconPulse` (same directory) mirrors `useTitleFlash`'s timer/visibility-listener shape, toggling the `<link>`'s `href` between the original and the composited badge. No per-skin assets needed — it composites over whatever icon is currently active.
+- Verified end-to-end in a real Chrome tab (not just jsdom, which can't run canvas/`Image` here) via `chrome-devtools` MCP tooling: the badge renders correctly, the href genuinely toggles on the 700ms cadence while hidden, restores and stays restored once visible again, and repaints in a different color when `--amber` is changed live — confirming the color really comes from the active skin's CSS variable, not a hardcoded value.
+- A final-review pass caught and fixed a real race: the pulse interval used to start asynchronously (inside the badge-compositing promise's `.then`), so a fast hidden→visible→hidden bounce during the first-ever activation (real image load in flight) could leave an orphaned interval running — pulsing the favicon even after the tab regained focus. Fixed with an idempotency guard (only one interval can ever be live) plus a regression test that reproduces the exact race.
+- Spec/plan: `docs/superpowers/specs/2026-07-28-favicon-attention-pulse-design.md`, `docs/superpowers/plans/2026-07-28-favicon-attention-pulse.md`.
+
+### Fix: agent-written `question.json` no longer silently dropped on invalid JSON
+- `FindUnansweredQuestions` used to try one narrow repair heuristic (an unescaped `"` inside a string value) and, on any other kind of malformed JSON, silently `continue` — the question file vanished from the poller's view, the stage never reached `awaiting_user_input`, and the agent was left polling for an answer that could never arrive. Root-caused from a real incident: an agent dropped the opening quote before the `options` key (`...,options":[...]` instead of `...,"options":[...]`), and the stage hung in `running` for 12+ minutes with zero trace anywhere in the UI or logs.
+- **Fix:** replaced the narrow heuristic with [`github.com/kaptinlin/jsonrepair`](https://github.com/kaptinlin/jsonrepair), which covers a much wider class of agent JSON mistakes (missing key quotes, missing commas, stray unescaped quotes, etc.) — verified against the actual incident's payload. If even that can't recover the file, the question now surfaces as a fallback stub (`Continue anyway` / `Cancel stage` options, raw file contents shown for inspection) instead of vanishing — the stage always reaches `awaiting_user_input`, never hangs silently again.
+- `go.mod`: `go 1.26` → `go 1.26.4` (the new dependency's minimum; toolchain fetched automatically via `GOTOOLCHAIN=auto`, no manual Go upgrade needed).
+
 ## 2026-07-27
 
 ### Fix: kebab menu clipped by the scrollable stages panel
