@@ -51,6 +51,28 @@ func TestFmDir(t *testing.T) {
 	}
 }
 
+func TestRunsDir(t *testing.T) {
+	prev := rootDir
+	t.Cleanup(func() { rootDir = prev })
+
+	rootDir = "/tmp/x"
+	want := "/tmp/x/.afm/runs"
+	if got := runsDir(); got != want {
+		t.Errorf("runsDir() with rootDir=%q = %q, want %q", rootDir, got, want)
+	}
+}
+
+func TestFlowsDir(t *testing.T) {
+	prev := rootDir
+	t.Cleanup(func() { rootDir = prev })
+
+	rootDir = "/tmp/x"
+	want := "/tmp/x/.afm/flows"
+	if got := flowsDir(); got != want {
+		t.Errorf("flowsDir() with rootDir=%q = %q, want %q", rootDir, got, want)
+	}
+}
+
 // TestRootVersionOutput проверяет, что корневая команда печатает версию по --version.
 // cobra регистрирует --version только если cmd.Version != "".
 func TestRootVersionOutput(t *testing.T) {

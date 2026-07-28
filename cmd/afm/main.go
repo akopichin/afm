@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 )
 
@@ -22,7 +23,17 @@ var version = "dev"
 // rootDir задаётся флагом --dir, иначе переменной AFM_DIR, иначе "."
 // (PersistentPreRunE в корневой команде).
 func fmDir() string {
-	return filepath.Join(rootDir, ".afm")
+	return filepath.Join(rootDir, config.AfmDir)
+}
+
+// runsDir возвращает путь к каталогу с ранами внутри .afm.
+func runsDir() string {
+	return filepath.Join(fmDir(), "runs")
+}
+
+// flowsDir возвращает путь к каталогу с flow.yaml внутри .afm.
+func flowsDir() string {
+	return filepath.Join(fmDir(), "flows")
 }
 
 // resolveRootDir определяет базовую директорию для .afm по приоритету:
