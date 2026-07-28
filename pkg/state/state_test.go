@@ -119,3 +119,63 @@ func TestVersionPlan(t *testing.T) {
 		t.Error("plan.md should be removed after versioning")
 	}
 }
+
+func TestLatestPlanVersion(t *testing.T) {
+	t.Run("empty directory", func(t *testing.T) {
+		dir := t.TempDir()
+		v, content, err := state.LatestPlanVersion(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != 0 || content != "" {
+			t.Errorf("got (%d, %q), want (0, \"\")", v, content)
+		}
+	})
+
+	t.Run("single version", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "plan.v1.md"), []byte("v1 content"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		v, content, err := state.LatestPlanVersion(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != 1 || content != "v1 content" {
+			t.Errorf("got (%d, %q), want (1, \"v1 content\")", v, content)
+		}
+	})
+
+	t.Run("multiple versions with a gap picks the max", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "plan.v1.md"), []byte("v1 content"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "plan.v3.md"), []byte("v3 content"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		v, content, err := state.LatestPlanVersion(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != 3 || content != "v3 content" {
+			t.Errorf("got (%d, %q), want (3, \"v3 content\")", v, content)
+		}
+	})
+
+	t.Run("garbage names are ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"plan.vX.md", "plan.v1.txt", "plan.md", "plan.v.md"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("should not count"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		v, content, err := state.LatestPlanVersion(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != 0 || content != "" {
+			t.Errorf("got (%d, %q), want (0, \"\") — garbage names must not be counted as versions", v, content)
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -271,4 +272,38 @@ func VersionPlan(stageDir string) (int, error) {
 		return 0, fmt.Errorf("rename plan: %w", err)
 	}
 	return n, nil
+}
+
+// LatestPlanVersion scans stageDir for plan.v{N}.md files and returns the
+// highest N found (0 if none) along with that file's content ("" if none).
+// Garbage names (non-numeric middle, wrong extension) are ignored, not errors.
+func LatestPlanVersion(stageDir string) (version int, content string, err error) {
+	entries, err := os.ReadDir(stageDir)
+	if err != nil {
+		return 0, "", fmt.Errorf("read stage dir: %w", err)
+	}
+
+	best := 0
+	var bestName string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "plan.v") || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		numPart := strings.TrimSuffix(strings.TrimPrefix(name, "plan.v"), ".md")
+		n, convErr := strconv.Atoi(numPart)
+		if convErr != nil || n <= best {
+			continue
+		}
+		best = n
+		bestName = name
+	}
+	if bestName == "" {
+		return 0, "", nil
+	}
+	data, err := os.ReadFile(filepath.Join(stageDir, bestName))
+	if err != nil {
+		return 0, "", fmt.Errorf("read %s: %w", bestName, err)
+	}
+	return best, string(data), nil
 }
