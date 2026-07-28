@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -31,10 +32,11 @@ const (
 	typeRetryExhausted     = "retry_exhausted"
 )
 
-// autonomousLabel — имя фазы (reconstructAgentActions) и значение
-// supervisor-решения (Task 3, logSupervisorDecision track="autonomous")
-// текстуально совпадают, поэтому используем одну общую константу вместо
-// двух одинаковых строковых литералов (goconst).
+// autonomousLabel — значение supervisor-решения (Task 3,
+// logSupervisorDecision track="autonomous") в can_execute_autonomously.
+// Не связано с flow.PhaseAutonomous ("autonomous_execution") — это
+// отдельный, случайно совпадающий по подстроке "autonomous" словарь
+// (supervisor-track "standard"/"autonomous", а не имя фазы).
 const autonomousLabel = "autonomous"
 
 // feedEvent — одна запись реплея истории ленты событий. Seq заполняется
@@ -118,8 +120,8 @@ func transitionToFeedEvents(t state.Transition) []feedEvent {
 func reconstructAgentActions(runDir, stageID string) []feedEvent {
 	stageDir := filepath.Join(runDir, stageID)
 	var out []feedEvent
-	for _, phase := range []string{"planning", "implementation", "review", autonomousLabel} {
-		path := filepath.Join(stageDir, phase+".jsonl")
+	for _, p := range flow.Phases() {
+		path := filepath.Join(stageDir, flow.PhaseJSONL(p))
 		info, err := os.Stat(path)
 		if err != nil {
 			continue

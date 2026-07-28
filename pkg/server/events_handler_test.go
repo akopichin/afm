@@ -98,3 +98,35 @@ func TestHandleEvents_CapsAt200(t *testing.T) {
 		t.Errorf("got %d events, want <= 200", len(events))
 	}
 }
+
+func TestReconstructAgentActions_CoversAllPhasesIncludingAutonomous(t *testing.T) {
+	stageDir := t.TempDir()
+
+	planningLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hi"}}]}}` + "\n"
+	if err := os.WriteFile(filepath.Join(stageDir, "planning.jsonl"), []byte(planningLine), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// autonomous — граничный случай: файл называется autonomous.jsonl,
+	// НЕ autonomous_execution.jsonl (flow.PhaseJSONL спецкейс).
+	autonomousLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"plan.md"}}]}}` + "\n"
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.jsonl"), []byte(autonomousLine), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := reconstructAgentActions(filepath.Dir(stageDir), filepath.Base(stageDir))
+
+	if len(out) != 2 {
+		t.Fatalf("want 2 agent_action events (one per phase file), got %d: %+v", len(out), out)
+	}
+	tools := map[string]bool{}
+	for _, e := range out {
+		data, ok := e.Data.(map[string]string)
+		if !ok {
+			t.Fatalf("unexpected Data type: %#v", e.Data)
+		}
+		tools[data["tool"]] = true
+	}
+	if !tools["Bash"] || !tools["Write"] {
+		t.Errorf("expected actions from both planning.jsonl (Bash) and autonomous.jsonl (Write), got tools: %v", tools)
+	}
+}
