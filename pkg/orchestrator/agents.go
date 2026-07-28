@@ -6,12 +6,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/prompts"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 const planningContract = `## Output Contract (mandatory)
@@ -117,21 +116,9 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
 		feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
-		var prevPlan string
-		planVersionRe := regexp.MustCompile(`^plan\.v(\d+)\.md$`)
-		var bestVer int
-		entries, _ := os.ReadDir(stageDir)
-		for _, e := range entries {
-			m := planVersionRe.FindStringSubmatch(e.Name())
-			if m == nil {
-				continue
-			}
-			v, _ := strconv.Atoi(m[1])
-			if v > bestVer {
-				bestVer = v
-				data, _ := os.ReadFile(filepath.Join(stageDir, e.Name()))
-				prevPlan = string(data)
-			}
+		_, prevPlan, err := state.LatestPlanVersion(stageDir)
+		if err != nil {
+			return fmt.Errorf("read previous plan: %w", err)
 		}
 
 		depPlans := CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
