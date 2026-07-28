@@ -54,6 +54,34 @@ func TestPhaseStreamLogs(t *testing.T) {
 	}
 }
 
+func TestPhaseLogFile(t *testing.T) {
+	cases := map[Phase]string{
+		PhasePlanning:       "planning.log",
+		PhaseImplementation: "implementation.log",
+		PhaseReview:         "review.log",
+		PhaseAutonomous:     "autonomous.log", // НЕ autonomous_execution.log
+	}
+	for p, want := range cases {
+		if got := PhaseLogFile(p); got != want {
+			t.Errorf("PhaseLogFile(%q) = %q, want %q", p, got, want)
+		}
+	}
+}
+
+func TestPhaseLogFiles(t *testing.T) {
+	cases := map[Phase][]string{
+		PhasePlanning:       {"planning.log", "planning-reprompt.log", "planning-revision.log"},
+		PhaseImplementation: {"implementation.log", "implementation-feedback.log"},
+		PhaseReview:         {"review.log", "review-feedback.log"},
+		PhaseAutonomous:     {"autonomous.log", "autonomous-feedback.log"},
+	}
+	for p, want := range cases {
+		if got := PhaseLogFiles(p); !slices.Equal(got, want) {
+			t.Errorf("PhaseLogFiles(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 // AgentType (YAML-агенты) НЕ должен включать autonomous_execution.
 func TestAgentTypeExcludesAutonomous(t *testing.T) {
 	if AgentType("autonomous_execution") == AgentPlanning ||

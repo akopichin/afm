@@ -54,3 +54,31 @@ func PhaseStreamLogs(p Phase) []string {
 		return nil
 	}
 }
+
+// PhaseLogFile returns the phase's canonical human-readable log file name.
+// autonomous logs to autonomous.log (not autonomous_execution.log),
+// mirroring PhaseJSONL's naming.
+func PhaseLogFile(p Phase) string {
+	if p == PhaseAutonomous {
+		return "autonomous.log"
+	}
+	return string(p) + ".log"
+}
+
+// PhaseLogFiles returns all human-readable log files a phase may produce,
+// in chronological/reading order: the canonical file first, then any
+// retry/revise variants. Mirrors PhaseStreamLogs but for *.log, not *.jsonl.
+func PhaseLogFiles(p Phase) []string {
+	switch p {
+	case PhasePlanning:
+		return []string{"planning.log", "planning-reprompt.log", "planning-revision.log"}
+	case PhaseImplementation:
+		return []string{"implementation.log", "implementation-feedback.log"}
+	case PhaseReview:
+		return []string{"review.log", "review-feedback.log"}
+	case PhaseAutonomous:
+		return []string{"autonomous.log", "autonomous-feedback.log"}
+	default:
+		return nil
+	}
+}
