@@ -181,13 +181,26 @@ func TestHandleLog(t *testing.T) {
 	}
 }
 
-func TestHandleLog_IncludesReviewAndAutonomousPhases(t *testing.T) {
+// TestHandleLog_IncludesFeedbackVariantPhases guards the actual gap the
+// flow.Phases()+PhaseLogFiles refactor closed: the OLD hardcoded list in
+// handleLog was {"planning.log", "planning-revision.log",
+// "implementation.log", "review.log", "autonomous.log"} — it already
+// included bare "review.log"/"autonomous.log" literally, so a test only
+// checking those would pass against the old buggy code too (false
+// positive). What the old list never had, at all, were the
+// feedback/reprompt-variant filenames: "implementation-feedback.log" and
+// "review-feedback.log" (also "planning-reprompt.log",
+// "autonomous-feedback.log" — see flow.PhaseLogFiles). This test writes
+// into two of those previously-invisible files and asserts their content
+// reaches the /log response, which only flow.PhaseLogFiles-driven
+// iteration can satisfy.
+func TestHandleLog_IncludesFeedbackVariantPhases(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 	stageDir := filepath.Join(runDir, testStageID)
-	if err := os.WriteFile(filepath.Join(stageDir, "review.log"), []byte("review phase output"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(stageDir, "implementation-feedback.log"), []byte("implementation feedback output"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.log"), []byte("autonomous phase output"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(stageDir, "review-feedback.log"), []byte("review feedback output"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -199,11 +212,11 @@ func TestHandleLog_IncludesReviewAndAutonomousPhases(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "review phase output") {
-		t.Errorf("expected review.log content in response, got: %s", body)
+	if !strings.Contains(body, "implementation feedback output") {
+		t.Errorf("expected implementation-feedback.log content in response, got: %s", body)
 	}
-	if !strings.Contains(body, "autonomous phase output") {
-		t.Errorf("expected autonomous.log content in response, got: %s", body)
+	if !strings.Contains(body, "review feedback output") {
+		t.Errorf("expected review-feedback.log content in response, got: %s", body)
 	}
 }
 
