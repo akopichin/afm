@@ -60,7 +60,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 			GlobalPrompt:     o.opts.GlobalPrompt,
 		})
 		outFile := filepath.Join(stageDir, "plan.md")
-		logFile := filepath.Join(stageDir, "planning.log")
+		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhasePlanning))
 
 		r := o.runnerFor(s, phasePlanning)
 		if err := r.RunPlanning(ctx, s.Name, prompt, outFile, logFile); err != nil {
@@ -222,7 +222,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			RetryContext:    retryContext + stageDirNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 		})
-		logFile := filepath.Join(stageDir, "implementation.log")
+		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseImplementation))
 
 		r := o.runnerFor(s, phaseImplementation)
 		if err := r.RunAgent(ctx, string(s.ImplAgent()), s.Name, prompt, logFile); err != nil {
@@ -240,7 +240,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 				Interactive:     s.Interactive,
 				GlobalPrompt:    o.opts.GlobalPrompt,
 			})
-			reviewLog := filepath.Join(stageDir, "review.log")
+			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 			rr := o.runnerFor(s, phaseReview)
 			if err := rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog); err != nil {
 				return err
@@ -281,7 +281,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 			RetryContext:    retryContext,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 		})
-		reviewLog := filepath.Join(stageDir, "review.log")
+		reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 		rr := o.runnerFor(s, phaseReview)
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 	}, func() error {
@@ -334,7 +334,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			RetryContext:    retryContext + summaryNote,
 		})
-		logFile := filepath.Join(stageDir, "autonomous.log")
+		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseAutonomous))
 		r := o.runnerFor(s, phaseAutonomous)
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
 	}, func() error {
@@ -427,7 +427,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 				Interactive:     s.Interactive,
 				GlobalPrompt:    o.opts.GlobalPrompt,
 			})
-			reviewLog := filepath.Join(stageDir, "review.log")
+			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 			rr := o.runnerFor(s, phaseReview)
 			if err := rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog); err != nil {
 				return err
