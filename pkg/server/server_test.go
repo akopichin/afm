@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akopichin/afm/pkg/config"
 )
 
 func TestServerRouteStages(t *testing.T) {
@@ -118,7 +120,7 @@ func TestServer_IndexDefaultTheme(t *testing.T) {
 }
 
 func TestServer_IndexGogaTheme(t *testing.T) {
-	srv := New(Config{Theme: themeGoga})
+	srv := New(Config{Theme: config.ThemeGoga})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -144,7 +146,7 @@ func TestServer_IndexGogaTheme(t *testing.T) {
 }
 
 func TestServer_IndexNovacorpsTheme(t *testing.T) {
-	srv := New(Config{Theme: themeNovacorps})
+	srv := New(Config{Theme: config.ThemeNovacorps})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -170,7 +172,7 @@ func TestServer_IndexNovacorpsTheme(t *testing.T) {
 }
 
 func TestServer_ServesGogaStylesheet(t *testing.T) {
-	srv := New(Config{Theme: themeGoga})
+	srv := New(Config{Theme: config.ThemeGoga})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/skins/goga/index.css", nil)
@@ -207,7 +209,7 @@ func TestServer_SkinDirOverridesTheme(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{Theme: themeGoga, SkinDir: dir})
+	srv := New(Config{Theme: config.ThemeGoga, SkinDir: dir})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -236,7 +238,7 @@ func TestServer_SkinDirOverridesTheme(t *testing.T) {
 func TestServer_SkinDirMissingIndexFallsBack(t *testing.T) {
 	dir := t.TempDir() // пустая директория, index.css нет
 
-	srv := New(Config{Theme: themeGoga, SkinDir: dir})
+	srv := New(Config{Theme: config.ThemeGoga, SkinDir: dir})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -299,7 +301,7 @@ func TestServer_SkinDirWithoutFaviconUsesDefault(t *testing.T) {
 }
 
 func TestServer_IndexGogaTheme_TitleAndFavicon(t *testing.T) {
-	srv := New(Config{Theme: themeGoga})
+	srv := New(Config{Theme: config.ThemeGoga})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -319,7 +321,7 @@ func TestServer_IndexGogaTheme_TitleAndFavicon(t *testing.T) {
 }
 
 func TestServer_ServesGogaLogoAsset(t *testing.T) {
-	srv := New(Config{Theme: themeGoga})
+	srv := New(Config{Theme: config.ThemeGoga})
 	handler := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/skins/goga/quarium-logo.png", nil)

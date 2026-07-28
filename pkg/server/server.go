@@ -12,21 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/web"
 )
 
-// Имена скинов. themeGoga/themeNovacorps соответствуют
-// pkg/config.Config.EffectiveTheme() == "goga"/"novacorps"; themeCoffee —
-// дефолтный встроенный скин, захардкоженный в index.html (пустое/неизвестное
-// значение EffectiveTheme схлопывается в него); themeCustom — активный skin_dir.
-const (
-	themeGoga      = "goga"
-	themeNovacorps = "novacorps"
-	themeCoffee    = "coffee"
-	themeCustom    = "custom"
-)
+// themeCustom — активный skin_dir (не значение EffectiveTheme, поэтому не в
+// pkg/config; goga/novacorps/coffee берутся из config.Theme*).
+const themeCustom = "custom"
 
 // Имена файлов внутри директории скина (встроенной или skin_dir).
 const skinIndexFile = "index.css"
@@ -200,9 +194,9 @@ func New(cfg Config) *Server {
 		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
 	} else {
 		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`href="`+skinHrefFor(themeCoffee)+`"`), []byte(`href="`+skinHref+`"`))
+			[]byte(`href="`+skinHrefFor(config.ThemeCoffee)+`"`), []byte(`href="`+skinHref+`"`))
 		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`class="theme-`+themeCoffee+`"`), []byte(`class="theme-`+skinName+`"`))
+			[]byte(`class="theme-`+config.ThemeCoffee+`"`), []byte(`class="theme-`+skinName+`"`))
 		indexBytes = bytes.ReplaceAll(indexBytes,
 			[]byte(`type="`+mimeSVG+`" href="`+defaultFaviconHref+`"`),
 			[]byte(`type="`+faviconMimeType+`" href="`+faviconHref+`"`))
@@ -235,12 +229,12 @@ func New(cfg Config) *Server {
 // "novacorps" или дефолт "coffee".
 func (s *Server) builtinSkinName() string {
 	switch s.theme {
-	case themeGoga:
-		return themeGoga
-	case themeNovacorps:
-		return themeNovacorps
+	case config.ThemeGoga:
+		return config.ThemeGoga
+	case config.ThemeNovacorps:
+		return config.ThemeNovacorps
 	default:
-		return themeCoffee
+		return config.ThemeCoffee
 	}
 }
 
