@@ -43,26 +43,15 @@ type ReExecConfig struct {
 	SecretsFile   string                        // опц. override для default-слоёв secrets.env
 }
 
-const claudeCommand = "claude"
-
-// claudeAuthEnvVars — env vars, через которые claude CLI принимает токены в Docker.
-// macOS хранит OAuth-токены в Keychain, который недоступен из Linux-контейнера;
-// поэтому auth должна идти через один из этих env vars.
-var claudeAuthEnvVars = []string{
-	"CLAUDE_CODE_OAUTH_TOKEN", // long-lived token: `claude setup-token`
-	"ANTHROPIC_API_KEY",       // API-ключ Anthropic
-	"ANTHROPIC_AUTH_TOKEN",    // auth token для кастомных шлюзов
-}
-
 // CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker
 // задан один из поддерживаемых auth env vars. macOS Keychain недоступен из
 // Linux-контейнера, поэтому OAuth-сессия из ~/.claude.json там не работает.
 // Возвращает ошибку с инструкцией, если auth не настроена.
 func CheckClaudeDockerAuth(clientCommand string) error {
-	if clientCommand != claudeCommand && clientCommand != "" {
+	if clientCommand != config.ClaudeCommand && clientCommand != "" {
 		return nil
 	}
-	for _, key := range claudeAuthEnvVars {
+	for _, key := range config.ClaudeAuthEnvVars {
 		if os.Getenv(key) != "" {
 			return nil
 		}
@@ -191,7 +180,7 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]config.AgentRecipe) map[string]bool {
 	used := map[string]bool{}
 	check := func(cmd string) {
-		if cmd == "" || cmd == claudeCommand {
+		if cmd == "" || cmd == config.ClaudeCommand {
 			return
 		}
 		if _, ok := recipes[cmd]; ok {
@@ -302,7 +291,8 @@ func ReExec(cfg ReExecConfig) error {
 	// наследует окружение afm (см. os.Environ() в вызове execFunc ниже) и сам
 	// подставит значение. Так секрет никогда не попадает в argv `docker run` и
 	// не светится в `ps aux`, history и audit-логах хоста.
-	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"} {
+	dockerForwardEnvVars := append([]string{"ANTHROPIC_BASE_URL"}, config.ClaudeAuthEnvVars...)
+	for _, key := range dockerForwardEnvVars {
 		if os.Getenv(key) != "" {
 			args = append(args, "-e", key)
 		}
