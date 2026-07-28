@@ -171,7 +171,7 @@ export function StagesList({ stages, selectedStageId, onSelect, agentSuggestEnab
                             onAddNote?.(stage.id)
                           }}
                         >
-                          Добавить поправку агенту
+                          Add note for agent
                         </button>
                       </li>
                     </ul>,

@@ -90,7 +90,7 @@ describe('StagesList', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
 
-    const menuItem = screen.getByText('Добавить поправку агенту')
+    const menuItem = screen.getByText('Add note for agent')
     const menu = menuItem.closest('ul')
     expect(menu).not.toBeNull()
     // #stages-panel has overflow-y: auto (layout.css) — any descendant that opens
@@ -106,10 +106,10 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Добавить поправку агенту')).toBeInTheDocument()
+    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
 
     fireEvent.mouseDown(document.body)
-    expect(screen.queryByText('Добавить поправку агенту')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
   test('scrolling the page closes the open kebab menu', () => {
@@ -119,10 +119,10 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Добавить поправку агенту')).toBeInTheDocument()
+    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
 
     fireEvent.scroll(window)
-    expect(screen.queryByText('Добавить поправку агенту')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
   test('переход стадии в done навешивает one-shot класс just-done', async () => {

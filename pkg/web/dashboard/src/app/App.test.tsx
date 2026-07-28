@@ -332,7 +332,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(screen.getByText('Добавить поправку агенту'))
+    fireEvent.click(screen.getByText('Add note for agent'))
     fireEvent.change(screen.getByPlaceholderText(/what should the agent take into account/i), {
       target: { value: 'test note' },
     })

@@ -23,6 +23,12 @@ export function useStageLog(stageId: string | null): LogEntry[] {
     const id = stageId
     let cancelled = false
 
+    // Сбрасываем сразу при смене стадии: без этого до первого успешного fetch
+    // (или на 404 у ещё не начавшей писать лог стадии) в панели оставались
+    // записи предыдущей выбранной стадии — реальный баг, замеченный на живом
+    // флоу (ретраенные стадии показывали лог активной brainstorm-стадии).
+    setEntries([])
+
     async function load() {
       let response: Response
       try {
@@ -31,7 +37,10 @@ export function useStageLog(stageId: string | null): LogEntry[] {
         return
       }
 
-      if (!response.ok) return
+      if (!response.ok) {
+        if (!cancelled) setEntries([])
+        return
+      }
 
       // Лог — текстовый эндпоинт, не JSON.
       const text = await response.text()

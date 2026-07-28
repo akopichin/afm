@@ -47,7 +47,7 @@ export function FlowHeader({ flowName, connected, attention = false, description
         <div id="flow-name" className="flow-name">{flowName}</div>
         {hasDescription && <div id="flow-description" className="flow-description">{description}</div>}
       </div>
-      {attention && <span className="attention-dot" aria-label="Нужно действие" />}
+      {attention && <span className="attention-dot" aria-label="Action needed" />}
       <div id="ws-status" className={`ws-status ${statusClass}`} title="WebSocket">{statusText}</div>
       <button
         type="button"

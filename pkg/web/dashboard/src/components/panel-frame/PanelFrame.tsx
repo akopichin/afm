@@ -25,7 +25,7 @@ export function PanelFrame({ title, maximizeId, attention, actions, children }: 
             <button
               type="button"
               className="icon-btn"
-              aria-label={maximized ? 'Свернуть' : 'Развернуть'}
+              aria-label={maximized ? 'Collapse' : 'Expand'}
               onClick={() => toggle(maximizeId)}
             >
               {maximized ? '✕' : '⛶'}

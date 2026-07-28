@@ -23,17 +23,17 @@ describe('FlowHeader', () => {
   test('shows attention indicator when attention is true', () => {
     render(<FlowHeader flowName="demo" connected={true} attention={true} />)
 
-    expect(screen.getByLabelText('Нужно действие')).toBeInTheDocument()
+    expect(screen.getByLabelText('Action needed')).toBeInTheDocument()
   })
 
   test('hides attention indicator when attention is false or omitted', () => {
     const { rerender } = render(<FlowHeader flowName="demo" connected={true} attention={false} />)
 
-    expect(screen.queryByLabelText('Нужно действие')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Action needed')).not.toBeInTheDocument()
 
     rerender(<FlowHeader flowName="demo" connected={true} />)
 
-    expect(screen.queryByLabelText('Нужно действие')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Action needed')).not.toBeInTheDocument()
   })
 
   test('renders the passed description under the flow name', () => {

@@ -549,7 +549,7 @@ describe('DialogChannel', () => {
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     mockJumpToBottom.mockClear()
 
-    const maximizeButton = await screen.findByRole('button', { name: 'Развернуть' })
+    const maximizeButton = await screen.findByRole('button', { name: 'Expand' })
     fireEvent.click(maximizeButton)
 
     await waitFor(() => expect(mockJumpToBottom).toHaveBeenCalled())
@@ -566,12 +566,12 @@ describe('DialogChannel', () => {
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
 
-    const maximizeButton = await screen.findByRole('button', { name: 'Развернуть' })
+    const maximizeButton = await screen.findByRole('button', { name: 'Expand' })
     fireEvent.click(maximizeButton)
     await waitFor(() => expect(mockJumpToBottom).toHaveBeenCalled())
     mockJumpToBottom.mockClear()
 
-    const restoreButton = await screen.findByRole('button', { name: 'Свернуть' })
+    const restoreButton = await screen.findByRole('button', { name: 'Collapse' })
     fireEvent.click(restoreButton)
 
     await act(async () => {

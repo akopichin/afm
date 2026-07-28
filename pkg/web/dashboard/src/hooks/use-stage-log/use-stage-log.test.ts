@@ -44,7 +44,7 @@ describe('useStageLog', () => {
     })
   })
 
-  test('response.ok === false leaves entries unchanged', async () => {
+  test('response.ok === false clears entries', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,
       text: async () => '10:00:01  text  should not appear',
@@ -54,6 +54,39 @@ describe('useStageLog', () => {
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalled()
+    })
+    expect(result.current).toEqual([])
+  })
+
+  test('switching to a stage with no log yet does not show the previous stage\'s entries', async () => {
+    // Живой баг: ретраенные стадии без собственного лога (404) показывали лог
+    // ранее выбранной стадии, пока не проверялся response.ok — без немедленного
+    // сброса entries при смене stageId старые записи оставались видны.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('s1')) {
+        return { ok: true, text: async () => '10:00:01  text  brainstorm output' } as Response
+      }
+      return { ok: false, text: async () => '' } as Response
+    })
+
+    const { result, rerender } = renderHook(({ stageId }) => useStageLog(stageId), {
+      initialProps: { stageId: 's1' },
+    })
+
+    await waitFor(() => {
+      expect(result.current).toHaveLength(1)
+    })
+    expect(result.current[0]?.message).toBe('brainstorm output')
+
+    rerender({ stageId: 's2' })
+
+    // Сброс должен быть синхронным — до того, как fetch для s2 успеет
+    // резолвиться (иначе окно, где старые записи ещё видны, тест не поймает).
+    expect(result.current).toEqual([])
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('s2'))
     })
     expect(result.current).toEqual([])
   })

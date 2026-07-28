@@ -40,7 +40,7 @@ describe('LogPanel', () => {
 
     expect(container.querySelector('.maximize-overlay')).toBeNull()
 
-    const button = screen.getByRole('button', { name: 'Развернуть' })
+    const button = screen.getByRole('button', { name: 'Expand' })
     fireEvent.click(button)
 
     expect(document.querySelector('.maximize-overlay')).not.toBeNull()
@@ -65,7 +65,7 @@ describe('LogPanel', () => {
     expect(compactContent?.textContent).toContain(`${longLine}-0`)
     expect(compactContent?.textContent).toContain(`${longLine}-199`)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Развернуть' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }))
 
     const maximizedContent = document.querySelector('.maximize-overlay #log-content')
     expect(maximizedContent?.textContent).toContain(`${longLine}-0`)
