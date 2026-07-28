@@ -82,6 +82,9 @@ const (
 	RecipeTypeCursor = "cursor" // Cursor Cloud Agents API (async run-based, не chat completions)
 )
 
+// AfmDir — имя служебного каталога afm: и глобального (~/.afm), и per-project.
+const AfmDir = ".afm"
+
 type AgentRecipe struct {
 	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "cursor" = Cursor Cloud Agents API
 	Model        string     `yaml:"model"`         // required → ANTHROPIC_DEFAULT_*_MODEL (claude) / OPENAI_MODEL (openai) / CURSOR_MODEL (cursor)
@@ -250,9 +253,9 @@ func Default() Config {
 
 // Dashboard theme names returned by EffectiveTheme.
 const (
-	themeGoga      = "goga"
-	themeNovacorps = "novacorps"
-	themeCoffee    = "coffee"
+	ThemeGoga      = "goga"
+	ThemeNovacorps = "novacorps"
+	ThemeCoffee    = "coffee"
 )
 
 // EffectiveTheme returns the normalized dashboard theme name.
@@ -260,15 +263,15 @@ const (
 // fall back to the default "coffee" (unknown logs a warning to stderr).
 func (c Config) EffectiveTheme() string {
 	switch strings.ToLower(strings.TrimSpace(c.Theme)) {
-	case themeGoga:
-		return themeGoga
-	case themeNovacorps:
-		return themeNovacorps
-	case themeCoffee, "":
-		return themeCoffee
+	case ThemeGoga:
+		return ThemeGoga
+	case ThemeNovacorps:
+		return ThemeNovacorps
+	case ThemeCoffee, "":
+		return ThemeCoffee
 	default:
-		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, themeCoffee)
-		return themeCoffee
+		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, ThemeCoffee)
+		return ThemeCoffee
 	}
 }
 
