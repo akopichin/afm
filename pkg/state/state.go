@@ -258,14 +258,11 @@ func VersionPlan(stageDir string) (int, error) {
 		return 0, fmt.Errorf("plan.md not found: %w", err)
 	}
 
-	n := 1
-	for {
-		versionedPath := filepath.Join(stageDir, fmt.Sprintf("plan.v%d.md", n))
-		if _, err := os.Stat(versionedPath); os.IsNotExist(err) {
-			break
-		}
-		n++
+	latest, _, err := LatestPlanVersion(stageDir)
+	if err != nil {
+		return 0, fmt.Errorf("scan plan versions: %w", err)
 	}
+	n := latest + 1
 
 	dst := filepath.Join(stageDir, fmt.Sprintf("plan.v%d.md", n))
 	if err := os.Rename(planFile, dst); err != nil {
