@@ -6,11 +6,13 @@ package orchestrator_test
 // исполняющихся стадий, разделяющих одну команду агента.
 //
 // Модель: N независимых (без DependsOn) auto-стадий (Agents: [flow.AgentAuto])
-// с общей (пустой, т.е. дефолтной) командой и MaxParallel=2, заданным на
-// ПЕРВОЙ стадии в Stages — semFor/New берут MaxParallel только с первой
-// стадии, встретившей данную эффективную команду (см. orchestrator.go:
-// "if _, exists := sems[cmd]; exists { continue }"), остальные стадии с тем
-// же cmd наследуют уже созданный семафор. auto-стадии не требуют planning.md
+// с общей (пустой, т.е. дефолтной) командой и MaxParallel=2 на каждой стадии —
+// New берёт САМЫЙ строгий MaxParallel среди всех стадий с данной эффективной
+// командой (см. orchestrator.go: сбор limits[cmd] = min(...) перед построением
+// семафоров); здесь все стадии задают одно и то же значение, так что тест не
+// различает "строже из всех" от прежнего "первая встретившаяся" — про это
+// различие см. TestMaxParallelThrottling_NonFirstStageLimitApplies ниже.
+// auto-стадии не требуют planning.md
 // (runAutonomousAgent, agents.go) — все они становятся Ready в одном проходе
 // startPlanningForPending→startReadyStages при старте Run и спавнятся
 // параллельно (по одной горутине на стадию), так что тест реально бьётся
@@ -102,13 +104,9 @@ func TestMaxParallelThrottling(t *testing.T) {
 	stages := make([]flow.Stage, nStages)
 	for i := range stages {
 		stages[i] = flow.Stage{
-			ID:     fmt.Sprintf("auto%d", i),
-			Name:   fmt.Sprintf("Auto %d", i),
-			Agents: []flow.AgentType{flow.AgentAuto},
-			// MaxParallel только на первой стадии реально используется
-			// (New берёт его с первой стадии, встретившей эффективную
-			// команду) — остальные наследуют тот же семафор. Всё же
-			// проставляем везде для читаемости конфигурации.
+			ID:          fmt.Sprintf("auto%d", i),
+			Name:        fmt.Sprintf("Auto %d", i),
+			Agents:      []flow.AgentType{flow.AgentAuto},
 			MaxParallel: maxParallel,
 		}
 	}
@@ -198,5 +196,79 @@ func TestMaxParallelThrottling(t *testing.T) {
 
 	if maxSeen := atomic.LoadInt64(&runner.maxSeen); maxSeen != int64(maxParallel) {
 		t.Errorf("max observed concurrency = %d, want exactly %d (MaxParallel)", maxSeen, maxParallel)
+	}
+}
+
+// TestMaxParallelThrottling_NonFirstStageLimitApplies воспроизводит найденный
+// при аудите баг: New строил per-command семафор из MaxParallel ПЕРВОЙ
+// стадии, встретившей эффективную команду ("if _, exists := sems[cmd];
+// exists { continue }") — MaxParallel любой последующей стадии с той же
+// командой молча игнорировался. Здесь первая стадия ("loose") не задаёт
+// MaxParallel вовсе (а глобальный Executor.MaxParallel тоже 0 — безлимит),
+// а вторая и третья ("strict1"/"strict2") явно просят MaxParallel: 1. До
+// фикса это давало неограниченный параллелизм (первая стадия "выигрывала"
+// пустым лимитом); после фикса действует самый строгий лимит среди всех
+// стадий команды — не более 1 одновременно, независимо от порядка в YAML.
+func TestMaxParallelThrottling_NonFirstStageLimitApplies(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "loose", Name: "Loose", Agents: []flow.AgentType{flow.AgentAuto}},
+		{ID: "strict1", Name: "Strict 1", Agents: []flow.AgentType{flow.AgentAuto}, MaxParallel: 1},
+		{ID: "strict2", Name: "Strict 2", Agents: []flow.AgentType{flow.AgentAuto}, MaxParallel: 1},
+	}
+
+	runDir := t.TempDir()
+	ids := []string{"loose", "strict1", "strict2"}
+	store, err := state.Open(runDir, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	runner := newBlockingAutoRunner(len(stages))
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- orch.Run(ctx) }()
+
+	// Три волны по 1 стадии — если баг вернётся, вторая волна не будет
+	// заблокирована первой и придёт больше одного входа сразу.
+	for i := 0; i < len(stages); i++ {
+		select {
+		case <-runner.acquired:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for wave entry %d/%d", i+1, len(stages))
+		}
+
+		select {
+		case extra := <-runner.acquired:
+			t.Fatalf("stage %q entered RunAgent while limit=1 semaphore should have been full", extra)
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		runner.release <- struct{}{}
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("orch.Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("orch.Run did not finish after releasing all stages")
+	}
+
+	if maxSeen := atomic.LoadInt64(&runner.maxSeen); maxSeen != 1 {
+		t.Errorf("max observed concurrency = %d, want exactly 1 (strict1/strict2's MaxParallel must apply even though \"loose\" is first)", maxSeen)
 	}
 }

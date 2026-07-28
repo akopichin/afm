@@ -165,22 +165,36 @@ func New(opts Options) *Orchestrator {
 		})
 	}
 
-	// Build per-command semaphores from stage configs.
-	sems := make(map[string]interface {
-		acquire()
-		release()
-	})
+	// Build per-command semaphores from stage configs. A command's effective
+	// limit is the STRICTEST explicit max_parallel among all stages sharing
+	// it (falling back to the global default when none set one) — not just
+	// whichever stage happens to appear first in Stages. A single "first
+	// stage wins" pass silently ignored a later stage's own max_parallel
+	// whenever an earlier stage using the same command had none/a looser
+	// one, defeating throttling the user explicitly asked for.
 	globalMP := opts.Config.Executor.MaxParallel
+	limits := make(map[string]int)
+	cmds := make(map[string]bool)
 	for _, s := range opts.Stages {
 		cmd := s.Command
 		if cmd == "" {
 			cmd = opts.Config.Client.Command
 		}
-		if _, exists := sems[cmd]; exists {
+		cmds[cmd] = true
+		if s.MaxParallel <= 0 {
 			continue
 		}
-		mp := s.MaxParallel
-		if mp <= 0 {
+		if cur, ok := limits[cmd]; !ok || s.MaxParallel < cur {
+			limits[cmd] = s.MaxParallel
+		}
+	}
+	sems := make(map[string]interface {
+		acquire()
+		release()
+	})
+	for cmd := range cmds {
+		mp, ok := limits[cmd]
+		if !ok {
 			mp = globalMP
 		}
 		if mp > 0 {
