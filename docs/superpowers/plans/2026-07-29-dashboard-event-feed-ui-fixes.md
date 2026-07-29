@@ -999,11 +999,20 @@ Add to `pkg/web/dashboard/src/app/App.test.tsx` (inside the existing `describe('
   })
 
   test('accumulates Idle time across an awaiting_user_input episode and shows it in the footer', async () => {
+    // started переключается в true ПОСЛЕ первой проверки (idle === '--'), чтобы
+    // сымитировать реальный бэкенд: started_at появляется в /api/status, как только
+    // стадия действительно стартовала (а не отсутствует всю жизнь рана, как в
+    // остальных тестах этого файла) — иначе #idle у Footer навсегда остаётся '--'
+    // (hasStarted гейтится по startedAt, см. Footer.tsx), и WS-накопленный idleMs
+    // никогда не отрисуется, даже если сам useStatusDuration посчитал его верно.
+    // Паттерн стейт-флага — как в 'advances selection to the next active stage...' выше.
+    let started = false
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stage_order: ['s1'],
       stage_names: { s1: 'Propose' },
       stages: { s1: { status: 'running', updated_at: '' } },
+      ...(started ? { started_at: '2026-07-29T09:59:00.000Z' } : {}),
     }))
 
     render(<App />)
@@ -1011,6 +1020,7 @@ Add to `pkg/web/dashboard/src/app/App.test.tsx` (inside the existing `describe('
 
     expect(document.getElementById('idle')).toHaveTextContent('--')
 
+    started = true
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {
       ws?.onopen?.()
@@ -1039,6 +1049,8 @@ Add to `pkg/web/dashboard/src/app/App.test.tsx` (inside the existing `describe('
     })
   })
 ```
+
+**Correction found during implementation:** the version above (with the stateful `started` flag) is what actually ships — the original draft of this test (fixed `mockFetchForStatus` payload, never including `started_at`) is **self-contradictory** given Footer's `hasStarted` gate (`startedAt !== ''`, required verbatim by Footer's own Step-1 test): with `startedAt` permanently `''`, `#idle` would render `'--'` forever regardless of the real `idleMs` value, so the final `'00:05'` assertion could never pass no matter how correct the underlying accumulation is. The fix: flip `started_at` into the mock's returned payload right after the initial `'--'` check (mirroring the `let done = false` pattern already used elsewhere in this file) — since `stage_status_changed` is a `SIGNIFICANT_EVENT_TYPE` that triggers an `/api/status` refetch, the enriched payload arrives asynchronously and `hasStarted` becomes true in time for the final `waitFor`, exercising the exact same WS-driven accumulation this test was designed to check.
 
 Note: `useStatus`'s `normalizeStatus` (`hooks/use-status/use-status.ts:87`) reads `startedAt` from `obj.started_at`, defaulting to `''` when absent. The mock payload above has no `started_at` field, so `startedAt` stays `''` for the whole test (matching the existing "renders the flow name..." test's payload shape) — `#idle` reads the `'--'` placeholder branch first, then the WS-driven accumulation is asserted from its text changing to `'00:05'`.
 
