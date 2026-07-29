@@ -421,6 +421,72 @@ describe('App', () => {
     })
   })
 
+  test('regression: a cascaded-failed downstream stage does not count as Idle while another stage is actively running', async () => {
+    // Реальный баг: пользователь ретраит текущую стадию (агент реально
+    // работает), а стадии дальше по depends_on упали каскадно
+    // (blocked_by_dep) и остаются failed. Idle не должен копиться, пока хоть
+    // один агент активен — иначе счётчик растёт, даже когда всё работает.
+    let started = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stage_order: ['s1', 's2'],
+      stage_names: { s1: 'Upstream', s2: 'Downstream' },
+      stages: {
+        s1: { status: 'running', updated_at: '' },
+        s2: { status: 'failed', updated_at: '' },
+      },
+      ...(started ? { started_at: '2026-07-29T09:59:00.000Z' } : {}),
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Upstream'))
+
+    started = true
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onopen?.()
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'stage_status_changed',
+          data: { status: 'running' },
+          stage_id: 's1',
+          timestamp: '2026-07-29T10:00:00.000Z',
+        }),
+      })
+    })
+    act(() => {
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'stage_status_changed',
+          data: { status: 'failed' },
+          stage_id: 's2',
+          timestamp: '2026-07-29T10:00:00.001Z',
+        }),
+      })
+    })
+
+    // s1 продолжает работать, s2 остаётся failed — Idle не должен появиться.
+    await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
+
+    act(() => {
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'stage_status_changed',
+          data: { status: 'done' },
+          stage_id: 's1',
+          timestamp: '2026-07-29T10:00:05.000Z',
+        }),
+      })
+    })
+
+    // s1 закончил, s2 всё ещё failed — теперь Idle должен начать копиться.
+    await waitFor(() => {
+      const text = document.getElementById('idle')?.textContent ?? ''
+      expect(text).not.toBe('00:00')
+      expect(text).not.toBe('--')
+    })
+  })
+
   test('WARNING: falls back to a failed stage when no stage is active', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

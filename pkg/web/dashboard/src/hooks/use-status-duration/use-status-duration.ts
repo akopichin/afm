@@ -4,9 +4,9 @@ import { extractStageStatus, type AfmEvent, type StageStatus } from '../../types
 const TICK_INTERVAL_MS = 1000
 
 // Кумулятивное время (мс), которое хотя бы одна стадия провела в одном из
-// статусов набора `statuses` — используется и для Idle (ждём пользователя:
-// awaiting_user_input/awaiting_approval/failed), и для Backoff (retrying),
-// см. IDLE_STATUSES/BACKOFF_STATUSES в types/stage.ts.
+// статусов набора `statuses` — используется для Backoff (retrying), см.
+// BACKOFF_STATUSES в types/stage.ts. Idle считается отдельным хуком
+// useIdleTime (не простой суммой по набору статусов, см. его комментарий).
 //
 // Обрабатывает stage_status_changed ИНКРЕМЕНТАЛЬНО: каждое событие учитывается
 // ровно один раз (ключ по stageId+timestamp+статусу), уже закрытые эпизоды

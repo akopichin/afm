@@ -15,10 +15,11 @@ import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageLog } from '../hooks/use-stage-log'
 import { useElapsed } from '../hooks/use-elapsed'
 import { useStatusDuration } from '../hooks/use-status-duration'
+import { useIdleTime } from '../hooks/use-idle-time'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
-import { ACTIVE_STAGE_STATUSES, BACKOFF_STATUSES, IDLE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
+import { ACTIVE_STAGE_STATUSES, BACKOFF_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
 import type { Stage } from '../types'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
@@ -115,7 +116,7 @@ export function App(): ReactElement {
 
   const logEntries = useStageLog(selectedStageId)
   const elapsedMs = useElapsed(startedAt)
-  const idleMs = useStatusDuration(events, IDLE_STATUSES)
+  const idleMs = useIdleTime(events)
   const backoffMs = useStatusDuration(events, BACKOFF_STATUSES)
 
   const refreshedForEvent = useRef<number>(-1)
