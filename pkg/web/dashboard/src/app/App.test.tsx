@@ -345,6 +345,82 @@ describe('App', () => {
     expect(screen.getByPlaceholderText(/what should the agent take into account/i)).toHaveValue('test note')
   })
 
+  test('hides the "thinking" badge while offline even if the selected stage is running', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stage_names: { s1: 'Propose' },
+      stages: { s1: { status: 'running', updated_at: '' } },
+    }))
+
+    render(<App />)
+
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    // WS никогда не открывался в этом тесте — connected остаётся false.
+    expect(screen.getByText('OFFLINE')).toBeInTheDocument()
+    expect(screen.queryByText('thinking')).not.toBeInTheDocument()
+
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onopen?.()
+    })
+
+    await waitFor(() => expect(screen.getByText('LINK')).toBeInTheDocument())
+    expect(screen.getByText('thinking')).toBeInTheDocument()
+  })
+
+  test('accumulates Idle time across an awaiting_user_input episode and shows it in the footer', async () => {
+    // started переключается в true ПОСЛЕ первой проверки (idle === '--'), чтобы
+    // сымитировать реальный бэкенд: started_at появляется в /api/status, как только
+    // стадия действительно стартовала (а не отсутствует всю жизнь рана, как в
+    // остальных тестах этого файла) — иначе #idle у Footer навсегда остаётся '--'
+    // (hasStarted гейтится по startedAt, см. Footer.tsx), и WS-накопленный idleMs
+    // никогда не отрисуется, даже если сам useStatusDuration посчитал его верно.
+    // Паттерн стейт-флага — как в 'advances selection to the next active stage...' выше.
+    let started = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stage_names: { s1: 'Propose' },
+      stages: { s1: { status: 'running', updated_at: '' } },
+      ...(started ? { started_at: '2026-07-29T09:59:00.000Z' } : {}),
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    expect(document.getElementById('idle')).toHaveTextContent('--')
+
+    started = true
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onopen?.()
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'stage_status_changed',
+          data: { status: 'awaiting_user_input' },
+          stage_id: 's1',
+          timestamp: '2026-07-29T10:00:00.000Z',
+        }),
+      })
+    })
+    act(() => {
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'stage_status_changed',
+          data: { status: 'running' },
+          stage_id: 's1',
+          timestamp: '2026-07-29T10:00:05.000Z',
+        }),
+      })
+    })
+
+    await waitFor(() => {
+      expect(document.getElementById('idle')).toHaveTextContent('00:05')
+    })
+  })
+
   test('WARNING: falls back to a failed stage when no stage is active', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

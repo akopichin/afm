@@ -14,10 +14,11 @@ import { useStatus } from '../hooks/use-status'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageLog } from '../hooks/use-stage-log'
 import { useElapsed } from '../hooks/use-elapsed'
+import { useStatusDuration } from '../hooks/use-status-duration'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
-import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
+import { ACTIVE_STAGE_STATUSES, BACKOFF_STATUSES, IDLE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
 import type { Stage } from '../types'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
@@ -114,6 +115,8 @@ export function App(): ReactElement {
 
   const logEntries = useStageLog(selectedStageId)
   const elapsedMs = useElapsed(startedAt)
+  const idleMs = useStatusDuration(events, IDLE_STATUSES)
+  const backoffMs = useStatusDuration(events, BACKOFF_STATUSES)
 
   const refreshedForEvent = useRef<number>(-1)
 
@@ -199,7 +202,7 @@ export function App(): ReactElement {
                     <span id="detail-status" className="status-badge" data-status={selectedStage.status}>
                       {STAGE_STATUS_LABELS[selectedStage.status]}
                     </span>
-                    {selectedStage.status === 'running' && (
+                    {selectedStage.status === 'running' && connected && (
                       <span className="thinking" aria-hidden="true">
                         <span className="td" />
                         <span className="td" />
@@ -229,7 +232,7 @@ export function App(): ReactElement {
         </MaximizeProvider>
       </main>
 
-      <Footer stages={stages} startedAt={startedAt} elapsedMs={elapsedMs} />
+      <Footer stages={stages} startedAt={startedAt} elapsedMs={elapsedMs} idleMs={idleMs} backoffMs={backoffMs} />
 
       {noteModalStageId !== null && (
         <AgentNoteModal

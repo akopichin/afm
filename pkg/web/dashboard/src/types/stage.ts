@@ -49,3 +49,11 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'retrying',
   'awaiting_user_input',
 ])
+
+// Idle — стадия ждёт действия ПОЛЬЗОВАТЕЛЯ: открытый диалог, ожидание
+// одобрения плана, или упавшая стадия (ждёт ручного retry). Backoff —
+// автоматическая пауза перед авто-ретраем, без участия пользователя.
+// Оба набора питают useStatusDuration в app/App.tsx (см. дизайн-документ
+// docs/superpowers/specs/2026-07-29-dashboard-event-feed-ui-fixes-design.md).
+export const IDLE_STATUSES: ReadonlySet<StageStatus> = new Set(['awaiting_user_input', 'awaiting_approval', 'failed'])
+export const BACKOFF_STATUSES: ReadonlySet<StageStatus> = new Set(['retrying'])

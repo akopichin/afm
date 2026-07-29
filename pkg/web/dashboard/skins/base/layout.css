@@ -82,7 +82,7 @@
 /* === Footer === */
 #footer {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   align-items: center;
   gap: 22px;
   padding: 10px 20px;
