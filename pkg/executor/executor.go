@@ -412,6 +412,48 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	return runErr
 }
 
+// RunScript runs a plain shell script (no stream-json parsing, no session/
+// resume args) with a hard, non-resetting timeout — unlike RunAgent's
+// idle-timeout (reset per output line), timeout here bounds the whole run
+// regardless of how much output streams. Each output line is logged via
+// LogAction("stdout", line) and forwarded to Config.OnAction if set, so
+// callers get the same per-line visibility RunAgent gives for tool actions.
+func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile string) error {
+	lg, err := progress.NewLogger(logFile)
+	if err != nil {
+		return err
+	}
+	defer lg.Close()
+
+	var stderr io.Writer = io.Discard
+	if sf := openStderrLog(logFile); sf != nil {
+		stderr = sf
+		defer sf.Close()
+	}
+
+	lg.LogStart("script", strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile)))
+
+	runCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	runErr := e.run(runCtx, "", "script", stderr, func(line string) {
+		lg.LogAction("stdout", line)
+		if e.cfg.OnAction != nil {
+			e.cfg.OnAction("stdout", line)
+		}
+	})
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		runErr = fmt.Errorf("script timeout after %v", timeout)
+	}
+
+	lg.LogEnd(runErr)
+	return runErr
+}
+
 // RunJSONQuery запускает команду с одним промптом в JSON-режиме.
 // Не использует stream-json — просто захватывает stdout через cmd.Output().
 // Используется Supervisor для однократных LLM-вызовов (без логирования действий).

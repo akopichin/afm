@@ -757,3 +757,90 @@ func TestExecutor_RunJSONQuery_Error(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestRunScript_Success(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, "echo hello-script"},
+	})
+
+	if err := ex.RunScript(context.Background(), 5*time.Second, logFile); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "hello-script") {
+		t.Errorf("log missing script output: %q", content)
+	}
+	if !strings.Contains(content, "completed") {
+		t.Errorf("log missing completion banner: %q", content)
+	}
+}
+
+func TestRunScript_NonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, "exit 3"},
+	})
+
+	err := ex.RunScript(context.Background(), 5*time.Second, logFile)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit, got nil")
+	}
+	data, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(data), "FAILED") {
+		t.Errorf("log should contain FAILED banner: %q", string(data))
+	}
+}
+
+func TestRunScript_HardTimeout(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, "sleep 10"},
+	})
+
+	start := time.Now()
+	err := ex.RunScript(context.Background(), 200*time.Millisecond, logFile)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("RunScript took too long to time out: %v", elapsed)
+	}
+}
+
+func TestRunScript_OnActionCalledPerLine(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	var got []string
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, "echo line1\necho line2"},
+		OnAction: func(tool, detail string) {
+			got = append(got, detail)
+		},
+	})
+
+	if err := ex.RunScript(context.Background(), 5*time.Second, logFile); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if len(got) != 2 || got[0] != "line1" || got[1] != "line2" {
+		t.Errorf("OnAction lines = %v, want [line1 line2]", got)
+	}
+}
