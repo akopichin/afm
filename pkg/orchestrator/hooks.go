@@ -91,8 +91,26 @@ const (
 // ctx is cancelled (full-run shutdown — the stage resumes waiting on the
 // next `afm run` via recovery.go). Only one waiter per stageID at a time.
 func (o *Orchestrator) waitForHookDecision(ctx context.Context, stageID string) (hookDecision, bool) {
+	return o.waitOnHookChan(ctx, stageID, o.registerHookWaiter(stageID))
+}
+
+// registerHookWaiter creates and registers the channel a hook decision will
+// arrive on for stageID. Split out from waitForHookDecision so a caller (see
+// runBeforeHook) can register the waiter BEFORE making the stage's
+// hook_failed status observable (FSM transition + event publish) — otherwise
+// a fast resolver (dashboard, automation hitting the HTTP API) could see
+// hook_failed and call resolveHook in the narrow window before the waiter
+// exists, which would silently drop the decision (resolveHook returns false
+// with nobody to retry).
+func (o *Orchestrator) registerHookWaiter(stageID string) chan hookDecision {
 	ch := make(chan hookDecision, 1)
 	o.hookWaiters.Store(stageID, ch)
+	return ch
+}
+
+// waitOnHookChan blocks on a channel already registered via
+// registerHookWaiter, until a decision arrives or ctx is cancelled.
+func (o *Orchestrator) waitOnHookChan(ctx context.Context, stageID string, ch chan hookDecision) (hookDecision, bool) {
 	defer o.hookWaiters.Delete(stageID)
 	select {
 	case d := <-ch:
@@ -148,6 +166,12 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 			return true
 		}
 
+		// Register the waiter BEFORE the transition/event below make
+		// hook_failed observable — closes the race where a fast resolver
+		// (dashboard, automation) could call resolveHook before anyone is
+		// listening (see registerHookWaiter's doc comment).
+		waitCh := o.registerHookWaiter(s.ID)
+
 		_ = writeHookPending(stageDir, hookPending{Hook: "before", Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
 		_, seq, _ := o.triggerWithSeq(s.ID, EvHookFailed, GuardCtx{}, err.Error())
 		_ = o.critical.Publish(ctx, Event{
@@ -157,7 +181,7 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 			Seq:     seq,
 		})
 
-		decision, ok := o.waitForHookDecision(ctx, s.ID)
+		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
 		if !ok {
 			return false
 		}
