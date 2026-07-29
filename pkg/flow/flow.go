@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -84,6 +85,19 @@ type Stage struct {
 	// Стадия обязана содержать AgentPlanning в Agents.
 	Supervisor       bool   `yaml:"supervisor"`
 	SupervisorPrompt string `yaml:"supervisor_prompt,omitempty"`
+	// Script, if set, makes this a script-only stage: it runs the given shell
+	// script (via sh -c) instead of any agent, with no planning/supervisor/
+	// approval gate. Mutually exclusive with Agents/Command/Interactive/Plan/
+	// Verify/Supervisor.
+	Script        string        `yaml:"script"`
+	ScriptTimeout time.Duration `yaml:"script_timeout"`
+	// ScriptBefore/ScriptAfter run a shell script immediately before/after this
+	// stage's own main content (agent, script, or interactive). Legal on any
+	// stage type, alongside its other fields.
+	ScriptBefore        string        `yaml:"script_before"`
+	ScriptBeforeTimeout time.Duration `yaml:"script_before_timeout"`
+	ScriptAfter         string        `yaml:"script_after"`
+	ScriptAfterTimeout  time.Duration `yaml:"script_after_timeout"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -135,6 +149,12 @@ func (s *Stage) NeedsPlanning() bool {
 // IsAuto сообщает, что стадия жёстко помечена автономной (agents: [auto]).
 func (s *Stage) IsAuto() bool {
 	return len(s.Agents) == 1 && s.Agents[0] == AgentAuto
+}
+
+// IsScript reports whether the stage runs a plain shell script instead of an
+// agent (agents: [] entirely absent, replaced by the Script field).
+func (s *Stage) IsScript() bool {
+	return s.Script != ""
 }
 
 // Flow is the top-level structure parsed from a flow YAML file.
@@ -192,7 +212,7 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
-		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() {
+		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() && !s.IsScript() {
 			return fmt.Errorf("stage %q: must have planning agent or a plan path", s.ID)
 		}
 	}
