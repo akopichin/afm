@@ -356,7 +356,19 @@ func (o *Orchestrator) allTerminal() bool {
 // Without a dashboard, any terminal state (done or failed) is final.
 // With a dashboard, exit only when all stages are done — failed stages stay
 // visible so the user can retry them without restarting the process.
+//
+// agentsInFlight guards a gap allTerminal() alone can't see: a stage's own
+// status can already be "done" while its script_after hook (spawned from
+// onAgentCompleted, right as that same status flips) is still running or
+// blocked waiting on a RetryHook/SkipHook decision — runAfterHook
+// deliberately never touches the FSM (see its doc comment), so the stage
+// stays "done" throughout. Without this check, Run() could cancel its ctx
+// (shutdown) in the very same instant the hook goroutine was spawned,
+// killing it before it ever gets to run.
 func (o *Orchestrator) shouldExit() bool {
+	if o.agentsInFlight.Load() > 0 {
+		return false
+	}
 	if !o.allTerminal() {
 		return false
 	}

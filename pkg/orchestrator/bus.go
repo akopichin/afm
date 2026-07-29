@@ -29,6 +29,18 @@ const (
 	// EventHookResolved fires when the user retries or skips a failed hook.
 	// Data: map[string]string{"hook": ..., "resolution": "retried"|"skipped"}.
 	EventHookResolved EventType = "hook_resolved"
+	// eventAgentDrained is an internal-only nudge published on the critical
+	// bus right after any spawnAgent goroutine finishes (concurrency.go),
+	// once agentsInFlight has already been decremented. handleEvent's switch
+	// doesn't match it (falls through as a no-op) — its only purpose is to
+	// wake Run()'s select loop so it re-checks shouldExit() with a
+	// guaranteed-fresh agentsInFlight value. Needed because a script_after
+	// hook resolving (RetryHook/SkipHook, or the script finally succeeding)
+	// never itself triggers an FSM transition/EventAgentCompleted, so without
+	// this Run() could sit blocked on select forever after the hook settles,
+	// never noticing every stage is actually done. Never published to ui —
+	// must not reach the dashboard.
+	eventAgentDrained EventType = "__agent_drained"
 )
 
 type Event struct {

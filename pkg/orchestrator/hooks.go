@@ -254,6 +254,20 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	}
 }
 
+// maybeRunAfterHook fires the stage's script_after hook (if any) in a tracked
+// goroutine via spawnAgent, reusing its semaphore/agentWG bookkeeping — the
+// hook may block for an arbitrarily long time waiting on a user decision, so
+// it must never run inline in onAgentCompleted (an event-loop callback that
+// must return promptly). A no-op when the stage has no ScriptAfter: no
+// goroutine is spawned, so a stage without the hook behaves unchanged.
+func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
+	stage := o.graph.Stage(stageID)
+	if stage == nil || stage.ScriptAfter == "" {
+		return
+	}
+	o.spawnAgent(ctx, *stage, o.runAfterHook)
+}
+
 // withBeforeHook wraps a stage's fresh-activation run function with
 // script_before: if the stage has no ScriptBefore, mainFn runs unchanged. If
 // the hook fails and is blocked in hook_failed, ctx cancellation during the

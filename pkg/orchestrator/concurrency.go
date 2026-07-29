@@ -45,6 +45,11 @@ func (o *Orchestrator) isAgentActive(stageID string) bool {
 // заменяет ~10 копий одинакового boilerplate и гарантирует чистый shutdown.
 func (o *Orchestrator) spawnAgent(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
 	o.agentWG.Add(1)
+	// Инкремент синхронный, ДО запуска горутины — чтобы shouldExit(),
+	// вызванный сразу после того, как этот вызов вернётся (см.
+	// onAgentCompleted → Run()), гарантированно увидел агента как
+	// "в полёте", без окна гонки (см. doc-комментарий agentsInFlight).
+	o.agentsInFlight.Add(1)
 	go func() {
 		defer o.agentWG.Done()
 		sem := o.semFor(s)
@@ -53,9 +58,26 @@ func (o *Orchestrator) spawnAgent(ctx context.Context, s flow.Stage, run func(co
 		defer func() {
 			o.markAgentDone(s.ID)
 			sem.release()
+			o.agentsInFlight.Add(-1)
+			o.wakeEventLoop()
 		}()
 		run(ctx, s)
 	}()
+}
+
+// wakeEventLoop будит select Run()'а после того, как агентская горутина
+// действительно завершилась (agentsInFlight уже декрементирован) — чтобы
+// shouldExit() гарантированно перепроверился со свежим значением счётчика,
+// даже если завершение этой конкретной горутины не породило собственного
+// EventAgentCompleted (случай script_after: runAfterHook никогда не трогает
+// FSM). Best-effort и неблокирующий: если буфер critical-шины полон, там уже
+// стоят другие события — их обработка и так вызовет свою перепроверку
+// shouldExit(), так что потеря этого толчка безвредна.
+func (o *Orchestrator) wakeEventLoop() {
+	select {
+	case o.critical.ch <- Event{Type: eventAgentDrained}:
+	default:
+	}
 }
 
 // waitAgents дожидается завершения всех агентских горутин (с ограничением),
