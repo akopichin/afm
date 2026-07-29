@@ -60,19 +60,24 @@ stages:
 
 `runScriptStage(ctx, s)` — рядом с `runAutonomousAgent`. Активируется тем же путём, что и `auto`-стейдж сегодня (`tryActivatePrePlanned` / `startPlanningForPending` в `recovery.go`, страховка в `startReadyStages`): т.к. `NeedsPlanning()==false`, стейдж уходит pending→ready без planning/supervisor и сразу запускается. `runScriptStage` вызывает `executor.RunScript` с `s.Script`/`s.ScriptTimeout`, ретраит по хук-политике (см. ниже), пишет лог в `<stage>.script.log`.
 
-### Централизованный hook-wrapper
+### Hook-wrapper: уточнение места врезки (после детального разбора call-сайтов)
 
-Решение о том, ЧТО и КОГДА запускать, в оркестраторе принимается минимум в 6-7 независимых местах (`startReadyStages`, `retryStage`, `recovery.go`, `Revise`, `onAgentCompleted`, `onUserAnswered`) — единой точки диспатча-решения нет. Но почти все они сходятся к единому низкоуровневому механизму запуска — `spawnAgent` (`pkg/orchestrator/concurrency.go:46`), который принимает саму run-функцию (`runPlanningAgent`/`runImplementationAgent`/`runAutonomousAgent`/новую `runScriptStage`) как параметр и стартует горутину. Поэтому hook-wrapper встраивается ОДИН РАЗ — внутрь `spawnAgent`, оборачивая переданную `fn` до/после её вызова:
+Первая версия этого раздела предлагала обернуть единый низкоуровневый `spawnAgent` (`concurrency.go:46`) — механический launch-механизм, через который проходят почти все ~6-7 независимых мест принятия решения «что и когда запускать» (`startReadyStages`, `retryStage`, `recovery.go`, `Revise`, `onAgentCompleted`-revising-ветка, `onUserAnswered`). При детальной проработке плана выяснилось, что это НЕВЕРНО: `spawnAgent` вызывается не только для «свежего старта» стейджа, но и для продолжений уже начатого прогона — `resumeInteractiveAgent` (резюме прерванного диалога), `Revise`/`runPlanningWithFeedback`, `onAgentCompleted`-revising-ветка, `onUserAnswered`. Обернуть их ВСЕ одним и тем же `before`+`after`-циклом означало бы повторно гонять `script_before` на каждое продолжение прерванного/ревайзящегося прогона — неверно по смыслу (`before` — это «перед стартом настоящей работы», а не «перед каждым возобновлением»).
 
-`runStageWithHooks(ctx, s, mainFn func() error) error` — вызывается из тела `spawnAgent` вместо прямого вызова `fn`:
+Правильные две точки врезки:
 
-1. Если `s.ScriptBefore != ""` — выполнить его (retry ×3, backoff 1s→2s→3s, лог в `<stage>.before.log`). При исчерпании ретраев → стейдж уходит в статус `hook_failed` (см. ниже), `mainFn` НЕ вызывается, пока пользователь не решит retry/skip.
-2. Вызвать `mainFn()` — существующий диспатч (агент/interactive/auto/script), без изменений.
-3. Если `mainFn()` завершился успехом И `s.ScriptAfter != ""` — выполнить его (та же retry-политика, лог в `<stage>.after.log`). При исчерпании ретраев — публикуется `hook_failed{hook:"after"}`, но статус самого стейджа остаётся `done` (см. «Обработка ошибок»).
+**`script_before` — врезается в решение «активировать стейдж с нуля»**, а не в механический spawn:
+- `startReadyStages` (`scheduling.go:103-142`) — непосредственно перед `o.spawnAgent(ctx, *stage, o.runAutonomousAgent/runImplementationAgent/runScriptStage)`: если у стейджа есть `ScriptBefore`, гейт вызывается ДО спавна основного run-а; спавн происходит только после успеха/skip.
+- `retryStage` (`scheduling.go`, вызывается из ручного `/api/stages/{id}/retry`) — та же гейт-логика перед повторным спавном: пользователь явно перезапускает стейдж, значит `before` должен снова отработать.
+- `recovery.go`/`startPlanningForPending` — активация pending-стейджа после краша ДО того, как его горутина вообще когда-либо стартовала — тоже «с нуля», тот же гейт.
 
-Хук-ретраи — **отдельная, фиксированная политика** (3 попытки, backoff 1s/2s/3s), НЕ переиспользует `runWithRetry`/`o.maxRetries`/`o.retryBackoff` (`pkg/orchestrator/retry.go:56-63`, 15 попыток по 5s — рассчитана на LLM rate-limit окна, для детерминированного shell-скрипта избыточна и не подходит по смыслу). Провал самого `script`-стейджа (не хука, а основного скрипта) — та же 3×/1-2-3s политика, что и у хуков (это тоже детерминированная быстрая операция), после исчерпания — обычный `failed`, доступен `afm retry` как сегодня.
+`resumeInteractiveAgent` (`recovery.go:161-181`, резюмирует стейдж, УЖЕ прошедший свой `before`, прерванный где-то в середине диалога) — **`script_before` НЕ повторяется здесь**.
 
-**Два прямых вызова, минующих `spawnAgent`.** `resumeInteractiveAgent` (`recovery.go:171,179`) вызывает `runPlanningAgent`/`runImplementationAgent` напрямую и синхронно (уже внутри своей горутины) — эти два места должны явно обернуть вызов в `runStageWithHooks`, т.к. они не проходят через `spawnAgent` и иначе останутся без хуков.
+**`script_after` — врезается в момент, когда стейдж реально достигает `done`**, а не в момент возврата из `mainFn`, потому что `mainFn` может вернуться без достижения `done` (approval/revising) и «настоящее» завершение произойти позже через совершенно другой спавн (`Revise`/`onUserAnswered`/`onAgentCompleted`-revising-ветка). Единственное по-настоящему единое место, где стейдж переходит в `done` независимо от того, сколько retry/revise-циклов до этого было — `onAgentCompleted` (`orchestrator.go:323`, normal-completion-ветка, `:381-383`). `script_after` вызывается оттуда, один раз, после того как `EvComplete` реально применился и статус стал `done`.
+
+Хук-ретраи (`before`/`after`/сам `script`-стейдж) — **отдельная, фиксированная политика** (3 попытки, backoff 1s/2s/3s), НЕ переиспользует `runWithRetry`/`o.maxRetries`/`o.retryBackoff` (`pkg/orchestrator/retry.go:56-63`, 15 попыток по 5s — рассчитана на LLM rate-limit окна, для детерминированного shell-скрипта избыточна и не подходит по смыслу). Провал самого `script`-стейджа (не хука, а основного скрипта) — та же 3×/1-2-3s политика, что и у хуков, после исчерпания — обычный `failed`, доступен `afm retry` как сегодня.
+
+Благодаря врезке именно в `onAgentCompleted` (а не в `spawnAgent`/`mainFn`-возврат), `script_after` корректно срабатывает независимо от того, сколько `Revise`/`onUserAnswered`-циклов прошло у стейджа перед итоговым `done` — это не факультативный edge-case, а прямое следствие выбора точки врезки. Единственное намеренное ограничение — `script_before` не повторяется в `resumeInteractiveAgent` (резюме после краша посреди диалога, стейдж уже прошёл свой `before` до прерывания), см. выше.
 
 ### Working directory и окружение
 
