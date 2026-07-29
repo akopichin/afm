@@ -212,8 +212,8 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
-		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() {
-			return fmt.Errorf("stage %q: must have planning agent or a plan path", s.ID)
+		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() && !s.IsScript() {
+			return fmt.Errorf("stage %q: must have planning agent, a plan path, or script", s.ID)
 		}
 	}
 
@@ -233,6 +233,30 @@ func (f *Flow) validate() error {
 		}
 		if s.Supervisor {
 			return fmt.Errorf("stage %q: \"auto\" is incompatible with supervisor: true", s.ID)
+		}
+	}
+
+	for _, s := range f.Stages {
+		if !s.IsScript() {
+			continue
+		}
+		if len(s.Agents) > 0 {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with agents", s.ID)
+		}
+		if s.Command != "" {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with command", s.ID)
+		}
+		if s.Interactive {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with interactive", s.ID)
+		}
+		if s.Plan != "" {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with plan", s.ID)
+		}
+		if s.Verify != "" {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with verify", s.ID)
+		}
+		if s.Supervisor {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with supervisor", s.ID)
 		}
 	}
 

@@ -508,7 +508,6 @@ stages:
   - id: notify
     name: N
     description: d
-    plan: docs/plan.md
     script: |
       echo "hello"
     script_timeout: 45s
@@ -559,6 +558,56 @@ stages:
 	}
 	if st.IsScript() {
 		t.Error("IsScript() should be false for an agent stage with hooks")
+	}
+}
+
+func TestValidateScriptCannotCombineWithAgents(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    script: "echo hi"
+    agents: [implementation]
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "script") {
+		t.Fatalf("expected script-combination error, got %v", err)
+	}
+}
+
+func TestValidateScriptCannotCombineWithVerify(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    script: "echo hi"
+    verify: "true"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "script") {
+		t.Fatalf("expected script-combination error, got %v", err)
+	}
+}
+
+func TestValidateScriptStageNeedsNoOtherWorkField(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    script: "echo hi"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error for valid script-only stage: %v", err)
 	}
 }
 
