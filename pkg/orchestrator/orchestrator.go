@@ -86,6 +86,10 @@ type Orchestrator struct {
 	// агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
 	// что ломает phaseDispatch и уводит FSM в wrong state.
 	preAskPhase sync.Map
+	// hookWaiters holds, per stageID, the channel a blocked before/after hook
+	// is waiting on for a user decision (see hooks.go: waitForHookDecision/
+	// resolveHook). Only populated while a hook is actually blocked.
+	hookWaiters sync.Map
 	// violationCache кешует stat .jsonl-файлов для detectDialogViolation.
 	// Доступен только из горутины поллера — мьютекс не нужен.
 	violationCache map[string]violationCacheEntry // key: путь к .jsonl
