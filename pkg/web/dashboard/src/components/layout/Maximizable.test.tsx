@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MaximizeProvider, Maximizable, useMaximize } from './Maximizable'
@@ -25,5 +26,39 @@ describe('Maximizable', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(document.querySelector('.maximize-overlay')).toBeNull()
+  })
+})
+
+function Counter() {
+  const [count, setCount] = useState(0)
+  return (
+    <button onClick={() => setCount((c) => c + 1)}>{`clicks:${count}`}</button>
+  )
+}
+
+describe('Maximizable state preservation', () => {
+  it('preserves child component state across maximize and restore (no remount)', () => {
+    render(
+      <MaximizeProvider>
+        <Maximizable id="feed">
+          <Counter />
+        </Maximizable>
+        <Toggle id="feed" />
+      </MaximizeProvider>,
+    )
+
+    fireEvent.click(screen.getByText('clicks:0'))
+    expect(screen.getByText('clicks:1')).toBeInTheDocument()
+
+    // Maximize — if Maximizable remounts its children, this resets to clicks:0.
+    fireEvent.click(screen.getByText('toggle'))
+    expect(screen.getByText('clicks:1')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('clicks:1'))
+    expect(screen.getByText('clicks:2')).toBeInTheDocument()
+
+    // Restore — same check in the other direction.
+    fireEvent.click(screen.getByText('toggle'))
+    expect(screen.getByText('clicks:2')).toBeInTheDocument()
   })
 })
