@@ -349,4 +349,33 @@ describe('useEventFeed', () => {
       expect(result.current.events.filter((e) => e.type === 'agent_action')).toHaveLength(1)
     })
   })
+
+  test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderHook(() => useEventFeed('/ws'))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    // Первый onopen — это НЕ реконнект, лишнего фетча быть не должно.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      FakeWebSocket.last().emitClose()
+    })
+    act(() => {
+      vi.advanceTimersByTime(1000) // реконнект через INITIAL_RECONNECT_DELAY_MS
+    })
+    expect(FakeWebSocket.instances).toHaveLength(2)
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    // Второй onopen — реконнект после close — досасывает историю ещё раз.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 })

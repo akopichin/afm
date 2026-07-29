@@ -19,23 +19,28 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
 
   useEffect(() => {
     let cancelledFetch = false
-    // Открываем WebSocket СРАЗУ (см. ниже, connect() вызывается как и раньше)
-    // — live-события накапливаются в events через обычный путь setEvents.
-    // Историю фетчим ПАРАЛЛЕЛЬНО и, когда она придёт, мержим в уже
-    // накопленные live-события (mergeHistory) — так гарантированно нет ни
-    // дыры (WS слушает с самого начала), ни устойчивого дубля (дедуп по
-    // dedupeKey — seq, если есть, иначе по содержимому).
-    fetch('/api/events')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((raw: unknown) => {
-        if (cancelledFetch || !Array.isArray(raw)) return
-        const history = raw.map(toEvent)
-        setEvents((prev) => mergeHistory(history, prev))
-      })
-      .catch(() => {
-        // /api/events недоступен (старая сборка сервера, сетевая ошибка) —
-        // деградируем к чистому live-потоку, как было до этой правки.
-      })
+
+    // Тянет /api/events и мёржит с уже накопленными live-событиями.
+    // Вызывается один раз на монтировании (первичная история) и повторно на
+    // каждом реконнекте после первого успешного open (см. hasConnectedBefore
+    // ниже) — иначе транзишены, случившиеся, пока сокет был разорван, тихо
+    // теряются: /ws не реплеит пропущенные сообщения, а без ресинка счётчики
+    // Idle/Backoff (useStatusDuration) могли бы навсегда зависнуть «открытыми».
+    function syncHistory() {
+      fetch('/api/events')
+        .then((r) => (r.ok ? r.json() : []))
+        .then((raw: unknown) => {
+          if (cancelledFetch || !Array.isArray(raw)) return
+          const history = raw.map(toEvent)
+          setEvents((prev) => mergeHistory(history, prev))
+        })
+        .catch(() => {
+          // /api/events недоступен (старая сборка сервера, сетевая ошибка) —
+          // деградируем к чистому live-потоку, как было до этой правки.
+        })
+    }
+
+    syncHistory()
 
     let socket: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
@@ -43,6 +48,7 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
     let reconnectDelay = INITIAL_RECONNECT_DELAY_MS
     let lastMessageAt = Date.now()
     let cancelled = false
+    let hasConnectedBefore = false
 
     function connect() {
       socket = new WebSocket(url)
@@ -52,6 +58,9 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
         if (cancelled) return
         setConnected(true)
         reconnectDelay = INITIAL_RECONNECT_DELAY_MS
+
+        if (hasConnectedBefore) syncHistory()
+        hasConnectedBefore = true
       }
 
       socket.onclose = () => {
