@@ -16,20 +16,34 @@ import (
 // Pending stages start planning for the first time.
 func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 	for _, s := range o.opts.Stages {
+		// A crashed script_after resume is invisible to the status-based
+		// switches below: after-hooks never touch the FSM, so a stage stuck
+		// waiting on a retry/skip decision for its after-hook is still
+		// StatusDone on disk. Detect it directly via hook_pending.json
+		// (Hook == "after") and resume the wait BEFORE the normal
+		// status-based dispatch, regardless of the stage's current status.
+		if pending, ok := readHookPending(filepath.Join(o.opts.RunDir, s.ID)); ok && pending.Hook == "after" {
+			o.resumeAfterHook(ctx, s)
+			continue
+		}
+
 		if !s.NeedsPlanning() {
 			current := o.opts.Store.Get(s.ID)
 
 			switch current {
 			case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval:
 				continue
-			case state.StatusRunning, state.StatusReady, state.StatusAwaitingUserInput, state.StatusRevising:
+			case state.StatusRunning, state.StatusReady, state.StatusAwaitingUserInput, state.StatusRevising, state.StatusHookFailed:
 				// Let these fall through to the normal resume logic below. Revising
 				// must fall through too (not hit default→activateAutoStage below):
 				// an auto stage revised mid-run has no plan.md and isn't Pending, so
 				// treating it as a fresh activation candidate would fire a no-op
 				// EvReady (invalid from Revising, silently dropped) and strand the
 				// stage in Revising forever instead of resuming via
-				// runAutonomousWithFeedback below.
+				// runAutonomousWithFeedback below. HookFailed must fall through for
+				// the same reason: it's not Pending, so the default branch below
+				// would fire an invalid, silently-dropped EvReady instead of
+				// resuming the pending before-hook decision via the second switch.
 			case state.StatusRetrying:
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if err := checkCompletion(stageDir, ".", s); err == nil {
@@ -75,6 +89,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			continue
 		case state.StatusAwaitingUserInput:
 			o.spawnAgent(ctx, s, o.resumeInteractiveAgent)
+		case state.StatusHookFailed:
+			// Crashed while blocked on a before-hook retry/skip decision.
+			// Re-enter the wait (not a silent retry) — see resumeHookFailedWait.
+			o.spawnAgent(ctx, s, o.resumeHookFailedWait)
 		case state.StatusRetrying:
 			// Interrupted retry — check completion or restart
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)

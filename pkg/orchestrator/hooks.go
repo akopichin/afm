@@ -307,6 +307,114 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 	}
 }
 
+// resumeHookFailedWait resumes a stage that crashed while blocked in
+// hook_failed: re-reads the persisted hook_pending.json (written by
+// runBeforeHook before blocking) and re-enters the wait for a user decision,
+// WITHOUT silently re-attempting the hook — matching runBeforeHook's own
+// retry-decision loop from that point on. Called from recovery.go via
+// spawnAgent, so it's tracked the same way as any other resumed agent.
+func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	pending, ok := readHookPending(stageDir)
+	if !ok || pending.Hook != "before" {
+		// Nothing to resume from disk; fail safe rather than guessing.
+		o.Trigger(s.ID, EvFail, GuardCtx{}, "hook_failed with no pending hook on disk")
+		return
+	}
+	decision, ok := o.waitForHookDecision(ctx, s.ID)
+	if !ok {
+		// ctx cancelled (full shutdown) — stage stays in hook_failed and
+		// resumes again via this same path on the next `afm run`.
+		return
+	}
+	clearHookPending(stageDir)
+	_, seq, _ := o.triggerWithSeq(s.ID, EvHookResolved, GuardCtx{}, "before hook "+resolutionName(decision))
+	o.ui.Publish(Event{
+		Type:    EventHookResolved,
+		StageID: s.ID,
+		Data:    map[string]string{"hook": "before", "resolution": resolutionName(decision)},
+		Seq:     seq,
+	})
+	if decision == hookDecisionSkip {
+		o.dispatchMainAfterBeforeHook(ctx, s)
+		return
+	}
+	// Retry: re-enter the normal before-hook flow from scratch (full
+	// 3x/1-2-3s cycle); if it fails again it re-blocks in hook_failed itself.
+	if o.runBeforeHook(ctx, s) {
+		o.dispatchMainAfterBeforeHook(ctx, s)
+	}
+}
+
+// dispatchMainAfterBeforeHook runs a stage's real content after its
+// before-hook resolved during a resume (script/autonomous/implementation),
+// mirroring the branch startReadyStages/retryStage use for a fresh
+// activation (withBeforeHook(mainFn) — not reused directly here since the
+// hook already failed once and is being resumed mid-wait, not started fresh).
+// The autonomous check matches startReadyStages exactly: isAutonomousStage
+// (autonomous.flag on disk) catches a stage the supervisor dynamically
+// routed to the autonomous track, not just one hard-coded via IsAuto()
+// (agents: [auto]) — either way its before-hook ran ahead of runAutonomousAgent,
+// never runImplementationAgent.
+func (o *Orchestrator) dispatchMainAfterBeforeHook(ctx context.Context, s flow.Stage) {
+	switch {
+	case s.IsScript():
+		o.runScriptStage(ctx, s)
+	case isAutonomousStage(filepath.Join(o.opts.RunDir, s.ID)) || s.IsAuto():
+		o.runAutonomousAgent(ctx, s)
+	default:
+		o.runImplementationAgent(ctx, s)
+	}
+}
+
+// resumeAfterHookWait resumes a stage that crashed while its script_after
+// hook was blocked on a retry/skip decision. Unlike script_before's
+// hook_failed, a pending after-hook decision leaves NO trace in the FSM —
+// runAfterHook never calls Trigger, so the stage stays StatusDone straight
+// through the crash. recovery.go finds it only by scanning every stage's
+// hook_pending.json for Hook == "after", regardless of status, and resumes
+// it via resumeAfterHook below (not called directly — see its doc comment).
+// Mirrors resumeHookFailedWait: re-enters the wait without re-running the
+// hook, and re-runs the full retry cycle only if the user asks to retry.
+func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	decision, ok := o.waitForHookDecision(ctx, s.ID)
+	if !ok {
+		// ctx cancelled (full shutdown) — hook_pending.json is left on disk
+		// and this same scan resumes the wait again on the next `afm run`.
+		return
+	}
+	clearHookPending(stageDir)
+	o.ui.Publish(Event{
+		Type:    EventHookResolved,
+		StageID: s.ID,
+		Data:    map[string]string{"hook": "after", "resolution": resolutionName(decision)},
+	})
+	if decision == hookDecisionSkip {
+		return
+	}
+	// Retry: re-enter the normal after-hook cycle from scratch.
+	o.runAfterHook(ctx, s)
+}
+
+// resumeAfterHook wraps resumeAfterHookWait with the same pendingAfterHooks
+// bookkeeping maybeRunAfterHook uses: incremented synchronously here, BEFORE
+// spawnAgent returns to the caller (recovery.go, running on Run()'s own
+// goroutine), so shouldExit() can never observe zero in-flight after-hooks
+// in the narrow window between spawning this goroutine and the goroutine's
+// own first instruction — see maybeRunAfterHook's doc comment for the full
+// race this closes.
+func (o *Orchestrator) resumeAfterHook(ctx context.Context, s flow.Stage) {
+	o.pendingAfterHooks.Add(1)
+	o.spawnAgent(ctx, s, func(ctx context.Context, s flow.Stage) {
+		defer func() {
+			o.pendingAfterHooks.Add(-1)
+			o.wakeEventLoop()
+		}()
+		o.resumeAfterHookWait(ctx, s)
+	})
+}
+
 func resolutionName(d hookDecision) string {
 	if d == hookDecisionSkip {
 		return "skipped"
