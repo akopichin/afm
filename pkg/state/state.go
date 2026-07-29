@@ -27,6 +27,10 @@ const (
 	StatusAwaitingUserInput StageStatus = "awaiting_user_input"
 	StatusDone              StageStatus = "done"
 	StatusFailed            StageStatus = "failed"
+	// StatusHookFailed — script_before exhausted its retries; the stage is
+	// blocked until the user retries or skips the hook via the dashboard.
+	// Non-terminal (see orchestrator.IsTerminal).
+	StatusHookFailed StageStatus = "hook_failed"
 )
 
 // StageState holds persistent state for a single stage.
