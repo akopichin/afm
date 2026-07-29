@@ -125,6 +125,64 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 	return ex.RunScript(ctx, timeout, logFile)
 }
 
+// runBeforeHook runs s.ScriptBefore with retries; on exhaustion it blocks the
+// stage in hook_failed until the user retries or skips via the dashboard.
+// Returns true once the stage should proceed to its main content (hook
+// succeeded or was skipped), false if ctx was cancelled while waiting for a
+// decision (full-run shutdown — recovery.go resumes the wait on next start).
+func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// Best-effort: runBeforeHook is the first thing to touch the stage
+	// directory (mirrors the MkdirAll done by every other stage-content
+	// entry point — agents.go, scheduling.go, recovery.go). If it genuinely
+	// fails, execScript below will surface the real error through the normal
+	// hook_failed retry path.
+	_ = os.MkdirAll(stageDir, 0755)
+	logFile := filepath.Join(stageDir, "before.log")
+
+	for {
+		err := runScriptWithRetry(ctx, func() error {
+			return o.execScript(ctx, s, "before", s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
+		})
+		if err == nil {
+			return true
+		}
+
+		_ = writeHookPending(stageDir, hookPending{Hook: "before", Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
+		_, seq, _ := o.triggerWithSeq(s.ID, EvHookFailed, GuardCtx{}, err.Error())
+		_ = o.critical.Publish(ctx, Event{
+			Type:    EventHookFailed,
+			StageID: s.ID,
+			Data:    map[string]string{"hook": "before", "error": err.Error()},
+			Seq:     seq,
+		})
+
+		decision, ok := o.waitForHookDecision(ctx, s.ID)
+		if !ok {
+			return false
+		}
+		clearHookPending(stageDir)
+		_, seq, _ = o.triggerWithSeq(s.ID, EvHookResolved, GuardCtx{}, "before hook "+resolutionName(decision))
+		o.ui.Publish(Event{
+			Type:    EventHookResolved,
+			StageID: s.ID,
+			Data:    map[string]string{"hook": "before", "resolution": resolutionName(decision)},
+			Seq:     seq,
+		})
+		if decision == hookDecisionSkip {
+			return true
+		}
+		// hookDecisionRetry: loop back and re-run the full 3x/1-2-3s cycle.
+	}
+}
+
+func resolutionName(d hookDecision) string {
+	if d == hookDecisionSkip {
+		return "skipped"
+	}
+	return "retried"
+}
+
 // resolveHook delivers a user decision to a stage currently blocked in
 // waitForHookDecision. Returns false if no stage is waiting.
 func (o *Orchestrator) resolveHook(stageID string, d hookDecision) bool {

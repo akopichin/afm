@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func TestRunScriptWithRetry_SucceedsOnThirdAttempt(t *testing.T) {
@@ -158,5 +159,130 @@ func TestExecScript_RunsInRootDirAndPublishesOutput(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected at least one EventScriptOutput to be published")
+	}
+}
+
+func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
+	t.Helper()
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+	store, err := state.Open(runDir, []string{stageID})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stageID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	ui := NewUIBus()
+	critical := NewCriticalBus(16)
+	o := &Orchestrator{
+		opts:     Options{RootDir: rootDir, RunDir: runDir, Store: store},
+		ui:       ui,
+		critical: critical,
+		fsm:      NewFSM(store),
+	}
+	return o, runDir
+}
+
+func TestRunBeforeHook_SucceedsFirstTry(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	s := flow.Stage{ID: "s1", ScriptBefore: "echo ok"}
+	if !o.runBeforeHook(context.Background(), s) {
+		t.Fatal("expected true (proceed) on success")
+	}
+	if got := o.opts.Store.Get("s1"); got != state.StatusRunning {
+		t.Errorf("status = %v, want running (unchanged)", got)
+	}
+}
+
+func TestRunBeforeHook_BlocksThenRetrySucceeds(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(stageDir, "attempt.marker")
+	// Script fails until the marker file exists; the test creates it after
+	// the stage blocks, then issues a Retry decision.
+	s := flow.Stage{ID: "s1", ScriptBefore: "test -f " + marker}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- o.runBeforeHook(context.Background(), s)
+	}()
+
+	// Wait for the stage to block in hook_failed (4 failed attempts: 1s+2s+3s backoff).
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if o.opts.Store.Get("s1") == state.StatusHookFailed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if o.opts.Store.Get("s1") != state.StatusHookFailed {
+		t.Fatal("stage did not reach hook_failed")
+	}
+	if _, ok := readHookPending(stageDir); !ok {
+		t.Error("expected hook_pending.json to exist")
+	}
+
+	if err := os.WriteFile(marker, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !o.resolveHook("s1", hookDecisionRetry) {
+		t.Fatal("resolveHook returned false")
+	}
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("expected true (proceed) after successful retry")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for runBeforeHook to return")
+	}
+	if got := o.opts.Store.Get("s1"); got != state.StatusRunning {
+		t.Errorf("status = %v, want running after resolution", got)
+	}
+	if _, ok := readHookPending(stageDir); ok {
+		t.Error("expected hook_pending.json to be cleared")
+	}
+}
+
+func TestRunBeforeHook_BlocksThenSkip(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptBefore: "exit 1"}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- o.runBeforeHook(context.Background(), s)
+	}()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if o.opts.Store.Get("s1") == state.StatusHookFailed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !o.resolveHook("s1", hookDecisionSkip) {
+		t.Fatal("resolveHook returned false")
+	}
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("expected true (proceed) after skip")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out")
+	}
+	if got := o.opts.Store.Get("s1"); got != state.StatusRunning {
+		t.Errorf("status = %v, want running after skip", got)
 	}
 }
