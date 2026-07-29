@@ -210,6 +210,27 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		return
 	}
 
+	// Script-стадия (Stage.IsScript()): у неё нет ни plan.md, ни агента —
+	// перезапускаем сам скрипт напрямую, а не проваливаемся в ветку
+	// "!NeedsPlanning() → искать/копировать plan.md" ниже (у которой для
+	// script-стадии нет ни plan.md, ни stage.Plan-источника — она бы сразу
+	// повторно фейлила стадию с "no plan.md and no plan source configured"
+	// вместо реального повторного запуска скрипта). Проверяется ДО
+	// autonomous-ветки — script-стадия никогда не бывает autonomous.
+	if stage.IsScript() {
+		if !o.depsDone(*stage) {
+			return
+		}
+		o.Trigger(stageID, EvReady, GuardCtx{}, "manual retry: script")
+		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
+		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+			return
+		}
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
+		o.startReadyStages(ctx)
+		return
+	}
+
 	// Autonomous-стадия (супервизор ранее выбрал автономный трек — на диске лежит
 	// autonomous.flag): retry чтит это решение и перезапускает автономный агент
 	// напрямую, а не «сваливается» в planning. Супервизор повторно НЕ опрашивается —
