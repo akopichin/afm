@@ -425,7 +425,7 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 	}
 	defer lg.Close()
 
-	var stderr io.Writer = io.Discard
+	var stderr = io.Discard
 	if sf := openStderrLog(logFile); sf != nil {
 		stderr = sf
 		defer sf.Close()
