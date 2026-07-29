@@ -200,6 +200,60 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 	}
 }
 
+// runAfterHook runs s.ScriptAfter after the stage has already completed
+// successfully. Failure here does NOT touch the FSM — the stage stays done
+// regardless (no Trigger/triggerWithSeq call anywhere in this function). It
+// only surfaces a dismissable EventHookFailed notice with a retry/skip
+// decision, mirroring runBeforeHook's UI but never blocking the stage's
+// status.
+func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// Best-effort, mirrors runBeforeHook: the stage directory may not exist
+	// yet if this hook is the first thing to touch it. If MkdirAll genuinely
+	// fails, execScript below surfaces the real error through the normal
+	// hook_failed retry path.
+	_ = os.MkdirAll(stageDir, 0755)
+	logFile := filepath.Join(stageDir, "after.log")
+
+	for {
+		err := runScriptWithRetry(ctx, func() error {
+			return o.execScript(ctx, s, "after", s.ScriptAfter, s.ScriptAfterTimeout, logFile)
+		})
+		if err == nil {
+			return
+		}
+
+		// Register the waiter BEFORE writing hook_pending.json/publishing
+		// EventHookFailed below make the failure observable — closes the
+		// same TOCTOU race documented on registerHookWaiter/runBeforeHook: a
+		// fast resolver could otherwise call resolveHook before anyone is
+		// listening and silently lose the decision.
+		waitCh := o.registerHookWaiter(s.ID)
+
+		_ = writeHookPending(stageDir, hookPending{Hook: "after", Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout})
+		o.ui.Publish(Event{
+			Type:    EventHookFailed,
+			StageID: s.ID,
+			Data:    map[string]string{"hook": "after", "error": err.Error()},
+		})
+
+		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
+		if !ok {
+			return
+		}
+		clearHookPending(stageDir)
+		o.ui.Publish(Event{
+			Type:    EventHookResolved,
+			StageID: s.ID,
+			Data:    map[string]string{"hook": "after", "resolution": resolutionName(decision)},
+		})
+		if decision == hookDecisionSkip {
+			return
+		}
+		// retry: loop back and re-run the full cycle.
+	}
+}
+
 func resolutionName(d hookDecision) string {
 	if d == hookDecisionSkip {
 		return "skipped"

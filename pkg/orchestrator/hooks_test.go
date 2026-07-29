@@ -286,3 +286,63 @@ func TestRunBeforeHook_BlocksThenSkip(t *testing.T) {
 		t.Errorf("status = %v, want running after skip", got)
 	}
 }
+
+func TestRunAfterHook_SucceedsFirstTry_NoEvents(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptAfter: "echo ok"}
+	o.runAfterHook(context.Background(), s)
+	if got := o.opts.Store.Get("s1"); got != state.StatusDone {
+		t.Errorf("status = %v, want done (unchanged)", got)
+	}
+	if _, ok := readHookPending(filepath.Join(runDir, "s1")); ok {
+		t.Error("no pending hook expected on success")
+	}
+}
+
+func TestRunAfterHook_FailsThenSkip_StageStaysDone(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptAfter: "exit 1"}
+
+	done := make(chan struct{})
+	go func() {
+		o.runAfterHook(context.Background(), s)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := readHookPending(stageDir); ok {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, ok := readHookPending(stageDir); !ok {
+		t.Fatal("expected hook_pending.json for the failed after-hook")
+	}
+	// Status must NOT have moved to hook_failed for the after-hook.
+	if got := o.opts.Store.Get("s1"); got != state.StatusDone {
+		t.Errorf("status = %v, want done (after-hook must never block/revert)", got)
+	}
+
+	if !o.resolveHook("s1", hookDecisionSkip) {
+		t.Fatal("resolveHook returned false")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out")
+	}
+	if got := o.opts.Store.Get("s1"); got != state.StatusDone {
+		t.Errorf("status = %v, want done after skip", got)
+	}
+}
