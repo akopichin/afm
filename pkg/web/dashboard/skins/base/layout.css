@@ -293,7 +293,7 @@
   border-color: var(--mint);
 }
 
-/* Полноэкранный оверлей для максимизированной панели (портал в <body>). */
+/* Оверлей максимизированной панели: position: fixed вместо обычного потока. */
 .maximize-overlay {
   position: fixed;
   inset: 0;

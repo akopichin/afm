@@ -53,12 +53,12 @@ export function useStatusDuration(events: AfmEvent[], statuses: ReadonlySet<Stag
       }
     }
 
-    // Update accumulated time if delta changed
+    // Обновим накопленное время при изменении дельты
     if (delta !== 0) {
       setAccumulatedMs((prev) => prev + delta)
     }
-    // Trigger re-render if there are open episodes but delta is 0
-    // (we need a re-render to calculate and return the live liveMs delta)
+    // Пересчитаем, если открыты эпизоды, но дельта = 0
+    // (нужен пересчёт для вычисления и возврата живой liveMs дельты)
     if (delta === 0 && openSince.current.size > 0) {
       forceRerender({})
     }

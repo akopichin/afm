@@ -120,10 +120,10 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     return () => window.clearTimeout(t)
   }, [pending?.id])
 
-  // При разворачивании панели на весь экран (Maximizable-портал меняет высоту
-  // контейнера) канал должен показать хвост диалога, а не то место, на котором
-  // застал скролл в компактном режиме. rAF — после layout оверлея, чтобы
-  // scrollHeight уже отражал итоговую (полноэкранную) высоту.
+  // При разворачивании панели на весь экран (меняется высота контейнера) канал
+  // должен показать хвост диалога, а не то место, на котором застал скролл в компактном
+  // режиме. rAF — после layout оверлея, чтобы scrollHeight уже отражал итоговую
+  // (полноэкранную) высоту.
   useEffect(() => {
     if (!maximized) return
     const handle = requestAnimationFrame(() => jumpToBottom())
