@@ -2,6 +2,32 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-07-29
+
+### Fix: event feed's sticky auto-scroll and "↓ latest" button lost their state on maximize/restore
+- `Maximizable` (the component behind every panel's fullscreen toggle) used to switch between rendering `<>{children}</>` and `createPortal(...)` depending on maximize state — two structurally different element types at the same tree position, so React unmounted and remounted everything inside on every toggle. That silently reset the event feed's `useStickToBottom` state: scrolling up to read history, then maximizing/restoring the panel, snapped the feed back to the bottom and hid the "↓ latest" jump button — exactly backwards from what a user reviewing history would want.
+- **First attempt was wrong, caught mid-implementation:** the original plan kept `createPortal` but only switched its `container` argument (an anchor div ↔ `document.body`), reasoning React would treat that as an in-place update. It doesn't — verified directly with a minimal repro that a portal's container is part of its identity for React's reconciler, so changing it between renders remounts the subtree just as much as switching Fragment↔Portal did.
+- **Actual fix:** dropped portals from `Maximizable` entirely. A single stable `<div>` never leaves its position in the tree; only its `className` toggles between normal in-flow layout and a fullscreen `position: fixed` overlay (`maximize-overlay`, unchanged CSS). Since the div's type and position never change, React only ever diffs props — never unmounts. Safe in this codebase specifically because no ancestor between `Maximizable` and `document.body` sets `transform`/`filter`/`perspective`/`contain`/`will-change` or a `position` + non-`auto` `z-index` combination that would trap the fixed overlay (checked directly against `react-resizable-panels`' own styles and this project's CSS).
+- Verified end-to-end in a real Chrome tab against a locally built Docker image (`local/afm:dev`, same `Dockerfile.runtime` the real release uses) driving a live `afm run`: scrolled the feed to the top, maximized the panel, restored it, and confirmed both the scroll position and the jump button survived the round-trip — the exact regression this fixes.
+- Spec/plan: `docs/superpowers/specs/2026-07-29-dashboard-event-feed-ui-fixes-design.md`, `docs/superpowers/plans/2026-07-29-dashboard-event-feed-ui-fixes.md`.
+
+### Fix: event feed timestamps ticked "N seconds ago" instead of showing how long each step took
+- Each row used to recompute a live "N seconds/minutes ago" relative time every 5 seconds via a shared `setInterval` — noisy, and it couldn't answer "how long did that step actually take."
+- **Fix:** each row now shows a static duration computed once at render — the gap between that event and the previous one in the feed (`5s`, `1m`, …), across all stages in display order. The first row (no predecessor) or an unparseable timestamp shows an em dash. No more ticking.
+- Verified live: watched a specific row's printed duration stay frozen (e.g. `3m`) across 10+ real seconds, confirming the old live-ticking behavior is gone, while a fresh row correctly showed the real elapsed gap since the previous event.
+
+### New: Idle and Backoff counters in the footer
+- Previously there was no way to see, at a glance, how much of a run's wall-clock time was spent waiting on you vs. burned on automatic retry backoff.
+- **New footer counters**, next to the existing `Elapsed`: **Idle** — cumulative time any stage spent `awaiting_user_input`, `awaiting_approval`, or `failed` (a stopped stage waiting for a manual retry is waiting on you just as much as an open dialog question); **Backoff** — cumulative time in automatic `retrying` backoff, no user involved.
+- **Mechanism:** a new generic hook, `useStatusDuration(events, statuses)` (`pkg/web/dashboard/src/hooks/use-status-duration/`), processes `stage_status_changed` events incrementally — each event counted exactly once via a stable key — so a closed episode's contribution survives even after the underlying event is trimmed out of the frontend's capped 200-event buffer. While any stage is currently open, the counter adds a live delta ticking every second, same cadence as `Elapsed`. Concurrent open episodes across different stages are summed, not merged — a deliberate simplification.
+- **Reconnect resync:** `useEventFeed` now re-fetches and merges `/api/events` history on every WebSocket reconnect after the first (not just on initial mount), so a stage-status transition missed during a brief connection blip gets backfilled — otherwise a counter's open episode could get stuck accumulating forever.
+- Verified live against a locally built Docker image: watched `Idle` grow at exactly 2× wall-clock rate while two stages (an open dialog question and a failed stage) were simultaneously "open," confirming the sum-of-concurrent-episodes behavior; watched `Backoff` freeze at a fixed value once a retrying stage recovered; confirmed both counters read `--` before the run starts and `0:00` once it has, with nothing open.
+
+### Fix: "thinking" indicator kept showing while the dashboard was offline
+- The badge next to a running stage's status only checked `selectedStage.status === 'running'` — it stayed on even when the WebSocket had dropped and the dashboard had no idea what the agent was actually doing.
+- **Fix:** the condition now also requires `connected` (already computed by `useEventFeed` for the header's `LINK`/`OFFLINE` badge).
+- Verified live: force-killed the dashboard's WebSocket while a stage was genuinely `running` (confirmed via a separate `/api/status` poll, independent of the browser) — the "thinking" badge disappeared immediately alongside the header flipping to `OFFLINE`, and reappeared the moment the connection came back, with the stage still `running` throughout — isolating the fix from a simple "stage finished" confound.
+
 ## 2026-07-28
 
 ### New: pulsing browser-tab favicon while a stage waits for you
