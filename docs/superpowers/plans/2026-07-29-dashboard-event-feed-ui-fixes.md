@@ -111,13 +111,18 @@ describe('Maximizable state preservation', () => {
 Run: `cd pkg/web/dashboard && npx vitest run src/components/layout/Maximizable.test.tsx`
 Expected: FAIL — the new test's second assertion (`clicks:1` after toggling) fails because `Counter` remounts and resets to `clicks:0`.
 
-- [ ] **Step 3: Rewrite `Maximizable` to always portal**
+- [ ] **Step 3: Rewrite `Maximizable` to never remount — no portal at all, just a CSS class toggle**
+
+An earlier version of this plan had `Maximizable` always call `createPortal`, switching only its `container` argument (anchor div ↔ `document.body`) between renders, reasoning that React would treat this as an in-place container update. **That premise was verified wrong**: a portal's `container` is part of its identity for React's reconciler — changing it between renders unmounts and remounts the portalled subtree just as much as switching between a Fragment and a Portal did. (Verified directly: a minimal repro with `createPortal(<Counter/>, containerA)` → rerender with `createPortal(<Counter/>, containerB)` loses `Counter`'s state in this project's actual vitest+jsdom+React 18.3.1 setup.)
+
+The simplest correct fix removes portals from `Maximizable` entirely: render `children` in ONE stable `<div>` that never leaves its original position in the tree (same as the rest of the app), and toggle a CSS class on that same div to switch between normal in-flow layout and a fullscreen `position: fixed` overlay. Since the div's type and tree position never change — only its `className` — React only ever diffs props, never unmounts. (Verified via the same kind of repro: a `Counter` inside this pattern keeps its count across the toggle.)
+
+This works safely in this codebase specifically because no ancestor between `Maximizable` and `document.body` establishes a CSS containing block or stacking context that would trap a `position: fixed` descendant: `react-resizable-panels`' `Panel`/`Group` set no `transform`/`filter`/`perspective`/`contain`/`will-change` and no `position` + non-`auto` `z-index` combination on their own root elements (checked directly in `node_modules/react-resizable-panels/dist/react-resizable-panels.js`), and the only such combination in this project's own CSS (`#stages-panel, #detail-panel, #feed-panel { position: relative; z-index: 1; }` in `layout.css`) targets IDs that are *descendants* of `Maximizable` (e.g. `<aside id="feed-panel">` inside `EventFeedPanel`), not ancestors — so they cannot trap the fixed overlay.
 
 Replace the full contents of `pkg/web/dashboard/src/components/layout/Maximizable.tsx`:
 
 ```tsx
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
 
 type MaximizeState = { maximizedKey: string | null; toggle: (key: string) => void }
 const MaximizeContext = createContext<MaximizeState>({ maximizedKey: null, toggle: () => {} })
@@ -142,53 +147,45 @@ export function useMaximize(): MaximizeState {
   return useContext(MaximizeContext)
 }
 
-// Максимизация через портал: ВСЕГДА порталим (никогда не переключаемся между
-// Fragment и Portal на одной и той же позиции дерева) — иначе React видит
-// смену типа узла и размонтирует детей при каждом toggle, теряя их состояние
-// (было: <>{children}</> ↔ createPortal(...), баг — стик-скролл ленты событий
-// и видимость кнопки «↓ latest» сбрасывались при maximize/restore).
-// anchor — постоянный DOM-узел на исходной позиции в дереве: пока не
-// maximized, портал целится в него (контент виден инлайн на своём месте);
-// maximized — портал целится в document.body. Смена только containerInfo
-// портала — React обновляет его на месте, не размонтируя детей.
+// Максимизация БЕЗ портала: один и тот же <div> всегда монтирован на своей
+// исходной позиции в дереве — meняется только className (просто CSS
+// position:fixed на maximize-overlay даёт полноэкранный вид, см. layout.css).
+// Раньше здесь был createPortal (сначала Fragment↔Portal, потом
+// anchor↔document.body) — в обоих случаях React видел смену идентичности
+// узла на этой позиции и размонтировал детей при каждом toggle, сбрасывая их
+// состояние (баг: стик-скролл ленты событий и видимость кнопки «↓ latest»
+// терялись при maximize/restore). Без портала контейнер вообще не меняется —
+// React только обновляет className, дети остаются смонтированными.
 export function Maximizable({ id, children }: { id: string; children: ReactNode }) {
   const { maximizedKey } = useMaximize()
   const maximized = maximizedKey === id
-  const [anchor, setAnchor] = useState<HTMLDivElement | null>(null)
 
   return (
-    <>
-      <div ref={setAnchor} className="maximizable-anchor" />
-      {anchor !== null &&
-        createPortal(
-          maximized ? (
-            <div className="maximize-overlay" role="dialog" aria-modal="true">
-              {children}
-            </div>
-          ) : (
-            <div className="maximizable-inline">{children}</div>
-          ),
-          maximized ? document.body : anchor,
-        )}
-    </>
+    <div
+      className={`maximizable-frame${maximized ? ' maximize-overlay' : ''}`}
+      role={maximized ? 'dialog' : undefined}
+      aria-modal={maximized ? true : undefined}
+    >
+      {children}
+    </div>
   )
 }
 ```
 
-- [ ] **Step 4: Add the layout CSS for the new stable wrapper elements**
+- [ ] **Step 4: Add the layout CSS for the new stable wrapper element**
 
-`.panel-frame` (and its ancestors `.detail-column`, `.panel-frame-body > *`) rely on `height: 100%` percentage chains. The always-present `.maximizable-anchor` and the non-maximized `.maximizable-inline` portal wrapper both sit between `Panel` and `.panel-frame` now, so both need to pass a definite height through, matching the existing pattern used by `.panel-frame-body > *`.
+`.panel-frame` (and its ancestors `.detail-column`, `.panel-frame-body > *`) rely on `height: 100%` percentage chains. The new `.maximizable-frame` wrapper div sits between `Panel` and `.panel-frame` now (where a zero-node `Fragment` used to sit), so it needs to pass a definite height through, matching the existing pattern used by `.panel-frame-body > *`.
 
 Add to **both** `pkg/web/dashboard/skins/base/layout.css` and `pkg/web/dashboard/public/skins/base/layout.css` (these two files are kept identical in this repo — edit both), right after the `.panel-frame-body > *` block:
 
 ```css
-/* Maximizable теперь всегда порталит: .maximizable-anchor — постоянный якорь
-   на исходной позиции в дереве (портал целится в него, пока не maximized),
-   .maximizable-inline — обёртка портала в inline-режиме. Обе должны
-   пробрасывать высоту 100% дальше вниз к .panel-frame, иначе scroll-контейнеры
-   внутри (event-feed-scroll и т.п.) схлопнутся. */
-.maximizable-anchor,
-.maximizable-inline {
+/* Maximizable больше не портал: .maximizable-frame — единственная обёртка,
+   всегда на своей исходной позиции в дереве. Не-maximized — обычный
+   flex-контейнер, пробрасывающий высоту 100% дальше вниз к .panel-frame
+   (иначе scroll-контейнеры внутри, напр. event-feed-scroll, схлопнутся).
+   maximized добавляет .maximize-overlay (см. ниже) — тот же элемент, тот же
+   DOM-узел, просто position:fixed вместо обычного потока. */
+.maximizable-frame {
   height: 100%;
   min-height: 0;
   flex: 1;
@@ -213,7 +210,7 @@ git add pkg/web/dashboard/src/components/layout/Maximizable.tsx \
         pkg/web/dashboard/skins/base/layout.css \
         pkg/web/dashboard/public/skins/base/layout.css
 git commit -m "$(cat <<'EOF'
-fix(dashboard): Maximizable всегда порталит — состояние переживает maximize/restore
+fix(dashboard): Maximizable больше не портал — состояние переживает maximize/restore
 EOF
 )"
 ```
