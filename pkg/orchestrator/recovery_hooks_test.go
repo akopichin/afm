@@ -92,3 +92,123 @@ func TestRecovery_ResumesHookFailed(t *testing.T) {
 	cancel()
 	<-runDone
 }
+
+// TestRecovery_ResumesPendingAfterHook mirrors
+// TestRecovery_ResumesHookFailed for the other crash-recovery gap: a stage
+// that has already reached `done` (script_after never touches the FSM —
+// hooks.go) but crashed while its after-hook was blocked on a retry/skip
+// decision. That pending decision is invisible via stage status (still
+// `done` before AND after the crash) — the only on-disk trace is
+// hook_pending.json (Hook == "after"), which recovery.go must scan for
+// regardless of status.
+func TestRecovery_ResumesPendingAfterHook(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+
+	stages := []flow.Stage{{
+		ID:          "notify",
+		Name:        "Notify",
+		Script:      "echo main-ok",
+		ScriptAfter: "exit 1",
+	}}
+
+	// First run: get the stage genuinely to done with a genuinely failed
+	// after-hook (same pattern as
+	// TestIntegration_ScriptAfter_FailsThenSkip_StageStaysDone), then crash
+	// it (cancel ctx) WITHOUT ever resolving the hook — hook_pending.json
+	// is left on disk, exactly as a real process kill would leave it.
+	store, err := state.Open(runDir, []string{"notify"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+
+	orch1 := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		RootDir: rootDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+	runDone1 := make(chan error, 1)
+	go func() { runDone1 <- orch1.Run(ctx1) }()
+
+	stateFile := filepath.Join(runDir, "state.json")
+	waitForStatus(t, stateFile, "notify", state.StatusDone, 20*time.Second)
+
+	stageDir := filepath.Join(runDir, "notify")
+	pendingPath := filepath.Join(stageDir, "hook_pending.json")
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pendingPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatal("expected hook_pending.json for the failed after-hook before simulating the crash")
+	}
+
+	// Simulate the crash: cancel without ever calling RetryHook/SkipHook, so
+	// the after-hook goroutine's wait is abandoned mid-flight and
+	// hook_pending.json is left behind, unresolved.
+	cancel1()
+	<-runDone1
+	store.Close()
+
+	// Reopen (simulating `afm run` restart) and re-run with a fresh Orchestrator.
+	store2, err := state.Open(runDir, []string{"notify"})
+	if err != nil {
+		t.Fatalf("state.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() { store2.Close() })
+
+	orch2 := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		RootDir: rootDir,
+		Stages:  stages,
+		Store:   store2,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel2()
+	runDone2 := make(chan error, 1)
+	go func() { runDone2 <- orch2.Run(ctx2) }()
+
+	// Status must stay done throughout resume (after-hooks never touch the FSM).
+	time.Sleep(500 * time.Millisecond)
+	if got := orchestrator.StoreFromOrch(orch2).Get("notify"); got != state.StatusDone {
+		t.Fatalf("status = %v, want done (after-hook resume must never touch the FSM)", got)
+	}
+
+	// SkipHook only succeeds if the recovery scan actually re-registered a
+	// waiter for this stage's pending after-hook — proving the resume path
+	// ran, not just that the code compiles unexercised.
+	if err := orch2.SkipHook("notify"); err != nil {
+		t.Fatalf("SkipHook: %v (recovery did not resume the pending after-hook wait)", err)
+	}
+
+	// The resumed wait must actually process the decision: hook_pending.json
+	// gets cleared once resolved (resumeAfterHookWait -> clearHookPending).
+	deadline = time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pendingPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(pendingPath); err == nil {
+		t.Error("expected hook_pending.json to be cleared after SkipHook resolved the resumed wait")
+	}
+
+	if got := orchestrator.StoreFromOrch(orch2).Get("notify"); got != state.StatusDone {
+		t.Errorf("status = %v, want done (still unaffected after resolving the resumed after-hook)", got)
+	}
+
+	cancel2()
+	<-runDone2
+}
