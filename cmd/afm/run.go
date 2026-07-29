@@ -261,6 +261,8 @@ func newRunCmd() *cobra.Command {
 					ApproveFn:           orch.Approve,
 					ReviseFn:            orch.Revise,
 					RetryFn:             orch.Retry,
+					RetryHookFn:         orch.RetryHook,
+					SkipHookFn:          orch.SkipHook,
 					AgentSuggestEnabled: cfg.Experimental.IsAgentSuggestEnabled(),
 					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
 						return orch.NotifyAnswer(stageID, phase, qID, answer, fromOptions)

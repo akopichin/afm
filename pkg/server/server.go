@@ -76,6 +76,8 @@ type Server struct {
 	approveFn           func(ctx context.Context, stageID string) error
 	reviseFn            func(ctx context.Context, stageID, feedback string) error
 	retryFn             func(ctx context.Context, stageID string) error
+	retryHookFn         func(stageID string) error
+	skipHookFn          func(stageID string) error
 	dialogAnswerFn      func(stageID, phase, qID, answer string, fromOptions bool) error
 	dialogCancelFn      func(stageID string) error
 	agentSuggestEnabled bool
@@ -103,6 +105,8 @@ type Config struct {
 	ApproveFn           func(ctx context.Context, stageID string) error
 	ReviseFn            func(ctx context.Context, stageID, feedback string) error
 	RetryFn             func(ctx context.Context, stageID string) error
+	RetryHookFn         func(stageID string) error
+	SkipHookFn          func(stageID string) error
 	DialogAnswerFn      func(stageID, phase, qID, answer string, fromOptions bool) error
 	DialogCancelFn      func(stageID string) error
 	AgentSuggestEnabled bool // gate for agent_suggest experimental feature (config.Experimental.IsAgentSuggestEnabled())
@@ -138,6 +142,8 @@ func New(cfg Config) *Server {
 		approveFn:           cfg.ApproveFn,
 		reviseFn:            cfg.ReviseFn,
 		retryFn:             cfg.RetryFn,
+		retryHookFn:         cfg.RetryHookFn,
+		skipHookFn:          cfg.SkipHookFn,
 		dialogAnswerFn:      cfg.DialogAnswerFn,
 		dialogCancelFn:      cfg.DialogCancelFn,
 		agentSuggestEnabled: cfg.AgentSuggestEnabled,
@@ -283,6 +289,10 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleRevise(w, r)
 	case strings.HasSuffix(path, "/retry") && r.Method == http.MethodPost:
 		s.handleRetry(w, r)
+	case strings.HasSuffix(path, "/retry-hook") && r.Method == http.MethodPost:
+		s.handleRetryHook(w, r)
+	case strings.HasSuffix(path, "/skip-hook") && r.Method == http.MethodPost:
+		s.handleSkipHook(w, r)
 	case strings.HasSuffix(path, "/dialog") && r.Method == http.MethodGet:
 		s.handleDialogGet(w, r)
 	case strings.HasSuffix(path, "/dialog/answer") && r.Method == http.MethodPost:

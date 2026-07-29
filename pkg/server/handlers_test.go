@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -285,6 +286,89 @@ func TestHandleRetryNotFailed(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for non-failed stage, got %d", w.Code)
+	}
+}
+
+func TestHandleRetryHook_Success(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	called := ""
+	srv.retryHookFn = func(stageID string) error {
+		called = stageID
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
+	w := httptest.NewRecorder()
+	srv.routeStages(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if called != testStageID {
+		t.Errorf("retryHookFn called with %q, want %q", called, testStageID)
+	}
+}
+
+func TestHandleSkipHook_Success(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	called := ""
+	srv.skipHookFn = func(stageID string) error {
+		called = stageID
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/skip-hook", nil)
+	w := httptest.NewRecorder()
+	srv.routeStages(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if called != testStageID {
+		t.Errorf("skipHookFn called with %q, want %q", called, testStageID)
+	}
+}
+
+func TestHandleRetryHook_FnReturnsError(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.retryHookFn = func(stageID string) error {
+		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
+	w := httptest.NewRecorder()
+	srv.routeStages(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSkipHook_FnReturnsError(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.skipHookFn = func(stageID string) error {
+		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/skip-hook", nil)
+	w := httptest.NewRecorder()
+	srv.routeStages(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleRetryHook_NotConfigured(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	// retryHookFn intentionally left nil.
+
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
+	w := httptest.NewRecorder()
+	srv.routeStages(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501, body = %s", w.Code, w.Body.String())
 	}
 }
 
