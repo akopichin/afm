@@ -257,15 +257,32 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 // maybeRunAfterHook fires the stage's script_after hook (if any) in a tracked
 // goroutine via spawnAgent, reusing its semaphore/agentWG bookkeeping — the
 // hook may block for an arbitrarily long time waiting on a user decision, so
-// it must never run inline in onAgentCompleted (an event-loop callback that
-// must return promptly). A no-op when the stage has no ScriptAfter: no
-// goroutine is spawned, so a stage without the hook behaves unchanged.
+// it must never run inline in its callers (onAgentCompleted/approveStage —
+// event-loop callbacks that must return promptly). A no-op when the stage
+// has no ScriptAfter: no goroutine is spawned, so a stage without the hook
+// behaves unchanged.
+//
+// pendingAfterHooks is incremented here (synchronously, before spawnAgent
+// returns to the caller — completeStage/approveStage, both running on Run()'s
+// own goroutine) and decremented from the wrapper below once runAfterHook
+// actually returns, so shouldExit() (scheduling.go) never observes a stage
+// as fully done while its after-hook is still in flight or awaiting a
+// RetryHook/SkipHook decision. Scoped to just this one spawn — see
+// spawnAgent's doc comment on why the general agent-spawn path doesn't carry
+// this bookkeeping too.
 func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 	stage := o.graph.Stage(stageID)
 	if stage == nil || stage.ScriptAfter == "" {
 		return
 	}
-	o.spawnAgent(ctx, *stage, o.runAfterHook)
+	o.pendingAfterHooks.Add(1)
+	o.spawnAgent(ctx, *stage, func(ctx context.Context, s flow.Stage) {
+		defer func() {
+			o.pendingAfterHooks.Add(-1)
+			o.wakeEventLoop()
+		}()
+		o.runAfterHook(ctx, s)
+	})
 }
 
 // withBeforeHook wraps a stage's fresh-activation run function with

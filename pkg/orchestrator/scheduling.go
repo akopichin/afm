@@ -357,16 +357,19 @@ func (o *Orchestrator) allTerminal() bool {
 // With a dashboard, exit only when all stages are done — failed stages stay
 // visible so the user can retry them without restarting the process.
 //
-// agentsInFlight guards a gap allTerminal() alone can't see: a stage's own
-// status can already be "done" while its script_after hook (spawned from
-// onAgentCompleted, right as that same status flips) is still running or
-// blocked waiting on a RetryHook/SkipHook decision — runAfterHook
-// deliberately never touches the FSM (see its doc comment), so the stage
-// stays "done" throughout. Without this check, Run() could cancel its ctx
-// (shutdown) in the very same instant the hook goroutine was spawned,
-// killing it before it ever gets to run.
+// pendingAfterHooks guards a gap allTerminal() alone can't see: a stage's
+// own status can already be "done" while its script_after hook (spawned
+// from onAgentCompleted/approveStage, right as that same status flips) is
+// still running or blocked waiting on a RetryHook/SkipHook decision —
+// runAfterHook deliberately never touches the FSM (see its doc comment), so
+// the stage stays "done" throughout. Without this check, Run() could cancel
+// its ctx (shutdown) in the very same instant the hook goroutine was
+// spawned, killing it before it ever gets to run. Scoped narrowly to
+// after-hooks only (not a general "any agent in flight" counter, see
+// spawnAgent's doc comment) — every other agent type already moves its
+// stage's FSM status, which allTerminal() below already accounts for.
 func (o *Orchestrator) shouldExit() bool {
-	if o.agentsInFlight.Load() > 0 {
+	if o.pendingAfterHooks.Load() > 0 {
 		return false
 	}
 	if !o.allTerminal() {

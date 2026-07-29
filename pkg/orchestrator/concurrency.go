@@ -43,13 +43,15 @@ func (o *Orchestrator) isAgentActive(stageID string) bool {
 // spawnAgent запускает агентскую горутину под семафором команды, помечает стадию
 // активной и учитывает горутину в WaitGroup. Единственная точка запуска —
 // заменяет ~10 копий одинакового boilerplate и гарантирует чистый shutdown.
+//
+// Намеренно НЕ трогает pendingAfterHooks — эта бухгалтерия нужна только
+// script_after (см. maybeRunAfterHook в hooks.go, которая сама оборачивает
+// run перед вызовом spawnAgent): все остальные вызовы spawnAgent уже двигают
+// FSM-статус своей стадии, на который и так смотрит allTerminal()/shouldExit();
+// добавлять сюда счётчик "для всех" расширило бы область изменения на каждый
+// тип агента без всякой пользы для них.
 func (o *Orchestrator) spawnAgent(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
 	o.agentWG.Add(1)
-	// Инкремент синхронный, ДО запуска горутины — чтобы shouldExit(),
-	// вызванный сразу после того, как этот вызов вернётся (см.
-	// onAgentCompleted → Run()), гарантированно увидел агента как
-	// "в полёте", без окна гонки (см. doc-комментарий agentsInFlight).
-	o.agentsInFlight.Add(1)
 	go func() {
 		defer o.agentWG.Done()
 		sem := o.semFor(s)
@@ -58,21 +60,19 @@ func (o *Orchestrator) spawnAgent(ctx context.Context, s flow.Stage, run func(co
 		defer func() {
 			o.markAgentDone(s.ID)
 			sem.release()
-			o.agentsInFlight.Add(-1)
-			o.wakeEventLoop()
 		}()
 		run(ctx, s)
 	}()
 }
 
-// wakeEventLoop будит select Run()'а после того, как агентская горутина
-// действительно завершилась (agentsInFlight уже декрементирован) — чтобы
-// shouldExit() гарантированно перепроверился со свежим значением счётчика,
-// даже если завершение этой конкретной горутины не породило собственного
-// EventAgentCompleted (случай script_after: runAfterHook никогда не трогает
-// FSM). Best-effort и неблокирующий: если буфер critical-шины полон, там уже
-// стоят другие события — их обработка и так вызовет свою перепроверку
-// shouldExit(), так что потеря этого толчка безвредна.
+// wakeEventLoop будит select Run()'а неблокирующей отправкой во внутреннее
+// событие — используется maybeRunAfterHook после того, как after-hook
+// горутина реально завершилась (pendingAfterHooks уже декрементирован), т.к.
+// script_after никогда не публикует EventAgentCompleted сама (не трогает
+// FSM), так что без явного толчка Run() мог бы простаивать в select,
+// не перепроверяя shouldExit(). Best-effort: если буфер critical-шины полон,
+// там уже стоят другие события — их обработка и так вызовет свою
+// перепроверку shouldExit(), так что потеря этого толчка безвредна.
 func (o *Orchestrator) wakeEventLoop() {
 	select {
 	case o.critical.ch <- Event{Type: eventAgentDrained}:

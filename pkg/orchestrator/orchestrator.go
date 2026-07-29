@@ -120,17 +120,20 @@ type Orchestrator struct {
 	// ещё пишущие в Store, переживают Run и рискуют использовать Store после Close.
 	agentWG sync.WaitGroup
 
-	// agentsInFlight — счётчик живых агентских горутин (инкремент синхронно в
-	// spawnAgent ДО запуска горутины, декремент в её деferred cleanup). Нужен
-	// specifically для shouldExit (scheduling.go): script_after — единственный
-	// вид агента, который НЕ трогает FSM своей стадии (см. runAfterHook), так
-	// что allTerminal() остаётся true, пока хук ещё реально выполняется или
-	// ждёт решения RetryHook/SkipHook — без этого счётчика Run() мог бы отменить
-	// свой ctx (shutdown) в тот же момент, когда стадия стала done, убив
-	// только что запущенный after-hook раньше, чем он успеет хоть раз
-	// стартовать. sync.WaitGroup не даёт прочитать текущий счётчик, поэтому
-	// используется отдельный atomic.
-	agentsInFlight atomic.Int32
+	// pendingAfterHooks — счётчик живых script_after горутин (инкремент
+	// синхронно в maybeRunAfterHook ДО spawnAgent, декремент из её же
+	// cleanup-обёртки, см. hooks.go). Нужен specifically для shouldExit
+	// (scheduling.go): script_after — единственный вид агента, который НЕ
+	// трогает FSM своей стадии (см. runAfterHook), так что allTerminal()
+	// остаётся true, пока хук ещё реально выполняется или ждёт решения
+	// RetryHook/SkipHook — без этого счётчика Run() мог бы отменить свой ctx
+	// (shutdown) в тот же момент, когда стадия стала done, убив только что
+	// запущенный after-hook раньше, чем он успеет хоть раз стартовать.
+	// Намеренно уже, чем общий agentWG/spawnAgent: остальные типы агентов уже
+	// двигают FSM-статус, на который и так смотрит allTerminal(), так что им
+	// эта бухгалтерия не нужна и не добавляется (см. spawnAgent). Обычный
+	// sync.WaitGroup не даёт прочитать текущий счётчик, поэтому отдельный atomic.
+	pendingAfterHooks atomic.Int32
 
 	// runMu/runCtx хранят долгоживущий контекст event loop (см. Run), который
 	// HTTP-инициированные Approve/Revise/Retry подставляют вместо request-ctx
