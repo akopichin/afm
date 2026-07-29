@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 )
 
 // hookMaxRetries/hookRetryBackoff — fixed retry policy for script_before/
@@ -97,6 +100,29 @@ func (o *Orchestrator) waitForHookDecision(ctx context.Context, stageID string) 
 	case <-ctx.Done():
 		return 0, false
 	}
+}
+
+// execScript runs a shell script for stage s in its project root_dir,
+// streaming output into logFile via progress.Logger and publishing one
+// EventScriptOutput per line so the dashboard event feed can show it live.
+// Deliberately bypasses runnerFor/executor.Runner: script stages need no
+// per-phase LLM command routing, only Dir/StageDir plumbing.
+func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, script string, timeout time.Duration, logFile string) error {
+	ex := executor.New(executor.Config{
+		Command:     "sh",
+		ExtraArgs:   []string{"-c", script},
+		IdleTimeout: 24 * time.Hour, // effectively disabled; timeout below is the real bound
+		Dir:         o.opts.RootDir,
+		StageDir:    filepath.Join(o.opts.RunDir, s.ID),
+		OnAction: func(_, line string) {
+			o.ui.Publish(Event{
+				Type:    EventScriptOutput,
+				StageID: s.ID,
+				Data:    map[string]string{"hook": hook, "line": line},
+			})
+		},
+	})
+	return ex.RunScript(ctx, timeout, logFile)
 }
 
 // resolveHook delivers a user decision to a stage currently blocked in

@@ -3,9 +3,13 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/akopichin/afm/pkg/flow"
 )
 
 func TestRunScriptWithRetry_SucceedsOnThirdAttempt(t *testing.T) {
@@ -120,3 +124,39 @@ func TestResolveHook_NoWaiterReturnsFalse(t *testing.T) {
 }
 
 var _ = filepath.Join // silence unused import if not otherwise used
+
+func TestExecScript_RunsInRootDirAndPublishesOutput(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ui := NewUIBus()
+	subID, events := ui.Subscribe(10)
+	defer ui.Unsubscribe(subID)
+
+	o := &Orchestrator{opts: Options{RootDir: rootDir, RunDir: runDir}, ui: ui}
+
+	s := flow.Stage{ID: "s1"}
+	logFile := filepath.Join(stageDir, "before.log")
+	err := o.execScript(context.Background(), s, "before", "pwd; echo output-line", 5*time.Second, logFile)
+	if err != nil {
+		t.Fatalf("execScript: %v", err)
+	}
+
+	data, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(data), rootDir) {
+		t.Errorf("script should have run in rootDir, log: %q", string(data))
+	}
+
+	select {
+	case ev := <-events:
+		if ev.Type != EventScriptOutput {
+			t.Errorf("event type = %v, want EventScriptOutput", ev.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected at least one EventScriptOutput to be published")
+	}
+}
