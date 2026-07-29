@@ -508,6 +508,7 @@ stages:
   - id: notify
     name: N
     description: d
+    plan: docs/plan.md
     script: |
       echo "hello"
     script_timeout: 45s

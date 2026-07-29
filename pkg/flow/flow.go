@@ -212,7 +212,7 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
-		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() && !s.IsScript() {
+		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() {
 			return fmt.Errorf("stage %q: must have planning agent or a plan path", s.ID)
 		}
 	}
