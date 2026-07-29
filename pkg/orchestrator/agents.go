@@ -16,6 +16,35 @@ import (
 const planningContract = `## Output Contract (mandatory)
 The plan MUST contain sections: "## Tasks", "## Assumptions", "## Acceptance Criteria".`
 
+// phaseScript identifies a script-stage's own log namespace (script.log),
+// distinct from the before/after hook logs.
+const phaseScript = "script"
+
+// runScriptStage executes a script-only stage (Stage.IsScript()): no plan.md,
+// no approval, no LLM agent — just Stage.Script via execScript, retried with
+// the same fixed 3x/1-2-3s policy as hooks (a script failure is just as
+// deterministic and fast as a hook failure).
+func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		return
+	}
+	logFile := filepath.Join(stageDir, phaseScript+".log")
+
+	err := runScriptWithRetry(ctx, func() error {
+		return o.execScript(ctx, s, phaseScript, s.Script, s.ScriptTimeout, logFile)
+	})
+	if err != nil {
+		o.Trigger(s.ID, EvFail, GuardCtx{}, err.Error())
+		o.failBlockedStages()
+		return
+	}
+
+	appendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phaseScript)
+	_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phaseScript})
+}
+
 const sectionAssumptions = "Assumptions"
 
 var requiredPlanSections = []string{"Tasks", sectionAssumptions, "Acceptance Criteria"}

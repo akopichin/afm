@@ -391,6 +391,18 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 		o.startPlanningForUnblocked(ctx)
 		o.startReadyStages(ctx)
 		o.tryActivatePrePlanned(ctx)
+	case phaseScript:
+		// Script-стадия завершилась (runScriptStage): нет revising-гонки
+		// (interruptChans не регистрируется вне runWithRetry, Revise() на
+		// script-стадию не осмыслен) — просто done, как остальные фазы.
+		if current != state.StatusRunning && current != state.StatusRetrying {
+			return nil
+		}
+		o.Trigger(ev.StageID, EvComplete, GuardCtx{}, "")
+		o.failBlockedStages()
+		o.startPlanningForUnblocked(ctx)
+		o.startReadyStages(ctx)
+		o.tryActivatePrePlanned(ctx)
 	default:
 		// review or unknown agent type: no status change needed
 	}

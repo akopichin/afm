@@ -38,6 +38,22 @@ func (o *Orchestrator) activateAutoStage(s flow.Stage) bool {
 	return true
 }
 
+// activateScriptStage activates a script-only stage (Stage.IsScript()) the
+// same way activateAutoStage activates an auto stage: no plan.md, straight
+// to Ready. Returns false (no-op) if s is not a script stage.
+func (o *Orchestrator) activateScriptStage(s flow.Stage) bool {
+	if !s.IsScript() {
+		return false
+	}
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		return true
+	}
+	o.Trigger(s.ID, EvReady, GuardCtx{}, "script stage")
+	return true
+}
+
 // tryActivatePrePlanned checks all pre-planned stages (those with Plan != "")
 // and activates any whose dependencies are now done but status is still pending.
 func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
@@ -57,6 +73,9 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 		}
 
 		if o.activateAutoStage(s) {
+			continue
+		}
+		if o.activateScriptStage(s) {
 			continue
 		}
 
@@ -130,14 +149,18 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		// перед спавном, чтобы isAutonomousStage (используется dialog-поллером,
 		// resolvePlanSource и т.д.) видел стадию как автономную с самого начала.
 		stageDir := filepath.Join(o.opts.RunDir, id)
+		if stage.IsScript() {
+			o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
+			continue
+		}
 		if isAutonomousStage(stageDir) || stage.IsAuto() {
 			if stage.IsAuto() {
 				_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 			}
-			o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+			o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
 			continue
 		}
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 	}
 }
 
@@ -209,7 +232,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -241,7 +264,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -254,7 +277,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 	} else {
 		// Deps not done — stay pending; planning starts automatically
 		// via startPlanningForUnblocked once dependencies complete.

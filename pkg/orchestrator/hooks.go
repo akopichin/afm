@@ -254,6 +254,28 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	}
 }
 
+// withBeforeHook wraps a stage's fresh-activation run function with
+// script_before: if the stage has no ScriptBefore, mainFn runs unchanged. If
+// the hook fails and is blocked in hook_failed, ctx cancellation during the
+// wait (full shutdown) skips mainFn entirely — the stage resumes via
+// recovery.go on the next `afm run`.
+//
+// Used only at genuine "fresh activation" spawn sites (startReadyStages,
+// retryStage's non-planning branches, recovery.go's startPlanningForPending)
+// — NOT at resumeInteractiveAgent (already past its before-hook) or at
+// Revise/onUserAnswered/onAgentCompleted's revising branch (mid-flight
+// continuations of an already-hooked run).
+func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) func(context.Context, flow.Stage) {
+	return func(ctx context.Context, s flow.Stage) {
+		if s.ScriptBefore != "" {
+			if !o.runBeforeHook(ctx, s) {
+				return
+			}
+		}
+		mainFn(ctx, s)
+	}
+}
+
 func resolutionName(d hookDecision) string {
 	if d == hookDecisionSkip {
 		return "skipped"
