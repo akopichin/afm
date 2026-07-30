@@ -46,37 +46,46 @@ CODEX_SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
 codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox -s "$CODEX_SANDBOX")
 [[ -n "$CODEX_MODEL" ]] && codex_args+=(-m "$CODEX_MODEL")
 
-# run codex with JSON output, translate events to claude stream-json format.
-# only agent messages are emitted by default — command executions and file
+# run codex with JSON output, accumulate agent messages, emit one assistant event.
+# only agent messages are accumulated by default — command executions and file
 # reads produce excessive noise; set CODEX_VERBOSE=1 to include them.
 #
-# event mapping:
-#   item.completed + agent_message     -> content_block_delta (text_delta)
-#   item.completed + command_execution -> skipped (or included if CODEX_VERBOSE=1)
-#   item.completed + reasoning         -> skipped
-#   turn.completed                     -> result (end of execution)
-#   everything else                    -> skipped
+# event flow:
+#   Parse all item.completed events and accumulate:
+#     + agent_message        -> accumulate text
+#     + command_execution    -> accumulate if CODEX_VERBOSE=1
+#     + other types          -> skip
+#   When all events are processed, emit one aggregated "assistant" event
+#   (matches openai-as-claude.sh / cursor-as-claude.sh pattern;
+#   pkg/executor/executor.go parseStreamEvent only accepts "assistant"-typed events).
 CODEX_VERBOSE="${CODEX_VERBOSE:-0}"
 if [[ "$CODEX_VERBOSE" != "0" && "$CODEX_VERBOSE" != "1" ]]; then
     echo "warning: CODEX_VERBOSE must be 0 or 1, got '$CODEX_VERBOSE', defaulting to 0" >&2
     CODEX_VERBOSE=0
 fi
 
-printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" 2>/dev/null | while IFS= read -r line; do
-    echo "$line" | jq -c --argjson verbose "$CODEX_VERBOSE" '
-        if .type == "item.completed" then
-            if .item.type == "agent_message" then
-                {type: "content_block_delta", delta: {type: "text_delta", text: (.item.text + "\n")}}
-            elif .item.type == "command_execution" and $verbose == 1 then
-                {type: "content_block_delta", delta: {type: "text_delta",
-                    text: ("$ " + .item.command + "\n" + (.item.aggregated_output // "") + "\n")}}
-            else empty
-            end
-        elif .type == "turn.completed" then
-            {type: "result", result: ""}
-        else empty
-        end
-    ' 2>/dev/null || true
-done || true
+final_text=""
+while IFS= read -r line; do
+    ev_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
+    [[ "$ev_type" == "item.completed" ]] || continue
+    item_type=$(printf '%s' "$line" | jq -r '.item.type // empty' 2>/dev/null) || continue
+    case "$item_type" in
+        agent_message)
+            text=$(printf '%s' "$line" | jq -r '.item.text // empty' 2>/dev/null) || continue
+            final_text="${final_text}${text}"$'\n'
+            ;;
+        command_execution)
+            if [[ "$CODEX_VERBOSE" == "1" ]]; then
+                cmd=$(printf '%s' "$line" | jq -r '.item.command // empty' 2>/dev/null) || continue
+                out=$(printf '%s' "$line" | jq -r '.item.aggregated_output // empty' 2>/dev/null) || continue
+                final_text="${final_text}\$ ${cmd}"$'\n'"${out}"$'\n'
+            fi
+            ;;
+    esac
+done < <(printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" 2>/dev/null)
 
-echo '{"type":"result","result":""}'
+# assistant-конверт: агрегированный текст всего ответа (matches openai-as-claude.sh /
+# cursor-as-claude.sh pattern — afm's executor only accepts "assistant"-typed events,
+# see pkg/executor/executor.go parseStreamEvent).
+jq -nc --arg t "$final_text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+echo '{"type":"result","subtype":"success"}'
