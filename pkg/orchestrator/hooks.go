@@ -42,11 +42,17 @@ func runScriptWithRetry(ctx context.Context, fn func() error) error {
 	return lastErr
 }
 
+// hookBefore/hookAfter — the two valid hookPending.Hook values.
+const (
+	hookBefore = "before"
+	hookAfter  = "after"
+)
+
 // hookPending records which hook is currently blocked on a user decision, so
 // a crash mid-wait can be resumed (recovery.go) without losing which
 // script/timeout to re-run.
 type hookPending struct {
-	Hook    string        `json:"hook"` // "before" or "after"
+	Hook    string        `json:"hook"` // hookBefore or hookAfter
 	Script  string        `json:"script"`
 	Timeout time.Duration `json:"timeout"`
 }
@@ -133,11 +139,15 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 		Dir:         o.opts.RootDir,
 		StageDir:    filepath.Join(o.opts.RunDir, s.ID),
 		OnAction: func(_, line string) {
-			o.ui.Publish(Event{
-				Type:    EventScriptOutput,
-				StageID: s.ID,
-				Data:    map[string]string{"hook": hook, "line": line},
-			})
+			data := map[string]string{"hook": hook, "line": line}
+			o.ui.Publish(Event{Type: EventScriptOutput, StageID: s.ID, Data: data})
+			// appendNotice — тот же механизм, которым EventAgentCompleted/
+			// EventContextWarning уже становятся durable+реплеиваемыми через
+			// /api/events (см. notices.go, reconstructNotices). Без этого
+			// клиент, подключившийся ПОСЛЕ завершения быстрого script/hook
+			// (обычно <1с), никогда не увидит его вывод в ленте событий —
+			// EventScriptOutput publish в o.ui эфемерен и не реплеится.
+			appendNotice(o.opts.RunDir, s.ID, string(EventScriptOutput), data)
 		},
 	})
 	return ex.RunScript(ctx, timeout, logFile)
@@ -160,7 +170,7 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 
 	for {
 		err := runScriptWithRetry(ctx, func() error {
-			return o.execScript(ctx, s, "before", s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
+			return o.execScript(ctx, s, hookBefore, s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
 		})
 		if err == nil {
 			return true
@@ -172,12 +182,12 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		// listening (see registerHookWaiter's doc comment).
 		waitCh := o.registerHookWaiter(s.ID)
 
-		_ = writeHookPending(stageDir, hookPending{Hook: "before", Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
+		_ = writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
 		_, seq, _ := o.triggerWithSeq(s.ID, EvHookFailed, GuardCtx{}, err.Error())
 		_ = o.critical.Publish(ctx, Event{
 			Type:    EventHookFailed,
 			StageID: s.ID,
-			Data:    map[string]string{"hook": "before", "error": err.Error()},
+			Data:    map[string]string{"hook": hookBefore, "error": err.Error()},
 			Seq:     seq,
 		})
 
@@ -190,7 +200,7 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		o.ui.Publish(Event{
 			Type:    EventHookResolved,
 			StageID: s.ID,
-			Data:    map[string]string{"hook": "before", "resolution": resolutionName(decision)},
+			Data:    map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)},
 			Seq:     seq,
 		})
 		if decision == hookDecisionSkip {
@@ -217,7 +227,7 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 
 	for {
 		err := runScriptWithRetry(ctx, func() error {
-			return o.execScript(ctx, s, "after", s.ScriptAfter, s.ScriptAfterTimeout, logFile)
+			return o.execScript(ctx, s, hookAfter, s.ScriptAfter, s.ScriptAfterTimeout, logFile)
 		})
 		if err == nil {
 			return
@@ -230,11 +240,11 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 		// listening and silently lose the decision.
 		waitCh := o.registerHookWaiter(s.ID)
 
-		_ = writeHookPending(stageDir, hookPending{Hook: "after", Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout})
+		_ = writeHookPending(stageDir, hookPending{Hook: hookAfter, Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout})
 		o.ui.Publish(Event{
 			Type:    EventHookFailed,
 			StageID: s.ID,
-			Data:    map[string]string{"hook": "after", "error": err.Error()},
+			Data:    map[string]string{"hook": hookAfter, "error": err.Error()},
 		})
 
 		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
@@ -245,7 +255,7 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 		o.ui.Publish(Event{
 			Type:    EventHookResolved,
 			StageID: s.ID,
-			Data:    map[string]string{"hook": "after", "resolution": resolutionName(decision)},
+			Data:    map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)},
 		})
 		if decision == hookDecisionSkip {
 			return
@@ -316,7 +326,7 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	pending, ok := readHookPending(stageDir)
-	if !ok || pending.Hook != "before" {
+	if !ok || pending.Hook != hookBefore {
 		// Nothing to resume from disk; fail safe rather than guessing.
 		o.Trigger(s.ID, EvFail, GuardCtx{}, "hook_failed with no pending hook on disk")
 		return
@@ -332,7 +342,7 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	o.ui.Publish(Event{
 		Type:    EventHookResolved,
 		StageID: s.ID,
-		Data:    map[string]string{"hook": "before", "resolution": resolutionName(decision)},
+		Data:    map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)},
 		Seq:     seq,
 	})
 	if decision == hookDecisionSkip {
@@ -388,7 +398,7 @@ func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
 	o.ui.Publish(Event{
 		Type:    EventHookResolved,
 		StageID: s.ID,
-		Data:    map[string]string{"hook": "after", "resolution": resolutionName(decision)},
+		Data:    map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)},
 	})
 	if decision == hookDecisionSkip {
 		return

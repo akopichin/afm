@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -159,6 +160,63 @@ func TestExecScript_RunsInRootDirAndPublishesOutput(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected at least one EventScriptOutput to be published")
+	}
+}
+
+// TestExecScript_PersistsOutputToNotices verifies script/hook output survives
+// a client reconnecting after the script already finished: EventScriptOutput
+// must be durably recorded (via appendNotice, the same mechanism
+// EventAgentCompleted/EventContextWarning already use) in <runDir>/notices.jsonl,
+// not just published live to the ephemeral UI bus — otherwise a dashboard that
+// connects after a fast script/hook completes never sees its output in the
+// event feed (only the Log panel, which reads the log file directly).
+func TestExecScript_PersistsOutputToNotices(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ui := NewUIBus()
+	o := &Orchestrator{opts: Options{RootDir: rootDir, RunDir: runDir}, ui: ui}
+
+	s := flow.Stage{ID: "s1"}
+	logFile := filepath.Join(stageDir, "before.log")
+	err := o.execScript(context.Background(), s, "before", "echo first-line; echo second-line", 5*time.Second, logFile)
+	if err != nil {
+		t.Fatalf("execScript: %v", err)
+	}
+
+	noticesData, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		t.Fatalf("read notices.jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(noticesData)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 notice lines (one per output line), got %d: %q", len(lines), string(noticesData))
+	}
+
+	type scriptOutputData struct {
+		Hook string `json:"hook"`
+		Line string `json:"line"`
+	}
+	var entry struct {
+		Type    string           `json:"type"`
+		StageID string           `json:"stage_id"`
+		Data    scriptOutputData `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("unmarshal notice: %v", err)
+	}
+	if entry.Type != string(EventScriptOutput) {
+		t.Errorf("notice type = %q, want %q", entry.Type, EventScriptOutput)
+	}
+	if entry.StageID != "s1" {
+		t.Errorf("notice stage_id = %q, want s1", entry.StageID)
+	}
+	if entry.Data.Hook != "before" || entry.Data.Line != "first-line" {
+		t.Errorf("notice data = %+v, want hook=before line=first-line", entry.Data)
 	}
 }
 
