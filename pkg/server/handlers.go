@@ -76,14 +76,24 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	stageDir := filepath.Join(s.runDir, stageID)
 
 	var logContent string
-	for _, p := range flow.Phases() {
-		for _, name := range flow.PhaseLogFiles(p) {
-			data, err := os.ReadFile(filepath.Join(stageDir, name))
-			if err == nil {
-				logContent += string(data)
-			}
+	appendLog := func(name string) {
+		data, err := os.ReadFile(filepath.Join(stageDir, name))
+		if err == nil {
+			logContent += string(data)
 		}
 	}
+	// before.log/script.log/after.log — логи script_before/script-стадий/
+	// script_after хуков (см. pkg/orchestrator/hooks.go, agents.go). Стадии
+	// без хуков их просто не пишут — appendLog молча пропускает отсутствующие
+	// файлы, как и обычные phase-логи ниже.
+	appendLog("before.log")
+	for _, p := range flow.Phases() {
+		for _, name := range flow.PhaseLogFiles(p) {
+			appendLog(name)
+		}
+	}
+	appendLog("script.log")
+	appendLog("after.log")
 	if logContent == "" {
 		http.Error(w, "no logs found", http.StatusNotFound)
 		return

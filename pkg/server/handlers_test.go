@@ -221,6 +221,42 @@ func TestHandleLog_IncludesFeedbackVariantPhases(t *testing.T) {
 	}
 }
 
+// TestHandleLog_ConcatenatesHookLogs проверяет, что /log отдаёт логи
+// script_before/script_after хуков вместе с основным логом стадии, в порядке
+// before → main → after (before.log пишется до planning.log, after.log —
+// после; порядок проверяется по позиции содержимого в теле ответа).
+func TestHandleLog_ConcatenatesHookLogs(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+	stageDir := filepath.Join(runDir, testStageID)
+	if err := os.WriteFile(filepath.Join(stageDir, "before.log"), []byte("BEFORE-CONTENT\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "script.log"), []byte("SCRIPT-CONTENT\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "after.log"), []byte("AFTER-CONTENT\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stages/"+testStageID+"/log", nil)
+	w := httptest.NewRecorder()
+	srv.routeStages(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	beforeIdx := strings.Index(body, "BEFORE-CONTENT")
+	scriptIdx := strings.Index(body, "SCRIPT-CONTENT")
+	afterIdx := strings.Index(body, "AFTER-CONTENT")
+	if beforeIdx == -1 || scriptIdx == -1 || afterIdx == -1 {
+		t.Fatalf("log body missing hook content: %q", body)
+	}
+	if beforeIdx >= scriptIdx || scriptIdx >= afterIdx {
+		t.Errorf("expected order before < script < after, got positions %d, %d, %d", beforeIdx, scriptIdx, afterIdx)
+	}
+}
+
 func TestHandleApprove(t *testing.T) {
 	approved := ""
 	srv, _ := setupTestServer(t)
