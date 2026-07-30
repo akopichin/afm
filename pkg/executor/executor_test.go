@@ -779,6 +779,14 @@ func TestRunScript_Success(t *testing.T) {
 	if !strings.Contains(content, "hello-script") {
 		t.Errorf("log missing script output: %q", content)
 	}
+	// Тип строки должен быть "text" (не "stdout"), иначе use-stage-log.ts's
+	// TEXT_LINE_PATTERN на дашборде не подхватит вывод скрипта в Log panel.
+	if !strings.Contains(content, "text") {
+		t.Errorf("log line type should be %q for dashboard LogPanel visibility, got: %q", "text", content)
+	}
+	if strings.Contains(content, "stdout") {
+		t.Errorf("log line type should not be %q (dashboard LogPanel won't match it): %q", "stdout", content)
+	}
 	if !strings.Contains(content, "completed") {
 		t.Errorf("log missing completion banner: %q", content)
 	}

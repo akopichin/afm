@@ -441,7 +441,10 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 	}
 
 	runErr := e.run(runCtx, "", "script", stderr, func(line string) {
-		lg.LogAction("stdout", line)
+		// "text" (не "stdout") — тип строки, который use-stage-log.ts's
+		// TEXT_LINE_PATTERN на дашборде распознаёт как отображаемый в Log
+		// panel; тот же тип, что и обычный текстовый вывод агента.
+		lg.LogAction("text", line)
 		if e.cfg.OnAction != nil {
 			e.cfg.OnAction("stdout", line)
 		}
