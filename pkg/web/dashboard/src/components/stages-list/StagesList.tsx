@@ -11,20 +11,19 @@ type StagesListProps = {
   stages: Stage[]
   selectedStageId: string | null
   onSelect: (stageId: string) => void
-  agentSuggestEnabled: boolean
   onAddNote?: (stageId: string) => void // вызывается при клике на пункт меню
 }
 
-// Статусы, при которых у стадии доступен кебаб (agent_suggest): агент ещё
-// выполняется (running) или ждёт одобрения плана (awaiting_approval) — оба
-// случая, когда POST /api/stages/{id}/revise принимает поправку (см. Task 7).
+// Статусы, при которых у стадии доступен кебаб (добавить заметку агенту):
+// агент ещё выполняется (running) или ждёт одобрения плана (awaiting_approval) —
+// оба случая, когда POST /api/stages/{id}/revise принимает поправку.
 const KEBAB_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, agentSuggestEnabled, onAddNote }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onAddNote }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -132,7 +131,7 @@ export function StagesList({ stages, selectedStageId, onSelect, agentSuggestEnab
             </span>
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
-            {agentSuggestEnabled && KEBAB_STATUSES.has(stage.status) && (
+            {KEBAB_STATUSES.has(stage.status) && (
               <span className="stage-kebab-wrap">
                 <button
                   type="button"

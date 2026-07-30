@@ -26,7 +26,7 @@ import type { Stage } from '../types'
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, agentSuggestEnabled, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, refresh } = useStatus()
 
   // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
   // (agent_suggest, Task 8); null — модалка скрыта.
@@ -191,7 +191,6 @@ export function App(): ReactElement {
                 stages={stages}
                 selectedStageId={selectedStageId}
                 onSelect={setSelectedStageId}
-                agentSuggestEnabled={agentSuggestEnabled}
                 onAddNote={setNoteModalStageId}
               />
             }

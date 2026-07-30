@@ -313,7 +313,6 @@ describe('App', () => {
             stage_order: ['s1'],
             stage_names: { s1: 'Propose' },
             stages: { s1: { status: 'running', updated_at: '' } },
-            agent_suggest_enabled: true,
           }),
         } as Response
       }

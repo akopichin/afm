@@ -11,7 +11,7 @@ describe('StagesList', () => {
     ]
     const onSelect = vi.fn()
 
-    render(<StagesList stages={stages} selectedStageId="s2" onSelect={onSelect} agentSuggestEnabled={false} />)
+    render(<StagesList stages={stages} selectedStageId="s2" onSelect={onSelect} />)
 
     const items = screen.getAllByRole('listitem')
     expect(items[0]).not.toHaveClass('active')
@@ -26,7 +26,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Propose', status: 'awaiting_user_input', updatedAt: '', interactive: false, autonomous: false },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} agentSuggestEnabled={false} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
 
     const item = screen.getByRole('listitem')
     expect(item).toHaveAttribute('data-attention', 'true')
@@ -38,7 +38,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} agentSuggestEnabled={false} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
 
     const item = screen.getByRole('listitem')
     expect(item).toHaveAttribute('data-attention', 'true')
@@ -51,7 +51,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Run', status: 'running', updatedAt: '', interactive: false, autonomous: false },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} agentSuggestEnabled={false} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
 
     const item = screen.getByRole('listitem')
     expect(item).not.toHaveAttribute('data-attention', 'true')
@@ -62,31 +62,26 @@ describe('StagesList', () => {
       { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} agentSuggestEnabled={false} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
 
     expect(screen.getByRole('listitem').querySelector('.stage-name')).not.toBeInTheDocument()
   })
 
-  test('shows the kebab menu only when agentSuggestEnabled and status is running or awaiting_approval', () => {
+  test('shows the kebab menu only when status is running or awaiting_approval', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
       { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false },
       { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false },
     ]
-    const { rerender } = render(
-      <StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />,
-    )
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
     expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(2) // a и c, не b
-
-    rerender(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={false} />)
-    expect(screen.queryAllByRole('button', { name: /more actions/i })).toHaveLength(0)
   })
 
   test('CRITICAL: kebab menu portals to document.body so the scrollable #stages-panel cannot clip it', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
 
@@ -103,7 +98,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
@@ -116,7 +111,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={true} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
@@ -129,11 +124,11 @@ describe('StagesList', () => {
     const base: Stage[] = [
       { id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false },
     ]
-    const { container, rerender } = render(<StagesList stages={base} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={false} />)
+    const { container, rerender } = render(<StagesList stages={base} selectedStageId={null} onSelect={() => {}} />)
     expect(container.querySelector('.stage-item.just-done')).toBeNull()
 
     const done: Stage[] = [{ ...base[0]!, status: 'done' }]
-    rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={false} />)
+    rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />)
     expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
   })
 
@@ -141,12 +136,12 @@ describe('StagesList', () => {
     vi.useFakeTimers()
     try {
       const running: Stage[] = [{ id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false }]
-      const { container, rerender } = render(<StagesList stages={running} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={false} />)
+      const { container, rerender } = render(<StagesList stages={running} selectedStageId={null} onSelect={() => {}} />)
       const done: Stage[] = [{ ...running[0]!, status: 'done' }]
-      act(() => { rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={false} />) })
+      act(() => { rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />) })
       expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
       // промежуточное обновление stages (новый массив, без нового перехода) через 300мс
-      act(() => { vi.advanceTimersByTime(300); rerender(<StagesList stages={[{ ...done[0]! }]} selectedStageId={null} onSelect={() => {}} agentSuggestEnabled={false} />) })
+      act(() => { vi.advanceTimersByTime(300); rerender(<StagesList stages={[{ ...done[0]! }]} selectedStageId={null} onSelect={() => {}} />) })
       // к 700мс от перехода класс должен уйти
       act(() => { vi.advanceTimersByTime(500) })
       expect(container.querySelector('.stage-item.just-done')).toBeNull()
