@@ -55,6 +55,10 @@ ENV PATH="/usr/local/go/bin:$PATH"
 # claude CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# codex CLI (нативный бинарник — не портируется в контейнер простым mount с
+# хоста, поэтому ставим его так же, как claude, npm-пакетом внутри образа)
+RUN npm install -g @openai/codex
+
 # afm binary
 COPY --from=builder /afm /usr/local/bin/afm
 
@@ -72,6 +76,10 @@ RUN chmod +x /usr/local/bin/openai-as-claude
 # cursor-as-claude: адаптер Cursor Cloud Agents API (асинхронный run-based → claude stream-json)
 COPY scripts/cursor-as-claude.sh /usr/local/bin/cursor-as-claude
 RUN chmod +x /usr/local/bin/cursor-as-claude
+
+# codex-as-claude: адаптер codex JSONL (`codex exec --json`) → claude stream-json
+COPY scripts/codex-as-claude.sh /usr/local/bin/codex-as-claude
+RUN chmod +x /usr/local/bin/codex-as-claude
 
 WORKDIR /project
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

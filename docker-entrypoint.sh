@@ -17,6 +17,18 @@ set -e
 mkdir -p /home/afm
 chown "$AFM_HOST_UID:$AFM_HOST_GID" /home/afm
 
+# Codex OAuth-состояние (~/.codex): смонтировано read-only в /tmp/host-codex
+# (см. pkg/docker/launcher.go ReExec — MountCodexState), здесь копируется
+# (не bind-mount) в $HOME/.codex — codex может обновлять auth.json (refresh
+# token) внутри контейнера, не задевая хостовый ~/.codex. Контейнер эфемерный
+# (--rm), копия исчезает вместе с ним. Копируем и chown'им ДО gosu — после
+# сброса привилегий процесс уже не root и не сможет chown'ить.
+if [ -d /tmp/host-codex ]; then
+  mkdir -p /home/afm/.codex
+  cp -a /tmp/host-codex/. /home/afm/.codex/
+  chown -R "$AFM_HOST_UID:$AFM_HOST_GID" /home/afm/.codex
+fi
+
 # gosu сбрасывает HOME по /etc/passwd; для uid без записи там он ставит HOME=/.
 # Поэтому HOME задаём явно ПОСЛЕ gosu (через env) — иначе afm и его субпроцессы
 # (агенты) видят HOME=/ и не находят ~/файлы (токены ~/.ai-free, конфиг ~/.claude).
