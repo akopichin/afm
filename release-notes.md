@@ -4,6 +4,20 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ## 2026-07-30
 
+### New: `auto_approve` stage flag — skip the human approval checkpoint for CI
+
+- Set `auto_approve: true` on a stage to approve its plan automatically the instant it's ready — no dashboard click, no wait. Wins regardless of whether a dashboard is attached and regardless of `--require-approval` (which would otherwise fail a headless run with no dashboard) — built for CI flows where some stages need human review and others don't.
+- Wired into all three places a stage's plan can become ready: the normal post-planning path, and both crash-recovery paths (a stage resuming mid-`Retrying`/mid-`planning` with `plan.md` already on disk) — previously headless auto-approve only existed on the first of these.
+- Dashboard shows the plan with an "Auto-approved" badge in place of the Approve/Revise buttons, rather than the buttons flashing briefly before disappearing.
+- **A real regression caught only by the final whole-branch review, not the per-task ones:** the frontend badge commit accidentally shipped a deletion of an unrelated CSS rule (the `hook_failed` status-badge color) — traced to a separate, pre-existing bug in `vite.config.ts` (its `publicDir` silently overwrites `skins/*.css` from a stale copy on every build) that had been reverting local CSS edits in the working tree unnoticed. Fixed in a follow-up commit; the underlying vite config bug itself is still open.
+- Verified live: built the real binary, ran a real `afm run` with a dashboard, and drove it in an actual browser — one stage with `auto_approve: true` reached `done` with the badge and zero clicks, a sibling stage without the flag sat at `awaiting_approval` until manually approved, then completed normally too.
+- Spec/plan: `docs/superpowers/specs/2026-07-30-auto-approve-and-agent-suggest-removal-design.md`, `docs/superpowers/plans/2026-07-30-auto-approve-and-agent-suggest-removal.md`.
+
+### Fix: `agent_suggest` experimental flag removed — the feature it gated is unconditional now
+
+- The `experimental.agent_suggest` config flag / `AFM_EXP_AGENT_SUGGEST` env var (added 2026-07-27) is gone. Redirecting an actively `running` stage via the dashboard's kebab (⋮) menu or `POST /api/stages/{id}/revise` is now always available — no config needed.
+- `/api/status` no longer returns `agent_suggest_enabled`; the frontend's kebab menu render condition is now just the stage's own status (`running`/`awaiting_approval`).
+
 ### New: `script` stages and `script_before`/`script_after` hooks — shell steps without an LLM agent
 
 - A stage can now run a plain shell script instead of an AI agent (`script: |`) — for glue steps like notifications, deploy commands, or a linter run that don't need an LLM. It skips planning/approval entirely: as soon as its dependencies are done, the script runs and the stage moves straight to `done`/`failed` on exit code.
