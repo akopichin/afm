@@ -225,34 +225,16 @@ type SupervisorConfig struct {
 	Command string `yaml:"command"`
 }
 
-// ExperimentalConfig настраивает фичи под флагом, ещё не готовые для дефолтного
-// включения. agent_suggest — вброс фразы-поправки агенту на активной стадии
-// (не только awaiting_approval, как у обычного Revise) — см.
-// docs/superpowers/specs/2026-07-27-agent-suggest-design.md.
-type ExperimentalConfig struct {
-	AgentSuggest *bool `yaml:"agent_suggest"` // nil = смотрим AFM_EXP_AGENT_SUGGEST
-}
-
-// IsAgentSuggestEnabled reports whether the agent_suggest experimental
-// feature is enabled — explicit config value takes priority over the env var.
-func (e ExperimentalConfig) IsAgentSuggestEnabled() bool {
-	if e.AgentSuggest != nil {
-		return *e.AgentSuggest
-	}
-	return envFlag("AFM_EXP_AGENT_SUGGEST")
-}
-
 // Config is the merged configuration for afm.
 type Config struct {
-	Client       ClientConfig       `yaml:"client"`
-	Executor     ExecutorConfig     `yaml:"executor"`
-	Server       ServerConfig       `yaml:"server"`
-	Docker       DockerConfig       `yaml:"docker"`
-	Supervisor   SupervisorConfig   `yaml:"supervisor"`
-	Experimental ExperimentalConfig `yaml:"experimental"`
-	PromptsDir   string             `yaml:"prompts_dir"`
-	Theme        string             `yaml:"theme"`
-	SkinDir      string             `yaml:"skin_dir"`
+	Client     ClientConfig     `yaml:"client"`
+	Executor   ExecutorConfig   `yaml:"executor"`
+	Server     ServerConfig     `yaml:"server"`
+	Docker     DockerConfig     `yaml:"docker"`
+	Supervisor SupervisorConfig `yaml:"supervisor"`
+	PromptsDir string           `yaml:"prompts_dir"`
+	Theme      string           `yaml:"theme"`
+	SkinDir    string           `yaml:"skin_dir"`
 }
 
 // Default returns the built-in default configuration.
@@ -373,9 +355,6 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Supervisor.Command != "" {
 		dst.Supervisor.Command = overlay.Supervisor.Command
-	}
-	if overlay.Experimental.AgentSuggest != nil {
-		dst.Experimental.AgentSuggest = overlay.Experimental.AgentSuggest
 	}
 	return nil
 }

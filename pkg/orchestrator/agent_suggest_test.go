@@ -115,8 +115,6 @@ func TestAgentSuggest_InterruptRestartsWithFeedback(t *testing.T) {
 
 	runner := &blockingThenFeedbackRunner{stageID: "impl"}
 	cfg := config.Default()
-	trueVal := true
-	cfg.Experimental.AgentSuggest = &trueVal
 
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir:  runDir,

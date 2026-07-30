@@ -252,20 +252,19 @@ func newRunCmd() *cobra.Command {
 					stageInteractive[st.ID] = st.Interactive
 				}
 				srv := server.New(server.Config{
-					Port:                cfg.Server.GetPort(),
-					RunDir:              runDir,
-					Description:         f.Description,
-					StageInteractive:    stageInteractive,
-					Store:               store,
-					Theme:               cfg.EffectiveTheme(),
-					SkinDir:             cfg.SkinDir,
-					UIBus:               orch.UIBus(),
-					ApproveFn:           orch.Approve,
-					ReviseFn:            orch.Revise,
-					RetryFn:             orch.Retry,
-					RetryHookFn:         orch.RetryHook,
-					SkipHookFn:          orch.SkipHook,
-					AgentSuggestEnabled: cfg.Experimental.IsAgentSuggestEnabled(),
+					Port:             cfg.Server.GetPort(),
+					RunDir:           runDir,
+					Description:      f.Description,
+					StageInteractive: stageInteractive,
+					Store:            store,
+					Theme:            cfg.EffectiveTheme(),
+					SkinDir:          cfg.SkinDir,
+					UIBus:            orch.UIBus(),
+					ApproveFn:        orch.Approve,
+					ReviseFn:         orch.Revise,
+					RetryFn:          orch.Retry,
+					RetryHookFn:      orch.RetryHook,
+					SkipHookFn:       orch.SkipHook,
 					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
 						return orch.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
 					},

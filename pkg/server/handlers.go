@@ -26,10 +26,9 @@ const (
 // по наличию autonomous.flag в директории стадии).
 type statusResponse struct {
 	state.RunState
-	Description         string          `json:"description,omitempty"`
-	StageInteractive    map[string]bool `json:"stage_interactive,omitempty"`
-	StageAutonomous     map[string]bool `json:"stage_autonomous,omitempty"`
-	AgentSuggestEnabled bool            `json:"agent_suggest_enabled,omitempty"`
+	Description      string          `json:"description,omitempty"`
+	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
+	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -41,11 +40,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	resp := statusResponse{
-		RunState:            rs,
-		Description:         s.Description,
-		StageInteractive:    s.stageInteractive,
-		StageAutonomous:     autonomous,
-		AgentSuggestEnabled: s.agentSuggestEnabled,
+		RunState:         rs,
+		Description:      s.Description,
+		StageInteractive: s.stageInteractive,
+		StageAutonomous:  autonomous,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -179,10 +177,9 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	allowed := st.Status == state.StatusAwaitingApproval ||
-		(st.Status == state.StatusRunning && s.agentSuggestEnabled)
+	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning
 	if !allowed {
-		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval (or running, with agent_suggest enabled)", st.Status), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
 		return
 	}
 	var req reviseRequest

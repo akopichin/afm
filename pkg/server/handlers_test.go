@@ -796,7 +796,7 @@ func TestHandleDialogAnswer_DuplicateAnswer(t *testing.T) {
 	}
 }
 
-func TestHandleRevise_RunningRequiresAgentSuggestFlag(t *testing.T) {
+func TestHandleRevise_RunningAllowed(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
@@ -820,47 +820,6 @@ func TestHandleRevise_RunningRequiresAgentSuggestFlag(t *testing.T) {
 			reviseCalled = true
 			return nil
 		},
-		AgentSuggestEnabled: false, // флаг выключен
-	})
-
-	body, _ := json.Marshal(map[string]string{"feedback": "note"})
-	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-	srv.handleRevise(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 (flag disabled, running not allowed)", w.Code)
-	}
-	if reviseCalled {
-		t.Error("reviseFn should not be called when agent_suggest is disabled and stage is running")
-	}
-}
-
-func TestHandleRevise_RunningAllowedWithFlag(t *testing.T) {
-	runDir := t.TempDir()
-	stageDir := filepath.Join(runDir, testStageID)
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	store, err := state.Open(runDir, []string{testStageID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-	if err := store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
-		t.Fatal(err)
-	}
-
-	var reviseCalled bool
-	srv := New(Config{
-		RunDir: runDir,
-		Store:  store,
-		UIBus:  orchestrator.NewUIBus(),
-		ReviseFn: func(_ context.Context, _, _ string) error {
-			reviseCalled = true
-			return nil
-		},
-		AgentSuggestEnabled: true,
 	})
 
 	body, _ := json.Marshal(map[string]string{"feedback": "note"})
@@ -872,33 +831,6 @@ func TestHandleRevise_RunningAllowedWithFlag(t *testing.T) {
 		t.Errorf("status = %d, want 200", w.Code)
 	}
 	if !reviseCalled {
-		t.Error("reviseFn should be called when agent_suggest is enabled and stage is running")
-	}
-}
-
-func TestHandleStatus_AgentSuggestEnabledReflectsConfig(t *testing.T) {
-	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{testStageID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
-	srv := New(Config{
-		RunDir:              runDir,
-		Store:               store,
-		UIBus:               orchestrator.NewUIBus(),
-		AgentSuggestEnabled: true,
-	})
-	req := httptest.NewRequest("GET", "/api/status", nil)
-	w := httptest.NewRecorder()
-	srv.handleStatus(w, req)
-
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if v, _ := resp["agent_suggest_enabled"].(bool); !v {
-		t.Errorf("agent_suggest_enabled = %v, want true", resp["agent_suggest_enabled"])
+		t.Error("reviseFn should be called for a running stage")
 	}
 }
