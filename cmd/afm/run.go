@@ -103,6 +103,7 @@ func newRunCmd() *cobra.Command {
 					}
 				}
 				cmds := docker.ScanCommands(f, cfg.Client.Command, generatedForMount)
+				mountCodexState := docker.UsesCodex(f, cfg.Client.Command, recipes)
 				port := cfg.Server.GetPort()
 				// afm внутри Linux-контейнера не может открыть браузер на macOS-хосте
 				// (runtime.GOOS=linux → xdg-open без display). Поэтому opener запускаем
@@ -116,15 +117,16 @@ func newRunCmd() *cobra.Command {
 				// Последний --dir выигрывает у возможного пользовательского флага
 				// (cobra/pflag берёт последнее вхождение non-slice флага).
 				return docker.ReExec(docker.ReExecConfig{
-					Image:         cfg.Docker.GetImage(),
-					ProjectDir:    absDir,
-					Commands:      cmds,
-					DashboardPort: port,
-					ExtraMounts:   cfg.Docker.ExtraMounts,
-					ExtraArgs:     append(os.Args[1:], "--dir="+absDir),
-					ClientCommand: cfg.Client.Command,
-					Recipes:       recipes,
-					SecretsFile:   cfg.Docker.SecretsFile,
+					Image:           cfg.Docker.GetImage(),
+					ProjectDir:      absDir,
+					Commands:        cmds,
+					DashboardPort:   port,
+					ExtraMounts:     cfg.Docker.ExtraMounts,
+					ExtraArgs:       append(os.Args[1:], "--dir="+absDir),
+					ClientCommand:   cfg.Client.Command,
+					Recipes:         recipes,
+					SecretsFile:     cfg.Docker.SecretsFile,
+					MountCodexState: mountCodexState,
 				})
 			}
 
