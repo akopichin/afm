@@ -567,6 +567,50 @@ func TestAgentRecipe_CursorType(t *testing.T) {
 	}
 }
 
+func TestAgentRecipe_CodexType(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string // пустая строка → ожидаем PASS
+	}{
+		{
+			name:   "valid codex recipe, no auth, no model",
+			recipe: config.AgentRecipe{Type: "codex"},
+		},
+		{
+			name:   "valid codex recipe with model",
+			recipe: config.AgentRecipe{Type: "codex", Model: "gpt-5.1-codex"},
+		},
+		{
+			name:   "codex: auth optional but validated if present",
+			recipe: config.AgentRecipe{Type: "codex", Auth: config.RecipeAuth{From: "env:OPENAI_API_KEY", To: "env:OPENAI_API_KEY"}},
+		},
+		{
+			name:   "codex: auth.to must be env: if present",
+			recipe: config.AgentRecipe{Type: "codex", Auth: config.RecipeAuth{From: "env:X", To: "OPENAI_API_KEY"}},
+			errSub: "auth.to must be an env: reference",
+		},
+		{
+			name:   "codex: url not required",
+			recipe: config.AgentRecipe{Type: "codex", Model: "gpt-5.1-codex"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.recipe.Validate()
+			if c.errSub == "" {
+				if err != nil {
+					t.Errorf("Validate(): unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), c.errSub) {
+					t.Errorf("Validate(): got %v, want substring %q", err, c.errSub)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentRecipe_ClaudeType(t *testing.T) {
 	cases := []struct {
 		name   string

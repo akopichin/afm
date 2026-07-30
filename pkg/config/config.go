@@ -80,6 +80,7 @@ const ClaudeCommand = "claude"
 const (
 	RecipeTypeOpenAI = "openai"
 	RecipeTypeCursor = "cursor" // Cursor Cloud Agents API (async run-based, не chat completions)
+	RecipeTypeCodex  = "codex"  // codex CLI через codex-as-claude (см. scripts/codex-as-claude.sh)
 )
 
 // AfmDir — имя служебного каталога afm: и глобального (~/.afm), и per-project.
@@ -125,9 +126,23 @@ func (r AgentRecipe) Validate() error {
 	// type — allow-list; неизвестное значение (напр. опечатка "openapi") молча
 	// трактовалось бы как claude, что ведёт к некорректной генерации обёртки.
 	switch r.Type {
-	case "", ClaudeCommand, RecipeTypeOpenAI, RecipeTypeCursor:
+	case "", ClaudeCommand, RecipeTypeOpenAI, RecipeTypeCursor, RecipeTypeCodex:
 	default:
-		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", or \"cursor\"; got %q", r.Type)
+		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", \"cursor\", or \"codex\"; got %q", r.Type)
+	}
+	// codex: model опционален ("" / "default" → CODEX_MODEL не выставляется, решает
+	// сам codex/~/.codex/config.toml); auth опционален — авторизация идёт через
+	// смонтированную ~/.codex (ChatGPT-plan OAuth), а не через AFM_SECRET_<CMD>.
+	// Если auth всё же задан (задел на будущий API-key режим) — валидируем как
+	// openai/cursor (env:, без ограничения ClaudeAuthEnvVars).
+	if r.Type == RecipeTypeCodex {
+		if r.Auth == (RecipeAuth{}) {
+			return nil
+		}
+		if !strings.HasPrefix(r.Auth.To, "env:") {
+			return errors.New("recipe: auth.to must be an env: reference (e.g. env:OPENAI_API_KEY)")
+		}
+		return nil
 	}
 	if r.Model == "" {
 		return errors.New("recipe: model is required")
