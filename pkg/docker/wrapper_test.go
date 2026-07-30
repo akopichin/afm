@@ -258,6 +258,92 @@ func TestCreateWrappers_CursorNoClaudeRequired(t *testing.T) {
 	}
 }
 
+// stubCodexOnPATH кладёт fake-codex в temp-dir и prepend'ит его к PATH.
+// Возвращает абсолютный путь к fake-codex.
+func stubCodexOnPATH(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho fake-codex\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	return bin
+}
+
+func TestCreateWrappers_CodexTemplate(t *testing.T) {
+	realCodex := stubCodexOnPATH(t)
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeCodex,
+		Command: "codex",
+		Model:   "gpt-5.1-codex",
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (codex): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "codex"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export CODEX_BIN="` + realCodex + `"`,
+		`export CODEX_MODEL="gpt-5.1-codex"`,
+		`exec /usr/local/bin/codex-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("codex wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	for _, bad := range []string{"ANTHROPIC_", "OPENAI_", "CURSOR_"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("codex wrapper must not contain %q:\n%s", bad, s)
+		}
+	}
+}
+
+func TestCreateWrappers_CodexModelOptional(t *testing.T) {
+	stubCodexOnPATH(t)
+	for _, model := range []string{"", "default"} {
+		dir, err := CreateWrappers([]WrapperSpec{{Type: config.RecipeTypeCodex, Command: "codex", Model: model}})
+		if err != nil {
+			t.Fatalf("CreateWrappers (codex, model=%q): %v", model, err)
+		}
+		s := string(mustRead(t, filepath.Join(dir, "codex")))
+		cleanup(dir)
+		if strings.Contains(s, "CODEX_MODEL") {
+			t.Errorf("model=%q should omit CODEX_MODEL:\n%s", model, s)
+		}
+	}
+}
+
+func TestCreateWrappers_CodexNoClaudeRequired(t *testing.T) {
+	// codex-тип не требует claude в PATH
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+	if err := os.WriteFile(filepath.Join(emptyDir, "codex"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeCodex, Command: "codex", Model: "m"},
+	})
+	if err != nil {
+		t.Errorf("codex-only wrappers must not fail when claude absent: %v", err)
+	}
+}
+
+func TestCreateWrappers_CodexNoBinaryHardError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // ни claude, ни codex
+	_, err := CreateWrappers([]WrapperSpec{{Type: config.RecipeTypeCodex, Command: "codex"}})
+	if err == nil {
+		t.Fatal("expected error when codex not in PATH")
+	}
+}
+
 func TestCreateWrappers_BareFlag(t *testing.T) {
 	stubClaudeOnPATH(t)
 

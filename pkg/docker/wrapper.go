@@ -30,6 +30,7 @@ func envName(cmd string) string {
 // Type "" or "claude" selects the claude template (auth + ANTHROPIC_* vars + exec claude).
 // Type "openai" selects the OpenAI-compatible template (OPENAI_* vars + exec openai-as-claude).
 // Type "cursor" selects the Cursor Cloud Agents template (CURSOR_* vars + exec cursor-as-claude).
+// Type "codex" selects the codex template (CODEX_BIN + optional CODEX_MODEL + exec codex-as-claude).
 // Model == "" with Type "" selects the claude proxy-shim (BASE_URL only, no model vars).
 type WrapperSpec struct {
 	Type         string // "" | "claude" = claude template; "openai" = openai-compatible; "cursor" = Cursor Cloud Agents
@@ -44,18 +45,23 @@ type WrapperSpec struct {
 // CreateWrappers creates a temp dir with one executable script per spec, named
 // after spec.Command, and returns its path. realClaude is resolved once via
 // exec.LookPath("claude") (absolute path → bypasses the wrapper-dir on PATH,
-// avoiding recursion) — but only when at least one spec is NOT type "openai"
-// (openai specs exec openai-as-claude, which never calls claude). Caller must
-// defer os.RemoveAll(dir). Empty specs → ("", nil).
+// avoiding recursion) — but only when at least one spec is a claude-family type
+// (not openai/cursor/codex, which exec their own adapters, never claude).
+// realCodexBin is resolved once via exec.LookPath("codex") — only when at least
+// one spec is type "codex" — for the same PATH-recursion reason: the generated
+// "codex" wrapper shadows the real codex binary on PATH, so the wrapper bakes
+// in the absolute path via CODEX_BIN instead of letting the adapter script
+// resolve "codex" through the (now-shadowed) PATH itself.
+// Caller must defer os.RemoveAll(dir). Empty specs → ("", nil).
 func CreateWrappers(specs []WrapperSpec) (string, error) {
 	if len(specs) == 0 {
 		return "", nil
 	}
-	// LookPath claude только если есть хотя бы один claude-тип (не openai и не cursor —
-	// оба используют собственные адаптеры, не вызывающие claude).
+	// LookPath claude только если есть хотя бы один claude-тип (не openai, не cursor,
+	// не codex — все три используют собственные адаптеры, не вызывающие claude).
 	var realClaude string
 	for _, s := range specs {
-		if s.Type != config.RecipeTypeOpenAI && s.Type != config.RecipeTypeCursor {
+		if s.Type != config.RecipeTypeOpenAI && s.Type != config.RecipeTypeCursor && s.Type != config.RecipeTypeCodex {
 			p, err := exec.LookPath(config.ClaudeCommand)
 			if err != nil {
 				return "", fmt.Errorf("claude not found in PATH (required for wrapper generation): %w", err)
@@ -64,12 +70,23 @@ func CreateWrappers(specs []WrapperSpec) (string, error) {
 			break
 		}
 	}
+	var realCodexBin string
+	for _, s := range specs {
+		if s.Type == config.RecipeTypeCodex {
+			p, err := exec.LookPath("codex")
+			if err != nil {
+				return "", fmt.Errorf("codex not found in PATH (required for wrapper generation): %w", err)
+			}
+			realCodexBin = p
+			break
+		}
+	}
 	dir, err := os.MkdirTemp("", "fm-wrappers-*")
 	if err != nil {
 		return "", fmt.Errorf("create wrapper dir: %w", err)
 	}
 	for _, s := range specs {
-		script, gErr := generateWrapper(s, realClaude)
+		script, gErr := generateWrapper(s, realClaude, realCodexBin)
 		if gErr != nil {
 			_ = os.RemoveAll(dir)
 			return "", fmt.Errorf("generate wrapper %q: %w", s.Command, gErr)
@@ -82,7 +99,7 @@ func CreateWrappers(specs []WrapperSpec) (string, error) {
 	return dir, nil
 }
 
-func generateWrapper(s WrapperSpec, realClaude string) (string, error) {
+func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, error) {
 	if s.Command == "" {
 		return "", errors.New("empty command")
 	}
@@ -121,6 +138,20 @@ func generateWrapper(s WrapperSpec, realClaude string) (string, error) {
 			fmt.Fprintf(&b, "export CURSOR_MODEL=%q\n", s.Model)
 		}
 		b.WriteString("exec /usr/local/bin/cursor-as-claude \"$@\"\n")
+		return b.String(), nil
+	}
+
+	if s.Type == config.RecipeTypeCodex {
+		// CODEX_BIN — abs-путь к реальному codex CLI, резолвлен ДО того как
+		// wrapper-dir (где лежит ЭТОТ же файл с именем "codex") попал в PATH —
+		// иначе codex-as-claude (внутри себя вызывающий голый `codex`) поймал бы
+		// сам этот враппер и ушёл в бесконечную рекурсию. CODEX_MODEL опускается
+		// для ""/"default" — тогда решает сам codex/~/.codex/config.toml.
+		fmt.Fprintf(&b, "export CODEX_BIN=%q\n", realCodexBin)
+		if s.Model != "" && s.Model != "default" {
+			fmt.Fprintf(&b, "export CODEX_MODEL=%q\n", s.Model)
+		}
+		b.WriteString("exec /usr/local/bin/codex-as-claude \"$@\"\n")
 		return b.String(), nil
 	}
 
