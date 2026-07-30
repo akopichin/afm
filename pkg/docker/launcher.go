@@ -32,15 +32,16 @@ type CommandMount struct {
 
 // ReExecConfig параметры для перезапуска afm в Docker.
 type ReExecConfig struct {
-	Image         string
-	ProjectDir    string // абсолютный путь к директории проекта
-	Commands      []CommandMount
-	DashboardPort int                           // порт dashboard; при >0 пробрасывается на хост через -p
-	ExtraMounts   []string                      // доп. хост-директории (могут начинаться с ~) → монтируются :ro
-	ExtraArgs     []string                      // os.Args[1:]
-	ClientCommand string                        // имя агента из config (для проверки auth при command: claude)
-	Recipes       map[string]config.AgentRecipe // autoShim: команды с recipe → генерируются, секрет → transient env
-	SecretsFile   string                        // опц. override для default-слоёв secrets.env
+	Image           string
+	ProjectDir      string // абсолютный путь к директории проекта
+	Commands        []CommandMount
+	DashboardPort   int                           // порт dashboard; при >0 пробрасывается на хост через -p
+	ExtraMounts     []string                      // доп. хост-директории (могут начинаться с ~) → монтируются :ro
+	ExtraArgs       []string                      // os.Args[1:]
+	ClientCommand   string                        // имя агента из config (для проверки auth при command: claude)
+	Recipes         map[string]config.AgentRecipe // autoShim: команды с recipe → генерируются, секрет → transient env
+	SecretsFile     string                        // опц. override для default-слоёв secrets.env
+	MountCodexState bool                          // codex использует ~/.codex (OAuth) → монтировать read-only в /tmp/host-codex (entrypoint копирует в $HOME/.codex, см. UsesCodex)
 }
 
 // CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker
@@ -216,6 +217,37 @@ func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentReci
 	return out
 }
 
+// codexAdapterCommand — имя команды-адаптера codex CLI → claude stream-json
+// (см. scripts/codex-as-claude.sh), baked в образ рядом с openai-as-claude/
+// cursor-as-claude. Используется и напрямую (command: codex-as-claude, без
+// recipe), и как exec-цель generated-враппера recipe-типа "codex".
+const codexAdapterCommand = "codex-as-claude"
+
+// UsesCodex reports whether the flow (a stage command or the global client
+// command) invokes codex — either directly via codexAdapterCommand, or
+// indirectly via a used recipe of type "codex" — used to gate mounting the
+// host's ~/.codex OAuth state (see ReExec). usedRecipes should already be
+// filtered to commands the flow actually references (UsedRecipes), consistent
+// with the least-privilege rule already applied to recipe secrets.
+func UsesCodex(f *flow.Flow, globalCmd string, usedRecipes map[string]config.AgentRecipe) bool {
+	if globalCmd == codexAdapterCommand {
+		return true
+	}
+	if f != nil {
+		for _, s := range f.Stages {
+			if s.Command == codexAdapterCommand {
+				return true
+			}
+		}
+	}
+	for _, r := range usedRecipes {
+		if r.Type == config.RecipeTypeCodex {
+			return true
+		}
+	}
+	return false
+}
+
 // ReExec заменяет текущий процесс на docker run с нужными монтированиями.
 // Возвращает ошибку только если docker не найден в PATH; в случае успеха
 // syscall.Exec никогда не возвращает управление.
@@ -272,6 +304,18 @@ func ReExec(cfg ReExecConfig) error {
 		args = append(args, "-v", hostPath+":"+containerPath+":ro")
 	}
 
+	// Codex OAuth-состояние (~/.codex): монтируем read-only во временный путь
+	// контейнера — entrypoint (root, до gosu) копирует его в $HOME/.codex
+	// (writable), чтобы codex мог обновлять auth.json (refresh token), не задевая
+	// хостовый ~/.codex. Гейтим MountCodexState, чтобы не тащить OAuth-состояние
+	// во флоу, которые codex не используют (см. UsesCodex).
+	if cfg.MountCodexState {
+		codexHostDir := filepath.Join(home, ".codex")
+		if info, statErr := os.Stat(codexHostDir); statErr == nil && info.IsDir() {
+			args = append(args, "-v", codexHostDir+":/tmp/host-codex:ro")
+		}
+	}
+
 	// Окружение внутри контейнера.
 	// AFM_HOST_UID/GID: entrypoint дропает привилегии (gosu) до хостового
 	// пользователя, чтобы записи в примонтированные тома принадлежали пользователю
@@ -309,6 +353,13 @@ func ReExec(cfg ReExecConfig) error {
 		}
 		for cmd, recipe := range cfg.Recipes {
 			name := envName(cmd)
+			// codex — единственный тип, для которого Validate() допускает пустой
+			// Auth (авторизация идёт через смонтированную ~/.codex, не через
+			// секрет). Пропускаем резолв, иначе ResolveAuthValue("", ...) фейлит
+			// на пустом auth.from и валит весь запуск даже когда секрет не нужен.
+			if recipe.Auth.From == "" {
+				continue
+			}
 			val, vErr := ResolveAuthValue(recipe.Auth.From, secrets)
 			if vErr != nil {
 				return fmt.Errorf("agent %s: %w", cmd, vErr)

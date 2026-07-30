@@ -400,3 +400,160 @@ func TestUsedRecipes_EmptyAndClaude(t *testing.T) {
 		t.Errorf("claude should not be a recipe, got %v", got)
 	}
 }
+
+func TestUsesCodex_DirectCommand(t *testing.T) {
+	f := &flow.Flow{Stages: []flow.Stage{{ID: "s1", Command: "codex-as-claude"}}}
+	if !docker.UsesCodex(f, "", nil) {
+		t.Error("expected true for direct codex-as-claude stage command")
+	}
+}
+
+func TestUsesCodex_GlobalCommand(t *testing.T) {
+	if !docker.UsesCodex(nil, "codex-as-claude", nil) {
+		t.Error("expected true for global codex-as-claude client command")
+	}
+}
+
+func TestUsesCodex_RecipeType(t *testing.T) {
+	recipes := map[string]config.AgentRecipe{"codex": {Type: config.RecipeTypeCodex}}
+	if !docker.UsesCodex(nil, "", recipes) {
+		t.Error("expected true when a used recipe has type codex")
+	}
+}
+
+func TestUsesCodex_False(t *testing.T) {
+	f := &flow.Flow{Stages: []flow.Stage{{ID: "s1", Command: "glm51"}}}
+	recipes := map[string]config.AgentRecipe{"glm51": {Type: ""}}
+	if docker.UsesCodex(f, "claude", recipes) {
+		t.Error("expected false when codex is not used")
+	}
+}
+
+func TestReExec_CodexStateMount_WhenPresentAndFlagged(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj",
+		ExtraArgs: []string{"run", "flow.yaml"}, MountCodexState: true,
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	argsStr := strings.Join(capturedArgs, " ")
+	want := homeDir + "/.codex:/tmp/host-codex:ro"
+	if !strings.Contains(argsStr, want) {
+		t.Errorf("missing codex state mount %q: %s", want, argsStr)
+	}
+}
+
+func TestReExec_CodexStateMount_SkippedWhenFlagFalse(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj",
+		ExtraArgs: []string{"run", "flow.yaml"}, MountCodexState: false,
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	if strings.Contains(strings.Join(capturedArgs, " "), "host-codex") {
+		t.Error("codex state must not be mounted when MountCodexState=false")
+	}
+}
+
+func TestReExec_CodexStateMount_SkippedWhenDirMissing(t *testing.T) {
+	homeDir := t.TempDir() // нет .codex внутри
+	t.Setenv("HOME", homeDir)
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj",
+		ExtraArgs: []string{"run", "flow.yaml"}, MountCodexState: true,
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	if strings.Contains(strings.Join(capturedArgs, " "), "host-codex") {
+		t.Error("codex state must not be mounted when ~/.codex does not exist")
+	}
+}
+
+// TestReExec_CodexRecipeNoAuth_DoesNotFail проверяет фикс бага, найденного в
+// ревью Task 2: recipe типа codex может законно иметь пустой Auth (Validate()
+// это разрешает — авторизация идёт через смонтированную ~/.codex, а не через
+// секрет). Раньше ResolveAuthValue("", secrets) фейлил на пустом auth.from и
+// валил ВЕСЬ ReExec — это ломало главный (безсекретный) сценарий codex.
+func TestReExec_CodexRecipeNoAuth_DoesNotFail(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	recipes := map[string]config.AgentRecipe{
+		"codex": {Type: config.RecipeTypeCodex}, // Auth умышленно не задан
+	}
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj",
+		ExtraArgs: []string{"run", "flow.yaml"}, Recipes: recipes,
+	})
+	if err != nil {
+		t.Fatalf("ReExec must not fail for a no-auth codex recipe: %v", err)
+	}
+	if strings.Contains(strings.Join(capturedArgs, " "), "AFM_SECRET_CODEX") {
+		t.Error("no-auth codex recipe must not emit an AFM_SECRET_ env var")
+	}
+}
