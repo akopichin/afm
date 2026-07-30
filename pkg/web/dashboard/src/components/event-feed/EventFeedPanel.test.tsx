@@ -88,4 +88,22 @@ describe('EventFeedPanel', () => {
 
     vi.useRealTimers()
   })
+
+  test('renders script_output, hook_failed, and hook_resolved lines', () => {
+    const events: AfmEvent[] = [
+      { type: 'script_output', payload: { hook: 'before', line: 'setting up' }, stageId: 's1', timestamp: '2026-07-29T10:00:00Z' },
+      { type: 'hook_failed', payload: { hook: 'before', error: 'exit 1' }, stageId: 's1', timestamp: '2026-07-29T10:00:01Z' },
+      { type: 'hook_resolved', payload: { hook: 'before', resolution: 'skipped' }, stageId: 's1', timestamp: '2026-07-29T10:00:02Z' },
+    ]
+
+    const { container } = render(<EventFeedPanel events={events} />)
+    const entries = container.querySelectorAll('.feed-entry')
+    expect(entries).toHaveLength(3)
+
+    expect(entries[0]?.textContent).toContain('before')
+    expect(entries[0]?.textContent).toContain('setting up')
+    expect(entries[1]?.textContent).toContain('before')
+    expect(entries[1]?.textContent).toContain('exit 1')
+    expect(entries[2]?.textContent).toContain('skipped')
+  })
 })
