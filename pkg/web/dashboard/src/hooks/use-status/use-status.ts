@@ -87,11 +87,12 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const namesObj = isRecord(obj.stage_names) ? obj.stage_names : {}
   const interactiveObj = isRecord(obj.stage_interactive) ? obj.stage_interactive : {}
   const autonomousObj = isRecord(obj.stage_autonomous) ? obj.stage_autonomous : {}
+  const autoApproveObj = isRecord(obj.stage_auto_approve) ? obj.stage_auto_approve : {}
 
   const order = resolveOrder(obj.stage_order, stagesObj)
 
   const stages: Stage[] = order.map((id) =>
-    toStage(id, stagesObj[id], namesObj[id], interactiveObj[id] === true, autonomousObj[id] === true),
+    toStage(id, stagesObj[id], namesObj[id], interactiveObj[id] === true, autonomousObj[id] === true, autoApproveObj[id] === true),
   )
 
   return { flowName, stages, startedAt, description }
@@ -112,6 +113,7 @@ function toStage(
   nameRaw: unknown,
   interactive: boolean,
   autonomous: boolean,
+  autoApprove: boolean,
 ): Stage {
   const obj = isRecord(raw) ? raw : {}
 
@@ -119,7 +121,7 @@ function toStage(
   const updatedAt = typeof obj.updated_at === 'string' ? obj.updated_at : ''
   const name = typeof nameRaw === 'string' ? nameRaw : ''
 
-  return { id, name, status, updatedAt, interactive, autonomous }
+  return { id, name, status, updatedAt, interactive, autonomous, autoApprove }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

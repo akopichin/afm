@@ -26,7 +26,8 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | null>(null)
 
   const isReview = stage.status === 'awaiting_approval'
-  const showActions = isReview
+  const showActions = isReview && !stage.autoApprove
+  const showAutoApprovedBadge = stage.autoApprove && planMarkdown.trim() !== ''
   const showRetry = stage.status === 'failed'
   const showHookFailed = stage.status === 'hook_failed'
   const commentCount = Object.keys(comments).length
@@ -208,6 +209,12 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
               </button>
             </div>
             <div id="comment-hint" className="comment-hint">Click a plan line to comment</div>
+          </div>
+        )}
+
+        {showAutoApprovedBadge && (
+          <div id="auto-approved-section" className="section">
+            <span className="auto-approved-badge">Auto-approved</span>
           </div>
         )}
 

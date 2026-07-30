@@ -101,7 +101,7 @@ export function App(): ReactElement {
   // /api/stages//plan → 404 → early-return), а stageHeader остаётся null и
   // показывает заглушку «выберите стадию». При выбранной стадии видимость
   // панелей (монтировать/скрыть) решают showPlan/showDialog.
-  const NO_STAGE: Stage = { id: '', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false }
+  const NO_STAGE: Stage = { id: '', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false }
   const stageForPanels = selectedStage ?? NO_STAGE
 
   // Видимость панелей для выбранной стадии. Когда стадия не выбрана — показываем обе

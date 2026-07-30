@@ -70,7 +70,6 @@
 .status-badge[data-status="failed"]               { color: var(--c-failed); }
 .status-badge[data-status="retrying"]             { color: var(--c-retrying); }
 .status-badge[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); }
-.status-badge[data-status="hook_failed"]          { color: var(--c-hook-failed); }
 
 /* Pulsing badges for "running" states */
 .status-badge[data-status="running"],
@@ -482,6 +481,16 @@
   display: flex;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.auto-approved-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-done);
+  border: 1px solid var(--c-done);
 }
 
 /* .panel-frame-body > * (layout.css) даёт flex: 1 1 0 каждому прямому ребёнку —

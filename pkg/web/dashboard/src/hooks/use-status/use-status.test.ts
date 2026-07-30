@@ -37,6 +37,7 @@ describe('useStatus', () => {
       updatedAt: '2026-07-10T10:01:00Z',
       interactive: false,
       autonomous: false,
+      autoApprove: false,
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })

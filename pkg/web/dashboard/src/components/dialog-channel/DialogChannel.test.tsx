@@ -30,7 +30,7 @@ function jsonResponse(data: unknown): Response {
 }
 
 function makeStage(overrides: Partial<Stage> = {}): Stage {
-  return { id: 's1', name: 'Stage', status: 'awaiting_user_input', updatedAt: '', interactive: true, autonomous: false, ...overrides }
+  return { id: 's1', name: 'Stage', status: 'awaiting_user_input', updatedAt: '', interactive: true, autonomous: false, autoApprove: false, ...overrides }
 }
 
 describe('DialogChannel', () => {

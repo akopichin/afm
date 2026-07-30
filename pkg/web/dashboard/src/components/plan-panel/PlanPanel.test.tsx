@@ -4,7 +4,10 @@ import type { Stage } from '../../types'
 import { PlanPanel } from './PlanPanel'
 
 function makeStage(overrides: Partial<Stage> = {}): Stage {
-  return { id: 's1', name: 'Stage', status: 'running', updatedAt: '', interactive: false, autonomous: false, ...overrides }
+  return {
+    id: 's1', name: 'Stage', status: 'running', updatedAt: '',
+    interactive: false, autonomous: false, autoApprove: false, ...overrides,
+  }
 }
 
 function textResponse(text: string): Response {
@@ -212,5 +215,24 @@ describe('PlanPanel', () => {
 
     await waitFor(() => expect(container.querySelectorAll('.cb-done').length).toBe(2))
     expect(container.querySelectorAll('.cb-open').length).toBe(0)
+  })
+
+  test('autoApprove: true hides Approve/Revise and shows an Auto-approved badge instead', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Plan\n\nSome content'))
+
+    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval', autoApprove: true })} />)
+
+    await waitFor(() => expect(container.querySelector('.auto-approved-badge')).not.toBeNull())
+    expect(container.querySelector('#actions-section')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
+
+  test('autoApprove: false keeps the normal Approve/Revise actions (no badge)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Plan'))
+
+    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval', autoApprove: false })} />)
+
+    await waitFor(() => expect(container.querySelector('#actions-section')).not.toBeNull())
+    expect(container.querySelector('.auto-approved-badge')).toBeNull()
   })
 })
