@@ -59,6 +59,7 @@
   --c-failed:         var(--coral);
   --c-retrying:       var(--amber);
   --c-awaiting-user:  var(--violet);
+  --c-hook-failed:    var(--c-failed);
 
   /* legacy aliases */
   --text:     var(--ink);
@@ -105,6 +106,7 @@
   --c-failed:         var(--coral);
   --c-retrying:       var(--amber);
   --c-awaiting-user:  var(--violet);
+  --c-hook-failed:    var(--c-failed);
 
   /* legacy aliases */
   --text:     var(--ink);

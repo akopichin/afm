@@ -46,6 +46,12 @@ func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
 		stage := o.graph.Stage(stageID)
 		if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
 			o.Trigger(stageID, EvComplete, GuardCtx{}, "planning-only stage")
+			// Планировочная стадия без implementation-агента доходит до done
+			// прямо здесь, минуя onAgentCompleted/completeStage — но
+			// script_after разрешён на любой стадии (flow.go), так что этот
+			// путь тоже обязан его запустить, иначе хук молча не выполнится
+			// для планировочных стадий.
+			o.maybeRunAfterHook(ctx, stageID)
 		} else {
 			o.Trigger(stageID, EvApprove, GuardCtx{}, "")
 		}
@@ -133,5 +139,23 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 // (синхронно и долговечно).
 func (o *Orchestrator) Retry(ctx context.Context, stageID string) error {
 	o.retryStage(o.runContext(ctx), stageID)
+	return nil
+}
+
+// RetryHook resumes a stage currently blocked on a failed before/after hook
+// by re-running that hook's 3x/1-2-3s retry cycle.
+func (o *Orchestrator) RetryHook(stageID string) error {
+	if !o.resolveHook(stageID, hookDecisionRetry) {
+		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
+	}
+	return nil
+}
+
+// SkipHook resumes a stage currently blocked on a failed before/after hook
+// by skipping it entirely.
+func (o *Orchestrator) SkipHook(stageID string) error {
+	if !o.resolveHook(stageID, hookDecisionSkip) {
+		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
+	}
 	return nil
 }

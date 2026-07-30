@@ -84,6 +84,30 @@ function toFeedLine(event: AfmEvent): FeedLine {
       msgClass = 'feed-msg action'
       break
     }
+    case 'script_output': {
+      const obj = isRecord(data) ? data : {}
+      const hook = typeof obj.hook === 'string' ? obj.hook : ''
+      const line = typeof obj.line === 'string' ? obj.line : ''
+      msg = `[${hook}] ${line}`
+      msgClass = 'feed-msg action'
+      break
+    }
+    case 'hook_failed': {
+      const obj = isRecord(data) ? data : {}
+      const hook = typeof obj.hook === 'string' ? obj.hook : ''
+      const error = typeof obj.error === 'string' ? obj.error : ''
+      msg = `${hook}-hook failed: ${error}`
+      msgClass = 'feed-msg error'
+      statusClass = 'status-hook_failed'
+      break
+    }
+    case 'hook_resolved': {
+      const obj = isRecord(data) ? data : {}
+      const hook = typeof obj.hook === 'string' ? obj.hook : ''
+      const resolution = typeof obj.resolution === 'string' ? obj.resolution : ''
+      msg = `${hook}-hook ${resolution}`
+      break
+    }
     case 'approved':
       msg = 'approved'
       statusClass = 'status-awaiting_approval'

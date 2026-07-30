@@ -76,14 +76,24 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	stageDir := filepath.Join(s.runDir, stageID)
 
 	var logContent string
-	for _, p := range flow.Phases() {
-		for _, name := range flow.PhaseLogFiles(p) {
-			data, err := os.ReadFile(filepath.Join(stageDir, name))
-			if err == nil {
-				logContent += string(data)
-			}
+	appendLog := func(name string) {
+		data, err := os.ReadFile(filepath.Join(stageDir, name))
+		if err == nil {
+			logContent += string(data)
 		}
 	}
+	// before.log/script.log/after.log — логи script_before/script-стадий/
+	// script_after хуков (см. pkg/orchestrator/hooks.go, agents.go). Стадии
+	// без хуков их просто не пишут — appendLog молча пропускает отсутствующие
+	// файлы, как и обычные phase-логи ниже.
+	appendLog("before.log")
+	for _, p := range flow.Phases() {
+		for _, name := range flow.PhaseLogFiles(p) {
+			appendLog(name)
+		}
+	}
+	appendLog("script.log")
+	appendLog("after.log")
 	if logContent == "" {
 		http.Error(w, "no logs found", http.StatusNotFound)
 		return
@@ -216,6 +226,50 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "retried", keyStageID: stageID})
+}
+
+// handleRetryHook re-runs the retry cycle of a before/after hook currently
+// blocked on a user decision (stage in hook_failed for script_before, or the
+// stage's after-hook notice for script_after — the latter never changes the
+// stage's FSM status, see runAfterHook's doc comment). Unlike handleRetry,
+// there is no status precondition to check here: RetryHook's own "no waiter"
+// error is the only source of truth for whether a hook is actually pending.
+func (s *Server) handleRetryHook(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/retry-hook")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	if s.retryHookFn == nil {
+		http.Error(w, "retry-hook not supported", http.StatusNotImplemented)
+		return
+	}
+	if err := s.retryHookFn(stageID); err != nil {
+		http.Error(w, "retry-hook failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "retried", keyStageID: stageID})
+}
+
+// handleSkipHook skips a before/after hook currently blocked on a user
+// decision. See handleRetryHook's comment on why there is no status check.
+func (s *Server) handleSkipHook(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/skip-hook")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	if s.skipHookFn == nil {
+		http.Error(w, "skip-hook not supported", http.StatusNotImplemented)
+		return
+	}
+	if err := s.skipHookFn(stageID); err != nil {
+		http.Error(w, "skip-hook failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "skipped", keyStageID: stageID})
 }
 
 func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {

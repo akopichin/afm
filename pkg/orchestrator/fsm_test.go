@@ -190,6 +190,38 @@ func TestFSM_Property_LivenessTerminates(t *testing.T) {
 	})
 }
 
+func TestFSM_HookFailedTransitions(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"s1"})
+	defer store.Close()
+
+	// running -> hook_failed
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatalf("setup transition: %v", err)
+	}
+	to, _, ok, err := fsm.Apply("s1", EvHookFailed, GuardCtx{}, "before hook failed")
+	if err != nil || !ok || to != state.StatusHookFailed {
+		t.Fatalf("EvHookFailed from running: to=%v ok=%v err=%v", to, ok, err)
+	}
+
+	// hook_failed -> running (resolved)
+	to, _, ok, err = fsm.Apply("s1", EvHookResolved, GuardCtx{}, "user retried")
+	if err != nil || !ok || to != state.StatusRunning {
+		t.Fatalf("EvHookResolved from hook_failed: to=%v ok=%v err=%v", to, ok, err)
+	}
+
+	// EvHookFailed from done should be rejected (not in the From list)
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
+		t.Fatalf("setup transition to done: %v", err)
+	}
+	_, _, ok, err = fsm.Apply("s1", EvHookFailed, GuardCtx{}, "after hook failed")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("EvHookFailed should not apply from done (after-hook failures don't use the FSM)")
+	}
+}
+
 func newTestFSMRapid(t *rapid.T, stages []string) (*FSM, *state.Store) {
 	dir, err := os.MkdirTemp("", "fsm-rapid-*")
 	if err != nil {

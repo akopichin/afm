@@ -10,6 +10,7 @@ A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML f
 - [Usage in Claude Code](#usage-in-claude-code)
 - [The flow.yaml File](#the-flowyaml-file)
 - [Supervisor and Autonomous Track](#supervisor-and-autonomous-track)
+- [Script Stages and Hooks](#script-stages-and-hooks)
 - [Stage Lifecycle](#stage-lifecycle)
 - [Configuration](#configuration)
   - [Debugging: `--debug`](#debugging---debug)
@@ -260,6 +261,12 @@ stages:
 | `artifacts` | no | Files the stage produces for other stages |
 | `inputs` | no | Artifacts from dependency stages (`stage.artifact`) |
 | `verify` | no | Shell command run after `.done`. Exit ≠ 0 — the stage is not counted as complete: one retry with the command's output in the prompt, then `failed`. Guards against a false "done" |
+| `script` | no | Makes this a script-only stage: runs the given shell script (`sh -c`) instead of any AI agent — no planning, no approval. Mutually exclusive with `agents`/`command`/`interactive`/`plan`/`verify`/`supervisor` |
+| `script_timeout` | no | Hard timeout for `script` (default `5m`) |
+| `script_before` | no | Shell script run immediately before this stage's own content (agent, autonomous track, interactive dialog, or another script). Works on any stage type |
+| `script_before_timeout` | no | Hard timeout for `script_before` (default `5m`) |
+| `script_after` | no | Shell script run right after the stage successfully completes |
+| `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
 
 **Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `supervisor_command` (supervisor agent command), `root_dir` (project root = agents' working directory, see below), `stages`.
 
@@ -367,6 +374,36 @@ stages:
 
 `auto` must be the stage's only agent; `auto` + `supervisor: true` is a configuration error (conflicting intents, caught during flow parsing).
 
+## Script Stages and Hooks
+
+A stage can run a plain shell script instead of an AI agent — useful for glue steps (notifications, deploy commands, a linter run) that don't need an LLM:
+
+```yaml
+stages:
+  - id: notify
+    script: |
+      curl -s -X POST https://hooks.example/notify -d '{"status":"started"}'
+```
+
+A `script` stage skips planning/approval entirely: as soon as its `depends_on` are done, the script runs, and the stage moves straight to `done`/`failed` based on the exit code.
+
+**`script_before` / `script_after`** are hooks that run immediately before/after *any* stage's own content — orthogonal to the stage type, so they combine freely with `agents`/`supervisor`/`interactive`/etc.:
+
+```yaml
+stages:
+  - id: deploy
+    agents: [planning, implementation]
+    script_before: |
+      echo "starting deploy at $(date)"
+    script_after: |
+      curl -s -X POST https://hooks.example/notify -d '{"status":"done"}'
+```
+
+- Both hooks retry automatically on failure: 3 attempts with 1s/2s/3s backoff.
+- If `script_before` still fails after retries, the stage blocks in `hook_failed` — resolve it from the dashboard with **Retry** (re-run the hook) or **Skip** (proceed to the stage's own content anyway).
+- If `script_after` still fails, it does **not** revert the stage — it's already `done`. You get the same Retry/Skip notice, but the stage's status is unaffected either way.
+- Output from `script`/`script_before`/`script_after` streams to the dashboard's event feed and log panel just like an agent's.
+
 ## Stage Lifecycle
 
 ```
@@ -388,6 +425,7 @@ pending → (supervisor) → running(autonomous_execution) → done
 - `awaiting_user_input` — an interactive stage is waiting for a user answer; once answered, it returns to the phase where the question was asked
 - `revising` — feedback was sent and the AI is reworking: either the plan (from `awaiting_approval`), or — with the experimental `agent_suggest` flag on — a `running` stage that just got a note and a graceful interrupt (see "Suggesting a Note to a Running Stage" below)
 - `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
+- `hook_failed` — a `script_before` hook exhausted its retries; the stage is blocked until you hit **Retry** or **Skip** on the dashboard (a `script_after` failure never uses this status — the stage stays `done`)
 - `done` / `failed` — complete
 
 ## Configuration

@@ -25,6 +25,12 @@ const (
 	EvBlockedByDep       FSMEvent = "blocked_by_dep"
 	EvReady              FSMEvent = "ready"
 	EvSupervisorApproved FSMEvent = "supervisor_approved"
+	// EvHookFailed: script_before exhausted its retries — blocks the stage.
+	// Only fired for the blocking "before" hook; "after" hook failures do not
+	// go through the FSM (the stage is already done and must stay done).
+	EvHookFailed FSMEvent = "hook_failed"
+	// EvHookResolved: user retried (succeeded) or skipped a failed before-hook.
+	EvHookResolved FSMEvent = "hook_resolved"
 )
 
 type GuardCtx struct {
@@ -76,6 +82,8 @@ func NewFSM(store *state.Store) *FSM {
 			EvBlockedByDep:       {From: []state.StageStatus{state.StatusPending}, To: to(state.StatusFailed)},
 			EvReady:              {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
 			EvSupervisorApproved: {From: []state.StageStatus{state.StatusPlanning}, To: to(state.StatusReady)},
+			EvHookFailed:         {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
+			EvHookResolved:       {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
 		},
 	}
 }

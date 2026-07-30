@@ -80,6 +80,7 @@
 .status-dot[data-status="failed"]               { color: var(--c-failed);        border-color: var(--c-failed); }
 .status-dot[data-status="retrying"]             { color: var(--c-retrying);      border-color: var(--c-retrying); }
 .status-dot[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); border-color: var(--c-awaiting-user); }
+.status-dot[data-status="hook_failed"]          { color: var(--c-hook-failed);   border-color: var(--c-hook-failed); }
 
 /* "running" rings — pulse */
 .status-dot[data-status="running"],

@@ -162,6 +162,49 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(calls.some((c) => c.endsWith('/retry'))).toBe(true))
   })
 
+  test('shows Retry and Skip buttons when the stage is hook_failed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+
+    render(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+
+    const retryBtn = await screen.findByRole('button', { name: 'Retry' })
+    const skipBtn = await screen.findByRole('button', { name: 'Skip' })
+    expect(retryBtn).toBeInTheDocument()
+    expect(skipBtn).toBeInTheDocument()
+  })
+
+  test('skip(): posts to the skip-hook endpoint when the stage is hook_failed', async () => {
+    const calls: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      calls.push(url)
+      return textResponse('')
+    })
+
+    render(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+
+    const skipBtn = await screen.findByRole('button', { name: 'Skip' })
+    fireEvent.click(skipBtn)
+
+    await waitFor(() => expect(calls.some((c) => c.endsWith('/skip-hook'))).toBe(true))
+  })
+
+  test('retry section for hook_failed posts to retry-hook, not retry', async () => {
+    const calls: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      calls.push(url)
+      return textResponse('')
+    })
+
+    render(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+
+    const retryBtn = await screen.findByRole('button', { name: 'Retry' })
+    fireEvent.click(retryBtn)
+
+    await waitFor(() => expect(calls.some((c) => c.endsWith('/retry-hook'))).toBe(true))
+  })
+
   test('stage.status done: renders the plan with all checkboxes checked', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('- [ ] item one\n- [ ] item two'))
 

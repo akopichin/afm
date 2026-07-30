@@ -38,6 +38,22 @@ func (o *Orchestrator) activateAutoStage(s flow.Stage) bool {
 	return true
 }
 
+// activateScriptStage activates a script-only stage (Stage.IsScript()) the
+// same way activateAutoStage activates an auto stage: no plan.md, straight
+// to Ready. Returns false (no-op) if s is not a script stage.
+func (o *Orchestrator) activateScriptStage(s flow.Stage) bool {
+	if !s.IsScript() {
+		return false
+	}
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		return true
+	}
+	o.Trigger(s.ID, EvReady, GuardCtx{}, "script stage")
+	return true
+}
+
 // tryActivatePrePlanned checks all pre-planned stages (those with Plan != "")
 // and activates any whose dependencies are now done but status is still pending.
 func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
@@ -57,6 +73,9 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 		}
 
 		if o.activateAutoStage(s) {
+			continue
+		}
+		if o.activateScriptStage(s) {
 			continue
 		}
 
@@ -130,14 +149,18 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		// перед спавном, чтобы isAutonomousStage (используется dialog-поллером,
 		// resolvePlanSource и т.д.) видел стадию как автономную с самого начала.
 		stageDir := filepath.Join(o.opts.RunDir, id)
+		if stage.IsScript() {
+			o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
+			continue
+		}
 		if isAutonomousStage(stageDir) || stage.IsAuto() {
 			if stage.IsAuto() {
 				_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 			}
-			o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+			o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
 			continue
 		}
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 	}
 }
 
@@ -187,6 +210,27 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		return
 	}
 
+	// Script-стадия (Stage.IsScript()): у неё нет ни plan.md, ни агента —
+	// перезапускаем сам скрипт напрямую, а не проваливаемся в ветку
+	// "!NeedsPlanning() → искать/копировать plan.md" ниже (у которой для
+	// script-стадии нет ни plan.md, ни stage.Plan-источника — она бы сразу
+	// повторно фейлила стадию с "no plan.md and no plan source configured"
+	// вместо реального повторного запуска скрипта). Проверяется ДО
+	// autonomous-ветки — script-стадия никогда не бывает autonomous.
+	if stage.IsScript() {
+		if !o.depsDone(*stage) {
+			return
+		}
+		o.Trigger(stageID, EvReady, GuardCtx{}, "manual retry: script")
+		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
+		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+			return
+		}
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
+		o.startReadyStages(ctx)
+		return
+	}
+
 	// Autonomous-стадия (супервизор ранее выбрал автономный трек — на диске лежит
 	// autonomous.flag): retry чтит это решение и перезапускает автономный агент
 	// напрямую, а не «сваливается» в planning. Супервизор повторно НЕ опрашивается —
@@ -209,7 +253,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -241,7 +285,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -254,7 +298,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 	} else {
 		// Deps not done — stay pending; planning starts automatically
 		// via startPlanningForUnblocked once dependencies complete.
@@ -312,7 +356,22 @@ func (o *Orchestrator) allTerminal() bool {
 // Without a dashboard, any terminal state (done or failed) is final.
 // With a dashboard, exit only when all stages are done — failed stages stay
 // visible so the user can retry them without restarting the process.
+//
+// pendingAfterHooks guards a gap allTerminal() alone can't see: a stage's
+// own status can already be "done" while its script_after hook (spawned
+// from onAgentCompleted/approveStage, right as that same status flips) is
+// still running or blocked waiting on a RetryHook/SkipHook decision —
+// runAfterHook deliberately never touches the FSM (see its doc comment), so
+// the stage stays "done" throughout. Without this check, Run() could cancel
+// its ctx (shutdown) in the very same instant the hook goroutine was
+// spawned, killing it before it ever gets to run. Scoped narrowly to
+// after-hooks only (not a general "any agent in flight" counter, see
+// spawnAgent's doc comment) — every other agent type already moves its
+// stage's FSM status, which allTerminal() below already accounts for.
 func (o *Orchestrator) shouldExit() bool {
+	if o.pendingAfterHooks.Load() > 0 {
+		return false
+	}
 	if !o.allTerminal() {
 		return false
 	}

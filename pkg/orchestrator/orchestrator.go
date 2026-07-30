@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akopichin/afm/pkg/config"
@@ -86,6 +87,10 @@ type Orchestrator struct {
 	// агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
 	// что ломает phaseDispatch и уводит FSM в wrong state.
 	preAskPhase sync.Map
+	// hookWaiters holds, per stageID, the channel a blocked before/after hook
+	// is waiting on for a user decision (see hooks.go: waitForHookDecision/
+	// resolveHook). Only populated while a hook is actually blocked.
+	hookWaiters sync.Map
 	// violationCache кешует stat .jsonl-файлов для detectDialogViolation.
 	// Доступен только из горутины поллера — мьютекс не нужен.
 	violationCache map[string]violationCacheEntry // key: путь к .jsonl
@@ -114,6 +119,21 @@ type Orchestrator struct {
 	// waitAgents дожидается его опустошения на выходе из Run — иначе горутины,
 	// ещё пишущие в Store, переживают Run и рискуют использовать Store после Close.
 	agentWG sync.WaitGroup
+
+	// pendingAfterHooks — счётчик живых script_after горутин (инкремент
+	// синхронно в maybeRunAfterHook ДО spawnAgent, декремент из её же
+	// cleanup-обёртки, см. hooks.go). Нужен specifically для shouldExit
+	// (scheduling.go): script_after — единственный вид агента, который НЕ
+	// трогает FSM своей стадии (см. runAfterHook), так что allTerminal()
+	// остаётся true, пока хук ещё реально выполняется или ждёт решения
+	// RetryHook/SkipHook — без этого счётчика Run() мог бы отменить свой ctx
+	// (shutdown) в тот же момент, когда стадия стала done, убив только что
+	// запущенный after-hook раньше, чем он успеет хоть раз стартовать.
+	// Намеренно уже, чем общий agentWG/spawnAgent: остальные типы агентов уже
+	// двигают FSM-статус, на который и так смотрит allTerminal(), так что им
+	// эта бухгалтерия не нужна и не добавляется (см. spawnAgent). Обычный
+	// sync.WaitGroup не даёт прочитать текущий счётчик, поэтому отдельный atomic.
+	pendingAfterHooks atomic.Int32
 
 	// runMu/runCtx хранят долгоживущий контекст event loop (см. Run), который
 	// HTTP-инициированные Approve/Revise/Retry подставляют вместо request-ctx
@@ -379,18 +399,35 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
-		if current != state.StatusRunning && current != state.StatusRetrying {
-			return nil
-		}
-		o.Trigger(ev.StageID, EvComplete, GuardCtx{}, "")
-		o.failBlockedStages()
-		o.startPlanningForUnblocked(ctx)
-		o.startReadyStages(ctx)
-		o.tryActivatePrePlanned(ctx)
+		o.completeStage(ctx, ev.StageID, current)
+	case phaseScript:
+		// Script-стадия завершилась (runScriptStage): нет revising-гонки
+		// (interruptChans не регистрируется вне runWithRetry, Revise() на
+		// script-стадию не осмыслен) — просто done, как остальные фазы.
+		o.completeStage(ctx, ev.StageID, current)
 	default:
 		// review or unknown agent type: no status change needed
 	}
 	return nil
+}
+
+// completeStage finalizes a stage that genuinely reached done. It is the
+// single chokepoint shared by onAgentCompleted's phaseImplementation/
+// phaseAutonomous and phaseScript branches: their pre-checks differ (the
+// former also handles the revising race above), but once a stage is
+// confirmed Running/Retrying, the completion cascade — EvComplete, the
+// script_after hook, and unblocking dependents — is identical for all three
+// phases, so it lives here once instead of being duplicated per case.
+func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus) {
+	if current != state.StatusRunning && current != state.StatusRetrying {
+		return
+	}
+	o.Trigger(stageID, EvComplete, GuardCtx{}, "")
+	o.maybeRunAfterHook(ctx, stageID)
+	o.failBlockedStages()
+	o.startPlanningForUnblocked(ctx)
+	o.startReadyStages(ctx)
+	o.tryActivatePrePlanned(ctx)
 }
 
 // onUserAnswered resumes a stage that was paused on awaiting_user_input.

@@ -127,6 +127,7 @@
 .feed-stage-badge.status-failed              { color: var(--c-failed); }
 .feed-stage-badge.status-retrying            { color: var(--c-retrying); }
 .feed-stage-badge.status-awaiting_user_input { color: var(--c-awaiting-user); }
+.feed-stage-badge.status-hook_failed         { color: var(--c-hook-failed); }
 
 /* A2 — вход новых строк ленты (только новые монтируются → анимируются) */
 .feed-entry { animation: feedIn 0.25s ease; }

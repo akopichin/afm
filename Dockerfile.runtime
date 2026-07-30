@@ -13,7 +13,19 @@ FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 COPY . .
 # Перекрываем dashboard свежим билдом из stage web: точка входа, бандл, скины, иконки.
-COPY --from=web /dash/index.html /dash/assets /dash/skins /dash/favicon.svg /dash/quarium-logo.png ./pkg/web/dashboard/
+# Директории (assets/skins) копируются ОТДЕЛЬНЫМИ однo-source COPY, каждая в
+# явно named destination — это гарантирует, что source-директория целиком
+# заменяет destination (Docker так делает только для single-source COPY dir
+# в НЕСУЩЕСТВУЮЩИЙ/полностью заменяемый dest). Раньше assets/skins шли одним
+# multi-source COPY вместе с index.html — тогда содержимое /dash/assets
+# доливалось поверх уже закоммиченного ./pkg/web/dashboard/assets/ (со старым
+# index-<hash>.js, хеш контентный → другое имя), и go:embed мог встроить
+# СТАРЫЙ бандл рядом с новым index.html, который на него не ссылается —
+# бандл, который сервер реально отдаёт, оставался устаревшим молча.
+RUN rm -rf ./pkg/web/dashboard/assets ./pkg/web/dashboard/skins
+COPY --from=web /dash/assets ./pkg/web/dashboard/assets
+COPY --from=web /dash/skins ./pkg/web/dashboard/skins
+COPY --from=web /dash/index.html /dash/favicon.svg /dash/quarium-logo.png ./pkg/web/dashboard/
 ARG AFM_VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-X main.version=$AFM_VERSION" -o /afm ./cmd/afm
 

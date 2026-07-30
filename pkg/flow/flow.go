@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -84,6 +85,19 @@ type Stage struct {
 	// Стадия обязана содержать AgentPlanning в Agents.
 	Supervisor       bool   `yaml:"supervisor"`
 	SupervisorPrompt string `yaml:"supervisor_prompt,omitempty"`
+	// Script, if set, makes this a script-only stage: it runs the given shell
+	// script (via sh -c) instead of any agent, with no planning/supervisor/
+	// approval gate. Mutually exclusive with Agents/Command/Interactive/Plan/
+	// Verify/Supervisor.
+	Script        string        `yaml:"script"`
+	ScriptTimeout time.Duration `yaml:"script_timeout"`
+	// ScriptBefore/ScriptAfter run a shell script immediately before/after this
+	// stage's own main content (agent, script, or interactive). Legal on any
+	// stage type, alongside its other fields.
+	ScriptBefore        string        `yaml:"script_before"`
+	ScriptBeforeTimeout time.Duration `yaml:"script_before_timeout"`
+	ScriptAfter         string        `yaml:"script_after"`
+	ScriptAfterTimeout  time.Duration `yaml:"script_after_timeout"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -137,6 +151,12 @@ func (s *Stage) IsAuto() bool {
 	return len(s.Agents) == 1 && s.Agents[0] == AgentAuto
 }
 
+// IsScript reports whether the stage runs a plain shell script instead of an
+// agent (agents: [] entirely absent, replaced by the Script field).
+func (s *Stage) IsScript() bool {
+	return s.Script != ""
+}
+
 // Flow is the top-level structure parsed from a flow YAML file.
 type Flow struct {
 	Name        string `yaml:"name"`
@@ -171,7 +191,34 @@ func ParseFile(path string) (*Flow, error) {
 	if err := f.validate(); err != nil {
 		return nil, err
 	}
+	f.applyScriptTimeoutDefaults()
 	return &f, nil
+}
+
+// defaultScriptTimeout is applied to script/script_before/script_after when
+// the corresponding *_timeout field is left unset (zero value) in YAML — the
+// documented 300s (5min) default bound against a hung or noisily-looping
+// script that would otherwise only be caught by the 24h idle timeout.
+const defaultScriptTimeout = 5 * time.Minute
+
+// applyScriptTimeoutDefaults fills in defaultScriptTimeout for any script
+// field that is set but whose timeout was left at the Go zero value. An
+// explicit timeout in YAML (any non-zero duration) is never overridden.
+// Mutates f.Stages in place — f.Stages is a []Stage value slice, so the loop
+// indexes into it directly rather than ranging over a copy.
+func (f *Flow) applyScriptTimeoutDefaults() {
+	for i := range f.Stages {
+		s := &f.Stages[i]
+		if s.Script != "" && s.ScriptTimeout == 0 {
+			s.ScriptTimeout = defaultScriptTimeout
+		}
+		if s.ScriptBefore != "" && s.ScriptBeforeTimeout == 0 {
+			s.ScriptBeforeTimeout = defaultScriptTimeout
+		}
+		if s.ScriptAfter != "" && s.ScriptAfterTimeout == 0 {
+			s.ScriptAfterTimeout = defaultScriptTimeout
+		}
+	}
 }
 
 func (f *Flow) validate() error {
@@ -192,8 +239,8 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
-		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() {
-			return fmt.Errorf("stage %q: must have planning agent or a plan path", s.ID)
+		if s.Plan == "" && !s.HasAgent(AgentPlanning) && !s.Interactive && !s.IsAuto() && !s.IsScript() {
+			return fmt.Errorf("stage %q: must have planning agent, a plan path, or script", s.ID)
 		}
 	}
 
@@ -213,6 +260,30 @@ func (f *Flow) validate() error {
 		}
 		if s.Supervisor {
 			return fmt.Errorf("stage %q: \"auto\" is incompatible with supervisor: true", s.ID)
+		}
+	}
+
+	for _, s := range f.Stages {
+		if !s.IsScript() {
+			continue
+		}
+		if len(s.Agents) > 0 {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with agents", s.ID)
+		}
+		if s.Command != "" {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with command", s.ID)
+		}
+		if s.Interactive {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with interactive", s.ID)
+		}
+		if s.Plan != "" {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with plan", s.ID)
+		}
+		if s.Verify != "" {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with verify", s.ID)
+		}
+		if s.Supervisor {
+			return fmt.Errorf("stage %q: \"script\" cannot be combined with supervisor", s.ID)
 		}
 	}
 

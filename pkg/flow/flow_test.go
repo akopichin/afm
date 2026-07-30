@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
 )
@@ -496,6 +497,166 @@ stages:
 	}
 	if s.SupervisorPrompt != "extra hint" {
 		t.Errorf("got SupervisorPrompt=%q, want 'extra hint'", s.SupervisorPrompt)
+	}
+}
+
+func TestParseScriptStageFields(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: notify
+    name: N
+    description: d
+    script: |
+      echo "hello"
+    script_timeout: 45s
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st := f.Stages[0]
+	if st.Script != "echo \"hello\"\n" {
+		t.Errorf("Script = %q", st.Script)
+	}
+	if st.ScriptTimeout != 45*time.Second {
+		t.Errorf("ScriptTimeout = %v, want 45s", st.ScriptTimeout)
+	}
+	if !st.IsScript() {
+		t.Error("IsScript() should be true")
+	}
+}
+
+func TestParseScriptBeforeAfterFields(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: build
+    name: B
+    description: d
+    agents: [implementation]
+    plan: docs/plan.md
+    script_before: |
+      echo "before"
+    script_before_timeout: 10s
+    script_after: |
+      echo "after"
+    script_after_timeout: 20s
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st := f.Stages[0]
+	if st.ScriptBefore != "echo \"before\"\n" || st.ScriptBeforeTimeout != 10*time.Second {
+		t.Errorf("ScriptBefore = %q / %v", st.ScriptBefore, st.ScriptBeforeTimeout)
+	}
+	if st.ScriptAfter != "echo \"after\"\n" || st.ScriptAfterTimeout != 20*time.Second {
+		t.Errorf("ScriptAfter = %q / %v", st.ScriptAfter, st.ScriptAfterTimeout)
+	}
+	if st.IsScript() {
+		t.Error("IsScript() should be false for an agent stage with hooks")
+	}
+}
+
+func TestScriptTimeoutDefaultsWhenUnset(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: notify
+    name: N
+    description: d
+    script: |
+      echo "hello"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st := f.Stages[0]
+	if st.ScriptTimeout != 5*time.Minute {
+		t.Errorf("ScriptTimeout = %v, want 5m default", st.ScriptTimeout)
+	}
+}
+
+func TestScriptBeforeAfterTimeoutsDefaultWhenUnset(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: build
+    name: B
+    description: d
+    agents: [implementation]
+    plan: docs/plan.md
+    script_before: |
+      echo "before"
+    script_after: |
+      echo "after"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st := f.Stages[0]
+	if st.ScriptBeforeTimeout != 5*time.Minute {
+		t.Errorf("ScriptBeforeTimeout = %v, want 5m default", st.ScriptBeforeTimeout)
+	}
+	if st.ScriptAfterTimeout != 5*time.Minute {
+		t.Errorf("ScriptAfterTimeout = %v, want 5m default", st.ScriptAfterTimeout)
+	}
+}
+
+func TestValidateScriptCannotCombineWithAgents(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    script: "echo hi"
+    agents: [implementation]
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "script") {
+		t.Fatalf("expected script-combination error, got %v", err)
+	}
+}
+
+func TestValidateScriptCannotCombineWithVerify(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    script: "echo hi"
+    verify: "true"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "script") {
+		t.Fatalf("expected script-combination error, got %v", err)
+	}
+}
+
+func TestValidateScriptStageNeedsNoOtherWorkField(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: s1
+    name: S1
+    description: d
+    script: "echo hi"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error for valid script-only stage: %v", err)
 	}
 }
 

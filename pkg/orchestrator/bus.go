@@ -20,6 +20,28 @@ const (
 	EventUserAnswered       EventType = "user_answered"
 	EventSupervisorDecision EventType = "supervisor_decision"
 	EventContextWarning     EventType = "context_warning"
+	// EventScriptOutput carries one line of stdout from a script/hook run.
+	// Data: map[string]string{"hook": "before"|"script"|"after", "line": "..."}.
+	EventScriptOutput EventType = "script_output"
+	// EventHookFailed fires when a before/after hook exhausts its 3x/1-2-3s
+	// retries. Data: map[string]string{"hook": ..., "error": "..."}.
+	EventHookFailed EventType = "hook_failed"
+	// EventHookResolved fires when the user retries or skips a failed hook.
+	// Data: map[string]string{"hook": ..., "resolution": "retried"|"skipped"}.
+	EventHookResolved EventType = "hook_resolved"
+	// eventAgentDrained is an internal-only nudge published on the critical
+	// bus right after a script_after hook's goroutine finishes
+	// (maybeRunAfterHook, hooks.go), once pendingAfterHooks has already been
+	// decremented. handleEvent's switch doesn't match it (falls through as a
+	// no-op) — its only purpose is to wake Run()'s select loop so it
+	// re-checks shouldExit() with a guaranteed-fresh pendingAfterHooks value.
+	// Needed because a script_after hook resolving (RetryHook/SkipHook, or
+	// the script finally succeeding) never itself triggers an FSM
+	// transition/EventAgentCompleted, so without this Run() could sit
+	// blocked on select forever after the hook settles, never noticing every
+	// stage is actually done. Never published to ui —
+	// must not reach the dashboard.
+	eventAgentDrained EventType = "__agent_drained"
 )
 
 type Event struct {
