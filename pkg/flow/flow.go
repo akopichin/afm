@@ -98,6 +98,12 @@ type Stage struct {
 	ScriptBeforeTimeout time.Duration `yaml:"script_before_timeout"`
 	ScriptAfter         string        `yaml:"script_after"`
 	ScriptAfterTimeout  time.Duration `yaml:"script_after_timeout"`
+	// AutoApprove, if true, approves this stage's plan automatically the
+	// instant it's ready (awaiting_approval), with no human interaction —
+	// regardless of whether a dashboard is attached and regardless of
+	// --require-approval. Default false. Intended for CI runs where some
+	// stages need human review and others don't.
+	AutoApprove bool `yaml:"auto_approve"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
