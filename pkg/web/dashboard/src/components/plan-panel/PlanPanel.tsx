@@ -28,6 +28,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   const isReview = stage.status === 'awaiting_approval'
   const showActions = isReview
   const showRetry = stage.status === 'failed'
+  const showHookFailed = stage.status === 'hook_failed'
   const commentCount = Object.keys(comments).length
 
   function flashButton(which: 'approve' | 'revise' | 'retry') {
@@ -150,6 +151,26 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
     }
   }
 
+  async function retryHook() {
+    flashButton('retry')
+    setBusy(true)
+    try {
+      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/retry-hook`, null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function skipHook() {
+    flashButton('revise') // reuse the 'revise'-style flash slot; no dedicated 'skip' clicked-state needed
+    setBusy(true)
+    try {
+      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/skip-hook`, null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <Maximizable id="plan">
       <PanelFrame title="Plan" maximizeId="plan" attention={attention}>
@@ -196,6 +217,23 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
               <button id="btn-retry" className={`btn btn-retry${clicked === 'retry' ? ' ok' : ''}`} type="button" disabled={busy} onClick={retry}>
                 <span className="btn-ripple" aria-hidden="true" />
                 <span className="btn-label">Retry</span>
+                <span className="btn-done" aria-hidden="true">✓</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showHookFailed && (
+          <div id="hook-failed-section" className="section">
+            <div className="actions-row">
+              <button id="btn-retry-hook" className="btn btn-retry" type="button" disabled={busy} onClick={retryHook}>
+                <span className="btn-ripple" aria-hidden="true" />
+                <span className="btn-label">Retry</span>
+                <span className="btn-done" aria-hidden="true">✓</span>
+              </button>
+              <button id="btn-skip-hook" className="btn btn-revise" type="button" disabled={busy} onClick={skipHook}>
+                <span className="btn-ripple" aria-hidden="true" />
+                <span className="btn-label">Skip</span>
                 <span className="btn-done" aria-hidden="true">✓</span>
               </button>
             </div>

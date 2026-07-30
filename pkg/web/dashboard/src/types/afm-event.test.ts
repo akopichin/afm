@@ -57,6 +57,7 @@ describe('STAGE_STATUS_LABELS', () => {
       failed: 'Failed',
       retrying: 'Retrying',
       awaiting_user_input: 'Awaiting reply',
+      hook_failed: 'Hook failed',
     })
   })
 })

@@ -11,6 +11,7 @@ export const STAGE_STATUSES = [
   'failed',
   'retrying',
   'awaiting_user_input',
+  'hook_failed',
 ] as const
 
 export type StageStatus = (typeof STAGE_STATUSES)[number]
@@ -38,6 +39,7 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   failed: 'Failed',
   retrying: 'Retrying',
   awaiting_user_input: 'Awaiting reply',
+  hook_failed: 'Hook failed',
 }
 
 // Статусы, считающиеся «активными» (стадия в работе) — основа автовыбора и логики
