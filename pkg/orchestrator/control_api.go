@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -34,6 +35,21 @@ func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOpti
 		StageID: stageID,
 		Data:    map[string]any{keyID: qID, "phase": phase, keyAnswer: answer},
 	})
+}
+
+// autoApproveIfConfigured immediately approves a stage right after its plan
+// becomes ready (EvPlanReady) if flow.yaml sets auto_approve: true on it —
+// independent of whether a dashboard is attached and independent of
+// --require-approval, both of which only govern the *default* (no
+// auto_approve) headless behavior elsewhere in this package. Returns whether
+// it auto-approved (callers use this to skip their own headless branch).
+func (o *Orchestrator) autoApproveIfConfigured(ctx context.Context, stage flow.Stage) bool {
+	if !stage.AutoApprove {
+		return false
+	}
+	log.Printf("auto_approve: auto-approving plan for stage %q", stage.ID)
+	o.approveStage(ctx, stage.ID)
+	return true
 }
 
 // approveStage долговечно переводит стадию из awaiting_approval и запускает

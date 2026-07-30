@@ -104,6 +104,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			}
 			if checkPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
 				o.Trigger(s.ID, EvPlanReady, GuardCtx{}, "recovered plan.md")
+				o.autoApproveIfConfigured(ctx, s)
 				continue
 			}
 			// Restart planning from scratch
@@ -153,6 +154,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if checkPlanCompletion(stageDir) == nil {
 					o.Trigger(s.ID, EvPlanReady, GuardCtx{}, "recovered plan.md")
+					o.autoApproveIfConfigured(ctx, s)
 					continue
 				}
 			}

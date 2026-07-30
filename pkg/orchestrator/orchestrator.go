@@ -362,6 +362,11 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 			return nil
 		}
 		o.Trigger(ev.StageID, EvPlanReady, GuardCtx{}, "")
+		// auto_approve: true on the stage config wins regardless of
+		// dashboard/--require-approval — checked before the headless branch.
+		if stage := o.graph.Stage(ev.StageID); stage != nil && o.autoApproveIfConfigured(ctx, *stage) {
+			return nil
+		}
 		// Headless: нет дашборда → никто не нажмёт Approve.
 		// RequireApproval=true → fail-fast с понятным сообщением.
 		// RequireApproval=false (дефолт) → авто-апрув, flow идёт дальше.
