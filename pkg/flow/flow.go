@@ -191,7 +191,34 @@ func ParseFile(path string) (*Flow, error) {
 	if err := f.validate(); err != nil {
 		return nil, err
 	}
+	f.applyScriptTimeoutDefaults()
 	return &f, nil
+}
+
+// defaultScriptTimeout is applied to script/script_before/script_after when
+// the corresponding *_timeout field is left unset (zero value) in YAML — the
+// documented 300s (5min) default bound against a hung or noisily-looping
+// script that would otherwise only be caught by the 24h idle timeout.
+const defaultScriptTimeout = 5 * time.Minute
+
+// applyScriptTimeoutDefaults fills in defaultScriptTimeout for any script
+// field that is set but whose timeout was left at the Go zero value. An
+// explicit timeout in YAML (any non-zero duration) is never overridden.
+// Mutates f.Stages in place — f.Stages is a []Stage value slice, so the loop
+// indexes into it directly rather than ranging over a copy.
+func (f *Flow) applyScriptTimeoutDefaults() {
+	for i := range f.Stages {
+		s := &f.Stages[i]
+		if s.Script != "" && s.ScriptTimeout == 0 {
+			s.ScriptTimeout = defaultScriptTimeout
+		}
+		if s.ScriptBefore != "" && s.ScriptBeforeTimeout == 0 {
+			s.ScriptBeforeTimeout = defaultScriptTimeout
+		}
+		if s.ScriptAfter != "" && s.ScriptAfterTimeout == 0 {
+			s.ScriptAfterTimeout = defaultScriptTimeout
+		}
+	}
 }
 
 func (f *Flow) validate() error {

@@ -561,6 +561,55 @@ stages:
 	}
 }
 
+func TestScriptTimeoutDefaultsWhenUnset(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: notify
+    name: N
+    description: d
+    script: |
+      echo "hello"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st := f.Stages[0]
+	if st.ScriptTimeout != 5*time.Minute {
+		t.Errorf("ScriptTimeout = %v, want 5m default", st.ScriptTimeout)
+	}
+}
+
+func TestScriptBeforeAfterTimeoutsDefaultWhenUnset(t *testing.T) {
+	yaml := `
+name: f
+description: d
+stages:
+  - id: build
+    name: B
+    description: d
+    agents: [implementation]
+    plan: docs/plan.md
+    script_before: |
+      echo "before"
+    script_after: |
+      echo "after"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st := f.Stages[0]
+	if st.ScriptBeforeTimeout != 5*time.Minute {
+		t.Errorf("ScriptBeforeTimeout = %v, want 5m default", st.ScriptBeforeTimeout)
+	}
+	if st.ScriptAfterTimeout != 5*time.Minute {
+		t.Errorf("ScriptAfterTimeout = %v, want 5m default", st.ScriptAfterTimeout)
+	}
+}
+
 func TestValidateScriptCannotCombineWithAgents(t *testing.T) {
 	yaml := `
 name: f

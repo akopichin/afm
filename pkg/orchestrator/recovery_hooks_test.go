@@ -212,3 +212,88 @@ func TestRecovery_ResumesPendingAfterHook(t *testing.T) {
 	cancel2()
 	<-runDone2
 }
+
+// TestRecovery_FiresAfterHookOnRecoveredDone covers the crash scenario where
+// a stage's real work finished (its .done marker is on disk) but afm crashed
+// BEFORE the live completion path (completeStage in orchestrator.go) ever
+// ran — so script_after was never even attempted, not just interrupted
+// mid-flight. On restart, recovery.go detects the StatusRunning stage's
+// .done file and fires EvComplete directly (recovery.go's "recovered .done"
+// site under the StatusRunning case). Without a maybeRunAfterHook call right
+// after that Trigger, the stage's script_after would never run at all. This
+// differs from TestRecovery_ResumesPendingAfterHook, which resumes a hook
+// that had ALREADY started (hook_pending.json already on disk from a first
+// real run) — here the hook has not started at all before the simulated
+// crash, so hook_pending.json does not exist yet.
+func TestRecovery_FiresAfterHookOnRecoveredDone(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+	afterMarker := filepath.Join(rootDir, "after-ran.marker")
+
+	stages := []flow.Stage{{
+		ID:          "notify",
+		Name:        "Notify",
+		ScriptAfter: "touch " + afterMarker,
+	}}
+
+	// Simulate a crash: the stage's real work already finished (.done
+	// written, as an agent/script would leave it) and the store recorded it
+	// as StatusRunning, but the process died before completeStage ever ran
+	// — so EvComplete was never fired and script_after was never attempted.
+	store, err := state.Open(runDir, []string{"notify"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "notify", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, "notify")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, ".done"), []byte("done\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store.Close() // simulate process exit
+
+	// Reopen (simulating `afm run` restart) and re-run with a fresh Orchestrator.
+	store2, err := state.Open(runDir, []string{"notify"})
+	if err != nil {
+		t.Fatalf("state.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() { store2.Close() })
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		RootDir: rootDir,
+		Stages:  stages,
+		Store:   store2,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- orch.Run(ctx) }()
+
+	stateFile := filepath.Join(runDir, "state.json")
+	waitForStatus(t, stateFile, "notify", state.StatusDone, 20*time.Second)
+
+	// The key assertion: recovery must have actually given script_after a
+	// chance to run, not silently skipped it because EvComplete was fired
+	// via recovery.go instead of the live completeStage path.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(afterMarker); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(afterMarker); err != nil {
+		t.Error("expected script_after to have run after recovery fired EvComplete for the recovered .done stage")
+	}
+
+	cancel()
+	<-runDone
+}

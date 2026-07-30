@@ -48,6 +48,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if err := checkCompletion(stageDir, ".", s); err == nil {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
 				o.Trigger(s.ID, EvReady, GuardCtx{}, "retry recovery")
@@ -98,6 +99,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
 			if err := checkCompletion(stageDir, ".", s); err == nil {
 				o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+				o.maybeRunAfterHook(ctx, s.ID)
 				continue
 			}
 			if checkPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
@@ -132,6 +134,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if isAutonomousStage(stageDir) || s.IsAuto() {
 				if checkAutonomousCompletion(stageDir) == nil {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered execution_summary.md")
+					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
 				o.spawnAgent(ctx, s, o.runAutonomousAgent)
@@ -139,6 +142,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			}
 			if err := checkCompletion(stageDir, ".", s); err == nil {
 				o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+				o.maybeRunAfterHook(ctx, s.ID)
 				continue
 			}
 			// Interrupted implementation — restart with existing plan
