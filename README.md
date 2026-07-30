@@ -256,6 +256,7 @@ stages:
 | `command` | no | AI command for this stage (overrides `client.command` from the config) |
 | `max_parallel` | no | Limit on parallel stages for this command |
 | `interactive` | no | `true` — enables the file-based dialog protocol with the user via the dashboard (see below) |
+| `auto_approve` | no | `true` — approve this stage's plan automatically the instant it's ready, with no human interaction — regardless of a dashboard being attached or `--require-approval`. Default `false`. Intended for CI (see "Auto-Approving a Stage's Plan" below) |
 | `supervisor` | no | `true` — allow the supervisor to evaluate the stage and possibly move it to the autonomous track (requires `supervisor_command`) |
 | `supervisor_prompt` | no | Extra context for the supervisor when evaluating this stage |
 | `artifacts` | no | Files the stage produces for other stages |
@@ -526,6 +527,22 @@ Normally you can only redirect a stage at the `awaiting_approval` checkpoint (se
 1. Click the kebab (⋮) menu on a `running` (or `awaiting_approval`) stage row and choose "Add a note for the agent".
 2. Type the note and send — the agent finishes its current step, then receives SIGINT (a graceful interrupt, not a kill).
 3. The stage moves through `revising` and restarts the same phase (planning/implementation/review/autonomous) with your note folded into its context, then continues toward `done`.
+
+### Auto-Approving a Stage's Plan
+
+Set `auto_approve: true` on a stage to skip the human approval checkpoint entirely — useful for CI runs where some stages need review and others don't:
+
+```yaml
+stages:
+  - id: lint
+    agents: [planning, implementation]
+    auto_approve: true    # no human ever needs to click Approve for this stage
+  - id: deploy
+    agents: [planning, implementation]
+    depends_on: [lint]    # still requires a human Approve — auto_approve not set
+```
+
+The plan is approved the instant it's ready, whether or not a dashboard is attached and regardless of `--require-approval` (which normally fails a headless run with no dashboard). If the dashboard is open, the stage's plan is still shown, with an "Auto-approved" badge in place of the Approve/Revise buttons.
 
 ### Resume on Restart
 
