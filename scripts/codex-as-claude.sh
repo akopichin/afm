@@ -12,6 +12,11 @@
 #   CODEX_SANDBOX  — sandbox mode (default: danger-full-access — the container
 #                    is already isolated)
 #   CODEX_VERBOSE  — set to 1 to include command execution output (default: 0)
+#
+# codex's stderr flows through to this script's stderr (captured by afm's
+# executor into <phase>.stderr.log). If codex exits non-zero (e.g. not
+# logged in), this script prints a short diagnostic and exits with the same
+# code instead of emitting a success envelope — afm fails the stage.
 
 set -euo pipefail
 
@@ -64,6 +69,18 @@ if [[ "$CODEX_VERBOSE" != "0" && "$CODEX_VERBOSE" != "1" ]]; then
     CODEX_VERBOSE=0
 fi
 
+# codex's raw JSONL output goes to a temp file (not a process substitution)
+# so we can reliably capture its exit status: a failing pipeline inside a
+# `set -e` process-substitution subshell can abort before $? is readable.
+# set -e is suspended around just this one invocation for the same reason.
+out_file=$(mktemp)
+trap 'rm -f "$out_file"' EXIT
+
+set +e
+printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" > "$out_file"
+codex_exit=$?
+set -e
+
 final_text=""
 while IFS= read -r line; do
     ev_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
@@ -82,7 +99,12 @@ while IFS= read -r line; do
             fi
             ;;
     esac
-done < <(printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" 2>/dev/null)
+done < "$out_file"
+
+if [[ "$codex_exit" -ne 0 ]]; then
+    echo "error: codex exited with status $codex_exit" >&2
+    exit "$codex_exit"
+fi
 
 # assistant-конверт: агрегированный текст всего ответа (matches openai-as-claude.sh /
 # cursor-as-claude.sh pattern — afm's executor only accepts "assistant"-typed events,

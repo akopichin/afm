@@ -355,9 +355,12 @@ func ReExec(cfg ReExecConfig) error {
 			name := envName(cmd)
 			// codex — единственный тип, для которого Validate() допускает пустой
 			// Auth (авторизация идёт через смонтированную ~/.codex, не через
-			// секрет). Пропускаем резолв, иначе ResolveAuthValue("", ...) фейлит
-			// на пустом auth.from и валит весь запуск даже когда секрет не нужен.
-			if recipe.Auth.From == "" {
+			// секрет). Пропускаем резолв ТОЛЬКО для codex, иначе ResolveAuthValue("", ...)
+			// фейлит на пустом auth.from и валит весь запуск даже когда секрет не нужен.
+			// Для остальных типов (openai/cursor) пустой auth.from при заданном
+			// auth.to — это misconfiguration, которая должна fail-fast здесь, а не
+			// молча всплыть позже в контейнере как "OPENAI_API_KEY is not set".
+			if recipe.Type == config.RecipeTypeCodex && recipe.Auth.From == "" {
 				continue
 			}
 			val, vErr := ResolveAuthValue(recipe.Auth.From, secrets)

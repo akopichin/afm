@@ -142,8 +142,10 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	}
 
 	if s.Type == config.RecipeTypeCodex {
-		// codex API: CODEX_* vars + exec codex-as-claude.
-		// realClaude не нужен — codex-as-claude не вызывает claude.
+		// codex: без API/URL/auth-token — авторизация идёт через смонтированный
+		// ~/.codex (OAuth state), не через этот враппер. Здесь только резолвим
+		// CODEX_BIN (реальный бинарник, до PATH-рекурсии), опционально CODEX_MODEL,
+		// и exec'аем codex-as-claude. realClaude не нужен — codex-as-claude не вызывает claude.
 		if s.AuthTo != "" {
 			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
