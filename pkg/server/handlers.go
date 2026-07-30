@@ -29,6 +29,7 @@ type statusResponse struct {
 	Description      string          `json:"description,omitempty"`
 	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
 	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
+	StageAutoApprove map[string]bool `json:"stage_auto_approve,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -44,6 +45,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Description:      s.Description,
 		StageInteractive: s.stageInteractive,
 		StageAutonomous:  autonomous,
+		StageAutoApprove: s.stageAutoApprove,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

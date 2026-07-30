@@ -71,6 +71,7 @@ type Server struct {
 	runDir           string
 	Description      string          // корневой description флоу (для хедера дашборда)
 	stageInteractive map[string]bool // id стадии → interactive (статический конфиг флоу)
+	stageAutoApprove map[string]bool // id стадии → auto_approve (статический конфиг флоу)
 	store            *state.Store
 	uiBus            *orchestrator.UIBus
 	approveFn        func(ctx context.Context, stageID string) error
@@ -99,6 +100,7 @@ type Config struct {
 	RunDir           string
 	Description      string // корневой description флоу (для хедера дашборда)
 	StageInteractive map[string]bool
+	StageAutoApprove map[string]bool
 	Store            *state.Store
 	UIBus            *orchestrator.UIBus
 	ApproveFn        func(ctx context.Context, stageID string) error
@@ -135,6 +137,7 @@ func New(cfg Config) *Server {
 		runDir:           cfg.RunDir,
 		Description:      cfg.Description,
 		stageInteractive: cfg.StageInteractive,
+		stageAutoApprove: cfg.StageAutoApprove,
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,
 		approveFn:        cfg.ApproveFn,

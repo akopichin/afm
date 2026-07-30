@@ -248,14 +248,17 @@ func newRunCmd() *cobra.Command {
 			// Start HTTP server if port > 0
 			if cfg.Server.GetPort() > 0 {
 				stageInteractive := make(map[string]bool, len(f.Stages))
+				stageAutoApprove := make(map[string]bool, len(f.Stages))
 				for _, st := range f.Stages {
 					stageInteractive[st.ID] = st.Interactive
+					stageAutoApprove[st.ID] = st.AutoApprove
 				}
 				srv := server.New(server.Config{
 					Port:             cfg.Server.GetPort(),
 					RunDir:           runDir,
 					Description:      f.Description,
 					StageInteractive: stageInteractive,
+					StageAutoApprove: stageAutoApprove,
 					Store:            store,
 					Theme:            cfg.EffectiveTheme(),
 					SkinDir:          cfg.SkinDir,
