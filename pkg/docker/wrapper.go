@@ -142,6 +142,12 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	}
 
 	if s.Type == config.RecipeTypeCodex {
+		// codex API: CODEX_* vars + exec codex-as-claude.
+		// realClaude не нужен — codex-as-claude не вызывает claude.
+		if s.AuthTo != "" {
+			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
+			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+		}
 		// CODEX_BIN — abs-путь к реальному codex CLI, резолвлен ДО того как
 		// wrapper-dir (где лежит ЭТОТ же файл с именем "codex") попал в PATH —
 		// иначе codex-as-claude (внутри себя вызывающий голый `codex`) поймал бы

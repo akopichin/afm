@@ -298,7 +298,44 @@ func TestCreateWrappers_CodexTemplate(t *testing.T) {
 			t.Errorf("codex wrapper missing %q\n--- script ---\n%s", w, s)
 		}
 	}
-	for _, bad := range []string{"ANTHROPIC_", "OPENAI_", "CURSOR_"} {
+	for _, bad := range []string{"ANTHROPIC_", "OPENAI_", "CURSOR_", "AFM_SECRET_", "unset AFM_SECRET"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("codex wrapper must not contain %q:\n%s", bad, s)
+		}
+	}
+}
+
+func TestCreateWrappers_CodexWithAuth(t *testing.T) {
+	realCodex := stubCodexOnPATH(t)
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeCodex,
+		Command: "codex",
+		AuthTo:  "OPENAI_API_KEY",
+		Model:   "gpt-5.1-codex",
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (codex with auth): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "codex"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export OPENAI_API_KEY="$AFM_SECRET_CODEX"`,
+		"unset AFM_SECRET_CODEX",
+		`export CODEX_BIN="` + realCodex + `"`,
+		`export CODEX_MODEL="gpt-5.1-codex"`,
+		`exec /usr/local/bin/codex-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("codex wrapper with auth missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	for _, bad := range []string{"ANTHROPIC_", "CURSOR_"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("codex wrapper must not contain %q:\n%s", bad, s)
 		}
