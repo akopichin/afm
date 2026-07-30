@@ -70,6 +70,7 @@
 .status-badge[data-status="failed"]               { color: var(--c-failed); }
 .status-badge[data-status="retrying"]             { color: var(--c-retrying); }
 .status-badge[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); }
+.status-badge[data-status="hook_failed"]          { color: var(--c-hook-failed); }
 
 /* Pulsing badges for "running" states */
 .status-badge[data-status="running"],
