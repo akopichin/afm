@@ -160,6 +160,54 @@ func TestServerConfig_IsOpenBrowser(t *testing.T) {
 	}
 }
 
+func TestConfig_IsAutoRecover(t *testing.T) {
+	var c config.Config
+	if !c.IsAutoRecover() {
+		t.Error("nil AutoRecover should default to true")
+	}
+	tb := true
+	c.AutoRecover = &tb
+	if !c.IsAutoRecover() {
+		t.Error("AutoRecover=true should return true")
+	}
+	fb := false
+	c.AutoRecover = &fb
+	if c.IsAutoRecover() {
+		t.Error("AutoRecover=false should return false")
+	}
+}
+
+func TestDefaultConfig_AutoRecoverTrue(t *testing.T) {
+	cfg := config.Default()
+	if !cfg.IsAutoRecover() {
+		t.Error("Default() should have auto_recover=true")
+	}
+}
+
+func TestAutoRecoverMerge_ProjectDisablesGlobalDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "auto_recover: false\n")
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IsAutoRecover() {
+		t.Error("explicit auto_recover: false in project config should override the true default")
+	}
+}
+
+func TestAutoRecoverMerge_AbsentKeepsDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "theme: goga\n")
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IsAutoRecover() {
+		t.Error("config without auto_recover key should keep the true default")
+	}
+}
+
 func TestServerConfigOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeYAML(t, dir, "config.yaml", "server:\n  port: 8080\n  open_browser: false\n")

@@ -235,17 +235,30 @@ type Config struct {
 	PromptsDir string           `yaml:"prompts_dir"`
 	Theme      string           `yaml:"theme"`
 	SkinDir    string           `yaml:"skin_dir"`
+	// AutoRecover controls whether failed stages are automatically reset to
+	// pending when a run starts/resumes (e.g. after a killed process/container
+	// left stages in failed). nil/true = enabled (default); explicit false disables.
+	AutoRecover *bool `yaml:"auto_recover"`
 }
 
 // Default returns the built-in default configuration.
 func Default() Config {
 	openBrowser := false
 	port := 9876
+	autoRecover := true
 	return Config{
-		Client:   ClientConfig{Command: ClaudeCommand},
-		Executor: ExecutorConfig{IdleTimeout: 30 * time.Minute, MaxParallel: 0},
-		Server:   ServerConfig{Port: &port, OpenBrowser: &openBrowser},
+		Client:      ClientConfig{Command: ClaudeCommand},
+		Executor:    ExecutorConfig{IdleTimeout: 30 * time.Minute, MaxParallel: 0},
+		Server:      ServerConfig{Port: &port, OpenBrowser: &openBrowser},
+		AutoRecover: &autoRecover,
 	}
+}
+
+// IsAutoRecover reports whether failed stages should be auto-retried when a
+// run starts or resumes. Defaults to true; only an explicit
+// `auto_recover: false` disables it.
+func (c Config) IsAutoRecover() bool {
+	return c.AutoRecover == nil || *c.AutoRecover
 }
 
 // Dashboard theme names returned by EffectiveTheme.
@@ -355,6 +368,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Supervisor.Command != "" {
 		dst.Supervisor.Command = overlay.Supervisor.Command
+	}
+	if overlay.AutoRecover != nil {
+		dst.AutoRecover = overlay.AutoRecover
 	}
 	return nil
 }
