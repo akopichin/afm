@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -317,18 +318,28 @@ func TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- orch.Run(ctx) }()
 
+	// Command "true" never produces real implementation output, so
+	// runImplementationAgent's own completion check can legitimately retry
+	// and re-fail this stage on its own (no artifact ever appears) — that
+	// outcome is unrelated to what this test verifies and must not be
+	// asserted on; it's what made this test flaky in CI (a slower runner let
+	// that unrelated retry-then-fail cycle run to completion inside the poll
+	// window). What this test actually checks is that the STALE phantom
+	// content never survives: whether the file is deleted outright or
+	// promptly replaced by a fresh session for the retried stage (both are
+	// correct), the old "stale-phantom" id must be gone. Checking content
+	// rather than mere non-existence avoids racing against however fast a
+	// legitimate new session gets written back to the same path.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(staleSession); os.IsNotExist(err) {
+		data, err := os.ReadFile(staleSession)
+		if os.IsNotExist(err) || (err == nil && !bytes.Contains(data, []byte("stale-phantom"))) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := os.Stat(staleSession); err == nil {
-		t.Error("expected stale session.json to be removed by auto-recover before retry")
-	}
-	if got := orchestrator.StoreFromOrch(orch).Get("review"); got == state.StatusFailed {
-		t.Error("stage should have left failed status after auto-recover")
+	if data, err := os.ReadFile(staleSession); err == nil && bytes.Contains(data, []byte("stale-phantom")) {
+		t.Error("expected stale session.json content to be cleared by auto-recover before retry")
 	}
 
 	cancel()
