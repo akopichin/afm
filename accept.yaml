@@ -1,4 +1,4 @@
-name: accept-01
+name: accept-02
 description: "accept"
 
 prompt: |
@@ -6,6 +6,22 @@ prompt: |
   constraint: пиши все на русском. Не используй английский кроме спец терминов нужных.
 
 stages:
+  - id: install-goga
+    name: "Install goga"
+    description: |
+      Установить бинарь goga и подключить его к claude (skills/commands).
+    script: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
+
   - id: accept
     name: "accept"
     interactive: true
@@ -17,6 +33,18 @@ stages:
     skills:
       - goga-accept
     command: claude
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
+    depends_on: [install-goga]
 
   - id: commit
     name: "commit"
@@ -31,4 +59,15 @@ stages:
       обновить доку
       обновить release notes
       сделать коммит
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [accept]

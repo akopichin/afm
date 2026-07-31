@@ -8,6 +8,22 @@ prompt: |
   constraint: пиши все на русском. Не используй английский кроме спец терминов нужных.
 
 stages:
+  - id: install-goga
+    name: "Install goga"
+    description: |
+      Установить бинарь goga и подключить его к claude (skills/commands).
+    script: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
+
   - id: change
     name: "change"
     supervisor: true
@@ -21,6 +37,18 @@ stages:
     skills:
       - goga-change
     command: claude
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
+    depends_on: [install-goga]
   - id: accept
     name: "accept"
     supervisor: true
@@ -34,6 +62,17 @@ stages:
     skills:
       - goga-accept
     command: claude
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [change]
 
   - id: commit
@@ -49,4 +88,15 @@ stages:
       обнови доку по этому изменению, напиши релиз нотсы.
       закоммитить все если все хорошо. Если нет - починить.
     command: claude
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [accept]

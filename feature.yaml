@@ -1,13 +1,28 @@
-name: preprompt
+name: feature-02
 description: "Feature implementation"
 
 prompt: |
   Общие правила для всего flow:
-  - if goga binary not installed - install it with `pip install goga && goga connect claude`
-  - Общайся на русском.
+  - **Общайся на русском**
 
 
 stages:
+  - id: install-goga
+    name: "Install goga"
+    description: |
+      Установить бинарь goga и подключить его к claude (skills/commands).
+    script: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
+
   - id: propose
     name: "Propose"
     interactive: true
@@ -18,6 +33,18 @@ stages:
       Save the task file as `<git branch --show-current>.md`
     skills:
       - goga-propose
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
+    depends_on: [install-goga]
 
   - id: propose-review
     name: "Propose Review"
@@ -29,6 +56,17 @@ stages:
     agents: [auto]
     skills:
       - goga-review-task
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [propose]
 
   - id: brainstorm
@@ -43,6 +81,17 @@ stages:
     agents: [auto]
     skills:
       - goga-brainstorm
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [propose-review]
 
   - id: brainstorm-review
@@ -55,6 +104,17 @@ stages:
     agents: [auto]
     skills:
       - goga-review-arch
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [brainstorm]
 
   - id: apply
@@ -66,6 +126,17 @@ stages:
     agents: [auto]
     skills:
       - goga-apply
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [brainstorm-review]
 
   - id: design
@@ -78,6 +149,17 @@ stages:
     agents: [auto]
     skills:
       - goga-design
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [apply]
 
   - id: design-review
@@ -91,6 +173,17 @@ stages:
     agents: [auto]
     skills:
       - goga-review-design
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [design]
 
   - id: plan
@@ -105,6 +198,17 @@ stages:
     agents: [auto]
     skills:
       - goga-plan
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [design-review]
 
   - id: plan-review
@@ -117,6 +221,17 @@ stages:
     agents: [auto]
     skills:
       - goga-review-plan
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [plan]
 
   - id: fix-changes
@@ -136,4 +251,15 @@ stages:
         - Don't autoconfirm user answer.
         - Except changes in `docs/<tasks|arch|design|plans>`.
     agents: [planning, implementation]
+    script_before: |
+      if ! command -v goga >/dev/null 2>&1; then
+        pip install goga 2>&1 || pip install --user goga 2>&1 || {
+          mkdir -p ~/.local/bin ~/.local/venvs
+          python3 -m venv ~/.local/venvs/goga
+          ~/.local/venvs/goga/bin/pip install --quiet goga
+          ln -sf ~/.local/venvs/goga/bin/goga ~/.local/bin/goga
+          hash -r
+        }
+      fi
+      goga connect claude
     depends_on: [plan-review]
