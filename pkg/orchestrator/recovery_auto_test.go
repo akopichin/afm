@@ -193,3 +193,79 @@ func TestAutoRecover_RespectsDependsOnOrder(t *testing.T) {
 	cancel()
 	<-runDone
 }
+
+// TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry covers the
+// interactive-stage edge case: a leftover <phase>.session.json from before
+// the crash would otherwise make the retried agent fail with "No
+// conversation found" (the same reason retryStage's manual path clears
+// sessions in scheduling.go). autoRecoverFailedStages must clear it too.
+// This only checks the cleanup itself (which happens synchronously, before
+// any agent spawns) — it does not wait for the interactive stage to fully
+// complete, since that is already covered by the dialog-specific tests.
+func TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+
+	stages := []flow.Stage{{
+		ID:          "review",
+		Name:        "Review",
+		Interactive: true,
+		Command:     "true",
+	}}
+
+	store, err := state.Open(runDir, []string{"review"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "review", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "review", From: state.StatusRunning, To: state.StatusFailed, Event: "fail", Reason: "context canceled"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, "review")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	staleSession := filepath.Join(stageDir, "implementation.session.json")
+	if err := os.WriteFile(staleSession, []byte(`{"session_id":"stale-phantom"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	store2, err := state.Open(runDir, []string{"review"})
+	if err != nil {
+		t.Fatalf("state.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() { store2.Close() })
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		RootDir: rootDir,
+		Stages:  stages,
+		Store:   store2,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	runDone := make(chan error, 1)
+	go func() { runDone <- orch.Run(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(staleSession); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(staleSession); err == nil {
+		t.Error("expected stale session.json to be removed by auto-recover before retry")
+	}
+	if got := orchestrator.StoreFromOrch(orch).Get("review"); got == state.StatusFailed {
+		t.Error("stage should have left failed status after auto-recover")
+	}
+
+	cancel()
+	<-runDone
+}
