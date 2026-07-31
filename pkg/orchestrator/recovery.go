@@ -162,6 +162,24 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusRunning:
 			// Check if .done exists (agent completed but orchestrator missed the event)
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
+			// Script-стадия (Stage.IsScript()): нет ни plan.md, ни агента —
+			// перезапускаем сам скрипт напрямую, тем же способом, что и
+			// retryStage (scheduling.go) для вручную ретраенной failed
+			// script-стадии. Без этой проверки код ниже безусловно падал бы в
+			// runImplementationAgent, который ищет plan.md — файл, которого у
+			// script-стадии никогда нет — и стадия падала бы с левой ошибкой
+			// "no such file or directory" вместо перезапуска скрипта.
+			// Проверяется ДО autonomous-ветки — script-стадия никогда не
+			// бывает autonomous.
+			if s.IsScript() {
+				if err := checkCompletion(stageDir, ".", s); err == nil {
+					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+					o.maybeRunAfterHook(ctx, s.ID)
+					continue
+				}
+				o.spawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
+				continue
+			}
 			// Autonomous track resume: if this is an autonomous stage, look for
 			// execution_summary.md instead of .done, and restart the autonomous
 			// agent rather than the standard implementation agent.
