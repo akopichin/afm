@@ -194,6 +194,71 @@ func TestAutoRecover_RespectsDependsOnOrder(t *testing.T) {
 	<-runDone
 }
 
+// TestAutoRecover_OnlyTouchesFailedStages is the selectivity guard: a stage
+// already in a terminal StatusDone must be left completely untouched by
+// auto-recover, while a genuinely failed stage in the same run is still
+// reset and re-run as usual. auto_recover must be a strict no-op for
+// anything that isn't StatusFailed.
+func TestAutoRecover_OnlyTouchesFailedStages(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+
+	stages := []flow.Stage{
+		{ID: "done-stage", Name: "Done", Script: "true"},
+		{ID: "failed-stage", Name: "Failed", Script: "true"},
+	}
+
+	store, err := state.Open(runDir, []string{"done-stage", "failed-stage"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	// done-stage: already completed successfully before this run started.
+	if err := store.Apply(&state.Transition{StageID: "done-stage", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "done-stage", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	// failed-stage: genuine failure, same shape as the other auto-recover tests.
+	if err := store.Apply(&state.Transition{StageID: "failed-stage", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "failed-stage", From: state.StatusRunning, To: state.StatusFailed, Event: "fail", Reason: "context canceled"}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close() // simulate process exit
+
+	store2, err := state.Open(runDir, []string{"done-stage", "failed-stage"})
+	if err != nil {
+		t.Fatalf("state.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() { store2.Close() })
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		RootDir: rootDir,
+		Stages:  stages,
+		Store:   store2,
+		Config:  config.Default(), // AutoRecover defaults to true
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- orch.Run(ctx) }()
+
+	stateFile := filepath.Join(runDir, "state.json")
+	waitForStatus(t, stateFile, "failed-stage", state.StatusDone, 20*time.Second)
+
+	if got := orchestrator.StoreFromOrch(orch).Get("done-stage"); got != state.StatusDone {
+		t.Fatalf("done-stage status = %v, want done (auto_recover must not touch a non-failed stage)", got)
+	}
+
+	cancel()
+	<-runDone
+}
+
 // TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry covers the
 // interactive-stage edge case: a leftover <phase>.session.json from before
 // the crash would otherwise make the retried agent fail with "No
