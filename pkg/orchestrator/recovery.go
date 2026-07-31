@@ -38,7 +38,12 @@ func (o *Orchestrator) autoRecoverFailedStages() {
 }
 
 // startPlanningForPending starts or resumes stages based on their saved status.
-// Terminal states (done, failed, awaiting_approval) are left untouched.
+// Terminal states done and awaiting_approval are left untouched. Failed is
+// only "terminal" when auto_recover is disabled: by default (auto_recover
+// enabled) the call to autoRecoverFailedStages above resets every failed
+// stage to pending first, so by the time the switches below run, a stage
+// that failed no longer has StatusFailed at all — it re-enters the same
+// pending flow as a stage that never ran.
 // Interrupted transient states (planning, running, revising) are restarted.
 // Pending stages start planning for the first time.
 func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
