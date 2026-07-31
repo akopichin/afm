@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -10,11 +11,38 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// autoRecoverFailedStages resets every stage currently in StatusFailed back
+// to Pending when auto_recover is enabled (default true), so a run
+// interrupted by a killed process/container resumes automatically instead of
+// requiring manual `afm retry` on each failed stage. All failed stages are
+// reset regardless of failure reason (context canceled vs a genuine bug are
+// treated identically — see the design doc for why). Order does not matter
+// here: the reset stages re-enter the Pending flow in startPlanningForPending
+// below, which already gates on depsDone(), so depends_on order falls out on
+// its own without any extra bookkeeping.
+func (o *Orchestrator) autoRecoverFailedStages() {
+	if !o.opts.Config.IsAutoRecover() {
+		return
+	}
+	for _, s := range o.opts.Stages {
+		if o.opts.Store.Get(s.ID) != state.StatusFailed {
+			continue
+		}
+		if s.Interactive {
+			clearInteractiveSessions(filepath.Join(o.opts.RunDir, s.ID))
+		}
+		if _, ok := o.Trigger(s.ID, EvManualRetry, GuardCtx{}, "auto_recover"); ok {
+			log.Printf("auto_recover: stage %q failed -> pending", s.ID)
+		}
+	}
+}
+
 // startPlanningForPending starts or resumes stages based on their saved status.
 // Terminal states (done, failed, awaiting_approval) are left untouched.
 // Interrupted transient states (planning, running, revising) are restarted.
 // Pending stages start planning for the first time.
 func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
+	o.autoRecoverFailedStages()
 	for _, s := range o.opts.Stages {
 		// A crashed script_after resume is invisible to the status-based
 		// switches below: after-hooks never touch the FSM, so a stage stuck
