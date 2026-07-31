@@ -2,6 +2,17 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-07-31
+
+### New: `auto_recover` config flag — auto-retry failed stages on run start/resume
+
+- Killing the process or Docker container mid-run used to leave the interrupted stage (and everything cascaded from it via `blocked_by_dep`) stuck in `failed` forever — `afm run` would resume the run dir, but `startPlanningForPending` deliberately left terminal `failed` stages untouched, so every one of them needed a manual `afm retry <id>` before the flow could continue.
+- **New:** `auto_recover` (top-level config, default `true`) resets every stage currently `failed` back to `pending` as the very first thing a run does on start/resume (`autoRecoverFailedStages()`, called at the top of `startPlanningForPending`) — reusing the same `Failed → Pending` FSM transition the dashboard's manual retry button already used, and the same stale-interactive-session cleanup manual retry does. All failed stages are reset regardless of why they failed (no reason-based filtering — deliberately simple). No new ordering logic was needed: a reset stage just re-enters the same `depsDone()`-gated pending flow every never-yet-run stage already goes through, so `depends_on` order falls out for free. Set `auto_recover: false` to go back to requiring manual retries.
+- Built via 4 TDD tasks (fresh subagent per task, spec/quality review after each), a whole-branch review, and one fix round (a stale doc comment plus a missing spec-listed test for the "only touches `failed`, never `done`/`awaiting_approval`" selectivity guard).
+- **Verified live end-to-end, twice, against a locally built Docker image** (`akopichin/afm:auto-recover-test`, same `Dockerfile.runtime` the real release uses): a 5-stage sequential flow, letting 2-3 stages complete, then `docker kill`-ing the running container mid-stage and re-running `afm run`. The log line `auto_recover: stage "s4" failed -> pending` (and `s5`) appeared, `events.jsonl` recorded the `manual_retry`/`auto_recover` transitions, and the flow completed all 5 stages with zero manual intervention.
+- **A real, pre-existing bug found only by that live Docker test, unrelated to `auto_recover` itself:** `docker kill`'s default SIGKILL gives the container's `afm` process no chance for graceful shutdown, so a script stage killed mid-execution is left in `running` (not `failed`) with no `.done` file. The `StatusRunning` resume branch of `startPlanningForPending` never checked `Stage.IsScript()` before falling through to `runImplementationAgent` — which unconditionally looks for `plan.md`, a file script stages never write — so the stage failed immediately on the very first resume attempt with a spurious `plan.md: no such file or directory` instead of just restarting the script. Fixed by mirroring the `IsScript()` check `retryStage` (manual retry from the dashboard) already had, checked before the `IsAuto()`/autonomous branch since a script stage is never autonomous. Regression-tested (`TestRecovery_ResumesScriptStageStuckRunning`) and re-verified live on a rebuilt image with the exact same kill-mid-stage scenario — the stage now just restarts the script and the flow completes normally, no `failed` transition at all.
+- Spec/plan: `docs/superpowers/specs/2026-07-31-auto-recover-design.md`, `docs/superpowers/plans/2026-07-31-auto-recover.md`.
+
 ## 2026-07-30
 
 ### New: `auto_approve` stage flag — skip the human approval checkpoint for CI

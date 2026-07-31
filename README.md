@@ -477,6 +477,7 @@ supervisor:
 
 # theme: coffee             # dashboard theme: coffee | goga | novacorps (default: coffee)
 # prompts_dir: .afm/prompts/  # custom prompt templates
+# auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
 docker:
   enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
@@ -552,6 +553,7 @@ On a repeated `afm run`, the tool automatically:
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
 - Preserves stages in `awaiting_user_input`: question/answer files survive the restart, an unanswered question is shown again in the dashboard, and once answered the stage continues
+- **Auto-retries `failed` stages** (`auto_recover`, default `true`): if a run was interrupted hard enough that a stage landed in `failed` (e.g. the process or Docker container was killed), the next `afm run` resets every failed stage back to `pending` before doing anything else — no manual `afm retry <id>` needed. All failed stages are reset regardless of why they failed; dependency order (`depends_on`) is preserved automatically, since a reset stage just re-enters the normal pending flow. Set `auto_recover: false` in `.afm/config.yaml` to go back to requiring manual `afm retry` for each failed stage.
 
 Approve/revise/retry are durably recorded in the log (fsync) before control returns — a crash right after approval doesn't lose the intent; recovery continues from the correct state.
 
