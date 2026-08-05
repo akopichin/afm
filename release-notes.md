@@ -2,6 +2,20 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-05
+
+### New: `afm init` rewritten as an archetype-driven wizard, plus `afm validate`
+
+- The old `afm init` only asked for id/name/description/`depends_on`/`agents` per stage, one blind text field at a time — no exposure to `artifacts`/`inputs`, `verify`, `interactive`, `script`, or `plan:`, and no way to know if the result was even valid before a real `afm run` spun up actual agents.
+- **New wizard flow:** pick one of four archetypes first — single change (`planning → implementation → review`), build + verify loop (`build` with a `verify:` gate → `check`, one auto-retry on failure), parallel tracks → integration (N independent stages merging into one), or fully custom stage-by-stage. Each stage then asks: stage mode (standard agent stage / `auto` / `script`), for standard mode whether it already has a plan file or needs a planning agent, which phases to run (`implementation`/`review`, multi-select), and one optional "advanced settings?" question gating artifacts/inputs/verify/interactive/custom-command instead of always asking all of them.
+- **New: `afm validate <flow.yaml>`** — dry-run schema check (cycles, unknown `depends_on`/`inputs` references, etc.) via the existing `flow.ParseFile`, with no agents spun up. The wizard now runs this on its own output before declaring success, and offers edit-manually / restart / exit if it's invalid.
+- `pkg/flow`'s `Flow`/`Stage`/`Artifact`/`Input` YAML tags gained `omitempty` (plus inline `flow`-style lists for `agents`/`skills`/`depends_on`) — needed because the project had only ever `Unmarshal`ed these types, never `Marshal`ed them; without this, the wizard's generated flow.yaml would have every zero-value field (`command: ""`, `verify: ""`, `supervisor: false`, …) printed out.
+- **A real schema-validity bug caught during design review, before any code was written:** the natural first choice for the verify-loop archetype's `check` stage was `agents: [review]` with no planning agent — but `flow.Flow.validate()`'s "must have planning agent, a plan path, or script" rule rejects exactly that combination, so every verify-loop flow the wizard generated would have failed its own validation. Fixed by defaulting `check` to `script` mode instead (mechanical check, paired with `build`'s `verify:`) before implementation started; a dedicated test (`TestBuildVerifyLoopStages_CheckDefaultsToScriptAndIsValid`) round-trips the generated flow through the real `flow.ParseFile` as a permanent regression guard.
+- **A second bug caught by the final whole-branch review, not any per-task review:** `buildParallelTracksStages` read the "how many tracks?" answer with no lower bound, so typing a negative number crashed the wizard outright (`runtime error: makeslice: cap out of range`). Fixed with a one-line clamp to at least 1 track, with its own regression test.
+- Old `afm init` implementation (`stageInput` struct, line-by-line `prompt()` loop, manual YAML string-building) fully removed — no compatibility shim.
+- Built via 8 TDD tasks (fresh subagent per task, spec/quality review after each) plus a whole-branch review; two cosmetic minors (a test-name scope nit, and restarting the wizard mid-repair-loop can orphan the previous invalid file on disk under a different flow name) were parked as deferred rather than fixed.
+- Spec/plan: `docs/superpowers/specs/2026-08-05-init-wizard-design.md`, `docs/superpowers/plans/2026-08-05-init-wizard.md`.
+
 ## 2026-07-31
 
 ### New: `auto_recover` config flag — auto-retry failed stages on run start/resume
