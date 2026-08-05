@@ -65,6 +65,9 @@ func buildVerifyLoopStages(scanner *bufio.Scanner, w io.Writer) []flow.Stage {
 
 func buildParallelTracksStages(scanner *bufio.Scanner, w io.Writer) []flow.Stage {
 	n := promptInt(scanner, w, "How many parallel tracks? [2]: ", 2)
+	if n < 1 {
+		n = 1
+	}
 	tracks := make([]flow.Stage, 0, n)
 	for i := 1; i <= n; i++ {
 		id := fmt.Sprintf("track-%d", i)

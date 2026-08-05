@@ -101,6 +101,25 @@ func TestBuildParallelTracksStages_DefaultTwoTracksPlusIntegration(t *testing.T)
 	parseGeneratedFlow(t, f)
 }
 
+func TestBuildParallelTracksStages_NegativeCountClampsToOne(t *testing.T) {
+	trackAnswers := []string{"", "", "", "track work", "", "", "n"}
+	full := "-1\n" + // "How many parallel tracks?" -> negative, must clamp to 1
+		strings.Join(trackAnswers, "\n") + "\n" + // track-1
+		strings.Join(trackAnswers, "\n") + "\n" // integration
+	scanner := bufio.NewScanner(strings.NewReader(full))
+	var out bytes.Buffer
+	stages := buildParallelTracksStages(scanner, &out)
+	if len(stages) != 2 {
+		t.Fatalf("got %d stages, want 2 (1 track + integration)", len(stages))
+	}
+	integration := stages[1]
+	if len(integration.DependsOn) != 1 {
+		t.Errorf("integration.DependsOn = %v, want 1 entry", integration.DependsOn)
+	}
+	f := &flow.Flow{Name: "test", Description: "d", Stages: stages}
+	parseGeneratedFlow(t, f)
+}
+
 func TestBuildArchetypeStages_DispatchesToEachBuilder(t *testing.T) {
 	singleChangeLines := []string{"", "", "", "ship the feature", "", "", "n"}
 	trackAnswers := []string{"", "", "", "track work", "", "", "n"}
