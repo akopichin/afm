@@ -10,9 +10,32 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const cmdInit = "init"
+
+// generateAndValidateFlow marshals f to YAML, writes it to outPath, and
+// validates the result via flow.ParseFile. Returns the rendered YAML and
+// a validation error (if any) — the file is written regardless of
+// validity, so the user (or the wizard's own repair loop) can inspect
+// or edit it.
+func generateAndValidateFlow(f *flow.Flow, outPath string) (string, error) {
+	data, err := yaml.Marshal(f)
+	if err != nil {
+		return "", fmt.Errorf("render flow.yaml: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return "", fmt.Errorf("create flows dir: %w", err)
+	}
+	if err := os.WriteFile(outPath, data, 0644); err != nil {
+		return "", fmt.Errorf("write flow file: %w", err)
+	}
+	if _, err := flow.ParseFile(outPath); err != nil {
+		return string(data), fmt.Errorf("invalid flow.yaml: %w", err)
+	}
+	return string(data), nil
+}
 
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
@@ -20,72 +43,40 @@ func newInitCmd() *cobra.Command {
 		Short: "Create a flow.yaml interactively",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scanner := bufio.NewScanner(os.Stdin)
+			f := runInitWizard(scanner, os.Stdout)
+			outPath := filepath.Join(flowsDir(), f.Name+".yaml")
 
-			name := prompt(scanner, "Flow name (e.g. my-feature): ")
-			description := prompt(scanner, "Flow description: ")
-
-			var stages []stageInput
 			for {
-				fmt.Println("\nAdd a stage (leave ID empty to finish):")
-				id := prompt(scanner, "  Stage ID: ")
-				if id == "" {
+				_, err := generateAndValidateFlow(f, outPath)
+				if err == nil {
 					break
 				}
-				stageName := prompt(scanner, "  Stage name: ")
-				stageDesc := prompt(scanner, "  Stage description: ")
-				depsRaw := prompt(scanner, "  Depends on (comma-separated IDs, or empty): ")
-				agentsRaw := prompt(scanner, "  Agents [planning,implementation,review]: ")
-				if agentsRaw == "" {
-					agentsRaw = "planning,implementation,review"
+				fmt.Printf("\n✗ %s — %v\n", outPath, err)
+				choice := promptChoice(scanner, os.Stdout, "What next?", []string{
+					"Edit the file manually, then re-validate",
+					"Restart the wizard from scratch",
+					"Exit (file stays on disk, but invalid)",
+				}, 0)
+				switch choice {
+				case 0:
+					promptLine(scanner, os.Stdout, "Press Enter once you've fixed the file: ")
+				case 1:
+					f = runInitWizard(scanner, os.Stdout)
+					outPath = filepath.Join(flowsDir(), f.Name+".yaml")
+				default:
+					return fmt.Errorf("flow.yaml left invalid at %s: %w", outPath, err)
 				}
-				stages = append(stages, stageInput{
-					id: id, name: stageName, desc: stageDesc,
-					deps: splitComma(depsRaw), agents: splitComma(agentsRaw),
-				})
 			}
 
-			dir := flowsDir()
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return fmt.Errorf("create flows dir: %w", err)
-			}
-			outPath := filepath.Join(dir, name+".yaml")
-
-			var sb strings.Builder
-			sb.WriteString("name: " + name + "\n")
-			sb.WriteString("description: \"" + description + "\"\n\n")
-			sb.WriteString("stages:\n")
-			for _, s := range stages {
-				sb.WriteString("  - id: " + s.id + "\n")
-				sb.WriteString("    name: \"" + s.name + "\"\n")
-				sb.WriteString("    description: \"" + s.desc + "\"\n")
-				sb.WriteString("    agents: [" + strings.Join(s.agents, ", ") + "]\n")
-				if len(s.deps) > 0 {
-					sb.WriteString("    depends_on: [" + strings.Join(s.deps, ", ") + "]\n")
-				}
-				sb.WriteString("\n")
-			}
-
-			if err := os.WriteFile(outPath, []byte(sb.String()), 0644); err != nil {
-				return fmt.Errorf("write flow file: %w", err)
-			}
 			if err := ensureGitignoreEntry(".", ".afm/secrets.env"); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)
 			}
-			fmt.Printf("\nCreated: %s\n", outPath)
+
+			fmt.Printf("\n✓ Created: %s\n✓ Validated: %d stage(s), valid\n", outPath, len(f.Stages))
+			fmt.Printf("\nRun it with:\n  afm run %s\n", outPath)
 			return nil
 		},
 	}
-}
-
-type stageInput struct {
-	id, name, desc string
-	deps, agents   []string
-}
-
-func prompt(scanner *bufio.Scanner, label string) string {
-	fmt.Print(label)
-	scanner.Scan()
-	return strings.TrimSpace(scanner.Text())
 }
 
 func splitComma(s string) []string {
