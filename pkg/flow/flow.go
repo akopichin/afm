@@ -25,8 +25,8 @@ const (
 type Artifact struct {
 	Name        string `yaml:"name"`
 	Path        string `yaml:"path"`
-	Description string `yaml:"description"`
-	Inline      *bool  `yaml:"inline"`
+	Description string `yaml:"description,omitempty"`
+	Inline      *bool  `yaml:"inline,omitempty"`
 }
 
 // IsInline returns whether the artifact content should be inlined into the prompt.
@@ -39,7 +39,7 @@ func (a Artifact) IsInline() bool {
 // Supports unmarshalling from a plain string "stage.artifact" or an object {ref, optional}.
 type Input struct {
 	Ref      string `yaml:"ref"`
-	Optional bool   `yaml:"optional"`
+	Optional bool   `yaml:"optional,omitempty"`
 }
 
 // UnmarshalYAML allows Input to be parsed from a string or an object.
@@ -56,54 +56,54 @@ func (inp *Input) UnmarshalYAML(value *yaml.Node) error {
 type Stage struct {
 	ID          string      `yaml:"id"`
 	Name        string      `yaml:"name"`
-	Description string      `yaml:"description"`
-	Agents      []AgentType `yaml:"agents"`
-	Skills      []string    `yaml:"skills"`
-	DependsOn   []string    `yaml:"depends_on"`
+	Description string      `yaml:"description,omitempty"`
+	Agents      []AgentType `yaml:"agents,omitempty,flow"`
+	Skills      []string    `yaml:"skills,omitempty,flow"`
+	DependsOn   []string    `yaml:"depends_on,omitempty,flow"`
 	// EagerPlanning starts the planning agent immediately without
 	// waiting for depends_on stages to finish (the default before
 	// the planning-by-deps gate was introduced).
-	EagerPlanning bool `yaml:"eager_planning"`
+	EagerPlanning bool `yaml:"eager_planning,omitempty"`
 	// Plan is an optional path to an existing plan file.
 	// If set, the planning agent is skipped.
-	Plan string `yaml:"plan"`
+	Plan string `yaml:"plan,omitempty"`
 	// Command overrides the global client command for this stage.
-	Command string `yaml:"command"`
+	Command string `yaml:"command,omitempty"`
 	// MaxParallel limits concurrent stages using the same command.
-	MaxParallel int        `yaml:"max_parallel"`
-	Artifacts   []Artifact `yaml:"artifacts"`
-	Inputs      []Input    `yaml:"inputs"`
-	Interactive bool       `yaml:"interactive"`
+	MaxParallel int        `yaml:"max_parallel,omitempty"`
+	Artifacts   []Artifact `yaml:"artifacts,omitempty"`
+	Inputs      []Input    `yaml:"inputs,omitempty"`
+	Interactive bool       `yaml:"interactive,omitempty"`
 	// Verify is an optional shell command executed in the project directory
 	// after the stage reports completion. Non-zero exit means the stage is
 	// not actually done, regardless of what the agent claims.
-	Verify string `yaml:"verify"`
+	Verify string `yaml:"verify,omitempty"`
 	// Prompt is an optional explicit instruction delivered to the agent
 	// after the <stage> context block.
-	Prompt string `yaml:"prompt"`
+	Prompt string `yaml:"prompt,omitempty"`
 	// Supervisor включает оценку стадии агентом-супервизором перед запуском.
 	// Стадия обязана содержать AgentPlanning в Agents.
-	Supervisor       bool   `yaml:"supervisor"`
+	Supervisor       bool   `yaml:"supervisor,omitempty"`
 	SupervisorPrompt string `yaml:"supervisor_prompt,omitempty"`
 	// Script, if set, makes this a script-only stage: it runs the given shell
 	// script (via sh -c) instead of any agent, with no planning/supervisor/
 	// approval gate. Mutually exclusive with Agents/Command/Interactive/Plan/
 	// Verify/Supervisor.
-	Script        string        `yaml:"script"`
-	ScriptTimeout time.Duration `yaml:"script_timeout"`
+	Script        string        `yaml:"script,omitempty"`
+	ScriptTimeout time.Duration `yaml:"script_timeout,omitempty"`
 	// ScriptBefore/ScriptAfter run a shell script immediately before/after this
 	// stage's own main content (agent, script, or interactive). Legal on any
 	// stage type, alongside its other fields.
-	ScriptBefore        string        `yaml:"script_before"`
-	ScriptBeforeTimeout time.Duration `yaml:"script_before_timeout"`
-	ScriptAfter         string        `yaml:"script_after"`
-	ScriptAfterTimeout  time.Duration `yaml:"script_after_timeout"`
+	ScriptBefore        string        `yaml:"script_before,omitempty"`
+	ScriptBeforeTimeout time.Duration `yaml:"script_before_timeout,omitempty"`
+	ScriptAfter         string        `yaml:"script_after,omitempty"`
+	ScriptAfterTimeout  time.Duration `yaml:"script_after_timeout,omitempty"`
 	// AutoApprove, if true, approves this stage's plan automatically the
 	// instant it's ready (awaiting_approval), with no human interaction —
 	// regardless of whether a dashboard is attached and regardless of
 	// --require-approval. Default false. Intended for CI runs where some
 	// stages need human review and others don't.
-	AutoApprove bool `yaml:"auto_approve"`
+	AutoApprove bool `yaml:"auto_approve,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -170,8 +170,8 @@ type Flow struct {
 	// Prompt is shared text added to the system prompt of every stage and
 	// every phase (planning/implementation/review). Empty value does not
 	// change behavior.
-	Prompt      string `yaml:"prompt"`
-	MaxParallel int    `yaml:"max_parallel"`
+	Prompt      string `yaml:"prompt,omitempty"`
+	MaxParallel int    `yaml:"max_parallel,omitempty"`
 	// RootDir — корень проекта, в котором выполняются агенты (их CWD). Нужен,
 	// когда рабочая директория процесса afm не совпадает с корнем проекта
 	// (напр. Docker-сетап: исходники в /workspace, а .afm — в другом каталоге).
