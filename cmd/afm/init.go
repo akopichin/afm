@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/spf13/cobra"
 )
 
@@ -122,4 +124,17 @@ func ensureGitignoreEntry(repoDir, entry string) error {
 	defer f.Close()
 	_, err = f.WriteString(content)
 	return err
+}
+
+// runInitWizard runs the full interactive flow: archetype selection,
+// flow-level name/description, and per-stage questions. Returns the
+// fully built Flow — nothing is written to disk yet.
+func runInitWizard(scanner *bufio.Scanner, w io.Writer) *flow.Flow {
+	name := promptLine(scanner, w, "Flow name (e.g. my-feature): ")
+	description := promptLine(scanner, w, "Flow description: ")
+
+	archetype := promptChoice(scanner, w, "\nWhat kind of flow are you building?", archetypeOptions, archetypeSingleChange)
+	stages := buildArchetypeStages(archetype, scanner, w)
+
+	return &flow.Flow{Name: name, Description: description, Stages: stages}
 }
