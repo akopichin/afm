@@ -97,6 +97,7 @@ func newRootCmd() *cobra.Command {
 		newReviseCmd(),
 		newRetryCmd(),
 		newInitCmd(),
+		newValidateCmd(),
 		newListCmd(),
 		newInstallSkillsCmd(),
 	)
