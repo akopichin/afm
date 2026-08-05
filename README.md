@@ -130,7 +130,23 @@ Details and examples are in `config.example.yaml`, `example-flow-cursor.yaml`, a
 afm init
 ```
 
-Interactively asks questions and creates `.afm/flows/<name>.yaml`. Or write it by hand — see the example below.
+Walks you through one of four archetypes — a single change
+(planning → implementation → review), a build + verify loop, parallel
+tracks merging into an integration stage, or fully custom
+stage-by-stage — then asks per-stage questions (agent mode, plan vs.
+planning agent, which phases to run, and optional artifacts/inputs/
+verify/interactive/custom-command settings). The result is validated
+before the wizard reports success. Or write `flow.yaml` by hand — see
+the example below.
+
+```bash
+afm validate flow.yaml
+```
+
+Checks a flow.yaml for structural errors (dependency cycles, unknown
+`depends_on`/`inputs` references, …) without running any agents. The
+wizard runs this automatically after generating a file; run it yourself
+after hand-editing a flow.
 
 ### 2. Run
 
