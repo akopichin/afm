@@ -39,7 +39,7 @@ func buildArchetypeStages(archetype int, scanner *bufio.Scanner, w io.Writer) []
 
 func buildSingleChangeStages(scanner *bufio.Scanner, w io.Writer) []flow.Stage {
 	s := askStageDetails(scanner, w, stageDefaults{
-		SuggestedID:   "implementation",
+		SuggestedID:   phaseNameImplementation,
 		SuggestedName: "Implementation",
 		DefaultMode:   stageModeStandard,
 	}, nil)

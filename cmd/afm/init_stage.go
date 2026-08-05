@@ -31,7 +31,15 @@ var planModeOptions = []string{
 	"I already have a plan file (I'll provide the path)",
 }
 
-var phaseOptions = []string{"implementation", "review"}
+// phaseNameImplementation/phaseNameReview name the two selectable phases
+// in phaseOptions — pulled out as constants (rather than repeating the
+// string literals at each use site) purely to satisfy goconst.
+const (
+	phaseNameImplementation = "implementation"
+	phaseNameReview         = "review"
+)
+
+var phaseOptions = []string{phaseNameImplementation, phaseNameReview}
 
 // stageDefaults configures the suggested defaults for one round of
 // askStageDetails. FixedID, when non-empty, is used as the stage ID
@@ -92,9 +100,9 @@ func askStageDetails(scanner *bufio.Scanner, w io.Writer, d stageDefaults, prior
 		)
 		for _, idx := range selected {
 			switch phaseOptions[idx] {
-			case "implementation":
+			case phaseNameImplementation:
 				stage.Agents = append(stage.Agents, flow.AgentImplementation)
-			case "review":
+			case phaseNameReview:
 				stage.Agents = append(stage.Agents, flow.AgentReview)
 			default:
 				// unreachable: idx is always within phaseOptions
