@@ -103,8 +103,7 @@ func askStageDetails(scanner *bufio.Scanner, w io.Writer, d stageDefaults, prior
 	}
 
 	if d.AskDeps {
-		raw := promptLine(scanner, w, "Depends on (comma-separated IDs, or empty): ")
-		stage.DependsOn = splitComma(raw)
+		stage.DependsOn = askDependsOn(scanner, w, priorStages)
 	} else {
 		stage.DependsOn = d.DependsOn
 	}
@@ -118,6 +117,37 @@ func askStageDetails(scanner *bufio.Scanner, w io.Writer, d stageDefaults, prior
 	}
 
 	return stage
+}
+
+// askDependsOn offers a checklist of already-built prior stages as
+// depends_on candidates instead of free-text stage IDs — free text lets
+// a typo silently produce a dangling reference that only surfaces later,
+// at `afm validate`/`afm run` time. Selecting by index into the known
+// list of already-built stages makes that mistake impossible, and
+// naturally forbids depending on a stage that comes later in the flow
+// (it hasn't been built yet, so it isn't in priorStages).
+func askDependsOn(scanner *bufio.Scanner, w io.Writer, priorStages []flow.Stage) []string {
+	if len(priorStages) == 0 {
+		return nil
+	}
+	ids := make([]string, len(priorStages))
+	for i, s := range priorStages {
+		ids[i] = s.ID
+	}
+	_, _ = fmt.Fprintln(w, "Depends on which existing stage(s)?")
+	for i, id := range ids {
+		_, _ = fmt.Fprintf(w, "  %d. %s\n", i+1, id)
+	}
+	raw := promptLine(scanner, w, "Comma-separated numbers, or empty for none: ")
+	selected := parsePhaseSelection(raw, len(ids), nil)
+	if len(selected) == 0 {
+		return nil
+	}
+	deps := make([]string, len(selected))
+	for i, idx := range selected {
+		deps[i] = ids[idx]
+	}
+	return deps
 }
 
 // askAdvanced collects the optional advanced fields: artifacts, inputs

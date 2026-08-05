@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -124,7 +125,7 @@ func TestBuildArchetypeStages_DispatchesToEachBuilder(t *testing.T) {
 	singleChangeLines := []string{"", "", "", "ship the feature", "", "", "n"}
 	trackAnswers := []string{"", "", "", "track work", "", "", "n"}
 	parallelTracksLines := "\n" + strings.Join(trackAnswers, "\n") + "\n" + strings.Join(trackAnswers, "\n") + "\n" + strings.Join(trackAnswers, "\n") + "\n"
-	customLines := []string{"alpha", "", "", "do alpha", "", "", "", "n", ""}
+	customLines := []string{"alpha", "", "", "do alpha", "", "", "n", ""}
 	verifyLoopLines := strings.Join([]string{"", "", "", "implement the feature", "", "", "go test ./...", "n"}, "\n") + "\n" +
 		strings.Join([]string{"", "", "", "go vet ./...", "n"}, "\n") + "\n"
 
@@ -171,15 +172,42 @@ func TestBuildCustomStages_StopsOnEmptyID(t *testing.T) {
 		"do alpha", // description
 		"",         // plan mode -> default agent
 		"",         // phases -> default implementation
-		"",         // depends_on (AskDeps=true) -> empty
-		"n",        // advanced? -> no
-		"",         // outer loop: empty ID -> stop
+		// no depends_on line: "alpha" is the first stage, no prior
+		// stages exist yet, so the checklist question is skipped
+		"n", // advanced? -> no
+		"",  // outer loop: empty ID -> stop
 	}
 	scanner := bufio.NewScanner(strings.NewReader(strings.Join(stageLines, "\n") + "\n"))
 	var out bytes.Buffer
 	stages := buildCustomStages(scanner, &out)
 	if len(stages) != 1 || stages[0].ID != "alpha" {
 		t.Fatalf("got %+v", stages)
+	}
+	f := &flow.Flow{Name: "test", Description: "d", Stages: stages}
+	parseGeneratedFlow(t, f)
+}
+
+func TestBuildCustomStages_DependsOnOffersOnlyEarlierStagesAsChecklist(t *testing.T) {
+	stageLines := []string{
+		// stage 1: "alpha" — no prior stages, no depends_on question
+		"alpha", "", "", "do alpha", "", "", "n",
+		// stage 2: "beta" — checklist now offers only "alpha"; select it by index
+		"beta", "", "", "do beta", "", "", "1", "n",
+		// stop
+		"",
+	}
+	scanner := bufio.NewScanner(strings.NewReader(strings.Join(stageLines, "\n") + "\n"))
+	var out bytes.Buffer
+	stages := buildCustomStages(scanner, &out)
+	if len(stages) != 2 {
+		t.Fatalf("got %d stages, want 2: %+v", len(stages), stages)
+	}
+	beta := stages[1]
+	if !reflect.DeepEqual(beta.DependsOn, []string{"alpha"}) {
+		t.Errorf("beta.DependsOn = %v, want [alpha] (selected by index from the checklist, not typed)", beta.DependsOn)
+	}
+	if !strings.Contains(out.String(), "1. alpha") {
+		t.Errorf("expected the checklist to list \"alpha\" as option 1, got:\n%s", out.String())
 	}
 	f := &flow.Flow{Name: "test", Description: "d", Stages: stages}
 	parseGeneratedFlow(t, f)

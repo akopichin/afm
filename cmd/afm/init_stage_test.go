@@ -129,25 +129,47 @@ func TestAskStageDetails_ForceVerifyAsksRegardlessOfAdvanced(t *testing.T) {
 }
 
 func TestAskStageDetails_AskDepsForCustomArchetype(t *testing.T) {
+	priorStages := []flow.Stage{{ID: "a"}, {ID: "b"}, {ID: "c"}}
 	lines := []string{
 		"",     // name -> default "My Stage" (FixedID set, id not asked)
 		"",     // mode -> default standard
 		"do x", // description
 		"",     // plan mode -> default agent
 		"",     // phases -> default implementation
-		"a,b",  // depends_on
+		"1,2",  // depends_on -> select "a" and "b" from the checklist, not "c"
 		"n",    // advanced? -> no
 	}
 	scanner := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 	var out bytes.Buffer
 	d := stageDefaults{FixedID: "mystage", SuggestedName: "My Stage", AskDeps: true}
-	stage := askStageDetails(scanner, &out, d, nil)
+	stage := askStageDetails(scanner, &out, d, priorStages)
 
 	if stage.ID != "mystage" {
 		t.Errorf("ID = %q, want mystage (FixedID must be used verbatim)", stage.ID)
 	}
 	if !reflect.DeepEqual(stage.DependsOn, []string{"a", "b"}) {
 		t.Errorf("DependsOn = %v", stage.DependsOn)
+	}
+}
+
+func TestAskStageDetails_AskDepsSkipsQuestionWhenNoPriorStages(t *testing.T) {
+	lines := []string{
+		"",     // name -> default "My Stage" (FixedID set, id not asked)
+		"",     // mode -> default standard
+		"do x", // description
+		"",     // plan mode -> default agent
+		"",     // phases -> default implementation
+		// no depends_on line: with zero prior stages there's nothing to
+		// select, so askDependsOn must not consume a line here
+		"n", // advanced? -> no
+	}
+	scanner := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	var out bytes.Buffer
+	d := stageDefaults{FixedID: "first", SuggestedName: "First", AskDeps: true}
+	stage := askStageDetails(scanner, &out, d, nil)
+
+	if stage.DependsOn != nil {
+		t.Errorf("DependsOn = %v, want nil (no prior stages to depend on)", stage.DependsOn)
 	}
 }
 
