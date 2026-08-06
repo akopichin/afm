@@ -1,10 +1,10 @@
-package orchestrator_test
+package graph_test
 
 import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -31,7 +31,7 @@ func TestReadyStagesNoDeps(t *testing.T) {
 		"b": state.StatusReady,
 		"c": state.StatusDone,
 	}
-	g := orchestrator.NewGraph(stages)
+	g := graph.NewGraph(stages)
 	ready := g.ReadyStages(statuses)
 	if len(ready) != 2 {
 		t.Errorf("expected 2 ready stages, got %d: %v", len(ready), ready)
@@ -50,7 +50,7 @@ func TestReadyStagesBlockedByDep(t *testing.T) {
 		"a": state.StatusRunning,
 		"b": state.StatusReady,
 	}
-	g := orchestrator.NewGraph(stages)
+	g := graph.NewGraph(stages)
 	ready := g.ReadyStages(statuses)
 	if len(ready) != 0 {
 		t.Errorf("b should be blocked: got %v", ready)
@@ -69,7 +69,7 @@ func TestReadyStagesDepDone(t *testing.T) {
 		"a": state.StatusDone,
 		"b": state.StatusReady,
 	}
-	g := orchestrator.NewGraph(stages)
+	g := graph.NewGraph(stages)
 	ready := g.ReadyStages(statuses)
 	if len(ready) != 1 || ready[0] != "b" {
 		t.Errorf("b should be ready when a is done: got %v", ready)

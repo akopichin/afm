@@ -1,4 +1,4 @@
-package orchestrator
+package graph
 
 import (
 	"github.com/akopichin/afm/pkg/flow"

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -63,7 +64,7 @@ func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 
 	o := &Orchestrator{
 		opts:     Options{RunDir: dir, Stages: stages, Store: store, Runner: runner},
-		graph:    NewGraph(stages),
+		graph:    graph.NewGraph(stages),
 		runner:   runner,
 		fsm:      NewFSM(store),
 		ui:       NewUIBus(),

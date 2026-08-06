@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -28,7 +29,7 @@ func TestApproveStage_DurableTransition(t *testing.T) {
 	}
 	o := &Orchestrator{
 		opts:     Options{RunDir: dir, Stages: stages, Store: store},
-		graph:    NewGraph(stages),
+		graph:    graph.NewGraph(stages),
 		fsm:      NewFSM(store),
 		ui:       NewUIBus(),
 		critical: NewCriticalBus(16),
@@ -95,7 +96,7 @@ func TestRevise_DurableTransition(t *testing.T) {
 	blockSem <- struct{}{} // занят: следующий acquire() (в spawnAgent) заблокируется
 	o := &Orchestrator{
 		opts:     Options{RunDir: dir, Stages: stages, Store: store},
-		graph:    NewGraph(stages),
+		graph:    graph.NewGraph(stages),
 		runner:   noopPlanningRunner{},
 		fsm:      NewFSM(store),
 		ui:       NewUIBus(),

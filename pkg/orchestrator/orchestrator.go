@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -66,7 +67,7 @@ type Options struct {
 // Orchestrator manages the full lifecycle of a flow run via event loop.
 type Orchestrator struct {
 	opts     Options
-	graph    *Graph
+	graph    *graph.Graph
 	runner   executor.Runner
 	critical *CriticalBus
 	ui       *UIBus
@@ -233,7 +234,7 @@ func New(opts Options) *Orchestrator {
 
 	return &Orchestrator{
 		opts:           opts,
-		graph:          NewGraph(opts.Stages),
+		graph:          graph.NewGraph(opts.Stages),
 		runner:         r,
 		critical:       critical,
 		ui:             ui,
