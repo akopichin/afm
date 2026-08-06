@@ -150,3 +150,11 @@ func (m *Manager) WakeEventLoop() // критично: использует TryP
 - Вынос `retry.go`, `hooks.go`, `dialog_poller.go`, `errors.go` — см. раздел "Явно вне охвата".
 - Дальнейшее дробление ядра (`agents.go`/`control_api.go`/`orchestrator.go`/`recovery.go`/`runner_factory.go`/`scheduling.go`/`supervisor_track.go`) — один связный автомат, естественных границ нет.
 - Экспорт FSM-control методов `Orchestrator` (`TriggerWithSeq`, `HasOpenQuestion`, `CurrentStatus`, `FailBlockedStages`) для нужд гипотетического будущего выноса — осознанно отклонено как небезопасное расширение публичного API.
+
+## Результат (после реализации)
+
+overengineering_pressure пакета `orchestrator`: **91 → 32** (статус: critical → normal). Эффект соответствует ожиданиям — Tier 1 (bus/graph/supervisor/stagefiles) убрал из пакета основную массу типов, Tier 2 (concurrency) добрал остаток; дальше не продолжаем, см. Global Constraints плана реализации.
+
+Новые подпакеты не создали новых горячих точек: `pkg/orchestrator/bus` — OP=33 (normal), остальные (`graph`/`supervisor`/`stagefiles`/`concurrency`) слишком малы, чтобы попасть в top-5 отчёта — здоровы по построению.
+
+Реализация: `docs/superpowers/plans/2026-08-06-orchestrator-package-split.md` (5 задач, subagent-driven-development, все прошли ревью — Задача 2 с одним fix-раундом).
