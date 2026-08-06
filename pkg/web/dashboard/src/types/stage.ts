@@ -43,14 +43,21 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   hook_failed: 'Hook failed',
 }
 
-// Статусы, считающиеся «активными» (стадия в работе) — основа автовыбора и логики
-// обновления в корневой композиции. Соответствует ACTIVE_STATUSES в текущем app.js.
+// Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует
+// прогресс флоу и ждёт решения человека (нужно auto-select, иначе на свежей
+// загрузке дашборда стадия в awaiting_approval/hook_failed не выбирается
+// сама, и панель Plan/Communication channel с кнопкой действия просто не
+// рендерится — пользователь видит пустой экран, хотя баннер "Action needed"
+// уже горит). awaiting_user_input уже был в этом множестве по той же причине,
+// хоть агент там тоже не «работает», а ждёт ответа.
 export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'running',
   'planning',
   'revising',
   'retrying',
   'awaiting_user_input',
+  'awaiting_approval',
+  'hook_failed',
 ])
 
 // Backoff — автоматическая пауза перед авто-ретраем, без участия

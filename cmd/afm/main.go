@@ -64,19 +64,28 @@ func resolveDebug(flag bool, env string) bool {
 }
 
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	cmd, err := newRootCmd().ExecuteC()
+	if err != nil {
 		var exitErr *docker.SubprocessExitError
 		if errors.As(err, &exitErr) {
+			// Код завершения docker-контейнера (в т.ч. 0 — успех) передаётся
+			// через error-канал Cobra чисто как транспорт для os.Exit(code) в
+			// main; это не настоящая ошибка пользователя, поэтому подавляем
+			// её через SilenceErrors/SilenceUsage на root и не печатаем здесь.
 			os.Exit(exitErr.Code)
 		}
+		cmd.PrintErrln(cmd.ErrPrefix(), err.Error())
+		cmd.Println(cmd.UsageString())
 		os.Exit(1)
 	}
 }
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "afm",
-		Short: "Orchestrate multi-stage AI flows",
+		Use:           "afm",
+		Short:         "Orchestrate multi-stage AI flows",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			rootDir = resolveRootDir(rootDir, os.Getenv("AFM_DIR"))
 			debugEnabled = resolveDebug(debugEnabled, os.Getenv("AFM_DEBUG"))

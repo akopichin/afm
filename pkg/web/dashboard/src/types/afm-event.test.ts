@@ -63,9 +63,17 @@ describe('STAGE_STATUS_LABELS', () => {
 })
 
 describe('ACTIVE_STAGE_STATUSES', () => {
-  test('contains exactly the documented "in progress" statuses', () => {
+  test('contains exactly the documented "in progress or needs human action" statuses', () => {
     expect(ACTIVE_STAGE_STATUSES).toEqual(
-      new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_user_input']),
+      new Set([
+        'running',
+        'planning',
+        'revising',
+        'retrying',
+        'awaiting_user_input',
+        'awaiting_approval',
+        'hook_failed',
+      ]),
     )
   })
 })
