@@ -10,6 +10,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -110,7 +111,7 @@ func TestPollQuestions_DetectsNewQuestion(t *testing.T) {
 	for {
 		select {
 		case ev := <-sub:
-			if ev.Type == orchestrator.EventAskUser && ev.StageID == stageID {
+			if ev.Type == bus.EventAskUser && ev.StageID == stageID {
 				uiBus.Unsubscribe(subID)
 				return // success
 			}
@@ -148,7 +149,7 @@ func TestPollQuestions_Idempotent(t *testing.T) {
 	for !done {
 		select {
 		case ev := <-sub:
-			if ev.Type == orchestrator.EventAskUser && ev.StageID == stageID {
+			if ev.Type == bus.EventAskUser && ev.StageID == stageID {
 				askCount++
 			}
 		case <-timer:

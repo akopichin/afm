@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
@@ -28,7 +29,7 @@ const phaseScript = "script"
 func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return
 	}
 	logFile := filepath.Join(stageDir, phaseScript+".log")
@@ -37,13 +38,13 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 		return o.execScript(ctx, s, phaseScript, s.Script, s.ScriptTimeout, logFile)
 	})
 	if err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, err.Error())
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
 		o.failBlockedStages()
 		return
 	}
 
-	stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phaseScript)
-	_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phaseScript})
+	stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phaseScript)
+	_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phaseScript})
 }
 
 // sectionAssumptions зеркалит одну из секций stagefiles.RequiredPlanSections
@@ -54,7 +55,7 @@ const sectionAssumptions = "Assumptions"
 func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return
 	}
 
@@ -67,12 +68,12 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 
 	// Defensive: may be a no-op if the caller already transitioned
 	// the stage to "planning" (e.g. startPlanningForUnblocked).
-	o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "")
+	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
 
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
 		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
@@ -143,7 +144,7 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 
-	o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "")
+	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
 
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
 		feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
@@ -153,8 +154,8 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 		}
 
 		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
@@ -210,8 +211,8 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		}
 
 		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
@@ -287,13 +288,13 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return
 	}
 
 	depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-		o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+		o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 	})
 	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 	if artErr != nil {
@@ -337,7 +338,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return
 	}
 	_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
@@ -348,8 +349,8 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			log.Printf("WARN: collect artifacts for %s autonomous: %v", s.ID, artErr)
 		}
 		depCtx := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 
 		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
@@ -384,7 +385,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	// сюда стадию, чтобы доставить прерывание). Без этого onAgentCompleted и
 	// EvComplete не увидели бы подходящий статус, и стадия зависла бы в
 	// Revising даже после успешного завершения агента.
-	o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
+	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	feedbackNote := ""
 	if len(feedbackData) > 0 {
@@ -398,8 +399,8 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 		}
 
 		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
@@ -474,7 +475,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
+	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	feedbackNote := ""
 	if len(feedbackData) > 0 {
@@ -482,8 +483,8 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	}
 
 	depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-		o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+		o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 	})
 	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 	if artErr != nil {
@@ -518,7 +519,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
+	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	feedbackNote := ""
 	if len(feedbackData) > 0 {
@@ -531,8 +532,8 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 			log.Printf("WARN: collect artifacts for %s autonomous (feedback restart): %v", s.ID, artErr)
 		}
 		depCtx := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(Event{Type: EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 
 		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)

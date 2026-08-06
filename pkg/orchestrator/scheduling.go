@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -31,11 +32,11 @@ func (o *Orchestrator) activateAutoStage(s flow.Stage) bool {
 	}
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return true
 	}
 	_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
-	o.Trigger(s.ID, EvReady, GuardCtx{}, "auto stage")
+	o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "auto stage")
 	return true
 }
 
@@ -48,10 +49,10 @@ func (o *Orchestrator) activateScriptStage(s flow.Stage) bool {
 	}
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return true
 	}
-	o.Trigger(s.ID, EvReady, GuardCtx{}, "script stage")
+	o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "script stage")
 	return true
 }
 
@@ -82,15 +83,15 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 
 		stageDir := filepath.Join(o.opts.RunDir, s.ID)
 		if err := os.MkdirAll(stageDir, 0755); err != nil {
-			o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 			continue
 		}
 		dst := filepath.Join(stageDir, "plan.md")
 		if err := copyFile(resolvePlanSource(o.opts.RunDir, s), dst); err != nil {
-			o.Trigger(s.ID, EvFail, GuardCtx{}, "copy plan failed")
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "copy plan failed")
 			continue
 		}
-		o.Trigger(s.ID, EvReady, GuardCtx{}, "")
+		o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "")
 	}
 
 	// Newly activated stages may now be ready to run.
@@ -113,7 +114,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 		}
 		// Synchronous transition out of pending guards against double
 		// start: a second call sees "planning" and skips the stage.
-		if _, ok := o.Trigger(s.ID, EvStartPlanning, GuardCtx{Stage: s}, "deps done"); !ok {
+		if _, ok := o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "deps done"); !ok {
 			continue
 		}
 		o.spawnAgent(ctx, s, o.startWithSupervisor)
@@ -134,7 +135,7 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		if stage == nil {
 			continue
 		}
-		if _, ok := o.Trigger(id, EvStartRun, GuardCtx{}, ""); !ok {
+		if _, ok := o.Trigger(id, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			continue
 		}
 		// Autonomous-стадия могла оказаться в Ready через retryStage (retry
@@ -207,7 +208,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		clearInteractiveSessions(filepath.Join(o.opts.RunDir, stageID))
 	}
 
-	if _, ok := o.Trigger(stageID, EvManualRetry, GuardCtx{}, ""); !ok {
+	if _, ok := o.Trigger(stageID, bus.EvManualRetry, bus.GuardCtx{}, ""); !ok {
 		return
 	}
 
@@ -222,9 +223,9 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if !o.depsDone(*stage) {
 			return
 		}
-		o.Trigger(stageID, EvReady, GuardCtx{}, "manual retry: script")
+		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "manual retry: script")
 		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
-		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
 		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
@@ -249,9 +250,9 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if !o.depsDone(*stage) {
 			return
 		}
-		o.Trigger(stageID, EvReady, GuardCtx{}, "manual retry: autonomous")
+		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "manual retry: autonomous")
 		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
-		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
 		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
@@ -268,22 +269,22 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 				return
 			}
 			if stage.Plan == "" {
-				o.Trigger(stageID, EvFail, GuardCtx{}, "no plan.md and no plan source configured")
+				o.Trigger(stageID, bus.EvFail, bus.GuardCtx{}, "no plan.md and no plan source configured")
 				return
 			}
 			if err := os.MkdirAll(stageDir, 0755); err != nil {
-				o.Trigger(stageID, EvFail, GuardCtx{}, "mkdir failed")
+				o.Trigger(stageID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 				return
 			}
 			if err := copyFile(resolvePlanSource(o.opts.RunDir, *stage), planPath); err != nil {
-				o.Trigger(stageID, EvFail, GuardCtx{}, "copy plan failed: "+err.Error())
+				o.Trigger(stageID, bus.EvFail, bus.GuardCtx{}, "copy plan failed: "+err.Error())
 				return
 			}
 		}
-		o.Trigger(stageID, EvReady, GuardCtx{}, "")
+		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "")
 		// Synchronous transition guards against a concurrent event-loop path
 		// (e.g. startReadyStages) also winning EvStartRun for this stage.
-		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
 		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
@@ -294,9 +295,9 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
 	planPath := filepath.Join(stageDir, "plan.md")
 	if _, err := os.Stat(planPath); err == nil {
-		o.Trigger(stageID, EvReady, GuardCtx{}, "")
+		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "")
 		// Same CAS guard as above: only the winner spawns.
-		if _, ok := o.Trigger(stageID, EvStartRun, GuardCtx{}, ""); !ok {
+		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
 		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
@@ -308,7 +309,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		}
 		// Synchronous transition guards against double start
 		// (matches startPlanningForUnblocked pattern).
-		if _, ok := o.Trigger(stageID, EvStartPlanning, GuardCtx{Stage: *stage}, "manual retry"); !ok {
+		if _, ok := o.Trigger(stageID, bus.EvStartPlanning, bus.GuardCtx{Stage: *stage}, "manual retry"); !ok {
 			return
 		}
 		o.spawnAgent(ctx, *stage, o.runPlanningAgent)
@@ -331,7 +332,7 @@ func (o *Orchestrator) failBlockedStages() {
 
 			for _, dep := range s.DependsOn {
 				if o.opts.Store.Get(dep) == state.StatusFailed {
-					o.Trigger(s.ID, EvBlockedByDep, GuardCtx{}, "dep failed")
+					o.Trigger(s.ID, bus.EvBlockedByDep, bus.GuardCtx{}, "dep failed")
 					changed = true
 					break
 				}
@@ -346,7 +347,7 @@ func (o *Orchestrator) allTerminal() bool {
 		return true
 	}
 	for _, s := range snap.Stages {
-		if !IsTerminal(s.Status) {
+		if !bus.IsTerminal(s.Status) {
 			return false
 		}
 	}

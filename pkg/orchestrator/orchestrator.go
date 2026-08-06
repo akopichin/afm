@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/orchestrator/supervisor"
 	"github.com/akopichin/afm/pkg/state"
@@ -70,9 +71,9 @@ type Orchestrator struct {
 	opts     Options
 	graph    *graph.Graph
 	runner   executor.Runner
-	critical *CriticalBus
-	ui       *UIBus
-	fsm      *FSM
+	critical *bus.CriticalBus
+	ui       *bus.UIBus
+	fsm      *bus.FSM
 	sems     map[string]interface {
 		acquire()
 		release()
@@ -170,8 +171,8 @@ func (o *Orchestrator) loadFatal() error {
 
 // New creates an Orchestrator.
 func New(opts Options) *Orchestrator {
-	critical := NewCriticalBus(16)
-	ui := NewUIBus()
+	critical := bus.NewCriticalBus(16)
+	ui := bus.NewUIBus()
 
 	r := opts.Runner
 	if r == nil {
@@ -239,7 +240,7 @@ func New(opts Options) *Orchestrator {
 		runner:         r,
 		critical:       critical,
 		ui:             ui,
-		fsm:            NewFSM(opts.Store),
+		fsm:            bus.NewFSM(opts.Store),
 		sems:           sems,
 		violationCache: make(map[string]violationCacheEntry),
 		lastRootScan:   make(map[string]time.Time),
@@ -250,11 +251,11 @@ func New(opts Options) *Orchestrator {
 }
 
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
-func (o *Orchestrator) UIBus() *UIBus { return o.ui }
+func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
 
 // Trigger applies an FSM event to transition a stage's status.
 // Returns the new status and whether the transition was applied.
-func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, bool) {
+func (o *Orchestrator) Trigger(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, bool) {
 	to, _, ok := o.triggerWithSeq(stageID, ev, ctx, reason)
 	return to, ok
 }
@@ -266,7 +267,7 @@ func (o *Orchestrator) Trigger(stageID string, ev FSMEvent, ctx GuardCtx, reason
 // нужен тот же реальный seq, чтобы фронт дедуплицировал историю из
 // /api/events с live-потоком по стабильному ключу, а не по содержимому.
 // Остальные ~60 call site'ов Trigger в этом не нуждаются и не меняются.
-func (o *Orchestrator) triggerWithSeq(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, uint64, bool) {
+func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, uint64, bool) {
 	to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 	if err != nil {
 		var se *StorageError
@@ -283,13 +284,10 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev FSMEvent, ctx GuardCtx,
 		return o.currentStatus(stageID), 0, false
 	}
 	if ok {
-		pubEv := Event{Type: EventStageStatusChanged, StageID: stageID, Data: string(to), Seq: seq}
+		pubEv := bus.Event{Type: bus.EventStageStatusChanged, StageID: stageID, Data: string(to), Seq: seq}
 		o.ui.Publish(pubEv)
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
-		select {
-		case o.critical.ch <- pubEv:
-		default:
-		}
+		o.critical.TryPublish(pubEv)
 	}
 	return to, seq, ok
 }
@@ -332,17 +330,17 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 }
 
 // handleEvent dispatches events to the appropriate handler.
-func (o *Orchestrator) handleEvent(ctx context.Context, ev Event) error {
+func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 	switch ev.Type {
-	case EventAgentCompleted:
+	case bus.EventAgentCompleted:
 		return o.onAgentCompleted(ctx, ev)
-	case EventUserAnswered:
+	case bus.EventUserAnswered:
 		return o.onUserAnswered(ctx, ev)
 	}
 	return nil
 }
 
-func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
+func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error {
 	agentType, _ := ev.Data.(string)
 	current := o.currentStatus(ev.StageID)
 
@@ -352,7 +350,7 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 	if o.hasOpenQuestion(ev.StageID, agentType) {
 		// agentType здесь — реальная фаза от executor, не из имени файла вопроса.
 		o.preAskPhase.Store(ev.StageID, agentType)
-		o.Trigger(ev.StageID, EvAskUser, GuardCtx{Phase: agentType}, "")
+		o.Trigger(ev.StageID, bus.EvAskUser, bus.GuardCtx{Phase: agentType}, "")
 		return nil
 	}
 
@@ -363,7 +361,7 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev Event) error {
 		if current != state.StatusPlanning && current != state.StatusRetrying {
 			return nil
 		}
-		o.Trigger(ev.StageID, EvPlanReady, GuardCtx{}, "")
+		o.Trigger(ev.StageID, bus.EvPlanReady, bus.GuardCtx{}, "")
 		// auto_approve: true on the stage config wins regardless of
 		// dashboard/--require-approval — checked before the headless branch.
 		if stage := o.graph.Stage(ev.StageID); stage != nil && o.autoApproveIfConfigured(ctx, *stage) {
@@ -429,7 +427,7 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	if current != state.StatusRunning && current != state.StatusRetrying {
 		return
 	}
-	o.Trigger(stageID, EvComplete, GuardCtx{}, "")
+	o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, "")
 	o.maybeRunAfterHook(ctx, stageID)
 	o.failBlockedStages()
 	o.startPlanningForUnblocked(ctx)
@@ -441,7 +439,7 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 // If the agent is still running (its bash loop is waiting for answer.json),
 // NotifyAnswer already transitioned the status — this is a no-op.
 // If the agent exited before the user answered, we restart it here.
-func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
+func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 	if o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
 		return nil
 	}
@@ -468,16 +466,16 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev Event) error {
 	// answer.json (bash loop exits immediately since the file now exists).
 	switch phase {
 	case phasePlanning:
-		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phasePlanning}, "")
+		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "")
 		o.spawnAgent(ctx, *stage, o.runPlanningAgent)
 	case phaseImplementation:
-		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseImplementation}, "")
+		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "")
 		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
 	case phaseReview:
-		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseReview}, "")
+		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseReview}, "")
 		o.spawnAgent(ctx, *stage, o.runReviewAgent)
 	case phaseAutonomous:
-		o.Trigger(ev.StageID, EvUserAnswered, GuardCtx{Phase: phaseAutonomous}, "")
+		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseAutonomous}, "")
 		o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)

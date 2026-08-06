@@ -74,10 +74,7 @@ func (o *Orchestrator) spawnAgent(ctx context.Context, s flow.Stage, run func(co
 // там уже стоят другие события — их обработка и так вызовет свою
 // перепроверку shouldExit(), так что потеря этого толчка безвредна.
 func (o *Orchestrator) wakeEventLoop() {
-	select {
-	case o.critical.ch <- Event{Type: eventAgentDrained}:
-	default:
-	}
+	o.critical.WakeEventLoop()
 }
 
 // waitAgents дожидается завершения всех агентских горутин (с ограничением),

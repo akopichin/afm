@@ -1,10 +1,35 @@
-package orchestrator
+package bus
 
 import (
 	"context"
 	"testing"
 	"time"
 )
+
+func TestCriticalBus_TryPublish_DropsWhenFull(t *testing.T) {
+	b := NewCriticalBus(1)
+	if !b.TryPublish(Event{Type: EventAgentCompleted}) {
+		t.Fatal("first TryPublish on empty buffer should succeed")
+	}
+	if b.TryPublish(Event{Type: EventAgentCompleted}) {
+		t.Fatal("TryPublish on full buffer should return false, not block")
+	}
+	<-b.Recv()
+	if !b.TryPublish(Event{Type: EventAgentCompleted}) {
+		t.Fatal("TryPublish should succeed again after buffer drains")
+	}
+}
+
+func TestCriticalBus_WakeEventLoop_PublishesInternalMarker(t *testing.T) {
+	b := NewCriticalBus(1)
+	if !b.WakeEventLoop() {
+		t.Fatal("WakeEventLoop on empty buffer should succeed")
+	}
+	ev := <-b.Recv()
+	if ev.Type != eventAgentDrained {
+		t.Fatalf("want eventAgentDrained, got %q", ev.Type)
+	}
+}
 
 func TestCriticalBus_Blocking(t *testing.T) {
 	b := NewCriticalBus(2)

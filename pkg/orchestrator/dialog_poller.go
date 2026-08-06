@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -98,9 +99,9 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию
 			// реальный seq этой transition — фронт дедуплицирует по нему live-
 			// событие с историческим двойником из /api/events.
-			_, seq, _ := o.triggerWithSeq(stageID, EvAskUser, GuardCtx{Phase: q.Phase}, "")
-			o.ui.Publish(Event{
-				Type:    EventAskUser,
+			_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
+			o.ui.Publish(bus.Event{
+				Type:    bus.EventAskUser,
 				StageID: stageID,
 				Data: map[string]any{
 					keyID: q.ID, keyPhase: q.Phase, "question": q.Question,

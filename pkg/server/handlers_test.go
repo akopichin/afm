@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -51,12 +51,12 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 		t.Fatal(err)
 	}
 
-	bus := orchestrator.NewUIBus()
+	uiBus := bus.NewUIBus()
 	srv := New(Config{
 		Port:         0,
 		RunDir:       runDir,
 		Store:        store,
-		UIBus:        bus,
+		UIBus:        uiBus,
 		ApproveFn:    func(ctx context.Context, id string) error { return nil },
 		ReviseFn:     func(ctx context.Context, id, fb string) error { return nil },
 		RetryFn:      func(ctx context.Context, id string) error { return nil },
@@ -449,7 +449,7 @@ func TestDialogGet(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  orchestrator.NewUIBus(),
+		UIBus:  bus.NewUIBus(),
 	})
 
 	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/dialog", nil)
@@ -557,7 +557,7 @@ func TestDialogAnswer(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  orchestrator.NewUIBus(),
+		UIBus:  bus.NewUIBus(),
 		DialogAnswerFn: func(s, p, q, a string, fo bool) error {
 			called.stage, called.phase, called.id, called.answer, called.fromOptions = s, p, q, a, fo
 			return nil
@@ -634,7 +634,7 @@ func TestDialogCancelAwaiting(t *testing.T) {
 	srv := New(Config{
 		RunDir:         runDir,
 		Store:          store,
-		UIBus:          orchestrator.NewUIBus(),
+		UIBus:          bus.NewUIBus(),
 		DialogCancelFn: func(id string) error { cancelled = id; return nil },
 	})
 
@@ -664,7 +664,7 @@ func TestDialogCancelRejectsNonAwaiting(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  orchestrator.NewUIBus(),
+		UIBus:  bus.NewUIBus(),
 	})
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/cancel", nil)
@@ -752,7 +752,7 @@ func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  orchestrator.NewUIBus(),
+		UIBus:  bus.NewUIBus(),
 		DialogAnswerFn: func(s, p, q, a string, fo bool) error {
 			notifyCalled = true
 			return nil
@@ -835,7 +835,7 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  orchestrator.NewUIBus(),
+		UIBus:  bus.NewUIBus(),
 		ReviseFn: func(_ context.Context, _, _ string) error {
 			reviseCalled = true
 			return nil

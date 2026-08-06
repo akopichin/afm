@@ -10,14 +10,22 @@ import (
 
 var Analyzer = &analysis.Analyzer{
 	Name: "noStoreApplyOutsideFSM",
-	Doc:  "Prohibits direct (*state.Store).Apply calls outside pkg/orchestrator/fsm.go.",
+	Doc:  "Prohibits direct (*state.Store).Apply calls outside pkg/orchestrator/bus/fsm.go.",
 	Run:  run,
 }
+
+// fsmFile — единственный файл, которому разрешён прямой (*state.Store).Apply.
+// Переехал из pkg/orchestrator/fsm.go в pkg/orchestrator/bus/fsm.go (Task 4
+// orchestrator-split, вынос CriticalBus/UIBus/FSM в отдельный пакет) — путь
+// здесь хардкодился под старое расположение и не был упомянут в брифе задачи;
+// без этой правки линтер молча продолжил бы искать старый путь и репортил
+// бы FSM.Apply как нарушение.
+const fsmFile = "pkg/orchestrator/bus/fsm.go"
 
 func run(pass *analysis.Pass) (any, error) {
 	for _, file := range pass.Files {
 		fname := pass.Fset.Position(file.Pos()).Filename
-		if strings.HasSuffix(fname, "pkg/orchestrator/fsm.go") || strings.HasSuffix(fname, "_test.go") {
+		if strings.HasSuffix(fname, fsmFile) || strings.HasSuffix(fname, "_test.go") {
 			continue
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -35,7 +43,7 @@ func run(pass *analysis.Pass) (any, error) {
 			}
 			t := tv.Type.String()
 			if strings.HasSuffix(t, "/pkg/state.Store") || strings.HasSuffix(t, "/pkg/state.*Store") {
-				pass.Reportf(call.Pos(), "(*state.Store).Apply must be called only via FSM in pkg/orchestrator/fsm.go (got call in %s)", fname)
+				pass.Reportf(call.Pos(), "(*state.Store).Apply must be called only via FSM in %s (got call in %s)", fsmFile, fname)
 			}
 			return true
 		})

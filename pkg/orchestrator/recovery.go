@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -32,7 +33,7 @@ func (o *Orchestrator) autoRecoverFailedStages() {
 		if s.Interactive {
 			clearInteractiveSessions(filepath.Join(o.opts.RunDir, s.ID))
 		}
-		if _, ok := o.Trigger(s.ID, EvManualRetry, GuardCtx{}, "auto_recover"); ok {
+		if _, ok := o.Trigger(s.ID, bus.EvManualRetry, bus.GuardCtx{}, "auto_recover"); ok {
 			log.Printf("auto_recover: stage %q failed -> pending", s.ID)
 		}
 	}
@@ -81,11 +82,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			case state.StatusRetrying:
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
-				o.Trigger(s.ID, EvReady, GuardCtx{}, "retry recovery")
+				o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
 			default:
 				if !o.depsDone(s) {
 					continue
@@ -97,22 +98,22 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if err := os.MkdirAll(stageDir, 0755); err != nil {
-					o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+					o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 					continue
 				}
 				dst := filepath.Join(stageDir, "plan.md")
 				if s.Plan != "" {
 					if err := copyFile(resolvePlanSource(o.opts.RunDir, s), dst); err != nil {
-						o.Trigger(s.ID, EvFail, GuardCtx{}, "copy plan failed")
+						o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "copy plan failed")
 						continue
 					}
 				} else if s.Interactive {
 					if err := os.WriteFile(dst, []byte(s.Description), 0644); err != nil {
-						o.Trigger(s.ID, EvFail, GuardCtx{}, "write plan failed")
+						o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "write plan failed")
 						continue
 					}
 				}
-				o.Trigger(s.ID, EvReady, GuardCtx{}, "")
+				o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "")
 				continue
 			}
 		}
@@ -132,17 +133,17 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Interrupted retry — check completion or restart
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
 			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-				o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
 				o.maybeRunAfterHook(ctx, s.ID)
 				continue
 			}
 			if stagefiles.CheckPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
-				o.Trigger(s.ID, EvPlanReady, GuardCtx{}, "recovered plan.md")
+				o.Trigger(s.ID, bus.EvPlanReady, bus.GuardCtx{}, "recovered plan.md")
 				o.autoApproveIfConfigured(ctx, s)
 				continue
 			}
 			// Restart planning from scratch
-			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "restart after retry")
+			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "restart after retry")
 			o.spawnAgent(ctx, s, o.runPlanningAgent)
 		case state.StatusRevising:
 			// Interrupted revision — restart with feedback, using whichever phase
@@ -174,7 +175,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// бывает autonomous.
 			if s.IsScript() {
 				if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
@@ -186,7 +187,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// agent rather than the standard implementation agent.
 			if isAutonomousStage(stageDir) || s.IsAuto() {
 				if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
-					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered execution_summary.md")
+					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered execution_summary.md")
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
@@ -194,7 +195,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue
 			}
 			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-				o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
+				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
 				o.maybeRunAfterHook(ctx, s.ID)
 				continue
 			}
@@ -205,7 +206,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if s.NeedsPlanning() {
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
 				if stagefiles.CheckPlanCompletion(stageDir) == nil {
-					o.Trigger(s.ID, EvPlanReady, GuardCtx{}, "recovered plan.md")
+					o.Trigger(s.ID, bus.EvPlanReady, bus.GuardCtx{}, "recovered plan.md")
 					o.autoApproveIfConfigured(ctx, s)
 					continue
 				}
@@ -215,7 +216,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if current == state.StatusPending && !s.EagerPlanning && !o.depsDone(s) {
 				continue
 			}
-			o.Trigger(s.ID, EvStartPlanning, GuardCtx{}, "")
+			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
 			o.spawnAgent(ctx, s, o.startWithSupervisor)
 		}
 	}
@@ -243,7 +244,7 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 
 	switch phase {
 	case phasePlanning:
-		o.Trigger(s.ID, EvUserAnswered, GuardCtx{Phase: phasePlanning}, "resume interactive")
+		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "resume interactive")
 		o.runPlanningAgent(ctx, s)
 	case phaseReview:
 		// Review runs after implementation completes; if we see review session
@@ -251,7 +252,7 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 		// agent which will re-trigger review at the end.
 		fallthrough
 	default:
-		o.Trigger(s.ID, EvUserAnswered, GuardCtx{Phase: phaseImplementation}, "resume interactive")
+		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "resume interactive")
 		o.runImplementationAgent(ctx, s)
 	}
 }

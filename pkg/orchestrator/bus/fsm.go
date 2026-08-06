@@ -1,4 +1,4 @@
-package orchestrator
+package bus
 
 import (
 	"errors"
@@ -6,6 +6,13 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+// phasePlanning — локальная копия orchestrator.phasePlanning (= string(flow.PhasePlanning)).
+// Нужна только phaseDispatch ниже; не экспортируется и не алиасится — это
+// derived string-константа, а не тип с identity, так что дублирование
+// значения в двух пакетах безопасно (в отличие от StorageError ниже, где
+// identity типа важна для errors.As).
+const phasePlanning = string(flow.PhasePlanning)
 
 type FSMEvent string
 
@@ -49,6 +56,22 @@ type FSM struct {
 }
 
 var ErrNoRule = errors.New("no rule for event")
+
+// StorageError signals that FSM.Apply failed because the underlying log
+// write failed (authoritative event log append error) — as opposed to a
+// benign state.ErrConcurrentChange (CAS mismatch, silently dropped) or
+// ErrNoRule (unknown event, logged and dropped without failing the run).
+// Callers (orchestrator.Trigger) use errors.As(err, &se *StorageError) to
+// decide whether to setFatal() and stop the run. Lives here (not in
+// orchestrator/errors.go) because it's constructed only by FSM.Apply below;
+// orchestrator/errors.go keeps a `type StorageError = bus.StorageError`
+// alias so existing errors.As call sites there and in orchestrator.go don't
+// need a bus. prefix — same pattern as the stagefiles.IncompleteWorkError/
+// MissingArtifactError aliases from Task 3.
+type StorageError struct{ Inner error }
+
+func (e *StorageError) Error() string { return "storage failure: " + e.Inner.Error() }
+func (e *StorageError) Unwrap() error { return e.Inner }
 
 func NewFSM(store *state.Store) *FSM {
 	to := func(s state.StageStatus) func(GuardCtx) state.StageStatus {

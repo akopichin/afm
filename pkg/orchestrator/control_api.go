@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
 // FailStage marks a stage as failed with a reason.
 func (o *Orchestrator) FailStage(stageID, reason string) {
-	o.Trigger(stageID, EvFail, GuardCtx{}, reason)
+	o.Trigger(stageID, bus.EvFail, bus.GuardCtx{}, reason)
 	o.failBlockedStages()
 }
 
@@ -24,14 +25,14 @@ func (o *Orchestrator) FailStage(stageID, reason string) {
 func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
 	if o.isAgentActive(stageID) {
 		guardPhase := o.popPreAskPhase(stageID, phase)
-		_, seq, _ := o.triggerWithSeq(stageID, EvUserAnswered, GuardCtx{Phase: guardPhase}, "")
-		o.ui.Publish(Event{Type: EventUserAnswered, StageID: stageID, Data: map[string]any{
+		_, seq, _ := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase}, "")
+		o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
 			keyID: qID, keyPhase: phase, keyAnswer: answer,
 		}, Seq: seq})
 		return nil
 	}
-	return o.critical.Publish(context.Background(), Event{
-		Type:    EventUserAnswered,
+	return o.critical.Publish(context.Background(), bus.Event{
+		Type:    bus.EventUserAnswered,
 		StageID: stageID,
 		Data:    map[string]any{keyID: qID, "phase": phase, keyAnswer: answer},
 	})
@@ -61,7 +62,7 @@ func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
 	if o.currentStatus(stageID) == state.StatusAwaitingApproval {
 		stage := o.graph.Stage(stageID)
 		if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
-			o.Trigger(stageID, EvComplete, GuardCtx{}, "planning-only stage")
+			o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, "planning-only stage")
 			// Планировочная стадия без implementation-агента доходит до done
 			// прямо здесь, минуя onAgentCompleted/completeStage — но
 			// script_after разрешён на любой стадии (flow.go), так что этот
@@ -69,7 +70,7 @@ func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
 			// для планировочных стадий.
 			o.maybeRunAfterHook(ctx, stageID)
 		} else {
-			o.Trigger(stageID, EvApprove, GuardCtx{}, "")
+			o.Trigger(stageID, bus.EvApprove, bus.GuardCtx{}, "")
 		}
 	}
 	o.startPlanningForUnblocked(ctx)
@@ -118,7 +119,7 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
 
 	if current == state.StatusRunning {
-		if _, ok := o.Trigger(stageID, EvRevise, GuardCtx{}, feedback); !ok {
+		if _, ok := o.Trigger(stageID, bus.EvRevise, bus.GuardCtx{}, feedback); !ok {
 			return nil
 		}
 		if err := state.SaveFeedback(stageDir, feedback); err != nil {
@@ -133,7 +134,7 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 		return nil
 	}
 
-	if _, ok := o.Trigger(stageID, EvRevise, GuardCtx{}, feedback); !ok {
+	if _, ok := o.Trigger(stageID, bus.EvRevise, bus.GuardCtx{}, feedback); !ok {
 		return nil
 	}
 	if _, err := state.VersionPlan(stageDir); err != nil {

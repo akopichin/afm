@@ -14,6 +14,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -206,13 +207,13 @@ func TestIntegration_MissingDependencyPlanWarns(t *testing.T) {
 	subID, events := orch.UIBus().Subscribe(64)
 	var (
 		mu       sync.Mutex
-		warnings []orchestrator.Event
+		warnings []bus.Event
 	)
 	collected := make(chan struct{})
 	go func() {
 		defer close(collected)
 		for ev := range events {
-			if ev.Type == orchestrator.EventContextWarning {
+			if ev.Type == bus.EventContextWarning {
 				mu.Lock()
 				warnings = append(warnings, ev)
 				mu.Unlock()
@@ -231,7 +232,7 @@ func TestIntegration_MissingDependencyPlanWarns(t *testing.T) {
 	<-collected
 
 	mu.Lock()
-	got := append([]orchestrator.Event{}, warnings...)
+	got := append([]bus.Event{}, warnings...)
 	mu.Unlock()
 
 	if len(got) == 0 {

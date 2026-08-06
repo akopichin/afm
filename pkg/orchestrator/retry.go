@@ -11,6 +11,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -99,33 +100,33 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// ровно на таком выходе агента в ожидании.
 			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {
 				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingUserInput {
-					o.Trigger(s.ID, EvAskUser, GuardCtx{Phase: phase}, "")
+					o.Trigger(s.ID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, "")
 				}
 				return
 			}
 			if completionCheck == nil {
-				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
-				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
+				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
+				_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			checkErr := completionCheck()
 			if checkErr == nil {
-				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
-				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
+				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
+				_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			// Incomplete work — retry once without backoff
 			if stagefiles.IsIncompleteWorkError(checkErr) && attempt == 0 {
 				incompleteReason = checkErr.Error()
-				o.ui.Publish(Event{
-					Type:    EventStageStatusChanged,
+				o.ui.Publish(bus.Event{
+					Type:    bus.EventStageStatusChanged,
 					StageID: s.ID,
 					Data:    "incomplete work, retrying: " + checkErr.Error(),
 				})
 				continue
 			}
 			// Missing artifact or second incomplete attempt — fail
-			o.Trigger(s.ID, EvFail, GuardCtx{}, "missing artifact or incomplete")
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "missing artifact or incomplete")
 			o.failBlockedStages()
 			return
 		}
@@ -140,7 +141,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// instead of resuming a conversation that was never created (e.g. the
 			// process died before claude created it). Mirrors the retryable branch.
 			_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
-			o.Trigger(s.ID, EvFail, GuardCtx{}, err.Error())
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
 			o.failBlockedStages()
 			return
 		}
@@ -152,9 +153,9 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 
 		if attempt < maxRetries {
-			_, seq, _ := o.triggerWithSeq(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
-			o.ui.Publish(Event{
-				Type:    EventRetryScheduled,
+			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, "")
+			o.ui.Publish(bus.Event{
+				Type:    bus.EventRetryScheduled,
 				StageID: s.ID,
 				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff),
 				Seq:     seq,
@@ -162,20 +163,20 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			select {
 			case <-time.After(retryBackoff):
 			case <-ctx.Done():
-				o.Trigger(s.ID, EvFail, GuardCtx{}, "cancelled during retry")
+				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "cancelled during retry")
 				o.failBlockedStages()
 				return
 			}
 			switch phase {
 			case phasePlanning:
-				o.Trigger(s.ID, EvResumeAfterRetry, GuardCtx{Phase: phasePlanning}, "")
+				o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phasePlanning}, "")
 			default:
-				o.Trigger(s.ID, EvResumeAfterRetry, GuardCtx{Phase: phaseImplementation}, "")
+				o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phaseImplementation}, "")
 			}
 		} else {
-			_, seq, _ := o.triggerWithSeq(s.ID, EvFail, GuardCtx{}, "retries exhausted")
+			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, "retries exhausted")
 			o.failBlockedStages()
-			_ = o.critical.Publish(ctx, Event{Type: EventRetryExhausted, StageID: s.ID, Seq: seq})
+			_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
 		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -65,7 +66,7 @@ func TestLiveEvent_CarriesRealSeq(t *testing.T) {
 	go func() {
 		defer close(done)
 		for ev := range events {
-			if ev.Type == orchestrator.EventStageStatusChanged && ev.Seq != 0 {
+			if ev.Type == bus.EventStageStatusChanged && ev.Seq != 0 {
 				seenNonZeroSeq = true
 			}
 		}

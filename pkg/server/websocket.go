@@ -8,7 +8,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
 var upgrader = websocket.Upgrader{
@@ -67,7 +67,7 @@ func (s *Server) readPump(conn *websocket.Conn) {
 }
 
 // writePump — единственный писатель в conn. Select по событиям / тикеру / done.
-func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan orchestrator.Event, done <-chan struct{}) {
+func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan bus.Event, done <-chan struct{}) {
 	ticker := time.NewTicker(s.wsPingPeriod)
 	defer ticker.Stop()
 

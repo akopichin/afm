@@ -7,6 +7,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
@@ -112,9 +113,9 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 	})
 }
 
-func uiActionPublisher(ui *UIBus, stageID string) func(string, string) {
+func uiActionPublisher(ui *bus.UIBus, stageID string) func(string, string) {
 	return func(tool, detail string) {
-		ui.Publish(Event{Type: EventAgentAction, StageID: stageID, Data: map[string]string{
+		ui.Publish(bus.Event{Type: bus.EventAgentAction, StageID: stageID, Data: map[string]string{
 			"tool":   tool,
 			"detail": detail,
 		}})

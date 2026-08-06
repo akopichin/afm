@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/web"
 )
@@ -73,7 +73,7 @@ type Server struct {
 	stageInteractive map[string]bool // id стадии → interactive (статический конфиг флоу)
 	stageAutoApprove map[string]bool // id стадии → auto_approve (статический конфиг флоу)
 	store            *state.Store
-	uiBus            *orchestrator.UIBus
+	uiBus            *bus.UIBus
 	approveFn        func(ctx context.Context, stageID string) error
 	reviseFn         func(ctx context.Context, stageID, feedback string) error
 	retryFn          func(ctx context.Context, stageID string) error
@@ -102,7 +102,7 @@ type Config struct {
 	StageInteractive map[string]bool
 	StageAutoApprove map[string]bool
 	Store            *state.Store
-	UIBus            *orchestrator.UIBus
+	UIBus            *bus.UIBus
 	ApproveFn        func(ctx context.Context, stageID string) error
 	ReviseFn         func(ctx context.Context, stageID, feedback string) error
 	RetryFn          func(ctx context.Context, stageID string) error

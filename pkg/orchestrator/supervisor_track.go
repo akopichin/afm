@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/supervisor"
 )
 
@@ -68,12 +69,12 @@ func (o *Orchestrator) startWithSupervisor(ctx context.Context, s flow.Stage) {
 	if len(phases) == 1 && phases[0] == phaseAutonomous {
 		stageDir := filepath.Join(o.opts.RunDir, s.ID)
 		if err := os.MkdirAll(stageDir, 0755); err != nil {
-			o.Trigger(s.ID, EvFail, GuardCtx{}, "mkdir failed")
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 			return
 		}
 		_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
-		o.Trigger(s.ID, EvSupervisorApproved, GuardCtx{}, "supervisor: autonomous")
-		o.Trigger(s.ID, EvStartRun, GuardCtx{}, "")
+		o.Trigger(s.ID, bus.EvSupervisorApproved, bus.GuardCtx{}, "supervisor: autonomous")
+		o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 		o.runAutonomousAgent(ctx, s)
 	} else {
 		o.runPlanningAgent(ctx, s)
@@ -116,8 +117,8 @@ func (o *Orchestrator) DetermineStagePhases(ctx context.Context, s flow.Stage) [
 		track = "autonomous"
 	}
 	o.logSupervisorDecision(s.ID, track, decision.Reason)
-	o.ui.Publish(Event{
-		Type:    EventSupervisorDecision,
+	o.ui.Publish(bus.Event{
+		Type:    bus.EventSupervisorDecision,
 		StageID: s.ID,
 		Data:    decision,
 	})

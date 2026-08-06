@@ -1,4 +1,4 @@
-package orchestrator
+package bus
 
 import (
 	"context"
@@ -73,6 +73,28 @@ func (b *CriticalBus) Publish(ctx context.Context, ev Event) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// TryPublish публикует событие неблокирующим best-effort send; возвращает
+// false, если буфер шины полон — вызывающий код тогда просто теряет толчок
+// (см. WakeEventLoop).
+func (b *CriticalBus) TryPublish(ev Event) bool {
+	select {
+	case b.ch <- ev:
+		return true
+	default:
+		return false
+	}
+}
+
+// WakeEventLoop будит select Run()'а неблокирующей отправкой внутреннего
+// маркер-события — используется concurrency.Manager.WakeEventLoop после
+// того, как after-hook горутина завершилась без движения FSM (script_after
+// никогда не публикует EventAgentCompleted сама). Best-effort: если буфер
+// полон, там уже стоят другие события — их обработка и так вызовет
+// перепроверку состояния, потеря толчка безвредна.
+func (b *CriticalBus) WakeEventLoop() bool {
+	return b.TryPublish(Event{Type: eventAgentDrained})
 }
 
 func (b *CriticalBus) Recv() <-chan Event { return b.ch }

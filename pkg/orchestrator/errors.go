@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
@@ -51,10 +52,12 @@ func (e *MissingSectionsError) Error() string {
 	return "plan missing sections: " + strings.Join(e.Missing, ", ")
 }
 
-type StorageError struct{ Inner error }
-
-func (e *StorageError) Error() string { return "storage failure: " + e.Inner.Error() }
-func (e *StorageError) Unwrap() error { return e.Inner }
+// StorageError переехал в pkg/orchestrator/bus (Task 4 orchestrator-split) —
+// его конструирует FSM.Apply при сбое записи в лог. Алиас сохраняет identity
+// типа для errors.As здесь (Classify) и в orchestrator.go (triggerWithSeq) —
+// тот же паттерн, что и для stagefiles.IncompleteWorkError/MissingArtifactError
+// выше.
+type StorageError = bus.StorageError
 
 func Classify(err error) Classification {
 	if err == nil {

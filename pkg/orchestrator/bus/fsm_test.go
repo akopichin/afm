@@ -1,4 +1,4 @@
-package orchestrator
+package bus
 
 import (
 	"os"

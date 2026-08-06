@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -66,9 +67,9 @@ func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 		opts:     Options{RunDir: dir, Stages: stages, Store: store, Runner: runner},
 		graph:    graph.NewGraph(stages),
 		runner:   runner,
-		fsm:      NewFSM(store),
-		ui:       NewUIBus(),
-		critical: NewCriticalBus(16),
+		fsm:      bus.NewFSM(store),
+		ui:       bus.NewUIBus(),
+		critical: bus.NewCriticalBus(16),
 		sems: map[string]interface {
 			acquire()
 			release()
@@ -85,8 +86,8 @@ func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 	}
 
 	// Drive stage "a" to awaiting_approval, same as the dashboard would see it.
-	o.Trigger("a", EvStartPlanning, GuardCtx{}, "")
-	o.Trigger("a", EvPlanReady, GuardCtx{}, "")
+	o.Trigger("a", bus.EvStartPlanning, bus.GuardCtx{}, "")
+	o.Trigger("a", bus.EvPlanReady, bus.GuardCtx{}, "")
 
 	// reqCtx simulates the HTTP request ctx handleApprove passes as r.Context().
 	reqCtx, reqCancel := context.WithCancel(context.Background())

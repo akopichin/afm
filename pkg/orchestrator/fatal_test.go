@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -21,10 +22,10 @@ func TestTrigger_ConcurrentChangeIsBenign(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	o := &Orchestrator{fsm: NewFSM(store), ui: NewUIBus(), critical: NewCriticalBus(16)}
+	o := &Orchestrator{fsm: bus.NewFSM(store), ui: bus.NewUIBus(), critical: bus.NewCriticalBus(16)}
 
 	// Событие с неверным From → CAS-mismatch → benign.
-	_, ok := o.Trigger("a", EvComplete, GuardCtx{}, "") // из pending complete не разрешён
+	_, ok := o.Trigger("a", bus.EvComplete, bus.GuardCtx{}, "") // из pending complete не разрешён
 	if ok {
 		t.Fatal("expected transition to be rejected")
 	}
@@ -88,13 +89,13 @@ func TestTrigger_NoRuleIsNotFatal(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	o := &Orchestrator{
 		opts:      Options{Store: store},
-		fsm:       NewFSM(store),
-		ui:        NewUIBus(),
-		critical:  NewCriticalBus(16),
+		fsm:       bus.NewFSM(store),
+		ui:        bus.NewUIBus(),
+		critical:  bus.NewCriticalBus(16),
 		cancelRun: cancel,
 	}
 
-	_, ok := o.Trigger("a", FSMEvent("no_such_event"), GuardCtx{}, "")
+	_, ok := o.Trigger("a", bus.FSMEvent("no_such_event"), bus.GuardCtx{}, "")
 	if ok {
 		t.Fatal("expected transition to be rejected for unknown event")
 	}

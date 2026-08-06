@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -30,17 +31,17 @@ func TestApproveStage_DurableTransition(t *testing.T) {
 	o := &Orchestrator{
 		opts:     Options{RunDir: dir, Stages: stages, Store: store},
 		graph:    graph.NewGraph(stages),
-		fsm:      NewFSM(store),
-		ui:       NewUIBus(),
-		critical: NewCriticalBus(16),
+		fsm:      bus.NewFSM(store),
+		ui:       bus.NewUIBus(),
+		critical: bus.NewCriticalBus(16),
 		sems: map[string]interface {
 			acquire()
 			release()
 		}{},
 	}
 	// довести "a" до awaiting_approval ("b" остаётся pending, некому её завершить)
-	o.Trigger("a", EvStartPlanning, GuardCtx{}, "")
-	o.Trigger("a", EvPlanReady, GuardCtx{}, "")
+	o.Trigger("a", bus.EvStartPlanning, bus.GuardCtx{}, "")
+	o.Trigger("a", bus.EvPlanReady, bus.GuardCtx{}, "")
 
 	o.approveStage(context.Background(), "a")
 
@@ -98,9 +99,9 @@ func TestRevise_DurableTransition(t *testing.T) {
 		opts:     Options{RunDir: dir, Stages: stages, Store: store},
 		graph:    graph.NewGraph(stages),
 		runner:   noopPlanningRunner{},
-		fsm:      NewFSM(store),
-		ui:       NewUIBus(),
-		critical: NewCriticalBus(16),
+		fsm:      bus.NewFSM(store),
+		ui:       bus.NewUIBus(),
+		critical: bus.NewCriticalBus(16),
 		sems: map[string]interface {
 			acquire()
 			release()
@@ -111,8 +112,8 @@ func TestRevise_DurableTransition(t *testing.T) {
 	_ = os.MkdirAll(stageDir, 0755)
 	_ = os.WriteFile(stageDir+"/plan.md", []byte("# plan"), 0644)
 
-	o.Trigger("a", EvStartPlanning, GuardCtx{}, "")
-	o.Trigger("a", EvPlanReady, GuardCtx{}, "")
+	o.Trigger("a", bus.EvStartPlanning, bus.GuardCtx{}, "")
+	o.Trigger("a", bus.EvPlanReady, bus.GuardCtx{}, "")
 
 	if err := o.Revise(context.Background(), "a", "нужны правки"); err != nil {
 		t.Fatal(err)

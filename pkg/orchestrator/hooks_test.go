@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -135,7 +136,7 @@ func TestExecScript_RunsInRootDirAndPublishesOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ui := NewUIBus()
+	ui := bus.NewUIBus()
 	subID, events := ui.Subscribe(10)
 	defer ui.Unsubscribe(subID)
 
@@ -155,11 +156,11 @@ func TestExecScript_RunsInRootDirAndPublishesOutput(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		if ev.Type != EventScriptOutput {
-			t.Errorf("event type = %v, want EventScriptOutput", ev.Type)
+		if ev.Type != bus.EventScriptOutput {
+			t.Errorf("event type = %v, want bus.EventScriptOutput", ev.Type)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected at least one EventScriptOutput to be published")
+		t.Fatal("expected at least one bus.EventScriptOutput to be published")
 	}
 }
 
@@ -178,7 +179,7 @@ func TestExecScript_PersistsOutputToNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ui := NewUIBus()
+	ui := bus.NewUIBus()
 	o := &Orchestrator{opts: Options{RootDir: rootDir, RunDir: runDir}, ui: ui}
 
 	s := flow.Stage{ID: "s1"}
@@ -209,8 +210,8 @@ func TestExecScript_PersistsOutputToNotices(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
 		t.Fatalf("unmarshal notice: %v", err)
 	}
-	if entry.Type != string(EventScriptOutput) {
-		t.Errorf("notice type = %q, want %q", entry.Type, EventScriptOutput)
+	if entry.Type != string(bus.EventScriptOutput) {
+		t.Errorf("notice type = %q, want %q", entry.Type, bus.EventScriptOutput)
 	}
 	if entry.StageID != "s1" {
 		t.Errorf("notice stage_id = %q, want s1", entry.StageID)
@@ -232,13 +233,13 @@ func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
 	if err := store.Apply(&state.Transition{StageID: stageID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
-	ui := NewUIBus()
-	critical := NewCriticalBus(16)
+	ui := bus.NewUIBus()
+	critical := bus.NewCriticalBus(16)
 	o := &Orchestrator{
 		opts:     Options{RootDir: rootDir, RunDir: runDir, Store: store},
 		ui:       ui,
 		critical: critical,
-		fsm:      NewFSM(store),
+		fsm:      bus.NewFSM(store),
 	}
 	return o, runDir
 }

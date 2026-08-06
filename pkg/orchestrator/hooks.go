@@ -9,6 +9,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
@@ -141,14 +142,14 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 		StageDir:    filepath.Join(o.opts.RunDir, s.ID),
 		OnAction: func(_, line string) {
 			data := map[string]string{"hook": hook, "line": line}
-			o.ui.Publish(Event{Type: EventScriptOutput, StageID: s.ID, Data: data})
+			o.ui.Publish(bus.Event{Type: bus.EventScriptOutput, StageID: s.ID, Data: data})
 			// stagefiles.AppendNotice — тот же механизм, которым EventAgentCompleted/
 			// EventContextWarning уже становятся durable+реплеиваемыми через
 			// /api/events (см. stagefiles/notices.go, reconstructNotices). Без этого
 			// клиент, подключившийся ПОСЛЕ завершения быстрого script/hook
 			// (обычно <1с), никогда не увидит его вывод в ленте событий —
 			// EventScriptOutput publish в o.ui эфемерен и не реплеится.
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventScriptOutput), data)
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventScriptOutput), data)
 		},
 	})
 	return ex.RunScript(ctx, timeout, logFile)
@@ -184,9 +185,9 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		waitCh := o.registerHookWaiter(s.ID)
 
 		_ = writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
-		_, seq, _ := o.triggerWithSeq(s.ID, EvHookFailed, GuardCtx{}, err.Error())
-		_ = o.critical.Publish(ctx, Event{
-			Type:    EventHookFailed,
+		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvHookFailed, bus.GuardCtx{}, err.Error())
+		_ = o.critical.Publish(ctx, bus.Event{
+			Type:    bus.EventHookFailed,
 			StageID: s.ID,
 			Data:    map[string]string{"hook": hookBefore, "error": err.Error()},
 			Seq:     seq,
@@ -197,9 +198,9 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 			return false
 		}
 		clearHookPending(stageDir)
-		_, seq, _ = o.triggerWithSeq(s.ID, EvHookResolved, GuardCtx{}, "before hook "+resolutionName(decision))
-		o.ui.Publish(Event{
-			Type:    EventHookResolved,
+		_, seq, _ = o.triggerWithSeq(s.ID, bus.EvHookResolved, bus.GuardCtx{}, "before hook "+resolutionName(decision))
+		o.ui.Publish(bus.Event{
+			Type:    bus.EventHookResolved,
 			StageID: s.ID,
 			Data:    map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)},
 			Seq:     seq,
@@ -242,8 +243,8 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 		waitCh := o.registerHookWaiter(s.ID)
 
 		_ = writeHookPending(stageDir, hookPending{Hook: hookAfter, Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout})
-		o.ui.Publish(Event{
-			Type:    EventHookFailed,
+		o.ui.Publish(bus.Event{
+			Type:    bus.EventHookFailed,
 			StageID: s.ID,
 			Data:    map[string]string{"hook": hookAfter, "error": err.Error()},
 		})
@@ -253,8 +254,8 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 			return
 		}
 		clearHookPending(stageDir)
-		o.ui.Publish(Event{
-			Type:    EventHookResolved,
+		o.ui.Publish(bus.Event{
+			Type:    bus.EventHookResolved,
 			StageID: s.ID,
 			Data:    map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)},
 		})
@@ -329,7 +330,7 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	pending, ok := readHookPending(stageDir)
 	if !ok || pending.Hook != hookBefore {
 		// Nothing to resume from disk; fail safe rather than guessing.
-		o.Trigger(s.ID, EvFail, GuardCtx{}, "hook_failed with no pending hook on disk")
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "hook_failed with no pending hook on disk")
 		return
 	}
 	decision, ok := o.waitForHookDecision(ctx, s.ID)
@@ -339,9 +340,9 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 		return
 	}
 	clearHookPending(stageDir)
-	_, seq, _ := o.triggerWithSeq(s.ID, EvHookResolved, GuardCtx{}, "before hook "+resolutionName(decision))
-	o.ui.Publish(Event{
-		Type:    EventHookResolved,
+	_, seq, _ := o.triggerWithSeq(s.ID, bus.EvHookResolved, bus.GuardCtx{}, "before hook "+resolutionName(decision))
+	o.ui.Publish(bus.Event{
+		Type:    bus.EventHookResolved,
 		StageID: s.ID,
 		Data:    map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)},
 		Seq:     seq,
@@ -396,8 +397,8 @@ func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
 		return
 	}
 	clearHookPending(stageDir)
-	o.ui.Publish(Event{
-		Type:    EventHookResolved,
+	o.ui.Publish(bus.Event{
+		Type:    bus.EventHookResolved,
 		StageID: s.ID,
 		Data:    map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)},
 	})

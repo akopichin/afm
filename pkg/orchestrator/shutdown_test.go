@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
 // spawnAgent отслеживает горутину в WaitGroup: waitAgents дожидается её завершения.
 func TestSpawnAgent_WaitAgentsBlocksUntilDone(t *testing.T) {
-	o := &Orchestrator{ui: NewUIBus(), critical: NewCriticalBus(16), sems: map[string]interface {
+	o := &Orchestrator{ui: bus.NewUIBus(), critical: bus.NewCriticalBus(16), sems: map[string]interface {
 		acquire()
 		release()
 	}{}}
@@ -45,7 +46,7 @@ func TestSpawnAgent_WaitAgentsBlocksUntilDone(t *testing.T) {
 
 func TestRun_CancelDrainsAgents(t *testing.T) {
 	dir := t.TempDir()
-	o := &Orchestrator{ui: NewUIBus(), critical: NewCriticalBus(16), sems: map[string]interface {
+	o := &Orchestrator{ui: bus.NewUIBus(), critical: bus.NewCriticalBus(16), sems: map[string]interface {
 		acquire()
 		release()
 	}{}}

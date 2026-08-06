@@ -16,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -89,7 +90,7 @@ func autoApprove(orch *orchestrator.Orchestrator) context.CancelFunc {
 				if !ok {
 					return
 				}
-				if ev.Type == orchestrator.EventStageStatusChanged {
+				if ev.Type == bus.EventStageStatusChanged {
 					status, _ := ev.Data.(string)
 					if status == string(state.StatusAwaitingApproval) {
 						_ = orch.Approve(context.Background(), ev.StageID)

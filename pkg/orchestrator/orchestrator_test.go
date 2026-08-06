@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -55,7 +56,7 @@ echo '{"type":"result","subtype":"success"}'`},
 		subID, events := orch.UIBus().Subscribe(64)
 		defer orch.UIBus().Unsubscribe(subID)
 		for ev := range events {
-			if ev.Type == orchestrator.EventStageStatusChanged {
+			if ev.Type == bus.EventStageStatusChanged {
 				status, _ := ev.Data.(string)
 				if status == string(state.StatusAwaitingApproval) {
 					_ = orch.Approve(context.Background(), ev.StageID)

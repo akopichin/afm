@@ -8,6 +8,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -59,18 +60,18 @@ printf '{"type":"result","subtype":"success"}\n'`
 	}
 }
 
-func waitForAgentAction(t *testing.T, ch <-chan Event) Event {
+func waitForAgentAction(t *testing.T, ch <-chan bus.Event) bus.Event {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case ev := <-ch:
-			if ev.Type == EventAgentAction {
+			if ev.Type == bus.EventAgentAction {
 				return ev
 			}
 		case <-deadline:
 			t.Fatal("timed out waiting for agent_action event")
-			return Event{}
+			return bus.Event{}
 		}
 	}
 }
