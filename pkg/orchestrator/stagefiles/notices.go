@@ -1,4 +1,4 @@
-package orchestrator
+package stagefiles
 
 import (
 	"encoding/json"
@@ -20,10 +20,10 @@ type noticeEntry struct {
 	Data    any       `json:"data,omitempty"`
 }
 
-// appendNotice дописывает одну строку в <runDir>/notices.jsonl. Ошибка
+// AppendNotice дописывает одну строку в <runDir>/notices.jsonl. Ошибка
 // нефатальна (это вспомогательный файл для истории event feed, не источник
 // правды) — молча игнорируется, как и dialog.jsonl в файловом протоколе.
-func appendNotice(runDir, stageID, eventType string, data any) {
+func AppendNotice(runDir, stageID, eventType string, data any) {
 	entry := noticeEntry{Time: time.Now(), Type: eventType, StageID: stageID, Data: data}
 	line, err := json.Marshal(entry)
 	if err != nil {

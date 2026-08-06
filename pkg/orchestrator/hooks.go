@@ -9,6 +9,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
 // hookMaxRetries/hookRetryBackoff — fixed retry policy for script_before/
@@ -141,13 +142,13 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 		OnAction: func(_, line string) {
 			data := map[string]string{"hook": hook, "line": line}
 			o.ui.Publish(Event{Type: EventScriptOutput, StageID: s.ID, Data: data})
-			// appendNotice — тот же механизм, которым EventAgentCompleted/
+			// stagefiles.AppendNotice — тот же механизм, которым EventAgentCompleted/
 			// EventContextWarning уже становятся durable+реплеиваемыми через
-			// /api/events (см. notices.go, reconstructNotices). Без этого
+			// /api/events (см. stagefiles/notices.go, reconstructNotices). Без этого
 			// клиент, подключившийся ПОСЛЕ завершения быстрого script/hook
 			// (обычно <1с), никогда не увидит его вывод в ленте событий —
 			// EventScriptOutput publish в o.ui эфемерен и не реплеится.
-			appendNotice(o.opts.RunDir, s.ID, string(EventScriptOutput), data)
+			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventScriptOutput), data)
 		},
 	})
 	return ex.RunScript(ctx, timeout, logFile)

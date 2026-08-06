@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -96,7 +97,7 @@ func TestCollectDependencyPlans(t *testing.T) {
 		{ID: "frontend", Name: "Frontend", Description: "frontend", DependsOn: []string{"backend"}},
 	}
 
-	result := orchestrator.CollectDependencyPlans(runDir, stages[1], stages, nil)
+	result := stagefiles.CollectDependencyPlans(runDir, stages[1], stages, nil)
 	if result == "" {
 		t.Fatal("expected non-empty dependency plans")
 	}
@@ -133,7 +134,7 @@ func TestCollectArtifacts_Inline(t *testing.T) {
 		},
 	}
 
-	result, err := orchestrator.CollectArtifacts(projectDir, "", allStages[1], allStages)
+	result, err := stagefiles.CollectArtifacts(projectDir, "", allStages[1], allStages)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestCollectArtifacts_NonInline(t *testing.T) {
 		},
 	}
 
-	result, err := orchestrator.CollectArtifacts("", runDir, allStages[1], allStages)
+	result, err := stagefiles.CollectArtifacts("", runDir, allStages[1], allStages)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -199,7 +200,7 @@ func TestCollectArtifacts_MissingRequired(t *testing.T) {
 		},
 	}
 
-	_, err := orchestrator.CollectArtifacts("/tmp", "", allStages[1], allStages)
+	_, err := stagefiles.CollectArtifacts("/tmp", "", allStages[1], allStages)
 	if err == nil {
 		t.Fatal("expected error for missing required artifact")
 	}
@@ -220,7 +221,7 @@ func TestCollectArtifacts_MissingOptional(t *testing.T) {
 		},
 	}
 
-	result, err := orchestrator.CollectArtifacts("/tmp", "", allStages[1], allStages)
+	result, err := stagefiles.CollectArtifacts("/tmp", "", allStages[1], allStages)
 	if err != nil {
 		t.Fatalf("optional artifact should not cause error: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
 // wrapperDirFor возвращает wrapper-dir для команды cmd: для generated-команд
@@ -61,8 +62,8 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	resume := sessionExists(stageDir, phase)
-	sessionID, err := loadOrCreateSession(stageDir, phase)
+	resume := stagefiles.SessionExists(stageDir, phase)
+	sessionID, err := stagefiles.LoadOrCreateSession(stageDir, phase)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: interactive stage %q: session failed: %v; using non-interactive runner\n", s.ID, err)
 		return o.runnerForFallback(s)

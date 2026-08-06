@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"errors"
 	"strings"
+
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
 type Classification int
@@ -33,13 +35,15 @@ const (
 	matchAPIError504         = "api error: 504"
 )
 
-type IncompleteWorkError struct{ Reason string }
-
-func (e *IncompleteWorkError) Error() string { return "incomplete work: " + e.Reason }
-
-type MissingArtifactError struct{ Name string }
-
-func (e *MissingArtifactError) Error() string { return "missing artifact: " + e.Name }
+// IncompleteWorkError и MissingArtifactError переехали в stagefiles (Task 3
+// orchestrator-split) — их конструируют completion-check'и CheckCompletion/
+// CheckPlanCompletionFor/CheckAutonomousCompletion, которые тоже там живут.
+// Алиасы сохраняют identity типа для errors.As здесь (Classify) и в
+// retry.go/agents.go, где эти типы используются как есть без префикса
+// пакета — без алиаса пришлось бы везде переходить на stagefiles.*, что не
+// входило в бриф этой задачи.
+type IncompleteWorkError = stagefiles.IncompleteWorkError
+type MissingArtifactError = stagefiles.MissingArtifactError
 
 type MissingSectionsError struct{ Missing []string }
 

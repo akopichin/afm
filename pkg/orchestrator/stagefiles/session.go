@@ -1,4 +1,4 @@
-package orchestrator
+package stagefiles
 
 import (
 	"crypto/rand"
@@ -12,12 +12,15 @@ type phaseSession struct {
 	SessionID string `json:"session_id"`
 }
 
-func sessionFile(stageDir, phase string) string {
+// SessionFile returns the path to the phase's session-id side-car file.
+func SessionFile(stageDir, phase string) string {
 	return filepath.Join(stageDir, phase+".session.json")
 }
 
-func loadOrCreateSession(stageDir, phase string) (string, error) {
-	p := sessionFile(stageDir, phase)
+// LoadOrCreateSession returns the existing session id for stageDir/phase,
+// creating and persisting a fresh one if none exists yet.
+func LoadOrCreateSession(stageDir, phase string) (string, error) {
+	p := SessionFile(stageDir, phase)
 	data, err := os.ReadFile(p)
 	if err == nil {
 		var s phaseSession
@@ -38,8 +41,9 @@ func loadOrCreateSession(stageDir, phase string) (string, error) {
 	return id, nil
 }
 
-func sessionExists(stageDir, phase string) bool {
-	_, err := os.Stat(sessionFile(stageDir, phase))
+// SessionExists reports whether a session-id file already exists for stageDir/phase.
+func SessionExists(stageDir, phase string) bool {
+	_, err := os.Stat(SessionFile(stageDir, phase))
 	return err == nil
 }
 

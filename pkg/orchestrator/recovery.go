@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -79,7 +80,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				// resuming the pending before-hook decision via the second switch.
 			case state.StatusRetrying:
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
-				if err := checkCompletion(stageDir, ".", s); err == nil {
+				if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
@@ -130,12 +131,12 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusRetrying:
 			// Interrupted retry — check completion or restart
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
-			if err := checkCompletion(stageDir, ".", s); err == nil {
+			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
 				o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
 				o.maybeRunAfterHook(ctx, s.ID)
 				continue
 			}
-			if checkPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
+			if stagefiles.CheckPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
 				o.Trigger(s.ID, EvPlanReady, GuardCtx{}, "recovered plan.md")
 				o.autoApproveIfConfigured(ctx, s)
 				continue
@@ -172,7 +173,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Проверяется ДО autonomous-ветки — script-стадия никогда не
 			// бывает autonomous.
 			if s.IsScript() {
-				if err := checkCompletion(stageDir, ".", s); err == nil {
+				if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
@@ -184,7 +185,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// execution_summary.md instead of .done, and restart the autonomous
 			// agent rather than the standard implementation agent.
 			if isAutonomousStage(stageDir) || s.IsAuto() {
-				if checkAutonomousCompletion(stageDir) == nil {
+				if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
 					o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered execution_summary.md")
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
@@ -192,7 +193,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				o.spawnAgent(ctx, s, o.runAutonomousAgent)
 				continue
 			}
-			if err := checkCompletion(stageDir, ".", s); err == nil {
+			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
 				o.Trigger(s.ID, EvComplete, GuardCtx{}, "recovered .done")
 				o.maybeRunAfterHook(ctx, s.ID)
 				continue
@@ -203,7 +204,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Pending, planning, or unknown — check if planning already completed
 			if s.NeedsPlanning() {
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
-				if checkPlanCompletion(stageDir) == nil {
+				if stagefiles.CheckPlanCompletion(stageDir) == nil {
 					o.Trigger(s.ID, EvPlanReady, GuardCtx{}, "recovered plan.md")
 					o.autoApproveIfConfigured(ctx, s)
 					continue
@@ -260,7 +261,7 @@ func (o *Orchestrator) detectInterruptedPhase(stageDir string) string {
 	var latestMtime time.Time
 	for _, p := range flow.Phases() {
 		phase := string(p)
-		fi, err := os.Stat(sessionFile(stageDir, phase))
+		fi, err := os.Stat(stagefiles.SessionFile(stageDir, phase))
 		if err != nil {
 			continue
 		}

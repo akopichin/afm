@@ -1,4 +1,4 @@
-package orchestrator
+package stagefiles
 
 import (
 	"fmt"
@@ -44,7 +44,7 @@ func TestAdoptWrittenPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !adoptWrittenPlan(logFile, outFile) {
+	if !AdoptWrittenPlan(logFile, outFile) {
 		t.Fatal("adoptWrittenPlan=false, want true")
 	}
 	data, err := os.ReadFile(outFile)
@@ -73,7 +73,7 @@ func TestAdoptWrittenPlanSkipsOutFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if adoptWrittenPlan(logFile, outFile) {
+	if AdoptWrittenPlan(logFile, outFile) {
 		t.Error("adoptWrittenPlan=true, want false (outFile is not a candidate)")
 	}
 }
@@ -82,7 +82,7 @@ func TestAdoptWrittenPlanSkipsOutFile(t *testing.T) {
 // нет кандидатов.
 func TestAdoptWrittenPlanNoLog(t *testing.T) {
 	dir := t.TempDir()
-	if adoptWrittenPlan(filepath.Join(dir, "planning.log"), filepath.Join(dir, "plan.md")) {
+	if AdoptWrittenPlan(filepath.Join(dir, "planning.log"), filepath.Join(dir, "plan.md")) {
 		t.Error("adoptWrittenPlan=true, want false (no jsonl log)")
 	}
 }

@@ -1,4 +1,4 @@
-package orchestrator
+package stagefiles
 
 import (
 	"bufio"
@@ -11,8 +11,8 @@ import (
 func TestAppendNotice(t *testing.T) {
 	runDir := t.TempDir()
 
-	appendNotice(runDir, "stage-a", "agent_completed", "planning")
-	appendNotice(runDir, "stage-b", "context_warning", "dep-x: context too large")
+	AppendNotice(runDir, "stage-a", "agent_completed", "planning")
+	AppendNotice(runDir, "stage-b", "context_warning", "dep-x: context too large")
 
 	f, err := os.Open(filepath.Join(runDir, "notices.jsonl"))
 	if err != nil {

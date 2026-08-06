@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -171,7 +172,7 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 // логируется в autonomous.jsonl, а не autonomous_execution.jsonl).
 func clearInteractiveSessions(stageDir string) {
 	for _, ph := range dialogPhases(stageDir) {
-		_ = os.Remove(sessionFile(stageDir, ph))
+		_ = os.Remove(stagefiles.SessionFile(stageDir, ph))
 		_ = os.Truncate(filepath.Join(stageDir, jsonlFileForPhase(ph)), 0)
 	}
 }

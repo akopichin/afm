@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
 // TestResolvePlanSource фиксирует разрешение пути stage.Plan: относительный путь
@@ -82,7 +83,7 @@ func TestCollectDependencyPlans_AutonomousFallback(t *testing.T) {
 		{ID: "dep1", Description: "dep", Agents: []flow.AgentType{flow.AgentPlanning}},
 		{ID: "s1", Description: "main", DependsOn: []string{"dep1"}, Agents: []flow.AgentType{flow.AgentPlanning}},
 	}
-	result := CollectDependencyPlans(runDir, stages[1], stages, nil)
+	result := stagefiles.CollectDependencyPlans(runDir, stages[1], stages, nil)
 	if !strings.Contains(result, "Did the thing") {
 		t.Errorf("expected execution_summary.md content in result, got:\n%s", result)
 	}
@@ -107,7 +108,7 @@ func TestCollectDependencyPlans_StandardPlan(t *testing.T) {
 		{ID: "dep1", Agents: []flow.AgentType{flow.AgentPlanning}},
 		{ID: "s1", DependsOn: []string{"dep1"}, Agents: []flow.AgentType{flow.AgentPlanning}},
 	}
-	result := CollectDependencyPlans(runDir, stages[1], stages, nil)
+	result := stagefiles.CollectDependencyPlans(runDir, stages[1], stages, nil)
 	if !strings.Contains(result, "do it") {
 		t.Errorf("expected plan.md content, got:\n%s", result)
 	}

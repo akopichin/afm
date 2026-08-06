@@ -1,4 +1,4 @@
-package orchestrator
+package stagefiles
 
 import (
 	"os"
@@ -17,7 +17,7 @@ import (
 // произвольным именем: текстовый вывод агента тогда — лишь резюме, и валидация
 // outFile проваливается, хотя полноценный план лежит рядом в файле.
 // Кандидаты проверяются от последнего записанного к первому.
-func adoptWrittenPlan(logFile, outFile string) bool {
+func AdoptWrittenPlan(logFile, outFile string) bool {
 	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
 	absOut, err := filepath.Abs(outFile)
 	if err != nil {
@@ -35,7 +35,7 @@ func adoptWrittenPlan(logFile, outFile string) bool {
 		if readErr != nil {
 			continue
 		}
-		if !prompts.ValidatePlan(string(data), requiredPlanSections).IsClean() {
+		if !prompts.ValidatePlan(string(data), RequiredPlanSections).IsClean() {
 			continue
 		}
 		return os.WriteFile(outFile, data, 0644) == nil

@@ -1,7 +1,6 @@
-package orchestrator
+package stagefiles
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,14 +25,14 @@ func TestCheckPlanCompletion(t *testing.T) {
 	t.Run("plan exists and not empty", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "plan.md"), []byte("# Plan\n- step 1"))
-		if err := checkPlanCompletion(dir); err != nil {
+		if err := CheckPlanCompletion(dir); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
 
 	t.Run("plan missing", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := checkPlanCompletion(dir); err == nil {
+		if err := CheckPlanCompletion(dir); err == nil {
 			t.Error("expected error for missing plan.md")
 		}
 	})
@@ -41,7 +40,7 @@ func TestCheckPlanCompletion(t *testing.T) {
 	t.Run("plan empty", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "plan.md"), []byte(""))
-		if err := checkPlanCompletion(dir); err == nil {
+		if err := CheckPlanCompletion(dir); err == nil {
 			t.Error("expected error for empty plan.md")
 		}
 	})
@@ -52,7 +51,7 @@ func TestCheckCompletion(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("all done"))
 		stage := flow.Stage{ID: testStageID}
-		if err := checkCompletion(dir, ".", stage); err != nil {
+		if err := CheckCompletion(dir, ".", stage); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
@@ -60,11 +59,11 @@ func TestCheckCompletion(t *testing.T) {
 	t.Run("done missing", func(t *testing.T) {
 		dir := t.TempDir()
 		stage := flow.Stage{ID: testStageID}
-		err := checkCompletion(dir, ".", stage)
+		err := CheckCompletion(dir, ".", stage)
 		if err == nil {
 			t.Error("expected error for missing .done")
 		}
-		if !isIncompleteWorkError(err) {
+		if !IsIncompleteWorkError(err) {
 			t.Errorf("expected incomplete work error, got %v", err)
 		}
 	})
@@ -73,11 +72,11 @@ func TestCheckCompletion(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte(""))
 		stage := flow.Stage{ID: testStageID}
-		err := checkCompletion(dir, ".", stage)
+		err := CheckCompletion(dir, ".", stage)
 		if err == nil {
 			t.Error("expected error for empty .done")
 		}
-		if !isIncompleteWorkError(err) {
+		if !IsIncompleteWorkError(err) {
 			t.Errorf("expected incomplete work error, got %v", err)
 		}
 	})
@@ -91,11 +90,11 @@ func TestCheckCompletion(t *testing.T) {
 				{Name: testArtifactName, Path: testArtifactPath, Description: "output file"},
 			},
 		}
-		err := checkCompletion(dir, t.TempDir(), stage)
+		err := CheckCompletion(dir, t.TempDir(), stage)
 		if err == nil {
 			t.Error("expected error for missing artifact")
 		}
-		if isIncompleteWorkError(err) {
+		if IsIncompleteWorkError(err) {
 			t.Error("missing artifact should NOT be incomplete work (no retry)")
 		}
 	})
@@ -111,7 +110,7 @@ func TestCheckCompletion(t *testing.T) {
 				{Name: testArtifactName, Path: testArtifactPath, Description: "output file"},
 			},
 		}
-		if err := checkCompletion(stageDir, projectDir, stage); err != nil {
+		if err := CheckCompletion(stageDir, projectDir, stage); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
@@ -130,40 +129,10 @@ func TestCheckCompletion(t *testing.T) {
 				{Name: "db", Path: "./schema.sql", Description: "migration"},
 			},
 		}
-		if err := checkCompletion(stageDir, ".", stage); err != nil {
+		if err := CheckCompletion(stageDir, ".", stage); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
-}
-
-func TestIsRetryableError(t *testing.T) {
-	cases := []struct {
-		msg  string
-		want bool
-	}{
-		{"You've hit your limit", true},
-		{matchRateLimit + " exceeded", true},
-		{matchTooManyRequests, true},
-		{matchOverloaded, true},
-		{matchAtCapacity, true},
-		{"500 Internal Server Error", true},
-		{matchInternalServerError, true},
-		{"something went wrong", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		var err error
-		if c.msg != "" {
-			err = fmt.Errorf("%s", c.msg)
-		}
-		if got := isRetryableError(err); got != c.want {
-			t.Errorf("isRetryableError(%q) = %v, want %v", c.msg, got, c.want)
-		}
-	}
-
-	if isRetryableError(nil) {
-		t.Error("nil should not be retryable")
-	}
 }
 
 func TestCheckCompletion_Verify(t *testing.T) {
@@ -171,7 +140,7 @@ func TestCheckCompletion_Verify(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
 		stage := flow.Stage{ID: testStageID, Verify: "true"}
-		if err := checkCompletion(dir, t.TempDir(), stage); err != nil {
+		if err := CheckCompletion(dir, t.TempDir(), stage); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
@@ -180,11 +149,11 @@ func TestCheckCompletion_Verify(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
 		stage := flow.Stage{ID: testStageID, Verify: "echo '3 tests failed'; exit 1"}
-		err := checkCompletion(dir, t.TempDir(), stage)
+		err := CheckCompletion(dir, t.TempDir(), stage)
 		if err == nil {
 			t.Fatal("expected error for failing verify command")
 		}
-		if !isIncompleteWorkError(err) {
+		if !IsIncompleteWorkError(err) {
 			t.Errorf("verify failure should be incomplete work (one retry), got %v", err)
 		}
 		if !strings.Contains(err.Error(), "3 tests failed") {
@@ -198,7 +167,7 @@ func TestCheckCompletion_Verify(t *testing.T) {
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
 		writeFile(t, filepath.Join(projectDir, "marker.txt"), []byte("x"))
 		stage := flow.Stage{ID: testStageID, Verify: "test -f marker.txt"}
-		if err := checkCompletion(dir, projectDir, stage); err != nil {
+		if err := CheckCompletion(dir, projectDir, stage); err != nil {
 			t.Errorf("verify should run in project dir, got %v", err)
 		}
 	})
@@ -206,8 +175,8 @@ func TestCheckCompletion_Verify(t *testing.T) {
 	t.Run("verify skipped when missing done", func(t *testing.T) {
 		dir := t.TempDir()
 		stage := flow.Stage{ID: testStageID, Verify: "true"}
-		err := checkCompletion(dir, t.TempDir(), stage)
-		if err == nil || !isIncompleteWorkError(err) {
+		err := CheckCompletion(dir, t.TempDir(), stage)
+		if err == nil || !IsIncompleteWorkError(err) {
 			t.Errorf("missing .done should still be incomplete work, got %v", err)
 		}
 	})

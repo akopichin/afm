@@ -11,6 +11,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -103,18 +104,18 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				return
 			}
 			if completionCheck == nil {
-				appendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
+				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
 				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			checkErr := completionCheck()
 			if checkErr == nil {
-				appendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
+				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(EventAgentCompleted), phase)
 				_ = o.critical.Publish(ctx, Event{Type: EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			// Incomplete work — retry once without backoff
-			if isIncompleteWorkError(checkErr) && attempt == 0 {
+			if stagefiles.IsIncompleteWorkError(checkErr) && attempt == 0 {
 				incompleteReason = checkErr.Error()
 				o.ui.Publish(Event{
 					Type:    EventStageStatusChanged,
@@ -138,7 +139,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// Drop the session file so a later retry starts a fresh Claude session
 			// instead of resuming a conversation that was never created (e.g. the
 			// process died before claude created it). Mirrors the retryable branch.
-			_ = os.Remove(sessionFile(stageDir, phase))
+			_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 			o.Trigger(s.ID, EvFail, GuardCtx{}, err.Error())
 			o.failBlockedStages()
 			return
@@ -148,7 +149,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		// session context. Drop the session file so the next attempt starts a
 		// fresh Claude session. Answers already written to answer.json files
 		// remain on disk and are re-read immediately by the agent's bash loop.
-		_ = os.Remove(sessionFile(stageDir, phase))
+		_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 
 		if attempt < maxRetries {
 			_, seq, _ := o.triggerWithSeq(s.ID, EvScheduleRetry, GuardCtx{Phase: phase}, "")
