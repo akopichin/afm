@@ -16,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
+	"github.com/akopichin/afm/pkg/orchestrator/supervisor"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -100,7 +101,7 @@ type Orchestrator struct {
 	lastRootScan map[string]time.Time
 	// supervisor оценивает, можно ли выполнить стадию автономно.
 	// nil, если SupervisorRunner не задан в Options.
-	supervisor *Supervisor
+	supervisor *supervisor.Supervisor
 	// maxRetries/retryBackoff — снапшоты package-level RetryBackoff/MaxRetries,
 	// снятые в New(). Агентские горутины могут пережить возврат Run(), поэтому
 	// прямое чтение этих globals гонится с мутацией в тестах (data race).
@@ -227,9 +228,9 @@ func New(opts Options) *Orchestrator {
 
 	// Supervisor включается только если задан SupervisorRunner; иначе
 	// DetermineStagePhases всегда возвращает базовые фазы.
-	var sup *Supervisor
+	var sup *supervisor.Supervisor
 	if opts.SupervisorRunner != nil {
-		sup = NewSupervisor(opts.SupervisorRunner)
+		sup = supervisor.NewSupervisor(opts.SupervisorRunner)
 	}
 
 	return &Orchestrator{

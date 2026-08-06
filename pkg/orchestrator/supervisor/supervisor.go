@@ -1,4 +1,4 @@
-package orchestrator
+package supervisor
 
 import (
 	"bytes"
@@ -13,6 +13,48 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 )
+
+// MaxRetries — число повторных попыток после первого запуска (всего MaxRetries+1).
+// Сверху ограничено idle_timeout stage (30м default): каждая попытка ≈ agent-runtime,
+// так что реально успевает меньше — idle_timeout добьёт лишнее.
+// Может переопределяться в тестах ДО создания Supervisor.
+var MaxRetries = 15
+
+// RetryBackoff — фиксированная пауза между попытками после retryable-ошибки
+// (529/502/503/504, rate limit).
+// Может переопределяться в тестах ДО создания Supervisor.
+var RetryBackoff = 5 * time.Second
+
+// phaseAutonomous — строковая константа для автономной фазы выполнения.
+const phaseAutonomous = string(flow.PhaseAutonomous)
+
+// isRetryableError проверяет, является ли ошибка rate limit или server error (повторяемой с backoff).
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	patterns := []string{
+		"hit your limit",
+		"rate limit",
+		"too many requests",
+		"overloaded",
+		"at capacity",
+		"http 500",
+		"status 500",
+		"internal server error",
+		"api error: 529",
+		"api error: 502",
+		"api error: 503",
+		"api error: 504",
+	}
+	for _, p := range patterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // EvaluationResult — ответ супервизора на оценку стадии.
 type EvaluationResult struct {
@@ -84,7 +126,7 @@ type supervisorTmplData struct {
 var supervisorTmpl = template.Must(template.New("supervisor").Parse(supervisorPromptTmpl))
 
 func compileSupervisorPrompt(stage flow.Stage, globalPrompt string) (string, error) {
-	bp, err := json.Marshal(agentTypesToStrings(stage.Agents))
+	bp, err := json.Marshal(AgentTypesToStrings(stage.Agents))
 	if err != nil {
 		return "", fmt.Errorf("marshal base phases: %w", err)
 	}
@@ -101,9 +143,9 @@ func compileSupervisorPrompt(stage flow.Stage, globalPrompt string) (string, err
 	return buf.String(), nil
 }
 
-// agentTypesToStrings конвертирует []flow.AgentType в []string.
+// AgentTypesToStrings конвертирует []flow.AgentType в []string.
 // Определена здесь (Task 3), переиспользуется в Task 7 (DetermineStagePhases).
-func agentTypesToStrings(agents []flow.AgentType) []string {
+func AgentTypesToStrings(agents []flow.AgentType) []string {
 	ss := make([]string, len(agents))
 	for i, a := range agents {
 		ss[i] = string(a)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/supervisor"
 )
 
 // isAutonomousStage возвращает true, если stageDir содержит autonomous.flag —
@@ -90,7 +91,7 @@ func (o *Orchestrator) startWithSupervisor(ctx context.Context, s flow.Stage) {
 //   - CanExecuteAutonomously=true → ["autonomous_execution"], логируется решение,
 //     публикуется событие EventSupervisorDecision.
 func (o *Orchestrator) DetermineStagePhases(ctx context.Context, s flow.Stage) []string {
-	base := agentTypesToStrings(s.Agents)
+	base := supervisor.AgentTypesToStrings(s.Agents)
 
 	if !s.Supervisor || o.supervisor == nil {
 		return base

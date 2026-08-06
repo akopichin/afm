@@ -12,6 +12,18 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// mockJSONRunner реализует executor.Runner с настраиваемым RunJSONQuery.
+type mockJSONRunner struct {
+	response []byte
+	err      error
+}
+
+func (m *mockJSONRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, error) {
+	return m.response, m.err
+}
+func (m *mockJSONRunner) RunPlanning(_ context.Context, _, _, _, _ string) error { return nil }
+func (m *mockJSONRunner) RunAgent(_ context.Context, _, _, _, _ string) error    { return nil }
+
 // newOrchWithSupervisorRunner строит Orchestrator с заданным supervisor runner
 // (nil = supervisor отключён). Используется тестами DetermineStagePhases.
 func newOrchWithSupervisorRunner(t *testing.T, stages []flow.Stage, supervisorRunner executor.Runner) *Orchestrator {
