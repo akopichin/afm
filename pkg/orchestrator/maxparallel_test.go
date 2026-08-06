@@ -1,14 +1,14 @@
 package orchestrator_test
 
 // TestMaxParallelThrottling закрывает пробел покрытия: stage.MaxParallel
-// (per-command семафор, см. pkg/orchestrator/concurrency.go semFor и
-// New()'s sems-построение в orchestrator.go) ограничивает число ОДНОВРЕМЕННО
+// (per-command семафор, см. pkg/orchestrator/concurrency/concurrency.go
+// semFor и New()'s sems-построение) ограничивает число ОДНОВРЕМЕННО
 // исполняющихся стадий, разделяющих одну команду агента.
 //
 // Модель: N независимых (без DependsOn) auto-стадий (Agents: [flow.AgentAuto])
 // с общей (пустой, т.е. дефолтной) командой и MaxParallel=2 на каждой стадии —
-// New берёт САМЫЙ строгий MaxParallel среди всех стадий с данной эффективной
-// командой (см. orchestrator.go: сбор limits[cmd] = min(...) перед построением
+// concurrency.New берёт САМЫЙ строгий MaxParallel среди всех стадий с данной
+// эффективной командой (сбор limits[cmd] = min(...) перед построением
 // семафоров); здесь все стадии задают одно и то же значение, так что тест не
 // различает "строже из всех" от прежнего "первая встретившаяся" — про это
 // различие см. TestMaxParallelThrottling_NonFirstStageLimitApplies ниже.

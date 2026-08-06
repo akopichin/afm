@@ -23,7 +23,7 @@ func (o *Orchestrator) FailStage(stageID, reason string) {
 // file and continue without a restart. If the goroutine has exited, we publish
 // to the critical bus so onUserAnswered can restart it.
 func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
-	if o.isAgentActive(stageID) {
+	if o.concurrency.IsActive(stageID) {
 		guardPhase := o.popPreAskPhase(stageID, phase)
 		_, seq, _ := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase}, "")
 		o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
@@ -147,7 +147,7 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 	if stage := o.graph.Stage(stageID); stage != nil {
 		// Спавним под run ctx, а не reqCtx: HTTP-хэндлер отменит reqCtx сразу
 		// после возврата ответа, и агент был бы убит немедленно (см. runContext).
-		o.spawnAgent(o.runContext(reqCtx), *stage, o.runPlanningWithFeedback)
+		o.concurrency.SpawnAgent(o.runContext(reqCtx), *stage, o.runPlanningWithFeedback)
 	}
 	return nil
 }

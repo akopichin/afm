@@ -7,6 +7,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -28,16 +29,14 @@ func TestApproveStage_DurableTransition(t *testing.T) {
 		{ID: "b", Agents: []flow.AgentType{flow.AgentImplementation}},
 		{ID: "a", Agents: []flow.AgentType{flow.AgentImplementation}, DependsOn: []string{"b"}},
 	}
+	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{
-		opts:     Options{RunDir: dir, Stages: stages, Store: store},
-		graph:    graph.NewGraph(stages),
-		fsm:      bus.NewFSM(store),
-		ui:       bus.NewUIBus(),
-		critical: bus.NewCriticalBus(16),
-		sems: map[string]interface {
-			acquire()
-			release()
-		}{},
+		opts:        Options{RunDir: dir, Stages: stages, Store: store},
+		graph:       graph.NewGraph(stages),
+		fsm:         bus.NewFSM(store),
+		ui:          bus.NewUIBus(),
+		critical:    cb,
+		concurrency: concurrency.NewWithSemaphores(cb, map[string]concurrency.Semaphore{}, ""),
 	}
 	// довести "a" до awaiting_approval ("b" остаётся pending, некому её завершить)
 	o.Trigger("a", bus.EvStartPlanning, bus.GuardCtx{}, "")
@@ -75,14 +74,14 @@ func (noopPlanningRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, err
 // в state.StatusRevising в логе синхронно (до возврата из вызова) — краш
 // сразу после Revise не теряет интент на переплан.
 //
-// Фоновая горутина, которую Revise запускает через spawnAgent
+// Фоновая горутина, которую Revise запускает через concurrency.Manager.SpawnAgent
 // (runPlanningWithFeedback), сама первым делом делает
 // Trigger(EvStartPlanning) — а это валидный переход ИЗ revising (см.
 // fsm.go: EvStartPlanning{From: ...,StatusRevising}), так что без
 // синхронизации она гоняется с последующим LoadRunState в тесте: получаем
 // то "revising", то уже "planning" в зависимости от планировщика
 // (флейково воспроизводится через `-race -count`). Семафор команды "" (test
-// sems map) держит spawnAgent на sem.acquire() ДО запуска run(), пока тест
+// sems map) держит SpawnAgent на sem.acquire() ДО запуска run(), пока тест
 // не прочитает состояние и не отпустит его явно — тем самым тест проверяет
 // именно гарантию Revise (запись в Store до возврата), а не выигрыш в гонке
 // с фоновым агентом.
@@ -93,19 +92,17 @@ func TestRevise_DurableTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	stages := []flow.Stage{{ID: "a", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}}}
-	blockSem := make(semChan, 1)
-	blockSem <- struct{}{} // занят: следующий acquire() (в spawnAgent) заблокируется
+	cb := bus.NewCriticalBus(16)
+	blockSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
+	blockSem <- struct{}{} // занят: следующий acquire() (в SpawnAgent) заблокируется
 	o := &Orchestrator{
-		opts:     Options{RunDir: dir, Stages: stages, Store: store},
-		graph:    graph.NewGraph(stages),
-		runner:   noopPlanningRunner{},
-		fsm:      bus.NewFSM(store),
-		ui:       bus.NewUIBus(),
-		critical: bus.NewCriticalBus(16),
-		sems: map[string]interface {
-			acquire()
-			release()
-		}{"": blockSem},
+		opts:        Options{RunDir: dir, Stages: stages, Store: store},
+		graph:       graph.NewGraph(stages),
+		runner:      noopPlanningRunner{},
+		fsm:         bus.NewFSM(store),
+		ui:          bus.NewUIBus(),
+		critical:    cb,
+		concurrency: concurrency.NewWithSemaphores(cb, map[string]concurrency.Semaphore{"": blockSem}, ""),
 	}
 	// подготовить plan.md (revise версионирует его)
 	stageDir := dir + "/a"
@@ -123,6 +120,6 @@ func TestRevise_DurableTransition(t *testing.T) {
 		t.Fatalf("want revising persisted, got %q", rs.Stages["a"].Status)
 	}
 	<-blockSem // отпускаем фонового агента — теперь он может продолжить (planning → done)
-	o.waitAgents()
+	o.concurrency.WaitAgents()
 	store.Close()
 }

@@ -63,7 +63,7 @@ func (o *Orchestrator) logSupervisorDecision(stageID, decision, reason string) {
 // автономный трек (пишет autonomous.flag + durable-переходы + runAutonomousAgent)
 // либо обычное планирование. Идентичный блок раньше дублировался в
 // startPlanningForUnblocked (scheduling.go) и в recovery.go; извлечён сюда.
-// Вызывается как agent-функция через spawnAgent.
+// Вызывается как agent-функция через concurrency.Manager.SpawnAgent.
 func (o *Orchestrator) startWithSupervisor(ctx context.Context, s flow.Stage) {
 	phases := o.DetermineStagePhases(ctx, s)
 	if len(phases) == 1 && phases[0] == phaseAutonomous {

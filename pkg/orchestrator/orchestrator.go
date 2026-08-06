@@ -16,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/orchestrator/supervisor"
 	"github.com/akopichin/afm/pkg/state"
@@ -74,11 +75,9 @@ type Orchestrator struct {
 	critical *bus.CriticalBus
 	ui       *bus.UIBus
 	fsm      *bus.FSM
-	sems     map[string]interface {
-		acquire()
-		release()
-	} // per-command semaphores
-	activeAgents sync.Map // stageID → struct{}: set while an agent goroutine runs
+	// concurrency инкапсулирует семафоры на команду, учёт активных агентских
+	// горутин и WaitGroup для чистого shutdown (вынесено в отдельный пакет).
+	concurrency *concurrency.Manager
 	// interruptChans хранит канал прерывания (stageID → chan struct{}, буфер
 	// 1) на время КОНКРЕТНОЙ попытки RunAgent — создаётся в начале
 	// runWithRetry, удаляется по её завершении (успешном или нет). Revise
@@ -118,13 +117,8 @@ type Orchestrator struct {
 	fatalErr  error
 	cancelRun context.CancelFunc
 
-	// agentWG учитывает все агентские горутины, запущенные через spawnAgent.
-	// waitAgents дожидается его опустошения на выходе из Run — иначе горутины,
-	// ещё пишущие в Store, переживают Run и рискуют использовать Store после Close.
-	agentWG sync.WaitGroup
-
 	// pendingAfterHooks — счётчик живых script_after горутин (инкремент
-	// синхронно в maybeRunAfterHook ДО spawnAgent, декремент из её же
+	// синхронно в maybeRunAfterHook ДО concurrency.SpawnAgent, декремент из её же
 	// cleanup-обёртки, см. hooks.go). Нужен specifically для shouldExit
 	// (scheduling.go): script_after — единственный вид агента, который НЕ
 	// трогает FSM своей стадии (см. runAfterHook), так что allTerminal()
@@ -132,16 +126,17 @@ type Orchestrator struct {
 	// RetryHook/SkipHook — без этого счётчика Run() мог бы отменить свой ctx
 	// (shutdown) в тот же момент, когда стадия стала done, убив только что
 	// запущенный after-hook раньше, чем он успеет хоть раз стартовать.
-	// Намеренно уже, чем общий agentWG/spawnAgent: остальные типы агентов уже
-	// двигают FSM-статус, на который и так смотрит allTerminal(), так что им
-	// эта бухгалтерия не нужна и не добавляется (см. spawnAgent). Обычный
-	// sync.WaitGroup не даёт прочитать текущий счётчик, поэтому отдельный atomic.
+	// Намеренно уже, чем общий agentWG внутри concurrency.Manager: остальные
+	// типы агентов уже двигают FSM-статус, на который и так смотрит
+	// allTerminal(), так что им эта бухгалтерия не нужна и не добавляется.
+	// Обычный sync.WaitGroup не даёт прочитать текущий счётчик, поэтому
+	// отдельный atomic.
 	pendingAfterHooks atomic.Int32
 
 	// runMu/runCtx хранят долгоживущий контекст event loop (см. Run), который
 	// HTTP-инициированные Approve/Revise/Retry подставляют вместо request-ctx
 	// перед спавном агента (см. runContext). net/http отменяет r.Context() сразу
-	// после возврата хэндлера — если передать его в spawnAgent как есть, только
+	// после возврата хэндлера — если передать его в SpawnAgent как есть, только
 	// что запущенный агент будет убит немедленно (exec.CommandContext убивает
 	// процесс на <-ctx.Done()). Мьютекс нужен, т.к. HTTP-сервер начинает слушать
 	// ДО вызова Run (см. cmd/afm/run.go) — запрос может прийти раньше, чем Run
@@ -188,44 +183,10 @@ func New(opts Options) *Orchestrator {
 		})
 	}
 
-	// Build per-command semaphores from stage configs. A command's effective
-	// limit is the STRICTEST explicit max_parallel among all stages sharing
-	// it (falling back to the global default when none set one) — not just
-	// whichever stage happens to appear first in Stages. A single "first
-	// stage wins" pass silently ignored a later stage's own max_parallel
-	// whenever an earlier stage using the same command had none/a looser
-	// one, defeating throttling the user explicitly asked for.
-	globalMP := opts.Config.Executor.MaxParallel
-	limits := make(map[string]int)
-	cmds := make(map[string]bool)
-	for _, s := range opts.Stages {
-		cmd := s.Command
-		if cmd == "" {
-			cmd = opts.Config.Client.Command
-		}
-		cmds[cmd] = true
-		if s.MaxParallel <= 0 {
-			continue
-		}
-		if cur, ok := limits[cmd]; !ok || s.MaxParallel < cur {
-			limits[cmd] = s.MaxParallel
-		}
-	}
-	sems := make(map[string]interface {
-		acquire()
-		release()
-	})
-	for cmd := range cmds {
-		mp, ok := limits[cmd]
-		if !ok {
-			mp = globalMP
-		}
-		if mp > 0 {
-			sems[cmd] = semChan(make(chan struct{}, mp))
-		} else {
-			sems[cmd] = semNop{}
-		}
-	}
+	// Семафоры на команду строятся из конфигурации стадий: per-stage
+	// MaxParallel имеет приоритет над глобальным дефолтом (см.
+	// concurrency.New — 1:1 перенос прежней логики этого блока).
+	conc := concurrency.New(critical, opts.Stages, opts.Config.Client.Command, opts.Config.Executor.MaxParallel)
 
 	// Supervisor включается только если задан SupervisorRunner; иначе
 	// DetermineStagePhases всегда возвращает базовые фазы.
@@ -241,7 +202,7 @@ func New(opts Options) *Orchestrator {
 		critical:       critical,
 		ui:             ui,
 		fsm:            bus.NewFSM(opts.Store),
-		sems:           sems,
+		concurrency:    conc,
 		violationCache: make(map[string]violationCacheEntry),
 		lastRootScan:   make(map[string]time.Time),
 		supervisor:     sup,
@@ -302,7 +263,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	o.runMu.Lock()
 	o.runCtx = ctx
 	o.runMu.Unlock()
-	defer o.waitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
+	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 
 	o.startPlanningForPending(ctx)
@@ -396,9 +357,9 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 				return nil
 			}
 			if agentType == phaseAutonomous {
-				o.spawnAgent(ctx, *stage, o.runAutonomousWithFeedback)
+				o.concurrency.SpawnAgent(ctx, *stage, o.runAutonomousWithFeedback)
 			} else {
-				o.spawnAgent(ctx, *stage, o.runImplementationWithFeedback)
+				o.concurrency.SpawnAgent(ctx, *stage, o.runImplementationWithFeedback)
 			}
 			return nil
 		}
@@ -467,16 +428,16 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 	switch phase {
 	case phasePlanning:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "")
-		o.spawnAgent(ctx, *stage, o.runPlanningAgent)
+		o.concurrency.SpawnAgent(ctx, *stage, o.runPlanningAgent)
 	case phaseImplementation:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "")
-		o.spawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.concurrency.SpawnAgent(ctx, *stage, o.runImplementationAgent)
 	case phaseReview:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseReview}, "")
-		o.spawnAgent(ctx, *stage, o.runReviewAgent)
+		o.concurrency.SpawnAgent(ctx, *stage, o.runReviewAgent)
 	case phaseAutonomous:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseAutonomous}, "")
-		o.spawnAgent(ctx, *stage, o.runAutonomousAgent)
+		o.concurrency.SpawnAgent(ctx, *stage, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)
 	}

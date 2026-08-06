@@ -117,7 +117,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 		if _, ok := o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "deps done"); !ok {
 			continue
 		}
-		o.spawnAgent(ctx, s, o.startWithSupervisor)
+		o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
 	}
 }
 
@@ -152,17 +152,17 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		// resolvePlanSource и т.д.) видел стадию как автономную с самого начала.
 		stageDir := filepath.Join(o.opts.RunDir, id)
 		if stage.IsScript() {
-			o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
+			o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
 			continue
 		}
 		if isAutonomousStage(stageDir) || stage.IsAuto() {
 			if stage.IsAuto() {
 				_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 			}
-			o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
+			o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
 			continue
 		}
-		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
+		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 	}
 }
 
@@ -228,7 +228,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
+		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -255,7 +255,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
+		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -287,7 +287,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
+		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -300,7 +300,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
+		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
 	} else {
 		// Deps not done — stay pending; planning starts automatically
 		// via startPlanningForUnblocked once dependencies complete.
@@ -312,7 +312,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartPlanning, bus.GuardCtx{Stage: *stage}, "manual retry"); !ok {
 			return
 		}
-		o.spawnAgent(ctx, *stage, o.runPlanningAgent)
+		o.concurrency.SpawnAgent(ctx, *stage, o.runPlanningAgent)
 	}
 }
 
@@ -368,7 +368,7 @@ func (o *Orchestrator) allTerminal() bool {
 // its ctx (shutdown) in the very same instant the hook goroutine was
 // spawned, killing it before it ever gets to run. Scoped narrowly to
 // after-hooks only (not a general "any agent in flight" counter, see
-// spawnAgent's doc comment) — every other agent type already moves its
+// SpawnAgent's doc comment) — every other agent type already moves its
 // stage's FSM status, which allTerminal() below already accounts for.
 func (o *Orchestrator) shouldExit() bool {
 	if o.pendingAfterHooks.Load() > 0 {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -63,18 +64,16 @@ func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	defer runCancel()
 
+	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{
-		opts:     Options{RunDir: dir, Stages: stages, Store: store, Runner: runner},
-		graph:    graph.NewGraph(stages),
-		runner:   runner,
-		fsm:      bus.NewFSM(store),
-		ui:       bus.NewUIBus(),
-		critical: bus.NewCriticalBus(16),
-		sems: map[string]interface {
-			acquire()
-			release()
-		}{},
-		runCtx: runCtx,
+		opts:        Options{RunDir: dir, Stages: stages, Store: store, Runner: runner},
+		graph:       graph.NewGraph(stages),
+		runner:      runner,
+		fsm:         bus.NewFSM(store),
+		ui:          bus.NewUIBus(),
+		critical:    cb,
+		concurrency: concurrency.NewWithSemaphores(cb, map[string]concurrency.Semaphore{}, ""),
+		runCtx:      runCtx,
 	}
 
 	stageDir := filepath.Join(dir, "a")
@@ -108,5 +107,5 @@ func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 		t.Fatal("timeout waiting for RunAgent to be invoked")
 	}
 
-	o.waitAgents()
+	o.concurrency.WaitAgents()
 }

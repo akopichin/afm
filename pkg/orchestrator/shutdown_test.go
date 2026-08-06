@@ -8,24 +8,27 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 )
 
-// spawnAgent отслеживает горутину в WaitGroup: waitAgents дожидается её завершения.
+// SpawnAgent отслеживает горутину в WaitGroup: WaitAgents дожидается её завершения.
 func TestSpawnAgent_WaitAgentsBlocksUntilDone(t *testing.T) {
-	o := &Orchestrator{ui: bus.NewUIBus(), critical: bus.NewCriticalBus(16), sems: map[string]interface {
-		acquire()
-		release()
-	}{}}
+	cb := bus.NewCriticalBus(16)
+	o := &Orchestrator{
+		ui:          bus.NewUIBus(),
+		critical:    cb,
+		concurrency: concurrency.NewWithSemaphores(cb, map[string]concurrency.Semaphore{}, ""),
+	}
 
 	var finished atomic.Bool
 	release := make(chan struct{})
-	o.spawnAgent(context.Background(), flow.Stage{ID: "a"}, func(ctx context.Context, s flow.Stage) {
+	o.concurrency.SpawnAgent(context.Background(), flow.Stage{ID: "a"}, func(ctx context.Context, s flow.Stage) {
 		<-release
 		finished.Store(true)
 	})
 
 	done := make(chan struct{})
-	go func() { o.waitAgents(); close(done) }()
+	go func() { o.concurrency.WaitAgents(); close(done) }()
 
 	select {
 	case <-done:
@@ -46,20 +49,22 @@ func TestSpawnAgent_WaitAgentsBlocksUntilDone(t *testing.T) {
 
 func TestRun_CancelDrainsAgents(t *testing.T) {
 	dir := t.TempDir()
-	o := &Orchestrator{ui: bus.NewUIBus(), critical: bus.NewCriticalBus(16), sems: map[string]interface {
-		acquire()
-		release()
-	}{}}
+	cb := bus.NewCriticalBus(16)
+	o := &Orchestrator{
+		ui:          bus.NewUIBus(),
+		critical:    cb,
+		concurrency: concurrency.NewWithSemaphores(cb, map[string]concurrency.Semaphore{}, ""),
+	}
 
 	started := make(chan struct{})
 	var done atomic.Bool
-	o.spawnAgent(context.Background(), flow.Stage{ID: "a"}, func(ctx context.Context, s flow.Stage) {
+	o.concurrency.SpawnAgent(context.Background(), flow.Stage{ID: "a"}, func(ctx context.Context, s flow.Stage) {
 		close(started)
 		time.Sleep(20 * time.Millisecond)
 		done.Store(true)
 	})
 	<-started
-	o.waitAgents()
+	o.concurrency.WaitAgents()
 	if !done.Load() {
 		t.Fatal("waitAgents returned before agent completed")
 	}

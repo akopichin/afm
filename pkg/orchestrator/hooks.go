@@ -267,20 +267,20 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 }
 
 // maybeRunAfterHook fires the stage's script_after hook (if any) in a tracked
-// goroutine via spawnAgent, reusing its semaphore/agentWG bookkeeping — the
-// hook may block for an arbitrarily long time waiting on a user decision, so
-// it must never run inline in its callers (onAgentCompleted/approveStage —
-// event-loop callbacks that must return promptly). A no-op when the stage
-// has no ScriptAfter: no goroutine is spawned, so a stage without the hook
-// behaves unchanged.
+// goroutine via concurrency.Manager.SpawnAgent, reusing its semaphore/agentWG
+// bookkeeping — the hook may block for an arbitrarily long time waiting on a
+// user decision, so it must never run inline in its callers
+// (onAgentCompleted/approveStage — event-loop callbacks that must return
+// promptly). A no-op when the stage has no ScriptAfter: no goroutine is
+// spawned, so a stage without the hook behaves unchanged.
 //
-// pendingAfterHooks is incremented here (synchronously, before spawnAgent
+// pendingAfterHooks is incremented here (synchronously, before SpawnAgent
 // returns to the caller — completeStage/approveStage, both running on Run()'s
 // own goroutine) and decremented from the wrapper below once runAfterHook
 // actually returns, so shouldExit() (scheduling.go) never observes a stage
 // as fully done while its after-hook is still in flight or awaiting a
 // RetryHook/SkipHook decision. Scoped to just this one spawn — see
-// spawnAgent's doc comment on why the general agent-spawn path doesn't carry
+// SpawnAgent's doc comment on why the general agent-spawn path doesn't carry
 // this bookkeeping too.
 func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 	stage := o.graph.Stage(stageID)
@@ -288,10 +288,10 @@ func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 		return
 	}
 	o.pendingAfterHooks.Add(1)
-	o.spawnAgent(ctx, *stage, func(ctx context.Context, s flow.Stage) {
+	o.concurrency.SpawnAgent(ctx, *stage, func(ctx context.Context, s flow.Stage) {
 		defer func() {
 			o.pendingAfterHooks.Add(-1)
-			o.wakeEventLoop()
+			o.concurrency.WakeEventLoop()
 		}()
 		o.runAfterHook(ctx, s)
 	})
@@ -324,7 +324,8 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 // runBeforeHook before blocking) and re-enters the wait for a user decision,
 // WITHOUT silently re-attempting the hook — matching runBeforeHook's own
 // retry-decision loop from that point on. Called from recovery.go via
-// spawnAgent, so it's tracked the same way as any other resumed agent.
+// concurrency.Manager.SpawnAgent, so it's tracked the same way as any other
+// resumed agent.
 func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	pending, ok := readHookPending(stageDir)
@@ -411,17 +412,17 @@ func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
 
 // resumeAfterHook wraps resumeAfterHookWait with the same pendingAfterHooks
 // bookkeeping maybeRunAfterHook uses: incremented synchronously here, BEFORE
-// spawnAgent returns to the caller (recovery.go, running on Run()'s own
+// SpawnAgent returns to the caller (recovery.go, running on Run()'s own
 // goroutine), so shouldExit() can never observe zero in-flight after-hooks
 // in the narrow window between spawning this goroutine and the goroutine's
 // own first instruction — see maybeRunAfterHook's doc comment for the full
 // race this closes.
 func (o *Orchestrator) resumeAfterHook(ctx context.Context, s flow.Stage) {
 	o.pendingAfterHooks.Add(1)
-	o.spawnAgent(ctx, s, func(ctx context.Context, s flow.Stage) {
+	o.concurrency.SpawnAgent(ctx, s, func(ctx context.Context, s flow.Stage) {
 		defer func() {
 			o.pendingAfterHooks.Add(-1)
-			o.wakeEventLoop()
+			o.concurrency.WakeEventLoop()
 		}()
 		o.resumeAfterHookWait(ctx, s)
 	})

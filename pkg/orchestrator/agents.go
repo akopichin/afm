@@ -115,7 +115,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 		return nil
 	}, func() error {
 		return stagefiles.CheckPlanCompletionFor(stageDir, s.Interactive)
-	}, func() { o.spawnAgent(ctx, s, o.runPlanningWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runPlanningWithFeedback) })
 }
 
 func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage, prevPlan string, missing []string, outFile string) error {
@@ -198,7 +198,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 		return nil
 	}, func() error {
 		return stagefiles.CheckPlanCompletionFor(stageDir, s.Interactive)
-	}, func() { o.spawnAgent(ctx, s, o.runPlanningWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runPlanningWithFeedback) })
 }
 
 func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage) {
@@ -282,7 +282,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		return nil
 	}, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnAgent(ctx, s, o.runImplementationWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runImplementationWithFeedback) })
 }
 
 func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
@@ -318,7 +318,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 	}, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnAgent(ctx, s, o.runReviewWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runReviewWithFeedback) })
 }
 
 // runAutonomousAgent выполняет стадию в автономном треке — без plan.md и approval.
@@ -371,7 +371,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
 	}, func() error {
 		return stagefiles.CheckAutonomousCompletion(stageDir)
-	}, func() { o.spawnAgent(ctx, s, o.runAutonomousWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runAutonomousWithFeedback) })
 }
 
 // runImplementationWithFeedback перезапускает implementation-фазу с фидбеком
@@ -468,7 +468,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 		return nil
 	}, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnAgent(ctx, s, o.runImplementationWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runImplementationWithFeedback) })
 }
 
 // runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
@@ -508,7 +508,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 	}, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnAgent(ctx, s, o.runReviewWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runReviewWithFeedback) })
 }
 
 // runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в
@@ -554,5 +554,5 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
 	}, func() error {
 		return stagefiles.CheckAutonomousCompletion(stageDir)
-	}, func() { o.spawnAgent(ctx, s, o.runAutonomousWithFeedback) })
+	}, func() { o.concurrency.SpawnAgent(ctx, s, o.runAutonomousWithFeedback) })
 }

@@ -124,11 +124,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady:
 			continue
 		case state.StatusAwaitingUserInput:
-			o.spawnAgent(ctx, s, o.resumeInteractiveAgent)
+			o.concurrency.SpawnAgent(ctx, s, o.resumeInteractiveAgent)
 		case state.StatusHookFailed:
 			// Crashed while blocked on a before-hook retry/skip decision.
 			// Re-enter the wait (not a silent retry) — see resumeHookFailedWait.
-			o.spawnAgent(ctx, s, o.resumeHookFailedWait)
+			o.concurrency.SpawnAgent(ctx, s, o.resumeHookFailedWait)
 		case state.StatusRetrying:
 			// Interrupted retry — check completion or restart
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -144,7 +144,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			}
 			// Restart planning from scratch
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "restart after retry")
-			o.spawnAgent(ctx, s, o.runPlanningAgent)
+			o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
 		case state.StatusRevising:
 			// Interrupted revision — restart with feedback, using whichever phase
 			// was actually interrupted (agent_suggest can revise any active phase,
@@ -153,13 +153,13 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
 			switch o.detectInterruptedPhase(stageDir) {
 			case phaseImplementation:
-				o.spawnAgent(ctx, s, o.runImplementationWithFeedback)
+				o.concurrency.SpawnAgent(ctx, s, o.runImplementationWithFeedback)
 			case phaseReview:
-				o.spawnAgent(ctx, s, o.runReviewWithFeedback)
+				o.concurrency.SpawnAgent(ctx, s, o.runReviewWithFeedback)
 			case phaseAutonomous:
-				o.spawnAgent(ctx, s, o.runAutonomousWithFeedback)
+				o.concurrency.SpawnAgent(ctx, s, o.runAutonomousWithFeedback)
 			default:
-				o.spawnAgent(ctx, s, o.runPlanningWithFeedback)
+				o.concurrency.SpawnAgent(ctx, s, o.runPlanningWithFeedback)
 			}
 		case state.StatusRunning:
 			// Check if .done exists (agent completed but orchestrator missed the event)
@@ -179,7 +179,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
-				o.spawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
+				o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
 				continue
 			}
 			// Autonomous track resume: if this is an autonomous stage, look for
@@ -191,7 +191,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					o.maybeRunAfterHook(ctx, s.ID)
 					continue
 				}
-				o.spawnAgent(ctx, s, o.runAutonomousAgent)
+				o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
 				continue
 			}
 			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
@@ -200,7 +200,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue
 			}
 			// Interrupted implementation — restart with existing plan
-			o.spawnAgent(ctx, s, o.runImplementationAgent)
+			o.concurrency.SpawnAgent(ctx, s, o.runImplementationAgent)
 		default:
 			// Pending, planning, or unknown — check if planning already completed
 			if s.NeedsPlanning() {
@@ -217,7 +217,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue
 			}
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
-			o.spawnAgent(ctx, s, o.startWithSupervisor)
+			o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
 		}
 	}
 
