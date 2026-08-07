@@ -73,6 +73,8 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }, [stage.id, stage.status])
 
   function handleLineClick(line: number) {
+    if (activeCommentLine !== null && draft.trim() !== '') return
+
     if (activeCommentLine === line) {
       setActiveCommentLine(null)
       return
@@ -80,6 +82,11 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
 
     setActiveCommentLine(line)
     setDraft(comments[line] ?? '')
+  }
+
+  function closeCommentForm() {
+    setActiveCommentLine(null)
+    setDraft('')
   }
 
   function saveComment(line: number) {
@@ -313,6 +320,18 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
 
         {activeCommentLine === item.line && (
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
+            <div className="comment-display-header">
+              <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{`Comment on line ${item.line}`}</span>
+              <button
+                type="button"
+                className="comment-remove"
+                aria-label={`Close comment on line ${item.line}`}
+                title="Close"
+                onClick={closeCommentForm}
+              >
+                ✕
+              </button>
+            </div>
             <textarea placeholder={`Comment on line ${item.line}...`} value={draft} onChange={(event) => setDraft(event.target.value)} />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
@@ -323,9 +342,6 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
                   Delete
                 </button>
               )}
-              <button className="btn btn-cancel" type="button" onClick={() => setActiveCommentLine(null)}>
-                Cancel
-              </button>
             </div>
           </div>
         )}
