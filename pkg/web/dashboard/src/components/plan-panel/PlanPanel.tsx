@@ -196,7 +196,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
                 id="btn-approve"
                 className={`btn btn-approve${clicked === 'approve' ? ' ok' : ''}`}
                 type="button"
-                disabled={busy}
+                disabled={busy || commentCount > 0}
                 onClick={approve}
               >
                 <span className="btn-ripple" aria-hidden="true" />
