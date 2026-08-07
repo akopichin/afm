@@ -102,7 +102,6 @@
   resize: vertical;
   margin-bottom: 14px;
   min-height: 60px;
-  max-height: 400px;
   overflow-y: auto;
 }
 .agent-note-textarea:focus {

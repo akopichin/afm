@@ -19,3 +19,12 @@ if (!('ResizeObserver' in globalThis)) {
   globalThis.ResizeObserver = ResizeObserverStub
 }
 
+// jsdom не реализует scrollIntoView (useAutoGrowTextarea зовёт его при
+// каждом росте textarea, чтобы не прятать кнопку под ней) — без стаба любой
+// такой рендер падал бы с "scrollIntoView is not a function". TS считает
+// scrollIntoView всегда присутствующим в типе HTMLElement (lib.dom.d.ts),
+// поэтому здесь достаточно безусловной no-op заглушки, без runtime-проверки.
+HTMLElement.prototype.scrollIntoView = function (): void {
+  /* no-op */
+}
+

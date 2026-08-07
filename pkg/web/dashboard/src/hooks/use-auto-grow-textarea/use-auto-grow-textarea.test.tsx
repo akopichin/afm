@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import React from 'react'
 import { useAutoGrowTextarea } from './use-auto-grow-textarea'
 
 class MockResizeObserver {
@@ -20,6 +19,24 @@ let lastObserver: MockResizeObserver | null = null
 
 function TestComponent({ value, maxHeight }: { value: string; maxHeight: number }) {
   const ref = useAutoGrowTextarea(value, maxHeight)
+  return <textarea ref={ref} data-testid="textarea" defaultValue={value} />
+}
+
+// Mirrors PlanPanel/DialogChannel's actual pattern: the hook is called at the
+// parent's top level, but the textarea itself is rendered conditionally (only
+// when a comment form is "open") — so the DOM node does not exist yet at the
+// hook's own first render.
+function ConditionalTestComponent({
+  show,
+  value,
+  maxHeight,
+}: {
+  show: boolean
+  value: string
+  maxHeight: number
+}) {
+  const ref = useAutoGrowTextarea(value, maxHeight)
+  if (!show) return null
   return <textarea ref={ref} data-testid="textarea" defaultValue={value} />
 }
 
@@ -113,5 +130,36 @@ describe('useAutoGrowTextarea', () => {
     rerender(<TestComponent value="a fresh comment" maxHeight={400} />)
 
     expect(textarea.style.height).toBe('90px')
+  })
+
+  it('engages the manual-resize lock even when the textarea mounts after the hook first runs', () => {
+    // Comment form starts closed — the hook runs (at the parent's top level)
+    // before the textarea exists at all.
+    const { rerender } = render(<ConditionalTestComponent show={false} value="" maxHeight={400} />)
+    expect(screen.queryByTestId('textarea')).toBeNull()
+
+    // Comment form "opens" — the textarea mounts well after the hook's first
+    // render. This is exactly the late-mount scenario from PlanPanel/DialogChannel.
+    rerender(<ConditionalTestComponent show={true} value="" maxHeight={400} />)
+    const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
+
+    Object.defineProperty(textarea, 'scrollHeight', { value: 120, configurable: true })
+    rerender(<ConditionalTestComponent show={true} value="first draft" maxHeight={400} />)
+    expect(textarea.style.height).toBe('120px')
+
+    // Simulate the user dragging the resize handle on the late-mounted textarea.
+    textarea.style.height = '250px'
+    lastObserver?.trigger()
+
+    // Change scrollHeight (simulating more content would create more scroll).
+    Object.defineProperty(textarea, 'scrollHeight', { value: 500, configurable: true })
+
+    // Rerender with a different value — height should stay locked at 250px.
+    // Against the old useRef([]) implementation, the ResizeObserver was never
+    // created (ref.current was null at mount), so lastObserver stays null,
+    // the trigger() above is a no-op, the lock never engages, and this would
+    // snap back to min(500, 400) = 400px instead of staying at 250px.
+    rerender(<ConditionalTestComponent show={true} value="first draft, now much longer" maxHeight={400} />)
+    expect(textarea.style.height).toBe('250px')
   })
 })
