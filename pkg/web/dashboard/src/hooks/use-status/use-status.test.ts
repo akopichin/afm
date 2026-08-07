@@ -190,4 +190,30 @@ describe('useStatus', () => {
       expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsBefore)
     })
   })
+
+  test('normalizeStatus parses idle/backoff fields', () => {
+    const result = normalizeStatus({
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stages: { s1: { status: 'running', updated_at: '' } },
+      idle_accumulated_ms: 5000,
+      idle_since: '2026-08-07T10:00:00Z',
+      backoff_accumulated_ms: 3000,
+      backoff_open_since: ['2026-08-07T10:05:00Z', '2026-08-07T10:06:00Z'],
+    })
+
+    expect(result.idleAccumulatedMs).toBe(5000)
+    expect(result.idleSince).toBe('2026-08-07T10:00:00Z')
+    expect(result.backoffAccumulatedMs).toBe(3000)
+    expect(result.backoffOpenSince).toEqual(['2026-08-07T10:05:00Z', '2026-08-07T10:06:00Z'])
+  })
+
+  test('normalizeStatus defaults idle/backoff fields when absent', () => {
+    const result = normalizeStatus({ flow_name: 'demo', stage_order: [], stages: {} })
+
+    expect(result.idleAccumulatedMs).toBe(0)
+    expect(result.idleSince).toBeNull()
+    expect(result.backoffAccumulatedMs).toBe(0)
+    expect(result.backoffOpenSince).toEqual([])
+  })
 })

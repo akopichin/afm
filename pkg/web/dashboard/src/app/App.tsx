@@ -14,19 +14,19 @@ import { useStatus } from '../hooks/use-status'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageLog } from '../hooks/use-stage-log'
 import { useElapsed } from '../hooks/use-elapsed'
-import { useStatusDuration } from '../hooks/use-status-duration'
-import { useIdleTime } from '../hooks/use-idle-time'
+import { useIdleMs } from '../hooks/use-idle-ms'
+import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
-import { ACTIVE_STAGE_STATUSES, BACKOFF_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
+import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
 import type { Stage } from '../types'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, refresh } = useStatus()
 
   // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
   // (agent_suggest, Task 8); null — модалка скрыта.
@@ -116,8 +116,8 @@ export function App(): ReactElement {
 
   const logEntries = useStageLog(selectedStageId)
   const elapsedMs = useElapsed(startedAt)
-  const idleMs = useIdleTime(events)
-  const backoffMs = useStatusDuration(events, BACKOFF_STATUSES)
+  const idleMs = useIdleMs(idleAccumulatedMs, idleSince, connected)
+  const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, connected)
 
   const refreshedForEvent = useRef<number>(-1)
 

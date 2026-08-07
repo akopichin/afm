@@ -369,63 +369,39 @@ describe('App', () => {
     expect(screen.getByText('thinking')).toBeInTheDocument()
   })
 
-  test('accumulates Idle time across an awaiting_user_input episode and shows it in the footer', async () => {
-    // started переключается в true ПОСЛЕ первой проверки (idle === '--'), чтобы
-    // сымитировать реальный бэкенд: started_at появляется в /api/status, как только
-    // стадия действительно стартовала (а не отсутствует всю жизнь рана, как в
-    // остальных тестах этого файла) — иначе #idle у Footer навсегда остаётся '--'
-    // (hasStarted гейтится по startedAt, см. Footer.tsx), и WS-накопленный idleMs
-    // никогда не отрисуется, даже если сам useStatusDuration посчитал его верно.
-    // Паттерн стейт-флага — как в 'advances selection to the next active stage...' выше.
-    let started = false
+  test('shows accumulated Idle time from /api/status and lets it tick while an idle episode is open', async () => {
+    let idleSince: string | null = null
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stage_order: ['s1'],
       stage_names: { s1: 'Propose' },
       stages: { s1: { status: 'running', updated_at: '' } },
-      ...(started ? { started_at: '2026-07-29T09:59:00.000Z' } : {}),
+      started_at: '2026-07-29T09:59:00.000Z',
+      idle_accumulated_ms: 5000,
+      idle_since: idleSince,
     }))
 
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:05'))
 
-    expect(document.getElementById('idle')).toHaveTextContent('--')
-
-    started = true
+    idleSince = '2026-07-29T10:00:00.000Z'
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {
       ws?.onopen?.()
-      ws?.onmessage?.({
-        data: JSON.stringify({
-          type: 'stage_status_changed',
-          data: { status: 'awaiting_user_input' },
-          stage_id: 's1',
-          timestamp: '2026-07-29T10:00:00.000Z',
-        }),
-      })
-    })
-    act(() => {
-      ws?.onmessage?.({
-        data: JSON.stringify({
-          type: 'stage_status_changed',
-          data: { status: 'running' },
-          stage_id: 's1',
-          timestamp: '2026-07-29T10:00:05.000Z',
-        }),
-      })
     })
 
     await waitFor(() => {
-      expect(document.getElementById('idle')).toHaveTextContent('00:05')
-    })
+      const text = document.getElementById('idle')?.textContent ?? ''
+      expect(text).not.toBe('00:05')
+    }, { timeout: 4000 })
   })
 
-  test('regression: a cascaded-failed downstream stage does not count as Idle while another stage is actively running', async () => {
-    // Реальный баг: пользователь ретраит текущую стадию (агент реально
-    // работает), а стадии дальше по depends_on упали каскадно
-    // (blocked_by_dep) и остаются failed. Idle не должен копиться, пока хоть
-    // один агент активен — иначе счётчик растёт, даже когда всё работает.
-    let started = false
+  test('regression: idle_accumulated_ms with idle_since=null does not tick — the backend, not the client, decides what counts as idle', async () => {
+    // Реальный баг, который чинил старый useIdleTime на фронте, теперь чинится
+    // на бэкенде (см. Task 1's TestIsIdle_FailedWhileAnotherRunningIsNotIdle) —
+    // здесь достаточно проверить, что фронт просто показывает то, что
+    // прислал бэкенд, и не тикает, если idle_since=null (флоу не простаивает).
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stage_order: ['s1', 's2'],
@@ -434,56 +410,54 @@ describe('App', () => {
         s1: { status: 'running', updated_at: '' },
         s2: { status: 'failed', updated_at: '' },
       },
-      ...(started ? { started_at: '2026-07-29T09:59:00.000Z' } : {}),
+      started_at: '2026-07-29T09:59:00.000Z',
+      idle_accumulated_ms: 0,
+      idle_since: null,
     }))
 
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Upstream'))
+    await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
+  })
 
-    started = true
+  test('IDLE stops ticking while the WebSocket is disconnected and resumes once reconnected', async () => {
+    vi.useFakeTimers()
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stage_names: { s1: 'Propose' },
+      stages: { s1: { status: 'awaiting_approval', updated_at: '2026-07-29T10:00:00.000Z' } },
+      started_at: '2026-07-29T09:59:00.000Z',
+      idle_accumulated_ms: 0,
+      idle_since: '2026-07-29T10:00:00.000Z',
+    }))
+
+    render(<App />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {
       ws?.onopen?.()
-      ws?.onmessage?.({
-        data: JSON.stringify({
-          type: 'stage_status_changed',
-          data: { status: 'running' },
-          stage_id: 's1',
-          timestamp: '2026-07-29T10:00:00.000Z',
-        }),
-      })
     })
-    act(() => {
-      ws?.onmessage?.({
-        data: JSON.stringify({
-          type: 'stage_status_changed',
-          data: { status: 'failed' },
-          stage_id: 's2',
-          timestamp: '2026-07-29T10:00:00.001Z',
-        }),
-      })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
     })
 
-    // s1 продолжает работать, s2 остаётся failed — Idle не должен появиться.
-    await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
+    const idleTextConnected = document.getElementById('idle')?.textContent ?? ''
 
     act(() => {
-      ws?.onmessage?.({
-        data: JSON.stringify({
-          type: 'stage_status_changed',
-          data: { status: 'done' },
-          stage_id: 's1',
-          timestamp: '2026-07-29T10:00:05.000Z',
-        }),
-      })
+      ws?.onclose?.()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
     })
 
-    // s1 закончил, s2 всё ещё failed — теперь Idle должен начать копиться.
-    await waitFor(() => {
-      const text = document.getElementById('idle')?.textContent ?? ''
-      expect(text).not.toBe('00:00')
-      expect(text).not.toBe('--')
-    })
+    // Сокет разорван — значение держится на месте, а не продолжает тикать.
+    expect(document.getElementById('idle')).toHaveTextContent(idleTextConnected)
+
+    vi.useRealTimers()
   })
 
   test('WARNING: falls back to a failed stage when no stage is active', async () => {

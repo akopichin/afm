@@ -16,9 +16,26 @@ export type FlowStatus = {
   // читается защитно (undefined, если отсутствует), без нового API-вызова —
   // как только бэкенд начнёт присылать description, подзаголовок появится сам.
   description?: string
+  // idle/backoff — накопленное на бэкенде время (пережившее restart) плюс
+  // необязательный анкер ТЕКУЩЕГО открытого периода/эпизодов, см.
+  // useIdleMs/useBackoffMs. idleSince — null, если флоу не простаивает
+  // прямо сейчас; backoffOpenSince — по одному значению на каждую стадию,
+  // сейчас находящуюся в retrying (может быть пустым).
+  idleAccumulatedMs: number
+  idleSince: string | null
+  backoffAccumulatedMs: number
+  backoffOpenSince: string[]
 }
 
-const EMPTY_STATUS: FlowStatus = { flowName: '', stages: [], startedAt: '' }
+const EMPTY_STATUS: FlowStatus = {
+  flowName: '',
+  stages: [],
+  startedAt: '',
+  idleAccumulatedMs: 0,
+  idleSince: null,
+  backoffAccumulatedMs: 0,
+  backoffOpenSince: [],
+}
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
 // объект по id, порядок — в stage_order, имена — в stage_names (как в текущем app.js).
@@ -95,7 +112,14 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     toStage(id, stagesObj[id], namesObj[id], interactiveObj[id] === true, autonomousObj[id] === true, autoApproveObj[id] === true),
   )
 
-  return { flowName, stages, startedAt, description }
+  const idleAccumulatedMs = typeof obj.idle_accumulated_ms === 'number' ? obj.idle_accumulated_ms : 0
+  const idleSince = typeof obj.idle_since === 'string' ? obj.idle_since : null
+  const backoffAccumulatedMs = typeof obj.backoff_accumulated_ms === 'number' ? obj.backoff_accumulated_ms : 0
+  const backoffOpenSince = Array.isArray(obj.backoff_open_since)
+    ? obj.backoff_open_since.filter((v): v is string => typeof v === 'string')
+    : []
+
+  return { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince }
 }
 
 function resolveOrder(stageOrder: unknown, stagesObj: Record<string, unknown>): string[] {
