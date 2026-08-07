@@ -42,7 +42,7 @@ export function useAutoGrowTextarea(value: string, maxHeightPx: number): RefObje
     })
     obs.observe(el)
     return () => obs.disconnect()
-  }, [ref.current])
+  }, [])
 
   return ref
 }
