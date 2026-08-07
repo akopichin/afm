@@ -198,6 +198,8 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }
 
   function handleLineClick(line: number) {
+    if (activeCommentLine !== null && draft.trim() !== '') return
+
     if (activeCommentLine === line) {
       setActiveCommentLine(null)
       return
@@ -205,6 +207,11 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
     setActiveCommentLine(line)
     setDraft(comments[line] ?? '')
+  }
+
+  function closeCommentForm() {
+    setActiveCommentLine(null)
+    setDraft('')
   }
 
   function saveComment(line: number) {
@@ -247,6 +254,17 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     }
   }
 
+  function renderCommentHeader(label: string, ariaLabel: string, title: string, onClick: () => void): ReactNode {
+    return (
+      <div className="comment-display-header">
+        <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{label}</span>
+        <button type="button" className="comment-remove" aria-label={ariaLabel} title={title} onClick={onClick}>
+          ✕
+        </button>
+      </div>
+    )
+  }
+
   // Строка вопроса рендерится как строка ревью-плана (renderPlanLine в PlanPanel) —
   // те же CSS-классы (plan-line/line-num/line-content/line-comment-*) ради
   // визуальной консистентности между комментариями к плану и к вопросу.
@@ -266,24 +284,14 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
         {hasComment && (
           <div className="line-comment-form line-comment-display" onClick={(event) => event.stopPropagation()}>
-            <div className="comment-display-header">
-              <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{`Comment on line ${item.line}`}</span>
-              <button
-                type="button"
-                className="comment-remove"
-                aria-label={`Remove comment on line ${item.line}`}
-                title="Remove comment"
-                onClick={() => deleteComment(item.line)}
-              >
-                ✕
-              </button>
-            </div>
+            {renderCommentHeader(`Comment on line ${item.line}`, `Remove comment on line ${item.line}`, 'Remove comment', () => deleteComment(item.line))}
             <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{comments[item.line]}</div>
           </div>
         )}
 
         {activeCommentLine === item.line && (
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
+            {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
             <textarea
               placeholder={`Comment on line ${item.line}...`}
               value={draft}
@@ -304,9 +312,6 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                   Delete
                 </button>
               )}
-              <button className="btn btn-cancel" type="button" onClick={() => setActiveCommentLine(null)}>
-                Cancel
-              </button>
             </div>
           </div>
         )}

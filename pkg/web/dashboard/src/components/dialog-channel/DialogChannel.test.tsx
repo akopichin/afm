@@ -312,6 +312,61 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.line-comment-form')).not.toBeNull()
   })
 
+  test('a non-empty draft ignores clicks on other question lines and on itself; only × discards it', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    const line1 = container.querySelector('[data-line="1"]') as HTMLElement
+    const line2 = container.querySelector('[data-line="2"]') as HTMLElement
+
+    fireEvent.click(line1)
+    const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'in progress' } })
+
+    fireEvent.click(line1)
+    expect(container.querySelector('.line-comment-form')).not.toBeNull()
+    expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('in progress')
+
+    fireEvent.click(line2)
+    expect(container.querySelector('[data-line="1"] .line-comment-form')).not.toBeNull()
+    expect(container.querySelector('[data-line="2"] .line-comment-form')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+  })
+
+  test('an empty draft still lets a row click switch to a different question line', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    expect(container.querySelector('[data-line="1"] .line-comment-form')).not.toBeNull()
+
+    fireEvent.click(container.querySelector('[data-line="2"]') as HTMLElement)
+    expect(container.querySelector('[data-line="1"] .line-comment-form')).toBeNull()
+    expect(container.querySelector('[data-line="2"] .line-comment-form')).not.toBeNull()
+  })
+
   test('adding a comment hides options+textarea and shows Send feedback; deleting the only comment restores them', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
