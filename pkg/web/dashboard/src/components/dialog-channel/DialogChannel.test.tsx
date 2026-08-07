@@ -345,6 +345,35 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.line-comment-form')).toBeNull()
   })
 
+  test('▸ SEND is disabled while a draft comment is open but unsaved, and re-enables once the form is closed', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    const sendBtn = screen.getByRole('button', { name: '▸ SEND' })
+    expect(sendBtn).not.toBeDisabled()
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: 'not saved yet' },
+    })
+
+    expect(sendBtn).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
+
+    expect(sendBtn).not.toBeDisabled()
+  })
+
   test('an empty draft still lets a row click switch to a different question line', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',

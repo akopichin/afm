@@ -369,7 +369,12 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
                 <div className="dialog-actions">
                   {commentCount === 0 ? (
-                    <button className={`btn btn-send${clickedSend ? ' ok' : ''}`} type="button" onClick={sendAnswer}>
+                    <button
+                      className={`btn btn-send${clickedSend ? ' ok' : ''}`}
+                      type="button"
+                      disabled={activeCommentLine !== null && draft.trim() !== ''}
+                      onClick={sendAnswer}
+                    >
                       <span className="btn-ripple" aria-hidden="true" />
                       <span className="btn-label">▸ SEND</span>
                       <span className="btn-done" aria-hidden="true">✓ Sent</span>

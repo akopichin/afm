@@ -96,6 +96,27 @@ describe('PlanPanel', () => {
     expect(approveBtn).not.toBeDisabled()
   })
 
+  test('Approve is disabled while a draft comment is open but unsaved, and re-enables once the form is closed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+
+    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    expect(approveBtn).not.toBeDisabled()
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: 'not saved yet' },
+    })
+
+    expect(approveBtn).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
+
+    expect(approveBtn).not.toBeDisabled()
+  })
+
   test('sendRevision(): no-op without comments; posts feedback and clears comments once one exists', async () => {
     const calls: { url: string; body?: string }[] = []
 
