@@ -53,6 +53,14 @@ type RunState struct {
 	// mirrored from the event log so consumers of the snapshot alone
 	// (e.g. UI) can detect staleness without replaying events.jsonl.
 	LastSeq uint64 `json:"last_seq"`
+	// IdleAccumulatedMs/BackoffAccumulatedMs — накопленное время простоя/бэкоффа
+	// на момент последнего примененного перехода. Текущий ОТКРЫТЫЙ эпизод (если
+	// флоу простаивает/стадия ретраится прямо сейчас) НЕ хранится отдельным
+	// полем — он добавляется при чтении через IdleSince()/BackoffOpenSince(),
+	// потому что момент его начала всегда совпадает с UpdatedAt той стадии,
+	// которая последней сменила статус (см. accountIdleAndBackoff).
+	IdleAccumulatedMs    int64 `json:"idle_accumulated_ms"`
+	BackoffAccumulatedMs int64 `json:"backoff_accumulated_ms"`
 }
 
 // NewRunState creates an initial RunState with all stages pending.
@@ -63,7 +71,17 @@ func NewRunState(stageIDs []string) *RunState {
 		Stages:     make(map[string]StageState, len(stageIDs)),
 	}
 	for _, id := range stageIDs {
-		rs.Stages[id] = StageState{Status: StatusPending, UpdatedAt: time.Now()}
+		// UpdatedAt остаётся нулевым (стадия ещё ни разу не переходила), а не
+		// time.Now(): maxUpdatedAt/accountIdleAndBackoff считает максимум
+		// UpdatedAt по ВСЕМ стадиям, включая нетронутые pending. Если бы тут
+		// стоял time.Now(), это было бы время конструирования RunState —
+		// разное на живом Open() (старт рана) и на replay-Open() при resume
+		// (момент повторного открытия, т.е. позже последней транзакции в
+		// логе), и максимум "ехал" бы вперёд только из-за replay, раздувая
+		// накопленный Idle. Нулевое время игнорируется maxUpdatedAt/isZero-
+		// проверкой в accountIdleAndBackoff — как и для стадий, ещё не
+		// получивших ни одной транзакции.
+		rs.Stages[id] = StageState{Status: StatusPending}
 	}
 	return rs
 }
@@ -79,6 +97,94 @@ func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
 // (Transition.Time) rather than the moment of replay.
 func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
 	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t}
+}
+
+// isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое
+// состояние на весь флоу (в отличие от backoff, который считается по каждой
+// стадии отдельно, см. accountIdleAndBackoff). Порт isIdle() из
+// use-idle-time.ts (pkg/web/dashboard/src/hooks/use-idle-time/use-idle-time.ts):
+//
+//	idle = есть вопрос к пользователю на любой стадии (awaiting_user_input,
+//	       awaiting_approval), ИЛИ (есть failed-стадия И ни один агент не
+//	       активен: running/planning/revising). retrying намеренно не
+//	       считается «активной работой» — это пассивный бэкофф-таймер,
+//	       отдельная метрика (см. BackoffOpenSince).
+func isIdle(stages map[string]StageState) bool {
+	hasFailed := false
+	anyActive := false
+	for _, st := range stages {
+		switch st.Status {
+		case StatusAwaitingUserInput, StatusAwaitingApproval:
+			return true
+		case StatusFailed:
+			hasFailed = true
+		case StatusRunning, StatusPlanning, StatusRevising:
+			anyActive = true
+		default:
+			// pending/ready/retrying/done/hook_failed — не влияют на isIdle.
+		}
+	}
+	return hasFailed && !anyActive
+}
+
+// maxUpdatedAt возвращает самый свежий UpdatedAt среди всех стадий — момент
+// последнего примененного во флоу перехода. Используется и как «время
+// предыдущего события» при накоплении Idle, и как idle_since для API (см.
+// RunState.IdleSince).
+func maxUpdatedAt(stages map[string]StageState) time.Time {
+	var latest time.Time
+	for _, st := range stages {
+		if st.UpdatedAt.After(latest) {
+			latest = st.UpdatedAt
+		}
+	}
+	return latest
+}
+
+// accountIdleAndBackoff обновляет RunState.IdleAccumulatedMs/BackoffAccumulatedMs
+// ДО применения перехода {stageID, to, t} к rs — читает rs.Stages как оно было
+// ПЕРЕД этим переходом. Вызывается из ОБОИХ мест, применяющих переходы к
+// RunState (parseEventLog при replay и Store.Apply при живой работе), чтобы
+// восстановление после перезапуска (Store.Open → replayEvents → parseEventLog)
+// давало те же накопленные значения, что и живой прогон.
+func accountIdleAndBackoff(rs *RunState, stageID string, to StageStatus, t time.Time) {
+	if isIdle(rs.Stages) {
+		if prev := maxUpdatedAt(rs.Stages); !prev.IsZero() && t.After(prev) {
+			rs.IdleAccumulatedMs += t.Sub(prev).Milliseconds()
+		}
+	}
+
+	before := rs.Stages[stageID]
+	if before.Status == StatusRetrying && to != StatusRetrying && t.After(before.UpdatedAt) {
+		rs.BackoffAccumulatedMs += t.Sub(before.UpdatedAt).Milliseconds()
+	}
+}
+
+// IdleSince возвращает момент начала текущего периода простоя, если флоу
+// простаивает сейчас (см. isIdle) — иначе nil.
+func (rs *RunState) IdleSince() *time.Time {
+	if !isIdle(rs.Stages) {
+		return nil
+	}
+	t := maxUpdatedAt(rs.Stages)
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// BackoffOpenSince возвращает момент входа в retrying для каждой стадии,
+// которая сейчас в этом статусе — параллельные эпизоды суммируются на чтении
+// (фронтенд), а не мёржатся здесь (осознанное упрощение, см.
+// use-status-duration.ts).
+func (rs *RunState) BackoffOpenSince() []time.Time {
+	var out []time.Time
+	for _, st := range rs.Stages {
+		if st.Status == StatusRetrying {
+			out = append(out, st.UpdatedAt)
+		}
+	}
+	return out
 }
 
 // AllDone returns true when every stage has StatusDone.
@@ -160,6 +266,7 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 			res.corrupted = true
 			return res
 		}
+		accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
 		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
 		res.history = append(res.history, t)
 		res.lastSeq = t.Seq

@@ -436,3 +436,61 @@ func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 		t.Errorf("after crash recovery Get(a) = %q, want %q", got, StatusAwaitingApproval)
 	}
 }
+
+// Живой прогон копит Idle через Apply; закрытие и повторное Open той же
+// run-директории должно восстановить ТОЧНО ТО ЖЕ значение через replay
+// (parseEventLog) — это и есть гарантия "восстановить при продолжении
+// работы afm" из спеки.
+func TestOpen_ResumeReconstructsIdleAndBackoffFromReplay(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	apply := func(stageID string, from, to StageStatus) {
+		if err := store.Apply(&Transition{StageID: stageID, From: from, To: to, Event: "test"}); err != nil {
+			t.Fatalf("Apply(%s, %s->%s): %v", stageID, from, to, err)
+		}
+	}
+
+	apply("a", StatusPending, StatusRunning)
+	apply("a", StatusRunning, StatusFailed) // a failed, nothing else active → idle starts
+	time.Sleep(10 * time.Millisecond)
+	apply("b", StatusPending, StatusRetrying) // b starts a backoff episode
+	time.Sleep(10 * time.Millisecond)
+	apply("b", StatusRetrying, StatusPending) // b's backoff episode closes
+
+	before := store.Snapshot()
+	if before.BackoffAccumulatedMs <= 0 {
+		t.Fatalf("BackoffAccumulatedMs before close = %d, want > 0", before.BackoffAccumulatedMs)
+	}
+	if before.IdleSince() == nil {
+		t.Fatal("IdleSince() before close = nil, want non-nil (a is failed, nothing active)")
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(dir, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	defer reopened.Close()
+
+	after := reopened.Snapshot()
+	if after.BackoffAccumulatedMs != before.BackoffAccumulatedMs {
+		t.Errorf("BackoffAccumulatedMs after resume = %d, want %d (unchanged from replay)", after.BackoffAccumulatedMs, before.BackoffAccumulatedMs)
+	}
+	if after.IdleAccumulatedMs != before.IdleAccumulatedMs {
+		t.Errorf("IdleAccumulatedMs after resume = %d, want %d (unchanged from replay)", after.IdleAccumulatedMs, before.IdleAccumulatedMs)
+	}
+	beforeSince, afterSince := before.IdleSince(), after.IdleSince()
+	if (beforeSince == nil) != (afterSince == nil) {
+		t.Fatalf("IdleSince() presence mismatch: before=%v after=%v", beforeSince, afterSince)
+	}
+	if beforeSince != nil && !beforeSince.Equal(*afterSince) {
+		t.Errorf("IdleSince() after resume = %v, want %v", afterSince, beforeSince)
+	}
+}

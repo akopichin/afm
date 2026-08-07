@@ -181,10 +181,12 @@ func (s *Store) Snapshot() RunState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := RunState{
-		FlowName:   s.snapshot.FlowName,
-		StartedAt:  s.snapshot.StartedAt,
-		StageOrder: append([]string(nil), s.snapshot.StageOrder...),
-		Stages:     make(map[string]StageState, len(s.snapshot.Stages)),
+		FlowName:             s.snapshot.FlowName,
+		StartedAt:            s.snapshot.StartedAt,
+		StageOrder:           append([]string(nil), s.snapshot.StageOrder...),
+		Stages:               make(map[string]StageState, len(s.snapshot.Stages)),
+		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,
+		BackoffAccumulatedMs: s.snapshot.BackoffAccumulatedMs,
 	}
 	if s.snapshot.StageNames != nil {
 		out.StageNames = maps.Clone(s.snapshot.StageNames)
@@ -290,7 +292,14 @@ func (s *Store) Apply(t *Transition) error {
 		hook(*t)
 	}
 
-	s.snapshot.SetStageStatus(t.StageID, t.To)
+	// SetStageStatusAt(t.Time), не SetStageStatus(time.Now()): t.Time уже
+	// зафиксирован выше (до fsync) и это именно то время, которое попадёт в
+	// events.jsonl. Второй, более поздний time.Now() здесь развёл бы живой
+	// снапшот с replay (parseEventLog всегда берёт t.Time) на длительность
+	// fsync — и ту же дельту накопил бы accountIdleAndBackoff при следующем
+	// переходе, ломая гарантию "resume даёт то же самое, что живой прогон".
+	accountIdleAndBackoff(s.snapshot, t.StageID, t.To, t.Time)
+	s.snapshot.SetStageStatusAt(t.StageID, t.To, t.Time)
 	s.snapshot.LastSeq = s.lastSeq
 
 	if err := s.writeSnapshot(); err != nil {
