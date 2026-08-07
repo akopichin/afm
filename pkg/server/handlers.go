@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -30,6 +31,11 @@ type statusResponse struct {
 	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
 	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
 	StageAutoApprove map[string]bool `json:"stage_auto_approve,omitempty"`
+	// IdleSince/BackoffOpenSince — computed from RunState.Stages on read (see
+	// RunState.IdleSince/BackoffOpenSince), not stored fields. nil/empty when
+	// not currently idle/retrying.
+	IdleSince        *time.Time  `json:"idle_since,omitempty"`
+	BackoffOpenSince []time.Time `json:"backoff_open_since,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -46,6 +52,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		StageInteractive: s.stageInteractive,
 		StageAutonomous:  autonomous,
 		StageAutoApprove: s.stageAutoApprove,
+		IdleSince:        rs.IdleSince(),
+		BackoffOpenSince: rs.BackoffOpenSince(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

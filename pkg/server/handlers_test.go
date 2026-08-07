@@ -854,3 +854,48 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 		t.Error("reviseFn should be called for a running stage")
 	}
 }
+
+func TestHandleStatus_IncludesIdleSinceWhenIdle(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	// setupTestServer already moved s1 to awaiting_approval — that's a
+	// QUESTION_STATUSES-equivalent, so the flow is idle right now.
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	var resp struct {
+		IdleSince        *time.Time  `json:"idle_since"`
+		BackoffOpenSince []time.Time `json:"backoff_open_since"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.IdleSince == nil {
+		t.Error("idle_since = nil, want a timestamp (stage is awaiting_approval)")
+	}
+	if len(resp.BackoffOpenSince) != 0 {
+		t.Errorf("backoff_open_since = %v, want empty (no stage retrying)", resp.BackoffOpenSince)
+	}
+}
+
+func TestHandleStatus_IncludesBackoffOpenSinceWhenRetrying(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRetrying, Event: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	var resp struct {
+		BackoffOpenSince []time.Time `json:"backoff_open_since"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.BackoffOpenSince) != 1 {
+		t.Fatalf("backoff_open_since len = %d, want 1", len(resp.BackoffOpenSince))
+	}
+}
