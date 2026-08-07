@@ -54,7 +54,16 @@ export function useAutoGrowTextarea(
     // (#plan-content, #dialog-scroll) без явного признака, что там есть
     // скролл. 'nearest' докручивает минимально необходимо, не дёргая
     // страницу, если элемент и так виден.
-    node.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    //
+    // Скроллим к СЛЕДУЮЩЕМУ элементу (кнопке), а не к самой textarea:
+    // scrollIntoView(node) гарантирует видимость верха textarea, но никак не
+    // гарантирует видимость того, что идёт после неё. Когда высокая textarea
+    // (после роста) не помещается в видимую область скролл-контейнера вместе
+    // с кнопкой, приоритет — показать кнопку (то, что реально нужно нажать),
+    // а не верх уже введённого текста: пользователь обычно печатает в конце.
+    // Фолбэк на node — на случай, если у textarea вообще нет соседа.
+    const scrollTarget = node.nextElementSibling ?? node
+    scrollTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [value, maxHeightPx, node])
 
   useEffect(() => {

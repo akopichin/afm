@@ -26,6 +26,18 @@ function TestComponent({ value, maxHeight }: { value: string; maxHeight: number 
 // parent's top level, but the textarea itself is rendered conditionally (only
 // when a comment form is "open") — so the DOM node does not exist yet at the
 // hook's own first render.
+// Mirrors PlanPanel/DialogChannel: a trailing action button as the
+// textarea's DOM nextElementSibling.
+function TestComponentWithSibling({ value, maxHeight }: { value: string; maxHeight: number }) {
+  const ref = useAutoGrowTextarea(value, maxHeight)
+  return (
+    <>
+      <textarea ref={ref} data-testid="textarea" defaultValue={value} />
+      <button data-testid="next-sibling">Add</button>
+    </>
+  )
+}
+
 function ConditionalTestComponent({
   show,
   value,
@@ -130,6 +142,32 @@ describe('useAutoGrowTextarea', () => {
     rerender(<TestComponent value="a fresh comment" maxHeight={400} />)
 
     expect(textarea.style.height).toBe('90px')
+  })
+
+  it('scrolls the next sibling (action button) into view instead of the textarea itself', () => {
+    const { rerender } = render(<TestComponentWithSibling value="" maxHeight={400} />)
+    const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
+    const sibling = screen.getByTestId('next-sibling') as HTMLButtonElement
+
+    const textareaSpy = vi.spyOn(textarea, 'scrollIntoView')
+    const siblingSpy = vi.spyOn(sibling, 'scrollIntoView')
+
+    Object.defineProperty(textarea, 'scrollHeight', { value: 400, configurable: true })
+    rerender(<TestComponentWithSibling value="a long comment that grows the box" maxHeight={400} />)
+
+    expect(siblingSpy).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' })
+    expect(textareaSpy).not.toHaveBeenCalled()
+  })
+
+  it('falls back to scrolling the textarea itself when it has no next sibling', () => {
+    const { rerender } = render(<TestComponent value="" maxHeight={400} />)
+    const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
+    const textareaSpy = vi.spyOn(textarea, 'scrollIntoView')
+
+    Object.defineProperty(textarea, 'scrollHeight', { value: 120, configurable: true })
+    rerender(<TestComponent value="some text" maxHeight={400} />)
+
+    expect(textareaSpy).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' })
   })
 
   it('engages the manual-resize lock even when the textarea mounts after the hook first runs', () => {
