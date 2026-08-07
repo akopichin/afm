@@ -372,6 +372,8 @@
   font-size: 11px;
   resize: vertical;
   min-height: 56px;
+  max-height: 400px;
+  overflow-y: auto;
 }
 .line-comment-form textarea:focus {
   outline: 1px solid var(--mint);

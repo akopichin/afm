@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import type { Stage } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
@@ -21,6 +22,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   const [comments, setComments] = useState<Record<number, string>>({})
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const commentTextareaRef = useAutoGrowTextarea(draft, 400)
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
   const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | null>(null)
@@ -321,7 +323,12 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
         {activeCommentLine === item.line && (
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
             {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
-            <textarea placeholder={`Comment on line ${item.line}...`} value={draft} onChange={(event) => setDraft(event.target.value)} />
+            <textarea
+              ref={commentTextareaRef}
+              placeholder={`Comment on line ${item.line}...`}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+            />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
                 {hasComment ? 'Update' : 'Add'}

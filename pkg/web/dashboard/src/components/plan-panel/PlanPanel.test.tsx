@@ -320,4 +320,22 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(container.querySelector('#actions-section')).not.toBeNull())
     expect(container.querySelector('.auto-approved-badge')).toBeNull()
   })
+
+  test('the comment textarea grows to fit its content via the auto-grow hook', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    const scrollHeightSpy = vi
+      .spyOn(window.HTMLTextAreaElement.prototype, 'scrollHeight', 'get')
+      .mockReturnValue(150)
+
+    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'a longer comment' } })
+
+    expect(textarea.style.height).toBe('150px')
+
+    scrollHeightSpy.mockRestore()
+  })
 })
