@@ -47,46 +47,61 @@ nothing has changed, which may not be true.
 
 ### 1. Backend: durable idle/backoff tracking in `pkg/state`
 
-`RunState` (`pkg/state/state.go`) gains:
+`RunState` (`pkg/state/state.go`) gains exactly two new persisted fields:
 
 ```go
-IdleAccumulatedMs    int64      `json:"idle_accumulated_ms"`
-IdleSince            *time.Time `json:"idle_since,omitempty"`      // non-nil while currently idle
-BackoffAccumulatedMs int64      `json:"backoff_accumulated_ms"`
-BackoffOpenSince     map[string]time.Time `json:"-"`               // stageID -> episode start, serialized separately (see API)
+IdleAccumulatedMs    int64 `json:"idle_accumulated_ms"`
+BackoffAccumulatedMs int64 `json:"backoff_accumulated_ms"`
 ```
 
-Both are maintained inside `Store.Apply(t *Transition) error` (`pkg/state/store.go:257`)
-— the same durable choke point that already updates each stage's status and
-is the single place every real transition passes through, exactly once, in
-order, whether live or replayed. `Transition` already carries `Time`,
-`StageID`, and `To` (`store.go:16-24`), everything needed:
+`idle_since` and `backoff_open_since` (see API below) need no persisted field
+at all — they're derived on read from data `RunState` already has. The start
+of the *current* idle window is always exactly the latest `Stages[].UpdatedAt`
+across all stages (whichever stage's transition most recently made the flow
+idle); the start of a stage's *current* backoff episode is always exactly
+that stage's own `UpdatedAt` while its `Status` is `retrying`. Two `RunState`
+methods compute these on demand: `IdleSince() *time.Time` and
+`BackoffOpenSince() []time.Time`.
+
+A single shared helper, called `accountIdleAndBackoff(rs, stageID, to, t)`,
+updates the two accumulators using `rs.Stages` as it was *before* the
+transition is applied. It is called from **both** places a `Transition`
+mutates a `RunState`:
+
+- `Store.Apply` (`pkg/state/store.go:257`) — the live path, used while a run
+  is actively executing.
+- `parseEventLog` (`pkg/state/state.go`) — the replay path shared by
+  `Store.Open` (resuming a run's in-memory state from `events.jsonl` when
+  the process restarts) *and* `LoadRunState` (read-only access, e.g. `afm
+  check`). Note this is a different function from `Apply` — replay does not
+  go through `Apply` at all, it mutates `RunState` directly — so both call
+  sites need the same accounting logic for resume to reconstruct the same
+  numbers a live run would have had.
 
 - **Idle** is a flow-wide state, not per-stage — ported directly from the
   existing `isIdle()` state machine in `use-idle-time.ts`: idle if any stage
   is in `awaiting_user_input`/`awaiting_approval`, OR if some stage is
   `failed` and no stage is actively `running`/`planning`/`revising`
   (`retrying` intentionally does not count as "active" — it's passive
-  backoff, not agent work, per the existing TS comment). Before applying a
-  transition, if the state *before* this transition was idle, add the
-  elapsed time since `IdleSince` to `IdleAccumulatedMs`. After applying it,
-  recompute idleness across all stages and set/clear `IdleSince`
-  accordingly.
+  backoff, not agent work, per the existing TS comment). If the state
+  *before* a transition was idle, the gap since the last transition
+  (`maxUpdatedAt` over all stages) is added to `IdleAccumulatedMs`.
 - **Backoff** sums time each stage individually spends in `retrying`
   (`BACKOFF_STATUSES` in `pkg/web/dashboard/src/types/stage.ts`), and — like
   the existing `useStatusDuration` — sums *parallel* open episodes rather
   than merging them (an existing, intentional simplification carried over
-  as-is). `BackoffOpenSince` tracks each currently-retrying stage's episode
-  start; when a stage leaves `retrying`, its elapsed episode is added to
-  `BackoffAccumulatedMs` and removed from the open set.
+  as-is). When a stage's transition leaves `retrying`, the elapsed time
+  since that stage's own `UpdatedAt` (i.e., since it entered `retrying`) is
+  added to `BackoffAccumulatedMs`.
 
-**No backfill needed.** `LoadRunState` (`state.go:98`) already reconstructs
-`RunState` by replaying every historical `Transition` in `events.jsonl`
-through `Apply`. Since idle/backoff tracking lives inside `Apply` itself,
-replaying an existing run's full log with the new code correctly
-reconstructs accurate cumulative values from scratch — runs started before
-this change ships get correct numbers the next time their state loads, with
-no migration or special-casing.
+**No backfill needed.** `LoadRunState` (`state.go:98`) and `Store.Open`
+already reconstruct `RunState` by replaying every historical `Transition` in
+`events.jsonl` through `parseEventLog`. Since idle/backoff accounting lives
+inside that same shared function, replaying an existing run's full log with
+the new code correctly reconstructs accurate cumulative values from
+scratch — runs started before this change ships get correct numbers the
+next time their state is loaded or resumed, with no migration or
+special-casing.
 
 ### 2. API surface
 
