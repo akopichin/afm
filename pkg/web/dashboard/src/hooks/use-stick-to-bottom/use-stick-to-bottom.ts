@@ -5,42 +5,50 @@ const STICK_THRESHOLD_PX = 40
 // Держит скролл-контейнер прижатым к низу, пока пользователь сам не уехал вверх.
 // stick=true → MutationObserver докручивает вниз при росте контента.
 // stick=false → не трогаем скролл; jumpToBottom() возвращается к хвосту.
+//
+// ref — callback (не RefObject): некоторые контейнеры (DialogChannel/#dialog-scroll)
+// монтируются не сразу, а только когда появляется контент (hasContent). Callback
+// ref гарантирует, что эффект ниже переустановит наблюдатели именно в момент
+// реального появления DOM-узла, а не только один раз при первом рендере хука.
 export function useStickToBottom<T extends HTMLElement>(): {
-  ref: React.RefObject<T>
+  ref: (node: T | null) => void
   stick: boolean
   jumpToBottom: () => void
 } {
-  const ref = useRef<T>(null)
+  const [node, setNode] = useState<T | null>(null)
   const [stick, setStick] = useState(true)
   const stickRef = useRef(true)
   stickRef.current = stick
 
   const jumpToBottom = useCallback(() => {
-    const el = ref.current
-    if (el === null) return
-    el.scrollTop = el.scrollHeight
+    if (node === null) return
+    node.scrollTop = node.scrollHeight
     setStick(true)
-  }, [])
+  }, [node])
 
   useEffect(() => {
-    const el = ref.current
-    if (el === null) return
+    if (node === null) return
+
+    // Узел мог примонтироваться уже с готовым контентом (та самая задержка
+    // DialogChannel выше) — без явного скролла здесь MutationObserver ниже
+    // реагирует только на БУДУЩИЙ рост контента, и список остаётся наверху.
+    if (stickRef.current) node.scrollTop = node.scrollHeight
 
     const onScroll = () => {
-      const near = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX
+      const near = node.scrollHeight - node.scrollTop - node.clientHeight < STICK_THRESHOLD_PX
       setStick(near)
     }
     const obs = new MutationObserver(() => {
-      if (stickRef.current) el.scrollTop = el.scrollHeight
+      if (stickRef.current) node.scrollTop = node.scrollHeight
     })
 
-    el.addEventListener('scroll', onScroll, { passive: true })
-    obs.observe(el, { childList: true, subtree: true, characterData: true })
+    node.addEventListener('scroll', onScroll, { passive: true })
+    obs.observe(node, { childList: true, subtree: true, characterData: true })
     return () => {
-      el.removeEventListener('scroll', onScroll)
+      node.removeEventListener('scroll', onScroll)
       obs.disconnect()
     }
-  }, [])
+  }, [node])
 
-  return { ref, stick, jumpToBottom }
+  return { ref: setNode, stick, jumpToBottom }
 }
