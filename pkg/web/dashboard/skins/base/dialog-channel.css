@@ -189,6 +189,8 @@
 .dialog-pending .dialog-custom {
   width: 100%;
   min-height: 60px;
+  max-height: 400px;
+  overflow-y: auto;
   background: var(--panel-bg);
   border: 1px solid rgba(111, 212, 204, 0.2);
   color: var(--ink);

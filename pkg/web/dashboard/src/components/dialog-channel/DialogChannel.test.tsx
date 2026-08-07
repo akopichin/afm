@@ -312,6 +312,72 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.line-comment-form')).not.toBeNull()
   })
 
+  test('the question-line comment textarea grows to fit its content', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'scrollHeight',
+    )
+    Object.defineProperty(window.HTMLTextAreaElement.prototype, 'scrollHeight', {
+      get: () => 150,
+      configurable: true,
+    })
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'a longer comment' } })
+
+    expect(textarea.style.height).toBe('150px')
+
+    if (originalScrollHeight) {
+      Object.defineProperty(window.HTMLTextAreaElement.prototype, 'scrollHeight', originalScrollHeight)
+    }
+  })
+
+  test('the free-answer textarea grows to fit its content', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'Pick one',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'scrollHeight',
+    )
+    Object.defineProperty(window.HTMLTextAreaElement.prototype, 'scrollHeight', {
+      get: () => 200,
+      configurable: true,
+    })
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+    const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'a much longer free-text answer' } })
+
+    expect(textarea.style.height).toBe('200px')
+
+    if (originalScrollHeight) {
+      Object.defineProperty(window.HTMLTextAreaElement.prototype, 'scrollHeight', originalScrollHeight)
+    }
+  })
+
   test('a non-empty draft ignores clicks on other question lines and on itself; only × discards it', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
@@ -39,6 +40,9 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   const [draft, setDraft] = useState('')
   const [clickedSend, setClickedSend] = useState(false)
   const [flash, setFlash] = useState(false)
+
+  const commentTextareaRef = useAutoGrowTextarea(draft, 400)
+  const customTextareaRef = useAutoGrowTextarea(customText, 400)
 
   // Автоскролл канала к хвосту при появлении новых сообщений/вопросов,
   // пока пользователь сам не уехал вверх. Контейнер охватывает и историю,
@@ -293,6 +297,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
             {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
             <textarea
+              ref={commentTextareaRef}
               placeholder={`Comment on line ${item.line}...`}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
@@ -352,6 +357,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                     </div>
 
                     <textarea
+                      ref={customTextareaRef}
                       className="dialog-custom"
                       placeholder="Or type your own answer…"
                       value={customText}
