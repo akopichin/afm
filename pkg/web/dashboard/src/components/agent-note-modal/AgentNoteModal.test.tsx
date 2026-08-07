@@ -32,4 +32,18 @@ describe('AgentNoteModal', () => {
     render(<AgentNoteModal stageId="s1" onSubmit={vi.fn()} onCancel={vi.fn()} />)
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled()
   })
+
+  it('grows the textarea to fit its content', () => {
+    const scrollHeightSpy = vi
+      .spyOn(window.HTMLTextAreaElement.prototype, 'scrollHeight', 'get')
+      .mockReturnValue(180)
+
+    render(<AgentNoteModal stageId="s1" onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'a longer note for the agent' } })
+
+    expect(textarea.style.height).toBe('180px')
+
+    scrollHeightSpy.mockRestore()
+  })
 })
