@@ -11,6 +11,5 @@ export {
   STAGE_STATUSES,
   STAGE_STATUS_LABELS,
   ACTIVE_STAGE_STATUSES,
-  BACKOFF_STATUSES,
 } from './stage'
 export { AFM_EVENT_TYPES, SIGNIFICANT_EVENT_TYPES, extractStageStatus } from './afm-event'

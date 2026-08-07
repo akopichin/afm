@@ -60,10 +60,3 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'hook_failed',
 ])
 
-// Backoff — автоматическая пауза перед авто-ретраем, без участия
-// пользователя. Питает useStatusDuration в app/App.tsx. Idle считается
-// отдельным хуком useIdleTime (не простой суммой по набору статусов — см.
-// его комментарий), т.к. failed-стадия не должна копить Idle, пока активен
-// другой агент (реальный баг: каскадные blocked_by_dep failed-стадии копили
-// Idle, пока пользователь ретраил и агент реально работал).
-export const BACKOFF_STATUSES: ReadonlySet<StageStatus> = new Set(['retrying'])

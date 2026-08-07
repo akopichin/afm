@@ -8,7 +8,7 @@ type FooterProps = {
   // Idle — суммарное время, когда хоть одна стадия ждала пользователя
   // (awaiting_user_input/awaiting_approval/failed). Backoff — суммарное
   // время автоматического retry-backoff (retrying), без участия
-  // пользователя. Оба — из useStatusDuration (см. app/App.tsx).
+  // пользователя. Оба — из useIdleMs/useBackoffMs (см. app/App.tsx).
   idleMs: number
   backoffMs: number
 }
