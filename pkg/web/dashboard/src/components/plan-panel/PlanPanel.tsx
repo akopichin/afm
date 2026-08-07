@@ -285,6 +285,17 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
     return renderPlanLine(item, `line-${sectionIndex}`)
   }
 
+  function renderCommentHeader(label: string, ariaLabel: string, title: string, onClick: () => void): ReactNode {
+    return (
+      <div className="comment-display-header">
+        <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{label}</span>
+        <button type="button" className="comment-remove" aria-label={ariaLabel} title={title} onClick={onClick}>
+          ✕
+        </button>
+      </div>
+    )
+  }
+
   function renderPlanLine(item: LineItem, key: string): ReactNode {
     const hasComment = comments[item.line] !== undefined
 
@@ -302,36 +313,14 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
 
         {hasComment && (
           <div className="line-comment-form line-comment-display" onClick={(event) => event.stopPropagation()}>
-            <div className="comment-display-header">
-              <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{`Comment on line ${item.line}`}</span>
-              <button
-                type="button"
-                className="comment-remove"
-                aria-label={`Remove comment on line ${item.line}`}
-                title="Remove comment"
-                onClick={() => deleteComment(item.line)}
-              >
-                ✕
-              </button>
-            </div>
+            {renderCommentHeader(`Comment on line ${item.line}`, `Remove comment on line ${item.line}`, 'Remove comment', () => deleteComment(item.line))}
             <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{comments[item.line]}</div>
           </div>
         )}
 
         {activeCommentLine === item.line && (
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
-            <div className="comment-display-header">
-              <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{`Comment on line ${item.line}`}</span>
-              <button
-                type="button"
-                className="comment-remove"
-                aria-label={`Close comment on line ${item.line}`}
-                title="Close"
-                onClick={closeCommentForm}
-              >
-                ✕
-              </button>
-            </div>
+            {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
             <textarea placeholder={`Comment on line ${item.line}...`} value={draft} onChange={(event) => setDraft(event.target.value)} />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
