@@ -14,29 +14,20 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// blockingRunner holds RunPlanning/RunAgent open until ctx is cancelled. It keeps
-// a stage in its active status while the file-based question poller runs, so the
-// poller has a chance to detect *.question.json files. This avoids the real agent
-// binary and any fast-fail status transitions during the test.
-type blockingRunner struct{}
-
-func (blockingRunner) RunPlanning(ctx context.Context, _, _, _, _ string) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (blockingRunner) RunAgent(ctx context.Context, _, _, _, _ string) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (blockingRunner) RunJSONQuery(ctx context.Context, _ string) ([]byte, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-// newPollerOrch builds an orchestrator whose stage starts in StatusRunning with a
-// blocking runner, returning the store and a cancellable context for the Run loop.
+// newPollerOrch builds an orchestrator whose stage starts in StatusRunning,
+// returning the store and a cancellable context for the Run loop.
+//
+// The stage is Interactive: true — required so pollQuestions still exercises
+// the ask_user path (a non-interactive stage's open question is now
+// auto-answered instead, see dialog_poller.go). Interactive stages ignore any
+// injected Runner (runnerFor always builds a real executor.New(stage.Command)
+// for them — see CLAUDE.md's File-Based Dialog Protocol section), so a
+// blocking Command script is used to hold the stage in StatusRunning for the
+// poller to observe, instead of the Runner-injection trick a non-interactive
+// stage could use. Without a real Command, runnerFor falls back to the
+// configured default client ("claude"), which doesn't exist on a CI runner —
+// this bit locally (claude present in PATH) but failed every run in GitHub
+// Actions with "start claude: exec: \"claude\": executable file not found".
 func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestrator, *state.Store, context.Context, context.CancelFunc) {
 	t.Helper()
 	stageDir := filepath.Join(runDir, stageID)
@@ -45,8 +36,18 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 	}
 	// plan.md must exist so runImplementationAgent does not fail fast (it reads
 	// the plan before invoking the runner). With the plan present, the blocking
-	// runner holds the stage in StatusRunning for the poller to observe.
+	// script holds the stage in StatusRunning for the poller to observe.
 	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# plan"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A plain script (not the injected Runner, which interactive stages
+	// ignore) — mirrors the blocking-agent pattern already used by
+	// integration_interactive_test.go's misplaced-question tests. Ignores its
+	// argv (the executor appends the default claude flags regardless of
+	// Command), just sleeps until the test cancels the run context and the
+	// executor kills the subprocess.
+	scriptPath := filepath.Join(stageDir, "block.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\nsleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	store, err := state.Open(runDir, []string{stageID})
@@ -58,10 +59,9 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 	}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir: runDir,
-		Stages: []flow.Stage{{ID: stageID, Name: stageID, Interactive: true}},
+		Stages: []flow.Stage{{ID: stageID, Name: stageID, Interactive: true, Command: scriptPath}},
 		Store:  store,
 		Config: config.Default(),
-		Runner: blockingRunner{},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	return orch, store, ctx, cancel
