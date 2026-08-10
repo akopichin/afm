@@ -141,11 +141,17 @@ func TestHandleStatus(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("status: got %d, want 200", w.Code)
 	}
-	var rs state.RunState
-	if err := json.NewDecoder(w.Body).Decode(&rs); err != nil {
+	var resp statusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := rs.Stages[testStageID]; !ok {
+	found := false
+	for _, sv := range resp.Stages {
+		if sv.ID == testStageID {
+			found = true
+		}
+	}
+	if !found {
 		t.Error("stage s1 missing from status")
 	}
 }
@@ -161,12 +167,18 @@ func TestHandleStatus_IncludesStageNames(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
 	}
-	var rs state.RunState
-	if err := json.NewDecoder(w.Body).Decode(&rs); err != nil {
+	var resp statusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got := rs.StageNames[testStageID]; got != "Backend Stage" {
-		t.Errorf("stage_names[%q] = %q, want %q", testStageID, got, "Backend Stage")
+	var got string
+	for _, sv := range resp.Stages {
+		if sv.ID == testStageID {
+			got = sv.Name
+		}
+	}
+	if got != "Backend Stage" {
+		t.Errorf("stage name = %q, want %q", got, "Backend Stage")
 	}
 }
 
@@ -189,14 +201,20 @@ func TestHandleStatus_IncludesInteractiveAndAutonomous(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := resp.Stages[testStageID]; !ok {
-		t.Error("embedded RunState: stage missing from status")
+	var found *StageView
+	for i := range resp.Stages {
+		if resp.Stages[i].ID == testStageID {
+			found = &resp.Stages[i]
+		}
 	}
-	if !resp.StageInteractive[testStageID] {
-		t.Errorf("stage_interactive[%q] = false, want true", testStageID)
+	if found == nil {
+		t.Fatal("stage missing from status")
 	}
-	if !resp.StageAutonomous[testStageID] {
-		t.Errorf("stage_autonomous[%q] = false, want true", testStageID)
+	if !found.Interactive {
+		t.Error("Interactive = false, want true")
+	}
+	if !found.Autonomous {
+		t.Error("Autonomous = false, want true")
 	}
 }
 
@@ -214,8 +232,17 @@ func TestHandleStatus_IncludesHasDialog(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.StageHasDialog[testStageID] {
-		t.Errorf("stage_has_dialog[%q] = false, want true", testStageID)
+	var found *StageView
+	for i := range resp.Stages {
+		if resp.Stages[i].ID == testStageID {
+			found = &resp.Stages[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("stage missing from status")
+	}
+	if !found.HasDialog {
+		t.Error("HasDialog = false, want true")
 	}
 }
 
@@ -230,8 +257,17 @@ func TestHandleStatus_HasDialogFalseWhenNoDialogFile(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.StageHasDialog[testStageID] {
-		t.Errorf("stage_has_dialog[%q] = true, want false (no dialog.jsonl written)", testStageID)
+	var found *StageView
+	for i := range resp.Stages {
+		if resp.Stages[i].ID == testStageID {
+			found = &resp.Stages[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("stage missing from status")
+	}
+	if found.HasDialog {
+		t.Error("HasDialog = true, want false (no dialog.jsonl written)")
 	}
 }
 
@@ -250,8 +286,17 @@ func TestHandleStatus_IncludesAutoApprove(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.StageAutoApprove[testStageID] {
-		t.Errorf("stage_auto_approve[%q] = false, want true", testStageID)
+	var found *StageView
+	for i := range resp.Stages {
+		if resp.Stages[i].ID == testStageID {
+			found = &resp.Stages[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("stage missing from status")
+	}
+	if !found.AutoApprove {
+		t.Error("AutoApprove = false, want true")
 	}
 }
 

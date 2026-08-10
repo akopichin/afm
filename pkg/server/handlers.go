@@ -21,52 +21,33 @@ const (
 	keyStatus  = "status"
 )
 
-// statusResponse расширяет снапшот тремя per-stage картами для UI:
-// stage_interactive (статический конфиг флоу), stage_autonomous (рантайм,
-// по наличию autonomous.flag в директории стадии) и stage_has_dialog (рантайм,
-// по наличию хотя бы одного <phase>.dialog.jsonl — стадия могла накопить
-// диалоговую историю через file-based dialog protocol независимо от того,
-// interactive она или autonomous).
+// statusResponse is GET /api/status's wire shape: run-level fields plus one
+// ordered []StageView (see stageview.go) instead of five parallel per-stage
+// maps the frontend used to re-join by id.
 type statusResponse struct {
-	state.RunState
-	Description      string          `json:"description,omitempty"`
-	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
-	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
-	StageHasDialog   map[string]bool `json:"stage_has_dialog,omitempty"`
-	StageAutoApprove map[string]bool `json:"stage_auto_approve,omitempty"`
-	// IdleSince/BackoffOpenSince — computed from RunState.Stages on read (see
-	// RunState.IdleSince/BackoffOpenSince), not stored fields. nil/empty when
-	// not currently idle/retrying.
-	IdleSince        *time.Time  `json:"idle_since,omitempty"`
-	BackoffOpenSince []time.Time `json:"backoff_open_since,omitempty"`
+	FlowName             string      `json:"flow_name"`
+	StartedAt            time.Time   `json:"started_at"`
+	Description          string      `json:"description,omitempty"`
+	Stages               []StageView `json:"stages"`
+	LastSeq              uint64      `json:"last_seq"`
+	IdleAccumulatedMs    int64       `json:"idle_accumulated_ms"`
+	IdleSince            *time.Time  `json:"idle_since,omitempty"`
+	BackoffAccumulatedMs int64       `json:"backoff_accumulated_ms"`
+	BackoffOpenSince     []time.Time `json:"backoff_open_since,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	rs := s.store.Snapshot()
-	autonomous := make(map[string]bool, len(rs.Stages))
-	for id := range rs.Stages {
-		if _, err := os.Stat(filepath.Join(s.runDir, id, "autonomous.flag")); err == nil {
-			autonomous[id] = true
-		}
-	}
-	hasDialog := make(map[string]bool, len(rs.Stages))
-	for id := range rs.Stages {
-		for _, p := range flow.Phases() {
-			if _, err := os.Stat(filepath.Join(s.runDir, id, string(p)+".dialog.jsonl")); err == nil {
-				hasDialog[id] = true
-				break
-			}
-		}
-	}
 	resp := statusResponse{
-		RunState:         rs,
-		Description:      s.Description,
-		StageInteractive: s.stageInteractive,
-		StageAutonomous:  autonomous,
-		StageHasDialog:   hasDialog,
-		StageAutoApprove: s.stageAutoApprove,
-		IdleSince:        rs.IdleSince(),
-		BackoffOpenSince: rs.BackoffOpenSince(),
+		FlowName:             rs.FlowName,
+		StartedAt:            rs.StartedAt,
+		Description:          s.Description,
+		Stages:               buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove),
+		LastSeq:              rs.LastSeq,
+		IdleAccumulatedMs:    rs.IdleAccumulatedMs,
+		IdleSince:            rs.IdleSince(),
+		BackoffAccumulatedMs: rs.BackoffAccumulatedMs,
+		BackoffOpenSince:     rs.BackoffOpenSince(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
