@@ -33,6 +33,19 @@ const (
 	StatusHookFailed StageStatus = "hook_failed"
 )
 
+// AllStatuses returns every StageStatus in declaration order. This is the
+// single source of truth tools/genstagestatus reads to generate the
+// frontend's StageStatus TypeScript union — add a new status here (and to
+// the const block above) and both stay in sync automatically instead of
+// requiring a matching hand-edit in pkg/web/dashboard/src/types/stage.ts.
+func AllStatuses() []StageStatus {
+	return []StageStatus{
+		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
+		StatusReady, StatusRunning, StatusRetrying, StatusAwaitingUserInput,
+		StatusDone, StatusFailed, StatusHookFailed,
+	}
+}
+
 // StageState holds persistent state for a single stage.
 type StageState struct {
 	Status    StageStatus `json:"status"`

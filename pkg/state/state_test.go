@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+func TestAllStatuses_MatchesConsts(t *testing.T) {
+	want := []StageStatus{
+		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
+		StatusReady, StatusRunning, StatusRetrying, StatusAwaitingUserInput,
+		StatusDone, StatusFailed, StatusHookFailed,
+	}
+	got := AllStatuses()
+	if len(got) != len(want) {
+		t.Fatalf("AllStatuses() has %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for i, s := range want {
+		if got[i] != s {
+			t.Errorf("AllStatuses()[%d] = %q, want %q", i, got[i], s)
+		}
+	}
+}
+
 func TestAllDone(t *testing.T) {
 	s := NewRunState([]string{"a", "b"})
 	if s.AllDone() {
