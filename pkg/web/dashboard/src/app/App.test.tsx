@@ -417,7 +417,7 @@ describe('App', () => {
     vi.useFakeTimers()
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stages: [stageView('s1', 'Propose', 'awaiting_approval', { showPlan: true })],
+      stages: [stageView('s1', 'Propose', 'awaiting_approval')],
       started_at: '2026-07-29T09:59:00.000Z',
       idle_accumulated_ms: 0,
       idle_since: '2026-07-29T10:00:00.000Z',

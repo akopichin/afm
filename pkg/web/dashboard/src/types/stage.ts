@@ -4,8 +4,10 @@
 // FSM руками при каждом новом статусе.
 export { STAGE_STATUSES, type StageStatus } from './stage-status.generated'
 
-// Данные одной стадии afm-флоу. Источник — поле stages ответа GET /api/status
-// (объект по идентификатору стадии); имя берётся из stage_names, время — из updated_at.
+// Данные одной стадии afm-флоу. Источник — элемент упорядоченного массива
+// stages ответа GET /api/status (см. pkg/server/stageview.go's StageView) —
+// каждое поле уже лежит прямо на объекте стадии, отдельных parallel-map'ов
+// (stage_names/stage_interactive/...) в ответе больше нет.
 export type Stage = {
   id: string
   name: string
