@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { reviseStage } from '../api/run-client'
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -35,18 +36,8 @@ export function App(): ReactElement {
   async function handleSubmitNote(note: string): Promise<void> {
     if (noteModalStageId === null) return
 
-    const url = `/api/stages/${encodeURIComponent(noteModalStageId)}/revise`
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback: note }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`POST ${url} -> ${response.status}`)
-      }
-
+      await reviseStage(noteModalStageId, note)
       setNoteModalStageId(null)
     } catch (err) {
       // Стадия могла уйти из ожидаемого статуса за время, пока юзер печатал
@@ -94,38 +85,11 @@ export function App(): ReactElement {
     lastKind.current = attention.kind
   }, [attention.kind])
 
-  // Панели (PlanPanel/DialogChannel) требуют Stage, а не Stage | null. Sentinel
-  // NO_STAGE нужен только на случай, когда стадия не выбрана: тогда обе панели
-  // видимы (см. showPlan/showDialog ниже) и им нужен непустой Stage — рендерим
-  // их с нейтральным sentinel'ом, они уходят в пустое состояние (GET
-  // /api/stages//plan → 404 → early-return), а stageHeader остаётся null и
-  // показывает заглушку «выберите стадию». При выбранной стадии видимость
-  // панелей (монтировать/скрыть) решают showPlan/showDialog.
-  const NO_STAGE: Stage = {
-    id: '',
-    name: '',
-    status: 'pending',
-    updatedAt: '',
-    interactive: false,
-    autonomous: false,
-    autoApprove: false,
-    hasDialog: false,
-  }
-  const stageForPanels = selectedStage ?? NO_STAGE
-
-  // Видимость панелей для выбранной стадии. Когда стадия не выбрана — показываем обе
-  // (нейтральное состояние). plan скрыт у автономной стадии (нет plan.md) — КРОМЕ
-  // случая failed: кнопка Retry (общее действие восстановления после сбоя, не
-  // привязанное к наличию плана) живёт внутри PlanPanel, и должна быть доступна для
-  // любой упавшей стадии, а не только для стадий с планом. dialog скрыт только когда
-  // диалог невозможен: не interactive, не autonomous (автономный трек диалоговый
-  // даже при interactive:false) И у стадии ещё нет накопленной диалоговой истории —
-  // обычная (не interactive, не autonomous) стадия может пройти через file-based
-  // dialog protocol и получить auto-answered вопрос, поэтому "диалог возможен"
-  // больше не выводится только из статического типа стадии.
-  const showPlan = selectedStage === null || !selectedStage.autonomous || selectedStage.status === 'failed'
-  const showDialog =
-    selectedStage === null || selectedStage.interactive || selectedStage.autonomous || selectedStage.hasDialog
+  // showPlan/showDialog capabilities are computed server-side per stage (see
+  // pkg/server/stageview.go's StageView.ShowPlan/ShowDialog) — the client only
+  // adds the "nothing selected → show both, neutral state" rule on top.
+  const showPlan = selectedStage === null || selectedStage.showPlan
+  const showDialog = selectedStage === null || selectedStage.showDialog
 
   const logEntries = useStageLog(selectedStageId)
   const elapsedMs = useElapsed(startedAt)
@@ -237,8 +201,8 @@ export function App(): ReactElement {
                 </>
               )
             }
-            plan={showPlan ? <PlanPanel stage={stageForPanels} attention={attention.kind === 'plan'} /> : null}
-            dialog={showDialog ? <DialogChannel stage={stageForPanels} attention={attention.kind === 'dialog'} /> : null}
+            plan={showPlan ? <PlanPanel stage={selectedStage} attention={attention.kind === 'plan'} /> : null}
+            dialog={showDialog ? <DialogChannel stage={selectedStage} attention={attention.kind === 'dialog'} /> : null}
             log={<LogPanel entries={logEntries} />}
             feed={<EventFeedPanel events={events} />}
           />

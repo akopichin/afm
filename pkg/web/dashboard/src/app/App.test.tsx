@@ -21,6 +21,39 @@ class StubWebSocket {
   }
 }
 
+type StageViewOverrides = {
+  interactive?: boolean
+  autonomous?: boolean
+  autoApprove?: boolean
+  hasDialog?: boolean
+  showPlan?: boolean
+  showDialog?: boolean
+}
+
+// Строит один элемент нового wire-формата stages: []StageView (см. Task 2's
+// pkg/server/stageview.go). show_plan/show_dialog по умолчанию вычисляются
+// так же, как их раньше считал клиент (App.tsx до удаления NO_STAGE) — это
+// сохраняет поведение существующих тестов один в один, ведь теперь эти два
+// поля приходят готовыми с бэкенда, а не считаются на фронте.
+function stageView(id: string, name: string, status: string, overrides: StageViewOverrides = {}) {
+  const interactive = overrides.interactive ?? false
+  const autonomous = overrides.autonomous ?? false
+  const hasDialog = overrides.hasDialog ?? false
+
+  return {
+    id,
+    name,
+    status,
+    updated_at: '',
+    interactive,
+    autonomous,
+    auto_approve: overrides.autoApprove ?? false,
+    has_dialog: hasDialog,
+    show_plan: overrides.showPlan ?? (!autonomous || status === 'failed'),
+    show_dialog: overrides.showDialog ?? (interactive || autonomous || hasDialog),
+  }
+}
+
 // Мокирует fetch для App: /api/status отдаёт statusPayload() (и считает вызовы через
 // onStatusCall), остальные эндпоинты (log/plan/dialog) отвечают пустыми заглушками.
 function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => void) {
@@ -52,30 +85,10 @@ describe('App', () => {
   })
 
   test('renders the flow name and auto-selects an active stage', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : (input as Request).url
-
-      if (url.includes('/api/status')) {
-        return {
-          ok: true,
-          json: async () => ({
-            flow_name: 'demo',
-            stage_order: ['s1', 's2'],
-            stage_names: { s1: 'Propose', s2: 'Plan' },
-            stages: {
-              s1: { status: 'running', updated_at: '' },
-              s2: { status: 'pending', updated_at: '' },
-            },
-          }),
-        } as Response
-      }
-
-      if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
-      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
-      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
-
-      return { ok: true, json: async () => [] } as Response
-    })
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'running'), stageView('s2', 'Plan', 'pending')],
+    }))
 
     render(<App />)
 
@@ -97,9 +110,7 @@ describe('App', () => {
     mockFetchForStatus(
       () => ({
         flow_name: 'demo',
-        stage_order: ['s1'],
-        stage_names: { s1: 'Propose' },
-        stages: { s1: { status: 'running', updated_at: '' } },
+        stages: [stageView('s1', 'Propose', 'running')],
       }),
       () => {
         statusCalls += 1
@@ -123,9 +134,7 @@ describe('App', () => {
     mockFetchForStatus(
       () => ({
         flow_name: 'demo',
-        stage_order: ['s1'],
-        stage_names: { s1: 'Propose' },
-        stages: { s1: { status: 'running', updated_at: '' } },
+        stages: [stageView('s1', 'Propose', 'running')],
       }),
       () => {
         statusCalls += 1
@@ -159,11 +168,7 @@ describe('App', () => {
   test('CRITICAL: an autonomous stage hides the plan panel', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Autonomous stage' },
-      stages: { s1: { status: 'running', updated_at: '' } },
-      stage_autonomous: { s1: true },
-      stage_interactive: { s1: false },
+      stages: [stageView('s1', 'Autonomous stage', 'running', { autonomous: true, interactive: false })],
     }))
 
     render(<App />)
@@ -178,11 +183,7 @@ describe('App', () => {
   test('CRITICAL: a non-interactive, non-autonomous stage hides the dialog panel', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Silent stage' },
-      stages: { s1: { status: 'running', updated_at: '' } },
-      stage_autonomous: { s1: false },
-      stage_interactive: { s1: false },
+      stages: [stageView('s1', 'Silent stage', 'running', { autonomous: false, interactive: false })],
     }))
 
     render(<App />)
@@ -198,12 +199,9 @@ describe('App', () => {
   test('CRITICAL: a non-interactive stage WITH dialog history still shows the dialog panel', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Auto-answered stage' },
-      stages: { s1: { status: 'running', updated_at: '' } },
-      stage_autonomous: { s1: false },
-      stage_interactive: { s1: false },
-      stage_has_dialog: { s1: true },
+      stages: [
+        stageView('s1', 'Auto-answered stage', 'running', { autonomous: false, interactive: false, hasDialog: true }),
+      ],
     }))
 
     render(<App />)
@@ -218,11 +216,7 @@ describe('App', () => {
   test('CRITICAL: a failed autonomous stage still shows the retry button', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Autonomous stage' },
-      stages: { s1: { status: 'failed', updated_at: '' } },
-      stage_autonomous: { s1: true },
-      stage_interactive: { s1: false },
+      stages: [stageView('s1', 'Autonomous stage', 'failed', { autonomous: true, interactive: false })],
     }))
 
     render(<App />)
@@ -242,15 +236,11 @@ describe('App', () => {
       done
         ? {
             flow_name: 'demo',
-            stage_order: ['s1', 's2'],
-            stage_names: { s1: 'Propose', s2: 'Plan' },
-            stages: { s1: { status: 'done', updated_at: '' }, s2: { status: 'running', updated_at: '' } },
+            stages: [stageView('s1', 'Propose', 'done'), stageView('s2', 'Plan', 'running')],
           }
         : {
             flow_name: 'demo',
-            stage_order: ['s1', 's2'],
-            stage_names: { s1: 'Propose', s2: 'Plan' },
-            stages: { s1: { status: 'running', updated_at: '' }, s2: { status: 'pending', updated_at: '' } },
+            stages: [stageView('s1', 'Propose', 'running'), stageView('s2', 'Plan', 'pending')],
           },
     )
 
@@ -272,9 +262,7 @@ describe('App', () => {
     // оставить её выбранной (иначе нельзя посмотреть её логи/план/диалог).
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1', 's2'],
-      stage_names: { s1: 'Propose', s2: 'Plan' },
-      stages: { s1: { status: 'done', updated_at: '' }, s2: { status: 'running', updated_at: '' } },
+      stages: [stageView('s1', 'Propose', 'done'), stageView('s2', 'Plan', 'running')],
     }))
 
     render(<App />)
@@ -296,9 +284,7 @@ describe('App', () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       description: 'Build the login flow',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Propose' },
-      stages: { s1: { status: 'running', updated_at: '' } },
+      stages: [stageView('s1', 'Propose', 'running')],
     }))
 
     render(<App />)
@@ -309,9 +295,7 @@ describe('App', () => {
   test('tab title falls back to the flow name when description is absent', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo-flow',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Propose' },
-      stages: { s1: { status: 'running', updated_at: '' } },
+      stages: [stageView('s1', 'Propose', 'running')],
     }))
 
     render(<App />)
@@ -330,9 +314,7 @@ describe('App', () => {
           ok: true,
           json: async () => ({
             flow_name: 'demo',
-            stage_order: ['s1'],
-            stage_names: { s1: 'Propose' },
-            stages: { s1: { status: 'running', updated_at: '' } },
+            stages: [stageView('s1', 'Propose', 'running')],
           }),
         } as Response
       }
@@ -367,9 +349,7 @@ describe('App', () => {
   test('hides the "thinking" badge while offline even if the selected stage is running', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Propose' },
-      stages: { s1: { status: 'running', updated_at: '' } },
+      stages: [stageView('s1', 'Propose', 'running')],
     }))
 
     render(<App />)
@@ -393,9 +373,7 @@ describe('App', () => {
     let idleSince: string | null = null
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Propose' },
-      stages: { s1: { status: 'running', updated_at: '' } },
+      stages: [stageView('s1', 'Propose', 'running')],
       started_at: '2026-07-29T09:59:00.000Z',
       idle_accumulated_ms: 5000,
       idle_since: idleSince,
@@ -424,12 +402,7 @@ describe('App', () => {
     // прислал бэкенд, и не тикает, если idle_since=null (флоу не простаивает).
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1', 's2'],
-      stage_names: { s1: 'Upstream', s2: 'Downstream' },
-      stages: {
-        s1: { status: 'running', updated_at: '' },
-        s2: { status: 'failed', updated_at: '' },
-      },
+      stages: [stageView('s1', 'Upstream', 'running'), stageView('s2', 'Downstream', 'failed')],
       started_at: '2026-07-29T09:59:00.000Z',
       idle_accumulated_ms: 0,
       idle_since: null,
@@ -444,9 +417,7 @@ describe('App', () => {
     vi.useFakeTimers()
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stage_names: { s1: 'Propose' },
-      stages: { s1: { status: 'awaiting_approval', updated_at: '2026-07-29T10:00:00.000Z' } },
+      stages: [stageView('s1', 'Propose', 'awaiting_approval', { showPlan: true })],
       started_at: '2026-07-29T09:59:00.000Z',
       idle_accumulated_ms: 0,
       idle_since: '2026-07-29T10:00:00.000Z',
@@ -483,12 +454,7 @@ describe('App', () => {
   test('WARNING: falls back to a failed stage when no stage is active', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
-      stage_order: ['s1', 's2'],
-      stage_names: { s1: 'Done stage', s2: 'Failed stage' },
-      stages: {
-        s1: { status: 'done', updated_at: '' },
-        s2: { status: 'failed', updated_at: '' },
-      },
+      stages: [stageView('s1', 'Done stage', 'done'), stageView('s2', 'Failed stage', 'failed')],
     }))
 
     render(<App />)

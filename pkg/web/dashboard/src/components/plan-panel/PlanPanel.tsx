@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { approveStage, retryHookStage, retryStage, reviseStage, skipHookStage } from '../../api/run-client'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import type { Stage } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
@@ -6,7 +7,7 @@ import { PanelFrame } from '../panel-frame/PanelFrame'
 import { isHeading2, isSpecialSection, nextLineBlock, renderMarkdown, type SpecialSection } from './markdown'
 
 type PlanPanelProps = {
-  stage: Stage
+  stage: Stage | null
   attention?: boolean
 }
 
@@ -27,11 +28,11 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   const [busy, setBusy] = useState(false)
   const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | null>(null)
 
-  const isReview = stage.status === 'awaiting_approval'
-  const showActions = isReview && !stage.autoApprove
-  const showAutoApprovedBadge = stage.autoApprove && planMarkdown.trim() !== ''
-  const showRetry = stage.status === 'failed'
-  const showHookFailed = stage.status === 'hook_failed'
+  const isReview = stage?.status === 'awaiting_approval'
+  const showActions = isReview && stage !== null && !stage.autoApprove
+  const showAutoApprovedBadge = stage !== null && stage.autoApprove && planMarkdown.trim() !== ''
+  const showRetry = stage?.status === 'failed'
+  const showHookFailed = stage?.status === 'hook_failed'
   const commentCount = Object.keys(comments).length
 
   function flashButton(which: 'approve' | 'revise' | 'retry') {
@@ -40,9 +41,10 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }
 
   useEffect(() => {
-    // NO_STAGE sentinel: панель смонтирована для стабильности лейаута, но
+    // stage === null: панель смонтирована для стабильности лейаута, но
     // реальной стадии нет — не гоняем пустой fetch GET /api/stages//plan.
-    if (stage.id === '') return
+    const current = stage
+    if (current === null) return
 
     let cancelled = false
 
@@ -50,10 +52,10 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
     setActiveCommentLine(null)
     setPlanMarkdown('')
 
-    async function loadPlan() {
+    async function loadPlan(stageId: string, stageDone: boolean) {
       let response: Response
       try {
-        response = await fetch(`/api/stages/${encodeURIComponent(stage.id)}/plan`)
+        response = await fetch(`/api/stages/${encodeURIComponent(stageId)}/plan`)
       } catch {
         return
       }
@@ -63,16 +65,16 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
       const text = await response.text()
       if (cancelled) return
 
-      const finalText = stage.status === 'done' ? text.replace(/- \[ \]/g, '- [x]') : text
+      const finalText = stageDone ? text.replace(/- \[ \]/g, '- [x]') : text
       setPlanMarkdown(finalText)
     }
 
-    void loadPlan()
+    void loadPlan(current.id, current.status === 'done')
 
     return () => {
       cancelled = true
     }
-  }, [stage.id, stage.status])
+  }, [stage?.id, stage?.status])
 
   function handleLineClick(line: number) {
     if (activeCommentLine !== null && draft.trim() !== '') return
@@ -127,23 +129,25 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }
 
   async function approve() {
+    if (stage === null) return
     flashButton('approve')
     setBusy(true)
     try {
-      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/approve`, null)
+      await approveStage(stage.id)
     } finally {
       setBusy(false)
     }
   }
 
   async function sendRevision() {
+    if (stage === null) return
     flashButton('revise')
     const feedback = buildFeedback(comments)
     if (feedback === '') return
 
     setBusy(true)
     try {
-      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/revise`, { feedback })
+      await reviseStage(stage.id, feedback)
       setComments({})
       setActiveCommentLine(null)
     } finally {
@@ -152,30 +156,33 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   }
 
   async function retry() {
+    if (stage === null) return
     flashButton('retry')
     setBusy(true)
     try {
-      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/retry`, null)
+      await retryStage(stage.id)
     } finally {
       setBusy(false)
     }
   }
 
   async function retryHook() {
+    if (stage === null) return
     flashButton('retry')
     setBusy(true)
     try {
-      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/retry-hook`, null)
+      await retryHookStage(stage.id)
     } finally {
       setBusy(false)
     }
   }
 
   async function skipHook() {
+    if (stage === null) return
     flashButton('revise') // reuse the 'revise'-style flash slot; no dedicated 'skip' clicked-state needed
     setBusy(true)
     try {
-      await postJson(`/api/stages/${encodeURIComponent(stage.id)}/skip-hook`, null)
+      await skipHookStage(stage.id)
     } finally {
       setBusy(false)
     }
@@ -401,16 +408,4 @@ function buildFeedback(comments: Record<number, string>): string {
     .sort((a, b) => a - b)
     .map((line) => `Line ${line}: ${comments[line]}`)
     .join('\n\n')
-}
-
-async function postJson(url: string, body: unknown): Promise<void> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body === null ? null : JSON.stringify(body),
-  })
-
-  if (!response.ok) {
-    throw new Error(`POST ${url} -> ${response.status}`)
-  }
 }

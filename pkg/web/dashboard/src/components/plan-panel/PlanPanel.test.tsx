@@ -6,7 +6,8 @@ import { PlanPanel } from './PlanPanel'
 function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
     id: 's1', name: 'Stage', status: 'running', updatedAt: '',
-    interactive: false, autonomous: false, autoApprove: false, hasDialog: false, ...overrides,
+    interactive: false, autonomous: false, autoApprove: false, hasDialog: false,
+    showPlan: true, showDialog: false, ...overrides,
   }
 }
 
@@ -337,5 +338,16 @@ describe('PlanPanel', () => {
     expect(textarea.style.height).toBe('150px')
 
     scrollHeightSpy.mockRestore()
+  })
+
+  test('stage=null: renders the panel shell without fetching or crashing', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const { container } = render(<PlanPanel stage={null} />)
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(container.querySelector('#plan-empty')).not.toBeNull()
+    expect(container.querySelector('#actions-section')).toBeNull()
+    expect(container.querySelector('#retry-section')).toBeNull()
   })
 })

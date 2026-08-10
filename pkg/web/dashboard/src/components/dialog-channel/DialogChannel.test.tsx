@@ -39,6 +39,8 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
     autonomous: false,
     autoApprove: false,
     hasDialog: false,
+    showPlan: true,
+    showDialog: true,
     ...overrides,
   }
 }
@@ -774,5 +776,18 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.qa')).not.toHaveClass('qa-auto')
     expect(container.querySelector('.auto-answered-badge')).toBeNull()
     expect(container.querySelector('.qa')?.textContent).toContain('User chose Alpha')
+  })
+
+  test('stage=null: renders nothing, fetches no dialog, and does not crash', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const { container } = render(<DialogChannel stage={null} />)
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(container).toBeEmptyDOMElement()
   })
 })

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { answerDialog, cancelDialog } from '../../api/run-client'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
@@ -8,7 +9,7 @@ import { parseLineBlocks, type LineBlock } from '../plan-panel/markdown'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 
 type DialogChannelProps = {
-  stage: Stage
+  stage: Stage | null
   attention?: boolean
 }
 
@@ -62,9 +63,10 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   // Выбор пользователя (option/customText) сбрасываем только при смене
   // pending-вопроса, чтобы опрос не затирал ввод посреди ответа.
   useEffect(() => {
-    // NO_STAGE sentinel: панель смонтирована для стабильности лейаута, но
+    // stage === null: панель смонтирована для стабильности лейаута, но
     // реальной стадии нет — не гоняем пустые опросы GET /api/stages//dialog.
-    if (stage.id === '') return
+    const current = stage
+    if (current === null) return
 
     let cancelled = false
     let lastPendingId: string | undefined
@@ -76,7 +78,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     setActiveCommentLine(null)
 
     const refresh = (): void => {
-      void loadDialog(stage.id).then((data) => {
+      void loadDialog(current.id).then((data) => {
         if (cancelled) return
         setEntries(data)
         const nextPendingId = findPending(data)?.id
@@ -97,7 +99,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [stage.id])
+  }, [stage?.id])
 
   const pending = useMemo(() => findPending(entries), [entries])
   // stage.hasDialog — серверный сигнал «на диске уже есть хотя бы один
@@ -106,7 +108,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   // (или в проде вернул пустой список из-за гонки с записью файла) — иначе
   // возможна ложная секунда пустой панели/мигание для стадии, у которой
   // диалоговая история уже реально есть.
-  const hasContent = entries.length > 0 || stage.status === 'awaiting_user_input' || stage.hasDialog
+  const hasContent = stage !== null && (entries.length > 0 || stage.status === 'awaiting_user_input' || stage.hasDialog)
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
   const jumpToBottom = feed.jumpToBottom
   const commentCount = Object.keys(comments).length
@@ -144,6 +146,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   if (!hasContent) return <></>
 
   async function reload() {
+    if (stage === null) return
     const data = await loadDialog(stage.id)
     setEntries(data)
     setSelectedOption(null)
@@ -153,6 +156,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }
 
   async function sendAnswer() {
+    if (stage === null) return
     const question = pending
     if (question === null || question.id === undefined) return
 
@@ -173,12 +177,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     setClickedSend(true)
     window.setTimeout(() => setClickedSend(false), 1200)
 
-    await postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/answer`, {
-      id: question.id,
-      phase: question.phase ?? '',
-      answer,
-      from_options: fromOptions,
-    })
+    await answerDialog(stage.id, question.phase ?? '', question.id, answer, fromOptions)
 
     await reload()
   }
@@ -189,6 +188,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   // /dialog/answer, что и обычный ответ (from_options всегда false — это не
   // выбор из options).
   async function sendFeedback() {
+    if (stage === null) return
     const question = pending
     if (question === null || question.id === undefined) return
 
@@ -198,12 +198,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     setClickedSend(true)
     window.setTimeout(() => setClickedSend(false), 1200)
 
-    await postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/answer`, {
-      id: question.id,
-      phase: question.phase ?? '',
-      answer: feedback,
-      from_options: false,
-    })
+    await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false)
 
     await reload()
   }
@@ -249,8 +244,9 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }
 
   function cancel() {
+    if (stage === null) return
     if (!window.confirm('Cancel stage?')) return
-    void postJson(`/api/stages/${encodeURIComponent(stage.id)}/dialog/cancel`, null)
+    void cancelDialog(stage.id)
   }
 
   function selectOption(option: string) {
@@ -511,16 +507,4 @@ async function loadDialog(stageId: string): Promise<DialogEntry[]> {
   const data: unknown = await response.json()
 
   return Array.isArray(data) ? (data as DialogEntry[]) : []
-}
-
-async function postJson(url: string, body: unknown): Promise<void> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body === null ? null : JSON.stringify(body),
-  })
-
-  if (!response.ok) {
-    throw new Error(`POST ${url} -> ${response.status}`)
-  }
 }
