@@ -1,20 +1,8 @@
-// Полный набор статусов стадии afm (см. statusLabels в текущем app.js).
-// done — завершена (не completed).
-export const STAGE_STATUSES = [
-  'pending',
-  'planning',
-  'awaiting_approval',
-  'revising',
-  'ready',
-  'running',
-  'done',
-  'failed',
-  'retrying',
-  'awaiting_user_input',
-  'hook_failed',
-] as const
-
-export type StageStatus = (typeof STAGE_STATUSES)[number]
+// STAGE_STATUSES/StageStatus сгенерированы из pkg/state.AllStatuses() —
+// см. tools/genstagestatus и 'make generate'. Раньше это был отдельный
+// вручную поддерживаемый список, который приходилось синхронизировать с Go
+// FSM руками при каждом новом статусе.
+export { STAGE_STATUSES, type StageStatus } from './stage-status.generated'
 
 // Данные одной стадии afm-флоу. Источник — поле stages ответа GET /api/status
 // (объект по идентификатору стадии); имя берётся из stage_names, время — из updated_at.

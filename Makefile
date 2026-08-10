@@ -38,6 +38,18 @@ build: web
 test:
 	$(GOENV) go test ./... -v -race
 
+.PHONY: generate
+generate:
+	$(GOENV) go run ./tools/genstagestatus
+
+# generate-check — фейлит билд, если сгенерированный TS-файл устарел
+# относительно pkg/state.AllStatuses() (забыли make generate после правки
+# статусов). Используется lint-ci, не lint (тот тихо чинит --fix'ом, здесь
+# нужно явное падение).
+.PHONY: generate-check
+generate-check: generate
+	git diff --exit-code -- pkg/web/dashboard/src/types/stage-status.generated.ts
+
 SETSTATUSLINTER_BIN=$(LOCAL_BIN)/setstatuslinter
 
 $(SETSTATUSLINTER_BIN): $(LOCAL_BIN)
@@ -50,7 +62,7 @@ lint: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
 # lint-ci — то же самое, но без --fix: CI должен падать явно на проблемах,
 # а не молча их чинить и зеленеть.
 .PHONY: lint-ci
-lint-ci: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
+lint-ci: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN) generate-check
 	$(GOENV) $(GOLANGCI_BIN) run ./...
 	$(SETSTATUSLINTER_BIN) ./pkg/...
 
