@@ -117,6 +117,65 @@ func TestPollQuestions_AutoStageAutoAnswers(t *testing.T) {
 	}
 }
 
+// noticeEnvelopeData — поле "data" одной строки notices.jsonl для
+// auto_answered-уведомления (см. TestPollQuestions_AutoAnswerPersistsToNotices).
+type noticeEnvelopeData struct {
+	ID     string `json:"id"`
+	Phase  string `json:"phase"`
+	Answer string `json:"answer"`
+}
+
+// noticeEnvelope — одна строка notices.jsonl (см. stagefiles.AppendNotice).
+type noticeEnvelope struct {
+	Type    string             `json:"type"`
+	StageID string             `json:"stage_id"`
+	Data    noticeEnvelopeData `json:"data"`
+}
+
+// TestPollQuestions_AutoAnswerPersistsToNotices закрывает баг, найденный
+// вручную в браузере: EventAutoAnswered публикуется ТОЛЬКО живьём в UI-шину,
+// поэтому клиент, подключившийся ПОСЛЕ авто-ответа, никогда не видит эту
+// строку в ленте событий (durable events.jsonl эта фича сознательно не
+// трогает — FSM-переход отсутствует). Как и EventAgentCompleted/
+// EventContextWarning/EventScriptOutput (см. agents.go/retry.go/hooks.go),
+// авто-ответ должен ТАКЖЕ дублироваться в notices.jsonl через
+// stagefiles.AppendNotice — /api/events (reconstructNotices) реплеит его
+// оттуда для клиентов, подключившихся позже.
+func TestPollQuestions_AutoAnswerPersistsToNotices(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"Вариант A", "Вариант B (recommended)"})
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	o.pollQuestions(map[string]bool{})
+
+	noticesData, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		t.Fatalf("notices.jsonl not written: %v", err)
+	}
+	var notice noticeEnvelope
+	if err := json.Unmarshal(noticesData, &notice); err != nil {
+		t.Fatalf("invalid notices.jsonl line: %v (content: %s)", err, noticesData)
+	}
+	if notice.Type != string(bus.EventAutoAnswered) {
+		t.Errorf("notice type = %q, want %q", notice.Type, bus.EventAutoAnswered)
+	}
+	if notice.StageID != stage.ID || notice.Data.ID != "q1" || notice.Data.Answer != "Вариант B" {
+		t.Errorf("notice content mismatch: %+v", notice)
+	}
+}
+
 // TestPollQuestions_InteractiveStageStillAsksUser — регрессионная гарантия:
 // interactive-стадия НЕ получает авто-ответ, поведение (EvAskUser →
 // awaiting_user_input) не меняется этой фичей.

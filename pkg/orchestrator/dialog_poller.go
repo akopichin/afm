@@ -13,6 +13,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -107,6 +108,9 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 					Data: map[string]any{
 						keyID: q.ID, keyPhase: q.Phase, "answer": answer, "from_options": fromOptions,
 					},
+				})
+				stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
+					keyID: q.ID, keyPhase: q.Phase, "answer": answer, "from_options": fromOptions,
 				})
 				continue
 			}
