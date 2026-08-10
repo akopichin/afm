@@ -19,3 +19,4 @@ docs/plans/
 pkg/web/dashboard/node_modules/
 pkg/web/dashboard/.afm/
 sync-upstream.sh
+tech-task.md
