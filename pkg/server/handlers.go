@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -298,17 +297,18 @@ const typeAgentText = "agent_text"
 // означает текстовое сообщение агента (заполнен Text); пустой Type —
 // вопрос/ответ из ask_user.
 type dialogUIEntry struct {
-	Type        string   `json:"type,omitempty"`
-	Text        string   `json:"text,omitempty"`
-	ID          string   `json:"id,omitempty"`
-	Phase       string   `json:"phase"`
-	TS          string   `json:"ts,omitempty"`
-	Question    string   `json:"question,omitempty"`
-	Options     []string `json:"options,omitempty"`
-	AllowCustom bool     `json:"allow_custom"`
-	Answer      *string  `json:"answer,omitempty"`
-	AnswerTS    string   `json:"answer_ts,omitempty"`
-	FromOptions bool     `json:"from_options,omitempty"`
+	Type         string   `json:"type,omitempty"`
+	Text         string   `json:"text,omitempty"`
+	ID           string   `json:"id,omitempty"`
+	Phase        string   `json:"phase"`
+	TS           string   `json:"ts,omitempty"`
+	Question     string   `json:"question,omitempty"`
+	Options      []string `json:"options,omitempty"`
+	AllowCustom  bool     `json:"allow_custom"`
+	Answer       *string  `json:"answer,omitempty"`
+	AnswerTS     string   `json:"answer_ts,omitempty"`
+	FromOptions  bool     `json:"from_options,omitempty"`
+	AutoAnswered bool     `json:"auto_answered,omitempty"`
 }
 
 // buildDialogEntries собирает диалоговую ленту стейджа: вопросы/ответы из
@@ -381,6 +381,7 @@ func questionUIEntry(phase string, e mcp.Entry) dialogUIEntry {
 		ID: e.ID, Phase: phase, TS: e.TS, Question: e.Question,
 		Options: e.Options, AllowCustom: e.AllowCustom,
 		Answer: e.Answer, AnswerTS: e.AnswerTS, FromOptions: e.FromOptions,
+		AutoAnswered: e.AutoAnswered,
 	}
 }
 
@@ -464,46 +465,16 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Atomically write answer.json FIRST so the agent's bash loop can pick it
-	// up. This is the critical path: the dialog history is only for the UI and
-	// must not be persisted before the agent's answer exists. Writing history
-	// first would leave the UI showing an answered question while the agent
-	// hangs forever if the answer.json write then fails.
-	payload, err := json.Marshal(map[string]any{
-		"id": req.ID, "answer": req.Answer, "from_options": req.FromOptions,
-	})
-	if err != nil {
-		http.Error(w, "encode answer: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Use O_EXCL to atomically create and check for existence in one operation,
-	// preventing TOCTOU race condition where two concurrent requests both see
-	// the file doesn't exist, then both try to create it.
-	f, err := os.OpenFile(answerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
+	// Atomically write answer.json FIRST (mcp.WriteAnswer) so the agent's bash
+	// loop can pick it up, then persist to dialog.jsonl for UI history
+	// (best-effort inside WriteAnswer). This is the critical path: dialog
+	// history must never be persisted before the agent's answer exists on disk.
+	if err := mcp.WriteAnswer(stageDir, req.Phase, req.ID, req.Answer, req.FromOptions, false); err != nil {
 		if os.IsExist(err) {
 			http.Error(w, "question already answered", http.StatusConflict)
 			return
 		}
-		http.Error(w, "create answer: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := f.Write(payload); err != nil {
-		f.Close()
-		_ = os.Remove(answerPath)
 		http.Error(w, "write answer: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		_ = os.Remove(answerPath)
-		http.Error(w, "sync answer: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(answerPath)
-		http.Error(w, "close answer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -515,18 +486,6 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		_ = os.Remove(answerPath)
 		http.Error(w, "question disappeared during write", http.StatusBadRequest)
 		return
-	}
-	// Persist the answer in dialog history for the UI (after answer.json is
-	// safely on disk). This is best-effort: answer.json is already written and
-	// dialogAnswerFn below is the critical side effect (status transition /
-	// agent restart). Returning an error here would skip the notify and leave
-	// the stage stuck in awaiting_user_input even though the agent received its
-	// answer, with no way for the user to recover (a retry hits the 409 below).
-	dialogPath := filepath.Join(stageDir, req.Phase+".dialog.jsonl")
-	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{
-		ID: req.ID, Answer: req.Answer, FromOptions: req.FromOptions,
-	}); err != nil {
-		log.Printf("WARN: persist dialog answer for %s/%s: %v (answer.json already written)", stageID, req.ID, err) //nolint:gosec // G706: stageID and req.ID are validated safe filename components above
 	}
 
 	if s.dialogAnswerFn != nil {

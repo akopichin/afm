@@ -778,6 +778,37 @@ func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 	}
 }
 
+func TestHandleDialogGet_SurfacesAutoAnsweredFlag(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+	stageDir := filepath.Join(runDir, testStageID)
+
+	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
+	if err := mcp.AppendQuestion(dialogPath, mcp.Question{ID: "q1", Question: "which?", Options: []string{"A", "B"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: "q1", Answer: "B", FromOptions: true, AutoAnswered: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/dialog", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want auto_answered:true surfaced in GET /dialog, got %v", got)
+	}
+	if autoAnswered, _ := got[0]["auto_answered"].(bool); !autoAnswered {
+		t.Fatalf("want auto_answered:true surfaced in GET /dialog, got %v", got)
+	}
+}
+
 func TestHandleDialogAnswer_QuestionNotFound(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	body := `{"id":"nonexistent","phase":"planning","answer":"yes"}`
