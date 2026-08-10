@@ -58,7 +58,7 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 	}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir: runDir,
-		Stages: []flow.Stage{{ID: stageID, Name: stageID}},
+		Stages: []flow.Stage{{ID: stageID, Name: stageID, Interactive: true}},
 		Store:  store,
 		Config: config.Default(),
 		Runner: blockingRunner{},
