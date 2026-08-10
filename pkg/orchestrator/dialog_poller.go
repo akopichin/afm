@@ -91,6 +91,26 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 					AllowCustom: q.AllowCustom,
 				})
 			}
+
+			// Non-interactive stage (default, or agents:[auto]): afm answers the
+			// question itself instead of surfacing it to a human — the stage's
+			// FSM status is left untouched (no EvAskUser transition).
+			if stage := o.graph.Stage(stageID); stage != nil && !stage.Interactive {
+				answer, fromOptions := mcp.PickAutoAnswer(q)
+				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
+					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+					continue
+				}
+				o.ui.Publish(bus.Event{
+					Type:    bus.EventAutoAnswered,
+					StageID: stageID,
+					Data: map[string]any{
+						keyID: q.ID, keyPhase: q.Phase, "answer": answer, "from_options": fromOptions,
+					},
+				})
+				continue
+			}
+
 			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
 			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал
 			// "review" вместо "planning") — при EvUserAnswered используем сохранённую
