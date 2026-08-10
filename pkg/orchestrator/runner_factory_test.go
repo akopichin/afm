@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -73,5 +75,48 @@ func waitForAgentAction(t *testing.T, ch <-chan bus.Event) bus.Event {
 			t.Fatal("timed out waiting for agent_action event")
 			return bus.Event{}
 		}
+	}
+}
+
+// TestRunnerForSetsStageDirForNonInteractiveStage закрывает главный пробел
+// этой фичи: без AFM_STAGE_DIR агенту non-interactive стадии физически
+// некуда писать question.json (см. docs/superpowers/specs/2026-08-07-non-interactive-auto-answer-design.md).
+func TestRunnerForSetsStageDirForNonInteractiveStage(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Backend"} // Interactive: false (default)
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	marker := filepath.Join(runDir, "stagedir-seen.txt")
+	script := fmt.Sprintf(`printf '%%s' "$AFM_STAGE_DIR" > %q
+printf '{"type":"result","subtype":"success"}\n'`, marker)
+	cfg := config.Default()
+	cfg.Client.Command = "sh"
+	cfg.Client.ExtraArgs = []string{"-c", script}
+	cfg.Executor.IdleTimeout = 5 * time.Second
+
+	o := New(Options{
+		RunDir: runDir,
+		Stages: []flow.Stage{stage},
+		Store:  store,
+		Config: cfg,
+	})
+
+	runner := o.runnerFor(stage, phaseImplementation)
+	logFile := filepath.Join(runDir, "impl.log")
+	if err := runner.RunAgent(context.Background(), phaseImplementation, stage.Name, "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("AFM_STAGE_DIR not set for non-interactive stage: %v", err)
+	}
+	if want := filepath.Join(runDir, stage.ID); string(got) != want {
+		t.Errorf("AFM_STAGE_DIR = %q, want %q", got, want)
 	}
 }

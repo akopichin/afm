@@ -50,11 +50,10 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			Debug:          o.opts.Debug,
 			RunDir:         o.opts.RunDir,
 			StageID:        s.ID,
-		}
-		// Autonomous-фаза диалоговая: агенту нужен AFM_STAGE_DIR, чтобы писать
-		// question.json и писать execution_summary.md в каталог стадии.
-		if phase == phaseAutonomous {
-			cfg.StageDir = filepath.Join(o.opts.RunDir, s.ID)
+			// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or
+			// skill that uses the file-based dialog protocol always has somewhere
+			// to write question.json — the poller auto-answers it (dialog_poller.go).
+			StageDir: filepath.Join(o.opts.RunDir, s.ID),
 		}
 		if ch, ok := o.interruptChans.Load(s.ID); ok {
 			cfg.InterruptCh = ch.(chan struct{})
