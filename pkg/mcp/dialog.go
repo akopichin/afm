@@ -29,23 +29,25 @@ type Question struct {
 
 // Answer is the record written when the user replies.
 type Answer struct {
-	ID          string `json:"id"`
-	TS          string `json:"ts"`
-	Answer      string `json:"answer"`
-	FromOptions bool   `json:"from_options"`
+	ID           string `json:"id"`
+	TS           string `json:"ts"`
+	Answer       string `json:"answer"`
+	FromOptions  bool   `json:"from_options"`
+	AutoAnswered bool   `json:"auto_answered,omitempty"`
 }
 
 // Entry is a grouped Q/A pair for reading. Answer is nil when the question
 // is still open.
 type Entry struct {
-	ID          string
-	TS          string
-	Question    string
-	Options     []string
-	AllowCustom bool
-	Answer      *string
-	AnswerTS    string
-	FromOptions bool
+	ID           string
+	TS           string
+	Question     string
+	Options      []string
+	AllowCustom  bool
+	Answer       *string
+	AnswerTS     string
+	FromOptions  bool
+	AutoAnswered bool
 }
 
 // AppendQuestion writes a question record as a single JSON line.
@@ -109,6 +111,7 @@ func ReadDialog(path string) ([]Entry, error) {
 			e.Answer = &ans
 			e.AnswerTS = a.TS
 			e.FromOptions = a.FromOptions
+			e.AutoAnswered = a.AutoAnswered
 		} else {
 			var q Question
 			if err := json.Unmarshal([]byte(line), &q); err != nil {
@@ -321,4 +324,54 @@ func stripRecommendedMarker(opt string) (string, bool) {
 		return strings.TrimSpace(cleaned), true
 	}
 	return "", false
+}
+
+// WriteAnswer atomically creates <stageDir>/<phase>.<id>.answer.json (O_EXCL
+// — a question may only be answered once; returns an error satisfying
+// os.IsExist if it already was) and best-effort appends the answer to
+// <phase>.dialog.jsonl for UI history. autoAnswered marks answers afm
+// synthesized itself (non-interactive auto-answer), as opposed to a real
+// user reply — see Answer.AutoAnswered / Entry.AutoAnswered.
+//
+// A dialog.jsonl append failure is logged and swallowed: answer.json is
+// already safely on disk (the critical path for the agent's polling loop),
+// so failing the caller here would incorrectly signal the answer was lost.
+func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered bool) error {
+	answerPath := filepath.Join(stageDir, phase+"."+id+".answer.json")
+	payload, err := json.Marshal(map[string]any{
+		"id": id, "answer": answer, "from_options": fromOptions,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal answer: %w", err)
+	}
+
+	// O_EXCL atomically creates-and-checks-existence in one step, preventing a
+	// TOCTOU race where two concurrent writers both see the file missing and
+	// both try to create it.
+	f, err := os.OpenFile(answerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(payload); err != nil {
+		f.Close()
+		_ = os.Remove(answerPath)
+		return fmt.Errorf("write answer: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(answerPath)
+		return fmt.Errorf("sync answer: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(answerPath)
+		return fmt.Errorf("close answer: %w", err)
+	}
+
+	dialogPath := filepath.Join(stageDir, phase+".dialog.jsonl")
+	if err := AppendAnswer(dialogPath, Answer{
+		ID: id, Answer: answer, FromOptions: fromOptions, AutoAnswered: autoAnswered,
+	}); err != nil {
+		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, phase, id, err) //nolint:gosec // G706: phase/id are validated safe filename components by callers
+	}
+	return nil
 }

@@ -484,3 +484,59 @@ func TestPickAutoAnswer_MarkerVariants(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteAnswer_CreatesAnswerFileAndDialogEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := mcp.WriteAnswer(dir, "implementation", "q1", "Вариант B", true, true); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "implementation.q1.answer.json"))
+	if err != nil {
+		t.Fatalf("answer.json not written: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	fromOpts, _ := got["from_options"].(bool)
+	if got["id"] != "q1" || got["answer"] != "Вариант B" || !fromOpts {
+		t.Errorf("answer.json content mismatch: %v", got)
+	}
+
+	entries, err := mcp.ReadDialog(filepath.Join(dir, "implementation.dialog.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Answer == nil || *entries[0].Answer != "Вариант B" || !entries[0].AutoAnswered {
+		t.Fatalf("dialog entry mismatch: %+v", entries)
+	}
+}
+
+func TestWriteAnswer_DuplicateReturnsExistsError(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := mcp.WriteAnswer(dir, "planning", "q1", "yes", false, false); err != nil {
+		t.Fatal(err)
+	}
+	err := mcp.WriteAnswer(dir, "planning", "q1", "no", false, false)
+	if err == nil || !os.IsExist(err) {
+		t.Fatalf("want an os.IsExist error on duplicate write, got %v", err)
+	}
+}
+
+func TestWriteAnswer_DialogAppendFailureStillWritesAnswerFile(t *testing.T) {
+	dir := t.TempDir()
+	// Make the dialog.jsonl path a directory so AppendAnswer fails internally.
+	if err := os.MkdirAll(filepath.Join(dir, "planning.dialog.jsonl"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mcp.WriteAnswer(dir, "planning", "q1", "yes", false, false); err != nil {
+		t.Fatalf("WriteAnswer must not fail when only the best-effort dialog append fails: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "planning.q1.answer.json")); err != nil {
+		t.Errorf("answer.json not written despite dialog append failure: %v", err)
+	}
+}
