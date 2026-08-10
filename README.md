@@ -108,7 +108,7 @@ export ANTHROPIC_API_KEY=sk-ant-api-...
 If a stage uses a non-claude command (`command: glm51`, `command: deepseek`, etc.), Docker offers two options:
 
 - **Mounting:** afm locates the binary via `which` and mounts it into the container (`:ro`). Works if the agent has no external dependencies.
-- **autoShim (recommended):** with `docker.autoShim: true`, afm generates a claude-compatible wrapper right inside the container from the `docker.agents.<cmd>` recipe — without mounting the binary and without passing tokens through files. The secret is read on the host and passed in as a transient env var. Supported types are `claude` (default), `openai` (DeepSeek/OpenAI-compatible), and `cursor` (Cursor Cloud Agents API).
+- **autoShim (recommended):** with `docker.autoShim: true`, afm generates a claude-compatible wrapper right inside the container from the `docker.agents.<cmd>` recipe — without mounting the binary and without passing tokens through files. The secret is read on the host and passed in as a transient env var. Supported types are `claude` (default), `openai` (DeepSeek/OpenAI-compatible), `cursor` (Cursor Cloud Agents API), and `codex` (OpenAI Codex CLI — auth via a mounted `~/.codex` OAuth state instead of a secret in config).
 
 ```yaml
 docker:

@@ -111,6 +111,12 @@ executor:
 #   #     auth:                                 # auth.to — любой env:VAR; CURSOR_API_KEY по конвенции
 #   #       from: "file:~/.ai-free/claude-glm/token-cursor"
 #   #       to: "env:CURSOR_API_KEY"
+#   #   codex:                                 # type:codex → OpenAI Codex CLI, БЕЗ секрета в конфиге:
+#   #     type: codex                           # авторизация через смонтированное ~/.codex (ChatGPT-plan
+#   #     model: gpt-5-codex                    # OAuth), afm монтирует его :ro только если флоу реально
+#   #                                            # использует codex. model опционален ("" / "default" →
+#   #                                            # решает сам codex/~/.codex/config.toml).
+#   #     # auth: не указывается для codex (единственный тип, где auth необязателен)
 #   #   # Для провайдеров с настоящим OpenAI /v1/chat/completions (deepseek, ollama, …) — type: openai:
 #   #   # openai-agent:
 #   #   #   type: openai

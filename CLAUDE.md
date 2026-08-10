@@ -365,6 +365,41 @@ docker:
 Особенность: первый ответ ~30–90с (старт cloud-VM при создании агента); далее run быстрый.
 Токен — user API key из Cursor Dashboard → API Keys (префикс `crsr_`). Требования в образе: `jq`, `curl`.
 
+#### Тип `codex`: OpenAI Codex CLI (ChatGPT-plan OAuth, без секрета в конфиге)
+
+В отличие от `claude`/`openai`/`cursor`, у `codex` **нет** `AFM_SECRET_<CMD>`-модели авторизации:
+`auth` в рецепте необязателен (`AgentRecipe.Validate()` — единственное исключение из трёх типов,
+где отсутствие `Auth` не ошибка). Авторизация идёт через ChatGPT-plan OAuth-состояние `~/.codex`
+на хосте: `docker.ReExec` монтирует его `:ro` во временный путь контейнера **только если** флоу
+реально использует codex (`docker.UsesCodex` — команда `codex-as-claude` напрямую или recipe
+`type: codex` где-то в `docker.agents`), а `docker-entrypoint.sh`, ещё под root до `gosu`,
+копирует смонтированное в `$HOME/.codex` (уже writable) — codex может обновлять `auth.json`
+(refresh token) внутри контейнера, не трогая хостовый файл; контейнер эфемерный, апдейт токена
+не переживает пересоздание.
+
+```yaml
+docker:
+  autoShim: true
+  agents:
+    codex:
+      type: codex
+      model: gpt-5-codex          # опционально; "" / "default" → CODEX_MODEL не выставляется,
+                                   # решает сам codex / ~/.codex/config.toml
+      # auth: не указывается — авторизация через смонтированный ~/.codex
+```
+
+Сгенерированный враппер резолвит абсолютный путь к реальному бинарнику `codex` **до** того как
+директория враппера (где лежит одноимённый файл `codex`) попадёт в `PATH` — иначе адаптер
+`codex-as-claude` (сам вызывающий голый `codex`) поймал бы через PATH самого себя и ушёл
+в рекурсию; резолвленный путь передаётся адаптеру через `CODEX_BIN`. Адаптер (`scripts/codex-as-claude.sh`)
+запускает `codex exec --json --dangerously-bypass-approvals-and-sandbox` (сэндбокс контейнера и
+так изолирован), накапливает `agent_message`-события в один `assistant`-конверт claude
+stream-json (`CODEX_VERBOSE=1` — включить в накопление ещё и вывод команд). `system_prompt`
+рецепта для codex не используется. Требование в образе: `jq`.
+
+`command: codex-as-claude` также можно использовать напрямую в стадии flow (без autoShim-рецепта) —
+`docker.UsesCodex` детектит и этот путь для гейтинга монтирования `~/.codex`.
+
 ### Известные грабли (Docker-mode)
 
 - **gosu сбрасывает HOME для uid без записи в `/etc/passwd`** → ставит `HOME=/`. Поэтому в `docker-entrypoint.sh` HOME задаётся **после** gosu (`gosu uid:gid env HOME=/home/afm afm …`), а не до. Иначе агенты ищут `~/`-файлы в `/` (баг: токен искался в `//.ai-free/…`).
