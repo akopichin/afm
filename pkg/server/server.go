@@ -74,17 +74,12 @@ type Server struct {
 	stageAutoApprove map[string]bool // id стадии → auto_approve (статический конфиг флоу)
 	store            *state.Store
 	uiBus            *bus.UIBus
-	approveFn        func(ctx context.Context, stageID string) error
-	reviseFn         func(ctx context.Context, stageID, feedback string) error
-	retryFn          func(ctx context.Context, stageID string) error
-	retryHookFn      func(stageID string) error
-	skipHookFn       func(stageID string) error
-	dialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
-	dialogCancelFn   func(stageID string) error
-	theme            string       // "goga" или "" (default coffee)
-	indexBytes       []byte       // предподготовленный index.html (с заменами скина/favicon)
-	fileServer       http.Handler // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer http.Handler // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	actions          StageActions     // never nil in practice — see StageActions doc
+	secondary        SecondaryActions // may be nil — see SecondaryActions doc
+	theme            string           // "goga" или "" (default coffee)
+	indexBytes       []byte           // предподготовленный index.html (с заменами скина/favicon)
+	fileServer       http.Handler     // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer http.Handler     // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
 	httpSrv          *http.Server
 	// Keepalive-таймауты вебсокета. Immutable: задаются один раз в New и не
 	// мутируются после (хранение в полях, а не в глобальных переменных, убирает
@@ -103,13 +98,8 @@ type Config struct {
 	StageAutoApprove map[string]bool
 	Store            *state.Store
 	UIBus            *bus.UIBus
-	ApproveFn        func(ctx context.Context, stageID string) error
-	ReviseFn         func(ctx context.Context, stageID, feedback string) error
-	RetryFn          func(ctx context.Context, stageID string) error
-	RetryHookFn      func(stageID string) error
-	SkipHookFn       func(stageID string) error
-	DialogAnswerFn   func(stageID, phase, qID, answer string, fromOptions bool) error
-	DialogCancelFn   func(stageID string) error
+	Actions          StageActions
+	Secondary        SecondaryActions
 	Theme            string
 	SkinDir          string
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
@@ -140,13 +130,8 @@ func New(cfg Config) *Server {
 		stageAutoApprove: cfg.StageAutoApprove,
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,
-		approveFn:        cfg.ApproveFn,
-		reviseFn:         cfg.ReviseFn,
-		retryFn:          cfg.RetryFn,
-		retryHookFn:      cfg.RetryHookFn,
-		skipHookFn:       cfg.SkipHookFn,
-		dialogAnswerFn:   cfg.DialogAnswerFn,
-		dialogCancelFn:   cfg.DialogCancelFn,
+		actions:          cfg.Actions,
+		secondary:        cfg.Secondary,
 		theme:            cfg.Theme,
 		wsPongWait:       pongWait,
 		wsPingPeriod:     pingPeriod,

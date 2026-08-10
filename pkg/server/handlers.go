@@ -176,7 +176,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval", st.Status), http.StatusBadRequest)
 		return
 	}
-	if err := s.approveFn(r.Context(), stageID); err != nil {
+	if err := s.actions.Approve(r.Context(), stageID); err != nil {
 		http.Error(w, "approve failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -214,7 +214,7 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "feedback is required", http.StatusBadRequest)
 		return
 	}
-	if err := s.reviseFn(r.Context(), stageID, req.Feedback); err != nil {
+	if err := s.actions.Revise(r.Context(), stageID, req.Feedback); err != nil {
 		http.Error(w, "revise failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -240,7 +240,7 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.retryFn(r.Context(), stageID); err != nil {
+	if err := s.actions.Retry(r.Context(), stageID); err != nil {
 		http.Error(w, "retry failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -260,11 +260,11 @@ func (s *Server) handleRetryHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid stage id", http.StatusBadRequest)
 		return
 	}
-	if s.retryHookFn == nil {
+	if s.secondary == nil {
 		http.Error(w, "retry-hook not supported", http.StatusNotImplemented)
 		return
 	}
-	if err := s.retryHookFn(stageID); err != nil {
+	if err := s.secondary.RetryHook(stageID); err != nil {
 		http.Error(w, "retry-hook failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -280,11 +280,11 @@ func (s *Server) handleSkipHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid stage id", http.StatusBadRequest)
 		return
 	}
-	if s.skipHookFn == nil {
+	if s.secondary == nil {
 		http.Error(w, "skip-hook not supported", http.StatusNotImplemented)
 		return
 	}
-	if err := s.skipHookFn(stageID); err != nil {
+	if err := s.secondary.SkipHook(stageID); err != nil {
 		http.Error(w, "skip-hook failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -502,8 +502,8 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.dialogAnswerFn != nil {
-		if err := s.dialogAnswerFn(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
+	if s.secondary != nil {
+		if err := s.secondary.NotifyAnswer(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
 			http.Error(w, "notify: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -524,8 +524,8 @@ func (s *Server) handleDialogCancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stage is not awaiting user input", http.StatusBadRequest)
 		return
 	}
-	if s.dialogCancelFn != nil {
-		if err := s.dialogCancelFn(stageID); err != nil {
+	if s.secondary != nil {
+		if err := s.secondary.CancelDialog(stageID); err != nil {
 			http.Error(w, "cancel: "+err.Error(), http.StatusInternalServerError)
 			return
 		}

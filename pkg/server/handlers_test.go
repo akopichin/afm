@@ -57,13 +57,79 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 		RunDir:       runDir,
 		Store:        store,
 		UIBus:        uiBus,
-		ApproveFn:    func(ctx context.Context, id string) error { return nil },
-		ReviseFn:     func(ctx context.Context, id, fb string) error { return nil },
-		RetryFn:      func(ctx context.Context, id string) error { return nil },
+		Actions:      fakeStageActions{},
 		WSPongWait:   pongWait,
 		WSPingPeriod: pingPeriod,
 	})
 	return srv, runDir
+}
+
+// fakeStageActions is the StageActions test double — every method is
+// backed by an overridable func field; the zero value succeeds and does
+// nothing, matching what most handler tests need.
+type fakeStageActions struct {
+	approve func(ctx context.Context, stageID string) error
+	revise  func(ctx context.Context, stageID, feedback string) error
+	retry   func(ctx context.Context, stageID string) error
+}
+
+func (f fakeStageActions) Approve(ctx context.Context, stageID string) error {
+	if f.approve == nil {
+		return nil
+	}
+	return f.approve(ctx, stageID)
+}
+
+func (f fakeStageActions) Revise(ctx context.Context, stageID, feedback string) error {
+	if f.revise == nil {
+		return nil
+	}
+	return f.revise(ctx, stageID, feedback)
+}
+
+func (f fakeStageActions) Retry(ctx context.Context, stageID string) error {
+	if f.retry == nil {
+		return nil
+	}
+	return f.retry(ctx, stageID)
+}
+
+// fakeSecondaryActions is the SecondaryActions test double. Tests that only
+// care about one method (e.g. TestHandleRetryHook_Success) leave the rest nil
+// — those methods simply aren't called by the code path under test.
+type fakeSecondaryActions struct {
+	retryHook    func(stageID string) error
+	skipHook     func(stageID string) error
+	notifyAnswer func(stageID, phase, qID, answer string, fromOptions bool) error
+	cancelDialog func(stageID string) error
+}
+
+func (f fakeSecondaryActions) RetryHook(stageID string) error {
+	if f.retryHook == nil {
+		return nil
+	}
+	return f.retryHook(stageID)
+}
+
+func (f fakeSecondaryActions) SkipHook(stageID string) error {
+	if f.skipHook == nil {
+		return nil
+	}
+	return f.skipHook(stageID)
+}
+
+func (f fakeSecondaryActions) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
+	if f.notifyAnswer == nil {
+		return nil
+	}
+	return f.notifyAnswer(stageID, phase, qID, answer, fromOptions)
+}
+
+func (f fakeSecondaryActions) CancelDialog(stageID string) error {
+	if f.cancelDialog == nil {
+		return nil
+	}
+	return f.cancelDialog(stageID)
 }
 
 func TestHandleStatus(t *testing.T) {
@@ -315,7 +381,7 @@ func TestHandleLog_ConcatenatesHookLogs(t *testing.T) {
 func TestHandleApprove(t *testing.T) {
 	approved := ""
 	srv, _ := setupTestServer(t)
-	srv.approveFn = func(ctx context.Context, id string) error { approved = id; return nil }
+	srv.actions = fakeStageActions{approve: func(ctx context.Context, id string) error { approved = id; return nil }}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/approve", nil)
 	w := httptest.NewRecorder()
@@ -332,7 +398,7 @@ func TestHandleApprove(t *testing.T) {
 func TestHandleRevise(t *testing.T) {
 	var revisedID, revisedFB string
 	srv, _ := setupTestServer(t)
-	srv.reviseFn = func(ctx context.Context, id, fb string) error { revisedID = id; revisedFB = fb; return nil }
+	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) error { revisedID = id; revisedFB = fb; return nil }}
 
 	body := `{"feedback":"Добавь Redis"}`
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", strings.NewReader(body))
@@ -353,7 +419,7 @@ func TestHandleRetry(t *testing.T) {
 	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test_fail"}); err != nil {
 		t.Fatal(err)
 	}
-	srv.retryFn = func(ctx context.Context, id string) error { retriedID = id; return nil }
+	srv.actions = fakeStageActions{retry: func(ctx context.Context, id string) error { retriedID = id; return nil }}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/retry", nil)
 	w := httptest.NewRecorder()
@@ -369,7 +435,7 @@ func TestHandleRetry(t *testing.T) {
 
 func TestHandleRetryNotFailed(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.retryFn = func(ctx context.Context, id string) error { return nil }
+	srv.actions = fakeStageActions{retry: func(ctx context.Context, id string) error { return nil }}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/retry", nil)
 	w := httptest.NewRecorder()
@@ -383,10 +449,10 @@ func TestHandleRetryNotFailed(t *testing.T) {
 func TestHandleRetryHook_Success(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	called := ""
-	srv.retryHookFn = func(stageID string) error {
+	srv.secondary = fakeSecondaryActions{retryHook: func(stageID string) error {
 		called = stageID
 		return nil
-	}
+	}}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
 	w := httptest.NewRecorder()
@@ -396,17 +462,17 @@ func TestHandleRetryHook_Success(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 	if called != testStageID {
-		t.Errorf("retryHookFn called with %q, want %q", called, testStageID)
+		t.Errorf("RetryHook called with %q, want %q", called, testStageID)
 	}
 }
 
 func TestHandleSkipHook_Success(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	called := ""
-	srv.skipHookFn = func(stageID string) error {
+	srv.secondary = fakeSecondaryActions{skipHook: func(stageID string) error {
 		called = stageID
 		return nil
-	}
+	}}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/skip-hook", nil)
 	w := httptest.NewRecorder()
@@ -416,15 +482,15 @@ func TestHandleSkipHook_Success(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 	if called != testStageID {
-		t.Errorf("skipHookFn called with %q, want %q", called, testStageID)
+		t.Errorf("SkipHook called with %q, want %q", called, testStageID)
 	}
 }
 
 func TestHandleRetryHook_FnReturnsError(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.retryHookFn = func(stageID string) error {
+	srv.secondary = fakeSecondaryActions{retryHook: func(stageID string) error {
 		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
-	}
+	}}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
 	w := httptest.NewRecorder()
@@ -437,9 +503,9 @@ func TestHandleRetryHook_FnReturnsError(t *testing.T) {
 
 func TestHandleSkipHook_FnReturnsError(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.skipHookFn = func(stageID string) error {
+	srv.secondary = fakeSecondaryActions{skipHook: func(stageID string) error {
 		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
-	}
+	}}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/skip-hook", nil)
 	w := httptest.NewRecorder()
@@ -452,7 +518,7 @@ func TestHandleSkipHook_FnReturnsError(t *testing.T) {
 
 func TestHandleRetryHook_NotConfigured(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	// retryHookFn intentionally left nil.
+	// secondary intentionally left nil.
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
 	w := httptest.NewRecorder()
@@ -593,10 +659,10 @@ func TestDialogAnswer(t *testing.T) {
 		RunDir: runDir,
 		Store:  store,
 		UIBus:  bus.NewUIBus(),
-		DialogAnswerFn: func(s, p, q, a string, fo bool) error {
+		Secondary: fakeSecondaryActions{notifyAnswer: func(s, p, q, a string, fo bool) error {
 			called.stage, called.phase, called.id, called.answer, called.fromOptions = s, p, q, a, fo
 			return nil
-		},
+		}},
 	})
 
 	body := `{"id":"` + testQuestionID + `","phase":"implementation","answer":"hello","from_options":false}`
@@ -653,7 +719,7 @@ func TestHandleDialogAnswer_InvalidID(t *testing.T) {
 }
 
 // TestDialogCancelAwaiting verifies the success path: a stage in
-// awaiting_user_input is cancelled and dialogCancelFn is invoked.
+// awaiting_user_input is cancelled and CancelDialog is invoked.
 func TestDialogCancelAwaiting(t *testing.T) {
 	runDir := t.TempDir()
 	store, err := state.Open(runDir, []string{testStageID})
@@ -667,10 +733,10 @@ func TestDialogCancelAwaiting(t *testing.T) {
 
 	cancelled := ""
 	srv := New(Config{
-		RunDir:         runDir,
-		Store:          store,
-		UIBus:          bus.NewUIBus(),
-		DialogCancelFn: func(id string) error { cancelled = id; return nil },
+		RunDir:    runDir,
+		Store:     store,
+		UIBus:     bus.NewUIBus(),
+		Secondary: fakeSecondaryActions{cancelDialog: func(id string) error { cancelled = id; return nil }},
 	})
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/cancel", nil)
@@ -681,7 +747,7 @@ func TestDialogCancelAwaiting(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	if cancelled != testStageID {
-		t.Errorf("dialogCancelFn not called with %q, got %q", testStageID, cancelled)
+		t.Errorf("CancelDialog not called with %q, got %q", testStageID, cancelled)
 	}
 }
 
@@ -757,7 +823,7 @@ func TestHandleDialogAnswer_WritesAnswerFile(t *testing.T) {
 
 // TestHandleDialogAnswer_AppendAnswerFailureStillNotifies verifies that when
 // the dialog.jsonl append fails (here: the path is a directory), the handler
-// still writes answer.json and calls dialogAnswerFn (the critical notify),
+// still writes answer.json and calls NotifyAnswer (the critical notify),
 // returning 200. Failing the request here would leave the stage stuck in
 // awaiting_user_input with the answer already delivered.
 func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
@@ -788,10 +854,10 @@ func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 		RunDir: runDir,
 		Store:  store,
 		UIBus:  bus.NewUIBus(),
-		DialogAnswerFn: func(s, p, q, a string, fo bool) error {
+		Secondary: fakeSecondaryActions{notifyAnswer: func(s, p, q, a string, fo bool) error {
 			notifyCalled = true
 			return nil
-		},
+		}},
 	})
 
 	body := `{"id":"q1","phase":"planning","answer":"yes","from_options":false}`
@@ -805,7 +871,7 @@ func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 		t.Fatalf("AppendAnswer failure must not fail the request: want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	if !notifyCalled {
-		t.Error("dialogAnswerFn (notify) was not called after AppendAnswer failure")
+		t.Error("NotifyAnswer was not called after AppendAnswer failure")
 	}
 	answerPath := filepath.Join(stageDir, "planning."+testQuestionID+".answer.json")
 	if _, err := os.Stat(answerPath); err != nil {
@@ -902,10 +968,10 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 		RunDir: runDir,
 		Store:  store,
 		UIBus:  bus.NewUIBus(),
-		ReviseFn: func(_ context.Context, _, _ string) error {
+		Actions: fakeStageActions{revise: func(_ context.Context, _, _ string) error {
 			reviseCalled = true
 			return nil
-		},
+		}},
 	})
 
 	body, _ := json.Marshal(map[string]string{"feedback": "note"})
@@ -917,7 +983,7 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 		t.Errorf("status = %d, want 200", w.Code)
 	}
 	if !reviseCalled {
-		t.Error("reviseFn should be called for a running stage")
+		t.Error("Revise should be called for a running stage")
 	}
 }
 

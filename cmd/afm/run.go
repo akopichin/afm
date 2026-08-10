@@ -27,6 +27,14 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// Compile-time checks that *orchestrator.Orchestrator satisfies both
+// server interfaces directly — a future signature drift here fails the
+// build instead of surfacing as a runtime nil-interface panic in server.New.
+var (
+	_ server.StageActions     = (*orchestrator.Orchestrator)(nil)
+	_ server.SecondaryActions = (*orchestrator.Orchestrator)(nil)
+)
+
 func newRunCmd() *cobra.Command {
 	var maxParallel int
 	var idleTimeout time.Duration
@@ -263,18 +271,8 @@ func newRunCmd() *cobra.Command {
 					Theme:            cfg.EffectiveTheme(),
 					SkinDir:          cfg.SkinDir,
 					UIBus:            orch.UIBus(),
-					ApproveFn:        orch.Approve,
-					ReviseFn:         orch.Revise,
-					RetryFn:          orch.Retry,
-					RetryHookFn:      orch.RetryHook,
-					SkipHookFn:       orch.SkipHook,
-					DialogAnswerFn: func(stageID, phase, qID, answer string, fromOptions bool) error {
-						return orch.NotifyAnswer(stageID, phase, qID, answer, fromOptions)
-					},
-					DialogCancelFn: func(stageID string) error {
-						orch.FailStage(stageID, "cancelled by user")
-						return nil
-					},
+					Actions:          orch,
+					Secondary:        orch,
 				})
 				addr, err := srv.Start()
 				if err != nil {
