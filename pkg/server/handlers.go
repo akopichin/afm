@@ -21,14 +21,18 @@ const (
 	keyStatus  = "status"
 )
 
-// statusResponse расширяет снапшот двумя per-stage картами для UI:
-// stage_interactive (статический конфиг флоу) и stage_autonomous (рантайм,
-// по наличию autonomous.flag в директории стадии).
+// statusResponse расширяет снапшот тремя per-stage картами для UI:
+// stage_interactive (статический конфиг флоу), stage_autonomous (рантайм,
+// по наличию autonomous.flag в директории стадии) и stage_has_dialog (рантайм,
+// по наличию хотя бы одного <phase>.dialog.jsonl — стадия могла накопить
+// диалоговую историю через file-based dialog protocol независимо от того,
+// interactive она или autonomous).
 type statusResponse struct {
 	state.RunState
 	Description      string          `json:"description,omitempty"`
 	StageInteractive map[string]bool `json:"stage_interactive,omitempty"`
 	StageAutonomous  map[string]bool `json:"stage_autonomous,omitempty"`
+	StageHasDialog   map[string]bool `json:"stage_has_dialog,omitempty"`
 	StageAutoApprove map[string]bool `json:"stage_auto_approve,omitempty"`
 	// IdleSince/BackoffOpenSince — computed from RunState.Stages on read (see
 	// RunState.IdleSince/BackoffOpenSince), not stored fields. nil/empty when
@@ -45,11 +49,21 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			autonomous[id] = true
 		}
 	}
+	hasDialog := make(map[string]bool, len(rs.Stages))
+	for id := range rs.Stages {
+		for _, p := range flow.Phases() {
+			if _, err := os.Stat(filepath.Join(s.runDir, id, string(p)+".dialog.jsonl")); err == nil {
+				hasDialog[id] = true
+				break
+			}
+		}
+	}
 	resp := statusResponse{
 		RunState:         rs,
 		Description:      s.Description,
 		StageInteractive: s.stageInteractive,
 		StageAutonomous:  autonomous,
+		StageHasDialog:   hasDialog,
 		StageAutoApprove: s.stageAutoApprove,
 		IdleSince:        rs.IdleSince(),
 		BackoffOpenSince: rs.BackoffOpenSince(),

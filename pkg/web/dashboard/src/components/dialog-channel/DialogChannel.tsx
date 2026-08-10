@@ -100,7 +100,13 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   }, [stage.id])
 
   const pending = useMemo(() => findPending(entries), [entries])
-  const hasContent = entries.length > 0 || stage.status === 'awaiting_user_input'
+  // stage.hasDialog — серверный сигнал «на диске уже есть хотя бы один
+  // <phase>.dialog.jsonl» (см. stage_has_dialog в /api/status): держим панель
+  // видимой, даже если локальный fetch дублирующего /dialog ещё не догнал
+  // (или в проде вернул пустой список из-за гонки с записью файла) — иначе
+  // возможна ложная секунда пустой панели/мигание для стадии, у которой
+  // диалоговая история уже реально есть.
+  const hasContent = entries.length > 0 || stage.status === 'awaiting_user_input' || stage.hasDialog
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
   const jumpToBottom = feed.jumpToBottom
   const commentCount = Object.keys(comments).length

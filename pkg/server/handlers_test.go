@@ -134,6 +134,41 @@ func TestHandleStatus_IncludesInteractiveAndAutonomous(t *testing.T) {
 	}
 }
 
+func TestHandleStatus_IncludesHasDialog(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+	if err := os.WriteFile(filepath.Join(runDir, testStageID, "implementation.dialog.jsonl"), []byte(`{"id":"q1","question":"x?"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	var resp statusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.StageHasDialog[testStageID] {
+		t.Errorf("stage_has_dialog[%q] = false, want true", testStageID)
+	}
+}
+
+func TestHandleStatus_HasDialogFalseWhenNoDialogFile(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	var resp statusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.StageHasDialog[testStageID] {
+		t.Errorf("stage_has_dialog[%q] = true, want false (no dialog.jsonl written)", testStageID)
+	}
+}
+
 func TestHandleStatus_IncludesAutoApprove(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	srv.stageAutoApprove = map[string]bool{testStageID: true}

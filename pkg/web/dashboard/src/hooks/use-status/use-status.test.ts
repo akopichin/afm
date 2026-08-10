@@ -38,6 +38,7 @@ describe('useStatus', () => {
       interactive: false,
       autonomous: false,
       autoApprove: false,
+      hasDialog: false,
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })
@@ -49,15 +50,19 @@ describe('useStatus', () => {
       stages: { s1: { status: 'running' }, s2: { status: 'pending' }, s3: { status: 'pending' } },
       stage_interactive: { s1: true },
       stage_autonomous: { s2: true },
+      stage_has_dialog: { s2: true },
     }
     const { stages } = normalizeStatus(raw)
     const byId = new Map(stages.map((s) => [s.id, s]))
     expect(byId.get('s1')?.interactive).toBe(true)
     expect(byId.get('s1')?.autonomous).toBe(false)
+    expect(byId.get('s1')?.hasDialog).toBe(false)
     expect(byId.get('s2')?.interactive).toBe(false)
     expect(byId.get('s2')?.autonomous).toBe(true)
+    expect(byId.get('s2')?.hasDialog).toBe(true)
     expect(byId.get('s3')?.interactive).toBe(false)
     expect(byId.get('s3')?.autonomous).toBe(false)
+    expect(byId.get('s3')?.hasDialog).toBe(false)
   })
 
   test('falls back to Object.keys(...).sort() when stage_order is missing', () => {

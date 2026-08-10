@@ -195,6 +195,26 @@ describe('App', () => {
     expect(document.getElementById('plan-section')).not.toBeNull()
   })
 
+  test('CRITICAL: a non-interactive stage WITH dialog history still shows the dialog panel', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stage_order: ['s1'],
+      stage_names: { s1: 'Auto-answered stage' },
+      stages: { s1: { status: 'running', updated_at: '' } },
+      stage_autonomous: { s1: false },
+      stage_interactive: { s1: false },
+      stage_has_dialog: { s1: true },
+    }))
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(document.getElementById('detail-title')).toHaveTextContent('Auto-answered stage')
+    })
+
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+  })
+
   test('CRITICAL: a failed autonomous stage still shows the retry button', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

@@ -101,7 +101,16 @@ export function App(): ReactElement {
   // /api/stages//plan → 404 → early-return), а stageHeader остаётся null и
   // показывает заглушку «выберите стадию». При выбранной стадии видимость
   // панелей (монтировать/скрыть) решают showPlan/showDialog.
-  const NO_STAGE: Stage = { id: '', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false }
+  const NO_STAGE: Stage = {
+    id: '',
+    name: '',
+    status: 'pending',
+    updatedAt: '',
+    interactive: false,
+    autonomous: false,
+    autoApprove: false,
+    hasDialog: false,
+  }
   const stageForPanels = selectedStage ?? NO_STAGE
 
   // Видимость панелей для выбранной стадии. Когда стадия не выбрана — показываем обе
@@ -109,10 +118,14 @@ export function App(): ReactElement {
   // случая failed: кнопка Retry (общее действие восстановления после сбоя, не
   // привязанное к наличию плана) живёт внутри PlanPanel, и должна быть доступна для
   // любой упавшей стадии, а не только для стадий с планом. dialog скрыт только когда
-  // диалог невозможен: не interactive и не autonomous (автономный трек диалоговый
-  // даже при interactive:false).
+  // диалог невозможен: не interactive, не autonomous (автономный трек диалоговый
+  // даже при interactive:false) И у стадии ещё нет накопленной диалоговой истории —
+  // обычная (не interactive, не autonomous) стадия может пройти через file-based
+  // dialog protocol и получить auto-answered вопрос, поэтому "диалог возможен"
+  // больше не выводится только из статического типа стадии.
   const showPlan = selectedStage === null || !selectedStage.autonomous || selectedStage.status === 'failed'
-  const showDialog = selectedStage === null || selectedStage.interactive || selectedStage.autonomous
+  const showDialog =
+    selectedStage === null || selectedStage.interactive || selectedStage.autonomous || selectedStage.hasDialog
 
   const logEntries = useStageLog(selectedStageId)
   const elapsedMs = useElapsed(startedAt)
