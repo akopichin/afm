@@ -38,7 +38,8 @@ const EMPTY_STATUS: FlowStatus = {
 }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
-// объект по id, порядок — в stage_order, имена — в stage_names (как в текущем app.js).
+// уже упорядоченный массив StageView (см. pkg/server/stageview.go), маппинг 1:1
+// через toStage.
 
 export function useStatus(): FlowStatus & { refresh: () => void } {
   const [status, setStatus] = useState<FlowStatus>(EMPTY_STATUS)
@@ -100,26 +101,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const startedAt = typeof obj.started_at === 'string' ? obj.started_at : ''
   const description = typeof obj.description === 'string' ? obj.description : undefined
 
-  const stagesObj = isRecord(obj.stages) ? obj.stages : {}
-  const namesObj = isRecord(obj.stage_names) ? obj.stage_names : {}
-  const interactiveObj = isRecord(obj.stage_interactive) ? obj.stage_interactive : {}
-  const autonomousObj = isRecord(obj.stage_autonomous) ? obj.stage_autonomous : {}
-  const hasDialogObj = isRecord(obj.stage_has_dialog) ? obj.stage_has_dialog : {}
-  const autoApproveObj = isRecord(obj.stage_auto_approve) ? obj.stage_auto_approve : {}
-
-  const order = resolveOrder(obj.stage_order, stagesObj)
-
-  const stages: Stage[] = order.map((id) =>
-    toStage(
-      id,
-      stagesObj[id],
-      namesObj[id],
-      interactiveObj[id] === true,
-      autonomousObj[id] === true,
-      autoApproveObj[id] === true,
-      hasDialogObj[id] === true,
-    ),
-  )
+  const stages: Stage[] = Array.isArray(obj.stages) ? obj.stages.map(toStage).filter((s): s is Stage => s !== null) : []
 
   const idleAccumulatedMs = typeof obj.idle_accumulated_ms === 'number' ? obj.idle_accumulated_ms : 0
   const idleSince = typeof obj.idle_since === 'string' ? obj.idle_since : null
@@ -131,31 +113,26 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   return { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince }
 }
 
-function resolveOrder(stageOrder: unknown, stagesObj: Record<string, unknown>): string[] {
-  if (Array.isArray(stageOrder) && stageOrder.length > 0) {
-    const filtered = stageOrder.filter((id): id is string => typeof id === 'string')
-    if (filtered.length > 0) return filtered
-  }
-
-  return Object.keys(stagesObj).sort()
-}
-
-function toStage(
-  id: string,
-  raw: unknown,
-  nameRaw: unknown,
-  interactive: boolean,
-  autonomous: boolean,
-  autoApprove: boolean,
-  hasDialog: boolean,
-): Stage {
-  const obj = isRecord(raw) ? raw : {}
+function toStage(raw: unknown): Stage | null {
+  const obj = isRecord(raw) ? raw : null
+  if (obj === null || typeof obj.id !== 'string') return null
 
   const status: StageStatus = isStageStatus(obj.status) ? obj.status : 'pending'
   const updatedAt = typeof obj.updated_at === 'string' ? obj.updated_at : ''
-  const name = typeof nameRaw === 'string' ? nameRaw : ''
+  const name = typeof obj.name === 'string' ? obj.name : ''
 
-  return { id, name, status, updatedAt, interactive, autonomous, autoApprove, hasDialog }
+  return {
+    id: obj.id,
+    name,
+    status,
+    updatedAt,
+    interactive: obj.interactive === true,
+    autonomous: obj.autonomous === true,
+    autoApprove: obj.auto_approve === true,
+    hasDialog: obj.has_dialog === true,
+    showPlan: obj.show_plan === true,
+    showDialog: obj.show_dialog === true,
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

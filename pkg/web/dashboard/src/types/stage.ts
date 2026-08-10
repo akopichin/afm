@@ -27,6 +27,8 @@ export type Stage = {
   autonomous: boolean
   autoApprove: boolean
   hasDialog: boolean
+  showPlan: boolean
+  showDialog: boolean
 }
 
 // Человекочитаемые подписи статусов для списка стадий и панели деталей.

@@ -11,8 +11,8 @@ describe('Footer', () => {
 
   test('renders done/total progress and formatted elapsed', () => {
     const stages: Stage[] = [
-      { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
-      { id: 's2', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
+      { id: 's2', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
 
     render(

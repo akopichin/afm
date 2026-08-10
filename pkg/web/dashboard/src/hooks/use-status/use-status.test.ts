@@ -7,18 +7,20 @@ describe('useStatus', () => {
     vi.restoreAllMocks()
   })
 
-  test('normalizes /api/status (object + stage_order + stage_names) into Stage[]', async () => {
+  test('normalizes /api/status (ordered stages array) into Stage[]', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({
         flow_name: 'demo',
         started_at: '2026-07-10T10:00:00Z',
-        stage_order: ['propose', 'plan'],
-        stage_names: { propose: 'Propose', plan: 'Plan' },
-        stages: {
-          propose: { status: 'done', updated_at: '2026-07-10T10:01:00Z' },
-          plan: { status: 'running', updated_at: '2026-07-10T10:02:00Z' },
-        },
+        stages: [
+          { id: 'propose', name: 'Propose', status: 'done', updated_at: '2026-07-10T10:01:00Z',
+            interactive: false, autonomous: false, auto_approve: false, has_dialog: false,
+            show_plan: true, show_dialog: false },
+          { id: 'plan', name: 'Plan', status: 'running', updated_at: '2026-07-10T10:02:00Z',
+            interactive: false, autonomous: false, auto_approve: false, has_dialog: false,
+            show_plan: true, show_dialog: false },
+        ],
       }),
     } as Response)
 
@@ -39,18 +41,20 @@ describe('useStatus', () => {
       autonomous: false,
       autoApprove: false,
       hasDialog: false,
+      showPlan: true,
+      showDialog: false,
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })
 
-  test('парсит stage_interactive и stage_autonomous с дефолтом false', () => {
+  test('парсит interactive/autonomous/has_dialog с дефолтом false', () => {
     const raw = {
       flow_name: 'demo',
-      stage_order: ['s1', 's2', 's3'],
-      stages: { s1: { status: 'running' }, s2: { status: 'pending' }, s3: { status: 'pending' } },
-      stage_interactive: { s1: true },
-      stage_autonomous: { s2: true },
-      stage_has_dialog: { s2: true },
+      stages: [
+        { id: 's1', status: 'running', interactive: true },
+        { id: 's2', status: 'pending', autonomous: true, has_dialog: true },
+        { id: 's3', status: 'pending' },
+      ],
     }
     const { stages } = normalizeStatus(raw)
     const byId = new Map(stages.map((s) => [s.id, s]))
@@ -65,30 +69,34 @@ describe('useStatus', () => {
     expect(byId.get('s3')?.hasDialog).toBe(false)
   })
 
-  test('falls back to Object.keys(...).sort() when stage_order is missing', () => {
+  test('preserves array order as sent by the backend (no client-side sort)', () => {
     const raw = {
       flow_name: 'demo',
-      stages: { b: { status: 'pending' }, a: { status: 'running' }, c: { status: 'done' } },
+      stages: [
+        { id: 'b', status: 'pending' },
+        { id: 'a', status: 'running' },
+        { id: 'c', status: 'done' },
+      ],
     }
     const { stages } = normalizeStatus(raw)
-    expect(stages.map((s) => s.id)).toEqual(['a', 'b', 'c'])
+    expect(stages.map((s) => s.id)).toEqual(['b', 'a', 'c'])
   })
 
-  test('falls back to Object.keys(...).sort() when stage_order is an empty array', () => {
-    const raw = {
-      flow_name: 'demo',
-      stage_order: [],
-      stages: { b: { status: 'pending' }, a: { status: 'running' } },
-    }
+  test('an empty stages array yields no stages', () => {
+    const raw = { flow_name: 'demo', stages: [] }
     const { stages } = normalizeStatus(raw)
-    expect(stages.map((s) => s.id)).toEqual(['a', 'b'])
+    expect(stages).toEqual([])
+  })
+
+  test('a missing/malformed stages field yields no stages', () => {
+    const { stages } = normalizeStatus({ flow_name: 'demo' })
+    expect(stages).toEqual([])
   })
 
   test('normalizes the optional description field when present', () => {
     const raw = {
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stages: { s1: { status: 'pending' } },
+      stages: [{ id: 's1', status: 'pending' }],
       description: 'Проект X: очистка изображений',
     }
     const status = normalizeStatus(raw)
@@ -98,8 +106,7 @@ describe('useStatus', () => {
   test('leaves description undefined when the backend does not send it', () => {
     const raw = {
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stages: { s1: { status: 'pending' } },
+      stages: [{ id: 's1', status: 'pending' }],
     }
     const status = normalizeStatus(raw)
     expect(status.description).toBeUndefined()
@@ -108,11 +115,19 @@ describe('useStatus', () => {
   test('normalizes an unrecognized stage status to "pending"', () => {
     const raw = {
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stages: { s1: { status: 'not_a_real_status' } },
+      stages: [{ id: 's1', status: 'not_a_real_status' }],
     }
     const { stages } = normalizeStatus(raw)
     expect(stages[0]?.status).toBe('pending')
+  })
+
+  test('skips a stage entry without a string id', () => {
+    const raw = {
+      flow_name: 'demo',
+      stages: [{ status: 'running' }, { id: 's1', status: 'pending' }],
+    }
+    const { stages } = normalizeStatus(raw)
+    expect(stages.map((s) => s.id)).toEqual(['s1'])
   })
 
   test('fetch rejection leaves status at the empty initial state', async () => {
@@ -131,7 +146,7 @@ describe('useStatus', () => {
   test('response.ok === false leaves status at the empty initial state', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,
-      json: async () => ({ flow_name: 'should-not-apply', stages: {} }),
+      json: async () => ({ flow_name: 'should-not-apply', stages: [] }),
     } as Response)
 
     const { result } = renderHook(() => useStatus())
@@ -167,11 +182,11 @@ describe('useStatus', () => {
     await waitFor(() => expect(deferred[1]).toBeDefined())
 
     // Резолвим НЕ по порядку: новый запрос отвечает первым.
-    deferred[1]!({ flow_name: 'newer', stages: {} })
+    deferred[1]!({ flow_name: 'newer', stages: [] })
     await waitFor(() => expect(result.current.flowName).toBe('newer'))
 
     // Устаревший запрос отвечает последним — не должен откатить состояние назад.
-    deferred[0]!({ flow_name: 'stale', stages: {} })
+    deferred[0]!({ flow_name: 'stale', stages: [] })
     await new Promise((r) => setTimeout(r, 10))
     expect(result.current.flowName).toBe('newer')
   })
@@ -179,7 +194,7 @@ describe('useStatus', () => {
   test('refresh() triggers a fresh fetch on demand (WS refresh channel)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ flow_name: 'v1', stages: {} }),
+      json: async () => ({ flow_name: 'v1', stages: [] }),
     } as Response)
 
     const { result } = renderHook(() => useStatus())
@@ -199,8 +214,7 @@ describe('useStatus', () => {
   test('normalizeStatus parses idle/backoff fields', () => {
     const result = normalizeStatus({
       flow_name: 'demo',
-      stage_order: ['s1'],
-      stages: { s1: { status: 'running', updated_at: '' } },
+      stages: [{ id: 's1', status: 'running', updated_at: '' }],
       idle_accumulated_ms: 5000,
       idle_since: '2026-08-07T10:00:00Z',
       backoff_accumulated_ms: 3000,
@@ -214,11 +228,38 @@ describe('useStatus', () => {
   })
 
   test('normalizeStatus defaults idle/backoff fields when absent', () => {
-    const result = normalizeStatus({ flow_name: 'demo', stage_order: [], stages: {} })
+    const result = normalizeStatus({ flow_name: 'demo', stages: [] })
 
     expect(result.idleAccumulatedMs).toBe(0)
     expect(result.idleSince).toBeNull()
     expect(result.backoffAccumulatedMs).toBe(0)
     expect(result.backoffOpenSince).toEqual([])
+  })
+
+  test('normalizeStatus: reads the ordered stages array directly (no per-id maps)', () => {
+    const raw = {
+      flow_name: 'demo',
+      started_at: '2026-08-10T00:00:00Z',
+      stages: [
+        { id: 'b', name: 'Stage B', status: 'running', updated_at: '2026-08-10T00:01:00Z',
+          interactive: false, autonomous: true, auto_approve: false, has_dialog: false,
+          show_plan: false, show_dialog: true },
+        { id: 'a', name: '', status: 'pending', updated_at: '',
+          interactive: true, autonomous: false, auto_approve: true, has_dialog: false,
+          show_plan: true, show_dialog: true },
+      ],
+      idle_accumulated_ms: 0,
+      backoff_accumulated_ms: 0,
+    }
+
+    const status = normalizeStatus(raw)
+
+    expect(status.stages.map((s) => s.id)).toEqual(['b', 'a']) // order preserved, not sorted
+    expect(status.stages[0]).toMatchObject({
+      id: 'b', name: 'Stage B', status: 'running', autonomous: true, showPlan: false, showDialog: true,
+    })
+    expect(status.stages[1]).toMatchObject({
+      id: 'a', interactive: true, autoApprove: true, showPlan: true, showDialog: true,
+    })
   })
 })

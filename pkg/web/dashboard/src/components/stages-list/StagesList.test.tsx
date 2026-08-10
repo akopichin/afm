@@ -6,8 +6,8 @@ import { StagesList } from './StagesList'
 describe('StagesList', () => {
   test('marks the selected stage active and calls onSelect on click', () => {
     const stages: Stage[] = [
-      { id: 's1', name: 'Propose', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
-      { id: 's2', name: 'Plan', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: 'Propose', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
+      { id: 's2', name: 'Plan', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
     const onSelect = vi.fn()
 
@@ -23,7 +23,7 @@ describe('StagesList', () => {
 
   test('marks awaiting_user_input stage with attention and a dialog badge', () => {
     const stages: Stage[] = [
-      { id: 's1', name: 'Propose', status: 'awaiting_user_input', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: 'Propose', status: 'awaiting_user_input', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
@@ -35,7 +35,7 @@ describe('StagesList', () => {
 
   test('marks awaiting_approval stage with attention and an approval badge (not a dialog badge)', () => {
     const stages: Stage[] = [
-      { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
@@ -48,7 +48,7 @@ describe('StagesList', () => {
 
   test('does not mark running stage with attention', () => {
     const stages: Stage[] = [
-      { id: 's1', name: 'Run', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: 'Run', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
@@ -59,7 +59,7 @@ describe('StagesList', () => {
 
   test('does not render stage-name element when name is empty', () => {
     const stages: Stage[] = [
-      { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
@@ -69,9 +69,9 @@ describe('StagesList', () => {
 
   test('shows the kebab menu only when status is running or awaiting_approval', () => {
     const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
-      { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
-      { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
+      { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
+      { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
     expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(2) // a и c, не b
@@ -79,7 +79,7 @@ describe('StagesList', () => {
 
   test('CRITICAL: kebab menu portals to document.body so the scrollable #stages-panel cannot clip it', () => {
     const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
 
@@ -96,7 +96,7 @@ describe('StagesList', () => {
 
   test('clicking outside the open kebab menu closes it', () => {
     const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
 
@@ -109,7 +109,7 @@ describe('StagesList', () => {
 
   test('scrolling the page closes the open kebab menu', () => {
     const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
 
@@ -122,7 +122,7 @@ describe('StagesList', () => {
 
   test('переход стадии в done навешивает one-shot класс just-done', async () => {
     const base: Stage[] = [
-      { id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false },
+      { id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false },
     ]
     const { container, rerender } = render(<StagesList stages={base} selectedStageId={null} onSelect={() => {}} />)
     expect(container.querySelector('.stage-item.just-done')).toBeNull()
@@ -135,7 +135,7 @@ describe('StagesList', () => {
   test('just-done очищается через 700мс даже при промежуточном обновлении stages без нового перехода', () => {
     vi.useFakeTimers()
     try {
-      const running: Stage[] = [{ id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false }]
+      const running: Stage[] = [{ id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false }]
       const { container, rerender } = render(<StagesList stages={running} selectedStageId={null} onSelect={() => {}} />)
       const done: Stage[] = [{ ...running[0]!, status: 'done' }]
       act(() => { rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />) })
