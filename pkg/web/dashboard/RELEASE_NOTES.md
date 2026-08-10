@@ -1,5 +1,15 @@
 # Release Notes — afm dashboard
 
+## 2026-08-10
+
+- **Видимость авто-ответов afm на вопросы non-interactive стадий** (бэкенд-фича: `pollQuestions` сам отвечает на вопрос агента вместо перевода стадии в `awaiting_user_input`, когда `interactive` не `true`):
+  - Event feed: новый case `auto_answered` — строка вида `auto-answered q1: <ответ>`.
+  - Панель диалога (`DialogChannel`): отвеченная запись с меткой авто-ответа получает класс `qa-auto` и бейдж `⚙` (`title="Answered automatically by afm"`).
+  - Два бага, найденные только ручной проверкой в браузере (юнит-тесты в изоляции их не поймали):
+    1. Панель диалога вообще не монтировалась для обычных non-interactive стадий — `App.tsx`'s `showDialog` был `interactive || autonomous`, а авто-ответ по определению происходит именно на стадии, у которой оба флага `false`. Добавлен третий сигнал `stage_has_dialog` (`/api/status`, тот же file-presence паттерн, что и `stage_autonomous`), `showDialog`/внутренний гейт `DialogChannel`'s `hasContent` теперь также учитывают его.
+    2. Событие `auto_answered` терялось при перезагрузке страницы/переподключении — публиковалось только живьём в WebSocket-шину, без дублирования в `notices.jsonl` (в отличие от `agent_completed`/`context_warning`/`script_output`, которые уже это делают). Клиент, подключившийся после срабатывания, никогда не видел строку в ленте, хотя история диалога была на месте.
+- `npx vitest run`: 214/214 тестов, 26 test files.
+
 ## 2026-08-07
 
 - **Комментарии к плану/диалогу и скролл:**
