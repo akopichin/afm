@@ -279,3 +279,46 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 	}
 	return out, nil
 }
+
+// autoAnswerFallbackText is the answer afm synthesizes for an open question
+// (no options, only allow_custom) in a non-interactive stage.
+const autoAnswerFallbackText = "Прими самое релевантное решение автономно или предложи варианты ответов"
+
+// autoAnswerMarkers are the case-insensitive substrings that mark an option
+// as the recommended default, checked in option order (not marker priority
+// order) — the first option carrying ANY of these markers wins.
+var autoAnswerMarkers = []string{"(recommended)", "(default)", "(рекомендую)", "(рекомендуется)", "(по умолчанию)"}
+
+// PickAutoAnswer chooses the answer afm synthesizes for a question asked by a
+// non-interactive stage's agent: the option explicitly marked recommended
+// (see autoAnswerMarkers), the first option if none are marked, or a fixed
+// fallback text when the question has no options at all.
+func PickAutoAnswer(q QuestionFile) (answer string, fromOptions bool) {
+	if len(q.Options) == 0 {
+		return autoAnswerFallbackText, false
+	}
+	for _, opt := range q.Options {
+		if cleaned, ok := stripRecommendedMarker(opt); ok {
+			return cleaned, true
+		}
+	}
+	return q.Options[0], true
+}
+
+// stripRecommendedMarker reports whether opt carries any autoAnswerMarkers
+// substring and, if so, returns opt with the marker (and a trailing
+// space/dash left over from " - (recommended)"-style authoring) removed.
+func stripRecommendedMarker(opt string) (string, bool) {
+	lower := strings.ToLower(opt)
+	for _, m := range autoAnswerMarkers {
+		idx := strings.Index(lower, m)
+		if idx < 0 {
+			continue
+		}
+		cleaned := opt[:idx] + opt[idx+len(m):]
+		cleaned = strings.TrimSpace(cleaned)
+		cleaned = strings.TrimRight(cleaned, "-–— \t")
+		return strings.TrimSpace(cleaned), true
+	}
+	return "", false
+}

@@ -450,3 +450,37 @@ func TestFindUnansweredQuestions_SamePhaseAndFallback(t *testing.T) {
 		t.Fatalf("empty JSON id should fall back to filename id, got: %+v", got)
 	}
 }
+
+func TestPickAutoAnswer_NoOptions_ReturnsFallbackText(t *testing.T) {
+	answer, fromOptions := mcp.PickAutoAnswer(mcp.QuestionFile{Question: "что делать?"})
+	want := "Прими самое релевантное решение автономно или предложи варианты ответов"
+	if answer != want || fromOptions {
+		t.Errorf("got (%q, %v), want (%q, false)", answer, fromOptions, want)
+	}
+}
+
+func TestPickAutoAnswer_MarkerVariants(t *testing.T) {
+	cases := []struct {
+		name    string
+		options []string
+		want    string
+	}{
+		{"recommended", []string{"Вариант A", "Вариант B (recommended)"}, "Вариант B"},
+		{"default", []string{"Вариант A", "Вариант B (default)"}, "Вариант B"},
+		{"рекомендую", []string{"Вариант A", "Вариант B (рекомендую)"}, "Вариант B"},
+		{"рекомендуется", []string{"Вариант A (рекомендуется)", "Вариант B"}, "Вариант A"},
+		{"по умолчанию", []string{"Вариант A", "Вариант B (по умолчанию)"}, "Вариант B"},
+		{"marker not in first option", []string{"Вариант A", "Вариант B", "Вариант C (recommended)"}, "Вариант C"},
+		{"case-insensitive marker", []string{"Вариант A", "Вариант B (RECOMMENDED)"}, "Вариант B"},
+		{"trailing dash before marker trimmed", []string{"Вариант A - (recommended)"}, "Вариант A"},
+		{"no marker anywhere: first option wins", []string{"Вариант A", "Вариант B"}, "Вариант A"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			answer, fromOptions := mcp.PickAutoAnswer(mcp.QuestionFile{Options: tc.options})
+			if answer != tc.want || !fromOptions {
+				t.Errorf("got (%q, %v), want (%q, true)", answer, fromOptions, tc.want)
+			}
+		})
+	}
+}
