@@ -21,6 +21,7 @@ type DialogEntry = {
   allow_custom?: boolean
   options?: string[]
   text?: string
+  auto_answered?: boolean
 }
 
 // Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос
@@ -461,11 +462,16 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
 
     if (entry.answer !== null && entry.answer !== undefined) {
       nodes.push(
-        <div className="qa" key={`qa-${index}`}>
+        <div className={`qa${entry.auto_answered === true ? ' qa-auto' : ''}`} key={`qa-${index}`}>
           <div className="q">
             <MarkdownRenderer source={entry.question ?? ''} />
           </div>
-          <div className="a">{`→ ${entry.answer}`}</div>
+          <div className="a">
+            {entry.auto_answered === true && (
+              <span className="auto-answered-badge" title="Answered automatically by afm">⚙</span>
+            )}
+            {`→ ${entry.answer}`}
+          </div>
         </div>,
       )
     }

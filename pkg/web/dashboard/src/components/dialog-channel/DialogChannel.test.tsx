@@ -729,4 +729,40 @@ describe('DialogChannel', () => {
     })
     expect(mockJumpToBottom).not.toHaveBeenCalled()
   })
+
+  test('answered entry with auto_answered:true is marked distinctly from a real user answer', async () => {
+    const history: RawDialogEntry & { auto_answered?: boolean } = {
+      id: 'q1',
+      phase: 'implementation',
+      question: 'which option?',
+      answer: 'Вариант B',
+      auto_answered: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([history]))
+
+    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+
+    await waitFor(() => expect(container.querySelector('.qa')).not.toBeNull())
+    expect(container.querySelector('.qa')).toHaveClass('qa-auto')
+    expect(container.querySelector('.auto-answered-badge')).not.toBeNull()
+    expect(container.querySelector('.auto-answered-badge')?.textContent).toBe('⚙')
+    expect(container.querySelector('.qa')?.textContent).toContain('Вариант B')
+  })
+
+  test('answered entry without auto_answered (user answer) has no badge and no qa-auto class', async () => {
+    const history: RawDialogEntry = {
+      id: 'q1',
+      phase: 'implementation',
+      question: 'which option?',
+      answer: 'User chose Alpha',
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([history]))
+
+    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+
+    await waitFor(() => expect(container.querySelector('.qa')).not.toBeNull())
+    expect(container.querySelector('.qa')).not.toHaveClass('qa-auto')
+    expect(container.querySelector('.auto-answered-badge')).toBeNull()
+    expect(container.querySelector('.qa')?.textContent).toContain('User chose Alpha')
+  })
 })
