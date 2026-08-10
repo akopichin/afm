@@ -17,6 +17,15 @@ func (o *Orchestrator) FailStage(stageID, reason string) {
 	o.failBlockedStages()
 }
 
+// CancelDialog fails a stage that's awaiting user input because the user
+// cancelled the dialog from the dashboard. Thin wrapper so server.SecondaryActions
+// can require a real method instead of the HTTP layer building a closure around
+// FailStage with a hardcoded reason string.
+func (o *Orchestrator) CancelDialog(stageID string) error {
+	o.FailStage(stageID, "cancelled by user")
+	return nil
+}
+
 // NotifyAnswer is called by the HTTP handler when the user submits an answer.
 // If the agent goroutine is still running (its bash loop is awaiting
 // answer.json), we only transition the status — the bash loop will detect the
