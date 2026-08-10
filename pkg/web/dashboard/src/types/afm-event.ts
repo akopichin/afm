@@ -18,6 +18,7 @@ export const AFM_EVENT_TYPES = [
   'script_output',
   'hook_failed',
   'hook_resolved',
+  'auto_answered',
 ] as const
 
 export type AfmEventType = (typeof AFM_EVENT_TYPES)[number]

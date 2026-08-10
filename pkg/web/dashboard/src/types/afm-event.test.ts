@@ -113,6 +113,7 @@ describe('AFM_EVENT_TYPES', () => {
       'script_output',
       'hook_failed',
       'hook_resolved',
+      'auto_answered',
     ])
   })
 })

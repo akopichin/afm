@@ -138,6 +138,14 @@ function toFeedLine(event: AfmEvent): FeedLine {
       msg = 'reply to user'
       statusClass = 'status-running'
       break
+    case 'auto_answered': {
+      const obj = isRecord(data) ? data : {}
+      const id = typeof obj.id === 'string' ? obj.id : ''
+      const answer = typeof obj.answer === 'string' ? obj.answer : ''
+      msg = `auto-answered ${id}: ${answer}`
+      msgClass = 'feed-msg action'
+      break
+    }
     case 'supervisor_decision': {
       const obj = isRecord(data) ? data : {}
       const autonomous = obj.can_execute_autonomously === true

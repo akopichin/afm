@@ -106,4 +106,17 @@ describe('EventFeedPanel', () => {
     expect(entries[1]?.textContent).toContain('exit 1')
     expect(entries[2]?.textContent).toContain('skipped')
   })
+
+  test('renders auto_answered lines with the synthesized answer', () => {
+    const events: AfmEvent[] = [
+      { type: 'auto_answered', payload: { id: 'q1', phase: 'implementation', answer: 'Вариант B', from_options: true }, stageId: 's1', timestamp: '2026-08-07T10:00:00Z' },
+    ]
+
+    const { container } = render(<EventFeedPanel events={events} />)
+    const entries = container.querySelectorAll('.feed-entry')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.textContent).toContain('auto-answered')
+    expect(entries[0]?.textContent).toContain('q1')
+    expect(entries[0]?.textContent).toContain('Вариант B')
+  })
 })
