@@ -69,9 +69,10 @@ func findSkinFavicon(base string, statFn func(name string) bool) (href, mime str
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
 	runDir           string
-	Description      string          // корневой description флоу (для хедера дашборда)
-	stageInteractive map[string]bool // id стадии → interactive (статический конфиг флоу)
-	stageAutoApprove map[string]bool // id стадии → auto_approve (статический конфиг флоу)
+	Description      string              // корневой description флоу (для хедера дашборда)
+	stageInteractive map[string]bool     // id стадии → interactive (статический конфиг флоу)
+	stageAutoApprove map[string]bool     // id стадии → auto_approve (статический конфиг флоу)
+	stageDependsOn   map[string][]string // id стадии → depends_on (статический конфиг флоу, для UI-порядка)
 	store            *state.Store
 	uiBus            *bus.UIBus
 	actions          StageActions     // never nil in practice — see StageActions doc
@@ -96,6 +97,7 @@ type Config struct {
 	Description      string // корневой description флоу (для хедера дашборда)
 	StageInteractive map[string]bool
 	StageAutoApprove map[string]bool
+	StageDependsOn   map[string][]string
 	Store            *state.Store
 	UIBus            *bus.UIBus
 	Actions          StageActions
@@ -128,6 +130,7 @@ func New(cfg Config) *Server {
 		Description:      cfg.Description,
 		stageInteractive: cfg.StageInteractive,
 		stageAutoApprove: cfg.StageAutoApprove,
+		stageDependsOn:   cfg.StageDependsOn,
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,
 		actions:          cfg.Actions,

@@ -31,7 +31,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true})
+	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, nil)
 
 	if len(views) != 2 || views[0].ID != "b" || views[1].ID != "a" {
 		t.Fatalf("order not preserved: %+v", views)
@@ -58,4 +58,59 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 	if !b.ShowDialog {
 		t.Errorf("stage b (autonomous): ShowDialog should be true, got %+v", b)
 	}
+}
+
+func TestTopoOrder_NoDeps_PreservesDeclarationOrder(t *testing.T) {
+	ids := []string{"b", "a", "c"}
+	got := topoOrder(ids, nil)
+	if !equalSlices(got, ids) {
+		t.Fatalf("got %v, want %v (unchanged)", got, ids)
+	}
+}
+
+func TestTopoOrder_DependencyRendersAfterItsDep(t *testing.T) {
+	// "child" declared BEFORE its dependency "parent" — must be reordered.
+	ids := []string{"child", "parent"}
+	deps := map[string][]string{"child": {"parent"}}
+	got := topoOrder(ids, deps)
+	want := []string{"parent", "child"}
+	if !equalSlices(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestTopoOrder_UnrelatedSiblingsKeepDeclarationOrderRelativeToEachOther(t *testing.T) {
+	// stage1 depends on stage2; stage3/4/5 have no deps at all; stage6
+	// depends on stage2,3,4,5. Declared as 1,2,3,4,5,6 (1 before its own dep).
+	ids := []string{"stage1", "stage2", "stage3", "stage4", "stage5", "stage6"}
+	deps := map[string][]string{
+		"stage1": {"stage2"},
+		"stage6": {"stage2", "stage3", "stage4", "stage5"},
+	}
+	got := topoOrder(ids, deps)
+	want := []string{"stage2", "stage3", "stage4", "stage5", "stage1", "stage6"}
+	if !equalSlices(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestTopoOrder_UnknownDepIgnored(t *testing.T) {
+	ids := []string{"a", "b"}
+	deps := map[string][]string{"a": {"does-not-exist"}}
+	got := topoOrder(ids, deps)
+	if !equalSlices(got, ids) {
+		t.Fatalf("got %v, want %v (unknown dep should be ignored, not block ordering)", got, ids)
+	}
+}
+
+func equalSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
