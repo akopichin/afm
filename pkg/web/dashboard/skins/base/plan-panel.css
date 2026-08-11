@@ -190,6 +190,26 @@
   color: transparent;
 }
 
+/* PlanPanel — единственный потребитель PanelFrame, рендерящий больше одной
+   .section внутри .panel-frame-body одновременно (#plan-section + один из
+   #actions-section/#auto-approved-section/#retry-section/#hook-failed-section).
+   Общее правило .panel-frame-body > * (layout.css) даёт КАЖДОМУ прямому
+   ребёнку flex: 1 1 0 — для панелей с одним ребёнком (dialog/log/event-feed)
+   это безвредно (единственный ребёнок и так забирает 100%), но здесь делит
+   высоту 50/50 между планом и, например, крошечным баджем «Auto-approved» —
+   баг: в maximize-режиме (.maximize-overlay #plan-content снимает
+   max-height, ожидая занять весь оверлей) #plan-section получает только
+   половину доступной высоты, план обрезается вместо скролла на весь экран.
+   ID-селекторы ниже специфичнее .panel-frame-body > * (класс+универсальный),
+   поэтому переопределяют flex независимо от порядка файлов — #plan-section
+   остаётся единственной растущей секцией. */
+#actions-section,
+#auto-approved-section,
+#retry-section,
+#hook-failed-section {
+  flex: 0 0 auto;
+}
+
 /* === Plan line-by-line review === */
 #plan-content {
   background: var(--bg-elev);
