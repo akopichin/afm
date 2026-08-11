@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import { answerDialog, cancelDialog } from '../../api/run-client'
-import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
+import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
@@ -29,6 +29,7 @@ type DialogEntry = {
 // (опции и/или свободный ответ), отмена. Поведение перенесено из loadDialog /
 // renderDialog / renderPendingQuestion в текущем app.js.
 export function DialogChannel({ stage, attention = false }: DialogChannelProps): ReactElement {
+  const stageId = stage?.id ?? ''
   const [entries, setEntries] = useState<DialogEntry[]>([])
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
   const [customText, setCustomText] = useState('')
@@ -42,9 +43,6 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   const [draft, setDraft] = useState('')
   const [clickedSend, setClickedSend] = useState(false)
   const [flash, setFlash] = useState(false)
-
-  const commentTextareaRef = useAutoGrowTextarea(draft, 400)
-  const customTextareaRef = useAutoGrowTextarea(customText, 400)
 
   // Автоскролл канала к хвосту при появлении новых сообщений/вопросов,
   // пока пользователь сам не уехал вверх. Контейнер охватывает и историю,
@@ -299,11 +297,11 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
         {activeCommentLine === item.line && (
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
             {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
-            <textarea
-              ref={commentTextareaRef}
+            <PasteableTextarea
+              stageId={stageId}
               placeholder={`Comment on line ${item.line}...`}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={setDraft}
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                   e.preventDefault()
@@ -359,13 +357,13 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                       ))}
                     </div>
 
-                    <textarea
-                      ref={customTextareaRef}
+                    <PasteableTextarea
+                      stageId={stageId}
                       className="dialog-custom"
                       placeholder="Or type your own answer…"
                       value={customText}
                       disabled={pending.allow_custom !== true}
-                      onChange={(event) => onCustomInput(event.target.value)}
+                      onChange={onCustomInput}
                       onKeyDown={(e) => {
                         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                           e.preventDefault()
