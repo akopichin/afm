@@ -36,6 +36,16 @@ By default afm stores runs, flows, and config under `.afm/` in the working direc
 - **Фронтенд — anchor + tick, без event-replay.** `useIdleMs`/`useBackoffMs` (`pkg/web/dashboard/src/hooks/`) считают `accumulated + (now - since)`, как уже работавший `useElapsed`, и принимают `connected: boolean` — при `false` тикер замирает на последнем значении; при реконнекте `useStatus`'ный poll подтягивает уже скорректированный сервером якорь, никакой клиентской доверстки не нужно. Заменили `useIdleTime`/`useStatusDuration` (event-replay по `useEventFeed`'ному 200-событийному кэшу — на длинных ранах старые переходы вываливались из кэша и IDLE/BACKOFF тихо недосчитывали после reload).
 - Спек/план: `docs/superpowers/specs/2026-08-07-persistent-idle-backoff-design.md`, `docs/superpowers/plans/2026-08-07-persistent-idle-backoff.md`.
 
+### Порядок стадий в дашборде — топологический, не порядок объявления
+
+Список стадий слева в дашборде рендерится в порядке, который отдаёт `GET /api/status` (`stages []StageView`) — раньше это было ровно `state.RunState.StageOrder`, т.е. порядок объявления в `flow.yaml`. Стадия, объявленная в YAML раньше своей же зависимости (ради читаемости флоу), рисовалась выше неё, хотя реально стартует только когда зависимость завершится — список не отражал граф выполнения.
+
+- **`buildStageViews` (`pkg/server/stageview.go`) пересчитывает порядок через `topoOrder`** — устойчивый (stable) вариант алгоритма Кана: очередь готовых узлов заводится и пополняется в порядке исходного `StageOrder`, поэтому независимые стадии без связи между собой сохраняют взаимный порядок объявления (не тасуются итерацией по map), а зависимая стадия рендерится сразу после ВСЕХ своих `depends_on`, а не перед несвязанными соседями просто потому что была объявлена раньше.
+- **Пример:** `stage1 (deps:[stage2]), stage2, stage3, stage4, stage5, stage6 (deps:[stage2,3,4,5])` в объявлении → рендерится как `stage2, stage3, stage4, stage5, stage1, stage6`.
+- **`state.RunState.StageOrder` не трогается** — это авторитетный порядок для `state`/`scheduling` (реплей лога, CAS-переходы и т.д.); `topoOrder` — чисто display-слой поверх него, живёт только в `pkg/server`.
+- Новый `Server.stageDependsOn`/`Config.StageDependsOn` (`pkg/server/server.go`) заполняется из `flow.Stage.DependsOn` в `cmd/afm/run.go`, рядом с уже существующими `stageInteractive`/`stageAutoApprove`.
+- Защитный фолбэк в `topoOrder`: если результат не покрыл все id (цикл или ссылка на несуществующую стадию), возвращает исходный порядок как есть — на практике недостижимо, `flow.ParseFile`'s `detectCycles` уже отвергает такие флоу на этапе парсинга.
+
 ## File-Based Dialog Protocol (Interactive Stages)
 
 The interactive dialog system was refactored from an MCP HTTP server to a file-based protocol starting with the planning-depends-on-ref branch. This enables agents to ask users questions and receive answers through simple file I/O instead of HTTP.

@@ -2,6 +2,17 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-11
+
+### New: dashboard stage list orders by dependency graph, not raw flow.yaml declaration order
+
+- `GET /api/status` used to return `stages` in exactly the order they were declared in `flow.yaml` (`state.RunState.StageOrder`) — the same slice the dashboard's sidebar renders top-to-bottom. A stage declared before the dependency it actually waits on (e.g. `stage1: {depends_on: [stage2]}` written above `stage2` for narrative reasons) rendered above it too, even though it can only start once `stage2` is done — the list didn't reflect the real execution graph at all.
+- **Fix:** `buildStageViews` (`pkg/server/stageview.go`) now reorders the returned `[]StageView` through a new `topoOrder` helper — a stable Kahn's-algorithm topological sort whose ready-queue is seeded and re-fed in original declaration order. Independent stages with no ordering constraint between them keep their original relative order (they don't get shuffled by map iteration); a stage renders immediately after all of its `depends_on` are satisfied in the sort, not spliced ahead of unrelated siblings just because it happened to be declared earlier. `state.RunState.StageOrder` itself — the source of truth `state`/`scheduling` actually run on — is untouched; this is a display-only reordering of the API response.
+- Example: stages declared `stage1 (deps: [stage2]), stage2, stage3, stage4, stage5, stage6 (deps: [stage2,3,4,5])` now render as `stage2, stage3, stage4, stage5, stage1, stage6` — every dependent after its dependencies, unrelated siblings otherwise left alone.
+- New `Server.stageDependsOn`/`Config.StageDependsOn` (`pkg/server/server.go`), populated from `flow.Stage.DependsOn` in `cmd/afm/run.go` alongside the existing `stageInteractive`/`stageAutoApprove` maps.
+- Unit-tested (`pkg/server/stageview_test.go`): no-deps input is left unchanged, a stage declared before its own dependency gets moved after it, the exact 6-stage scenario above, and an unknown/dangling `depends_on` id (defensive only — `flow.ParseFile`'s `detectCycles` already rejects this at parse time) is ignored rather than blocking the sort.
+- **Verified live** against a real built binary and a real Chrome tab: a 6-stage mock-agent flow reproducing the scenario above rendered the sidebar as `STAGE2, STAGE3, STAGE4, STAGE5, STAGE1, STAGE6` while stages 2–5 were running and 1/6 still pending — matching the unit-tested prediction exactly, not just in theory.
+
 ## 2026-08-10
 
 ### New: non-interactive stages auto-answer file-based dialog questions instead of hanging
