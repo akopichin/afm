@@ -52,8 +52,12 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"
 
-# claude CLI
-RUN npm install -g @anthropic-ai/claude-code
+# claude CLI — версия запинена (не "latest"), чтобы пересборка образа не
+# подтягивала молча новый claude-code с другим поведением агентского цикла
+# между релизами afm. Обновлять ТОЛЬКО вручную, после того как новая версия
+# протестирована с текущим релизом — см. Dockerfile.runtime в CLAUDE.md.
+ARG CLAUDE_CODE_VERSION=2.1.227
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # codex CLI (нативный бинарник — не портируется в контейнер простым mount с
 # хоста, поэтому ставим его так же, как claude, npm-пакетом внутри образа)
