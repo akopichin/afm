@@ -48,18 +48,26 @@
 
 .pasteable-attachment-remove {
   position: absolute;
-  top: 1px;
-  right: 1px;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(var(--overlay-scrim-rgb), 0.6);
   border: none;
+  border-radius: 50%;
   color: var(--ink-hi);
   cursor: pointer;
   font-size: 9px;
   line-height: 1;
-  padding: 1px 4px;
-  border-radius: 2px;
+  padding: 0;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
 }
 .pasteable-attachment-remove:hover {
+  opacity: 1;
   color: var(--coral);
 }
 
