@@ -148,17 +148,40 @@ describe('useImagePaste', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('inserts two pasted images in order', async () => {
-    mockUpload.mockResolvedValueOnce({ path: '/x/paste-1.png' }).mockResolvedValueOnce({ path: '/x/paste-2.png' })
-    const onChange = vi.fn()
-    const { result } = renderHook(() => useImagePaste('s1', '', onChange))
+  it('inserts two pasted images in order, incorporating the parent re-render between them', async () => {
+    let resolveFirst: (value: { path: string }) => void = () => {}
+    let resolveSecond: (value: { path: string }) => void = () => {}
+    mockUpload
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+
+    let value = ''
+    const onChange = vi.fn((next: string) => {
+      value = next
+    })
+    const { result, rerender } = renderHook(({ v }) => useImagePaste('s1', v, onChange), {
+      initialProps: { v: value },
+    })
     const event = makePasteEvent([makeImageItem(), makeImageItem()], 0)
 
-    await act(async () => {
-      await result.current.onPaste(event)
+    let pastePromise: Promise<void> | undefined
+    act(() => {
+      pastePromise = result.current.onPaste(event) as unknown as Promise<void>
     })
 
-    expect(onChange).toHaveBeenLastCalledWith('[Screenshot: /x/paste-1.png]\n[Screenshot: /x/paste-2.png]\n')
+    await act(async () => {
+      resolveFirst({ path: '/x/paste-1.png' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    rerender({ v: value })
+
+    await act(async () => {
+      resolveSecond({ path: '/x/paste-2.png' })
+      await pastePromise
+    })
+
+    expect(value).toBe('[Screenshot: /x/paste-1.png]\n[Screenshot: /x/paste-2.png]\n')
   })
 
   it('preserves concurrent edits made while upload is pending', async () => {

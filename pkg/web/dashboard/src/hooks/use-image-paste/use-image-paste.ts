@@ -22,10 +22,10 @@ const ERROR_DISPLAY_MS = 4000
 // Backs PasteableTextarea's paste handling: uploads a pasted clipboard image
 // via uploadAttachment and splices "[Screenshot: <path>]\n" into the
 // controlled value at the caret. Multiple images in one paste are uploaded
-// sequentially (not in parallel) so each insertion's caret math compounds
-// correctly. At each upload resolution, we read the live textarea value
-// (valueRef.current) rather than using a stale snapshot from paste-start,
-// to handle concurrent edits safely (e.g., user typing while images upload).
+// sequentially (not in parallel), with caret advanced between each insertion.
+// At each upload resolution, reads the live textarea value (valueRef.current),
+// handling concurrent edits safely (e.g., user typing or deleting while upload
+// is pending).
 export function useImagePaste(
   stageId: string,
   value: string,
@@ -60,11 +60,7 @@ export function useImagePaste(
     errorTimer.current = window.setTimeout(() => setUploadError(null), ERROR_DISPLAY_MS)
   }
 
-  async function uploadOne(
-    file: File,
-    caret: number,
-    fallbackValue: string,
-  ): Promise<{ caret: number; value: string } | null> {
+  async function uploadOne(file: File, caret: number): Promise<{ caret: number } | null> {
     const id = String(nextId.current)
     nextId.current += 1
     const previewUrl = URL.createObjectURL(file)
@@ -78,11 +74,7 @@ export function useImagePaste(
         return null
       }
 
-      // Read the live value at the moment the upload resolves. Prefer the fresh valueRef.current
-      // (which catches concurrent edits like user typing), but fall back to the threaded value
-      // if parent hasn't re-rendered yet.
-      const freshValue = valueRef.current
-      const baseValue = freshValue.length >= fallbackValue.length ? freshValue : fallbackValue
+      const baseValue = valueRef.current
       const clampedCaret = Math.min(caret, baseValue.length)
       const inserted = `[Screenshot: ${path}]\n`
       const before = baseValue.slice(0, clampedCaret)
@@ -93,7 +85,7 @@ export function useImagePaste(
       setAttachments((prev) =>
         prev.map((a) => (a.id === id ? { ...a, uploading: false, insertedText: inserted } : a)),
       )
-      return { caret: before.length + inserted.length, value: next }
+      return { caret: before.length + inserted.length }
     } catch (err) {
       URL.revokeObjectURL(previewUrl)
       setAttachments((prev) => prev.filter((a) => a.id !== id))
@@ -130,12 +122,10 @@ export function useImagePaste(
 
     return (async () => {
       let caret = startCaret
-      let runningValue = valueRef.current
       for (const file of files) {
-        const result = await uploadOne(file, caret, runningValue)
+        const result = await uploadOne(file, caret)
         if (result !== null) {
           caret = result.caret
-          runningValue = result.value
         }
       }
     })()
