@@ -2,7 +2,14 @@
 // см. tools/genstagestatus и 'make generate'. Раньше это был отдельный
 // вручную поддерживаемый список, который приходилось синхронизировать с Go
 // FSM руками при каждом новом статусе.
+//
+// `export { type StageStatus } from ...` реэкспортирует имя для потребителей
+// этого файла, но НЕ вносит его в область видимости самого stage.ts — ниже
+// StageStatus используется в собственных аннотациях типов (Stage.status,
+// STAGE_STATUS_LABELS, ACTIVE_STAGE_STATUSES), поэтому нужен ещё и обычный
+// `import type` рядом.
 export { STAGE_STATUSES, type StageStatus } from './stage-status.generated'
+import type { StageStatus } from './stage-status.generated'
 
 // Данные одной стадии afm-флоу. Источник — элемент упорядоченного массива
 // stages ответа GET /api/status (см. pkg/server/stageview.go's StageView) —
