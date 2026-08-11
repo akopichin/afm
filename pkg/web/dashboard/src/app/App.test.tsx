@@ -280,6 +280,56 @@ describe('App', () => {
     expect(document.getElementById('detail-title')).toHaveTextContent('Propose')
   })
 
+  test('CRITICAL: keeps retrying auto-advance across polls instead of sticking forever (fast back-to-back script stages)', async () => {
+    // Root cause of the reported bug: the old check fired only in the exact
+    // tick the selected stage transitioned to done, searching forward for an
+    // already-active stage right then. Script stages (Stage.IsScript()) can
+    // run so briefly that a whole extra stage finishes between two polls —
+    // if NO stage was active yet in the snapshot where s1 was first seen
+    // done, the old code gave up permanently instead of trying again on the
+    // next poll once s3 actually became active.
+    let phase: 'running' | 'gap' | 'caught-up' = 'running'
+    mockFetchForStatus(() => {
+      if (phase === 'running') {
+        return {
+          flow_name: 'demo',
+          stages: [stageView('s1', 'Script 1', 'running'), stageView('s2', 'Script 2', 'pending'), stageView('s3', 'Script 3', 'pending')],
+        }
+      }
+      if (phase === 'gap') {
+        // s1 just finished; s2 hasn't started yet in this exact snapshot — nothing is active.
+        return {
+          flow_name: 'demo',
+          stages: [stageView('s1', 'Script 1', 'done'), stageView('s2', 'Script 2', 'pending'), stageView('s3', 'Script 3', 'pending')],
+        }
+      }
+      // s2 raced through to done too while nobody was watching; s3 is now active.
+      return {
+        flow_name: 'demo',
+        stages: [stageView('s1', 'Script 1', 'done'), stageView('s2', 'Script 2', 'done'), stageView('s3', 'Script 3', 'running')],
+      }
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Script 1'))
+
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+
+    phase = 'gap'
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
+    })
+    // Nothing downstream is active yet — selection correctly stays on s1 (not an error state).
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Script 1'))
+
+    phase = 'caught-up'
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'running' }, stage_id: 's3' }) })
+    })
+    // The old one-shot check would stay stuck on s1 forever here — this is the fix under test.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Script 3'))
+  })
+
   test('sets the browser tab title from the flow description', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

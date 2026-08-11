@@ -21,7 +21,6 @@ import { anyAwaiting, useAttention } from '../hooks/use-attention'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
-import type { Stage } from '../types'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
@@ -98,16 +97,31 @@ export function App(): ReactElement {
 
   const refreshedForEvent = useRef<number>(-1)
 
-  // Отслеживаем предыдущий выбор и его статус, чтобы отличить «стадию только что
-  // выбрал пользователь» от «выбранная стадия сама завершилась». Автопродвижение
-  // должно срабатывать только во втором случае.
-  const prevSelectedId = useRef<string | null>(null)
-  const prevSelectedStatus = useRef<Stage['status'] | null>(null)
+  // Отслеживаем, была ли ТЕКУЩАЯ выбранная стадия хоть раз замечена «в работе»
+  // (не done) под этим же выбором — отличает «пользователь выбрал уже
+  // завершённую стадию, чтобы посмотреть план/лог» (не трогаем выбор) от
+  // «стадия, за которой мы следим, завершилась» (нужно продвинуться дальше).
+  // Живёт per-selection: сбрасывается при каждой смене selectedStageId, а не
+  // при каждом опросе — иначе не отличить эти два случая.
+  const watchingId = useRef<string | null>(null)
+  const wasLive = useRef(false)
 
-  // Автовыбор активной стадии (иначе первая failed); продвижение к следующей активной
-  // только когда ТЕКУЩАЯ выбранная стадия сама перешла в done. Ручной выбор уже
-  // завершённой стадии не перекидывает пользователя — иначе во время работы флоу
-  // нельзя открыть логи/план/диалог завершённого стейджа (он мгновенно «убегает»).
+  // Автовыбор активной стадии (иначе первая failed); продвижение к следующей активной,
+  // пока стадия, за которой мы следим, done. Ручной выбор уже завершённой стадии не
+  // перекидывает пользователя — иначе во время работы флоу нельзя открыть логи/план/
+  // диалог завершённого стейджа (он мгновенно «убегает»).
+  //
+  // Раньше продвижение проверялось ОДИН РАЗ — ровно в тот тик, когда выбранная
+  // стадия переходила !done→done. На скриптовых стейджах (Stage.IsScript(),
+  // running может длиться доли секунды) несколько стадий подряд успевают
+  // полностью пройти running→done МЕЖДУ двумя опросами /api/status — к моменту,
+  // когда фронтенд наконец видит «стадия1 стала done», стадия2 уже тоже done, и
+  // среди ACTIVE_STAGE_STATUSES искать нечего. Прежний код на этом сдавался
+  // навсегда (тот самый единственный тик уже прошёл) — выбор залипал на
+  // стадии1, хотя реально уже работает стадия3/4. Теперь поиск следующей
+  // активной стадии повторяется на КАЖДОМ опросе, пока выбранная стадия done и
+  // wasLive — самокорректируется в течение одного цикла опроса вместо
+  // необратимого залипания.
   useEffect(() => {
     if (stages.length === 0) return
 
@@ -125,13 +139,14 @@ export function App(): ReactElement {
       return
     }
 
-    const sameStage = prevSelectedId.current === selectedStageId
-    const justFinished = sameStage && prevSelectedStatus.current !== 'done' && current.status === 'done'
+    if (watchingId.current !== selectedStageId) {
+      watchingId.current = selectedStageId
+      wasLive.current = current.status !== 'done'
+    } else if (current.status !== 'done') {
+      wasLive.current = true
+    }
 
-    prevSelectedId.current = selectedStageId
-    prevSelectedStatus.current = current.status
-
-    if (justFinished) {
+    if (wasLive.current && current.status === 'done') {
       const fromIndex = stages.findIndex((stage) => stage.id === selectedStageId)
       const nextActive = stages.slice(fromIndex + 1).find((stage) => ACTIVE_STAGE_STATUSES.has(stage.status)) ?? null
 
