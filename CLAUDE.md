@@ -46,6 +46,13 @@ By default afm stores runs, flows, and config under `.afm/` in the working direc
 - Новый `Server.stageDependsOn`/`Config.StageDependsOn` (`pkg/server/server.go`) заполняется из `flow.Stage.DependsOn` в `cmd/afm/run.go`, рядом с уже существующими `stageInteractive`/`stageAutoApprove`.
 - Защитный фолбэк в `topoOrder`: если результат не покрыл все id (цикл или ссылка на несуществующую стадию), возвращает исходный порядок как есть — на практике недостижимо, `flow.ParseFile`'s `detectCycles` уже отвергает такие флоу на этапе парсинга.
 
+### Автопродвижение выбранной стадии в дашборде — ретрай на каждом опросе, не одноразовая проверка
+
+`App.tsx` держит выбор пользователя (`selectedStageId`) и автоматически продвигает его к следующей активной стадии, когда стадия, за которой сейчас следят, завершается — но не перекидывает пользователя, если он сам вручную открыл уже завершённую стадию (посмотреть план/лог/диалог).
+
+- **`wasLive` — per-selection флаг, не per-tick.** Раньше продвижение проверялось РОВНО в тот тик, когда выбранная стадия переходила `!done → done` (сравнение с предыдущим статусом). На скриптовых стейджах (`Stage.IsScript()`, `pkg/flow/flow.go`) `running` может длиться доли секунды — несколько стадий подряд успевают пройти `running → done` МЕЖДУ двумя опросами `/api/status` (раз в 3с). К моменту, когда фронтенд наконец видит «стадия1 стала done», стадия2 уже тоже done — среди `ACTIVE_STAGE_STATUSES` искать нечего, и старая проверка сдавалась НАВСЕГДА (следующий опрос её уже не перезапускал, раз статус уже done) — выбор залипал на стадии1, хотя реально работает стадия3/4.
+- **Фикс:** `wasLive.current` живёт, пока текущий `selectedStageId` не поменяется (сбрасывается только при смене выбора, не при каждом опросе). Пока стадия done и была замечена «живой» под этим выбором — поиск следующей активной стадии повторяется на КАЖДОМ опросе, а не один раз. Самокорректируется в пределах одного цикла опроса вместо необратимого залипания. Ручной клик по уже завершённой стадии никогда не выставляет `wasLive` → её выбор не трогается (сохранено прежнее поведение).
+
 ## File-Based Dialog Protocol (Interactive Stages)
 
 The interactive dialog system was refactored from an MCP HTTP server to a file-based protocol starting with the planning-depends-on-ref branch. This enables agents to ask users questions and receive answers through simple file I/O instead of HTTP.
