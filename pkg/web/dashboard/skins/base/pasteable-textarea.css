@@ -1,0 +1,69 @@
+/* pkg/web/dashboard/public/skins/base/pasteable-textarea.css
+   PasteableTextarea: drop-in textarea wrapper used by AgentNoteModal,
+   DialogChannel (custom answer + line comments) and PlanPanel (line
+   comments) to support pasting a clipboard screenshot (Cmd+V). This file
+   owns layout only (width/stacking) — colors come from the same tokens each
+   call site's own textarea rule already uses (className is passed through
+   unchanged), so this file needs no per-skin override. */
+
+.pasteable-textarea-wrap {
+  display: block;
+  width: 100%;
+}
+
+.pasteable-textarea-wrap textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.pasteable-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.pasteable-attachment {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--mint-soft);
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.pasteable-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pasteable-attachment.uploading img {
+  opacity: 0.5;
+}
+
+.pasteable-attachment-remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  background: rgba(var(--overlay-scrim-rgb), 0.6);
+  border: none;
+  color: var(--ink-hi);
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.pasteable-attachment-remove:hover {
+  color: var(--coral);
+}
+
+.pasteable-attachment-error {
+  color: var(--coral);
+  font-size: 11px;
+}
