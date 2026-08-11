@@ -28,3 +28,14 @@ HTMLElement.prototype.scrollIntoView = function (): void {
   /* no-op */
 }
 
+// jsdom does not implement URL.createObjectURL/revokeObjectURL (used by
+// useImagePaste for an instant local thumbnail of a pasted screenshot before
+// the upload resolves) — stub them so paste-related tests don't crash.
+if (typeof URL.createObjectURL !== 'function') {
+  URL.createObjectURL = (): string => 'blob:mock-url'
+}
+if (typeof URL.revokeObjectURL !== 'function') {
+  URL.revokeObjectURL = (): void => {
+    /* no-op */
+  }
+}

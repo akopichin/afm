@@ -50,3 +50,27 @@ export async function answerDialog(
 export async function cancelDialog(stageId: string): Promise<void> {
   await postJson(stageUrl(stageId, 'dialog/cancel'), null)
 }
+
+export class AttachmentUploadError extends Error {
+  status: number
+
+  constructor(status: number) {
+    super(`upload attachment failed with status ${status}`)
+    this.status = status
+  }
+}
+
+export async function uploadAttachment(stageId: string, file: Blob): Promise<{ path: string }> {
+  const url = stageUrl(stageId, 'attachments')
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  })
+
+  if (!response.ok) {
+    throw new AttachmentUploadError(response.status)
+  }
+
+  return (await response.json()) as { path: string }
+}
