@@ -160,4 +160,43 @@ describe('useImagePaste', () => {
 
     expect(onChange).toHaveBeenLastCalledWith('[Screenshot: /x/paste-1.png]\n[Screenshot: /x/paste-2.png]\n')
   })
+
+  it('preserves concurrent edits made while upload is pending', async () => {
+    let resolveUpload: (value: { path: string }) => void = () => {}
+    mockUpload.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpload = resolve
+        }),
+    )
+    let value = 'initial'
+    const onChange = vi.fn((next: string) => {
+      value = next
+    })
+    const { result, rerender } = renderHook(({ v }) => useImagePaste('s1', v, onChange), {
+      initialProps: { v: value },
+    })
+    const event = makePasteEvent([makeImageItem()], 7)
+
+    // Start the paste (upload pending)
+    let pastePromise: Promise<void> | undefined
+    act(() => {
+      pastePromise = result.current.onPaste(event) as unknown as Promise<void>
+    })
+
+    // While upload is still pending, parent updates the value (user types)
+    await act(async () => {
+      value = 'initial caption'
+      rerender({ v: value })
+    })
+
+    // Resolve the upload
+    await act(async () => {
+      resolveUpload({ path: '/x/paste-1.png' })
+      await pastePromise
+    })
+
+    // Final value should include both the concurrent edit and the screenshot
+    expect(value).toBe('initial[Screenshot: /x/paste-1.png]\n caption')
+  })
 })

@@ -22,10 +22,10 @@ const ERROR_DISPLAY_MS = 4000
 // Backs PasteableTextarea's paste handling: uploads a pasted clipboard image
 // via uploadAttachment and splices "[Screenshot: <path>]\n" into the
 // controlled value at the caret. Multiple images in one paste are uploaded
-// sequentially (not in parallel) so each insertion's caret math is computed
-// against the previous insertion's already-updated in-memory value, not
-// against a possibly-stale `value` prop from before the parent re-rendered —
-// see uploadOne's `baseValue`/`caret` threading below.
+// sequentially (not in parallel) so each insertion's caret math compounds
+// correctly. At each upload resolution, we read the live textarea value
+// (valueRef.current) rather than using a stale snapshot from paste-start,
+// to handle concurrent edits safely (e.g., user typing while images upload).
 export function useImagePaste(
   stageId: string,
   value: string,
@@ -63,7 +63,7 @@ export function useImagePaste(
   async function uploadOne(
     file: File,
     caret: number,
-    baseValue: string,
+    fallbackValue: string,
   ): Promise<{ caret: number; value: string } | null> {
     const id = String(nextId.current)
     nextId.current += 1
@@ -78,9 +78,15 @@ export function useImagePaste(
         return null
       }
 
+      // Read the live value at the moment the upload resolves. Prefer the fresh valueRef.current
+      // (which catches concurrent edits like user typing), but fall back to the threaded value
+      // if parent hasn't re-rendered yet.
+      const freshValue = valueRef.current
+      const baseValue = freshValue.length >= fallbackValue.length ? freshValue : fallbackValue
+      const clampedCaret = Math.min(caret, baseValue.length)
       const inserted = `[Screenshot: ${path}]\n`
-      const before = baseValue.slice(0, caret)
-      const after = baseValue.slice(caret)
+      const before = baseValue.slice(0, clampedCaret)
+      const after = baseValue.slice(clampedCaret)
       const next = before + inserted + after
       pendingCaret.current = before.length + inserted.length
       onChangeRef.current(next)
