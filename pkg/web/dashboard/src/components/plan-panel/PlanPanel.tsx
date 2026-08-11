@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import { approveStage, retryHookStage, retryStage, reviseStage, skipHookStage } from '../../api/run-client'
-import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
+import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
@@ -19,11 +19,11 @@ type ReviewItem = LineItem | SectionItem
 // и комментариями), действия Approve/Send revision/Retry. Поведение перенесено из
 // loadPlan / renderPlanReview / onPlanLineClick в текущем app.js.
 export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactElement {
+  const stageId = stage?.id ?? ''
   const [planMarkdown, setPlanMarkdown] = useState('')
   const [comments, setComments] = useState<Record<number, string>>({})
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
-  const commentTextareaRef = useAutoGrowTextarea(draft, 400)
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
   const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | null>(null)
@@ -330,11 +330,11 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
         {activeCommentLine === item.line && (
           <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
             {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
-            <textarea
-              ref={commentTextareaRef}
+            <PasteableTextarea
+              stageId={stageId}
               placeholder={`Comment on line ${item.line}...`}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={setDraft}
             />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
