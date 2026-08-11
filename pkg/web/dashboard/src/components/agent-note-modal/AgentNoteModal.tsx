@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react'
-import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
+import { PasteableTextarea } from '../pasteable-textarea'
 
 type AgentNoteModalProps = {
   stageId: string
@@ -12,7 +12,6 @@ type AgentNoteModalProps = {
 // конца перед перезапуском с этой фразой в контексте.
 export function AgentNoteModal({ stageId, onSubmit, onCancel }: AgentNoteModalProps): ReactElement {
   const [note, setNote] = useState('')
-  const noteTextareaRef = useAutoGrowTextarea(note, 400)
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={`Add a note for stage ${stageId}`}>
@@ -20,11 +19,11 @@ export function AgentNoteModal({ stageId, onSubmit, onCancel }: AgentNoteModalPr
         <p className="agent-note-warning">
           The agent will finish its current action, then restart with this note in context.
         </p>
-        <textarea
-          ref={noteTextareaRef}
+        <PasteableTextarea
+          stageId={stageId}
           className="agent-note-textarea"
           value={note}
-          onChange={(e) => setNote(e.target.value)}
+          onChange={setNote}
           placeholder="What should the agent take into account?"
           autoFocus
         />
