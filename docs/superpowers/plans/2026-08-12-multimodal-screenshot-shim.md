@@ -306,9 +306,15 @@ with:
 extract_image_blocks() {
     local text="$1"
     local blocks='[]'
-    local path
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
+    local marker path
+    while IFS= read -r marker; do
+        [[ -z "$marker" ]] && continue
+        # marker уже включает скобки — обрезаем "[Screenshot: " и "]" в bash,
+        # чтобы обойтись POSIX-совместимым -E (без \K, который есть только в GNU/PCRE
+        # grep и отсутствует в BSD grep из macOS — go test запускает этот скрипт
+        # напрямую на хосте раннера, не внутри Docker-образа).
+        path="${marker#\[Screenshot: }"
+        path="${path%\]}"
         if [[ ! -r "$path" ]]; then
             echo "warning: [Screenshot: $path] not readable, skipping" >&2
             continue
@@ -322,10 +328,13 @@ extract_image_blocks() {
             *) echo "warning: [Screenshot: $path] unrecognized image extension, skipping" >&2; continue ;;
         esac
         local b64
-        b64=$(base64 -w 0 "$path")
+        # base64 -w0 — GNU-only флаг (BSD base64 из macOS падает "invalid argument").
+        # Портируемый вариант — читать файл через stdin (одинаковый вывод у обеих
+        # реализаций) и убрать переводы строк вручную.
+        b64=$(base64 <"$path" | tr -d '\n')
         blocks=$(jq -nc --argjson blocks "$blocks" --arg mime "$mime" --arg b64 "$b64" \
             '$blocks + [{type:"image_url", image_url:{url: ("data:" + $mime + ";base64," + $b64)}}]')
-    done < <(printf '%s' "$text" | grep -oP '\[Screenshot: \K[^]]+' || true)
+    done < <(printf '%s' "$text" | grep -oE '\[Screenshot: [^]]+\]' || true)
     printf '%s' "$blocks"
 }
 
@@ -523,9 +532,15 @@ tools_json='[{"type":"function","function":{"name":"bash","description":"Execute
 extract_image_blocks() {
     local text="$1"
     local blocks='[]'
-    local path
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
+    local marker path
+    while IFS= read -r marker; do
+        [[ -z "$marker" ]] && continue
+        # marker уже включает скобки — обрезаем "[Screenshot: " и "]" в bash,
+        # чтобы обойтись POSIX-совместимым -E (без \K, который есть только в GNU/PCRE
+        # grep и отсутствует в BSD grep из macOS — go test запускает этот скрипт
+        # напрямую на хосте раннера, не внутри Docker-образа).
+        path="${marker#\[Screenshot: }"
+        path="${path%\]}"
         if [[ ! -r "$path" ]]; then
             echo "warning: [Screenshot: $path] not readable, skipping" >&2
             continue
@@ -539,10 +554,13 @@ extract_image_blocks() {
             *) echo "warning: [Screenshot: $path] unrecognized image extension, skipping" >&2; continue ;;
         esac
         local b64
-        b64=$(base64 -w 0 "$path")
+        # base64 -w0 — GNU-only флаг (BSD base64 из macOS падает "invalid argument").
+        # Портируемый вариант — читать файл через stdin (одинаковый вывод у обеих
+        # реализаций) и убрать переводы строк вручную.
+        b64=$(base64 <"$path" | tr -d '\n')
         blocks=$(jq -nc --argjson blocks "$blocks" --arg mime "$mime" --arg b64 "$b64" \
             '$blocks + [{type:"image_url", image_url:{url: ("data:" + $mime + ";base64," + $b64)}}]')
-    done < <(printf '%s' "$text" | grep -oP '\[Screenshot: \K[^]]+' || true)
+    done < <(printf '%s' "$text" | grep -oE '\[Screenshot: [^]]+\]' || true)
     printf '%s' "$blocks"
 }
 
