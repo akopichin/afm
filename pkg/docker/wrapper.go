@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/config"
@@ -29,17 +30,19 @@ func envName(cmd string) string {
 // WrapperSpec describes one wrapper script to generate in the wrapper-dir.
 // Type "" or "claude" selects the claude template (auth + ANTHROPIC_* vars + exec claude).
 // Type "openai" selects the OpenAI-compatible template (OPENAI_* vars + exec openai-as-claude).
+// Type "openai-agent" selects the openai-compatible tool-loop template (OPENAI_* vars + exec openai-agent-as-claude).
 // Type "cursor" selects the Cursor Cloud Agents template (CURSOR_* vars + exec cursor-as-claude).
 // Type "codex" selects the codex template (CODEX_BIN + optional CODEX_MODEL + exec codex-as-claude).
 // Model == "" with Type "" selects the claude proxy-shim (BASE_URL only, no model vars).
 type WrapperSpec struct {
-	Type         string // "" | "claude" = claude template; "openai" = openai-compatible; "cursor" = Cursor Cloud Agents
+	Type         string // "" | "claude" = claude template; "openai" = openai-compatible; "openai-agent" = openai-compatible tool-loop; "cursor" = Cursor Cloud Agents
 	Command      string
 	AuthTo       string // auth env var name ("" for claude proxy-shim)
 	BaseURL      string // baked gateway URL; "" → omit
 	Model        string // model string; "" → claude proxy-shim for claude type
 	HasSysPrompt bool   // emit sysprompt block (claude type only)
 	Bare         bool   // prepend --bare to claude exec (skip CLAUDE.md/hooks/skills auto-context)
+	MaxTurns     int    // openai-agent only: OPENAI_AGENT_MAX_TURNS; 0 → omit (script default)
 }
 
 // CreateWrappers creates a temp dir with one executable script per spec, named
@@ -57,11 +60,11 @@ func CreateWrappers(specs []WrapperSpec) (string, error) {
 	if len(specs) == 0 {
 		return "", nil
 	}
-	// LookPath claude только если есть хотя бы один claude-тип (не openai, не cursor,
-	// не codex — все три используют собственные адаптеры, не вызывающие claude).
+	// LookPath claude только если есть хотя бы один claude-тип (не openai, не openai-agent, не cursor,
+	// не codex — все четыре используют собственные адаптеры, не вызывающие claude).
 	var realClaude string
 	for _, s := range specs {
-		if s.Type != config.RecipeTypeOpenAI && s.Type != config.RecipeTypeCursor && s.Type != config.RecipeTypeCodex {
+		if s.Type != config.RecipeTypeOpenAI && s.Type != config.RecipeTypeOpenAIAgent && s.Type != config.RecipeTypeCursor && s.Type != config.RecipeTypeCodex {
 			p, err := exec.LookPath(config.ClaudeCommand)
 			if err != nil {
 				return "", fmt.Errorf("claude not found in PATH (required for wrapper generation): %w", err)
@@ -121,6 +124,26 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 			fmt.Fprintf(&b, "export OPENAI_MODEL=%q\n", s.Model)
 		}
 		b.WriteString("exec /usr/local/bin/openai-as-claude \"$@\"\n")
+		return b.String(), nil
+	}
+
+	if s.Type == config.RecipeTypeOpenAIAgent {
+		// openai-compatible tool-loop: OPENAI_* vars + exec openai-agent-as-claude.
+		// realClaude не нужен — openai-agent-as-claude не вызывает claude.
+		if s.AuthTo != "" {
+			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
+			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+		}
+		if s.BaseURL != "" {
+			fmt.Fprintf(&b, "export OPENAI_BASE_URL=%q\n", s.BaseURL)
+		}
+		if s.Model != "" {
+			fmt.Fprintf(&b, "export OPENAI_MODEL=%q\n", s.Model)
+		}
+		if s.MaxTurns != 0 {
+			fmt.Fprintf(&b, "export OPENAI_AGENT_MAX_TURNS=%q\n", strconv.Itoa(s.MaxTurns))
+		}
+		b.WriteString("exec /usr/local/bin/openai-agent-as-claude \"$@\"\n")
 		return b.String(), nil
 	}
 

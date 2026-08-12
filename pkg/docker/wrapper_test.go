@@ -191,6 +191,80 @@ func TestCreateWrappers_OpenAINoClaudeRequired(t *testing.T) {
 	}
 }
 
+func TestCreateWrappers_OpenAIAgentTemplate(t *testing.T) {
+	// openai-agent-тип не требует claude в PATH
+	t.Setenv("PATH", t.TempDir())
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:     config.RecipeTypeOpenAIAgent,
+		Command:  "idealab",
+		AuthTo:   "OPENAI_API_KEY",
+		BaseURL:  "https://idealab.alibaba-inc.com/api/openai/v1",
+		Model:    "qwen3-max",
+		MaxTurns: 25,
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (openai-agent): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "idealab"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export OPENAI_API_KEY="$AFM_SECRET_IDEALAB"`,
+		"unset AFM_SECRET_IDEALAB",
+		`export OPENAI_BASE_URL="https://idealab.alibaba-inc.com/api/openai/v1"`,
+		`export OPENAI_MODEL="qwen3-max"`,
+		`export OPENAI_AGENT_MAX_TURNS="25"`,
+		`exec /usr/local/bin/openai-agent-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("openai-agent wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	if strings.Contains(s, "openai-as-claude") && !strings.Contains(s, "openai-agent-as-claude") {
+		t.Errorf("openai-agent wrapper must exec openai-agent-as-claude, not openai-as-claude:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_OpenAIAgentTemplate_NoMaxTurns(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeOpenAIAgent,
+		Command: "idealab",
+		AuthTo:  "OPENAI_API_KEY",
+		BaseURL: "https://idealab.alibaba-inc.com/api/openai/v1",
+		Model:   "qwen3-max",
+		// MaxTurns не задан (0) — переменная не экспортируется, скрипт берёт свой дефолт.
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (openai-agent): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "idealab"))
+	s := string(script)
+	if strings.Contains(s, "OPENAI_AGENT_MAX_TURNS") {
+		t.Errorf("wrapper must not export OPENAI_AGENT_MAX_TURNS when MaxTurns is 0:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_OpenAIAgentNoClaudeRequired(t *testing.T) {
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeOpenAIAgent, Command: "idealab", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
+	})
+	if err != nil {
+		t.Errorf("openai-agent-only wrappers must not fail when claude absent: %v", err)
+	}
+}
+
 func TestCreateWrappers_MixedTypes_RequiresClaude(t *testing.T) {
 	// смесь openai + claude без claude в PATH → ошибка
 	emptyDir := t.TempDir()
