@@ -376,6 +376,60 @@ docker:
 
 Требования в образе: `jq`, `curl` (оба присутствуют в `Dockerfile.runtime`).
 
+#### Тип `openai-agent`: OpenAI-совместимые провайдеры с реальным tool-loop
+
+`type: openai` (выше) даёт модели только текст — годится для planning/review
+стадий, но не годится для `agents: [auto]`/`interactive: true` стадий, которым
+нужно реально писать файлы, гонять скрипты и отвечать на диалоговые вопросы.
+`type: openai-agent` — для провайдеров, у которых `/chat/completions`
+поддерживает настоящий OpenAI-style function calling (`tools`/`tool_choice`,
+включая потоковые `tool_calls` со стандартной index-адресацией фрагментов).
+Сгенерированный враппер использует `/usr/local/bin/openai-agent-as-claude`:
+
+```yaml
+docker:
+  autoShim: true
+  agents:
+    idealab:
+      type: openai-agent
+      model: qwen3-max
+      url: https://idealab.alibaba-inc.com/api/openai/v1
+      max_turns: 40          # опционально; дефолт скрипта — 40
+      auth:
+        from: "file:~/.ai-free/claude-glm/token-idealab"
+        to: "env:OPENAI_API_KEY"
+```
+
+Модели даётся ровно один инструмент — `bash` (команда → stdout+stderr+exit
+code). Никаких отдельных read/write/skill-инструментов: чтение и запись
+файлов, запуск `./scripts/*.sh`, поллинг диалоговых файлов
+(`<phase>.<id>.answer.json`) — всё это модель делает сама через `bash`,
+ровно как обычный shell-скрипт делал бы. Skill-конвенция (`<skills>name</skills>`
+в промпте, см. раздел "File-Based Dialog Protocol" выше) не поддержана нативно
+у стороннего провайдера — системный промпт адаптера явно учит модель при
+упоминании skill'а самой прочитать `.claude/skills/<name>/SKILL.md` через `bash`.
+
+Каждый tool-вызов сразу печатается в stdout как
+`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"..."}}]}}`
+— та же форма, что и настоящий Claude `Bash`-tool_use, поэтому дашборд
+показывает живой action feed, а не тишину до самого конца стадии; это же
+сбрасывает 30-минутный `idle_timeout` между ходами. `max_turns` (дефолт 40)
+ограничивает число обращений к API за одну стадию; при достижении лимита
+скрипт завершается штатно (exit 0) с пометкой в тексте — afm обрабатывает
+это как обычный незавершённый autonomous-прогон (нет `execution_summary.md` →
+retry), а не как отдельную ошибку. Сбой самого запроса к API (сеть, не-2xx) —
+это `exit 1`, стадия падает сразу, в отличие от `openai-as-claude.sh`
+(который на сбое `curl` проглатывает ошибку в пустой success — там это
+безопасно для одноразового текста, здесь тихий "успех" замаскировал бы
+реально незавершённый tool-loop).
+
+Известное (не новое) ограничение: если модель зависает на диалоговом поллинге
+дольше 30 минут (человек долго не отвечает), сработает тот же `idle_timeout`,
+что уже документирован для файлового диалогового протокола выше — это
+свойство самого механизма, не специфика этого типа.
+
+Требования в образе: `jq`, `curl` (оба уже есть в `Dockerfile.runtime`).
+
 #### Тип `cursor`: Cursor Cloud Agents API
 
 Cursor Cloud API (`api.cursor.com`) **не имеет** синхронного `v1/chat/completions` (ответ 404) —
