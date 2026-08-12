@@ -77,6 +77,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY scripts/openai-as-claude.sh /usr/local/bin/openai-as-claude
 RUN chmod +x /usr/local/bin/openai-as-claude
 
+# openai-agent-as-claude: реальный tool-loop (bash tool + function calling) поверх
+# OpenAI-совместимых провайдеров с tool-calling (IdeaLab и т.п.)
+COPY scripts/openai-agent-as-claude.sh /usr/local/bin/openai-agent-as-claude
+RUN chmod +x /usr/local/bin/openai-agent-as-claude
+
 # cursor-as-claude: адаптер Cursor Cloud Agents API (асинхронный run-based → claude stream-json)
 COPY scripts/cursor-as-claude.sh /usr/local/bin/cursor-as-claude
 RUN chmod +x /usr/local/bin/cursor-as-claude
