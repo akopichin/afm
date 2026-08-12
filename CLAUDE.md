@@ -398,6 +398,21 @@ docker:
       auth:
         from: "file:~/.ai-free/claude-glm/token-idealab"
         to: "env:OPENAI_API_KEY"
+    balian:
+      # Balian/DashScope (Alibaba Cloud "百炼" Model Studio) — тот же
+      # compatible-mode /chat/completions, тот же streaming tool_calls формат.
+      # model: доступность моделей зависит от ключа — на проверенном ключе
+      # работают только qwen-plus и qwen3.5/3.6/3.7-plus; qwen3.8-max/qwen3-max/
+      # qwen-max/qwen-turbo/qwen3-coder-* дают Model.AccessDenied. qwen3.7-plus
+      # думает по умолчанию (300+ reasoning-токенов даже на тривиальный ответ,
+      # adapter reasoning_content не читает — просто лишние токены/задержка);
+      # qwen-plus того же провайдера отвечает без thinking-режима.
+      type: openai-agent
+      model: qwen3.7-plus
+      url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      auth:
+        from: "file:~/.ai-free/claude-glm/token-balian"
+        to: "env:OPENAI_API_KEY"
 ```
 
 Модели даётся ровно один инструмент — `bash` (команда → stdout+stderr+exit
