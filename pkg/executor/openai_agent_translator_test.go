@@ -228,3 +228,100 @@ func TestOpenAIAgentAsClaude_APIFailureExitsNonZero(t *testing.T) {
 		t.Fatalf("expected script to exit non-zero on HTTP 500, got success. output:\n%s", out)
 	}
 }
+
+// TestOpenAIAgentAsClaude_ScreenshotInInitialPromptEmbedsImage: a [Screenshot: <path>]
+// in the initial prompt (Path A) must produce a multimodal seed user message —
+// same mechanism as openai-as-claude.sh, verified here through the tool-loop script.
+// Also checks the system prompt was updated to mention the convention.
+func TestOpenAIAgentAsClaude_ScreenshotInInitialPromptEmbedsImage(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	pngPath := writeTestPNG(t)
+	wantB64 := readTestPNGBase64(t, pngPath)
+
+	finalAnswer := `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"red"},"finish_reason":""}]}
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	fakeCurlDir, captureDir := writeStatefulFakeCurl(t, []string{finalAnswer}, "200")
+
+	prompt := fmt.Sprintf("what color is [Screenshot: %s]?\n", pngPath)
+	out, err := runAgentScript(t, fakeCurlDir, prompt)
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	raw, readErr := os.ReadFile(filepath.Join(captureDir, "call_0.args"))
+	if readErr != nil {
+		t.Fatalf("read call_0.args: %v", readErr)
+	}
+	body := decodeCapturedRequestBody(t, raw)
+	messages, _ := body["messages"].([]any)
+	if len(messages) < 2 {
+		t.Fatalf("expected at least system+user messages, got %d: %v", len(messages), messages)
+	}
+
+	sysMsg, _ := messages[0].(map[string]any)
+	sysContent, _ := sysMsg["content"].(string)
+	if !strings.Contains(sysContent, "Screenshot") {
+		t.Errorf("system prompt should mention the [Screenshot: ...] convention, got: %q", sysContent)
+	}
+
+	userMsg, _ := messages[1].(map[string]any)
+	content, ok := userMsg["content"].([]any)
+	if !ok {
+		t.Fatalf("expected seed user content to be a multimodal array, got %T: %v", userMsg["content"], userMsg["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d: %v", len(content), content)
+	}
+	imgBlock, _ := content[1].(map[string]any)
+	imageURLField, _ := imgBlock["image_url"].(map[string]any)
+	url, _ := imageURLField["url"].(string)
+	wantURL := "data:image/png;base64," + wantB64
+	if url != wantURL {
+		t.Errorf("image_url = %q, want %q", url, wantURL)
+	}
+}
+
+// TestOpenAIAgentAsClaude_NoMarkerInitialPromptUnchanged: no [Screenshot: ...] in
+// the initial prompt keeps the seed user message content a plain string.
+func TestOpenAIAgentAsClaude_NoMarkerInitialPromptUnchanged(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	finalAnswer := `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":""}]}
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	fakeCurlDir, captureDir := writeStatefulFakeCurl(t, []string{finalAnswer}, "200")
+
+	out, err := runAgentScript(t, fakeCurlDir, "do the thing\n")
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	raw, readErr := os.ReadFile(filepath.Join(captureDir, "call_0.args"))
+	if readErr != nil {
+		t.Fatalf("read call_0.args: %v", readErr)
+	}
+	body := decodeCapturedRequestBody(t, raw)
+	messages, _ := body["messages"].([]any)
+	userMsg, _ := messages[1].(map[string]any)
+	content, ok := userMsg["content"].(string)
+	if !ok {
+		t.Fatalf("expected seed user content to stay a plain string, got %T: %v", userMsg["content"], userMsg["content"])
+	}
+	if content != "do the thing" {
+		t.Errorf("content = %q, want %q", content, "do the thing")
+	}
+}
