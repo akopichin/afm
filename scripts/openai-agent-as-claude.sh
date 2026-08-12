@@ -197,6 +197,17 @@ while :; do
 
         tool_msg=$(jq -nc --arg id "$call_id" --arg out "$tool_output" '{role:"tool", tool_call_id:$id, content:$out}')
         jq -c --argjson m "$tool_msg" '. + [$m]' "$messages_file" > "${messages_file}.tmp" && mv "${messages_file}.tmp" "$messages_file"
+
+        # если вывод команды содержит [Screenshot: ...] (например, cat ответа на
+        # диалог со вставленным скриншотом) — картинка идёт отдельным user-сообщением
+        # сразу за tool-результатом: tool-роль в OpenAI-протоколе не гарантированно
+        # поддерживает мультимодальный content, а user-роль — везде.
+        img_blocks=$(extract_image_blocks "$tool_output")
+        if [[ "$img_blocks" != "[]" ]]; then
+            followup_msg=$(jq -nc --argjson imgs "$img_blocks" \
+                '{role:"user", content: ([{type:"text", text:"Screenshot referenced in the tool result above:"}] + $imgs)}')
+            jq -c --argjson m "$followup_msg" '. + [$m]' "$messages_file" > "${messages_file}.tmp" && mv "${messages_file}.tmp" "$messages_file"
+        fi
     done
 done
 

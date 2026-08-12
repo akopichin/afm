@@ -325,3 +325,114 @@ data: [DONE]
 		t.Errorf("content = %q, want %q", content, "do the thing")
 	}
 }
+
+// TestOpenAIAgentAsClaude_ScreenshotInToolOutputInjectsFollowupMessage: when a
+// tool call's real output happens to contain [Screenshot: <path>] (e.g. cat'ing
+// a dialog answer.json that references a pasted image), the NEXT request must
+// carry both the unmodified tool-role message and a separate user-role message
+// with the image — Path B.
+func TestOpenAIAgentAsClaude_ScreenshotInToolOutputInjectsFollowupMessage(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	pngPath := writeTestPNG(t)
+	wantB64 := readTestPNGBase64(t, pngPath)
+
+	fixtureDir := t.TempDir()
+	answerPath := filepath.Join(fixtureDir, "answer.json")
+	answerContent := fmt.Sprintf(`{"id":"q1","answer":"here you go [Screenshot: %s]"}`, pngPath)
+	if err := os.WriteFile(answerPath, []byte(answerContent), 0o644); err != nil {
+		t.Fatalf("write fixture answer file: %v", err)
+	}
+
+	catCommand := fmt.Sprintf("cat %s", answerPath)
+	turn1 := fmt.Sprintf(`data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_1","function":{"name":"bash","arguments":"{\"command\": \"%s\"}"},"type":"function","index":0}]},"finish_reason":"tool_calls"}]}
+data: [DONE]
+`, catCommand)
+	turn2 := `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"got it"},"finish_reason":""}]}
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	fakeCurlDir, captureDir := writeStatefulFakeCurl(t, []string{turn1, turn2}, "200")
+
+	out, err := runAgentScript(t, fakeCurlDir, "check the answer file\n")
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	raw, readErr := os.ReadFile(filepath.Join(captureDir, "call_1.args"))
+	if readErr != nil {
+		t.Fatalf("read call_1.args: %v", readErr)
+	}
+	body := decodeCapturedRequestBody(t, raw)
+	messages, _ := body["messages"].([]any)
+	// system, user, assistant(tool_calls), tool, user(image) = 5 messages
+	if len(messages) != 5 {
+		t.Fatalf("expected 5 messages (system,user,assistant,tool,user-image), got %d: %v", len(messages), messages)
+	}
+
+	toolMsg, _ := messages[3].(map[string]any)
+	if toolMsg["role"] != "tool" {
+		t.Fatalf("messages[3].role = %v, want \"tool\"", toolMsg["role"])
+	}
+	toolContent, _ := toolMsg["content"].(string)
+	if !strings.Contains(toolContent, "[Screenshot:") {
+		t.Errorf("tool message should keep the raw marker text unmodified, got: %q", toolContent)
+	}
+
+	followupMsg, _ := messages[4].(map[string]any)
+	if followupMsg["role"] != "user" {
+		t.Fatalf("messages[4].role = %v, want \"user\"", followupMsg["role"])
+	}
+	followupContent, ok := followupMsg["content"].([]any)
+	if !ok || len(followupContent) != 2 {
+		t.Fatalf("expected followup content to be a 2-block array, got %T: %v", followupMsg["content"], followupMsg["content"])
+	}
+	imgBlock, _ := followupContent[1].(map[string]any)
+	imageURLField, _ := imgBlock["image_url"].(map[string]any)
+	url, _ := imageURLField["url"].(string)
+	wantURL := "data:image/png;base64," + wantB64
+	if url != wantURL {
+		t.Errorf("image_url = %q, want %q", url, wantURL)
+	}
+}
+
+// TestOpenAIAgentAsClaude_NoScreenshotInToolOutputNoFollowup: ordinary tool output
+// with no marker must NOT get a spurious followup image message appended.
+func TestOpenAIAgentAsClaude_NoScreenshotInToolOutputNoFollowup(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	turn1 := `data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_1","function":{"name":"bash","arguments":"{\"command\": \"echo hello-from-tool\"}"},"type":"function","index":0}]},"finish_reason":"tool_calls"}]}
+data: [DONE]
+`
+	turn2 := `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":""}]}
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+`
+	fakeCurlDir, captureDir := writeStatefulFakeCurl(t, []string{turn1, turn2}, "200")
+
+	out, err := runAgentScript(t, fakeCurlDir, "do the thing\n")
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	raw, readErr := os.ReadFile(filepath.Join(captureDir, "call_1.args"))
+	if readErr != nil {
+		t.Fatalf("read call_1.args: %v", readErr)
+	}
+	body := decodeCapturedRequestBody(t, raw)
+	messages, _ := body["messages"].([]any)
+	// system, user, assistant(tool_calls), tool = 4 messages — no followup injected
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 messages (no image followup), got %d: %v", len(messages), messages)
+	}
+}
