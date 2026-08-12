@@ -39,8 +39,63 @@ if [[ -z "${OPENAI_API_KEY:-}" ]]; then
     exit 1
 fi
 
+# extract_image_blocks <text> -> JSON array of image_url content blocks for every
+# readable [Screenshot: <path>] reference in text (empty "[]" if none, or if none
+# were readable/recognized). Unreadable/unrecognized paths are skipped with a
+# stderr warning, not a hard failure.
+extract_image_blocks() {
+    local text="$1"
+    local blocks='[]'
+    local marker path
+    while IFS= read -r marker; do
+        [[ -z "$marker" ]] && continue
+        # marker уже включает скобки — обрезаем "[Screenshot: " и "]" в bash,
+        # чтобы обойтись POSIX-совместимым -E (без \K, который есть только в GNU/PCRE grep
+        # и отсутствует в BSD grep из macOS).
+        path="${marker#\[Screenshot: }"
+        path="${path%\]}"
+        if [[ ! -r "$path" ]]; then
+            echo "warning: [Screenshot: $path] not readable, skipping" >&2
+            continue
+        fi
+        local mime=""
+        case "$path" in
+            *.png) mime="image/png" ;;
+            *.jpg|*.jpeg) mime="image/jpeg" ;;
+            *.webp) mime="image/webp" ;;
+            *.gif) mime="image/gif" ;;
+            *) echo "warning: [Screenshot: $path] unrecognized image extension, skipping" >&2; continue ;;
+        esac
+        local b64
+        # base64 -w0 — GNU-only флаг (BSD base64 из macOS его не понимает и падает
+        # "invalid argument"). Портируемый вариант — читать файл через stdin (у обеих
+        # реализаций один и тот же вид вывода по умолчанию) и убрать переводы строк сами.
+        b64=$(base64 <"$path" | tr -d '\n')
+        blocks=$(jq -nc --argjson blocks "$blocks" --arg mime "$mime" --arg b64 "$b64" \
+            '$blocks + [{type:"image_url", image_url:{url: ("data:" + $mime + ";base64," + $b64)}}]')
+    done < <(printf '%s' "$text" | grep -oE '\[Screenshot: [^]]+\]' || true)
+    printf '%s' "$blocks"
+}
+
+# build_user_content <text> -> plain JSON string if no image was embedded, else a
+# [{type:"text",...}, image_url...] array with the [Screenshot: <path>] marker(s)
+# stripped from the text portion.
+build_user_content() {
+    local text="$1"
+    local blocks
+    blocks=$(extract_image_blocks "$text")
+    if [[ "$blocks" == "[]" ]]; then
+        jq -nc --arg t "$text" '$t'
+        return
+    fi
+    local cleaned
+    cleaned=$(printf '%s' "$text" | sed -E 's/\[Screenshot: [^]]+\]//g')
+    jq -nc --arg t "$cleaned" --argjson imgs "$blocks" '[{type:"text", text:$t}] + $imgs'
+}
+
 # формируем тело запроса
-body=$(jq -nc --arg model "$OPENAI_MODEL" --arg content "$prompt" \
+content=$(build_user_content "$prompt")
+body=$(jq -nc --arg model "$OPENAI_MODEL" --argjson content "$content" \
     '{model: $model, stream: true, messages: [{role: "user", content: $content}]}')
 
 # вызываем API и накапливаем SSE-чанки, затем эмитим ОДИН assistant-конверт.
