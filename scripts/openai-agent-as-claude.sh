@@ -123,11 +123,10 @@ while :; do
         '{model: $model, stream: true, tool_choice: "auto", tools: $tools, messages: $msgs[0]}')
 
     set +e
-    response=$(curl -sS \
+    response=$(curl -sS -w '\n%{http_code}' \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $OPENAI_API_KEY" \
         -d "$request_body" \
-        -w '\n%{http_code}' \
         "${OPENAI_BASE_URL}/chat/completions")
     curl_exit=$?
     set -e

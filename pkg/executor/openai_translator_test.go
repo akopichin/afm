@@ -90,7 +90,7 @@ func readTestPNGBase64(t *testing.T, path string) string {
 // stops once one value is fully read, ignoring any trailing text.
 func decodeCapturedRequestBody(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
-	idx := bytes.IndexByte(raw, '{')
+	idx := bytes.Index(raw, []byte(`{"`))
 	if idx < 0 {
 		t.Fatalf("no JSON object found in captured args: %s", raw)
 	}
