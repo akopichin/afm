@@ -370,7 +370,9 @@ docker:
 ```
 
 Поддерживаемые провайдеры: DeepSeek (`api.deepseek.com`), OpenAI, локальные Ollama/любые
-эндпоинты с `POST /v1/chat/completions`. **Важно:** Cursor сюда НЕ относится — см. ниже `type: cursor`.
+эндпоинты с `POST /v1/chat/completions` (в т.ч. SSE-стриминг). **Важно:** Cursor сюда
+НЕ относится — см. ниже `type: cursor`; IdeaLab тоже НЕ относится — этому провайдеру
+нужен реальный tool-loop, см. ниже `type: openai-agent`.
 
 Требования в образе: `jq`, `curl` (оба присутствуют в `Dockerfile.runtime`).
 
