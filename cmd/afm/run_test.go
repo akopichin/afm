@@ -56,6 +56,22 @@ func TestBuildWrapperSpec(t *testing.T) {
 		}
 	})
 
+	t.Run("MaxTurns passed through", func(t *testing.T) {
+		withMaxTurns := openaiRecipe
+		withMaxTurns.MaxTurns = 15
+		spec := buildWrapperSpec("idealab", withMaxTurns, true)
+		if spec.MaxTurns != 15 {
+			t.Errorf("MaxTurns: got %d, want 15", spec.MaxTurns)
+		}
+	})
+
+	t.Run("MaxTurns zero when recipe doesn't set it", func(t *testing.T) {
+		spec := buildWrapperSpec("idealab", openaiRecipe, true)
+		if spec.MaxTurns != 0 {
+			t.Errorf("MaxTurns: got %d, want 0", spec.MaxTurns)
+		}
+	})
+
 	// Bare прокидывается в spec как есть (управляет --bare в claude-обёртке).
 	t.Run("Bare passed through", func(t *testing.T) {
 		if spec := buildWrapperSpec("glm51", openaiRecipe, true); !spec.Bare {
