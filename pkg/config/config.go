@@ -78,20 +78,22 @@ const ClaudeCommand = "claude"
 // AgentRecipe.Type/WrapperSpec.Type (экспортированы, чтобы pkg/docker/wrapper.go
 // могло их переиспользовать вместо собственных WrapperTypeOpenAI/WrapperTypeCursor).
 const (
-	RecipeTypeOpenAI = "openai"
-	RecipeTypeCursor = "cursor" // Cursor Cloud Agents API (async run-based, не chat completions)
-	RecipeTypeCodex  = "codex"  // codex CLI через codex-as-claude (см. scripts/codex-as-claude.sh)
+	RecipeTypeOpenAI      = "openai"
+	RecipeTypeOpenAIAgent = "openai-agent" // OpenAI-совместимый function calling + реальный tool-loop (см. scripts/openai-agent-as-claude.sh)
+	RecipeTypeCursor      = "cursor"       // Cursor Cloud Agents API (async run-based, не chat completions)
+	RecipeTypeCodex       = "codex"        // codex CLI через codex-as-claude (см. scripts/codex-as-claude.sh)
 )
 
 // AfmDir — имя служебного каталога afm: и глобального (~/.afm), и per-project.
 const AfmDir = ".afm"
 
 type AgentRecipe struct {
-	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "cursor" = Cursor Cloud Agents API
-	Model        string     `yaml:"model"`         // required → ANTHROPIC_DEFAULT_*_MODEL (claude) / OPENAI_MODEL (openai) / CURSOR_MODEL (cursor)
-	URL          string     `yaml:"url"`           // optional (claude); required (openai, cursor) — agent gateway
+	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "openai-agent" = OpenAI-compatible + real tool-loop; "cursor" = Cursor Cloud Agents API
+	Model        string     `yaml:"model"`         // required → ANTHROPIC_DEFAULT_*_MODEL (claude) / OPENAI_MODEL (openai, openai-agent) / CURSOR_MODEL (cursor)
+	URL          string     `yaml:"url"`           // optional (claude); required (openai, openai-agent, cursor) — agent gateway
 	SystemPrompt string     `yaml:"system_prompt"` // optional; "file:<path>" → --append-system-prompt-file content
 	Auth         RecipeAuth `yaml:"auth"`          // required
+	MaxTurns     int        `yaml:"max_turns"`     // openai-agent only: max tool-call iterations per stage invocation; 0 → script default (40)
 }
 
 // RecipeAuth describes where afm reads the secret on the host (From) and which
@@ -126,9 +128,9 @@ func (r AgentRecipe) Validate() error {
 	// type — allow-list; неизвестное значение (напр. опечатка "openapi") молча
 	// трактовалось бы как claude, что ведёт к некорректной генерации обёртки.
 	switch r.Type {
-	case "", ClaudeCommand, RecipeTypeOpenAI, RecipeTypeCursor, RecipeTypeCodex:
+	case "", ClaudeCommand, RecipeTypeOpenAI, RecipeTypeOpenAIAgent, RecipeTypeCursor, RecipeTypeCodex:
 	default:
-		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", \"cursor\", or \"codex\"; got %q", r.Type)
+		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", \"openai-agent\", \"cursor\", or \"codex\"; got %q", r.Type)
 	}
 	// codex: model опционален ("" / "default" → CODEX_MODEL не выставляется, решает
 	// сам codex/~/.codex/config.toml); auth опционален — авторизация идёт через
@@ -150,9 +152,9 @@ func (r AgentRecipe) Validate() error {
 	if !strings.HasPrefix(r.Auth.To, "env:") {
 		return errors.New("recipe: auth.to must be an env: reference (e.g. env:OPENAI_API_KEY)")
 	}
-	// openai и cursor — внешние шлюзы: url обязателен, auth.to не ограничен ClaudeAuthEnvVars
-	// (используют свои env vars: OPENAI_API_KEY, CURSOR_API_KEY и т.д.).
-	if r.Type == RecipeTypeOpenAI || r.Type == RecipeTypeCursor {
+	// openai, openai-agent и cursor — внешние шлюзы: url обязателен, auth.to не
+	// ограничен ClaudeAuthEnvVars (используют свои env vars: OPENAI_API_KEY, CURSOR_API_KEY и т.д.).
+	if r.Type == RecipeTypeOpenAI || r.Type == RecipeTypeOpenAIAgent || r.Type == RecipeTypeCursor {
 		if r.URL == "" {
 			return fmt.Errorf("recipe: url is required for type: %s", r.Type)
 		}

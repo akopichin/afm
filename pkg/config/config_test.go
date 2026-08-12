@@ -555,6 +555,86 @@ func TestAgentRecipe_OpenAIType(t *testing.T) {
 	}
 }
 
+func TestAgentRecipe_OpenAIAgentType(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string // пустая строка → ожидаем PASS
+	}{
+		{
+			name: "valid openai-agent recipe",
+			recipe: config.AgentRecipe{
+				Type:  "openai-agent",
+				Model: "qwen3-max",
+				URL:   "https://idealab.alibaba-inc.com/api/openai/v1",
+				Auth:  config.RecipeAuth{From: "env:IDEALAB_TOKEN", To: "env:OPENAI_API_KEY"},
+			},
+		},
+		{
+			name: "valid openai-agent recipe with max_turns",
+			recipe: config.AgentRecipe{
+				Type:     "openai-agent",
+				Model:    "qwen3-max",
+				URL:      "https://idealab.alibaba-inc.com/api/openai/v1",
+				Auth:     config.RecipeAuth{From: "env:IDEALAB_TOKEN", To: "env:OPENAI_API_KEY"},
+				MaxTurns: 10,
+			},
+		},
+		{
+			name: "openai-agent: missing model",
+			recipe: config.AgentRecipe{
+				Type: "openai-agent",
+				URL:  "https://idealab.alibaba-inc.com/api/openai/v1",
+				Auth: config.RecipeAuth{From: "env:IDEALAB_TOKEN", To: "env:OPENAI_API_KEY"},
+			},
+			errSub: "model is required",
+		},
+		{
+			name: "openai-agent: missing url",
+			recipe: config.AgentRecipe{
+				Type:  "openai-agent",
+				Model: "qwen3-max",
+				Auth:  config.RecipeAuth{From: "env:IDEALAB_TOKEN", To: "env:OPENAI_API_KEY"},
+			},
+			errSub: "url is required",
+		},
+		{
+			name: "openai-agent: auth.to not env:",
+			recipe: config.AgentRecipe{
+				Type:  "openai-agent",
+				Model: "qwen3-max",
+				URL:   "https://idealab.alibaba-inc.com/api/openai/v1",
+				Auth:  config.RecipeAuth{From: "env:IDEALAB_TOKEN", To: "OPENAI_API_KEY"},
+			},
+			errSub: "must be an env:",
+		},
+		{
+			name: "openai-agent: any env: var allowed (not restricted to ClaudeAuthEnvVars)",
+			recipe: config.AgentRecipe{
+				Type:  "openai-agent",
+				Model: "qwen3-max",
+				URL:   "https://idealab.alibaba-inc.com/api/openai/v1",
+				Auth:  config.RecipeAuth{From: "env:MY_CUSTOM_KEY", To: "env:MY_TARGET_KEY"},
+			},
+			// env: любой — ошибки нет
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.recipe.Validate()
+			if c.errSub == "" {
+				if err != nil {
+					t.Errorf("Validate(): unexpected error: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), c.errSub) {
+					t.Errorf("Validate(): got %v, want substring %q", err, c.errSub)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentRecipe_CursorType(t *testing.T) {
 	cases := []struct {
 		name   string
