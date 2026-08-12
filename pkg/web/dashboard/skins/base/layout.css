@@ -292,6 +292,14 @@
 .icon-btn:hover {
   border-color: var(--mint);
 }
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.icon-btn-on {
+  border-color: var(--mint);
+  color: var(--mint);
+}
 
 /* Оверлей максимизированной панели: position: fixed вместо обычного потока. */
 .maximize-overlay {

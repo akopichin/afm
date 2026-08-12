@@ -20,6 +20,7 @@ import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
+import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
 import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
@@ -64,6 +65,12 @@ export function App(): ReactElement {
   const anyAttention = anyAwaiting(stages)
   useTitleFlash(attention.needsAttention)
   useFaviconPulse(anyAttention)
+  const {
+    enabled: notificationsEnabled,
+    permission: notificationsPermission,
+    requestEnable: onRequestEnableNotifications,
+    disable: onDisableNotifications,
+  } = useDesktopNotifications(stages, setSelectedStageId)
 
   // Заголовок вкладки берём из description флоу (из flow.yaml), иначе имя флоу,
   // иначе дефолт. useTitleFlash мигает вокруг текущего title и восстанавливает
@@ -171,7 +178,16 @@ export function App(): ReactElement {
 
   return (
     <>
-      <FlowHeader flowName={flowName} connected={connected} attention={anyAttention} description={description} />
+      <FlowHeader
+        flowName={flowName}
+        connected={connected}
+        attention={anyAttention}
+        description={description}
+        notificationsPermission={notificationsPermission}
+        notificationsEnabled={notificationsEnabled}
+        onRequestEnableNotifications={onRequestEnableNotifications}
+        onDisableNotifications={onDisableNotifications}
+      />
 
       <main id="main">
         <div className="ray" aria-hidden="true" />

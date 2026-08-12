@@ -1,11 +1,16 @@
 import type { ReactElement } from 'react'
 import { useThemeMode } from '../../hooks/use-theme-mode'
+import type { NotificationPermissionState } from '../../hooks/use-desktop-notifications'
 
 type FlowHeaderProps = {
   flowName: string
   connected: boolean
   attention?: boolean
   description?: string
+  notificationsPermission?: NotificationPermissionState
+  notificationsEnabled?: boolean
+  onRequestEnableNotifications?: () => void
+  onDisableNotifications?: () => void
 }
 
 // Шапка дашборда: декоративный логотип, имя флоу и индикатор WebSocket-соединения.
@@ -17,7 +22,19 @@ type FlowHeaderProps = {
 // description — опциональный подзаголовок (описание флоу из его конфигурации),
 // помогает отличить несколько параллельно запущенных пайплайнов друг от друга;
 // рендерится второй строкой под именем флоу, не добавляя новую колонку в грид шапки.
-export function FlowHeader({ flowName, connected, attention = false, description }: FlowHeaderProps): ReactElement {
+// notificationsPermission/notificationsEnabled + on*Notifications — состояние и
+// колбэки десктоп-уведомлений (useDesktopNotifications в App.tsx); кнопка вообще
+// не рендерится при permission='unsupported' (браузер без Notification API).
+export function FlowHeader({
+  flowName,
+  connected,
+  attention = false,
+  description,
+  notificationsPermission = 'unsupported',
+  notificationsEnabled = false,
+  onRequestEnableNotifications,
+  onDisableNotifications,
+}: FlowHeaderProps): ReactElement {
   const hasDescription = description !== undefined && description.trim() !== ''
   const statusText = connected ? 'LINK' : 'OFFLINE'
   const statusClass = connected ? 'connected' : 'disconnected'
@@ -57,6 +74,18 @@ export function FlowHeader({ flowName, connected, attention = false, description
       >
         {mode === 'dark' ? '☾' : '☀'}
       </button>
+      {notificationsPermission !== 'unsupported' && (
+        <button
+          type="button"
+          className={notificationsEnabled ? 'icon-btn icon-btn-on' : 'icon-btn'}
+          onClick={notificationsEnabled ? onDisableNotifications : onRequestEnableNotifications}
+          disabled={notificationsPermission === 'denied'}
+          aria-label={notificationsEnabled ? 'Disable desktop notifications' : 'Enable desktop notifications'}
+          title={notificationsPermission === 'denied' ? 'Notifications blocked in browser settings' : undefined}
+        >
+          {notificationsEnabled ? '🔔' : '🔕'}
+        </button>
+      )}
     </header>
   )
 }

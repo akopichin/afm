@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react'
-import { beforeEach, describe, expect, test } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { FlowHeader } from './FlowHeader'
 
 describe('FlowHeader', () => {
@@ -63,5 +63,47 @@ describe('FlowHeader', () => {
     fireEvent.click(button)
 
     expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  test('hides notifications button when unsupported', () => {
+    render(<FlowHeader flowName="demo" connected={true} notificationsPermission="unsupported" />)
+    expect(screen.queryByLabelText(/notifications/i)).not.toBeInTheDocument()
+  })
+
+  test('shows disabled notifications button with tooltip when denied', () => {
+    render(<FlowHeader flowName="demo" connected={true} notificationsPermission="denied" />)
+    const button = screen.getByLabelText('Enable desktop notifications')
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', 'Notifications blocked in browser settings')
+  })
+
+  test('clicking the off notifications button calls onRequestEnableNotifications', () => {
+    const onRequestEnable = vi.fn()
+    render(
+      <FlowHeader
+        flowName="demo"
+        connected={true}
+        notificationsPermission="default"
+        notificationsEnabled={false}
+        onRequestEnableNotifications={onRequestEnable}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('Enable desktop notifications'))
+    expect(onRequestEnable).toHaveBeenCalled()
+  })
+
+  test('clicking the on notifications button calls onDisableNotifications', () => {
+    const onDisable = vi.fn()
+    render(
+      <FlowHeader
+        flowName="demo"
+        connected={true}
+        notificationsPermission="granted"
+        notificationsEnabled={true}
+        onDisableNotifications={onDisable}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('Disable desktop notifications'))
+    expect(onDisable).toHaveBeenCalled()
   })
 })
