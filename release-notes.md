@@ -2,6 +2,15 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-13
+
+### New: `afmsdk` — a Go SDK for driving afm flows from another Go program
+
+- New nested Go module at `sdk/` (`github.com/akopichin/afm/sdk`, package `afmsdk`, not yet tagged) lets a Go service launch an afm flow as a subprocess, poll its progress, and drive approve/retry/revise while it's running — for building your own HTTP endpoints on top of afm ("watch progress in the browser") without shelling out by hand. Zero dependency on any `github.com/akopichin/afm/...` package or third-party module — it talks to a spawned `afm run` subprocess purely over CLI flags and its own existing dashboard HTTP API.
+- Control of a *live* run has to go through that dashboard API, not the `afm approve/retry/revise` CLI subcommands — those take an exclusive `flock` that the live `afm run` process already holds for as long as a stage sits in `awaiting_approval`. Each run gets its own auto-generated, isolated `--dir` and `--port` so concurrent runs of the same flow never collide.
+- Built via `superpowers:subagent-driven-development` (11 tasks, task-scoped review after each, plus a final whole-branch review) and manually verified against a real `claude` agent end to end through a throwaway HTTP wrapper service, not just the automated test suite.
+- Full details, architecture rationale, and the three genuine plan defects found and fixed during implementation: see [`sdk/release-notes.md`](sdk/release-notes.md). Usage and API: [`sdk/README.md`](sdk/README.md). Spec/plan: `docs/superpowers/plans/2026-08-13-afm-go-sdk.md`.
+
 ## 2026-08-12
 
 ### New: desktop notifications for stages needing action
