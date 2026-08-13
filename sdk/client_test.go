@@ -70,3 +70,53 @@ func TestNew_SetsHTTPClientTimeout(t *testing.T) {
 		t.Errorf("httpClient timeout: got %v, want 10s", c.httpClient)
 	}
 }
+
+func TestPickFreePort_ReturnsDistinctPorts(t *testing.T) {
+	p1, err := pickFreePort()
+	if err != nil {
+		t.Fatalf("pickFreePort: %v", err)
+	}
+	if p1 <= 0 {
+		t.Fatalf("port: got %d, want positive", p1)
+	}
+	p2, err := pickFreePort()
+	if err != nil {
+		t.Fatalf("pickFreePort: %v", err)
+	}
+	if p1 == p2 {
+		t.Errorf("expected two different ports, got %d twice", p1)
+	}
+}
+
+func TestNewRunDir_CreatesDirectoryUnderBase(t *testing.T) {
+	base := t.TempDir()
+	dir, err := newRunDir(base)
+	if err != nil {
+		t.Fatalf("newRunDir: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat %q: %v", dir, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("%q is not a directory", dir)
+	}
+	if filepath.Dir(dir) != base {
+		t.Errorf("dir parent: got %q, want %q", filepath.Dir(dir), base)
+	}
+}
+
+func TestNewRunDir_TwoCallsProduceDistinctDirs(t *testing.T) {
+	base := t.TempDir()
+	d1, err := newRunDir(base)
+	if err != nil {
+		t.Fatalf("newRunDir: %v", err)
+	}
+	d2, err := newRunDir(base)
+	if err != nil {
+		t.Fatalf("newRunDir: %v", err)
+	}
+	if d1 == d2 {
+		t.Errorf("expected distinct run dirs, got %q twice", d1)
+	}
+}

@@ -2,6 +2,7 @@ package afmsdk
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -56,4 +57,25 @@ func New(cfg Config) (*Client, error) {
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		sem:        sem,
 	}, nil
+}
+
+func pickFreePort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("afmsdk: pick free port: %w", err)
+	}
+	defer ln.Close()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0, fmt.Errorf("afmsdk: pick free port: unexpected address type %T", ln.Addr())
+	}
+	return addr.Port, nil
+}
+
+func newRunDir(base string) (string, error) {
+	dir, err := os.MkdirTemp(base, "afm-run-*")
+	if err != nil {
+		return "", fmt.Errorf("afmsdk: create run dir under %q: %w", base, err)
+	}
+	return dir, nil
 }
