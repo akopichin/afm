@@ -255,3 +255,79 @@ stages:
 
 	waitForStageStatus(ctx, t, run, "notify", StageDone, 30*time.Second)
 }
+
+func TestIntegration_Revise(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	workDir := t.TempDir()
+	agentPath := writeFakePlanningAgent(t, workDir)
+	flowPath := writeFlow(t, workDir, fmt.Sprintf(`name: sdk-revise
+stages:
+  - id: plan-me
+    name: Plan Me
+    agents: [planning]
+    command: %s
+`, agentPath))
+
+	// See TestIntegration_HappyPath for why this is needed: isolates the afm
+	// subprocess from the developer's real global ~/.afm/config.yaml, which
+	// may have docker.enabled: true and would otherwise redirect this run
+	// into an unrelated Docker re-exec.
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	run, err := c.Start(ctx, flowPath, workDir)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		_ = run.Wait(ctx)
+		_ = run.Cleanup()
+	}()
+
+	waitForStageStatus(ctx, t, run, "plan-me", StageAwaitingApproval, 30*time.Second)
+
+	if err := run.Revise(ctx, "plan-me", "please add more tests"); err != nil {
+		t.Fatalf("Revise: %v", err)
+	}
+
+	// StageRevising is real (confirmed in afm's durable event log) but too
+	// transient to catch over HTTP: afm's re-plan goroutine races the HTTP
+	// response for this very POST and reliably wins on real hardware — the
+	// whole revising->planning->awaiting_approval cycle can resolve in
+	// under 150ms, faster than a normal 200ms poll interval samples. Poll
+	// tightly and briefly right after Revise() returns to catch ANY
+	// departure from awaiting_approval — proving Revise() had a real
+	// effect — without asserting which specific intermediate status was
+	// observed (a vacuous no-op Revise() would never leave
+	// awaiting_approval at all, so this still rules out the failure mode
+	// that matters).
+	{
+		deadline := time.Now().Add(2 * time.Second)
+		left := false
+		for time.Now().Before(deadline) {
+			status, err := run.Status(ctx)
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if status.Stages["plan-me"] != StageAwaitingApproval {
+				left = true
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !left {
+			t.Fatal("plan-me never left awaiting_approval after Revise()")
+		}
+	}
+
+	// The fake agent produces the same valid plan every time, so afm
+	// re-plans and lands back on awaiting_approval without human input.
+	waitForStageStatus(ctx, t, run, "plan-me", StageAwaitingApproval, 30*time.Second)
+}
