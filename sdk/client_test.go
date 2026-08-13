@@ -1,6 +1,7 @@
 package afmsdk
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -118,5 +119,66 @@ func TestNewRunDir_TwoCallsProduceDistinctDirs(t *testing.T) {
 	}
 	if d1 == d2 {
 		t.Errorf("expected distinct run dirs, got %q twice", d1)
+	}
+}
+
+func TestAcquire_Unlimited_NeverBlocks(t *testing.T) {
+	c := &Client{}
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		release, err := c.acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		release()
+	}
+}
+
+func TestAcquire_RespectsLimit(t *testing.T) {
+	c := &Client{sem: make(chan struct{}, 1)}
+	ctx := context.Background()
+
+	release1, err := c.acquire(ctx)
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+
+	acquired := make(chan struct{})
+	go func() {
+		release2, err := c.acquire(ctx)
+		if err != nil {
+			t.Errorf("second acquire: %v", err)
+			return
+		}
+		close(acquired)
+		release2()
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("second acquire succeeded before first release")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release1()
+	select {
+	case <-acquired:
+	case <-time.After(1 * time.Second):
+		t.Fatal("second acquire did not unblock after release")
+	}
+}
+
+func TestAcquire_RespectsContextCancellation(t *testing.T) {
+	c := &Client{sem: make(chan struct{}, 1)}
+	release1, err := c.acquire(context.Background())
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	defer release1()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.acquire(ctx); err == nil {
+		t.Fatal("expected error from cancelled context")
 	}
 }

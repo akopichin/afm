@@ -1,6 +1,7 @@
 package afmsdk
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -78,4 +79,16 @@ func newRunDir(base string) (string, error) {
 		return "", fmt.Errorf("afmsdk: create run dir under %q: %w", base, err)
 	}
 	return dir, nil
+}
+
+func (c *Client) acquire(ctx context.Context) (func(), error) {
+	if c.sem == nil {
+		return func() {}, nil
+	}
+	select {
+	case c.sem <- struct{}{}:
+		return func() { <-c.sem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
