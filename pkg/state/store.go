@@ -223,6 +223,17 @@ func (s *Store) SetStageNames(names map[string]string) {
 	s.snapshot.StageNames = maps.Clone(names)
 }
 
+// SetFlowName stores the flow's display name. Like SetStageNames, this is flow
+// metadata sourced from the flow file, not runtime state — it is not part of
+// the event log, and is expected to be (re-)set from the current flow file on
+// every Open, fresh or resumed, so it stays correct even if the flow was
+// renamed between runs.
+func (s *Store) SetFlowName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshot.FlowName = name
+}
+
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

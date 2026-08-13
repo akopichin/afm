@@ -182,6 +182,31 @@ func TestHandleStatus_IncludesStageNames(t *testing.T) {
 	}
 }
 
+// TestHandleStatus_IncludesFlowName guards the root cause of a real bug:
+// RunState.FlowName was declared and read here, but nothing in production
+// code ever called a setter for it (unlike the parallel, correctly-wired
+// SetStageNames right above) — /api/status's flow_name was silently "" for
+// every real run, CLI or otherwise.
+func TestHandleStatus_IncludesFlowName(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.store.SetFlowName("demo-flow")
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var resp statusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.FlowName != "demo-flow" {
+		t.Errorf("flow_name = %q, want %q", resp.FlowName, "demo-flow")
+	}
+}
+
 func TestHandleStatus_IncludesInteractiveAndAutonomous(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 	srv.stageInteractive = map[string]bool{testStageID: true}

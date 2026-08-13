@@ -222,6 +222,26 @@ func TestSnapshot_ReturnsCopy(t *testing.T) {
 	}
 }
 
+// TestSnapshot_IncludesFlowName guards the root cause of a real bug: RunState.FlowName
+// was declared and read (by /api/status) but never set anywhere in production code —
+// NewRunState never took it, and there was no SetFlowName to call, unlike the parallel
+// (and correctly wired) SetStageNames. flow_name was silently "" for every real run.
+func TestSnapshot_IncludesFlowName(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	store.SetFlowName("demo-flow")
+
+	snap := store.Snapshot()
+	if snap.FlowName != "demo-flow" {
+		t.Errorf("FlowName = %q, want %q", snap.FlowName, "demo-flow")
+	}
+}
+
 func TestSnapshot_IncludesStageNames(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a", "b"})
