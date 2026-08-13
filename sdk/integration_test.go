@@ -2,6 +2,7 @@ package afmsdk
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -123,4 +124,87 @@ stages:
 	if _, err := os.Stat(run.Dir()); !os.IsNotExist(err) {
 		t.Errorf("run dir %q still exists after Cleanup", run.Dir())
 	}
+}
+
+const fakePlanningAgentScript = `#!/bin/bash
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\n\n- [ ] Step 1: implement feature\n- [ ] Step 2: write tests\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] feature works\n"}]}}'
+echo '{"type":"result","subtype":"success"}'
+`
+
+// writeFakePlanningAgent writes an executable stand-in for a real AI agent
+// that always produces the same valid plan (Tasks/Assumptions/Acceptance
+// Criteria sections, required by prompts.ValidatePlan) on its first and only
+// invocation, so a stage with `agents: [planning]` deterministically reaches
+// awaiting_approval.
+func writeFakePlanningAgent(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "fake-plan-agent.sh")
+	if err := os.WriteFile(path, []byte(fakePlanningAgentScript), 0755); err != nil {
+		t.Fatalf("write fake planning agent: %v", err)
+	}
+	return path
+}
+
+// waitForStageStatusChange polls until stageID's status differs from from,
+// or fails the test after timeout.
+func waitForStageStatusChange(ctx context.Context, t *testing.T, run *Run, stageID string, from StageStatus, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := run.Status(ctx)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if status.Stages[stageID] != from {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stage %q did not move off %q in time", stageID, from)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func TestIntegration_Approve(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	workDir := t.TempDir()
+	agentPath := writeFakePlanningAgent(t, workDir)
+	flowPath := writeFlow(t, workDir, fmt.Sprintf(`name: sdk-approve
+stages:
+  - id: plan-me
+    name: Plan Me
+    agents: [planning]
+    command: %s
+`, agentPath))
+
+	// See TestIntegration_HappyPath for why this is needed: isolates the afm
+	// subprocess from the developer's real global ~/.afm/config.yaml, which
+	// may have docker.enabled: true and would otherwise redirect this run
+	// into an unrelated Docker re-exec.
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	run, err := c.Start(ctx, flowPath, workDir)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		_ = run.Wait(ctx)
+		_ = run.Cleanup()
+	}()
+
+	waitForStageStatus(ctx, t, run, "plan-me", StageAwaitingApproval, 30*time.Second)
+
+	if err := run.Approve(ctx, "plan-me"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	waitForStageStatusChange(ctx, t, run, "plan-me", StageAwaitingApproval, 10*time.Second)
 }
