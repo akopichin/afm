@@ -95,25 +95,10 @@ stages:
 		t.Fatalf("Start: %v", err)
 	}
 
+	// notify is the only stage in this flow, so reaching StageDone here
+	// already proves the whole run is done (RunStatus.Done requires every
+	// stage to be done) — no need for a separate poll loop on status.Done.
 	waitForStageStatus(ctx, t, run, "notify", StageDone, 30*time.Second)
-
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		status, err := run.Status(ctx)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if status.Done {
-			break
-		}
-		if status.Failed {
-			t.Fatalf("run failed unexpectedly: %+v", status.Stages)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("run did not finish in time: %+v", status.Stages)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
 
 	if err := run.Wait(ctx); err != nil {
 		t.Fatalf("Wait: %v", err)

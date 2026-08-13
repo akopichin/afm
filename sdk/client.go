@@ -114,6 +114,7 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 	port, err := pickFreePort()
 	if err != nil {
 		release()
+		_ = os.RemoveAll(runDir)
 		return nil, err
 	}
 
@@ -125,13 +126,14 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 
 	if err := cmd.Start(); err != nil {
 		release()
+		_ = os.RemoveAll(runDir)
 		return nil, fmt.Errorf("afmsdk: start %q: %w", c.binary, err)
 	}
 
 	run := &Run{
 		cmd:        cmd,
 		dir:        runDir,
-		baseURL:    fmt.Sprintf("http://localhost:%d", port),
+		baseURL:    fmt.Sprintf("http://127.0.0.1:%d", port),
 		httpClient: c.httpClient,
 		out:        out,
 		exited:     make(chan struct{}),
@@ -143,6 +145,7 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 	}()
 
 	if err := run.waitReady(ctx); err != nil {
+		_ = os.RemoveAll(runDir)
 		return nil, err
 	}
 	return run, nil
