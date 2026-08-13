@@ -331,3 +331,72 @@ stages:
 	// re-plans and lands back on awaiting_approval without human input.
 	waitForStageStatus(ctx, t, run, "plan-me", StageAwaitingApproval, 30*time.Second)
 }
+
+func TestIntegration_MaxConcurrentBlocksExtraStarts(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	c, err := New(Config{Binary: bin, BaseDir: t.TempDir(), MaxConcurrent: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	newSlowFlow := func(t *testing.T) (flowPath, workDir string) {
+		workDir = t.TempDir()
+		flowPath = writeFlow(t, workDir, `name: sdk-slow
+stages:
+  - id: notify
+    name: Notify
+    script: "sleep 2; echo done-output"
+`)
+		return
+	}
+
+	// See TestIntegration_HappyPath for why this is needed: isolates the afm
+	// subprocess from the developer's real global ~/.afm/config.yaml, which
+	// may have docker.enabled: true and would otherwise redirect this run
+	// into an unrelated Docker re-exec.
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	flow1, work1 := newSlowFlow(t)
+	run1, err := c.Start(ctx, flow1, work1)
+	if err != nil {
+		t.Fatalf("Start run1: %v", err)
+	}
+	defer func() { _ = run1.Wait(ctx); _ = run1.Cleanup() }()
+
+	flow2, work2 := newSlowFlow(t)
+	started2 := make(chan *Run, 1)
+	errs2 := make(chan error, 1)
+	go func() {
+		run2, err := c.Start(ctx, flow2, work2)
+		if err != nil {
+			errs2 <- err
+			return
+		}
+		started2 <- run2
+	}()
+
+	select {
+	case <-started2:
+		t.Fatal("second Start returned before first run finished, MaxConcurrent not enforced")
+	case err := <-errs2:
+		t.Fatalf("second Start failed: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		// expected: still blocked waiting for the semaphore
+	}
+
+	if err := run1.Wait(ctx); err != nil {
+		t.Fatalf("Wait run1: %v", err)
+	}
+
+	select {
+	case run2 := <-started2:
+		defer func() { _ = run2.Wait(ctx); _ = run2.Cleanup() }()
+	case err := <-errs2:
+		t.Fatalf("second Start failed after first finished: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("second Start did not unblock after first run finished")
+	}
+}
