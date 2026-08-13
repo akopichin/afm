@@ -35,13 +35,7 @@ func (r *Run) post(ctx context.Context, path string, body []byte) error {
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	u, err := url.Parse(r.baseURL)
-	if err != nil {
-		return fmt.Errorf("afmsdk: %s: %w", path, err)
-	}
-	u.Path = path
-	u.RawPath = path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.baseURL+path, reader)
 	if err != nil {
 		return fmt.Errorf("afmsdk: %s: %w", path, err)
 	}

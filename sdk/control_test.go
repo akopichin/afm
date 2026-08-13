@@ -94,16 +94,21 @@ func TestRevise_SendsFeedbackBody(t *testing.T) {
 }
 
 func TestStageIDIsPathEscaped(t *testing.T) {
-	var gotPath string
+	var gotEscapedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
+		// r.URL.Path is always the *decoded* path (a real "/" and an escaped
+		// "%2F" both decode to the same "/", so .Path can't distinguish
+		// them) — only .EscapedPath() (or .RawPath) preserves the encoding
+		// that was actually on the wire, which is what this test needs to
+		// verify.
+		gotEscapedPath = r.URL.EscapedPath()
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	run := &Run{baseURL: srv.URL, httpClient: srv.Client()}
 	_ = run.Retry(context.Background(), "weird/id")
-	if gotPath != "/api/stages/weird%2Fid/retry" {
-		t.Errorf("path: got %q, want escaped slash", gotPath)
+	if gotEscapedPath != "/api/stages/weird%2Fid/retry" {
+		t.Errorf("escaped path: got %q, want escaped slash", gotEscapedPath)
 	}
 }
