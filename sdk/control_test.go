@@ -16,7 +16,7 @@ func TestApprove_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotMethod = r.URL.Path, r.Method
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status":"approved","stage_id":"plan-me"}`)
+		_, _ = fmt.Fprint(w, `{"status":"approved","stage_id":"plan-me"}`)
 	}))
 	defer srv.Close()
 
@@ -53,7 +53,7 @@ func TestRetry_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status":"retried","stage_id":"notify"}`)
+		_, _ = fmt.Fprint(w, `{"status":"retried","stage_id":"notify"}`)
 	}))
 	defer srv.Close()
 
@@ -73,7 +73,7 @@ func TestRevise_SendsFeedbackBody(t *testing.T) {
 		gotPath = r.URL.Path
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status":"revised","stage_id":"plan-me"}`)
+		_, _ = fmt.Fprint(w, `{"status":"revised","stage_id":"plan-me"}`)
 	}))
 	defer srv.Close()
 

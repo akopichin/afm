@@ -14,7 +14,7 @@ func TestStatus_ParsesStages(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"flow_name":"demo","stages":[{"id":"a","status":"done"},{"id":"b","status":"running"}]}`)
+		_, _ = fmt.Fprint(w, `{"flow_name":"demo","stages":[{"id":"a","status":"done"},{"id":"b","status":"running"}]}`)
 	}))
 	defer srv.Close()
 
@@ -56,7 +56,7 @@ func TestStatus_AllDoneAndFailedFlags(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, tc.body)
+				_, _ = fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
 
