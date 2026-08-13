@@ -1,12 +1,14 @@
 package afmsdk
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 )
 
@@ -91,4 +93,57 @@ func (c *Client) acquire(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// Start launches "<afm> run --dir <isolated> --port <picked> <flowPath>" as a
+// subprocess with its working directory set to workDir (where the flow's
+// agents actually operate), and waits for its dashboard API to become
+// reachable before returning.
+func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, error) {
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	runDir, err := newRunDir(c.baseDir)
+	if err != nil {
+		release()
+		return nil, err
+	}
+
+	port, err := pickFreePort()
+	if err != nil {
+		release()
+		return nil, err
+	}
+
+	cmd := exec.Command(c.binary, "run", "--dir", runDir, "--port", strconv.Itoa(port), flowPath)
+	cmd.Dir = workDir
+	out := &bytes.Buffer{}
+	cmd.Stdout = out
+	cmd.Stderr = out
+
+	if err := cmd.Start(); err != nil {
+		release()
+		return nil, fmt.Errorf("afmsdk: start %q: %w", c.binary, err)
+	}
+
+	run := &Run{
+		cmd:        cmd,
+		dir:        runDir,
+		baseURL:    fmt.Sprintf("http://localhost:%d", port),
+		httpClient: c.httpClient,
+		out:        out,
+		exited:     make(chan struct{}),
+	}
+	go func() {
+		run.waitErr = cmd.Wait()
+		release()
+		close(run.exited)
+	}()
+
+	if err := run.waitReady(ctx); err != nil {
+		return nil, err
+	}
+	return run, nil
 }
