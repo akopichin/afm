@@ -129,3 +129,17 @@ release-minor:
 	./scripts/release.sh minor
 release-major:
 	./scripts/release.sh major
+
+.PHONY: sdk-test sdk-test-integration sdk-lint
+
+sdk-test:
+	cd sdk && go test ./... -v -race
+
+# sdk-test-integration builds the real afm binary first (with dashboard
+# assets embedded, see the `web`/`build` targets above) so sdk's integration
+# tests — which spawn `afm run` as a real subprocess — have something to exec.
+sdk-test-integration: build
+	cd sdk && AFM_SDK_TEST_BINARY=$(LOCAL_BIN)/$(PROJECT_NAME) go test ./... -v -race -run Integration
+
+sdk-lint: $(GOLANGCI_BIN)
+	cd sdk && $(GOLANGCI_BIN) run ./...

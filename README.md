@@ -15,6 +15,7 @@ A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML f
 - [Configuration](#configuration)
   - [Debugging: `--debug`](#debugging---debug)
 - [Web Dashboard](#web-dashboard)
+- [Go SDK](#go-sdk)
 - [Directory Structure](#directory-structure)
 - [Development](#development)
 
@@ -572,6 +573,10 @@ On a repeated `afm run`, the tool automatically:
 - **Auto-retries `failed` stages** (`auto_recover`, default `true`): if a run was interrupted hard enough that a stage landed in `failed` (e.g. the process or Docker container was killed), the next `afm run` resets every failed stage back to `pending` before doing anything else — no manual `afm retry <id>` needed. All failed stages are reset regardless of why they failed; dependency order (`depends_on`) is preserved automatically, since a reset stage just re-enters the normal pending flow. Set `auto_recover: false` in `.afm/config.yaml` to go back to requiring manual `afm retry` for each failed stage.
 
 Approve/revise/retry are durably recorded in the log (fsync) before control returns — a crash right after approval doesn't lose the intent; recovery continues from the correct state.
+
+## Go SDK
+
+Need to drive afm from a Go service instead of the CLI — start a flow as a subprocess, poll its progress, and call approve/retry/revise while it's running, e.g. to expose your own HTTP endpoints for watching progress in a browser? See [`sdk/README.md`](sdk/README.md) for the `afmsdk` Go module.
 
 ## Directory Structure
 
