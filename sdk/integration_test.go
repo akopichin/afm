@@ -208,3 +208,50 @@ stages:
 
 	waitForStageStatusChange(ctx, t, run, "plan-me", StageAwaitingApproval, 10*time.Second)
 }
+
+func TestIntegration_Retry(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	workDir := t.TempDir()
+	gateFile := filepath.Join(t.TempDir(), "gate")
+	flowPath := writeFlow(t, workDir, fmt.Sprintf(`name: sdk-retry
+stages:
+  - id: notify
+    name: Notify
+    script: "test -f %s && echo done-output || exit 1"
+`, gateFile))
+
+	// See TestIntegration_HappyPath for why this is needed: isolates the afm
+	// subprocess from the developer's real global ~/.afm/config.yaml, which
+	// may have docker.enabled: true and would otherwise redirect this run
+	// into an unrelated Docker re-exec.
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	run, err := c.Start(ctx, flowPath, workDir)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		_ = run.Wait(ctx)
+		_ = run.Cleanup()
+	}()
+
+	waitForStageStatus(ctx, t, run, "notify", StageFailed, 30*time.Second)
+
+	if err := os.WriteFile(gateFile, nil, 0644); err != nil {
+		t.Fatalf("write gate file: %v", err)
+	}
+
+	if err := run.Retry(ctx, "notify"); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	waitForStageStatus(ctx, t, run, "notify", StageDone, 30*time.Second)
+}
