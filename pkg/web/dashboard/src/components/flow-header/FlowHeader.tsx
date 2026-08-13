@@ -64,28 +64,30 @@ export function FlowHeader({
         <div id="flow-name" className="flow-name">{flowName}</div>
         {hasDescription && <div id="flow-description" className="flow-description">{description}</div>}
       </div>
-      {attention && <span className="attention-dot" aria-label="Action needed" />}
-      <div id="ws-status" className={`ws-status ${statusClass}`} title="WebSocket">{statusText}</div>
-      <button
-        type="button"
-        className="icon-btn"
-        onClick={toggle}
-        aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-      >
-        {mode === 'dark' ? '☾' : '☀'}
-      </button>
-      {notificationsPermission !== 'unsupported' && (
+      <div className="header-actions">
+        {attention && <span className="attention-dot" aria-label="Action needed" />}
+        <div id="ws-status" className={`ws-status ${statusClass}`} title="WebSocket">{statusText}</div>
         <button
           type="button"
-          className={notificationsEnabled ? 'icon-btn icon-btn-on' : 'icon-btn'}
-          onClick={notificationsEnabled ? onDisableNotifications : onRequestEnableNotifications}
-          disabled={notificationsPermission === 'denied'}
-          aria-label={notificationsEnabled ? 'Disable desktop notifications' : 'Enable desktop notifications'}
-          title={notificationsPermission === 'denied' ? 'Notifications blocked in browser settings' : undefined}
+          className="icon-btn"
+          onClick={toggle}
+          aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         >
-          {notificationsEnabled ? '🔔' : '🔕'}
+          {mode === 'dark' ? '☾' : '☀'}
         </button>
-      )}
+        {notificationsPermission !== 'unsupported' && (
+          <button
+            type="button"
+            className={notificationsEnabled ? 'icon-btn icon-btn-on' : 'icon-btn'}
+            onClick={notificationsEnabled ? onDisableNotifications : onRequestEnableNotifications}
+            disabled={notificationsPermission === 'denied'}
+            aria-label={notificationsEnabled ? 'Disable desktop notifications' : 'Enable desktop notifications'}
+            title={notificationsPermission === 'denied' ? 'Notifications blocked in browser settings' : undefined}
+          >
+            {notificationsEnabled ? '🔔' : '🔕'}
+          </button>
+        )}
+      </div>
     </header>
   )
 }

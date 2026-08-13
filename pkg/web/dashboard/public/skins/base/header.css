@@ -3,12 +3,22 @@
 
 #header {
   display: grid;
-  grid-template-columns: auto 1fr auto auto auto auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 18px;
   padding: 10px 20px;
   background: var(--bg);
   border-bottom: 1px solid var(--mint-soft);
+}
+
+/* Все опциональные иконки/статус справа (attention-dot, ws-status, кнопки) собраны
+   в один grid-элемент через flex — иначе число grid-колонок должно совпадать с
+   числом опциональных детей FlowHeader.tsx, и лишний элемент (напр. когда одновременно
+   видны attention-dot и кнопка уведомлений) переносился на новую строку под лого. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
 }
 
 #header .icon-btn {
