@@ -48,6 +48,19 @@
 //		log.Fatal(err)
 //	}
 //
+// Reconnecting after a restart of the calling process: persist Run.Dir(),
+// Run.Port(), and Run.PID() somewhere durable (e.g. a database row) when you
+// start a run, then call Client.Attach with those three values to get a new
+// *Run handle for it — Status/Approve/Retry/Revise work exactly as before.
+// Wait and Cleanup return an error on an attached Run, since this package
+// never held the *exec.Cmd needed to manage its lifecycle across a restart.
+//
+//	attached, err := client.Attach(ctx, savedDir, savedPort, savedPID)
+//	if errors.Is(err, afmsdk.ErrProcessDead) {
+//		// the afm subprocess didn't survive the restart either — nothing to
+//		// reconnect to.
+//	}
+//
 // Scope for v1: only file-path flow definitions; only autonomous
 // (agents: [auto]) or script/planning-gated stages — interactive
 // (question/answer) stages are not answerable through this package. Errors

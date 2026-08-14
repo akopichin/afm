@@ -73,11 +73,14 @@ A more complete, runnable example — a small HTTP service wrapping `afmsdk` wit
 
 - `Config{Binary, BaseDir string; MaxConcurrent int}` / `New(cfg Config) (*Client, error)` — `Binary` defaults to resolving `"afm"` from `PATH`; `BaseDir` (default `os.TempDir()`) is where each run's isolated `--dir` gets created; `MaxConcurrent` caps how many `afm run` subprocesses this `Client` will have active at once (0 = unlimited).
 - `Client.Start(ctx, flowPath, workDir string) (*Run, error)` — `workDir` is the subprocess's CWD (the target project agents actually operate on), deliberately separate from the auto-generated isolated state directory. Blocks until the run's dashboard API is reachable.
+- `Client.Attach(ctx, dir string, port int, pid int) (*Run, error)` — reconnect to a live afm subprocess that was started by an earlier process instance. `dir`, `port`, and `pid` are usually persisted when `Start` returns (e.g. in a database row), so a service can survive a restart: cancel the old process, restart the service, and call `Attach` to get a new `*Run` handle on the same subprocess. `Status`, `Approve`, `Retry`, and `Revise` work exactly as on a started run; `Wait` and `Cleanup` return an error (since this package never held the `*exec.Cmd` to manage across the restart).
 - `Run.Status(ctx) (RunStatus, error)` — polls `GET /api/status`. `RunStatus{FlowName string; Stages map[string]StageStatus; Done, Failed bool}`. `StageStatus` mirrors afm's internal stage FSM values (`pending`, `planning`, `awaiting_approval`, `revising`, `ready`, `running`, `retrying`, `awaiting_user_input`, `done`, `failed`, `hook_failed`) as plain string constants — duplicated here on purpose so this module stays free of any afm-package dependency.
 - `Run.Approve(ctx, stageID string) error`, `Run.Retry(ctx, stageID string) error`, `Run.Revise(ctx, stageID, feedback string) error` — POST to the live run's dashboard API. Errors carry the dashboard's response text; there are no typed/sentinel errors in v1.
 - `Run.Wait(ctx) error` — blocks until the subprocess exits. Cancelling `ctx` sends `SIGINT` (afm's graceful-shutdown signal) and waits up to 15s before killing the process.
 - `Run.Cleanup() error` — removes the run's isolated state directory. Must be called after `Wait` returns; calling it while the subprocess might still be alive returns an error instead of deleting files out from under a live afm process. Never called automatically.
 - `Run.Dir() string` — the isolated `--dir` this run's afm state lives in (useful for debugging).
+- `Run.Port() int` — the dashboard API port for this run (needed to reconnect via `Client.Attach` after a restart).
+- `Run.PID() int` — the operating system process ID of the afm subprocess (needed to reconnect via `Client.Attach` after a restart).
 
 ## Scope (v1)
 
@@ -87,7 +90,6 @@ Deliberately out of scope for now — see [release-notes.md](./release-notes.md)
 - No `Answer()` API for interactive (question/answer) stages — only autonomous (`agents: [auto]`) or script/planning-gated stages are supported end to end.
 - No built-in `net/http.Handler` — wire `Status`/`Approve`/`Retry`/`Revise` into your own routes.
 - No dynamic/in-memory flow definitions — `Start` takes a file path only.
-- No attach/resume across process restarts — a `*Run` handle only exists for the lifetime of the process that called `Start`.
 
 ## Testing
 

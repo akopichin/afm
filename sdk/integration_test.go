@@ -425,3 +425,48 @@ stages:
 		t.Fatal("second Start did not unblock after first run finished")
 	}
 }
+
+func TestIntegration_AttachReconnectsToLiveRun(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	c, err := New(Config{Binary: bin})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	workDir := t.TempDir()
+	flowPath := writeFlow(t, workDir, `name: sdk-attach
+stages:
+  - id: notify
+    name: Notify
+    script: "sleep 2 && echo done-output"
+`)
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	run, err := c.Start(ctx, flowPath, workDir)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Simulate the launching process restarting: a brand new Client attaches
+	// using only what would have been persisted externally (dir, port, pid).
+	c2, err := New(Config{Binary: bin})
+	if err != nil {
+		t.Fatalf("New (second client): %v", err)
+	}
+	attached, err := c2.Attach(ctx, run.Dir(), run.Port(), run.PID())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	waitForStageStatus(ctx, t, attached, "notify", StageDone, 30*time.Second)
+
+	if err := run.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if err := run.Cleanup(); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+}
