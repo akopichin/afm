@@ -32,6 +32,16 @@ func (r *Run) Dir() string {
 	return r.dir
 }
 
+// Port returns the TCP port this run's dashboard API listens on.
+func (r *Run) Port() int {
+	return r.port
+}
+
+// PID returns the OS process id of this run's afm subprocess.
+func (r *Run) PID() int {
+	return r.pid
+}
+
 const dashboardReadyTimeout = 30 * time.Second
 
 // waitReady polls the run's dashboard API until it responds or the process
@@ -72,6 +82,9 @@ func (r *Run) waitReady(ctx context.Context) error {
 // the OS default "terminate immediately" and skip that shutdown entirely)
 // and waits up to 15s for it to exit cleanly before killing it.
 func (r *Run) Wait(ctx context.Context) error {
+	if r.cmd == nil {
+		return errors.New("afmsdk: Wait: not supported for a Run obtained via Attach")
+	}
 	select {
 	case <-r.exited:
 		return r.waitErr
@@ -96,6 +109,9 @@ func (r *Run) Wait(ctx context.Context) error {
 // running returns an error instead of deleting files out from under a live
 // afm process.
 func (r *Run) Cleanup() error {
+	if r.cmd == nil {
+		return errors.New("afmsdk: Cleanup: not supported for a Run obtained via Attach")
+	}
 	select {
 	case <-r.exited:
 	default:
