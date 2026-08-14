@@ -71,8 +71,8 @@ A more complete, runnable example — a small HTTP service wrapping `afmsdk` wit
 
 ## API
 
-- `Config{Binary, BaseDir string; MaxConcurrent int}` / `New(cfg Config) (*Client, error)` — `Binary` defaults to resolving `"afm"` from `PATH`; `BaseDir` (default `os.TempDir()`) is where each run's isolated `--dir` gets created; `MaxConcurrent` caps how many `afm run` subprocesses this `Client` will have active at once (0 = unlimited).
-- `Client.Start(ctx, flowPath, workDir string) (*Run, error)` — `workDir` is the subprocess's CWD (the target project agents actually operate on), deliberately separate from the auto-generated isolated state directory. Blocks until the run's dashboard API is reachable.
+- `Config{Binary string; MaxConcurrent int}` / `New(cfg Config) (*Client, error)` — `Binary` defaults to resolving `"afm"` from `PATH`; `MaxConcurrent` caps how many `afm run` subprocesses this `Client` will have active at once (0 = unlimited).
+- `Client.Start(ctx, flowPath, workDir string) (*Run, error)` — `workDir` is used as both the subprocess's `--dir` (afm's own state directory) and its CWD (the target project agents actually operate on), creating `workDir` first if it doesn't exist. Blocks until the run's dashboard API is reachable.
 - `Client.Attach(ctx, dir string, port int, pid int) (*Run, error)` — reconnect to a live afm subprocess that was started by an earlier process instance. `dir`, `port`, and `pid` are usually persisted when `Start` returns (e.g. in a database row), so a service can survive a restart: cancel the old process, restart the service, and call `Attach` to get a new `*Run` handle on the same subprocess. `Status`, `Approve`, `Retry`, and `Revise` work exactly as on a started run; `Wait` and `Cleanup` return an error (since this package never held the `*exec.Cmd` to manage across the restart).
 - `Run.Status(ctx) (RunStatus, error)` — polls `GET /api/status`. `RunStatus{FlowName string; Stages map[string]StageStatus; Done, Failed bool}`. `StageStatus` mirrors afm's internal stage FSM values (`pending`, `planning`, `awaiting_approval`, `revising`, `ready`, `running`, `retrying`, `awaiting_user_input`, `done`, `failed`, `hook_failed`) as plain string constants — duplicated here on purpose so this module stays free of any afm-package dependency.
 - `Run.Approve(ctx, stageID string) error`, `Run.Retry(ctx, stageID string) error`, `Run.Revise(ctx, stageID, feedback string) error` — POST to the live run's dashboard API. Errors carry the dashboard's response text; there are no typed/sentinel errors in v1.
@@ -103,8 +103,8 @@ From the repo root:
 
 ```bash
 make sdk-test              # same as above
-make sdk-test-integration  # builds afm first, then also runs the 5 real-subprocess integration tests
+make sdk-test-integration  # builds afm first, then also runs the 7 real-subprocess integration tests
 make sdk-lint              # golangci-lint against this module
 ```
 
-The integration tests (`TestIntegration_HappyPath`, `_Approve`, `_Retry`, `_Revise`, `_MaxConcurrentBlocksExtraStarts`) spawn a real `afm run` subprocess end to end — they need a pre-built `afm` binary, resolved via `AFM_SDK_TEST_BINARY` or `../bin/afm` (what `make build` produces at the repo root), and `t.Skip` with a clear message if neither exists.
+The integration tests (`TestIntegration_HappyPath`, `_StartUsesWorkDirAsAfmDir`, `_Approve`, `_Retry`, `_Revise`, `_MaxConcurrentBlocksExtraStarts`, `_AttachReconnectsToLiveRun`) spawn a real `afm run` subprocess end to end — they need a pre-built `afm` binary, resolved via `AFM_SDK_TEST_BINARY` or `../bin/afm` (what `make build` produces at the repo root), and `t.Skip` with a clear message if neither exists.
