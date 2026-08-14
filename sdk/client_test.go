@@ -42,26 +42,6 @@ func TestNew_ExplicitBinaryIsNotLookedUp(t *testing.T) {
 	}
 }
 
-func TestNew_DefaultsBaseDirToTempDir(t *testing.T) {
-	c, err := New(Config{Binary: "/bin/true"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if c.baseDir != os.TempDir() {
-		t.Errorf("baseDir: got %q, want %q", c.baseDir, os.TempDir())
-	}
-}
-
-func TestNew_HonorsExplicitBaseDir(t *testing.T) {
-	c, err := New(Config{Binary: "/bin/true", BaseDir: "/custom/base"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if c.baseDir != "/custom/base" {
-		t.Errorf("baseDir: got %q, want %q", c.baseDir, "/custom/base")
-	}
-}
-
 func TestNew_SetsHTTPClientTimeout(t *testing.T) {
 	c, err := New(Config{Binary: "/bin/true"})
 	if err != nil {
@@ -86,39 +66,6 @@ func TestPickFreePort_ReturnsDistinctPorts(t *testing.T) {
 	}
 	if p1 == p2 {
 		t.Errorf("expected two different ports, got %d twice", p1)
-	}
-}
-
-func TestNewRunDir_CreatesDirectoryUnderBase(t *testing.T) {
-	base := t.TempDir()
-	dir, err := newRunDir(base)
-	if err != nil {
-		t.Fatalf("newRunDir: %v", err)
-	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		t.Fatalf("stat %q: %v", dir, err)
-	}
-	if !info.IsDir() {
-		t.Errorf("%q is not a directory", dir)
-	}
-	if filepath.Dir(dir) != base {
-		t.Errorf("dir parent: got %q, want %q", filepath.Dir(dir), base)
-	}
-}
-
-func TestNewRunDir_TwoCallsProduceDistinctDirs(t *testing.T) {
-	base := t.TempDir()
-	d1, err := newRunDir(base)
-	if err != nil {
-		t.Fatalf("newRunDir: %v", err)
-	}
-	d2, err := newRunDir(base)
-	if err != nil {
-		t.Fatalf("newRunDir: %v", err)
-	}
-	if d1 == d2 {
-		t.Errorf("expected distinct run dirs, got %q twice", d1)
 	}
 }
 

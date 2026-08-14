@@ -16,9 +16,6 @@ import (
 type Config struct {
 	// Binary is the path to the afm executable. Empty resolves "afm" from PATH.
 	Binary string
-	// BaseDir is the parent directory for auto-generated, per-run isolated
-	// state directories (passed to afm as --dir). Empty defaults to os.TempDir().
-	BaseDir string
 	// MaxConcurrent caps the number of afm run subprocesses this Client will
 	// have active at once. Zero means unlimited.
 	MaxConcurrent int
@@ -27,7 +24,6 @@ type Config struct {
 // Client launches and manages afm flow runs as subprocesses.
 type Client struct {
 	binary     string
-	baseDir    string
 	httpClient *http.Client
 	sem        chan struct{}
 }
@@ -44,11 +40,6 @@ func New(cfg Config) (*Client, error) {
 		binary = resolved
 	}
 
-	baseDir := cfg.BaseDir
-	if baseDir == "" {
-		baseDir = os.TempDir()
-	}
-
 	var sem chan struct{}
 	if cfg.MaxConcurrent > 0 {
 		sem = make(chan struct{}, cfg.MaxConcurrent)
@@ -56,7 +47,6 @@ func New(cfg Config) (*Client, error) {
 
 	return &Client{
 		binary:     binary,
-		baseDir:    baseDir,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		sem:        sem,
 	}, nil
@@ -75,14 +65,6 @@ func pickFreePort() (int, error) {
 	return addr.Port, nil
 }
 
-func newRunDir(base string) (string, error) {
-	dir, err := os.MkdirTemp(base, "afm-run-*")
-	if err != nil {
-		return "", fmt.Errorf("afmsdk: create run dir under %q: %w", base, err)
-	}
-	return dir, nil
-}
-
 func (c *Client) acquire(ctx context.Context) (func(), error) {
 	if c.sem == nil {
 		return func() {}, nil
@@ -95,30 +77,30 @@ func (c *Client) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// Start launches "<afm> run --dir <isolated> --port <picked> <flowPath>" as a
-// subprocess with its working directory set to workDir (where the flow's
-// agents actually operate), and waits for its dashboard API to become
-// reachable before returning.
+// Start launches "<afm> run --dir <workDir> --port <picked> <flowPath>" as a
+// subprocess whose --dir (afm's own state directory) and cwd (where the
+// flow's agents actually operate) are both workDir, creating workDir first if
+// it doesn't exist, and waits for its dashboard API to become reachable
+// before returning. On failure, workDir is left as-is (Start didn't create
+// it for its own exclusive use, so it isn't Start's to delete).
 func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, error) {
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	runDir, err := newRunDir(c.baseDir)
-	if err != nil {
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		release()
-		return nil, err
+		return nil, fmt.Errorf("afmsdk: create work dir %q: %w", workDir, err)
 	}
 
 	port, err := pickFreePort()
 	if err != nil {
 		release()
-		_ = os.RemoveAll(runDir)
 		return nil, err
 	}
 
-	cmd := exec.Command(c.binary, "run", "--dir", runDir, "--port", strconv.Itoa(port), flowPath)
+	cmd := exec.Command(c.binary, "run", "--dir", workDir, "--port", strconv.Itoa(port), flowPath)
 	cmd.Dir = workDir
 	out := &bytes.Buffer{}
 	cmd.Stdout = out
@@ -126,17 +108,18 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 
 	if err := cmd.Start(); err != nil {
 		release()
-		_ = os.RemoveAll(runDir)
 		return nil, fmt.Errorf("afmsdk: start %q: %w", c.binary, err)
 	}
 
 	run := &Run{
 		cmd:        cmd,
-		dir:        runDir,
+		dir:        workDir,
 		baseURL:    fmt.Sprintf("http://127.0.0.1:%d", port),
 		httpClient: c.httpClient,
 		out:        out,
 		exited:     make(chan struct{}),
+		port:       port,
+		pid:        cmd.Process.Pid,
 	}
 	go func() {
 		run.waitErr = cmd.Wait()
@@ -145,7 +128,6 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 	}()
 
 	if err := run.waitReady(ctx); err != nil {
-		_ = os.RemoveAll(runDir)
 		return nil, err
 	}
 	return run, nil

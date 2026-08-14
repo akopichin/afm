@@ -64,7 +64,7 @@ func waitForStageStatus(ctx context.Context, t *testing.T, run *Run, stageID str
 
 func TestIntegration_HappyPath(t *testing.T) {
 	bin := resolveAfmBinary(t)
-	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	c, err := New(Config{Binary: bin})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -111,6 +111,46 @@ stages:
 	}
 }
 
+func TestIntegration_StartUsesWorkDirAsAfmDir(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	c, err := New(Config{Binary: bin})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	workDir := t.TempDir()
+	flowPath := writeFlow(t, workDir, `name: sdk-dir-unify
+stages:
+  - id: notify
+    name: Notify
+    script: "echo done-output"
+`)
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	run, err := c.Start(ctx, flowPath, workDir)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		_ = run.Wait(ctx)
+		_ = run.Cleanup()
+	}()
+
+	if run.Dir() != workDir {
+		t.Errorf("Dir(): got %q, want %q (the workDir passed to Start)", run.Dir(), workDir)
+	}
+	matches, err := filepath.Glob(filepath.Join(workDir, ".afm", "runs", "*"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one afm run dir under %s/.afm/runs, got %d: %v", workDir, len(matches), matches)
+	}
+}
+
 const fakePlanningAgentScript = `#!/bin/bash
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\n\n- [ ] Step 1: implement feature\n- [ ] Step 2: write tests\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] feature works\n"}]}}'
 echo '{"type":"result","subtype":"success"}'
@@ -152,7 +192,7 @@ func waitForStageStatusChange(ctx context.Context, t *testing.T, run *Run, stage
 
 func TestIntegration_Approve(t *testing.T) {
 	bin := resolveAfmBinary(t)
-	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	c, err := New(Config{Binary: bin})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -196,7 +236,7 @@ stages:
 
 func TestIntegration_Retry(t *testing.T) {
 	bin := resolveAfmBinary(t)
-	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	c, err := New(Config{Binary: bin})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -243,7 +283,7 @@ stages:
 
 func TestIntegration_Revise(t *testing.T) {
 	bin := resolveAfmBinary(t)
-	c, err := New(Config{Binary: bin, BaseDir: t.TempDir()})
+	c, err := New(Config{Binary: bin})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -319,7 +359,7 @@ stages:
 
 func TestIntegration_MaxConcurrentBlocksExtraStarts(t *testing.T) {
 	bin := resolveAfmBinary(t)
-	c, err := New(Config{Binary: bin, BaseDir: t.TempDir(), MaxConcurrent: 1})
+	c, err := New(Config{Binary: bin, MaxConcurrent: 1})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

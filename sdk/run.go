@@ -23,6 +23,8 @@ type Run struct {
 	out        *bytes.Buffer
 	exited     chan struct{}
 	waitErr    error
+	port       int
+	pid        int
 }
 
 // Dir returns the isolated directory (--dir) this run's afm state lives in.
