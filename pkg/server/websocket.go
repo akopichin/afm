@@ -36,6 +36,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	s.wsClients.Add(1)
+	defer s.wsClients.Add(-1)
+
 	id, ch := s.uiBus.Subscribe(64)
 	defer s.uiBus.Unsubscribe(id)
 

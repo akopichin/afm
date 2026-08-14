@@ -251,9 +251,12 @@ func newRunCmd() *cobra.Command {
 			}
 
 			// dashboardStarted — поднят ли HTTP-сервер дашборда. По флагу после
-			// завершения флоу выдерживаем паузу (dashboardExitGrace), чтобы UI успел
-			// подтянуть терминальный статус до того, как процесс оборвёт соединения.
+			// завершения флоу выдерживаем паузу (waitForDashboardDrain), чтобы UI
+			// успел подтянуть терминальный статус до того, как процесс оборвёт
+			// соединения. srv нужен и после if — waitForDashboardDrain опрашивает
+			// его ConnectedClients().
 			dashboardStarted := false
+			var srv *server.Server
 
 			// Start HTTP server if port > 0
 			if cfg.Server.GetPort() > 0 {
@@ -265,7 +268,7 @@ func newRunCmd() *cobra.Command {
 					stageAutoApprove[st.ID] = st.AutoApprove
 					stageDependsOn[st.ID] = st.DependsOn
 				}
-				srv := server.New(server.Config{
+				srv = server.New(server.Config{
 					Port:             cfg.Server.GetPort(),
 					RunDir:           runDir,
 					Description:      f.Description,
@@ -312,17 +315,10 @@ func newRunCmd() *cobra.Command {
 
 			fmt.Printf("afm: flow %q completed\n", f.Name)
 
-			// Удерживаем дашборд чуть дольше завершения флоу: WS успевает доставить
-			// stage_status_changed→done, фронт делает refresh(), и очередной
-			// /api/status-поллинг (3с) тоже возвращает терминальный снапшот. Без паузы
-			// процесс рвёт соединение раньше — UI «залипает» на последнем активном
-			// статусе (например, running) вместо done/failed.
+			// Удерживаем дашборд после завершения флоу — см. waitForDashboardDrain.
 			if dashboardStarted {
-				fmt.Printf("  dashboard: holding %s for UI to render final state\n", dashboardExitGrace)
-				select {
-				case <-time.After(dashboardExitGrace):
-				case <-ctx.Done(): // Ctrl-C — выходим сразу, не дожидаясь паузы
-				}
+				fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMin)
+				waitForDashboardDrain(ctx, srv.ConnectedClients)
 			}
 
 			return nil
@@ -382,12 +378,53 @@ func launchHostBrowserOpener(port int) {
 const extYAML = ".yaml"
 const extYML = ".yml"
 
-// dashboardExitGrace — на сколько задержать завершение процесса после успеха
-// флоу, если поднят дашборд. Фронтенд опрашивает /api/status каждые 3с
+// dashboardExitGraceMin — безусловная пауза перед завершением процесса после
+// успеха флоу, если поднят дашборд. Фронтенд опрашивает /api/status каждые 3с
 // (POLL_INTERVAL_MS в use-status.ts) и обновляется по WS; 5с хватает, чтобы UI
-// гарантированно увидел терминальный статус (done/failed) до остановки сервера
-// и (в Docker-режиме) контейнера.
-const dashboardExitGrace = 5 * time.Second
+// гарантированно увидел терминальный статус (done/failed), пока вкладка
+// браузера активна.
+const dashboardExitGraceMin = 5 * time.Second
+
+// dashboardExitGraceMax — верхняя граница суммарного ожидания, пока к
+// дашборду подключён хотя бы один WS-клиент. Свёрнутая/неактивная вкладка
+// браузера троттлится браузером сильнее для setInterval-поллинга /api/status,
+// чем для уже открытого WS-соединения — dashboardExitGraceMin один в этом
+// случае недостаточен, UI «залипает» на последнем статусе (см. use-status.ts).
+// Ограничена сверху, чтобы процесс (и, в Docker-режиме, контейнер) не завис
+// навсегда из-за незакрытой вкладки.
+const dashboardExitGraceMax = 2 * time.Minute
+
+// dashboardDrainPoll — как часто проверять число подключённых WS-клиентов
+// в течение dashboardExitGraceMax.
+const dashboardDrainPoll = 2 * time.Second
+
+// waitForDashboardDrain держит дашборд открытым после успешного завершения
+// флоу: сначала dashboardExitGraceMin безусловно, затем — пока
+// connectedClients() > 0, но не дольше dashboardExitGraceMax суммарно.
+// Ctrl-C (ctx.Done()) прерывает ожидание немедленно.
+func waitForDashboardDrain(ctx context.Context, connectedClients func() int) {
+	waitForDashboardDrainWithTiming(ctx, connectedClients, dashboardExitGraceMin, dashboardExitGraceMax, dashboardDrainPoll)
+}
+
+// waitForDashboardDrainWithTiming — тело waitForDashboardDrain с
+// параметризованными длительностями (тесты подставляют миллисекунды вместо
+// реальных minGrace/maxGrace/pollInterval).
+func waitForDashboardDrainWithTiming(ctx context.Context, connectedClients func() int, minGrace, maxGrace, pollInterval time.Duration) {
+	select {
+	case <-time.After(minGrace):
+	case <-ctx.Done():
+		return
+	}
+
+	deadline := time.Now().Add(maxGrace)
+	for connectedClients() > 0 && time.Now().Before(deadline) {
+		select {
+		case <-time.After(pollInterval):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
 
 func resolveFlowPath(args []string) (string, error) {
 	if len(args) > 0 {

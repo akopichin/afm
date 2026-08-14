@@ -91,6 +91,26 @@ export function useStatus(): FlowStatus & { refresh: () => void } {
     }
   }, [load])
 
+  // Фоновая/свёрнутая вкладка троттлит setInterval сильнее, чем доставку
+  // WS-сообщений (см. use-event-feed.ts) — поэтому долгий флоу может
+  // завершиться, пока опрос выше не тикнул ни разу. Возврат вкладки в фокус —
+  // сигнал незамедлительно подтянуть актуальный статус, а не ждать следующего
+  // (возможно, отложенного браузером) тика.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void load()
+    }
+    // focus не нуждается в проверке visibilityState — сам факт фокуса окна
+    // уже означает, что вкладка активна.
+    const onFocus = () => void load()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [load])
+
   return { ...status, refresh }
 }
 

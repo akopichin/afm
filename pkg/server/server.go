@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/akopichin/afm/pkg/config"
@@ -88,6 +89,15 @@ type Server struct {
 	wsPongWait   time.Duration
 	wsPingPeriod time.Duration
 	wsWriteWait  time.Duration
+	// wsClients — число открытых сейчас /ws-соединений. Используется CLI при
+	// завершении run'а, чтобы не гасить дашборд, пока за ним кто-то следит
+	// (см. waitForDashboardDrain в cmd/afm/run.go).
+	wsClients atomic.Int64
+}
+
+// ConnectedClients возвращает текущее число открытых /ws-соединений.
+func (s *Server) ConnectedClients() int {
+	return int(s.wsClients.Load())
 }
 
 // Config holds server settings.

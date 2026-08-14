@@ -2,6 +2,18 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-14
+
+### Fix: dashboard UI could freeze mid-run (stuck stage/progress, permanent OFFLINE) after a long completed flow
+
+- Diagnosed from a real production run's logs (a 13-stage review flow, ~1h23m): the durable event log/state (`events.jsonl`/`state.json`/`notices.jsonl`) showed every stage genuinely reached `done`, but the dashboard still showed a mid-flow stage as running, the footer stuck at `11/13`, and a permanent `OFFLINE` badge — a UI/connection-lifecycle bug, not an orchestration bug (no data loss, no stuck agent).
+- Root cause: the header status badge, stage list, and footer are all fed by a single `useStatus()` object polled via a plain 3-second `setInterval` with no timeout/retry/backoff and no tab-visibility awareness (`pkg/web/dashboard/src/hooks/use-status/use-status.ts`), while the Event Feed panel is fed by a separate, self-healing WebSocket channel (reconnect + full-history resync on reconnect). Browsers throttle background-tab `setInterval` polling far more aggressively than delivery on an already-open WebSocket, so a tab backgrounded right as a long flow finishes can miss the existing `dashboardExitGrace` window entirely (a flat 5s hold added earlier, commit `d2ad944`) — by the time the poll would fire, the CLI process (and dashboard server) has already exited, and every later poll/reconnect attempt fails silently forever.
+- Two complementary fixes:
+  1. `useStatus` now forces an immediate `/api/status` refetch on `visibilitychange` (tab becomes visible) and `window focus` — a throttled background tab catches up the instant it's looked at again instead of waiting for its next, possibly delayed, poll tick.
+  2. The CLI's fixed 5s sleep is replaced by `waitForDashboardDrain` (`cmd/afm/run.go`): still waits 5s (`dashboardExitGraceMin`) unconditionally, then keeps the dashboard/WS server alive while at least one client is still connected — tracked via a new `Server.ConnectedClients()` counter (`pkg/server/websocket.go`) — up to a bounded 2-minute ceiling (`dashboardExitGraceMax`), giving a throttled tab real headroom to notice completion without hanging forever if the tab is simply never closed.
+- New tests: `pkg/server/websocket_clients_test.go` (client-count tracking), `cmd/afm/run_dashboard_drain_test.go` (drain-timing logic: min-grace floor, early exit on disconnect, hard ceiling, Ctrl-C short-circuit), plus three new cases in `use-status.test.ts` covering the visibility/focus refetch behavior.
+- Found via `/superpowers:systematic-debugging` against a copied `.afm/runs/` log directory from the actual affected run, not reproduced live — no formal spec/plan doc for this one.
+
 ## 2026-08-13
 
 ### New: `afmsdk` — a Go SDK for driving afm flows from another Go program

@@ -5,6 +5,7 @@ import { normalizeStatus, useStatus } from './use-status'
 describe('useStatus', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
   })
 
   test('normalizes /api/status (ordered stages array) into Stage[]', async () => {
@@ -261,5 +262,50 @@ describe('useStatus', () => {
     expect(status.stages[1]).toMatchObject({
       id: 'a', interactive: true, autoApprove: true, showPlan: true, showDialog: true,
     })
+  })
+
+  test('refetches status when the tab regains visibility (background-tab poll throttling)', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ flow_name: 'demo', stages: [] }),
+    } as Response)
+
+    renderHook(() => useStatus())
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  test('ignores visibilitychange while the tab is still hidden', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ flow_name: 'demo', stages: [] }),
+    } as Response)
+
+    renderHook(() => useStatus())
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('refetches status on window focus', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ flow_name: 'demo', stages: [] }),
+    } as Response)
+
+    renderHook(() => useStatus())
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    window.dispatchEvent(new Event('focus'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
   })
 })
