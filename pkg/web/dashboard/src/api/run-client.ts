@@ -29,6 +29,14 @@ export async function retryStage(stageId: string): Promise<void> {
   await postJson(stageUrl(stageId, 'retry'), null)
 }
 
+export async function pauseStage(stageId: string): Promise<void> {
+  await postJson(stageUrl(stageId, 'pause'), null)
+}
+
+export async function continueStage(stageId: string): Promise<void> {
+  await postJson(stageUrl(stageId, 'continue'), null)
+}
+
 export async function retryHookStage(stageId: string): Promise<void> {
   await postJson(stageUrl(stageId, 'retry-hook'), null)
 }
