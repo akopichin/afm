@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
@@ -269,4 +271,165 @@ func TestContinue_NotPaused_IsNoOp(t *testing.T) {
 	if final.Stages["s1"].Status != state.StatusDone {
 		t.Errorf("Continue on a done stage must not change its status, got %v", final.Stages["s1"].Status)
 	}
+}
+
+// blockingRunner: RunPlanning writes a minimally valid plan.md so the stage
+// reaches running (headless auto-approve carries it from
+// awaiting_approval->ready->running); RunAgent blocks on the same
+// interruptChans channel Revise() already uses for a running stage (see
+// orchestrator.InterruptChanForTest, used identically in
+// agent_suggest_test.go's blockingThenFeedbackRunner) and returns
+// executor.ErrUserInterrupted when signaled — simulating what a real
+// executor does after SIGINT.
+type blockingRunner struct {
+	orch    *orchestrator.Orchestrator
+	stageID string
+}
+
+func (r *blockingRunner) RunPlanning(_ context.Context, _, _, outFile, _ string) error {
+	plan := "## Tasks\n\n- [ ] implement feature\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] feature works\n"
+	return os.WriteFile(outFile, []byte(plan), 0644)
+}
+
+func (r *blockingRunner) RunAgent(ctx context.Context, _, _, _, _ string) error {
+	ch, ok := orchestrator.InterruptChanForTest(r.orch, r.stageID)
+	if !ok {
+		<-ctx.Done()
+		return context.Canceled
+	}
+	select {
+	case <-ch:
+		return executor.ErrUserInterrupted
+	case <-ctx.Done():
+		return context.Canceled
+	}
+}
+
+func (r *blockingRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, error) {
+	return nil, errors.New("not used in this test")
+}
+
+var _ executor.Runner = (*blockingRunner)(nil)
+
+func TestPause_RunningStage_StopsAgentAndTransitionsToPaused(t *testing.T) {
+	runDir := t.TempDir()
+	stages := []flow.Stage{{ID: "impl", Name: "Impl", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}}}
+
+	store, err := state.Open(runDir, []string{"impl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(runDir, "state.json")
+
+	runner := &blockingRunner{stageID: "impl"}
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(), Runner: runner,
+	})
+	runner.orch = orch
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "impl", state.StatusRunning, 10*time.Second)
+
+	if err := orch.Pause(ctx, "impl"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	waitForStatus(t, stateFile, "impl", state.StatusPaused, 5*time.Second)
+
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["impl"].PausedFrom != state.StatusRunning {
+		t.Errorf("PausedFrom = %q, want %q", final.Stages["impl"].PausedFrom, state.StatusRunning)
+	}
+}
+
+// alwaysRetryableAgentRunner: planning succeeds via delegate; every RunAgent
+// call fails with a retryable error, keeping the stage in the
+// running->retrying backoff loop so the test can Pause it mid-backoff.
+type alwaysRetryableAgentRunner struct {
+	delegate executor.Runner
+}
+
+func (r *alwaysRetryableAgentRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *alwaysRetryableAgentRunner) RunAgent(_ context.Context, _, _, _, _ string) error {
+	return errors.New("rate limit exceeded")
+}
+
+func (r *alwaysRetryableAgentRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
+var _ executor.Runner = (*alwaysRetryableAgentRunner)(nil)
+
+func TestPause_RetryingStage_CancelsBackoffImmediately(t *testing.T) {
+	origBackoff := orchestrator.RetryBackoff
+	origMax := orchestrator.MaxRetries
+	orchestrator.RetryBackoff = 30 * time.Second
+	orchestrator.MaxRetries = 15
+	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
+
+	stages := []flow.Stage{
+		{ID: "impl", Name: "Impl", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+	runner := &alwaysRetryableAgentRunner{delegate: mockRunner(t, mockPlanningScript)}
+	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer ctxCancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "impl", state.StatusRetrying, 10*time.Second)
+
+	if err := orch.Pause(ctx, "impl"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	// RetryBackoff is 30s — if Pause didn't cancel the backoff wait, this
+	// would time out instead of passing quickly.
+	waitForStatus(t, stateFile, "impl", state.StatusPaused, 3*time.Second)
+}
+
+func TestPause_AwaitingApproval_IsNoOp(t *testing.T) {
+	srv := setupPauseNoOpOrchestrator(t) // see helper below
+	if err := srv.orch.Pause(context.Background(), srv.stageID); err != nil {
+		t.Fatalf("Pause on awaiting_approval should be a no-op, got error: %v", err)
+	}
+	if got := srv.store.Get(srv.stageID); got != state.StatusAwaitingApproval {
+		t.Errorf("status changed to %v, want unchanged awaiting_approval", got)
+	}
+}
+
+type pauseNoOpFixture struct {
+	orch    *orchestrator.Orchestrator
+	store   *state.Store
+	stageID string
+}
+
+func setupPauseNoOpOrchestrator(t *testing.T) pauseNoOpFixture {
+	t.Helper()
+	runDir := t.TempDir()
+	stages := []flow.Stage{{ID: "s1", Name: "S1", Agents: []flow.AgentType{flow.AgentPlanning}}}
+	store, err := state.Open(runDir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusAwaitingApproval, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+	return pauseNoOpFixture{orch: orch, store: store, stageID: "s1"}
 }

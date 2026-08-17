@@ -132,6 +132,9 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		}
 
 		if errors.Is(err, executor.ErrUserInterrupted) {
+			if o.currentStatus(s.ID) == state.StatusPaused {
+				return // Pause() already recorded the durable transition — nothing to restart
+			}
 			onUserInterrupted()
 			return
 		}
@@ -162,6 +165,8 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			})
 			select {
 			case <-time.After(retryBackoff):
+			case <-interruptCh:
+				return // Pause() already transitioned to paused — nothing to resume here
 			case <-ctx.Done():
 				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "cancelled during retry")
 				o.failBlockedStages()

@@ -161,6 +161,34 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 	return nil
 }
 
+// Pause synchronously transitions a stage to paused and, if it has a live
+// agent or is waiting out a retry backoff, signals the same interruptChans
+// channel Revise() already uses for a running stage. The only difference
+// from Revise is what runWithRetry does when it wakes up: Revise restarts
+// with feedback, Pause doesn't restart anything — the durable transition to
+// paused already happened here, synchronously, before the signal was sent.
+func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
+	switch o.currentStatus(stageID) {
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying:
+	default:
+		return nil
+	}
+	if stage := o.graph.Stage(stageID); stage != nil && stage.IsScript() && o.currentStatus(stageID) == state.StatusRunning {
+		return nil // mid-script pause не поддержан — RunScript не принимает InterruptCh
+	}
+
+	if _, ok := o.Trigger(stageID, bus.EvPause, bus.GuardCtx{}, "manual pause"); !ok {
+		return nil
+	}
+	if ch, ok := o.interruptChans.Load(stageID); ok {
+		select {
+		case ch.(chan struct{}) <- struct{}{}:
+		default: // уже сигнализирован — не блокируемся
+		}
+	}
+	return nil
+}
+
 // Continue resumes a paused stage: for PausedFrom==pending (auto_run:false
 // gated the stage before it ever started, or a script stage's only pause
 // point) it's exactly a normal first activation; otherwise it's exactly what
