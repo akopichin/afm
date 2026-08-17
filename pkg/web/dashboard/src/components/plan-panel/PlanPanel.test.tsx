@@ -340,6 +340,47 @@ describe('PlanPanel', () => {
     scrollHeightSpy.mockRestore()
   })
 
+  test('paused, pending: shows the pending-specific reason and a Continue button', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+
+    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'pending' })} />)
+
+    expect(await screen.findByText(/before its first run/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
+  })
+
+  test('paused, running: shows the running-specific reason', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+
+    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'running' })} />)
+
+    expect(await screen.findByText(/manually paused while it was running/i)).toBeInTheDocument()
+  })
+
+  test('paused, retrying: shows the retrying-specific reason', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+
+    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'retrying' })} />)
+
+    expect(await screen.findByText(/waiting to retry/i)).toBeInTheDocument()
+  })
+
+  test('Continue: posts to the continue endpoint', async () => {
+    const calls: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      calls.push(url)
+      return textResponse('')
+    })
+
+    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'pending' })} />)
+
+    const continueBtn = await screen.findByRole('button', { name: 'Continue' })
+    fireEvent.click(continueBtn)
+
+    await waitFor(() => expect(calls.some((c) => c.endsWith('/continue'))).toBe(true))
+  })
+
   test('stage=null: renders the panel shell without fetching or crashing', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 

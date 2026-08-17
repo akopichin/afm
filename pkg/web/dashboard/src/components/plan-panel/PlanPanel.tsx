@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
-import { approveStage, retryHookStage, retryStage, reviseStage, skipHookStage } from '../../api/run-client'
+import { approveStage, continueStage, retryHookStage, retryStage, reviseStage, skipHookStage } from '../../api/run-client'
 import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
@@ -26,16 +26,17 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   const [draft, setDraft] = useState('')
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
-  const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | null>(null)
+  const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | 'continue' | null>(null)
 
   const isReview = stage?.status === 'awaiting_approval'
   const showActions = isReview && stage !== null && !stage.autoApprove
   const showAutoApprovedBadge = stage !== null && stage.autoApprove && planMarkdown.trim() !== ''
   const showRetry = stage?.status === 'failed'
   const showHookFailed = stage?.status === 'hook_failed'
+  const showPaused = stage?.status === 'paused'
   const commentCount = Object.keys(comments).length
 
-  function flashButton(which: 'approve' | 'revise' | 'retry') {
+  function flashButton(which: 'approve' | 'revise' | 'retry' | 'continue') {
     setClicked(which)
     window.setTimeout(() => setClicked(null), 1200)
   }
@@ -166,6 +167,17 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
     }
   }
 
+  async function doContinue() {
+    if (stage === null) return
+    flashButton('continue')
+    setBusy(true)
+    try {
+      await continueStage(stage.id)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function retryHook() {
     if (stage === null) return
     flashButton('retry')
@@ -240,6 +252,19 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
               <button id="btn-retry" className={`btn btn-retry${clicked === 'retry' ? ' ok' : ''}`} type="button" disabled={busy} onClick={retry}>
                 <span className="btn-ripple" aria-hidden="true" />
                 <span className="btn-label">Retry</span>
+                <span className="btn-done" aria-hidden="true">✓</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showPaused && (
+          <div id="paused-section" className="section">
+            <p className="paused-reason">{pausedReasonText(stage?.pausedFrom ?? '')}</p>
+            <div className="actions-row">
+              <button id="btn-continue" className={`btn btn-approve${clicked === 'continue' ? ' ok' : ''}`} type="button" disabled={busy} onClick={doContinue}>
+                <span className="btn-ripple" aria-hidden="true" />
+                <span className="btn-label">Continue</span>
                 <span className="btn-done" aria-hidden="true">✓</span>
               </button>
             </div>
@@ -400,6 +425,21 @@ function parseReviewPlan(text: string): ReviewItem[] {
   }
 
   return items
+}
+
+function pausedReasonText(pausedFrom: Stage['pausedFrom']): string {
+  switch (pausedFrom) {
+    case 'pending':
+      return 'This stage is paused before its first run (auto_run: false). Click Continue to start it.'
+    case 'retrying':
+      return 'This stage was paused while waiting to retry.'
+    case 'planning':
+      return 'This stage was manually paused while it was planning.'
+    case 'revising':
+      return 'This stage was manually paused while it was revising.'
+    default:
+      return 'This stage was manually paused while it was running.'
+  }
 }
 
 function buildFeedback(comments: Record<number, string>): string {
