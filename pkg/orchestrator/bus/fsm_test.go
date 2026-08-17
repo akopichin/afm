@@ -233,3 +233,63 @@ func newTestFSMRapid(t *rapid.T, stages []string) (*FSM, *state.Store) {
 	}
 	return NewFSM(store), store
 }
+
+func TestFSM_Apply_Pause(t *testing.T) {
+	for _, from := range []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		to, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "manual pause")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if !ok || to != state.StatusPaused {
+			t.Errorf("%s->paused: got (%v, %v), want (paused, true)", from, to, ok)
+		}
+	}
+}
+
+func TestFSM_Apply_Pause_IllegalFromAwaitingApproval(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingApproval, Event: "test_setup"})
+
+	_, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if ok {
+		t.Error("pause from awaiting_approval: ok = true, want false")
+	}
+}
+
+func TestFSM_Apply_Continue_ResumesToPausedFrom(t *testing.T) {
+	for _, pausedFrom := range []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusPending} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusPaused, Event: "test_setup"})
+
+		to, _, ok, err := fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: pausedFrom}, "")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", pausedFrom, err)
+		}
+		if !ok || to != pausedFrom {
+			t.Errorf("continue with PausedFrom=%s: got (%v, %v), want (%s, true)", pausedFrom, to, ok, pausedFrom)
+		}
+	}
+}
+
+func TestFSM_Apply_Continue_IllegalFromRunning(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
+
+	_, _, ok, err := fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: state.StatusRunning}, "")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if ok {
+		t.Error("continue from running (not paused): ok = true, want false")
+	}
+}
