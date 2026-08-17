@@ -10,6 +10,7 @@ const TITLES: Record<AttentionKind, string> = {
   plan: 'Need Approve',
   dialog: 'You have a question',
   failed: 'Stage failed',
+  paused: 'Stage paused',
 }
 
 function readInitialPermission(): NotificationPermissionState {

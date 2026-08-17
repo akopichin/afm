@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { Stage, StageStatus } from '../../types'
 
-export type AttentionKind = 'dialog' | 'plan' | 'failed'
+export type AttentionKind = 'dialog' | 'plan' | 'failed' | 'paused'
 export type Attention = { needsAttention: boolean; kind: AttentionKind | null }
 export type AttentionEntry = { stage: Stage; kind: AttentionKind }
 
@@ -10,12 +10,14 @@ export const ATTENTION_STATUSES: ReadonlySet<StageStatus> = new Set<StageStatus>
   'awaiting_approval',
   'failed',
   'hook_failed',
+  'paused',
 ])
 
 function attentionKindFor(status: StageStatus): AttentionKind | null {
   if (status === 'awaiting_user_input') return 'dialog'
   if (status === 'awaiting_approval') return 'plan'
   if (status === 'failed' || status === 'hook_failed') return 'failed'
+  if (status === 'paused') return 'paused'
   return null
 }
 

@@ -3,9 +3,10 @@ package server
 import "context"
 
 // StageActions are the commands the dashboard can always trigger for any
-// stage: approve/revise a plan, or retry a failed stage. Every production
-// Config wires all three (there is exactly one caller, cmd/afm/run.go) —
-// this interface has no meaningful "partially nil" state, unlike SecondaryActions.
+// stage: approve/revise a plan, retry a failed stage, or pause/continue a
+// stage. Every production Config wires all five (there is exactly one
+// caller, cmd/afm/run.go) — this interface has no meaningful "partially nil"
+// state, unlike SecondaryActions.
 type StageActions interface {
 	Approve(ctx context.Context, stageID string) error
 	Revise(ctx context.Context, stageID, feedback string) error

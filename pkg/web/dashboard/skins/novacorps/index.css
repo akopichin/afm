@@ -56,6 +56,7 @@
   --c-retrying:       var(--amber);
   --c-awaiting-user:  var(--violet);
   --c-hook-failed:    var(--c-failed);
+  --c-paused:         var(--amber);
 
   /* legacy aliases used by inline styles */
   --text:    var(--ink);
@@ -103,6 +104,7 @@
   --c-retrying:       var(--amber);
   --c-awaiting-user:  var(--violet);
   --c-hook-failed:    var(--c-failed);
+  --c-paused:         var(--amber);
 
   /* legacy aliases used by inline styles */
   --text:    var(--ink);
