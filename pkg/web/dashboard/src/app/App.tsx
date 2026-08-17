@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { reviseStage } from '../api/run-client'
+import { pauseStage, reviseStage } from '../api/run-client'
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -199,6 +199,7 @@ export function App(): ReactElement {
                 selectedStageId={selectedStageId}
                 onSelect={setSelectedStageId}
                 onAddNote={setNoteModalStageId}
+                onPause={(stageId) => { void pauseStage(stageId) }}
               />
             }
             stageHeader={

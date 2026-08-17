@@ -67,7 +67,7 @@ describe('StagesList', () => {
     expect(screen.getByRole('listitem').querySelector('.stage-name')).not.toBeInTheDocument()
   })
 
-  test('shows the kebab menu only when status is running or awaiting_approval', () => {
+  test('shows the kebab menu for running/awaiting_approval/planning/revising/retrying only', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
       { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
@@ -75,6 +75,43 @@ describe('StagesList', () => {
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
     expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(2) // a и c, не b
+  })
+
+  test('shows the kebab for planning/revising/retrying too, not just running/awaiting_approval', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'planning', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
+      { id: 'b', name: '', status: 'revising', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
+      { id: 'c', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(3)
+  })
+
+  test('Pause menu item calls onPause and is hidden for a running script stage', () => {
+    const onPause = vi.fn()
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
+      { id: 'b', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '' },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} />)
+
+    const buttons = screen.getAllByRole('button', { name: /more actions/i })
+    fireEvent.click(buttons[0]!) // stage a: regular running stage
+    expect(screen.getByText('Pause')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Pause'))
+    expect(onPause).toHaveBeenCalledWith('a')
+
+    fireEvent.click(buttons[1]!) // stage b: running SCRIPT stage
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
+  })
+
+  test('"Add note for agent" stays limited to running/awaiting_approval even though the kebab now also opens for planning/revising/retrying', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
   test('CRITICAL: kebab menu portals to document.body so the scrollable #stages-panel cannot clip it', () => {

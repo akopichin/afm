@@ -12,18 +12,25 @@ type StagesListProps = {
   selectedStageId: string | null
   onSelect: (stageId: string) => void
   onAddNote?: (stageId: string) => void // вызывается при клике на пункт меню
+  onPause?: (stageId: string) => void
 }
 
-// Статусы, при которых у стадии доступен кебаб (добавить заметку агенту):
-// агент ещё выполняется (running) или ждёт одобрения плана (awaiting_approval) —
-// оба случая, когда POST /api/stages/{id}/revise принимает поправку.
-const KEBAB_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
+// Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
+// "Add note for agent" остаётся ограничен running/awaiting_approval (см.
+// ниже, отдельное условие на сам пункт) — "Pause" доступен на остальных.
+const KEBAB_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval', 'planning', 'revising', 'retrying'])
+
+// Статусы, из которых можно поставить стадию на паузу вручную.
+const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying'])
+
+// "Add note for agent" (Revise) — только для running/awaiting_approval, как и раньше.
+const ADD_NOTE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onAddNote }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onPause }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -161,18 +168,34 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote }: Sta
                       style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <li>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenMenuStageId(null)
-                            setMenuPos(null)
-                            onAddNote?.(stage.id)
-                          }}
-                        >
-                          Add note for agent
-                        </button>
-                      </li>
+                      {ADD_NOTE_STATUSES.has(stage.status) && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuStageId(null)
+                              setMenuPos(null)
+                              onAddNote?.(stage.id)
+                            }}
+                          >
+                            Add note for agent
+                          </button>
+                        </li>
+                      )}
+                      {PAUSABLE_STATUSES.has(stage.status) && !(stage.isScript && stage.status === 'running') && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuStageId(null)
+                              setMenuPos(null)
+                              onPause?.(stage.id)
+                            }}
+                          >
+                            Pause
+                          </button>
+                        </li>
+                      )}
                     </ul>,
                     document.body,
                   )}
