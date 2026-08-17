@@ -17,13 +17,18 @@ import (
 type StageStatus string
 
 const (
-	StatusPending           StageStatus = "pending"
-	StatusPlanning          StageStatus = "planning"
-	StatusAwaitingApproval  StageStatus = "awaiting_approval"
-	StatusRevising          StageStatus = "revising"
-	StatusReady             StageStatus = "ready"
-	StatusRunning           StageStatus = "running"
-	StatusRetrying          StageStatus = "retrying"
+	StatusPending          StageStatus = "pending"
+	StatusPlanning         StageStatus = "planning"
+	StatusAwaitingApproval StageStatus = "awaiting_approval"
+	StatusRevising         StageStatus = "revising"
+	StatusReady            StageStatus = "ready"
+	StatusRunning          StageStatus = "running"
+	StatusRetrying         StageStatus = "retrying"
+	// StatusPaused — стадия приостановлена: либо auto_run:false не дал ей
+	// стартовать (PausedFrom=pending), либо пользователь вручную поставил на
+	// паузу уже бегущую стадию (PausedFrom=running/planning/revising/retrying).
+	// См. StageState.PausedFrom и bus.EvPause/EvContinue.
+	StatusPaused            StageStatus = "paused"
 	StatusAwaitingUserInput StageStatus = "awaiting_user_input"
 	StatusDone              StageStatus = "done"
 	StatusFailed            StageStatus = "failed"
@@ -41,7 +46,7 @@ const (
 func AllStatuses() []StageStatus {
 	return []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
-		StatusReady, StatusRunning, StatusRetrying, StatusAwaitingUserInput,
+		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
 		StatusDone, StatusFailed, StatusHookFailed,
 	}
 }

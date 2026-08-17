@@ -9,6 +9,7 @@ export const STAGE_STATUSES = [
   "ready",
   "running",
   "retrying",
+  "paused",
   "awaiting_user_input",
   "done",
   "failed",

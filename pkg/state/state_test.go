@@ -11,7 +11,7 @@ import (
 func TestAllStatuses_MatchesConsts(t *testing.T) {
 	want := []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
-		StatusReady, StatusRunning, StatusRetrying, StatusAwaitingUserInput,
+		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
 		StatusDone, StatusFailed, StatusHookFailed,
 	}
 	got := AllStatuses()

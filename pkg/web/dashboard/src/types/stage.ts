@@ -39,6 +39,7 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   done: 'Done',
   failed: 'Failed',
   retrying: 'Retrying',
+  paused: 'Paused',
   awaiting_user_input: 'Awaiting reply',
   hook_failed: 'Hook failed',
 }
@@ -55,6 +56,7 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'planning',
   'revising',
   'retrying',
+  'paused',
   'awaiting_user_input',
   'awaiting_approval',
   'hook_failed',
