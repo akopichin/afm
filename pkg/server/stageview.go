@@ -26,6 +26,15 @@ type StageView struct {
 	Autonomous  bool              `json:"autonomous"`
 	AutoApprove bool              `json:"auto_approve"`
 	HasDialog   bool              `json:"has_dialog"`
+	// IsScript — статический конфиг флоу (Stage.IsScript()): нужен фронту,
+	// чтобы скрывать пункт "Pause" в кебаб-меню, пока скриптовая стадия
+	// реально выполняется (mid-script graceful stop не поддержан).
+	IsScript bool `json:"is_script"`
+	// PausedFrom заполняется только когда Status == paused (см.
+	// state.StageState.PausedFrom, которое, в отличие от этого поля,
+	// остаётся непустым и после Continue) — панель паузы в дашборде решает
+	// по нему, какой текст показать.
+	PausedFrom state.StageStatus `json:"paused_from,omitempty"`
 	// ShowPlan/ShowDialog — the two visibility capabilities pkg/web/dashboard's
 	// App.tsx computed from Autonomous/Status/Interactive/HasDialog. See that
 	// file's showPlan/showDialog comment (removed in the frontend task of this
@@ -41,7 +50,7 @@ type StageView struct {
 // reordering. rs.StageOrder itself (the authoritative declaration order used
 // by state/scheduling) is never touched. Replaces handleStatus's previous
 // five-parallel-map construction.
-func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove map[string]bool, dependsOn map[string][]string) []StageView {
+func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string) []StageView {
 	order := topoOrder(rs.StageOrder, dependsOn)
 	views := make([]StageView, 0, len(order))
 	for _, id := range order {
@@ -51,6 +60,10 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 		interactive := stageInteractive[id]
 		showPlan := !autonomous || st.Status == state.StatusFailed
 		showDialog := interactive || autonomous || hasDialog
+		pausedFrom := state.StageStatus("")
+		if st.Status == state.StatusPaused {
+			pausedFrom = st.PausedFrom
+		}
 
 		views = append(views, StageView{
 			ID:          id,
@@ -61,6 +74,8 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			Autonomous:  autonomous,
 			AutoApprove: stageAutoApprove[id],
 			HasDialog:   hasDialog,
+			IsScript:    stageIsScript[id],
+			PausedFrom:  pausedFrom,
 			ShowPlan:    showPlan,
 			ShowDialog:  showDialog,
 		})

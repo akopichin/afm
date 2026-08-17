@@ -31,7 +31,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, nil)
+	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, map[string]bool{"a": false}, nil)
 
 	if len(views) != 2 || views[0].ID != "b" || views[1].ID != "a" {
 		t.Fatalf("order not preserved: %+v", views)
@@ -100,6 +100,39 @@ func TestTopoOrder_UnknownDepIgnored(t *testing.T) {
 	got := topoOrder(ids, deps)
 	if !equalSlices(got, ids) {
 		t.Fatalf("got %v, want %v (unknown dep should be ignored, not block ordering)", got, ids)
+	}
+}
+
+func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
+	runDir := t.TempDir()
+	for _, id := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(runDir, id), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rs := state.RunState{
+		StageOrder: []string{"a", "b"},
+		Stages: map[string]state.StageState{
+			"a": {Status: state.StatusPaused, PausedFrom: state.StatusRunning},
+			"b": {Status: state.StatusRunning}, // never paused — PausedFrom must not leak into the view
+		},
+	}
+
+	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{"a": true}, nil)
+
+	a, b := views[0], views[1]
+	if !a.IsScript {
+		t.Error("stage a: IsScript = false, want true")
+	}
+	if a.PausedFrom != state.StatusRunning {
+		t.Errorf("stage a: PausedFrom = %q, want %q", a.PausedFrom, state.StatusRunning)
+	}
+	if b.IsScript {
+		t.Error("stage b: IsScript = true, want false")
+	}
+	if b.PausedFrom != "" {
+		t.Errorf("stage b: PausedFrom = %q, want empty (never paused)", b.PausedFrom)
 	}
 }
 

@@ -42,7 +42,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		FlowName:             rs.FlowName,
 		StartedAt:            rs.StartedAt,
 		Description:          s.Description,
-		Stages:               buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageDependsOn),
+		Stages:               buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn),
 		LastSeq:              rs.LastSeq,
 		IdleAccumulatedMs:    rs.IdleAccumulatedMs,
 		IdleSince:            rs.IdleSince(),

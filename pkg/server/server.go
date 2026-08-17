@@ -73,6 +73,7 @@ type Server struct {
 	Description      string              // корневой description флоу (для хедера дашборда)
 	stageInteractive map[string]bool     // id стадии → interactive (статический конфиг флоу)
 	stageAutoApprove map[string]bool     // id стадии → auto_approve (статический конфиг флоу)
+	stageIsScript    map[string]bool     // id стадии → IsScript() (статический конфиг флоу)
 	stageDependsOn   map[string][]string // id стадии → depends_on (статический конфиг флоу, для UI-порядка)
 	store            *state.Store
 	uiBus            *bus.UIBus
@@ -107,6 +108,7 @@ type Config struct {
 	Description      string // корневой description флоу (для хедера дашборда)
 	StageInteractive map[string]bool
 	StageAutoApprove map[string]bool
+	StageIsScript    map[string]bool
 	StageDependsOn   map[string][]string
 	Store            *state.Store
 	UIBus            *bus.UIBus
@@ -140,6 +142,7 @@ func New(cfg Config) *Server {
 		Description:      cfg.Description,
 		stageInteractive: cfg.StageInteractive,
 		stageAutoApprove: cfg.StageAutoApprove,
+		stageIsScript:    cfg.StageIsScript,
 		stageDependsOn:   cfg.StageDependsOn,
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,

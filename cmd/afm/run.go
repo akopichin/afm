@@ -262,10 +262,12 @@ func newRunCmd() *cobra.Command {
 			if cfg.Server.GetPort() > 0 {
 				stageInteractive := make(map[string]bool, len(f.Stages))
 				stageAutoApprove := make(map[string]bool, len(f.Stages))
+				stageIsScript := make(map[string]bool, len(f.Stages))
 				stageDependsOn := make(map[string][]string, len(f.Stages))
 				for _, st := range f.Stages {
 					stageInteractive[st.ID] = st.Interactive
 					stageAutoApprove[st.ID] = st.AutoApprove
+					stageIsScript[st.ID] = st.IsScript()
 					stageDependsOn[st.ID] = st.DependsOn
 				}
 				srv = server.New(server.Config{
@@ -274,6 +276,7 @@ func newRunCmd() *cobra.Command {
 					Description:      f.Description,
 					StageInteractive: stageInteractive,
 					StageAutoApprove: stageAutoApprove,
+					StageIsScript:    stageIsScript,
 					StageDependsOn:   stageDependsOn,
 					Store:            store,
 					Theme:            cfg.EffectiveTheme(),
