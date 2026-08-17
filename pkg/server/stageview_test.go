@@ -136,6 +136,36 @@ func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
 	}
 }
 
+// TestBuildStageViews_AutonomousPausedShowsPlan is a regression test for a
+// bug found live: an autonomous stage (agents: [auto], no plan.md) that gets
+// paused had ShowPlan=false — same as any other non-failed autonomous
+// status — so PlanPanel (where the paused section + Continue button live)
+// never rendered at all. Only DialogChannel showed, with no way to resume.
+// paused must be treated like failed: both need PlanPanel's action button
+// regardless of the stage being autonomous.
+func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "a"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "a", "autonomous.flag"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := state.RunState{
+		StageOrder: []string{"a"},
+		Stages: map[string]state.StageState{
+			"a": {Status: state.StatusPaused, PausedFrom: state.StatusRunning},
+		},
+	}
+
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil)
+
+	if !views[0].ShowPlan {
+		t.Errorf("autonomous stage paused: ShowPlan should be true (Continue button lives in PlanPanel), got %+v", views[0])
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

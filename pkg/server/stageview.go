@@ -58,7 +58,11 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 		autonomous := stageIsAutonomous(runDir, id)
 		hasDialog := stageHasDialog(runDir, id)
 		interactive := stageInteractive[id]
-		showPlan := !autonomous || st.Status == state.StatusFailed
+		// autonomous-стадии обычно вообще не имеют plan.md и никогда не доходят
+		// до статусов, для которых нужна панель плана — кроме failed (retry) и
+		// paused (Continue): обе требуют кнопки действия, которая живёт в
+		// PlanPanel, а не в DialogChannel.
+		showPlan := !autonomous || st.Status == state.StatusFailed || st.Status == state.StatusPaused
 		showDialog := interactive || autonomous || hasDialog
 		pausedFrom := state.StageStatus("")
 		if st.Status == state.StatusPaused {
