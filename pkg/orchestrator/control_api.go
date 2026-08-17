@@ -161,6 +161,39 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 	return nil
 }
 
+// Continue resumes a paused stage: for PausedFrom==pending (auto_run:false
+// gated the stage before it ever started, or a script stage's only pause
+// point) it's exactly a normal first activation; otherwise it's exactly what
+// afm-restart recovery already does for a stage recorded as
+// running/planning/revising/retrying (resumeStageAtStatus, Task 6) — a
+// manually paused stage and a crashed-and-restarted one are, from the
+// scheduler's point of view, the same situation: "the process implied by
+// this status isn't running right now."
+func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
+	if o.currentStatus(stageID) != state.StatusPaused {
+		return nil
+	}
+	stage := o.graph.Stage(stageID)
+	if stage == nil {
+		return nil
+	}
+	pausedFrom := o.opts.Store.PausedFrom(stageID)
+	to, ok := o.Trigger(stageID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "")
+	if !ok {
+		return nil
+	}
+
+	ctx := o.runContext(reqCtx) // не reqCtx — иначе HTTP-хендлер убьёт агента при возврате ответа
+	if pausedFrom == state.StatusPending {
+		o.tryActivatePrePlanned(ctx)
+		o.startPlanningForUnblocked(ctx)
+		return nil
+	}
+
+	o.resumeStageAtStatus(ctx, *stage, to)
+	return nil
+}
+
 // Retry retries a failed stage by transitioning it to pending and restarting
 // (синхронно и долговечно).
 func (o *Orchestrator) Retry(ctx context.Context, stageID string) error {

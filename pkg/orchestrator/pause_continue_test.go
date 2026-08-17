@@ -2,7 +2,9 @@ package orchestrator_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,5 +144,129 @@ func TestIntegration_ResumeLeavesPausedStageUntouched(t *testing.T) {
 	final := loadStateJSON(t, stateFile)
 	if final.Stages["paused-stage"].Status != state.StatusPaused {
 		t.Errorf("expected paused stage to remain untouched by recovery, got %v", final.Stages["paused-stage"].Status)
+	}
+}
+
+// TestContinue_FromPending_StartsScriptStage covers cases 1/3: a stage
+// gated by auto_run:false (never actually started — PausedFrom=pending) is
+// resumed by Continue exactly like a normal first activation.
+func TestContinue_FromPending_StartsScriptStage(t *testing.T) {
+	runDir := t.TempDir()
+	stages := []flow.Stage{{ID: "s1", Name: "S1", Script: "true"}}
+	store, err := state.Open(runDir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// The gate never fired live (status was seeded directly into paused) —
+	// nothing to wait for before calling Continue.
+	if err := orch.Continue(ctx, "s1"); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+
+	waitForStatus(t, stateFile, "s1", state.StatusDone, 3*time.Second)
+}
+
+// TestContinue_FromRevising_ResumesWithFeedback covers case 2: a stage
+// paused mid-revision resumes via resumeStageAtStatus, exactly like an afm
+// restart would.
+func TestContinue_FromRevising_ResumesWithFeedback(t *testing.T) {
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "revise-stuck")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.v1.md"), []byte("# Plan v1\n\nold content\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("please add error handling for edge case X"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{
+		{ID: "revise-stuck", Name: "Revise Stuck", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+	store, err := state.Open(runDir, []string{"revise-stuck"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "revise-stuck", From: state.StatusPending, To: state.StatusRevising, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "revise-stuck", From: state.StatusRevising, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	capture := &capturingPlanningRunner{delegate: mockRunner(t, mockPlanningScript)}
+	runner := &doneCreatingRunner{delegate: capture}
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(), Runner: runner,
+	})
+	cancel := autoApprove(orch)
+	defer cancel()
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ctxCancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	if err := orch.Continue(ctx, "revise-stuck"); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+
+	waitForStatus(t, stateFile, "revise-stuck", state.StatusDone, 8*time.Second)
+
+	capture.mu.Lock()
+	prompts := append([]string{}, capture.prompts...)
+	capture.mu.Unlock()
+	if len(prompts) == 0 || !strings.Contains(prompts[0], "please add error handling for edge case X") {
+		t.Fatalf("expected planning prompt to include feedback.md content, got: %v", prompts)
+	}
+}
+
+func TestContinue_NotPaused_IsNoOp(t *testing.T) {
+	runDir := t.TempDir()
+	stages := []flow.Stage{{ID: "s1", Name: "S1", Script: "true"}}
+	store, err := state.Open(runDir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	stateFile := filepath.Join(runDir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	waitForStatus(t, stateFile, "s1", state.StatusDone, 3*time.Second)
+
+	if err := orch.Continue(ctx, "s1"); err != nil {
+		t.Fatalf("Continue on a non-paused stage should be a no-op, got error: %v", err)
+	}
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["s1"].Status != state.StatusDone {
+		t.Errorf("Continue on a done stage must not change its status, got %v", final.Stages["s1"].Status)
 	}
 }
