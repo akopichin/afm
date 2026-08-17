@@ -109,3 +109,38 @@ func TestIntegration_AutoRunGateFiresOnceOnly(t *testing.T) {
 		t.Errorf("expected done (gate must not re-fire on second pending pass), got %v", final.Stages["s1"].Status)
 	}
 }
+
+// TestIntegration_ResumeLeavesPausedStageUntouched — afm restarting must not
+// auto-resume a paused stage; only an explicit Continue may.
+func TestIntegration_ResumeLeavesPausedStageUntouched(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "paused-stage", Name: "Paused", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
+	}
+	runDir := t.TempDir()
+	store, err := state.Open(runDir, []string{"paused-stage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "paused-stage", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "paused-stage", From: state.StatusRunning, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = orch.Run(ctx) // expected to idle out on the ctx deadline — nothing else to complete
+
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["paused-stage"].Status != state.StatusPaused {
+		t.Errorf("expected paused stage to remain untouched by recovery, got %v", final.Stages["paused-stage"].Status)
+	}
+}

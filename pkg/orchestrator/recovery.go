@@ -66,7 +66,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			current := o.opts.Store.Get(s.ID)
 
 			switch current {
-			case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval:
+			case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusPaused:
 				continue
 			case state.StatusRunning, state.StatusReady, state.StatusAwaitingUserInput, state.StatusRevising, state.StatusHookFailed:
 				// Let these fall through to the normal resume logic below. Revising
@@ -126,7 +126,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		current := o.opts.Store.Get(s.ID)
 
 		switch current {
-		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady:
+		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused:
 			continue
 		case state.StatusAwaitingUserInput:
 			o.concurrency.SpawnAgent(ctx, s, o.resumeInteractiveAgent)
@@ -135,95 +135,26 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Re-enter the wait (not a silent retry) — see resumeHookFailedWait.
 			o.concurrency.SpawnAgent(ctx, s, o.resumeHookFailedWait)
 		case state.StatusRetrying:
-			// Interrupted retry — check completion or restart
+			o.resumeStageAtStatus(ctx, s, state.StatusRetrying)
+		case state.StatusRevising:
+			o.resumeStageAtStatus(ctx, s, state.StatusRevising)
+		case state.StatusRunning:
+			o.resumeStageAtStatus(ctx, s, state.StatusRunning)
+		default:
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
-			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-				o.maybeRunAfterHook(ctx, s.ID)
-				continue
-			}
-			if stagefiles.CheckPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
+			if stagefiles.CheckPlanCompletion(stageDir) == nil {
 				o.Trigger(s.ID, bus.EvPlanReady, bus.GuardCtx{}, "recovered plan.md")
 				o.autoApproveIfConfigured(ctx, s)
 				continue
 			}
-			// Restart planning from scratch
-			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "restart after retry")
-			o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
-		case state.StatusRevising:
-			// Interrupted revision — restart with feedback, using whichever phase
-			// was actually interrupted (agent_suggest can revise any active phase,
-			// not only planning — detectInterruptedPhase looks at *.session.json
-			// mtimes, same helper resumeInteractiveAgent already uses).
-			stageDir := filepath.Join(o.opts.RunDir, s.ID)
-			switch o.detectInterruptedPhase(stageDir) {
-			case phaseImplementation:
-				o.concurrency.SpawnAgent(ctx, s, o.runImplementationWithFeedback)
-			case phaseReview:
-				o.concurrency.SpawnAgent(ctx, s, o.runReviewWithFeedback)
-			case phaseAutonomous:
-				o.concurrency.SpawnAgent(ctx, s, o.runAutonomousWithFeedback)
-			default:
-				o.concurrency.SpawnAgent(ctx, s, o.runPlanningWithFeedback)
-			}
-		case state.StatusRunning:
-			// Check if .done exists (agent completed but orchestrator missed the event)
-			stageDir := filepath.Join(o.opts.RunDir, s.ID)
-			// Script-стадия (Stage.IsScript()): нет ни plan.md, ни агента —
-			// перезапускаем сам скрипт напрямую, тем же способом, что и
-			// retryStage (scheduling.go) для вручную ретраенной failed
-			// script-стадии. Без этой проверки код ниже безусловно падал бы в
-			// runImplementationAgent, который ищет plan.md — файл, которого у
-			// script-стадии никогда нет — и стадия падала бы с левой ошибкой
-			// "no such file or directory" вместо перезапуска скрипта.
-			// Проверяется ДО autonomous-ветки — script-стадия никогда не
-			// бывает autonomous.
-			if s.IsScript() {
-				if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-					o.maybeRunAfterHook(ctx, s.ID)
+			if current == state.StatusPending {
+				if !s.EagerPlanning && !o.depsDone(s) {
 					continue
 				}
-				o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
-				continue
-			}
-			// Autonomous track resume: if this is an autonomous stage, look for
-			// execution_summary.md instead of .done, and restart the autonomous
-			// agent rather than the standard implementation agent.
-			if isAutonomousStage(stageDir) || s.IsAuto() {
-				if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
-					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered execution_summary.md")
-					o.maybeRunAfterHook(ctx, s.ID)
+				if o.shouldGateAutoRun(s) {
+					o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
 					continue
 				}
-				o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
-				continue
-			}
-			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-				o.maybeRunAfterHook(ctx, s.ID)
-				continue
-			}
-			// Interrupted implementation — restart with existing plan
-			o.concurrency.SpawnAgent(ctx, s, o.runImplementationAgent)
-		default:
-			// Pending, planning, or unknown — check if planning already completed
-			if s.NeedsPlanning() {
-				stageDir := filepath.Join(o.opts.RunDir, s.ID)
-				if stagefiles.CheckPlanCompletion(stageDir) == nil {
-					o.Trigger(s.ID, bus.EvPlanReady, bus.GuardCtx{}, "recovered plan.md")
-					o.autoApproveIfConfigured(ctx, s)
-					continue
-				}
-			}
-			// Pending stages wait for depends_on unless eager_planning is set.
-			// Interrupted planning (status "planning") always resumes.
-			if current == state.StatusPending && !s.EagerPlanning && !o.depsDone(s) {
-				continue
-			}
-			if current == state.StatusPending && o.shouldGateAutoRun(s) {
-				o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
-				continue
 			}
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
 			o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
@@ -242,6 +173,90 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 
 	// Activate pre-planned stages whose deps just became satisfied.
 	o.tryActivatePrePlanned(ctx)
+}
+
+// resumePlanningStage (re)starts planning for a stage whose recorded status
+// says planning should be in progress (or complete on disk) — used both by
+// startPlanningForPending's default branch (afm restarted mid-planning) and
+// by resumeStageAtStatus below (Continue after a manual pause during
+// planning).
+func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if stagefiles.CheckPlanCompletion(stageDir) == nil {
+		o.Trigger(s.ID, bus.EvPlanReady, bus.GuardCtx{}, "recovered plan.md")
+		o.autoApproveIfConfigured(ctx, s)
+		return
+	}
+	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
+	o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
+}
+
+// resumeStageAtStatus (re)spawns whatever goroutine a stage recorded as
+// running/planning/revising/retrying needs to make progress again — used at
+// afm startup (startPlanningForPending, when the recorded status survived a
+// crash) and by Continue (Task 7, when a user resumes a stage from paused).
+// Both situations reduce to the same question: "the process this status
+// implies isn't running right now — start it."
+func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, status state.StageStatus) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	switch status {
+	case state.StatusPlanning:
+		o.resumePlanningStage(ctx, s)
+	case state.StatusRetrying:
+		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
+			o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
+			o.maybeRunAfterHook(ctx, s.ID)
+			return
+		}
+		if stagefiles.CheckPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
+			o.Trigger(s.ID, bus.EvPlanReady, bus.GuardCtx{}, "recovered plan.md")
+			o.autoApproveIfConfigured(ctx, s)
+			return
+		}
+		o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "restart after retry")
+		o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
+	case state.StatusRevising:
+		switch o.detectInterruptedPhase(stageDir) {
+		case phaseImplementation:
+			o.concurrency.SpawnAgent(ctx, s, o.runImplementationWithFeedback)
+		case phaseReview:
+			o.concurrency.SpawnAgent(ctx, s, o.runReviewWithFeedback)
+		case phaseAutonomous:
+			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousWithFeedback)
+		default:
+			o.concurrency.SpawnAgent(ctx, s, o.runPlanningWithFeedback)
+		}
+	case state.StatusRunning:
+		if s.IsScript() {
+			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
+				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
+				o.maybeRunAfterHook(ctx, s.ID)
+				return
+			}
+			o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
+			return
+		}
+		if isAutonomousStage(stageDir) || s.IsAuto() {
+			if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
+				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered execution_summary.md")
+				o.maybeRunAfterHook(ctx, s.ID)
+				return
+			}
+			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
+			return
+		}
+		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
+			o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
+			o.maybeRunAfterHook(ctx, s.ID)
+			return
+		}
+		o.concurrency.SpawnAgent(ctx, s, o.runImplementationAgent)
+	default:
+		// Unreachable in practice: callers only ever pass a status they just
+		// observed on a stage that needs resuming (Planning/Retrying/Revising/
+		// Running). Kept explicit to satisfy the lint rule requiring switches
+		// to have a default case.
+	}
 }
 
 // resumeInteractiveAgent re-runs the agent of the phase whose
