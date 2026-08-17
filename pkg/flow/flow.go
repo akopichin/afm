@@ -104,6 +104,12 @@ type Stage struct {
 	// --require-approval. Default false. Intended for CI runs where some
 	// stages need human review and others don't.
 	AutoApprove bool `yaml:"auto_approve,omitempty"`
+	// AutoRun, если явно false, приостанавливает стадию сразу при первой
+	// активации (когда её depends_on выполнены) вместо немедленного старта —
+	// стадия уходит в paused с PausedFrom=pending и ждёт Continue. nil (не
+	// задано) или true — прежнее поведение, немедленный старт. Гейт
+	// срабатывает один раз: см. state.StageState.PausedFrom.
+	AutoRun *bool `yaml:"auto_run,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -161,6 +167,12 @@ func (s *Stage) IsAuto() bool {
 // agent (agents: [] entirely absent, replaced by the Script field).
 func (s *Stage) IsScript() bool {
 	return s.Script != ""
+}
+
+// AutoRunDisabled reports whether this stage's first activation should pause
+// instead of starting immediately (auto_run explicitly set to false).
+func (s Stage) AutoRunDisabled() bool {
+	return s.AutoRun != nil && !*s.AutoRun
 }
 
 // Flow is the top-level structure parsed from a flow YAML file.

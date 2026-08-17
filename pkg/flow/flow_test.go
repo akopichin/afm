@@ -672,3 +672,46 @@ func writeTempYAML(t *testing.T, content string) string {
 	f.Close()
 	return f.Name()
 }
+
+func TestStage_AutoRunDisabled(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	if (flow.Stage{}).AutoRunDisabled() {
+		t.Error("nil AutoRun should not be disabled (default: enabled)")
+	}
+	if (flow.Stage{AutoRun: &enabled}).AutoRunDisabled() {
+		t.Error("AutoRun=true should not be disabled")
+	}
+	if !(flow.Stage{AutoRun: &disabled}).AutoRunDisabled() {
+		t.Error("AutoRun=false should be disabled")
+	}
+}
+
+func TestParseFile_AutoRunFalse(t *testing.T) {
+	yaml := `
+name: test-flow
+stages:
+  - id: s1
+    name: "S1"
+    script: "echo hi"
+    auto_run: false
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Stages[0].AutoRunDisabled() {
+		t.Error("expected auto_run: false to parse as disabled")
+	}
+}
+
+func TestParseFile_AutoRunOmittedDefaultsEnabled(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Stages[0].AutoRunDisabled() {
+		t.Error("expected omitted auto_run to default to enabled (not disabled)")
+	}
+}
