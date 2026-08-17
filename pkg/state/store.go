@@ -177,6 +177,15 @@ func (s *Store) Get(stageID string) StageStatus {
 	return StatusPending
 }
 
+// PausedFrom returns the status a paused stage was paused from (empty if the
+// stage has never been paused). See StageState.PausedFrom for why this value
+// survives after the stage leaves paused.
+func (s *Store) PausedFrom(stageID string) StageStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshot.Stages[stageID].PausedFrom
+}
+
 func (s *Store) Snapshot() RunState {
 	s.mu.Lock()
 	defer s.mu.Unlock()

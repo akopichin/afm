@@ -55,6 +55,13 @@ func AllStatuses() []StageStatus {
 type StageState struct {
 	Status    StageStatus `json:"status"`
 	UpdatedAt time.Time   `json:"updated_at"`
+	// PausedFrom — статус, из которого стадия ушла в paused. Заполняется один
+	// раз, при первом входе в paused, и НЕ очищается на выходе из paused
+	// (Continue) — это совмещает две роли: (1) пока стадия в paused — куда
+	// резюмиться; (2) после Continue — постоянная метка "эта стадия уже
+	// проходила цикл паузы хотя бы раз", которую auto_run-гейт (Task 5)
+	// использует, чтобы срабатывать только при самой первой активации.
+	PausedFrom StageStatus `json:"paused_from,omitempty"`
 }
 
 // RunState is the top-level state persisted in state.json.
@@ -114,7 +121,11 @@ func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
 // replayEvents) so a stage's UpdatedAt reflects the real transition time
 // (Transition.Time) rather than the moment of replay.
 func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
-	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t}
+	pausedFrom := rs.Stages[stageID].PausedFrom
+	if status == StatusPaused {
+		pausedFrom = rs.Stages[stageID].Status // статус ДО этого перехода
+	}
+	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t, PausedFrom: pausedFrom}
 }
 
 // isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое
@@ -132,7 +143,7 @@ func isIdle(stages map[string]StageState) bool {
 	anyActive := false
 	for _, st := range stages {
 		switch st.Status {
-		case StatusAwaitingUserInput, StatusAwaitingApproval:
+		case StatusAwaitingUserInput, StatusAwaitingApproval, StatusPaused:
 			return true
 		case StatusFailed:
 			hasFailed = true

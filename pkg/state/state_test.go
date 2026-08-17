@@ -347,3 +347,53 @@ func TestRunState_BackoffOpenSince_OneEntryPerRetryingStage(t *testing.T) {
 		t.Fatalf("BackoffOpenSince() len = %d, want 2", len(got))
 	}
 }
+
+func TestSetStageStatusAt_PausedFromRecordsAndSurvives(t *testing.T) {
+	rs := &RunState{Stages: map[string]StageState{
+		"a": {Status: StatusRunning},
+	}}
+
+	rs.SetStageStatusAt("a", StatusPaused, time.Now())
+	if rs.Stages["a"].PausedFrom != StatusRunning {
+		t.Fatalf("PausedFrom = %q, want %q", rs.Stages["a"].PausedFrom, StatusRunning)
+	}
+
+	// Continuing (leaving paused) must NOT erase PausedFrom — it doubles as
+	// the auto_run one-shot gate marker (see shouldGateAutoRun, Task 5).
+	rs.SetStageStatusAt("a", StatusRunning, time.Now())
+	if rs.Stages["a"].PausedFrom != StatusRunning {
+		t.Errorf("PausedFrom should survive leaving paused, got %q", rs.Stages["a"].PausedFrom)
+	}
+}
+
+func TestIsIdle_PausedIsIdle(t *testing.T) {
+	stages := map[string]StageState{
+		"a": {Status: StatusPaused},
+	}
+	if !isIdle(stages) {
+		t.Error("want idle=true for a lone paused stage")
+	}
+}
+
+func TestStore_PausedFrom(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "run"), []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if got := store.PausedFrom("a"); got != "" {
+		t.Errorf("PausedFrom before any pause = %q, want empty", got)
+	}
+
+	if err := store.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&Transition{StageID: "a", From: StatusRunning, To: StatusPaused, Event: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.PausedFrom("a"); got != StatusRunning {
+		t.Errorf("PausedFrom after pause = %q, want %q", got, StatusRunning)
+	}
+}
