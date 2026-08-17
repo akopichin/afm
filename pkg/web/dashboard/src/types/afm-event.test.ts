@@ -56,6 +56,7 @@ describe('STAGE_STATUS_LABELS', () => {
       done: 'Done',
       failed: 'Failed',
       retrying: 'Retrying',
+      paused: 'Paused',
       awaiting_user_input: 'Awaiting reply',
       hook_failed: 'Hook failed',
     })
@@ -70,6 +71,7 @@ describe('ACTIVE_STAGE_STATUSES', () => {
         'planning',
         'revising',
         'retrying',
+        'paused',
         'awaiting_user_input',
         'awaiting_approval',
         'hook_failed',
