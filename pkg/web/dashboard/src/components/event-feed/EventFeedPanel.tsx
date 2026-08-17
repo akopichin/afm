@@ -1,11 +1,17 @@
 import { type ReactElement } from 'react'
-import type { AfmEvent } from '../../types'
+import type { AfmEvent, LogEntry } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
+import { useFeedMode } from '../../hooks/use-feed-mode'
 
 type EventFeedPanelProps = {
   events: AfmEvent[]
+  // Лог выбранной стадии — второй режим этой же панели (переключается кнопкой
+  // в её шапке), см. useFeedMode. Раньше жил отдельной строкой в центральной
+  // колонке (LogPanel), теперь всегда в правой панели, чтобы не отъедать место
+  // у plan/dialog.
+  logEntries: LogEntry[]
 }
 
 type FeedLine = {
@@ -19,39 +25,64 @@ type FeedLine = {
 // совпадает с addFeedEntry в текущем app.js. Время у строки — статичное: разница с
 // предыдущим событием в ленте («сколько заняло время между операциями»), а не
 // тикающее «N секунд назад» — тикает только elapsed в футере.
-export function EventFeedPanel({ events }: EventFeedPanelProps): ReactElement {
+export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): ReactElement {
   // Автоскролл ленты к хвосту при появлении новых событий, пока пользователь
   // не уехал вверх сам. Кнопка «↓ к последнему» возвращается к актуальному.
   const feed = useStickToBottom<HTMLDivElement>()
+  const { mode, toggle } = useFeedMode()
+  const hasLogEntries = logEntries.length > 0
 
   return (
     <Maximizable id="feed">
-      <PanelFrame title="Event feed" maximizeId="feed">
+      <PanelFrame
+        title={mode === 'feed' ? 'Event feed' : 'Log'}
+        maximizeId="feed"
+        actions={
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={mode === 'feed' ? 'Switch to log' : 'Switch to feed'}
+            title={mode === 'feed' ? 'Switch to log' : 'Switch to feed'}
+            onClick={toggle}
+          >
+            {mode === 'feed' ? 'Log' : 'Feed'}
+          </button>
+        }
+      >
         <aside id="feed-panel">
-          <div id="feed-content" className="event-feed-scroll" ref={feed.ref}>
-            {events.map((event, index) => {
-              const ts = Date.parse(event.timestamp)
-              const prevTs = index > 0 ? Date.parse(events[index - 1]?.timestamp ?? '') : NaN
-              const line = toFeedLine(event)
+          {mode === 'feed' ? (
+            <div id="feed-content" className="event-feed-scroll" ref={feed.ref}>
+              {events.map((event, index) => {
+                const ts = Date.parse(event.timestamp)
+                const prevTs = index > 0 ? Date.parse(events[index - 1]?.timestamp ?? '') : NaN
+                const line = toFeedLine(event)
 
-              return (
-                <div className={`feed-entry${line.entryClass !== '' ? ` ${line.entryClass}` : ''}`} data-ts={Number.isNaN(ts) ? 0 : ts} key={`${event.timestamp}-${event.type}`}>
-                  <span className="feed-time">{formatEventGap(ts, prevTs)}</span>
-                  <span className={line.msgClass}>
-                    {event.stageId !== '' && (
-                      <span className={`feed-stage-badge ${line.statusClass}`}>{event.stageId}</span>
-                    )}
-                    {line.msg}
-                  </span>
-                </div>
-              )
-            })}
-            {!feed.stick && (
-              <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>
-                ↓ latest
-              </button>
-            )}
-          </div>
+                return (
+                  <div className={`feed-entry${line.entryClass !== '' ? ` ${line.entryClass}` : ''}`} data-ts={Number.isNaN(ts) ? 0 : ts} key={`${event.timestamp}-${event.type}`}>
+                    <span className="feed-time">{formatEventGap(ts, prevTs)}</span>
+                    <span className={line.msgClass}>
+                      {event.stageId !== '' && (
+                        <span className={`feed-stage-badge ${line.statusClass}`}>{event.stageId}</span>
+                      )}
+                      {line.msg}
+                    </span>
+                  </div>
+                )
+              })}
+              {!feed.stick && (
+                <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>
+                  ↓ latest
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="section">
+              <pre id="log-content" className={`log-content${hasLogEntries ? '' : ' hidden'}`}>
+                {logEntries.map((entry) => entry.message).join('\n')}
+              </pre>
+              <div id="log-empty" className={`empty-hint${hasLogEntries ? ' hidden' : ''}`}>Log is empty</div>
+            </div>
+          )}
         </aside>
       </PanelFrame>
     </Maximizable>

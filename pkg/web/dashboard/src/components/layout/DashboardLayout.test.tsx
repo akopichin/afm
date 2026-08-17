@@ -9,48 +9,45 @@ function renderLayout(overrides: Partial<Record<'plan' | 'dialog', null>>) {
       stageHeader={<div>HEADER</div>}
       plan={overrides.plan === null ? null : <div>PLAN</div>}
       dialog={overrides.dialog === null ? null : <div>DIALOG</div>}
-      log={<div>LOG</div>}
       feed={<div>FEED</div>}
     />,
   )
 }
 
 describe('DashboardLayout', () => {
-  test('показывает все панели по умолчанию', () => {
+  test('показывает plan и dialog по умолчанию', () => {
     const { container } = renderLayout({})
     expect(screen.getByText('PLAN')).toBeInTheDocument()
     expect(screen.getByText('DIALOG')).toBeInTheDocument()
-    expect(screen.getByText('LOG')).toBeInTheDocument()
-    // 3 строки (plan+dialog+log) → 2 разделителя между ними.
-    expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(2)
+    // 2 строки (plan+dialog) → 1 разделитель между ними.
+    expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(1)
   })
 
   test('скрывает plan, когда plan=null', () => {
     const { container } = renderLayout({ plan: null })
     expect(screen.queryByText('PLAN')).toBeNull()
     expect(screen.getByText('DIALOG')).toBeInTheDocument()
-    expect(screen.getByText('LOG')).toBeInTheDocument()
-    // 2 строки (dialog+log) → 1 разделитель. На старой безусловной реализации
-    // (plan монтировался бы всегда) здесь было бы 2 — этот ассерт ловит регрессию.
-    expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(1)
+    // 1 строка (только dialog) → 0 разделителей.
+    expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(0)
   })
 
   test('скрывает dialog, когда dialog=null', () => {
     const { container } = renderLayout({ dialog: null })
     expect(screen.getByText('PLAN')).toBeInTheDocument()
     expect(screen.queryByText('DIALOG')).toBeNull()
-    expect(screen.getByText('LOG')).toBeInTheDocument()
-    // 2 строки (plan+log) → 1 разделитель.
-    expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(1)
+    // 1 строка (только plan) → 0 разделителей.
+    expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(0)
   })
 
-  test('скрывает обе, когда plan=null и dialog=null', () => {
+  test('показывает empty-state, когда plan=null и dialog=null', () => {
     const { container } = renderLayout({ plan: null, dialog: null })
     expect(screen.queryByText('PLAN')).toBeNull()
     expect(screen.queryByText('DIALOG')).toBeNull()
-    expect(screen.getByText('LOG')).toBeInTheDocument()
-    // 1 строка (только log) → 0 разделителей. На старой реализации (обе панели
-    // монтированы всегда) здесь было бы 2 — этот ассерт ловит регрессию.
+    // Нет строк вообще → нет resize-группы и разделителей (регрессия на старой
+    // реализации: log-row монтировался всегда, разделителей было бы 0, но
+    // сама Group с одной log-панелью существовала бы — здесь Group не рендерится).
     expect(container.querySelectorAll('.resize-handle-h')).toHaveLength(0)
+    expect(container.querySelector('.detail-rows')).toBeNull()
+    expect(screen.getByText('Nothing to show for this stage')).toBeInTheDocument()
   })
 })

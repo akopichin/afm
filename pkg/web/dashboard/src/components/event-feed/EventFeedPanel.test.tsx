@@ -1,9 +1,14 @@
-import { act, render } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
-import type { AfmEvent } from '../../types'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
+import type { AfmEvent, LogEntry } from '../../types'
+import { MaximizeProvider } from '../layout/Maximizable'
 import { EventFeedPanel } from './EventFeedPanel'
 
 describe('EventFeedPanel', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
   test('renders representative feed lines for known event types and falls back to type for unknown ones', () => {
     const events: AfmEvent[] = [
       { type: 'stage_status_changed', payload: 'running', stageId: 's1', timestamp: '2026-07-10T10:00:00Z' },
@@ -17,7 +22,7 @@ describe('EventFeedPanel', () => {
       { type: 'custom_unknown_type', payload: null, stageId: '', timestamp: '2026-07-10T10:00:03Z' },
     ]
 
-    const { container } = render(<EventFeedPanel events={events} />)
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
 
     const entries = container.querySelectorAll('.feed-entry')
     expect(entries).toHaveLength(4)
@@ -35,7 +40,7 @@ describe('EventFeedPanel', () => {
       { type: 'agent_action', payload: { tool: 'read_file' }, stageId: '', timestamp: '2026-07-10T10:00:01Z' },
     ]
 
-    const { container } = render(<EventFeedPanel events={events} />)
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
 
     const entries = container.querySelectorAll('.feed-entry')
     expect(entries[0]?.querySelector('.feed-stage-badge')).toHaveTextContent('s1')
@@ -43,7 +48,7 @@ describe('EventFeedPanel', () => {
   })
 
   test('renders an empty feed without crashing when events is empty', () => {
-    const { container } = render(<EventFeedPanel events={[]} />)
+    const { container } = render(<EventFeedPanel events={[]} logEntries={[]} />)
 
     expect(container.querySelectorAll('.feed-entry')).toHaveLength(0)
     expect(container.querySelector('#feed-content')).toBeInTheDocument()
@@ -56,7 +61,7 @@ describe('EventFeedPanel', () => {
       { type: 'agent_action', payload: { tool: 'write_file' }, stageId: '', timestamp: '2026-07-10T10:01:35.000Z' },
     ]
 
-    const { container } = render(<EventFeedPanel events={events} />)
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
     const times = Array.from(container.querySelectorAll('.feed-time')).map((el) => el.textContent)
 
     // Первая строка — нет предыдущего события в ленте.
@@ -75,7 +80,7 @@ describe('EventFeedPanel', () => {
       { type: 'agent_action', payload: {}, stageId: '', timestamp: '2026-07-10T10:00:10.000Z' },
     ]
 
-    const { container } = render(<EventFeedPanel events={events} />)
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
     const before = container.querySelector('.feed-entry:last-child .feed-time')?.textContent
 
     act(() => {
@@ -96,7 +101,7 @@ describe('EventFeedPanel', () => {
       { type: 'hook_resolved', payload: { hook: 'before', resolution: 'skipped' }, stageId: 's1', timestamp: '2026-07-29T10:00:02Z' },
     ]
 
-    const { container } = render(<EventFeedPanel events={events} />)
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
     const entries = container.querySelectorAll('.feed-entry')
     expect(entries).toHaveLength(3)
 
@@ -112,11 +117,63 @@ describe('EventFeedPanel', () => {
       { type: 'auto_answered', payload: { id: 'q1', phase: 'implementation', answer: 'Вариант B', from_options: true }, stageId: 's1', timestamp: '2026-08-07T10:00:00Z' },
     ]
 
-    const { container } = render(<EventFeedPanel events={events} />)
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
     const entries = container.querySelectorAll('.feed-entry')
     expect(entries).toHaveLength(1)
     expect(entries[0]?.textContent).toContain('auto-answered')
     expect(entries[0]?.textContent).toContain('q1')
     expect(entries[0]?.textContent).toContain('Вариант B')
+  })
+
+  test('defaults to feed mode, with a toggle button to switch to the stage log', () => {
+    const { container } = render(<EventFeedPanel events={[]} logEntries={[]} />)
+
+    expect(container.querySelector('.panel-frame-header h3')).toHaveTextContent('Event feed')
+    expect(screen.getByRole('button', { name: 'Switch to log' })).toBeInTheDocument()
+  })
+
+  test('clicking the toggle switches to log mode, rendering stage log entries and updating the panel title', () => {
+    const logEntries: LogEntry[] = [{ timestamp: '10:00:00', message: 'first line', level: 'info' }]
+    const { container } = render(<EventFeedPanel events={[]} logEntries={logEntries} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to log' }))
+
+    expect(container.querySelector('.panel-frame-header h3')).toHaveTextContent('Log')
+    expect(container.querySelector('#log-content')).toHaveTextContent('first line')
+    expect(screen.getByRole('button', { name: 'Switch to feed' })).toBeInTheDocument()
+  })
+
+  test('shows the log empty-state and hides log content when logEntries is empty', () => {
+    const { container } = render(<EventFeedPanel events={[]} logEntries={[]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to log' }))
+
+    expect(container.querySelector('#log-content')).toHaveClass('hidden')
+    expect(container.querySelector('#log-empty')).not.toHaveClass('hidden')
+    expect(container.querySelector('#log-empty')).toHaveTextContent('Log is empty')
+  })
+
+  test('remembers the chosen mode across remounts via localStorage', () => {
+    const first = render(<EventFeedPanel events={[]} logEntries={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to log' }))
+    first.unmount()
+
+    const { container } = render(<EventFeedPanel events={[]} logEntries={[]} />)
+    expect(container.querySelector('.panel-frame-header h3')).toHaveTextContent('Log')
+  })
+
+  test('maximize still works while in log mode, moving log content into the fullscreen overlay', () => {
+    const logEntries: LogEntry[] = [{ timestamp: '10:00:00', message: 'line', level: 'info' }]
+    render(
+      <MaximizeProvider>
+        <EventFeedPanel events={[]} logEntries={logEntries} />
+      </MaximizeProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to log' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }))
+
+    expect(document.querySelector('.maximize-overlay #log-content')).not.toBeNull()
+    expect(document.querySelector('.maximize-overlay #log-content')).toHaveTextContent('line')
   })
 })

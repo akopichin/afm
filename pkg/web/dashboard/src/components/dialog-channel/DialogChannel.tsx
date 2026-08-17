@@ -455,7 +455,7 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
 
     // «Мысли» агента (text-блоки из stream-json лога) не показываем в диалоге:
     // для GLM это рассуждения вслух, которые дублируют панель log. Секция диалога
-    // — только вопросы/ответы. Контекст рассуждений остаётся в LogPanel.
+    // — только вопросы/ответы. Контекст рассуждений остаётся в Log-режиме EventFeedPanel.
     if (entry.type === 'agent_text') {
       return
     }

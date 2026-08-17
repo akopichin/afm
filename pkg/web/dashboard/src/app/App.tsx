@@ -5,7 +5,6 @@ import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { LogPanel } from '../components/log-panel'
 import { SupervisorDecision } from '../components/supervisor-decision'
 import { EventFeedPanel } from '../components/event-feed'
 import { Footer } from '../components/footer'
@@ -234,8 +233,7 @@ export function App(): ReactElement {
             }
             plan={showPlan ? <PlanPanel stage={selectedStage} attention={attention.kind === 'plan'} /> : null}
             dialog={showDialog ? <DialogChannel stage={selectedStage} attention={attention.kind === 'dialog'} /> : null}
-            log={<LogPanel entries={logEntries} />}
-            feed={<EventFeedPanel events={events} />}
+            feed={<EventFeedPanel events={events} logEntries={logEntries} />}
           />
         </MaximizeProvider>
       </main>

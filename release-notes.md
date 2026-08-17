@@ -2,6 +2,17 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-17
+
+### UI: right-panel Feed/Log toggle replaces the dedicated middle-column log row
+
+- The center detail column used to always reserve a third row for the stage's operational log below plan/dialog, even though it's usually the least-needed panel and ate real vertical space from plan/dialog on every stage. `DashboardLayout.tsx` drops the `log` row entirely — the column now only shows plan/dialog rows that actually apply to the selected stage, with a centered "Nothing to show for this stage" placeholder for the (rare) case where a stage has neither a plan nor any dialog history.
+- The stage log didn't disappear — it moved into the right-hand panel as a second mode. `EventFeedPanel` gained a `logEntries` prop and a single toggle button next to its existing maximize button (`⛶`); clicking it swaps the panel between "Event feed" (unchanged behavior) and "Log" (the log content previously rendered by the now-deleted `LogPanel` component), updating the panel title accordingly. Both modes share the same `#feed-panel` chrome (border/corner-notch decoration), so switching modes doesn't visually reset the panel.
+- The chosen mode is global and persisted (`localStorage` key `afm-feed-mode` via the new `useFeedMode` hook, `pkg/web/dashboard/src/hooks/use-feed-mode/`) — it survives switching between stages and reloading the page, matching the existing `useThemeMode` pattern rather than resetting per-stage.
+- All layout/structural CSS lives in `skins/base/layout.css`, shared by all three skins (`novacorps`, `goga`, `coffee`) — no skin-specific changes were needed; verified visually in a real browser against all three.
+- Built via TDD (9 new tests: `use-feed-mode`, `EventFeedPanel` toggle behavior including the ported-over `LogPanel` maximize/empty-state/chronological-order cases, `DashboardLayout` empty-state), plus a real end-to-end check: built the `akopichin/afm:latest` Docker image, drove a real (mocked-agent) flow through the live dashboard via Chrome DevTools MCP, and confirmed the toggle against real event/log data — not just the unit-test fixtures.
+- No design spec doc for this one — a bounded UI change scoped and approved in chat via `superpowers:brainstorming`, not an architectural one.
+
 ## 2026-08-14
 
 ### Fix: dashboard UI could freeze mid-run (stuck stage/progress, permanent OFFLINE) after a long completed flow

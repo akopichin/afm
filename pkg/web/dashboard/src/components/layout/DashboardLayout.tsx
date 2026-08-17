@@ -8,7 +8,6 @@ type Props = {
   // null — панель скрыта (автономная стадия для plan; недиалоговая для dialog).
   plan: ReactNode | null
   dialog: ReactNode | null
-  log: ReactNode
   feed: ReactNode
 }
 
@@ -33,31 +32,33 @@ function useSavedLayout(id: string, fallback: Layout) {
 }
 
 // Layout в v4 — это map Panel-id → flexGrow (доли). Это и начальные пропорции:
-// stages:detail:feed = 15:60:25, plan:dialog:log = 30:45:25 (диалогу — больше).
+// stages:detail:feed = 15:60:25, plan:dialog = 40:60 (диалогу — больше).
 // Применяется только когда в storage нет сохранённого layout (свежая загрузка);
 // после ручного ресайза восстанавливается сохранённое значение.
 const DEFAULT_COLS: Layout = { stages: 15, detail: 60, feed: 25 }
 
-type RowId = 'plan' | 'dialog' | 'log'
+type RowId = 'plan' | 'dialog'
 
 // Доли строк для полного набора; при скрытии панелей берутся только присутствующие id.
-const ROW_SHARES: Record<RowId, number> = { plan: 30, dialog: 45, log: 25 }
+const ROW_SHARES: Record<RowId, number> = { plan: 40, dialog: 60 }
 
 // Трёхколоночный resizable-лейаут: StagesList | центральная колонка (detail) | EventFeed.
 // Центральная колонка — flex-col: detail-header сверху, под ним вертикальная Group
-// (plan/dialog/log). Размеры колонок и строк сохраняются в localStorage.
+// (plan/dialog). Лог стадии больше не живёт тут отдельной строкой — он переехал в
+// правую feed-панель как второй режим (переключается кнопкой, см. EventFeedPanel).
+// Размеры колонок и строк сохраняются в localStorage.
 //
 // Внимание: API react-resizable-panels v4.x — Group/Panel/Separator + useDefaultLayout
 // (в задаче упоминался v2-style autoSaveId/PanelResizeHandle, но установлен v4.12.2).
-export function DashboardLayout({ stages, stageHeader, plan, dialog, log, feed }: Props) {
+export function DashboardLayout({ stages, stageHeader, plan, dialog, feed }: Props) {
   const cols = useSavedLayout('afm-cols', DEFAULT_COLS)
 
-  // Присутствующие строки в порядке plan → dialog → log. plan/dialog опускаются,
-  // когда проп null (автономная/неинтерактивная стадия). log присутствует всегда.
+  // Присутствующие строки в порядке plan → dialog. Обе опускаются, когда проп null
+  // (автономная стадия без плана и без диалоговой истории) — в этом случае под
+  // заголовком показывается empty-state вместо пустой resizable-группы.
   const rowPanels: Array<{ id: RowId; node: ReactNode; minSize: string }> = []
   if (plan !== null) rowPanels.push({ id: 'plan', node: plan, minSize: '15' })
   if (dialog !== null) rowPanels.push({ id: 'dialog', node: dialog, minSize: '15' })
-  rowPanels.push({ id: 'log', node: log, minSize: '10' })
 
   // Storage-ключ и defaultLayout зависят от набора панелей: у каждого набора
   // своя сохранённая раскладка, ключи всегда совпадают с присутствующими id
@@ -78,21 +79,25 @@ export function DashboardLayout({ stages, stageHeader, plan, dialog, log, feed }
       <Panel id="detail">
         <div className="detail-column">
           <div id="detail-header" className="detail-header">{stageHeader}</div>
-          <Group
-            orientation="vertical"
-            className="detail-rows"
-            defaultLayout={rows.defaultLayout ?? rowsFallback}
-            onLayoutChanged={rows.onLayoutChanged}
-          >
-            {rowPanels.map((p, i) => (
-              <Fragment key={p.id}>
-                {i > 0 && <Separator className="resize-handle resize-handle-h" />}
-                <Panel id={p.id} minSize={p.minSize}>
-                  {p.node}
-                </Panel>
-              </Fragment>
-            ))}
-          </Group>
+          {rowPanels.length === 0 ? (
+            <div className="detail-empty empty-hint">Nothing to show for this stage</div>
+          ) : (
+            <Group
+              orientation="vertical"
+              className="detail-rows"
+              defaultLayout={rows.defaultLayout ?? rowsFallback}
+              onLayoutChanged={rows.onLayoutChanged}
+            >
+              {rowPanels.map((p, i) => (
+                <Fragment key={p.id}>
+                  {i > 0 && <Separator className="resize-handle resize-handle-h" />}
+                  <Panel id={p.id} minSize={p.minSize}>
+                    {p.node}
+                  </Panel>
+                </Fragment>
+              ))}
+            </Group>
+          )}
         </div>
       </Panel>
       <Separator className="resize-handle resize-handle-v" />
