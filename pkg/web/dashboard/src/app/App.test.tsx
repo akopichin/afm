@@ -396,6 +396,41 @@ describe('App', () => {
     expect(screen.getByPlaceholderText(/what should the agent take into account/i)).toHaveValue('test note')
   })
 
+  test('a failed /pause POST is logged, not left as an unhandled rejection', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', 'running')],
+          }),
+        } as Response
+      }
+      // Стадия успела уйти из pausable-статуса за время между открытием кебаба и кликом.
+      if (url.includes('/pause')) {
+        return { ok: false, status: 409, json: async () => ({}) } as Response
+      }
+      if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    fireEvent.click(screen.getByText('Pause'))
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalledWith('Failed to pause stage:', expect.anything()))
+  })
+
   test('hides the "thinking" badge while offline even if the selected stage is running', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

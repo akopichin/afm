@@ -50,6 +50,18 @@ export function App(): ReactElement {
     }
   }
 
+  function handlePause(stageId: string): void {
+    // StagesList закрывает кебаб синхронно ДО вызова onPause, так что здесь
+    // нет модалки/состояния, которое надо откатывать при ошибке (в отличие
+    // от handleSubmitNote выше) — но onPause всё равно не-async проп,
+    // вызывается без await из onClick, поэтому свой catch обязателен, иначе
+    // отказ pauseStage (сеть, либо стадия успела уйти из pausable-статуса
+    // между открытием меню и кликом) уйдёт в unhandled rejection молча.
+    pauseStage(stageId).catch((err: unknown) => {
+      console.error('Failed to pause stage:', err)
+    })
+  }
+
   const wsUrl = buildWebSocketUrl()
   const { events, connected } = useEventFeed(wsUrl)
 
@@ -199,7 +211,7 @@ export function App(): ReactElement {
                 selectedStageId={selectedStageId}
                 onSelect={setSelectedStageId}
                 onAddNote={setNoteModalStageId}
-                onPause={(stageId) => { void pauseStage(stageId) }}
+                onPause={handlePause}
               />
             }
             stageHeader={
