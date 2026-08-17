@@ -342,6 +342,35 @@ func TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub(t *testing.T) {
 	if !got[0].AllowCustom {
 		t.Fatal("fallback stub must allow a custom answer")
 	}
+
+	// The stub must be persisted back to disk, not just returned in memory.
+	// handleDialogAnswer (pkg/server/handlers.go) re-reads question.json from
+	// disk on every POST /dialog/answer and strictly json.Unmarshal's it with
+	// no repair fallback. If the on-disk file is left as the original broken
+	// JSON, every answer submission (including "Continue anyway"/"Cancel
+	// stage") 500s forever and the Send button in the UI appears dead.
+	fixed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		ID          string   `json:"id"`
+		Question    string   `json:"question"`
+		Options     []string `json:"options"`
+		AllowCustom *bool    `json:"allow_custom"`
+	}
+	if err := json.Unmarshal(fixed, &probe); err != nil {
+		t.Fatalf("fallback stub was not persisted as valid JSON: %v\nraw: %s", err, fixed)
+	}
+	if probe.ID != "q5" {
+		t.Fatalf("persisted stub id mismatch: got %q, want %q", probe.ID, "q5")
+	}
+	if len(probe.Options) != 2 {
+		t.Fatalf("persisted stub options mismatch: %v", probe.Options)
+	}
+	if probe.AllowCustom == nil || !*probe.AllowCustom {
+		t.Fatal("persisted stub must allow a custom answer")
+	}
 }
 
 // TestFindUnansweredQuestions_UnknownPhaseSkipped locks in the phase

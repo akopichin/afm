@@ -254,10 +254,23 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 				if len(preview) > 400 {
 					preview = preview[:400]
 				}
+				qf.ID = id
 				qf.Question = fmt.Sprintf("⚠️ The agent wrote a malformed question.json that afm could not parse or repair. The file was left on disk for inspection.\n\nRaw preview:\n%s", preview)
 				qf.Options = []string{"Continue anyway", "Cancel stage"}
 				allowCustom := true
 				qf.AllowCustom = &allowCustom
+				// Persist the stub itself, not just the original broken file.
+				// handleDialogAnswer re-reads question.json from disk on every
+				// POST /dialog/answer with a strict json.Unmarshal (no repair
+				// fallback) — if the file on disk stays broken, every answer
+				// submission for this question 500s forever and the UI's
+				// Send/option buttons appear dead even though they show a
+				// valid-looking fallback question.
+				if stub, marshalErr := json.Marshal(qf); marshalErr != nil {
+					log.Printf("WARN: %s: failed to marshal fallback stub: %v", qPath, marshalErr)
+				} else if writeErr := os.WriteFile(qPath, stub, 0644); writeErr != nil {
+					log.Printf("WARN: %s: failed to persist fallback stub: %v", qPath, writeErr)
+				}
 			} else if writeErr := os.WriteFile(qPath, []byte(repaired), 0644); writeErr != nil {
 				log.Printf("WARN: %s: repaired invalid JSON in memory but failed to persist fix: %v", qPath, writeErr)
 			} else {
