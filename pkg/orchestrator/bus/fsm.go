@@ -39,9 +39,9 @@ const (
 	// EvHookResolved: user retried (succeeded) or skipped a failed before-hook.
 	EvHookResolved FSMEvent = "hook_resolved"
 	// EvPause — стадия приостанавливается: либо auto_run:false не дал ей
-	// начать (From включает только живые/ожидающие-повтора статусы, pending
-	// обрабатывается отдельно самим гейтом — см. Task 5), либо пользователь
-	// вручную поставил на паузу уже бегущую стадию.
+	// начать первую активацию из Pending (Task 5's shouldGateAutoRun), либо
+	// пользователь вручную поставил на паузу уже бегущую/ожидающую-повтора
+	// стадию (Running/Planning/Revising/Retrying).
 	EvPause FSMEvent = "pause"
 	// EvContinue возвращает стадию из paused туда, откуда она была
 	// приостановлена (ctx.PausedFrom) — реальный перезапуск агента делает
@@ -119,7 +119,7 @@ func NewFSM(store *state.Store) *FSM {
 			EvSupervisorApproved: {From: []state.StageStatus{state.StatusPlanning}, To: to(state.StatusReady)},
 			EvHookFailed:         {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
 			EvHookResolved:       {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
-			EvPause:              {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying}, To: to(state.StatusPaused)},
+			EvPause:              {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying}, To: to(state.StatusPaused)},
 			EvContinue:           {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}

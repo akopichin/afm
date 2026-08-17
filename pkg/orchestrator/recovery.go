@@ -92,6 +92,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					continue
 				}
 
+				if o.shouldGateAutoRun(s) {
+					o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
+					continue
+				}
+
 				if o.activateAutoStage(s) {
 					continue
 				}
@@ -214,6 +219,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Pending stages wait for depends_on unless eager_planning is set.
 			// Interrupted planning (status "planning") always resumes.
 			if current == state.StatusPending && !s.EagerPlanning && !o.depsDone(s) {
+				continue
+			}
+			if current == state.StatusPending && o.shouldGateAutoRun(s) {
+				o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
 				continue
 			}
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")

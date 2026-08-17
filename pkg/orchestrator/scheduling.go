@@ -40,6 +40,16 @@ func (o *Orchestrator) activateAutoStage(s flow.Stage) bool {
 	return true
 }
 
+// shouldGateAutoRun reports whether s's first activation should pause
+// instead of proceeding: auto_run is explicitly false AND this stage has
+// never been through a pause cycle before (PausedFrom is the permanent
+// marker — see state.StageState.PausedFrom). Without the second condition a
+// stage retried after failing (which re-enters Pending via EvManualRetry)
+// would re-pause on every retry instead of only the very first activation.
+func (o *Orchestrator) shouldGateAutoRun(s flow.Stage) bool {
+	return s.AutoRunDisabled() && o.opts.Store.PausedFrom(s.ID) == ""
+}
+
 // activateScriptStage activates a script-only stage (Stage.IsScript()) the
 // same way activateAutoStage activates an auto stage: no plan.md, straight
 // to Ready. Returns false (no-op) if s is not a script stage.
@@ -71,6 +81,11 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 		}
 
 		if !o.depsDone(s) {
+			continue
+		}
+
+		if o.shouldGateAutoRun(s) {
+			o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
 			continue
 		}
 
@@ -110,6 +125,10 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 			continue
 		}
 		if !o.depsDone(s) {
+			continue
+		}
+		if o.shouldGateAutoRun(s) {
+			o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
 			continue
 		}
 		// Synchronous transition out of pending guards against double
