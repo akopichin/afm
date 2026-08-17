@@ -41,6 +41,8 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
     hasDialog: false,
     showPlan: true,
     showDialog: true,
+    isScript: false,
+    pausedFrom: '',
     ...overrides,
   }
 }

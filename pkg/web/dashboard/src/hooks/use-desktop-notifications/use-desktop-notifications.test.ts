@@ -4,7 +4,7 @@ import { useDesktopNotifications } from './use-desktop-notifications'
 import type { Stage } from '../../types'
 
 const stage = (status: Stage['status'], id = 's'): Stage =>
-  ({ id, name: `Stage ${id}`, status, updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false })
+  ({ id, name: `Stage ${id}`, status, updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' })
 
 class MockNotification {
   static permission: NotificationPermission = 'granted'

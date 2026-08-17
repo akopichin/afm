@@ -44,8 +44,26 @@ describe('useStatus', () => {
       hasDialog: false,
       showPlan: true,
       showDialog: false,
+      isScript: false,
+      pausedFrom: '',
     })
     expect(result.current.stages[1]?.status).toBe('running')
+  })
+
+  test('парсит is_script/paused_from', () => {
+    const raw = {
+      flow_name: 'demo',
+      stages: [
+        { id: 's1', status: 'paused', is_script: true, paused_from: 'running' },
+        { id: 's2', status: 'running' },
+      ],
+    }
+    const { stages } = normalizeStatus(raw)
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('s1')?.isScript).toBe(true)
+    expect(byId.get('s1')?.pausedFrom).toBe('running')
+    expect(byId.get('s2')?.isScript).toBe(false)
+    expect(byId.get('s2')?.pausedFrom).toBe('')
   })
 
   test('парсит interactive/autonomous/has_dialog с дефолтом false', () => {

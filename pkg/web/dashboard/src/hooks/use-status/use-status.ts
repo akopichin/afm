@@ -152,6 +152,8 @@ function toStage(raw: unknown): Stage | null {
     hasDialog: obj.has_dialog === true,
     showPlan: obj.show_plan === true,
     showDialog: obj.show_dialog === true,
+    isScript: obj.is_script === true,
+    pausedFrom: isStageStatus(obj.paused_from) ? obj.paused_from : '',
   }
 }
 

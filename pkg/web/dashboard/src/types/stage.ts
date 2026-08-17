@@ -26,6 +26,14 @@ export type Stage = {
   hasDialog: boolean
   showPlan: boolean
   showDialog: boolean
+  // isScript: true, если стадия скриптовая (Stage.IsScript() в Go) — кебаб-
+  // меню скрывает пункт "Pause", пока такая стадия реально выполняется (нет
+  // graceful mid-script stop).
+  isScript: boolean
+  // pausedFrom заполнен только когда status === 'paused' (см. Go
+  // StageView.PausedFrom) — пустая строка иначе. Панель паузы использует его
+  // для текста причины.
+  pausedFrom: StageStatus | ''
 }
 
 // Человекочитаемые подписи статусов для списка стадий и панели деталей.
