@@ -2002,7 +2002,9 @@ git commit -m "feat: добавляем HTTP /pause и /continue"
 
 **Files:**
 - Modify: `pkg/web/dashboard/src/types/stage.ts`
-- Modify every existing test file that constructs a `Stage` object literal (they all specify every field, per Task 8's research note) — grep for `interactive: false` across `pkg/web/dashboard/src` test files and add the two new fields to each literal.
+- Modify: `pkg/web/dashboard/src/hooks/use-status/use-status.ts` (`toStage`) — this is the actual snake_case→camelCase mapping layer between `/api/status`'s JSON and the `Stage` type; skipping it would leave `isScript`/`pausedFrom` permanently `undefined` at runtime even though the type claims they exist.
+- Modify: `pkg/web/dashboard/src/hooks/use-status/use-status.test.ts`
+- Modify every existing test file that constructs a `Stage` object literal (they all specify every field) — grep for `interactive: false` across `pkg/web/dashboard/src` test files and add the two new fields to each literal.
 
 **Interfaces:**
 - Consumes: `is_script`/`paused_from` JSON fields (Task 9).
@@ -2011,9 +2013,55 @@ git commit -m "feat: добавляем HTTP /pause и /continue"
 - [ ] **Step 1: Find every existing `Stage` literal that needs updating**
 
 Run: `grep -rln "interactive: false" pkg/web/dashboard/src`
-Expected: a list of test files including at least `StagesList.test.tsx` (raw object literals, several per file) and `plan-panel/PlanPanel.test.tsx` (one `makeStage(overrides: Partial<Stage> = {}) { return { ..., showPlan: true, showDialog: false, ...overrides } }` helper — add `isScript: false, pausedFrom: '',` to that base object once, not per test-call, since every test in that file goes through the helper).
+Expected: a list of test files including at least `StagesList.test.tsx` (raw object literals, several per file), `plan-panel/PlanPanel.test.tsx` (one `makeStage(overrides: Partial<Stage> = {}) { return { ..., showPlan: true, showDialog: false, ...overrides } }` helper — add `isScript: false, pausedFrom: '',` to that base object once, not per test-call, since every test in that file goes through the helper), and `hooks/use-status/use-status.test.ts` (a `toEqual` assertion against a full `Stage` object at line 36-47, and inline literals elsewhere in the file).
 
-- [ ] **Step 2: Update the type**
+- [ ] **Step 2: Write the failing `toStage` mapping tests**
+
+Add to `use-status.test.ts`:
+
+```ts
+test('парсит is_script/paused_from', () => {
+  const raw = {
+    flow_name: 'demo',
+    stages: [
+      { id: 's1', status: 'paused', is_script: true, paused_from: 'running' },
+      { id: 's2', status: 'running' },
+    ],
+  }
+  const { stages } = normalizeStatus(raw)
+  const byId = new Map(stages.map((s) => [s.id, s]))
+  expect(byId.get('s1')?.isScript).toBe(true)
+  expect(byId.get('s1')?.pausedFrom).toBe('running')
+  expect(byId.get('s2')?.isScript).toBe(false)
+  expect(byId.get('s2')?.pausedFrom).toBe('')
+})
+```
+
+Update the existing full-object `toEqual` assertion (lines 36-47) to include the two new fields, since `toEqual` requires an exact match and will otherwise fail the moment `toStage` starts returning them:
+
+```ts
+    expect(result.current.stages[0]).toEqual({
+      id: 'propose',
+      name: 'Propose',
+      status: 'done',
+      updatedAt: '2026-07-10T10:01:00Z',
+      interactive: false,
+      autonomous: false,
+      autoApprove: false,
+      hasDialog: false,
+      showPlan: true,
+      showDialog: false,
+      isScript: false,
+      pausedFrom: '',
+    })
+```
+
+- [ ] **Step 3: Run tests to verify the new one fails**
+
+Run: `cd pkg/web/dashboard && npx vitest run use-status`
+Expected: FAIL — `toStage` doesn't read `is_script`/`paused_from` yet, and the updated `toEqual` assertion doesn't match the still-missing fields.
+
+- [ ] **Step 4: Update the type**
 
 In `pkg/web/dashboard/src/types/stage.ts`:
 
@@ -2040,33 +2088,61 @@ export type Stage = {
 }
 ```
 
-- [ ] **Step 3: Run the frontend test suite to see every now-broken literal**
+- [ ] **Step 5: Update `toStage` to read the two new fields**
+
+In `pkg/web/dashboard/src/hooks/use-status/use-status.ts`:
+
+```ts
+  return {
+    id: obj.id,
+    name,
+    status,
+    updatedAt,
+    interactive: obj.interactive === true,
+    autonomous: obj.autonomous === true,
+    autoApprove: obj.auto_approve === true,
+    hasDialog: obj.has_dialog === true,
+    showPlan: obj.show_plan === true,
+    showDialog: obj.show_dialog === true,
+    isScript: obj.is_script === true,
+    pausedFrom: isStageStatus(obj.paused_from) ? obj.paused_from : '',
+  }
+```
+
+(`isStageStatus` already exists in this file and is reused as-is — `obj.paused_from` is `undefined` whenever the backend omits `paused_from` for a non-paused stage, which `isStageStatus` correctly rejects, falling back to `''`.)
+
+- [ ] **Step 6: Run the `use-status` tests to verify Steps 2/5 pass**
+
+Run: `cd pkg/web/dashboard && npx vitest run use-status`
+Expected: PASS
+
+- [ ] **Step 7: Run the frontend test suite to see every now-broken `Stage` literal**
 
 Run: `cd pkg/web/dashboard && npx vitest run`
-Expected: FAIL — TypeScript compile errors / test failures listing every file with an incomplete `Stage` literal from Step 1.
+Expected: FAIL — TypeScript compile errors / test failures listing every remaining file with an incomplete `Stage` literal from Step 1 (component test files; `use-status.test.ts` is already fixed).
 
-- [ ] **Step 4: Fix every listed literal**
+- [ ] **Step 8: Fix every listed literal**
 
-For each `Stage` object literal found in Step 1, add `isScript: false, pausedFrom: ''` (or a value the specific test needs) right after `showDialog`. Example (`StagesList.test.tsx`):
+For each `Stage` object literal found in Step 1 (outside `use-status.test.ts`, already handled), add `isScript: false, pausedFrom: ''` (or a value the specific test needs) right after `showDialog`. Example (`StagesList.test.tsx`):
 
 ```ts
 { id: 's1', name: 'Propose', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 9: Run tests to verify they pass**
 
 Run: `cd pkg/web/dashboard && npx vitest run`
 Expected: PASS
 
-- [ ] **Step 6: Run the build**
+- [ ] **Step 10: Run the build**
 
 Run: `cd pkg/web/dashboard && npm run build`
 Expected: builds cleanly.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add pkg/web/dashboard/src/types/stage.ts pkg/web/dashboard/src/components
+git add pkg/web/dashboard/src/types/stage.ts pkg/web/dashboard/src/hooks/use-status/use-status.ts pkg/web/dashboard/src/hooks/use-status/use-status.test.ts pkg/web/dashboard/src/components
 git commit -m "feat: добавляем isScript/pausedFrom в тип Stage"
 ```
 
