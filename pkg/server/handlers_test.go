@@ -68,9 +68,11 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 // backed by an overridable func field; the zero value succeeds and does
 // nothing, matching what most handler tests need.
 type fakeStageActions struct {
-	approve func(ctx context.Context, stageID string) error
-	revise  func(ctx context.Context, stageID, feedback string) error
-	retry   func(ctx context.Context, stageID string) error
+	approve   func(ctx context.Context, stageID string) error
+	revise    func(ctx context.Context, stageID, feedback string) error
+	retry     func(ctx context.Context, stageID string) error
+	pause     func(ctx context.Context, stageID string) error
+	continue_ func(ctx context.Context, stageID string) error
 }
 
 func (f fakeStageActions) Approve(ctx context.Context, stageID string) error {
@@ -92,6 +94,20 @@ func (f fakeStageActions) Retry(ctx context.Context, stageID string) error {
 		return nil
 	}
 	return f.retry(ctx, stageID)
+}
+
+func (f fakeStageActions) Pause(ctx context.Context, stageID string) error {
+	if f.pause == nil {
+		return nil
+	}
+	return f.pause(ctx, stageID)
+}
+
+func (f fakeStageActions) Continue(ctx context.Context, stageID string) error {
+	if f.continue_ == nil {
+		return nil
+	}
+	return f.continue_(ctx, stageID)
 }
 
 // fakeSecondaryActions is the SecondaryActions test double. Tests that only
@@ -513,6 +529,89 @@ func TestHandleRetryNotFailed(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for non-failed stage, got %d", w.Code)
+	}
+}
+
+func TestHandlePause(t *testing.T) {
+	var pausedID string
+	srv, _ := setupTestServer(t)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
+	w := httptest.NewRecorder()
+	srv.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200", w.Code)
+	}
+	if pausedID != testStageID {
+		t.Errorf("pause not called with %s, got %q", testStageID, pausedID)
+	}
+}
+
+func TestHandlePause_WrongStatus(t *testing.T) {
+	srv, _ := setupTestServer(t) // seeded at awaiting_approval by setupTestServer itself
+	srv.actions = fakeStageActions{}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
+	w := httptest.NewRecorder()
+	srv.handlePause(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400", w.Code)
+	}
+}
+
+func TestHandlePause_ScriptStageRunning_Returns409(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	srv.stageIsScript = map[string]bool{testStageID: true}
+	srv.actions = fakeStageActions{}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
+	w := httptest.NewRecorder()
+	srv.handlePause(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status: got %d, want 409", w.Code)
+	}
+}
+
+func TestHandleContinue(t *testing.T) {
+	var continuedID string
+	srv, _ := setupTestServer(t)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	srv.actions = fakeStageActions{continue_: func(ctx context.Context, id string) error { continuedID = id; return nil }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil)
+	w := httptest.NewRecorder()
+	srv.handleContinue(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200", w.Code)
+	}
+	if continuedID != testStageID {
+		t.Errorf("continue not called with %s, got %q", testStageID, continuedID)
+	}
+}
+
+func TestHandleContinue_NotPaused(t *testing.T) {
+	srv, _ := setupTestServer(t) // seeded at awaiting_approval, not paused
+	srv.actions = fakeStageActions{}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil)
+	w := httptest.NewRecorder()
+	srv.handleContinue(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400", w.Code)
 	}
 }
 

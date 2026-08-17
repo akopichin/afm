@@ -290,6 +290,10 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleRevise(w, r)
 	case strings.HasSuffix(path, "/retry") && r.Method == http.MethodPost:
 		s.handleRetry(w, r)
+	case strings.HasSuffix(path, "/pause") && r.Method == http.MethodPost:
+		s.handlePause(w, r)
+	case strings.HasSuffix(path, "/continue") && r.Method == http.MethodPost:
+		s.handleContinue(w, r)
 	case strings.HasSuffix(path, "/retry-hook") && r.Method == http.MethodPost:
 		s.handleRetryHook(w, r)
 	case strings.HasSuffix(path, "/skip-hook") && r.Method == http.MethodPost:

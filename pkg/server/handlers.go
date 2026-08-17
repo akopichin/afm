@@ -229,6 +229,62 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "retried", keyStageID: stageID})
 }
 
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/pause")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	rs := s.store.Snapshot()
+	st, ok := rs.Stages[stageID]
+	if !ok {
+		http.Error(w, "stage not found", http.StatusNotFound)
+		return
+	}
+	switch st.Status {
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying:
+	default:
+		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
+		return
+	}
+	if s.stageIsScript[stageID] && st.Status == state.StatusRunning {
+		http.Error(w, "pause is not supported mid-script execution", http.StatusConflict)
+		return
+	}
+
+	if err := s.actions.Pause(r.Context(), stageID); err != nil {
+		http.Error(w, "pause failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "paused", keyStageID: stageID})
+}
+
+func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/continue")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	rs := s.store.Snapshot()
+	st, ok := rs.Stages[stageID]
+	if !ok {
+		http.Error(w, "stage not found", http.StatusNotFound)
+		return
+	}
+	if st.Status != state.StatusPaused {
+		http.Error(w, fmt.Sprintf("stage is %s, not paused", st.Status), http.StatusBadRequest)
+		return
+	}
+
+	if err := s.actions.Continue(r.Context(), stageID); err != nil {
+		http.Error(w, "continue failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "continued", keyStageID: stageID})
+}
+
 // handleRetryHook re-runs the retry cycle of a before/after hook currently
 // blocked on a user decision (stage in hook_failed for script_before, or the
 // stage's after-hook notice for script_after — the latter never changes the

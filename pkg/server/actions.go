@@ -10,6 +10,8 @@ type StageActions interface {
 	Approve(ctx context.Context, stageID string) error
 	Revise(ctx context.Context, stageID, feedback string) error
 	Retry(ctx context.Context, stageID string) error
+	Pause(ctx context.Context, stageID string) error
+	Continue(ctx context.Context, stageID string) error
 }
 
 // SecondaryActions are dashboard commands that are optional as a group: hook
