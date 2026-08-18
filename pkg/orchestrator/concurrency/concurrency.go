@@ -45,12 +45,21 @@ type Manager struct {
 	defaultCmd   string
 	activeAgents sync.Map
 	agentWG      sync.WaitGroup
+
+	// shouldRun — единая точка входа для пред-запускной проверки стадии.
+	// Проверяется в SpawnAgent ПОСЛЕ того, как горутина прошла семафор
+	// (закрывает окно, где стадию поставили на паузу, пока она стояла в
+	// очереди на слот) — это заменяет ранее разрозненные проверки в
+	// withBeforeHook и runWithRetry. nil означает "всегда запускать"
+	// (используется тестами, которым эта проверка не нужна).
+	shouldRun func(stageID string) bool
 }
 
 // New строит Manager с семафорами на команду из конфигурации стадий:
 // per-stage MaxParallel имеет приоритет над globalMaxParallel; MaxParallel<=0
-// означает отсутствие ограничения (noopSemaphore).
-func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, globalMaxParallel int) *Manager {
+// означает отсутствие ограничения (noopSemaphore). shouldRun — см. поле
+// Manager.shouldRun; nil допустим.
+func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, globalMaxParallel int, shouldRun func(stageID string) bool) *Manager {
 	limits := make(map[string]int)
 	cmds := make(map[string]bool)
 	for _, s := range stages {
@@ -78,7 +87,7 @@ func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, 
 			sems[cmd] = noopSemaphore{}
 		}
 	}
-	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand}
+	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand, shouldRun: shouldRun}
 }
 
 // NewWithSemaphores строит Manager с готовой картой семафоров — используется
@@ -125,6 +134,13 @@ func (m *Manager) SpawnAgent(ctx context.Context, s flow.Stage, run func(context
 			m.markDone(s.ID)
 			sem.release()
 		}()
+		// Re-check right before run: the goroutine may have queued on sem for
+		// an arbitrary amount of time, during which the stage could have been
+		// paused. Without this, a queued call fires run() for a stage that's
+		// no longer supposed to be running.
+		if m.shouldRun != nil && !m.shouldRun(s.ID) {
+			return
+		}
 		run(ctx, s)
 	}()
 }

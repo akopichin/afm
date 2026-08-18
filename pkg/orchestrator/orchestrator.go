@@ -186,7 +186,11 @@ func New(opts Options) *Orchestrator {
 	// Семафоры на команду строятся из конфигурации стадий: per-stage
 	// MaxParallel имеет приоритет над глобальным дефолтом (см.
 	// concurrency.New — 1:1 перенос прежней логики этого блока).
-	conc := concurrency.New(critical, opts.Stages, opts.Config.Client.Command, opts.Config.Executor.MaxParallel)
+	// shouldRun — единая точка проверки паузы перед стартом агента (закрывает
+	// гонку "стадию поставили на паузу, пока она ждала слот в семафоре"),
+	// заменяет прежние разрозненные проверки в withBeforeHook и runWithRetry.
+	conc := concurrency.New(critical, opts.Stages, opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
+		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
 
 	// Supervisor включается только если задан SupervisorRunner; иначе
 	// DetermineStagePhases всегда возвращает базовые фазы.
