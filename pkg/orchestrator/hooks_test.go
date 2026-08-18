@@ -405,3 +405,55 @@ func TestRunAfterHook_FailsThenSkip_StageStaysDone(t *testing.T) {
 		t.Errorf("status = %v, want done after skip", got)
 	}
 }
+
+// TestWithBeforeHook_SkipsMainFnIfPausedDuringHook is a regression test for a
+// bug found live: script_before runs as a bare shell script with no
+// InterruptCh (only the main agent registers one, inside runWithRetry) — so
+// Pause() can succeed (durable EvPause transition) while the hook is still
+// executing in the background. Without this check, withBeforeHook would
+// unconditionally call mainFn once the hook finished, spawning a real agent
+// on a stage the user just paused — and a second agent again if they'd
+// already clicked Continue in the meantime (Continue's resumeStageAtStatus
+// spawns independently). withBeforeHook must check status after the hook
+// resolves and skip mainFn if the stage went to paused in the meantime.
+func TestWithBeforeHook_SkipsMainFnIfPausedDuringHook(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	s := flow.Stage{ID: "s1", ScriptBefore: "echo ok"}
+
+	called := false
+	wrapped := o.withBeforeHook(func(context.Context, flow.Stage) {
+		called = true
+	})
+
+	// Simulate Pause() landing while the hook was still running in the
+	// background: by the time runBeforeHook returns (success), the stage is
+	// already paused.
+	if _, ok := o.Trigger("s1", bus.EvPause, bus.GuardCtx{}, "test"); !ok {
+		t.Fatal("EvPause should be allowed from running")
+	}
+
+	wrapped(context.Background(), s)
+
+	if called {
+		t.Error("mainFn must not run — the stage was paused while the before-hook was executing")
+	}
+	if got := o.opts.Store.Get("s1"); got != state.StatusPaused {
+		t.Errorf("status = %v, want paused (unchanged by withBeforeHook)", got)
+	}
+}
+
+func TestWithBeforeHook_RunsMainFnWhenNotPaused(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	s := flow.Stage{ID: "s1", ScriptBefore: "echo ok"}
+
+	called := false
+	wrapped := o.withBeforeHook(func(context.Context, flow.Stage) {
+		called = true
+	})
+
+	wrapped(context.Background(), s)
+
+	if !called {
+		t.Error("mainFn should run normally when the stage was not paused during the hook")
+	}
+}

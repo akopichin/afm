@@ -188,3 +188,12 @@ func TestLastLogAction_ReviewOnly(t *testing.T) {
 		t.Errorf("got %q, want %q — review.log was not covered before this fix", got, "review last line")
 	}
 }
+
+func TestStatusColor_PausedGetsItsOwnColor(t *testing.T) {
+	// paused needs a human decision (Continue), same class as
+	// awaiting_approval — it must not fall into the same colorGray bucket as
+	// genuinely inert statuses like pending/ready.
+	if got := statusColor(state.StatusPaused); got == colorGray {
+		t.Error("statusColor(paused) = colorGray, want a distinct attention color")
+	}
+}

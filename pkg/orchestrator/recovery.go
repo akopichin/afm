@@ -203,6 +203,21 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusPlanning:
 		o.resumePlanningStage(ctx, s)
 	case state.StatusRetrying:
+		// Autonomous stages never go through planning — same check the
+		// StatusRunning branch below already does. Without it, a retrying
+		// autonomous stage falls through to the generic plan-based fallback
+		// and gets routed into EvStartPlanning + runPlanningAgent, a real
+		// planning agent that has no plan.md to produce for a stage that's
+		// never supposed to have one.
+		if isAutonomousStage(stageDir) || s.IsAuto() {
+			if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
+				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered execution_summary.md")
+				o.maybeRunAfterHook(ctx, s.ID)
+				return
+			}
+			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
+			return
+		}
 		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
 			o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
 			o.maybeRunAfterHook(ctx, s.ID)

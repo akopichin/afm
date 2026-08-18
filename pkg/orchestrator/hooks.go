@@ -11,6 +11,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // hookMaxRetries/hookRetryBackoff — fixed retry policy for script_before/
@@ -314,6 +315,16 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 			if !o.runBeforeHook(ctx, s) {
 				return
 			}
+		}
+		// script_before runs as a bare shell script with no InterruptCh (only
+		// the main agent gets one, inside runWithRetry) — so a manual Pause()
+		// can succeed (durable EvPause transition) while the hook is still
+		// executing in the background, unnoticed. Without this check we'd
+		// spawn mainFn on a stage the user just paused — and a second time
+		// again if they'd already clicked Continue in the meantime (Continue
+		// spawns independently via resumeStageAtStatus).
+		if o.currentStatus(s.ID) == state.StatusPaused {
+			return
 		}
 		mainFn(ctx, s)
 	}

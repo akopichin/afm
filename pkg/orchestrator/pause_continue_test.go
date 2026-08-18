@@ -433,3 +433,87 @@ func setupPauseNoOpOrchestrator(t *testing.T) pauseNoOpFixture {
 	})
 	return pauseNoOpFixture{orch: orch, store: store, stageID: "s1"}
 }
+
+// autonomousDoneCreatingRunner mirrors doneCreatingRunner but writes
+// execution_summary.md (the autonomous completion marker) instead of .done.
+type autonomousDoneCreatingRunner struct {
+	delegate executor.Runner
+}
+
+func (r *autonomousDoneCreatingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *autonomousDoneCreatingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	if err := r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile); err != nil {
+		return err
+	}
+	stageDir := filepath.Dir(logFile)
+	return os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644)
+}
+
+func (r *autonomousDoneCreatingRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
+var _ executor.Runner = (*autonomousDoneCreatingRunner)(nil)
+
+// TestContinue_FromRetrying_AutonomousStage is a regression test for a bug
+// found live: resumeStageAtStatus's StatusRetrying branch didn't check for
+// autonomous stages the way its StatusRunning branch already does — Continue
+// after a manual pause during retrying misrouted an agents:[auto] stage into
+// EvStartPlanning + runPlanningAgent (a real planning agent, even though
+// autonomous stages have no plan.md and never go through planning at all).
+func TestContinue_FromRetrying_AutonomousStage(t *testing.T) {
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "auto-retry")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{{ID: "auto-retry", Name: "Auto Retry", Agents: []flow.AgentType{flow.AgentAuto}}}
+	store, err := state.Open(runDir, []string{"auto-retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "auto-retry", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "auto-retry", From: state.StatusRetrying, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	runner := &autonomousDoneCreatingRunner{delegate: mockRunner(t, mockPlanningScript)}
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(), Runner: runner,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	if err := orch.Continue(ctx, "auto-retry"); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+
+	waitForStatus(t, stateFile, "auto-retry", state.StatusDone, 8*time.Second)
+
+	// The critical assertion: reaching "done" alone isn't proof of the fix —
+	// the buggy path (EvStartPlanning -> runPlanningAgent -> auto-approve ->
+	// ready -> EvStartRun) also eventually reaches "done", because
+	// startReadyStages (a different, already-correct call site) detects
+	// autonomous.flag and spawns runAutonomousAgent regardless of how the
+	// stage arrived at "ready". What distinguishes the buggy path is that it
+	// writes a real plan.md along the way — something an autonomous stage
+	// must never do. Its absence proves resumeStageAtStatus's Retrying branch
+	// routed straight to runAutonomousAgent instead of through planning.
+	if _, err := os.Stat(filepath.Join(stageDir, "plan.md")); err == nil {
+		t.Error("plan.md was created — autonomous stage was incorrectly routed through planning on resume from retrying")
+	}
+}
