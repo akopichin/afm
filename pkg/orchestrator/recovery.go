@@ -211,16 +211,14 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 		// never supposed to have one.
 		if isAutonomousStage(stageDir) || s.IsAuto() {
 			if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
-				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered execution_summary.md")
-				o.maybeRunAfterHook(ctx, s.ID)
+				o.completeStage(ctx, s.ID, status, "recovered execution_summary.md")
 				return
 			}
 			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
 			return
 		}
 		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-			o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-			o.maybeRunAfterHook(ctx, s.ID)
+			o.completeStage(ctx, s.ID, status, "recovered .done")
 			return
 		}
 		if stagefiles.CheckPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
@@ -244,8 +242,7 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusRunning:
 		if s.IsScript() {
 			if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-				o.maybeRunAfterHook(ctx, s.ID)
+				o.completeStage(ctx, s.ID, status, "recovered .done")
 				return
 			}
 			o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
@@ -253,16 +250,14 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 		}
 		if isAutonomousStage(stageDir) || s.IsAuto() {
 			if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
-				o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered execution_summary.md")
-				o.maybeRunAfterHook(ctx, s.ID)
+				o.completeStage(ctx, s.ID, status, "recovered execution_summary.md")
 				return
 			}
 			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
 			return
 		}
 		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-			o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-			o.maybeRunAfterHook(ctx, s.ID)
+			o.completeStage(ctx, s.ID, status, "recovered .done")
 			return
 		}
 		o.concurrency.SpawnAgent(ctx, s, o.runImplementationAgent)

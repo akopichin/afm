@@ -369,12 +369,12 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
-		o.completeStage(ctx, ev.StageID, current)
+		o.completeStage(ctx, ev.StageID, current, "")
 	case phaseScript:
 		// Script-стадия завершилась (runScriptStage): нет revising-гонки
 		// (interruptChans не регистрируется вне runWithRetry, Revise() на
 		// script-стадию не осмыслен) — просто done, как остальные фазы.
-		o.completeStage(ctx, ev.StageID, current)
+		o.completeStage(ctx, ev.StageID, current, "")
 	default:
 		// review or unknown agent type: no status change needed
 	}
@@ -388,11 +388,19 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 // confirmed Running/Retrying, the completion cascade — EvComplete, the
 // script_after hook, and unblocking dependents — is identical for all three
 // phases, so it lives here once instead of being duplicated per case.
-func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus) {
+//
+// Also the chokepoint resumeStageAtStatus's "recovered from disk" fast paths
+// use (recovery.go): those finalize a stage without ever spawning a new
+// agent, so they need the exact same cascade a normally-completing agent
+// gets — skipping it left dependents of a stage resumed via Continue()
+// hanging in pending forever (found live: an autonomous stage paused right
+// after writing execution_summary.md, Continue then hit the fast path and
+// never re-evaluated stages waiting on it).
+func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus, reason string) {
 	if current != state.StatusRunning && current != state.StatusRetrying {
 		return
 	}
-	o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, "")
+	o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason)
 	o.maybeRunAfterHook(ctx, stageID)
 	o.failBlockedStages()
 	o.startPlanningForUnblocked(ctx)

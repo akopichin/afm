@@ -458,6 +458,82 @@ func (r *autonomousDoneCreatingRunner) RunJSONQuery(ctx context.Context, prompt 
 
 var _ executor.Runner = (*autonomousDoneCreatingRunner)(nil)
 
+// TestContinue_RecoveredCompletion_UnblocksDependent is a regression test for
+// a bug found live: resumeStageAtStatus's "already complete, recovered from
+// disk" fast paths (autonomous execution_summary.md / script .done) finalize
+// the resumed stage via a bare Trigger(EvComplete) + maybeRunAfterHook,
+// skipping the failBlockedStages/startPlanningForUnblocked/startReadyStages/
+// tryActivatePrePlanned cascade that completeStage (used by the normal
+// onAgentCompleted path) always runs afterward. Called from
+// startPlanningForPending that's harmless — the bootstrap loop runs that
+// cascade once after processing every stage regardless. But Continue()
+// resumes exactly one stage and returns — if that stage happens to hit the
+// recovered-from-disk fast path, nothing ever re-evaluates stages waiting on
+// it, and they hang in pending forever.
+func TestContinue_RecoveredCompletion_UnblocksDependent(t *testing.T) {
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	// The agent already wrote its completion artifact before Pause() landed —
+	// exactly the race a real run hit: Pause fires after the file is written
+	// but before the FSM would have naturally reached done on its own.
+	if err := os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stages := []flow.Stage{
+		{ID: "s1", Name: "S1", Agents: []flow.AgentType{flow.AgentAuto}},
+		{ID: "s2", Name: "S2", Agents: []flow.AgentType{flow.AgentAuto}, DependsOn: []string{"s1"}},
+	}
+	store, err := state.Open(runDir, []string{"s1", "s2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(runDir, "state.json")
+
+	runner := &autonomousDoneCreatingRunner{delegate: mockRunner(t, mockPlanningScript)}
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
+		Prompts: orchestrator.DefaultPrompts(), Runner: runner,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = orch.Run(ctx) }()
+
+	// Let Run's synchronous startPlanningForPending bootstrap finish and the
+	// event loop settle into its select before calling Continue — otherwise
+	// this test races: if Continue ran first (plausible, since go func()
+	// doesn't guarantee the new goroutine starts before this one continues),
+	// the bootstrap's OWN post-loop scheduling cascade (called once after it
+	// finishes processing every stage) would see s1 already done and activate
+	// s2 itself, passing for the wrong reason and masking the real bug this
+	// test targets: Continue's single-stage resume path skipping that cascade.
+	time.Sleep(200 * time.Millisecond)
+
+	if err := orch.Continue(ctx, "s1"); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+
+	waitForStatus(t, stateFile, "s1", state.StatusDone, 3*time.Second)
+	// The real assertion: s2 depends on s1 and must be unblocked by s1's
+	// completion, exactly like it would be after any other stage's natural
+	// completion — a hang here means Continue's fast path skipped scheduling.
+	waitForStatus(t, stateFile, "s2", state.StatusDone, 5*time.Second)
+}
+
 // TestContinue_FromRetrying_AutonomousStage is a regression test for a bug
 // found live: resumeStageAtStatus's StatusRetrying branch didn't check for
 // autonomous stages the way its StatusRunning branch already does — Continue
