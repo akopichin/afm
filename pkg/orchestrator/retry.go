@@ -68,6 +68,19 @@ var MaxRetries = 15
 // On rate limit: sets status to retrying, waits with backoff, then retries.
 // After exhausting all retries: publishes EventRetryExhausted.
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
+	// Every agent-driven phase (fresh activation via withBeforeHook, or a
+	// resume/*WithFeedback call from resumeStageAtStatus/retryStage/Revise,
+	// none of which are wrapped in withBeforeHook) funnels through here —
+	// this is the one place that can protect all of them uniformly against
+	// the same race withBeforeHook already guards for hooked stages:
+	// SpawnAgent queues this call behind the concurrency semaphore, and the
+	// stage gets (re-)paused while it's still waiting for a slot.
+	// interruptChans isn't registered until the line below, so Pause()
+	// firing during that wait has nothing to signal — checking status here,
+	// before registering it, is what actually stops a stale resume.
+	if o.currentStatus(s.ID) == state.StatusPaused {
+		return
+	}
 	interruptCh := make(chan struct{}, 1)
 	o.interruptChans.Store(s.ID, interruptCh)
 	defer o.interruptChans.Delete(s.ID)
