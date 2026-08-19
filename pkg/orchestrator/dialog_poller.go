@@ -76,6 +76,28 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 		if err != nil {
 			continue
 		}
+		// Forget any previously-processed key for this stage that is no longer
+		// in the current unanswered set — it must have been answered (dropped
+		// out of FindUnansweredQuestions once its answer.json appeared).
+		// Without this, `processed` never releases a key: the prompt tells
+		// agents to never reuse a question id within a phase, but a real
+		// agent (goga-brainstorm's revision loop) did reuse the same id for a
+		// second, distinct question after the first was answered — and the
+		// stale `processed[key] == true` silently swallowed it forever, with
+		// no EvAskUser, no dialog entry, and no visible symptom beyond the
+		// stage going idle. Restarting the browser can't fix this (the map is
+		// server-side, in-process); only a full afm restart happened to clear
+		// it. See TestPollQuestions_ReusedIDAfterAnswerAsksAgain.
+		unanswered := make(map[string]bool, len(questions))
+		for _, q := range questions {
+			unanswered[stageID+"|"+q.Phase+"|"+q.ID] = true
+		}
+		prefix := stageID + "|"
+		for key := range processed {
+			if strings.HasPrefix(key, prefix) && !unanswered[key] {
+				delete(processed, key)
+			}
+		}
 		for _, q := range questions {
 			key := stageID + "|" + q.Phase + "|" + q.ID
 			if processed[key] {

@@ -205,3 +205,62 @@ func TestPollQuestions_InteractiveStageStillAsksUser(t *testing.T) {
 		t.Errorf("stage status = %s, want %s", got, state.StatusAwaitingUserInput)
 	}
 }
+
+// TestPollQuestions_ReusedIDAfterAnswerAsksAgain is a regression test for a
+// bug found in a real production log: the prompt tells agents "never reuse an
+// ID within a phase", but a real agent (goga-brainstorm's revision loop) did
+// reuse the same id ("q2") for a second, distinct question after the first
+// "q2" was answered and the agent resumed. pollQuestions's `processed` map is
+// keyed only by stageID|phase|id and, once marked true, was NEVER cleared —
+// so the second, genuinely-unanswered "q2" was silently invisible to the
+// poller forever: no EvAskUser, no dialog.jsonl entry, stage stuck at
+// "running" with a real unanswered question.json sitting on disk. No restart
+// of the browser fixes this (the bug is server-side, in-memory); only a full
+// restart of the afm process happens to clear the map and rediscover it.
+func TestPollQuestions_ReusedIDAfterAnswerAsksAgain(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"A"})
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	processed := map[string]bool{}
+
+	// Round 1: question appears, poller asks the user.
+	o.pollQuestions(processed)
+	if got := store.Snapshot().Stages[stage.ID].Status; got != state.StatusAwaitingUserInput {
+		t.Fatalf("round 1: status = %s, want awaiting_user_input", got)
+	}
+
+	// User answers; agent resumes (Running) and consumes+removes the answer,
+	// mirroring the real bash loop's `cat` + later `rm -f` pattern.
+	answerPath := filepath.Join(stageDir, "implementation.q1.answer.json")
+	if err := os.WriteFile(answerPath, []byte(`{"id":"q1","answer":"A","from_options":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusAwaitingUserInput, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	o.pollQuestions(processed) // must prune the now-answered key from `processed`
+	if err := os.Remove(answerPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent reuses "q1" for a brand new, distinct question.
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"B"})
+
+	o.pollQuestions(processed)
+	if got := store.Snapshot().Stages[stage.ID].Status; got != state.StatusAwaitingUserInput {
+		t.Errorf("round 2 (reused id): status = %s, want awaiting_user_input — reused question was never re-surfaced", got)
+	}
+}
