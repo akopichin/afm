@@ -126,7 +126,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				// более чем повод для FSM транзишна, который уже случился.
 				if completionCheck == nil || completionCheck() == nil {
 					stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
-					_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
+					o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
 				}
 				return
 			}
@@ -136,7 +136,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			}
 			if checkErr == nil {
 				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
-				_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
+				o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
 			}
 			// Incomplete work — retry once without backoff
@@ -205,7 +205,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		} else {
 			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, "retries exhausted")
 			o.failBlockedStages()
-			_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
+			o.publishCritical(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
 		}
 	}
 }

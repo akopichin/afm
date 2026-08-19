@@ -44,7 +44,7 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	}
 
 	stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phaseScript)
-	_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phaseScript})
+	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phaseScript})
 }
 
 // sectionAssumptions зеркалит одну из секций stagefiles.RequiredPlanSections

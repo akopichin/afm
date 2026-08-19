@@ -187,7 +187,15 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 
 		_ = writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
 		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvHookFailed, bus.GuardCtx{}, err.Error())
-		_ = o.critical.Publish(ctx, bus.Event{
+		// o.ui, not o.critical: this is a dashboard notice, not an FSM-relevant
+		// signal — the transition already happened via triggerWithSeq above.
+		// o.critical has exactly one consumer (Run()'s event loop), and
+		// handleEvent's switch doesn't handle EventHookFailed, so publishing
+		// it there silently discarded it — the dashboard never saw the error
+		// text for a script_before failure, live or on reconnect. The other
+		// 3 sibling call sites (before-resolve, after-fail, after-resolve)
+		// already correctly use o.ui.
+		o.ui.Publish(bus.Event{
 			Type:    bus.EventHookFailed,
 			StageID: s.ID,
 			Data:    map[string]string{"hook": hookBefore, "error": err.Error()},

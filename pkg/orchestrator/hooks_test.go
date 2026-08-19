@@ -349,6 +349,60 @@ func TestRunBeforeHook_BlocksThenSkip(t *testing.T) {
 	}
 }
 
+// TestRunBeforeHook_PublishesEventHookFailedOnUIBus regression-tests a bug
+// found during an architectural review of the event pipeline: the exhausted-
+// retries EventHookFailed for script_before was published to o.critical, a
+// bus with exactly one consumer (Run()'s own event loop), whose handleEvent
+// switch doesn't even handle this event type — so it was silently discarded,
+// and the dashboard never saw the error text for a failed script_before
+// hook, live or on reconnect (the FSM status itself still updated fine via
+// the Trigger call, so the stage didn't hang — only the diagnostic message
+// was lost). Fixed by publishing to o.ui instead, matching the other 3
+// sibling call sites (before-resolve, after-fail, after-resolve).
+func TestRunBeforeHook_PublishesEventHookFailedOnUIBus(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptBefore: "exit 1"}
+
+	subID, ch := o.ui.Subscribe(16)
+	defer o.ui.Unsubscribe(subID)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- o.runBeforeHook(context.Background(), s)
+	}()
+
+	found := false
+	deadline := time.After(15 * time.Second)
+	for !found {
+		select {
+		case ev := <-ch:
+			if ev.Type != bus.EventHookFailed {
+				continue
+			}
+			data, ok := ev.Data.(map[string]string)
+			if !ok || data["error"] == "" {
+				t.Fatalf("EventHookFailed missing error text: %+v", ev.Data)
+			}
+			found = true
+		case <-deadline:
+			t.Fatal("EventHookFailed never reached a UI bus subscriber")
+		}
+	}
+
+	if !o.resolveHook("s1", hookDecisionSkip) {
+		t.Fatal("resolveHook returned false")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runBeforeHook to return")
+	}
+}
+
 func TestRunAfterHook_SucceedsFirstTry_NoEvents(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {

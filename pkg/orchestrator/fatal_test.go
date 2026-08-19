@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
@@ -72,6 +73,62 @@ func TestSetFatal_RecordsFirstErrorAndCancels(t *testing.T) {
 	o.setFatal(second)
 	if got := o.loadFatal(); !errors.Is(got, first) {
 		t.Fatalf("loadFatal() after second setFatal = %v, want first error %v", got, first)
+	}
+}
+
+// publishCritical raced against ctx cancellation used to be a bare
+// `_ = o.critical.Publish(ctx, ev)` at every call site — a dropped event
+// (e.g. setFatal from an unrelated stage cancelling the shared o.runCtx at
+// the exact instant this stage's own EventAgentCompleted tries to publish)
+// left zero trace anywhere. This only verifies the non-blocking/non-panicking
+// contract on both outcomes; the log line itself isn't asserted (no existing
+// convention in this package for capturing log.Printf output).
+func TestPublishCritical_CancelledCtxDoesNotBlockOrPanic(t *testing.T) {
+	o := &Orchestrator{critical: bus.NewCriticalBus(1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Fill the buffer first so the send case in Publish's select isn't ready —
+	// otherwise, with an empty buffer and an already-cancelled ctx, BOTH
+	// select cases are simultaneously ready and Go picks between them at
+	// random (this is exactly the real race publishCritical exists to make
+	// visible, not a test bug to paper over — but asserting a specific
+	// non-blocking outcome needs the send case genuinely blocked).
+	o.critical.TryPublish(bus.Event{Type: bus.EventAgentCompleted, StageID: "filler"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: "a"})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publishCritical blocked on an already-cancelled ctx")
+	}
+
+	ev := <-o.critical.Recv()
+	if ev.StageID != "filler" {
+		t.Fatalf("event should not have been delivered, got %+v", ev)
+	}
+	select {
+	case ev := <-o.critical.Recv():
+		t.Fatalf("only the filler event should be in the buffer, also got %+v", ev)
+	default:
+	}
+}
+
+func TestPublishCritical_LiveCtxDeliversEvent(t *testing.T) {
+	o := &Orchestrator{critical: bus.NewCriticalBus(1)}
+	o.publishCritical(context.Background(), bus.Event{Type: bus.EventAgentCompleted, StageID: "a"})
+
+	select {
+	case ev := <-o.critical.Recv():
+		if ev.StageID != "a" {
+			t.Fatalf("got stage %q, want \"a\"", ev.StageID)
+		}
+	default:
+		t.Fatal("event should have been delivered on a live ctx with room in the buffer")
 	}
 }
 

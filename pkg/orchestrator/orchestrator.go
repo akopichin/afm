@@ -223,6 +223,25 @@ func New(opts Options) *Orchestrator {
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
 func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
 
+// publishCritical wraps o.critical.Publish, logging instead of silently
+// discarding a drop. ctx here is always the shared, cancellable o.runCtx
+// (every SpawnAgent calls, all the way down to runWithRetry, thread the same
+// context passed to Run) — setFatal (above) proactively and synchronously
+// cancels that exact context the instant ANY stage's storage write fails, so
+// an unrelated stage's legitimate completion event racing that cancellation
+// could have its Publish lose the ctx.Done()/channel-send select and vanish
+// with zero trace. This doesn't retry or recover the event — a dropped
+// EventAgentCompleted here still means that stage's FSM status can lag for
+// the remainder of a dying run; recovery-on-restart independently re-derives
+// completion from on-disk artifacts (plan.md/execution_summary.md/.done), so
+// the loss isn't permanent across a restart. Logging exists purely so this
+// class of loss is visible during debugging instead of silent.
+func (o *Orchestrator) publishCritical(ctx context.Context, ev bus.Event) {
+	if err := o.critical.Publish(ctx, ev); err != nil {
+		log.Printf("orchestrator: dropped %s event for stage %q: %v", ev.Type, ev.StageID, err)
+	}
+}
+
 // Trigger applies an FSM event to transition a stage's status.
 // Returns the new status and whether the transition was applied.
 func (o *Orchestrator) Trigger(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, bool) {
