@@ -199,9 +199,9 @@ func TestFindUnansweredQuestions(t *testing.T) {
 		t.Fatalf("want 1 unanswered (implementation), got %v", got)
 	}
 
-	// Malformed, unrepairable JSON → surfaced as a fallback stub, not
+	// Malformed, unrepairable JSON → surfaced with Malformed=true, not
 	// dropped silently (a dropped question hangs the stage forever with no
-	// diagnostic — see TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub).
+	// diagnostic — see TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed).
 	bad := filepath.Join(dir, "review.q1.question.json")
 	if err := os.WriteFile(bad, []byte(`not json`), 0644); err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestFindUnansweredQuestions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("malformed JSON must surface as a fallback stub; want 2, got %d: %+v", len(got), got)
+		t.Fatalf("malformed JSON must still surface (Malformed=true); want 2, got %d: %+v", len(got), got)
 	}
 
 	// allow_custom defaults to true when omitted.
@@ -310,16 +310,22 @@ func TestFindUnansweredQuestions_MissingKeyQuote_Repaired(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub locks in the
+// TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed locks in the
 // last-resort fallback: a question file so broken that even jsonrepair
-// cannot recover it must still surface to the poller as a stub question
-// instead of vanishing. Before this fix, an unrepairable file was silently
-// dropped (continue) and the stage hung in "running" forever with no trace
-// in the UI or logs.
-func TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub(t *testing.T) {
+// cannot recover it must still surface to the caller (Malformed=true, id
+// from the filename) instead of vanishing — but WITHOUT afm touching the
+// file on disk. Found via a real production log: overwriting the file the
+// instant a parse fails races against the agent's own Write tool call, which
+// may still be landing on disk (a torn read produces exactly this kind of
+// unparseable content that becomes valid again moments later, unmodified).
+// Deciding whether this is a transient race or a genuine, persistent mistake
+// belongs to the caller (pollQuestions's retry state machine in
+// pkg/orchestrator/dialog_poller.go), not to this scan.
+func TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planning.q5.question.json")
-	if err := os.WriteFile(path, []byte(`not json at all {{{`), 0644); err != nil {
+	original := []byte(`not json at all {{{`)
+	if err := os.WriteFile(path, original, 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,48 +334,24 @@ func TestFindUnansweredQuestions_UnrepairableJSON_FallbackStub(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("want 1 fallback stub, got %d: %+v", len(got), got)
+		t.Fatalf("want 1 result, got %d: %+v", len(got), got)
+	}
+	if !got[0].Malformed {
+		t.Fatal("want Malformed=true for unrepairable JSON")
 	}
 	if got[0].ID != "q5" {
-		t.Fatalf("fallback stub must keep the id from the filename, got %q", got[0].ID)
-	}
-	if got[0].Question == "" {
-		t.Fatal("fallback stub must carry a non-empty explanatory question")
-	}
-	if len(got[0].Options) != 2 {
-		t.Fatalf("fallback stub must offer Continue/Cancel options, got %v", got[0].Options)
-	}
-	if !got[0].AllowCustom {
-		t.Fatal("fallback stub must allow a custom answer")
+		t.Fatalf("must keep the id from the filename, got %q", got[0].ID)
 	}
 
-	// The stub must be persisted back to disk, not just returned in memory.
-	// handleDialogAnswer (pkg/server/handlers.go) re-reads question.json from
-	// disk on every POST /dialog/answer and strictly json.Unmarshal's it with
-	// no repair fallback. If the on-disk file is left as the original broken
-	// JSON, every answer submission (including "Continue anyway"/"Cancel
-	// stage") 500s forever and the Send button in the UI appears dead.
-	fixed, err := os.ReadFile(path)
+	// The file on disk must be left completely untouched — no stub, no
+	// overwrite of any kind, since afm cannot tell a torn read from a
+	// genuine mistake at this layer.
+	unchanged, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var probe struct {
-		ID          string   `json:"id"`
-		Question    string   `json:"question"`
-		Options     []string `json:"options"`
-		AllowCustom *bool    `json:"allow_custom"`
-	}
-	if err := json.Unmarshal(fixed, &probe); err != nil {
-		t.Fatalf("fallback stub was not persisted as valid JSON: %v\nraw: %s", err, fixed)
-	}
-	if probe.ID != "q5" {
-		t.Fatalf("persisted stub id mismatch: got %q, want %q", probe.ID, "q5")
-	}
-	if len(probe.Options) != 2 {
-		t.Fatalf("persisted stub options mismatch: %v", probe.Options)
-	}
-	if probe.AllowCustom == nil || !*probe.AllowCustom {
-		t.Fatal("persisted stub must allow a custom answer")
+	if string(unchanged) != string(original) {
+		t.Fatalf("file was modified on disk: got %q, want unchanged %q", unchanged, original)
 	}
 }
 
@@ -567,5 +549,63 @@ func TestWriteAnswer_DialogAppendFailureStillWritesAnswerFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "planning.q1.answer.json")); err != nil {
 		t.Errorf("answer.json not written despite dialog append failure: %v", err)
+	}
+}
+
+// TestWriteInternalAnswer_WritesFileWithoutDialogEntry covers afm's own
+// internal signaling to an agent (currently: the malformed-question-json
+// retry nudge) — the answer.json file must appear so the agent's bash
+// polling loop finds it, but it must NOT leak into dialog.jsonl: an
+// interactive stage's dialog panel is watched live, and a stray answer with
+// no matching question would be a confusing artifact of an exchange the
+// user was never part of.
+func TestWriteInternalAnswer_WritesFileWithoutDialogEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := mcp.WriteInternalAnswer(dir, "implementation", "q1", "please rewrite your question.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "implementation.q1.answer.json"))
+	if err != nil {
+		t.Fatalf("answer.json not written: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["answer"] != "please rewrite your question.json" {
+		t.Errorf("answer.json content mismatch: %v", got)
+	}
+
+	entries, err := mcp.ReadDialog(filepath.Join(dir, "implementation.dialog.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("dialog.jsonl must stay untouched, got %+v", entries)
+	}
+}
+
+// TestCanParseQuestion covers the three cases the malformed-question retry
+// state machine (pkg/orchestrator/dialog_poller.go) depends on to decide
+// whether an agent's rewrite actually fixed a file, without persisting
+// anything or re-scanning the stage directory.
+func TestCanParseQuestion(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"valid JSON", `{"id":"q1","question":"go?"}`, true},
+		{"repairable JSON", `{"id":"q1","question":"нужно "решить" ли"}`, true},
+		{"unrepairable garbage", `not json at all {{{`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := mcp.CanParseQuestion([]byte(c.raw)); got != c.want {
+				t.Errorf("CanParseQuestion(%q) = %v, want %v", c.raw, got, c.want)
+			}
+		})
 	}
 }

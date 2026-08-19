@@ -197,6 +197,17 @@ type QuestionFile struct {
 	Question    string
 	Options     []string
 	AllowCustom bool
+	// Malformed is true when the file's JSON could not be parsed even after
+	// jsonrepair. Callers that surface questions directly to a human (the
+	// question poller, the dialog HTTP handler) must NOT show these to the
+	// user immediately — see pkg/orchestrator/dialog_poller.go's retry state
+	// machine, which decides whether this is a transient torn read (the
+	// agent's Write tool hadn't finished landing on disk when this file was
+	// scanned) or a genuine, persistent mistake worth nudging the agent
+	// about. Callers that only care about "is something unanswered" (e.g.
+	// hasOpenQuestion) can ignore this field — a malformed file still counts
+	// as open.
+	Malformed bool
 }
 
 // FindUnansweredQuestions scans stageDir for *.question.json files that do not
@@ -234,43 +245,30 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 			Options     []string `json:"options"`
 			AllowCustom *bool    `json:"allow_custom"`
 		}
+		malformed := false
 		if err := json.Unmarshal(raw, &qf); err != nil {
 			// Агент пишет question.json руками (файловый протокол диалога) и
 			// иногда ломает JSON: незаэкранированная кавычка внутри строки,
 			// пропущенная кавычка у ключа, пропущенная запятая и т.п.
 			// jsonrepair покрывает эти классы ошибок гораздо шире одной
-			// самописной эвристики. Если даже она не справилась — файл
-			// вопроса раньше молча пропадал из вида поллера (continue), и
-			// стадия зависала в awaiting-forever без единого следа. Вместо
-			// этого показываем вопрос-заглушку с сырым содержимым файла:
-			// стадия всегда доходит до awaiting_user_input.
+			// самописной эвристики.
 			repaired, repairErr := jsonrepair.Repair(string(raw))
 			if repairErr == nil {
 				repairErr = json.Unmarshal([]byte(repaired), &qf)
 			}
 			if repairErr != nil {
-				log.Printf("WARN: %s: invalid JSON, surfacing as fallback stub: %v", qPath, err)
-				preview := raw
-				if len(preview) > 400 {
-					preview = preview[:400]
-				}
+				// Даже jsonrepair не справился. НЕ пишем ничего на диск здесь:
+				// файл может быть просто недописан агентом (torn read —
+				// поллер читает файл, пока Write ещё не долетел до диска), и
+				// перезапись содержимого afm'ом гонится со всё ещё
+				// выполняющейся записью агента. Решение "это временная гонка
+				// или агент реально сломал JSON" принимает вызывающий
+				// (pollQuestions'ный retry-автомат в dialog_poller.go) —
+				// здесь только сигнализируем Malformed и отдаём то, что есть.
+				log.Printf("WARN: %s: invalid JSON even after repair: %v", qPath, err)
+				malformed = true
 				qf.ID = id
-				qf.Question = fmt.Sprintf("⚠️ The agent wrote a malformed question.json that afm could not parse or repair. The file was left on disk for inspection.\n\nRaw preview:\n%s", preview)
-				qf.Options = []string{"Continue anyway", "Cancel stage"}
-				allowCustom := true
-				qf.AllowCustom = &allowCustom
-				// Persist the stub itself, not just the original broken file.
-				// handleDialogAnswer re-reads question.json from disk on every
-				// POST /dialog/answer with a strict json.Unmarshal (no repair
-				// fallback) — if the file on disk stays broken, every answer
-				// submission for this question 500s forever and the UI's
-				// Send/option buttons appear dead even though they show a
-				// valid-looking fallback question.
-				if stub, marshalErr := json.Marshal(qf); marshalErr != nil {
-					log.Printf("WARN: %s: failed to marshal fallback stub: %v", qPath, marshalErr)
-				} else if writeErr := os.WriteFile(qPath, stub, 0644); writeErr != nil {
-					log.Printf("WARN: %s: failed to persist fallback stub: %v", qPath, writeErr)
-				}
+				qf.Question = string(raw)
 			} else if writeErr := os.WriteFile(qPath, []byte(repaired), 0644); writeErr != nil {
 				log.Printf("WARN: %s: repaired invalid JSON in memory but failed to persist fix: %v", qPath, writeErr)
 			} else {
@@ -290,10 +288,31 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 		}
 		out = append(out, QuestionFile{
 			Phase: phase, ID: actualID, Question: qf.Question,
-			Options: qf.Options, AllowCustom: allowCustom,
+			Options: qf.Options, AllowCustom: allowCustom, Malformed: malformed,
 		})
 	}
 	return out, nil
+}
+
+// CanParseQuestion reports whether raw is a *.question.json payload that
+// FindUnansweredQuestions would treat as parseable — a direct json.Unmarshal,
+// or (failing that) after jsonrepair.Repair. Does not persist anything to
+// disk; a caller that needs the repaired bytes should call
+// FindUnansweredQuestions itself, which does both the check and the persist.
+// Exposed for the orchestrator's malformed-question retry state machine
+// (pkg/orchestrator/dialog_poller.go), which needs to know whether an
+// agent's rewrite actually fixed a file without re-scanning the whole stage
+// directory.
+func CanParseQuestion(raw []byte) bool {
+	var probe map[string]any
+	if json.Unmarshal(raw, &probe) == nil {
+		return true
+	}
+	repaired, err := jsonrepair.Repair(string(raw))
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal([]byte(repaired), &probe) == nil
 }
 
 // autoAnswerFallbackText is the answer afm synthesizes for an open question
@@ -339,17 +358,12 @@ func stripRecommendedMarker(opt string) (string, bool) {
 	return "", false
 }
 
-// WriteAnswer atomically creates <stageDir>/<phase>.<id>.answer.json (O_EXCL
-// — a question may only be answered once; returns an error satisfying
-// os.IsExist if it already was) and best-effort appends the answer to
-// <phase>.dialog.jsonl for UI history. autoAnswered marks answers afm
-// synthesized itself (non-interactive auto-answer), as opposed to a real
-// user reply — see Answer.AutoAnswered / Entry.AutoAnswered.
-//
-// A dialog.jsonl append failure is logged and swallowed: answer.json is
-// already safely on disk (the critical path for the agent's polling loop),
-// so failing the caller here would incorrectly signal the answer was lost.
-func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered bool) error {
+// writeAnswerFile atomically creates <stageDir>/<phase>.<id>.answer.json
+// (O_EXCL — a question may only be answered once; returns an error
+// satisfying os.IsExist if it already was). No dialog.jsonl side effect —
+// callers decide separately whether this answer belongs in human-facing
+// history (see WriteAnswer vs WriteInternalAnswer).
+func writeAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error {
 	answerPath := filepath.Join(stageDir, phase+"."+id+".answer.json")
 	payload, err := json.Marshal(map[string]any{
 		"id": id, "answer": answer, "from_options": fromOptions,
@@ -379,7 +393,22 @@ func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered b
 		_ = os.Remove(answerPath)
 		return fmt.Errorf("close answer: %w", err)
 	}
+	return nil
+}
 
+// WriteAnswer atomically creates <stageDir>/<phase>.<id>.answer.json and
+// best-effort appends the answer to <phase>.dialog.jsonl for UI history.
+// autoAnswered marks answers afm synthesized itself (non-interactive
+// auto-answer), as opposed to a real user reply — see Answer.AutoAnswered /
+// Entry.AutoAnswered.
+//
+// A dialog.jsonl append failure is logged and swallowed: answer.json is
+// already safely on disk (the critical path for the agent's polling loop),
+// so failing the caller here would incorrectly signal the answer was lost.
+func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered bool) error {
+	if err := writeAnswerFile(stageDir, phase, id, answer, fromOptions); err != nil {
+		return err
+	}
 	dialogPath := filepath.Join(stageDir, phase+".dialog.jsonl")
 	if err := AppendAnswer(dialogPath, Answer{
 		ID: id, Answer: answer, FromOptions: fromOptions, AutoAnswered: autoAnswered,
@@ -387,4 +416,16 @@ func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered b
 		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, phase, id, err) //nolint:gosec // G706: phase/id are validated safe filename components by callers
 	}
 	return nil
+}
+
+// WriteInternalAnswer writes <stageDir>/<phase>.<id>.answer.json WITHOUT any
+// dialog.jsonl side effect. For afm-to-agent signaling that must never
+// appear in a human-facing dialog history — currently only the
+// malformed-question-json retry nudge (pkg/orchestrator/dialog_poller.go):
+// an interactive stage's dialog panel is actively watched in real time, and
+// a stray "→ <internal nudge text>" bubble with no matching question would
+// be a confusing artifact of afm talking to the agent about something the
+// user was never asked about.
+func WriteInternalAnswer(stageDir, phase, id, answer string) error {
+	return writeAnswerFile(stageDir, phase, id, answer, false)
 }

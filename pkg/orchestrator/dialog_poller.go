@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +18,35 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// maxMalformedRetries — сколько раз afm просит агента переписать
+// question.json, который не парсится даже после jsonrepair, прежде чем
+// сдаться и показать сырой текст пользователю без вариантов ответа.
+const maxMalformedRetries = 3
+
+// MalformedNudgeTimeout — сколько ждать реакции агента на один "перепиши
+// JSON"-нудж, прежде чем считать этот раунд ретрая исчерпанным и пробовать
+// следующий (или сдаться, если ретраи кончились). Читается один раз в New()
+// и фиксируется в Orchestrator.malformedNudgeTimeout — тот же паттерн, что
+// у RetryBackoff/MaxRetries (retry.go): тесты могут переопределять значение,
+// но обязаны делать это ДО New().
+//
+// Без этого таймаута агент, который вообще не реагирует на нудж (падает,
+// игнорирует, зависает) навсегда останавливал бы retry-автомат:
+// unblockRewrittenMalformedQuestions раньше снимала блокировку ТОЛЬКО когда
+// видела, что агент реально переписал файл — не отвечающий агент никогда не
+// меняет содержимое, значит ключ никогда не разблокировался бы и
+// maxMalformedRetries никогда бы не достигался.
+var MalformedNudgeTimeout = 10 * time.Second
+
+// malformedQuestionState отслеживает прогресс ретраев для одного
+// (stageID,phase,id), чей question.json не парсится. Живёт всё время работы
+// поллинг-горутины, параллельно с `processed` (см. startQuestionPoller).
+type malformedQuestionState struct {
+	lastRaw  []byte    // сырые байты, увиденные на предыдущем тике для этого ключа
+	retries  int       // сколько "перепиши JSON" уже отправлено агенту (0..maxMalformedRetries)
+	nudgedAt time.Time // когда отправлен последний нудж (нулевое значение — нуджа ещё не было)
+}
+
 // violationCacheEntry хранит stat-данные для одного .jsonl файла.
 // Используется в detectDialogViolation чтобы не перечитывать неизменившиеся файлы.
 type violationCacheEntry struct {
@@ -30,13 +60,14 @@ func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		processed := map[string]bool{} // "stageID|phase|id" → true
+		processed := map[string]bool{}                    // "stageID|phase|id" → true
+		malformed := map[string]*malformedQuestionState{} // "stageID|phase|id" → retry state
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				o.pollQuestions(processed)
+				o.pollQuestions(processed, malformed)
 			}
 		}
 	}()
@@ -45,7 +76,7 @@ func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 // pollQuestions scans each active stage directory for unanswered question files.
 // For each new file: writes it to dialog.jsonl (for UI history) and publishes
 // EventAskUser to transition the stage to awaiting_user_input.
-func (o *Orchestrator) pollQuestions(processed map[string]bool) {
+func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[string]*malformedQuestionState) {
 	snap := o.opts.Store.Snapshot()
 
 	// activeInteractiveCount считает interactive-стадии, активные прямо сейчас
@@ -72,6 +103,16 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 			continue
 		}
 		stageDir := filepath.Join(o.opts.RunDir, stageID)
+		stage := o.graph.Stage(stageID)
+		if stage != nil && stage.Interactive {
+			// A rewrite in response to an earlier nudge (see
+			// handleMalformedQuestion) makes the file's content change but
+			// leaves our synthetic answer.json sitting on disk — without
+			// removing it here, FindUnansweredQuestions below would keep
+			// treating this id as "already answered" forever and never see
+			// the rewritten content.
+			o.unblockRewrittenMalformedQuestions(malformed, stageID, stageDir)
+		}
 		questions, err := mcp.FindUnansweredQuestions(stageDir)
 		if err != nil {
 			continue
@@ -100,6 +141,23 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 		}
 		for _, q := range questions {
 			key := stageID + "|" + q.Phase + "|" + q.ID
+
+			// Malformed question.json (unparseable even after jsonrepair):
+			// never surface it directly. A single failed parse is frequently
+			// a torn read racing the agent's still-in-flight Write call, not
+			// a genuine mistake — see handleMalformedQuestion for the full
+			// retry state machine. Only applies to interactive stages: a
+			// non-interactive stage's existing auto-answer path already
+			// tolerates missing structure (PickAutoAnswer falls back to a
+			// fixed text when there are no options), so it isn't worth the
+			// extra retry machinery.
+			if q.Malformed {
+				if stage != nil && stage.Interactive {
+					o.handleMalformedQuestion(malformed, stageID, stageDir, q, key)
+				}
+				continue
+			}
+
 			if processed[key] {
 				continue
 			}
@@ -118,7 +176,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 			// Non-interactive stage (default, or agents:[auto]): afm answers the
 			// question itself instead of surfacing it to a human — the stage's
 			// FSM status is left untouched (no EvAskUser transition).
-			if stage := o.graph.Stage(stageID); stage != nil && !stage.Interactive {
+			if stage != nil && !stage.Interactive {
 				answer, fromOptions := mcp.PickAutoAnswer(q)
 				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
@@ -161,11 +219,181 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool) {
 		// constructs path from CWD instead of reading $AFM_STAGE_DIR).
 		// Auto-relocate the misplaced file so the dialog becomes visible in the UI.
 		if len(questions) == 0 {
-			if stage := o.graph.Stage(stageID); stage != nil && stage.Interactive {
+			if stage != nil && stage.Interactive {
 				o.relocateMisplacedQuestions(stageID, stageDir, activeInteractiveCount <= 1)
 			}
 		}
 	}
+}
+
+// unblockRewrittenMalformedQuestions checks every malformed-retry key
+// belonging to stageID that is currently mid-nudge (retries > 0 — afm already
+// wrote a synthetic "please rewrite" answer and is waiting for the agent to
+// act). It removes the stale synthetic answer.json — freeing the id for
+// FindUnansweredQuestions to see again this same tick — once EITHER:
+//   - the agent has rewritten question.json since our last observation (a
+//     correction under the SAME id, per the "never reuse an id" prompt rule —
+//     without this, it would stay invisible forever, exactly like the
+//     id-reuse bug this poller already had to learn to forget, see the
+//     `processed` pruning above); or
+//   - MalformedNudgeTimeout has elapsed with no rewrite at all — an agent
+//     that never responds to a nudge (crashed, ignored it, hung) would
+//     otherwise leave this key stuck waiting for a content change that will
+//     never come, and maxMalformedRetries would never be reached.
+func (o *Orchestrator) unblockRewrittenMalformedQuestions(malformed map[string]*malformedQuestionState, stageID, stageDir string) {
+	prefix := stageID + "|"
+	for key, st := range malformed {
+		if st.retries == 0 || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		phase, id, ok := strings.Cut(strings.TrimPrefix(key, prefix), "|")
+		if !ok {
+			continue
+		}
+		qPath := filepath.Join(stageDir, phase+"."+id+".question.json")
+		raw, err := os.ReadFile(qPath)
+		if err != nil {
+			continue
+		}
+		changed := string(raw) != string(st.lastRaw)
+		if !changed && time.Since(st.nudgedAt) < o.malformedNudgeTimeout {
+			continue // still within the response window, nothing changed yet
+		}
+		_ = os.Remove(filepath.Join(stageDir, phase+"."+id+".answer.json"))
+		if changed && mcp.CanParseQuestion(raw) {
+			// Fixed. Stop tracking this key entirely — from here on
+			// FindUnansweredQuestions handles it as a completely normal
+			// question. Leaving the entry behind would make this same
+			// "content changed since lastRaw" check fire on every future
+			// tick (raw is now permanently different from the stale broken
+			// lastRaw) and delete any LATER, unrelated real answer.json the
+			// moment a human actually answers the now-valid question — found
+			// live in a real browser run, not by inspection: the recovery
+			// path worked, but the very next legitimate answer.json the
+			// human submitted was silently deleted before the agent's bash
+			// loop could read it, hanging the stage.
+			delete(malformed, key)
+		} else {
+			// Still broken (either the rewrite didn't fix it, or there was no
+			// rewrite at all and we're only here because of the timeout).
+			// Refresh the baseline — a no-op if unchanged — so
+			// handleMalformedQuestion immediately sees "stable, still broken"
+			// and starts the next retry round instead of granting a
+			// redundant grace tick.
+			st.lastRaw = raw
+		}
+	}
+}
+
+// handleMalformedQuestion advances the retry state machine for a
+// question.json that failed to parse even after jsonrepair. A single failed
+// parse is NOT evidence of a genuine agent mistake — found via a real
+// production log: afm's poller can read a file while the agent's Write tool
+// call is still landing on disk (a torn read), producing bytes that fail to
+// parse and never change again on their own — except that in the real
+// incident, the SAME bytes parsed perfectly on the very next tick, once the
+// write actually finished. So:
+//   - First time this content is seen as broken: remember it, do nothing —
+//     if it was a torn read, the next tick's re-read is already complete and
+//     parses fine with zero agent involvement.
+//   - Same broken content again on a later tick (the write is genuinely
+//     done): nudge the agent, up to maxMalformedRetries times, via the exact
+//     file-based channel its own bash polling loop already reads
+//     (<phase>.<id>.answer.json) — no new protocol needed.
+//   - Still broken after exhausting retries: stop asking for valid JSON,
+//     persist a real parseable stub, and only now run the normal
+//     ask-the-user flow (see giveUpOnMalformedQuestion).
+func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQuestionState, stageID, stageDir string, q mcp.QuestionFile, key string) {
+	qPath := filepath.Join(stageDir, q.Phase+"."+q.ID+".question.json")
+	raw, err := os.ReadFile(qPath)
+	if err != nil {
+		return
+	}
+
+	st, seen := malformed[key]
+	if !seen {
+		malformed[key] = &malformedQuestionState{lastRaw: raw}
+		return // grace tick: give a possibly-still-writing file one more pass
+	}
+	if string(raw) != string(st.lastRaw) {
+		// Still changing — slow write, or the agent just rewrote it in
+		// response to a nudge. Wait one more tick before judging again.
+		st.lastRaw = raw
+		return
+	}
+
+	// Same broken bytes as last tick: the write is done, this is genuinely
+	// broken, not a race.
+	if st.retries >= maxMalformedRetries {
+		o.giveUpOnMalformedQuestion(stageID, stageDir, q, qPath, raw)
+		delete(malformed, key)
+		return
+	}
+
+	st.retries++
+	st.nudgedAt = time.Now()
+	msg := fmt.Sprintf(
+		"⚠️ afm: файл вопроса %s.%s.question.json содержит невалидный JSON и не может быть обработан (попытка %d из %d). "+
+			"Это не ответ пользователя — прочитайте и перепишите этот же файл корректным JSON (тот же id %q), "+
+			"затем снова дождитесь %s.%s.answer.json.",
+		q.Phase, q.ID, st.retries, maxMalformedRetries, q.ID, q.Phase, q.ID,
+	)
+	if err := mcp.WriteInternalAnswer(stageDir, q.Phase, q.ID, msg); err != nil {
+		log.Printf("WARN: malformed-question nudge %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+		return
+	}
+	o.ui.Publish(bus.Event{
+		Type:    bus.EventAutoAnswered,
+		StageID: stageID,
+		Data: map[string]any{
+			keyID: q.ID, keyPhase: q.Phase, "answer": msg, "from_options": false,
+		},
+	})
+	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
+		keyID: q.ID, keyPhase: q.Phase, "answer": msg, "from_options": false,
+	})
+}
+
+// giveUpOnMalformedQuestion runs once retries are exhausted: persists a
+// real, parseable stub to disk — handleDialogAnswer (pkg/server/handlers.go)
+// re-parses question.json strictly on every answer submission, so leaving
+// broken JSON in place would 500 forever — and surfaces it to the user with
+// no options, free text only; whatever they type becomes the literal answer.
+func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp.QuestionFile, qPath string, raw []byte) {
+	explanation := fmt.Sprintf(
+		"⚠️ Агент %d раз(а) подряд не смог записать корректный JSON для этого вопроса. Показан необработанный текст файла — ответьте свободным текстом.\n\nСодержимое файла:\n%s",
+		maxMalformedRetries, string(raw),
+	)
+	stub := struct {
+		ID          string `json:"id"`
+		Question    string `json:"question"`
+		AllowCustom bool   `json:"allow_custom"`
+	}{ID: q.ID, Question: explanation, AllowCustom: true}
+	data, err := json.Marshal(stub)
+	if err != nil {
+		log.Printf("WARN: marshal malformed-question stub %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+		return
+	}
+	if err := os.WriteFile(qPath, data, 0644); err != nil {
+		log.Printf("WARN: persist malformed-question stub %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+		return
+	}
+
+	dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
+	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
+		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: explanation, AllowCustom: true})
+	}
+	o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
+	_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
+	o.ui.Publish(bus.Event{
+		Type:    bus.EventAskUser,
+		StageID: stageID,
+		Data: map[string]any{
+			keyID: q.ID, keyPhase: q.Phase, "question": explanation,
+			"options": []string(nil), "allow_custom": true,
+		},
+		Seq: seq,
+	})
 }
 
 // detectDialogViolation scans the agent's stream-json logs (<phase>.jsonl) for a

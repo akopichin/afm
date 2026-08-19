@@ -417,6 +417,16 @@ func buildDialogEntries(stageDir string) []dialogUIEntry {
 			if haveID[q.ID] {
 				continue
 			}
+			// Malformed question.json is mid-retry (pollQuestions's state
+			// machine, dialog_poller.go): afm is silently nudging the agent
+			// to rewrite it, or still waiting a tick to rule out a torn read.
+			// Showing it here would leak that in-progress state to the user
+			// before the poller itself has decided to give up — skip it;
+			// once retries are exhausted the poller persists a real,
+			// parseable stub and this same scan picks it up normally.
+			if q.Malformed {
+				continue
+			}
 			out = append(out, dialogUIEntry{
 				Phase: q.Phase, ID: q.ID, Question: q.Question,
 				Options: q.Options, AllowCustom: q.AllowCustom,

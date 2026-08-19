@@ -552,10 +552,12 @@ func TestIntegration_BrokenQuestionStillSurfaces(t *testing.T) {
 }
 
 // TestIntegration_UnrepairableQuestionFallsBackToStub покрывает last-resort
-// fallback: агент пишет question.json настолько сломанный, что даже jsonrepair
-// не может его починить. Стадия всё равно должна дойти до
-// awaiting_user_input — с вопросом-заглушкой вместо вечного зависания в
-// "running" без единого следа.
+// fallback: агент пишет question.json настолько сломанный, что даже
+// jsonrepair не может его починить, и никогда не реагирует на просьбы afm
+// переписать файл (просто спит). Стадия всё равно должна дойти до
+// awaiting_user_input — после исчерпания retry-автомата (grace tick + до
+// maxMalformedRetries нуджей агенту) с вопросом-заглушкой без вариантов
+// ответа (свободный текст) вместо вечного зависания в "running" без следа.
 func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	dir := t.TempDir()
 
@@ -583,6 +585,14 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(dir, "state.json")
 
+	// The script never rewrites its own question.json (it just sleeps), so
+	// each retry round only advances once MalformedNudgeTimeout elapses with
+	// no response — shrink it so the test doesn't wait through 3 real-world
+	// nudge timeouts.
+	origTimeout := orchestrator.MalformedNudgeTimeout
+	orchestrator.MalformedNudgeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { orchestrator.MalformedNudgeTimeout = origTimeout })
+
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir:  dir,
 		Stages:  stages,
@@ -591,11 +601,13 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 		Prompts: orchestrator.DefaultPrompts(),
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	go func() { _ = orch.Run(ctx) }()
 
-	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 10*time.Second)
+	// grace tick + maxMalformedRetries rounds, each gated by the shrunk
+	// MalformedNudgeTimeout above — comfortably inside 15s.
+	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
 
 	stageDir := filepath.Join(dir, "propose")
 	questions, err := mcp.FindUnansweredQuestions(stageDir)
@@ -609,8 +621,8 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	if q.ID != "q1" {
 		t.Fatalf("fallback stub must keep the id from the filename, got %q", q.ID)
 	}
-	if q.Question == "" || len(q.Options) != 2 || !q.AllowCustom {
-		t.Fatalf("unexpected fallback stub: %+v", q)
+	if q.Question == "" || len(q.Options) != 0 || !q.AllowCustom {
+		t.Fatalf("unexpected fallback stub (want no options, free text only): %+v", q)
 	}
 }
 

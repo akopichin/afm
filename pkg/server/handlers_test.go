@@ -738,6 +738,51 @@ func TestDialogGet(t *testing.T) {
 	}
 }
 
+// TestDialogGet_SkipsMalformedPendingQuestion covers the "guarantee
+// visibility" fallback in handleDialog (reads *.question.json directly when
+// dialog.jsonl hasn't been written yet): a question.json unparseable even
+// after jsonrepair must NOT leak into the response while afm's poller is
+// still deciding whether it's a transient torn read or a genuine mistake
+// worth nudging the agent about (dialog_poller.go's retry state machine) —
+// showing it here would bypass that decision entirely and expose
+// in-progress internal state to the user.
+func TestDialogGet_SkipsMalformedPendingQuestion(t *testing.T) {
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, testStageID)
+	os.MkdirAll(stageDir, 0755)
+	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
+	if err := os.WriteFile(qPath, []byte(`not json at all {{{`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.Open(runDir, []string{testStageID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv := New(Config{
+		RunDir: runDir,
+		Store:  store,
+		UIBus:  bus.NewUIBus(),
+	})
+
+	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/dialog", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status %d, body %s", w.Code, w.Body.String())
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("malformed pending question must not be surfaced yet, got %+v", got)
+	}
+}
+
 // TestDialogGetWithTranscript проверяет, что тексты агента из stream-json
 // лога перемежают вопросы диалога в порядке появления.
 func TestDialogGetWithTranscript(t *testing.T) {

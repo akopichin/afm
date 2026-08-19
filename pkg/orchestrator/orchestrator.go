@@ -108,6 +108,10 @@ type Orchestrator struct {
 	// Снапшот на инстансе устраняет гонку: горутины читают immutable-поля.
 	maxRetries   int
 	retryBackoff time.Duration
+	// malformedNudgeTimeout — снапшот package-level MalformedNudgeTimeout
+	// (dialog_poller.go), тем же способом и по той же причине, что maxRetries/
+	// retryBackoff выше.
+	malformedNudgeTimeout time.Duration
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
@@ -200,18 +204,19 @@ func New(opts Options) *Orchestrator {
 	}
 
 	return &Orchestrator{
-		opts:           opts,
-		graph:          graph.NewGraph(opts.Stages),
-		runner:         r,
-		critical:       critical,
-		ui:             ui,
-		fsm:            bus.NewFSM(opts.Store),
-		concurrency:    conc,
-		violationCache: make(map[string]violationCacheEntry),
-		lastRootScan:   make(map[string]time.Time),
-		supervisor:     sup,
-		maxRetries:     MaxRetries,
-		retryBackoff:   RetryBackoff,
+		opts:                  opts,
+		graph:                 graph.NewGraph(opts.Stages),
+		runner:                r,
+		critical:              critical,
+		ui:                    ui,
+		fsm:                   bus.NewFSM(opts.Store),
+		concurrency:           conc,
+		violationCache:        make(map[string]violationCacheEntry),
+		lastRootScan:          make(map[string]time.Time),
+		supervisor:            sup,
+		maxRetries:            MaxRetries,
+		retryBackoff:          RetryBackoff,
+		malformedNudgeTimeout: MalformedNudgeTimeout,
 	}
 }
 
