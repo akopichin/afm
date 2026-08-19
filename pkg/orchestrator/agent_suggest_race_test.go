@@ -106,8 +106,7 @@ func TestAgentSuggest_NaturalCompletionRaceReconciles(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "impl", state.StatusRunning, 10*time.Second)
 

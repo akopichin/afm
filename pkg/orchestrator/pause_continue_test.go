@@ -35,8 +35,7 @@ func TestIntegration_AutoRunGatesScriptStage(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "s1", state.StatusPaused, 3*time.Second)
 
@@ -68,8 +67,7 @@ func TestIntegration_AutoRunGatesRegularStage(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "s1", state.StatusPaused, 3*time.Second)
 }
@@ -171,8 +169,7 @@ func TestContinue_FromPending_StartsScriptStage(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// The gate never fired live (status was seeded directly into paused) —
 	// nothing to wait for before calling Continue.
@@ -226,8 +223,7 @@ func TestContinue_FromRevising_ResumesWithFeedback(t *testing.T) {
 	defer cancel()
 
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer ctxCancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, ctxCancel)
 
 	if err := orch.Continue(ctx, "revise-stuck"); err != nil {
 		t.Fatalf("Continue: %v", err)
@@ -259,8 +255,7 @@ func TestContinue_NotPaused_IsNoOp(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "s1", state.StatusDone, 3*time.Second)
 
@@ -330,8 +325,7 @@ func TestPause_RunningStage_StopsAgentAndTransitionsToPaused(t *testing.T) {
 	runner.orch = orch
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "impl", state.StatusRunning, 10*time.Second)
 
@@ -385,8 +379,7 @@ func TestPause_RetryingStage_CancelsBackoffImmediately(t *testing.T) {
 	defer cancel()
 
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer ctxCancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, ctxCancel)
 
 	waitForStatus(t, stateFile, "impl", state.StatusRetrying, 10*time.Second)
 
@@ -510,8 +503,7 @@ func TestContinue_RecoveredCompletion_UnblocksDependent(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Let Run's synchronous startPlanningForPending bootstrap finish and the
 	// event loop settle into its select before calling Continue — otherwise
@@ -571,8 +563,7 @@ func TestContinue_FromRetrying_AutonomousStage(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	if err := orch.Continue(ctx, "auto-retry"); err != nil {
 		t.Fatalf("Continue: %v", err)

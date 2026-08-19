@@ -93,16 +93,31 @@ func NewFSM(store *state.Store) *FSM {
 		store: store,
 		rules: map[FSMEvent]Rule{
 			EvStartPlanning: {From: []state.StageStatus{state.StatusPending, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusPlanning)},
-			EvPlanReady:     {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying}, To: to(state.StatusAwaitingApproval)},
-			EvApprove:       {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
-			EvRevise:        {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning}, To: to(state.StatusRevising)},
+			// AwaitingUserInput разрешён по той же причине, что и в EvComplete
+			// ниже: поллер вопросов может независимо перевести стадию туда
+			// из-за постороннего, брошенного вопроса, пока планирующий агент
+			// ещё жив и вот-вот вернёт валидный plan.md.
+			EvPlanReady: {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingApproval)},
+			EvApprove:   {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
+			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning}, To: to(state.StatusRevising)},
 			// Revising тоже разрешён здесь: run<Phase>WithFeedback (кроме
 			// planning-варианта, у которого свой EvStartPlanning) переводит
 			// стадию обратно в Running этим же событием ПЕРЕД повторным
 			// runWithRetry — без этого стадия застревала бы в Revising
 			// навсегда (onAgentCompleted и EvComplete ждут Running/Retrying).
 			EvStartRun: {From: []state.StageStatus{state.StatusReady, state.StatusRevising}, To: to(state.StatusRunning)},
-			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying}, To: to(state.StatusDone)},
+			// AwaitingUserInput тоже разрешён: найдено разбором реального
+			// прод-лога + живым браузерным тестом — afm's собственный
+			// поллер вопросов может независимо перевести стадию в
+			// AwaitingUserInput из-за постороннего, брошенного вопроса
+			// (никто никогда на него не ответит), ПОКА агент ещё жив и
+			// вот-вот вернёт nil, уже дописав execution_summary.md/.done.
+			// runWithRetry (retry.go) проверяет completion ДО открытого
+			// вопроса именно ради этого — но раз EvComplete сам не признаёт
+			// AwaitingUserInput валидным источником, completeStage молча
+			// отбрасывал переход, и стадия зависала навсегда: агентского
+			// процесса больше нет, чтобы вернуться и попробовать снова.
+			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusDone)},
 			EvFail:     {From: nil, To: to(state.StatusFailed)},
 			// EvAskUser must be reachable from any state the question poller scans
 			// (planning, running, plus the retry/revision cycles where an agent can

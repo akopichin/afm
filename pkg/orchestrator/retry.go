@@ -106,16 +106,34 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// ровно на таком выходе агента в ожидании.
 			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {
 				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingUserInput {
+					// Первое обнаружение этого открытого вопроса — стадия
+					// ещё не в awaiting_user_input, вопрос точно живой
+					// (только что написан этим же вызовом агента). Держим.
 					o.Trigger(s.ID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, "")
+					return
+				}
+				// Статус уже awaiting_user_input — независимый поллер вопросов
+				// (см. pollQuestions) успел перевести стадию туда, ПОКА агент
+				// ещё выполнялся, обогнав его собственный выход. Найдено
+				// разбором реального прод-лога — постоянно висящий, брошенный
+				// вопрос (артефакт другого бага, реюз id — см.
+				// TestPollQuestions_ReusedIDAfterAnswerAsksAgain) держал
+				// стадию в awaiting_user_input НАВСЕГДА, хотя
+				// execution_summary.md уже был записан агентом и стадия
+				// объективно завершена. Раз FSM уже здесь БЕЗ участия этого
+				// return'а — completion решает, действительно ли работа
+				// сделана; вопрос, оставшийся на диске, в этом случае не
+				// более чем повод для FSM транзишна, который уже случился.
+				if completionCheck == nil || completionCheck() == nil {
+					stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
+					_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
 				}
 				return
 			}
-			if completionCheck == nil {
-				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
-				_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
-				return
+			var checkErr error
+			if completionCheck != nil {
+				checkErr = completionCheck()
 			}
-			checkErr := completionCheck()
 			if checkErr == nil {
 				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
 				_ = o.critical.Publish(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})

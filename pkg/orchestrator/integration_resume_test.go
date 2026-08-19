@@ -306,8 +306,7 @@ func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
 	orch.SetDashboardURL("http://127.0.0.1:0")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Первый проход planning: стадия доходит до awaiting_approval с реальным
 	// plan.md, написанным mockPlanningScript (никто его вручную не раскладывает).
@@ -497,8 +496,7 @@ func TestResumeAfterCrash(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Stage goes from awaiting_user_input → running → done via file-based resume.
 	waitForStatus(t, stateFile, "discovery", state.StatusDone, 10*time.Second)

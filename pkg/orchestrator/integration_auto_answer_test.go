@@ -97,8 +97,7 @@ func TestIntegration_NonInteractiveStageAutoAnswersQuestion(t *testing.T) {
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "discovery", state.StatusDone, 15*time.Second)
 	orch.UIBus().Unsubscribe(subID)

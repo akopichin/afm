@@ -86,8 +86,7 @@ func TestIntegration_CascadeFailedStageRetrySucceeds(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "a", state.StatusFailed, 10*time.Second)
 	waitForStatus(t, stateFile, "b", state.StatusFailed, 10*time.Second)
@@ -202,8 +201,7 @@ func TestIntegration_ManualRetryAutonomousWaitsForDeps(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// "a" fails its first attempt; "b" cascades to failed without ever
 	// getting its own stageDir.

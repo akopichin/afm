@@ -67,23 +67,6 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 	return orch, store, ctx, cancel
 }
 
-// settleAndCancel cancels the Run context and waits until the orchestrator's
-// launched agent goroutine reaches a terminal status. This must happen before
-// the store is closed: the agent goroutine applies an EvFail transition on
-// cancellation, and closing the store first would nil its events log and panic.
-func settleAndCancel(t *testing.T, store *state.Store, stageID string, cancel context.CancelFunc) {
-	t.Helper()
-	cancel()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		switch store.Get(stageID) {
-		case state.StatusDone, state.StatusFailed:
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 // TestPollQuestions_DetectsNewQuestion verifies that the 1-second question
 // poller, started by Run, detects a *.question.json file and publishes
 // EventAskUser so the UI and stage status reflect the open question.
@@ -91,8 +74,7 @@ func TestPollQuestions_DetectsNewQuestion(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "poll-test"
 	orch, store, ctx, cancel := newPollerOrch(t, runDir, stageID)
-	defer store.Close()
-	defer settleAndCancel(t, store, stageID, cancel)
+	t.Cleanup(func() { store.Close() })
 
 	// Write the question file BEFORE starting Run.
 	stageDir := filepath.Join(runDir, stageID)
@@ -104,7 +86,7 @@ func TestPollQuestions_DetectsNewQuestion(t *testing.T) {
 	uiBus := orch.UIBus()
 	subID, sub := uiBus.Subscribe(64)
 
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// The polling goroutine ticks every second; allow a comfortable margin.
 	timeout := time.After(3 * time.Second)
@@ -128,8 +110,7 @@ func TestPollQuestions_Idempotent(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "idem-test"
 	orch, store, ctx, cancel := newPollerOrch(t, runDir, stageID)
-	defer store.Close()
-	defer settleAndCancel(t, store, stageID, cancel)
+	t.Cleanup(func() { store.Close() })
 
 	stageDir := filepath.Join(runDir, stageID)
 	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
@@ -140,7 +121,7 @@ func TestPollQuestions_Idempotent(t *testing.T) {
 	uiBus := orch.UIBus()
 	subID, sub := uiBus.Subscribe(64)
 
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Observe for long enough that the 1-second poller ticks at least twice.
 	askCount := 0

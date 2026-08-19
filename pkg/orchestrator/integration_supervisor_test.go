@@ -220,8 +220,7 @@ func TestIntegration_StaleAutonomousFlagClearedOnPlanning(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Стадия проходит planning и встаёт на awaiting_approval (approve никто не жмёт).
 	waitForStatus(t, stateFile, "s1", state.StatusAwaitingApproval, 10*time.Second)
@@ -279,8 +278,7 @@ func TestIntegration_RetryFailedAutonomousStaysAutonomous(t *testing.T) {
 	stateFile := filepath.Join(runDir, "state.json")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Retry упавшей autonomous-стадии.
 	if err := orch.Retry(context.Background(), "s1"); err != nil {
@@ -396,8 +394,7 @@ func TestIntegration_AutoInteractiveStageHasNoPlanMD(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "auto-interactive", state.StatusDone, 15*time.Second)
 

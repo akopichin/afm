@@ -104,8 +104,7 @@ func TestIntegration_RetryFailedScriptStage(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Первый прогон: gateFile ещё не создан → скрипт всегда падает → стадия
 	// исчерпывает встроенные ретраи (3x/1-2-3s) и уходит в failed.

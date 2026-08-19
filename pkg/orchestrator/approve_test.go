@@ -96,7 +96,11 @@ func TestRevise_DurableTransition(t *testing.T) {
 	blockSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	blockSem <- struct{}{} // занят: следующий acquire() (в SpawnAgent) заблокируется
 	o := &Orchestrator{
-		opts:        Options{RunDir: dir, Stages: stages, Store: store},
+		// opts.Runner (не голое поле runner) — runnerFor только отдаёт o.runner
+		// когда opts.Runner != nil (см. runner_factory.go); без него стадия без
+		// stage.Command падает на реальный дефолтный клиент ("claude") — тест
+		// раньше незаметно делал живой сетевой вызов вместо мока.
+		opts:        Options{RunDir: dir, Stages: stages, Store: store, Runner: noopPlanningRunner{}},
 		graph:       graph.NewGraph(stages),
 		runner:      noopPlanningRunner{},
 		fsm:         bus.NewFSM(store),

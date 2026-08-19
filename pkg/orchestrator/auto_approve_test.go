@@ -136,8 +136,7 @@ func TestAutoApprove_WithDashboardAttached_SkipsManualClick(t *testing.T) {
 	orch.SetDashboardURL("http://127.0.0.1:9999")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "auto", state.StatusDone, 8*time.Second)
 

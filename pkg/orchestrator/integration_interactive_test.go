@@ -115,8 +115,7 @@ func TestFullDialogCycle(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Wait for agent to write question.json and polling goroutine to detect it.
 	waitForStatus(t, stateFile, "discovery", state.StatusAwaitingUserInput, 10*time.Second)
@@ -192,8 +191,7 @@ func TestIntegration_PlanningWithOpenQuestionWaits(t *testing.T) {
 	defer cancelApprove()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "gated", state.StatusAwaitingUserInput, 5*time.Second)
 
@@ -270,8 +268,7 @@ func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "propose", state.StatusFailed, 10*time.Second)
 
@@ -335,8 +332,7 @@ func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
 
@@ -402,8 +398,7 @@ func TestIntegration_BareQuestionFilenameNormalized(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
 
@@ -462,8 +457,7 @@ func TestIntegration_MisprefixedQuestionNormalized(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Mis-prefixed вопрос нормализуется → poller находит его → EvAskUser.
 	waitForStatus(t, stateFile, "commit-changes", state.StatusAwaitingUserInput, 15*time.Second)
@@ -529,8 +523,7 @@ func TestIntegration_BrokenQuestionStillSurfaces(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "brainstorm", state.StatusAwaitingUserInput, 10*time.Second)
 
@@ -602,8 +595,7 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// grace tick + maxMalformedRetries rounds, each gated by the shrunk
 	// MalformedNudgeTimeout above — comfortably inside 15s.
@@ -682,8 +674,7 @@ func TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit(t *testing.T) {
 	defer cancelApprove()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Агент задал вопрос и вышел → poller перевёл стадию в awaiting_user_input.
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 5*time.Second)
@@ -790,8 +781,7 @@ func TestIntegration_StaleAnsweredQuestionNotReopened(t *testing.T) {
 	defer cancelApprove()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	go func() { _ = orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	// Планирование задаёт вопрос и ждёт ответа.
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 10*time.Second)

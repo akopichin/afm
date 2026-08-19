@@ -12,6 +12,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -235,11 +236,13 @@ func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
 	}
 	ui := bus.NewUIBus()
 	critical := bus.NewCriticalBus(16)
+	stages := []flow.Stage{{ID: stageID}}
 	o := &Orchestrator{
-		opts:     Options{RootDir: rootDir, RunDir: runDir, Store: store},
+		opts:     Options{RootDir: rootDir, RunDir: runDir, Store: store, Stages: stages},
 		ui:       ui,
 		critical: critical,
 		fsm:      bus.NewFSM(store),
+		graph:    graph.NewGraph(stages),
 	}
 	return o, runDir
 }
