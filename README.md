@@ -274,6 +274,7 @@ stages:
 | `max_parallel` | no | Limit on parallel stages for this command |
 | `interactive` | no | `true` — enables the file-based dialog protocol with the user via the dashboard (see below) |
 | `auto_approve` | no | `true` — approve this stage's plan automatically the instant it's ready, with no human interaction — regardless of a dashboard being attached or `--require-approval`. Default `false`. Intended for CI (see "Auto-Approving a Stage's Plan" below) |
+| `auto_run` | no | `false` — pause the stage the instant it's first eligible to start (`depends_on` satisfied), instead of starting immediately; it sits in `paused` until you hit **Continue** on the dashboard. Default `true` (starts on its own). Works on any stage type — regular, `agents: [auto]`, or `script`. Only gates the very first activation, not retries (see "Pausing a Stage Before It Starts" below) |
 | `supervisor` | no | `true` — allow the supervisor to evaluate the stage and possibly move it to the autonomous track (requires `supervisor_command`) |
 | `supervisor_prompt` | no | Extra context for the supervisor when evaluating this stage |
 | `artifacts` | no | Files the stage produces for other stages |
@@ -444,6 +445,7 @@ pending → (supervisor) → running(autonomous_execution) → done
 - `revising` — feedback was sent and the AI is reworking: either the plan (from `awaiting_approval`), or a `running` stage that just got a note and a graceful interrupt (see "Suggesting a Note to a Running Stage" below)
 - `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
 - `hook_failed` — a `script_before` hook exhausted its retries; the stage is blocked until you hit **Retry** or **Skip** on the dashboard (a `script_after` failure never uses this status — the stage stays `done`)
+- `paused` — waiting for you to hit **Continue** on the dashboard: either gated by `auto_run: false` on first activation, or manually paused mid-run via the kebab (⋮) menu (see "Pausing a Stage Before It Starts" below)
 - `done` / `failed` — complete
 
 ## Configuration
@@ -561,6 +563,24 @@ stages:
 ```
 
 The plan is approved the instant it's ready, whether or not a dashboard is attached and regardless of `--require-approval` (which normally fails a headless run with no dashboard). If the dashboard is open, the stage's plan is still shown, with an "Auto-approved" badge in place of the Approve/Revise buttons.
+
+### Pausing a Stage Before It Starts
+
+Set `auto_run: false` on a stage to hold it at `paused` the instant it becomes eligible to start (once `depends_on` are satisfied), instead of running unattended — useful for a checkpoint you want a human to explicitly kick off (e.g. a stage that commits/deploys):
+
+```yaml
+stages:
+  - id: build
+    agents: [planning, implementation]
+  - id: deploy
+    agents: [planning, implementation]
+    depends_on: [build]
+    auto_run: false    # waits for a human to click Continue before it starts
+```
+
+The dashboard shows a Continue button instead of the stage running on its own. This only gates the stage's very first activation — once it's been through a pause/Continue cycle, later retries (e.g. after a `failed`) run normally without pausing again.
+
+You can also pause any `running`/`planning`/`revising`/`retrying` stage mid-flight from the kebab (⋮) menu — the same "Pause" action, just triggered manually instead of by `auto_run: false`. The agent gets a graceful interrupt (SIGINT), and Continue resumes it exactly where recovery-on-restart would (`--resume` for agents that support it). Script-only stages (`script:`) can only be paused via `auto_run: false`, before they start — a script already running can't be gracefully interrupted mid-way.
 
 ### Resume on Restart
 
