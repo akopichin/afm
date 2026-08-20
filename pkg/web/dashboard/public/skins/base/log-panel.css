@@ -1,6 +1,19 @@
 /* pkg/web/dashboard/public/skins/base/log-panel.css
    Stage execution log viewer. */
 
+/* Враппер лог-режима EventFeedPanel (`.section` переиспользуется и в
+   PlanPanel для стопки секций с обычными отступами — там flex:1 сломал бы
+   их вертикальную стопку, поэтому здесь отдельный, более специфичный класс,
+   а не правка самого `.section`). Делает враппер flex-колонкой, растянутой
+   на всю высоту #feed-panel (который сам уже flex-колонка, см. layout.css) —
+   .log-content ниже полагается именно на это, чтобы его flex:1 сработал. */
+.log-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .log-content {
   background: var(--bg-elev);
   border: 1px solid var(--mint-soft);
@@ -8,10 +21,14 @@
   font-family: inherit;
   font-size: 11px;
   line-height: 1.55;
-  /* Раньше было 300px — слишком мало видно за раз в компактной панели.
-     Поднято, но всё ещё ограничено: строки лога прокручиваются внутри
-     .log-content, а не растягивают всю панель детали. */
-  max-height: 480px;
+  /* Было max-height: 480px (до этого 300px) — жёсткий потолок обрезал лог
+     задолго до реальной высоты правой колонки на любом мониторе выше ~550px,
+     оставляя под ним пустое место панели. .panel-frame-body уже flex-колонка
+     с overflow:auto (layout.css), так что flex:1 здесь просто заполняет
+     реально доступную высоту — тот же паттерн, что maximize-режим ниже уже
+     использовал, только для базового (не maximized) состояния. */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -21,12 +38,3 @@
 
 .log-text-line  { color: var(--ink); font-weight: 500; }
 .log-error-line { color: var(--coral); }
-
-/* Maximized-режим (портал Maximizable в <body>, см. .maximize-overlay в layout.css):
-   фиксированный потолок высоты снимается — лог занимает всё доступное место
-   оверлея, полные строки видны без лишней обрезки/двойного скролла. */
-.maximize-overlay .log-content {
-  max-height: none;
-  flex: 1;
-  min-height: 0;
-}

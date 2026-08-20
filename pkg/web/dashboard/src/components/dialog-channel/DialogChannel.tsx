@@ -443,11 +443,19 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
   const nodes: ReactNode[] = []
   let lastPhase = ''
 
-  entries.forEach((entry, index) => {
+  // Ключи по entry.phase/entry.id, а не по index в entries: buildDialogEntries
+  // (сервер) перепарсивает растущий stream-лог стадии на каждый опрос и
+  // условно пропускает вопрос, ещё не попавший в <phase>.dialog.jsonl (см.
+  // "emitted"-гейт в pkg/server/handlers.go) — как только он туда попадает на
+  // следующем опросе, он вставляется в исходную позицию, СДВИГАЯ index всех
+  // последующих записей. С key=index React считал бы уже отрисованные (и не
+  // изменившиеся по содержимому) qa-блоки новыми элементами и пересоздавал их
+  // DOM целиком на ровном месте — отсюда рывки скролла по ходу диалога.
+  entries.forEach((entry) => {
     if (entry.phase !== undefined && entry.phase !== lastPhase) {
       lastPhase = entry.phase
       nodes.push(
-        <div className="phase-divider" key={`phase-${index}`}>
+        <div className="phase-divider" key={`phase-${entry.phase}`}>
           {entry.phase}
         </div>,
       )
@@ -462,7 +470,7 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
 
     if (entry.answer !== null && entry.answer !== undefined) {
       nodes.push(
-        <div className={`qa${entry.auto_answered === true ? ' qa-auto' : ''}`} key={`qa-${index}`}>
+        <div className={`qa${entry.auto_answered === true ? ' qa-auto' : ''}`} key={`qa-${entry.phase ?? ''}-${entry.id ?? ''}`}>
           <div className="q">
             <MarkdownRenderer source={entry.question ?? ''} />
           </div>

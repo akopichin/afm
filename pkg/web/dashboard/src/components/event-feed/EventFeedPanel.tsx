@@ -76,7 +76,7 @@ export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): Rea
               )}
             </div>
           ) : (
-            <div className="section">
+            <div className="section log-section">
               <pre id="log-content" className={`log-content${hasLogEntries ? '' : ' hidden'}`}>
                 {logEntries.map((entry) => entry.message).join('\n')}
               </pre>

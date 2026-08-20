@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -377,7 +378,7 @@ func TestPollQuestions_MalformedQuestion_StableSendsNudge(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got.Answer, "попытка 1 из 3") {
+	if !strings.Contains(got.Answer, fmt.Sprintf("попытка 1 из %d", maxMalformedRetries)) {
 		t.Errorf("nudge message missing attempt count: %q", got.Answer)
 	}
 	if entries, _ := mcp.ReadDialog(filepath.Join(stageDir, "implementation.dialog.jsonl")); len(entries) != 0 {
@@ -533,10 +534,10 @@ func TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, broken)
 	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
 
-	// Seed retry state as if 3 nudges already happened and this tick's
-	// content is stable — the exact state pollQuestions would have built up
-	// through repeated broken rewrites, without needing to simulate each
-	// round here.
+	// Seed retry state as if maxMalformedRetries nudges already happened and
+	// this tick's content is stable — the exact state pollQuestions would have
+	// built up through repeated broken rewrites, without needing to simulate
+	// each round here.
 	malformed := map[string]*malformedQuestionState{
 		"s1|implementation|q1": {lastRaw: []byte(broken), retries: maxMalformedRetries},
 	}

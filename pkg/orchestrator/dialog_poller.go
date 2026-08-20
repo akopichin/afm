@@ -21,7 +21,15 @@ import (
 // maxMalformedRetries — сколько раз afm просит агента переписать
 // question.json, который не парсится даже после jsonrepair, прежде чем
 // сдаться и показать сырой текст пользователю без вариантов ответа.
-const maxMalformedRetries = 3
+//
+// Было 3 — рассчитано на быстрый локальный Claude CLI. Живой прогон с
+// remote-агентом через type: openai-agent (GLM, HTTP round-trip + reasoning
+// на каждый ход) показал: агент сам корректно диагностировал и исправил
+// невалидный JSON (не экранированную кавычку внутри markdown-контента
+// вопроса), но это заняло заметно больше 3×MalformedNudgeTimeout — afm уже
+// сдался и показал сырой текст человеку раньше, чем агент успел
+// самостоятельно восстановиться.
+const maxMalformedRetries = 5
 
 // MalformedNudgeTimeout — сколько ждать реакции агента на один "перепиши
 // JSON"-нудж, прежде чем считать этот раунд ретрая исчерпанным и пробовать
@@ -36,7 +44,12 @@ const maxMalformedRetries = 3
 // видела, что агент реально переписал файл — не отвечающий агент никогда не
 // меняет содержимое, значит ключ никогда не разблокировался бы и
 // maxMalformedRetries никогда бы не достигался.
-var MalformedNudgeTimeout = 10 * time.Second
+//
+// Было 10s — верно для локального Claude CLI, но слишком мало для
+// remote-агентов (type: openai-agent/openai, напр. GLM) — один ход там это
+// полный HTTP round-trip плюс reasoning, легко занимающий десятки секунд,
+// особенно на большом (десятки КБ) payload вопроса. Поднято до 30s.
+var MalformedNudgeTimeout = 30 * time.Second
 
 // malformedQuestionState отслеживает прогресс ретраев для одного
 // (stageID,phase,id), чей question.json не парсится. Живёт всё время работы

@@ -1,9 +1,13 @@
 /* pkg/web/dashboard/public/skins/base/header.css
    Top bar: logo mark, flow name, WS status. */
 
+/* Растяжимая (1fr) колонка — за flow-name-wrap (3-й ребёнок: логотип, "afm",
+   имя/описание флоу), а не за декоративным <h1>afm</h1> — иначе имя пайпа
+   зажималось между пустым растянутым зазором и header-actions и визуально
+   прилипало к правому краю вместо органичного места рядом с логотипом слева. */
 #header {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto auto 1fr auto;
   align-items: center;
   gap: 18px;
   padding: 10px 20px;
