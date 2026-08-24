@@ -23,7 +23,10 @@ const KEBAB_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiti
 // Статусы, из которых можно поставить стадию на паузу вручную.
 const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying'])
 
-// "Add note for agent" (Revise) — только для running/awaiting_approval, как и раньше.
+// "Add note for agent" (Revise) — только для running/awaiting_approval, и
+// НИКОГДА для скриптовых стадий (see `!stage.isScript` в JSX): у скрипта нет
+// агента, которому можно что-то сказать, а RunScript даже не принимает
+// interrupt-канал, так что заметка на running-скрипте была бы no-op.
 const ADD_NOTE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
@@ -168,7 +171,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onPau
                       style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {ADD_NOTE_STATUSES.has(stage.status) && (
+                      {ADD_NOTE_STATUSES.has(stage.status) && !stage.isScript && (
                         <li>
                           <button
                             type="button"

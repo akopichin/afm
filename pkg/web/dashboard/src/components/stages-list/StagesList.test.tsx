@@ -114,6 +114,22 @@ describe('StagesList', () => {
     expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
+  test('"Add note for agent" is hidden for a script stage (no agent to receive it)', () => {
+    const onAddNote = vi.fn()
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
+      { id: 'b', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '' },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onAddNote={onAddNote} />)
+
+    const buttons = screen.getAllByRole('button', { name: /more actions/i })
+    fireEvent.click(buttons[0]!) // обычная running-стадия — пункт есть
+    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+
+    fireEvent.click(buttons[1]!) // running СКРИПТОВАЯ стадия — агента нет, пункта быть не должно
+    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
+  })
+
   test('CRITICAL: kebab menu portals to document.body so the scrollable #stages-panel cannot clip it', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '' },
