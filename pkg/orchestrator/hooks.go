@@ -384,10 +384,10 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 // activation (withBeforeHook(mainFn) — not reused directly here since the
 // hook already failed once and is being resumed mid-wait, not started fresh).
 // The autonomous check matches startReadyStages exactly: isAutonomousStage
-// (autonomous.flag on disk) catches a stage the supervisor dynamically
-// routed to the autonomous track, not just one hard-coded via IsAuto()
-// (agents: [auto]) — either way its before-hook ran ahead of runAutonomousAgent,
-// never runImplementationAgent.
+// (autonomous.flag on disk) re-derives the track from the persisted flag on
+// resume-after-restart, without re-parsing flow.yaml; s.IsAuto() (agents:
+// [auto]) covers the same stage on a fresh activation — either way its
+// before-hook ran ahead of runAutonomousAgent, never runImplementationAgent.
 func (o *Orchestrator) dispatchMainAfterBeforeHook(ctx context.Context, s flow.Stage) {
 	switch {
 	case s.IsScript():

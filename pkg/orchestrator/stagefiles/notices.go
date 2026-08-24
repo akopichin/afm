@@ -12,7 +12,7 @@ import (
 // events.jsonl намеренно не трогаем — это единственный источник правды с
 // CAS-инвариантом (Store.Apply: строгая проверка current != t.From), а эти
 // два типа уведомлений не соответствуют реальному переходу статуса стадии.
-// Файл run-level (как уже существующий supervisor.jsonl), не per-stage.
+// Файл run-level, не per-stage.
 type noticeEntry struct {
 	Time    time.Time `json:"time"`
 	Type    string    `json:"type"`
