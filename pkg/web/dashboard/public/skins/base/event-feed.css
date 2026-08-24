@@ -1,5 +1,5 @@
 /* pkg/web/dashboard/public/skins/base/event-feed.css
-   Live event feed + supervisor decision markers. */
+   Live event feed. */
 
 #feed-content {
   font-size: 11px;
@@ -35,71 +35,9 @@
 .feed-msg.error  { color: var(--coral); }
 .feed-msg.warning { color: var(--amber); }
 
-/* Supervisor decisions — выделены из общего лога: акцентный фон + левая полоса. */
-.feed-entry.supervisor {
-  background: rgba(192, 132, 252, 0.12);
-  border-left: 3px solid var(--supervisor-accent);
-  padding-left: 6px;
-  margin: 2px 0;
-}
-.feed-entry.supervisor:hover {
-  background: rgba(192, 132, 252, 0.18);
-}
-.feed-msg.supervisor {
-  color: var(--supervisor-accent);
-  font-weight: 600;
-}
-
-/* Supervisor-decision: точка в углу статус-бейджа + поповер причины по клику. */
 .status-badge-wrap {
   position: relative;
   display: inline-flex;
-}
-.supervisor-decision {
-  display: contents;
-}
-.supervisor-dot {
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 8px;
-  height: 8px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 6px currentColor;
-  cursor: pointer;
-}
-.supervisor-dot.standard { color: var(--amber); }
-.supervisor-dot.autonomous { color: var(--supervisor-accent); }
-
-.supervisor-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: -3px;
-  z-index: 50;
-  width: max-content;
-  max-width: 280px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--supervisor-accent);
-  background: rgba(192, 132, 252, 0.12);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  color: var(--ink-hi);
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: left;
-}
-.supervisor-popover-title {
-  margin-bottom: 4px;
-  font-weight: 600;
-  color: var(--supervisor-accent);
-}
-.supervisor-popover-reason {
-  font-weight: 400;
-  opacity: 0.9;
-  white-space: normal;
 }
 
 .feed-stage-badge {
