@@ -7,7 +7,7 @@ type Runner interface {
 	RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error
 	RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error
 	// RunJSONQuery запускает команду с -p prompt --output-format json
-	// и возвращает сырые байты stdout. Используется Supervisor.
+	// и возвращает сырые байты stdout.
 	RunJSONQuery(ctx context.Context, prompt string) ([]byte, error)
 }
 

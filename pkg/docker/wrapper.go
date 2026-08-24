@@ -225,9 +225,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	// добавляем только при отсутствии (interactive уже получает его через executor
 	// ExtraArgs), чтобы не дублировать флаг.
 	// --include-partial-messages добавляем ТОЛЬКО при output-format=stream-json: флаг
-	// требует stream-json, и его безусловное добавление ломало supervisor-ный вызов
-	// RunJSONQuery (--output-format json → claude: "requires --output-format=stream-json").
-	// Для json-вызова (однократный LLM-запрос супервизора) partial не нужен и вреден.
+	// требует stream-json, и его безусловное добавление ломало вызовы RunJSONQuery
+	// (--output-format json → claude: "requires --output-format=stream-json").
+	// Для json-режима (однократный LLM-запрос без stream-json) partial не нужен и вреден.
 	b.WriteString("case \" $* \" in *\"--output-format\"*) : ;; *) set -- \"$@\" --output-format stream-json ;; esac\n")
 	b.WriteString("case \" $* \" in *\"--output-format stream-json\"*|*\"--output-format=stream-json\"*) set -- \"$@\" --include-partial-messages ;; esac\n")
 	fmt.Fprintf(&b, "exec %s \"$@\"\n", realClaude)

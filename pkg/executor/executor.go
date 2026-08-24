@@ -459,7 +459,7 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 
 // RunJSONQuery запускает команду с одним промптом в JSON-режиме.
 // Не использует stream-json — просто захватывает stdout через cmd.Output().
-// Используется Supervisor для однократных LLM-вызовов (без логирования действий).
+// Предназначен для однократных LLM-вызовов (без логирования действий).
 // Возвращает сырые байты stdout; парсинг конверта/полей остаётся за вызывающей стороной.
 func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
 	e.logAgentInput("supervisor", prompt)
