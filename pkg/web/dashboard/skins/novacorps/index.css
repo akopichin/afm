@@ -33,11 +33,10 @@
   --violet:    #b787ff;
   --coral:     #ff6b5a;
 
-  /* dialog/supervisor accents (dark-mode-tuned pale hues, как раньше) */
+  /* dialog accents (dark-mode-tuned pale hues, как раньше) */
   --qa-answer:              #9fe0d8;
   --dialog-option-text:     #d4baff;
   --btn-cancel-dialog-text: #ff8a7a;
-  --supervisor-accent:      #c084fc;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет,
      чёрная затемняющая вуаль, одинаковая во всех темах/скинах (не тонируется
@@ -82,11 +81,10 @@
   --violet:    #7c3aed;
   --coral:     #c2410c;
 
-  /* dialog/supervisor accents — переподобраны под светлый фон */
+  /* dialog accents — переподобраны под светлый фон */
   --qa-answer:              #0f766e;
   --dialog-option-text:     #6d28d9;
   --btn-cancel-dialog-text: #b91c1c;
-  --supervisor-accent:      #9333ea;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */

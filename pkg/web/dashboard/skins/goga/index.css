@@ -36,13 +36,12 @@
   --violet:    #3882F6;
   --coral:     #FF6B5A;
 
-  /* dialog/supervisor accents — goga их не переопределял и сегодня, сохраняем
+  /* dialog accents — goga их не переопределял и сегодня, сохраняем
      дословные значения novacorps (текущее поведение — унаследованные через
      старый @import — не меняется) */
   --qa-answer:              #9fe0d8;
   --dialog-option-text:     #d4baff;
   --btn-cancel-dialog-text: #ff8a7a;
-  --supervisor-accent:      #c084fc;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет,
      чёрная затемняющая вуаль, одинаковая во всех темах/скинах (не тонируется
@@ -87,11 +86,10 @@
   --violet:    #2563EB;
   --coral:     #E11D48;
 
-  /* dialog/supervisor accents — переподобраны под светлый фон */
+  /* dialog accents — переподобраны под светлый фон */
   --qa-answer:              #0f766e;
   --dialog-option-text:     #2563eb;
   --btn-cancel-dialog-text: #b91c1c;
-  --supervisor-accent:      #7e22ce;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */

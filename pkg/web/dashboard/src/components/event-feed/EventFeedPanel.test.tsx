@@ -13,25 +13,17 @@ describe('EventFeedPanel', () => {
     const events: AfmEvent[] = [
       { type: 'stage_status_changed', payload: 'running', stageId: 's1', timestamp: '2026-07-10T10:00:00Z' },
       { type: 'agent_action', payload: { tool: 'read_file', detail: 'src/x.ts' }, stageId: '', timestamp: '2026-07-10T10:00:01Z' },
-      {
-        type: 'supervisor_decision',
-        payload: { can_execute_autonomously: true, reason: 'looks safe' },
-        stageId: 's2',
-        timestamp: '2026-07-10T10:00:02Z',
-      },
       { type: 'custom_unknown_type', payload: null, stageId: '', timestamp: '2026-07-10T10:00:03Z' },
     ]
 
     const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
 
     const entries = container.querySelectorAll('.feed-entry')
-    expect(entries).toHaveLength(4)
+    expect(entries).toHaveLength(3)
 
     expect(entries[0]?.textContent).toContain('→ running')
     expect(entries[1]?.textContent).toContain('read_file: src/x.ts')
-    expect(entries[2]?.textContent).toContain('supervisor: autonomous — looks safe')
-    expect(entries[2]).toHaveClass('supervisor')
-    expect(entries[3]?.textContent).toContain('custom_unknown_type')
+    expect(entries[2]?.textContent).toContain('custom_unknown_type')
   })
 
   test('renders a stage badge only when event.stageId is not empty', () => {

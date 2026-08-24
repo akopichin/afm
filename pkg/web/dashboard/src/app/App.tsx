@@ -5,7 +5,6 @@ import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { SupervisorDecision } from '../components/supervisor-decision'
 import { EventFeedPanel } from '../components/event-feed'
 import { Footer } from '../components/footer'
 import { MaximizeProvider } from '../components/layout/Maximizable'
@@ -230,7 +229,6 @@ export function App(): ReactElement {
                         thinking
                       </span>
                     )}
-                    {selectedStageId != null && <SupervisorDecision stageId={selectedStageId} />}
                   </span>
                   <span className="ornament" aria-hidden="true">
                     <svg viewBox="0 0 100 100" fill="none" stroke="#6fd4cc" strokeWidth="1">

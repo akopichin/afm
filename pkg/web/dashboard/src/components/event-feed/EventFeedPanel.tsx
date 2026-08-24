@@ -177,15 +177,6 @@ function toFeedLine(event: AfmEvent): FeedLine {
       msgClass = 'feed-msg action'
       break
     }
-    case 'supervisor_decision': {
-      const obj = isRecord(data) ? data : {}
-      const autonomous = obj.can_execute_autonomously === true
-      const reason = typeof obj.reason === 'string' ? obj.reason : ''
-      msg = `supervisor: ${autonomous ? 'autonomous' : 'standard'}${reason !== '' ? ` — ${reason}` : ''}`
-      msgClass = 'feed-msg supervisor'
-      entryClass = 'supervisor'
-      break
-    }
     case 'context_warning':
       msg = `context warning: ${stringify(data)}`
       msgClass = 'feed-msg warning'

@@ -140,7 +140,7 @@ function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
 // а не только к реплею истории, так что seq — надёжный ключ для событий,
 // производных от transition (stage_status_changed/ask_user/user_answered/
 // retry_scheduled/retry_exhausted). Для типов без transition (agent_action,
-// agent_completed, context_warning, supervisor_decision) seq не приходит ни
+// agent_completed, context_warning) seq не приходит ни
 // оттуда, ни отсюда — падаем на ключ по содержимому (type+stageId+payload).
 function dedupeKey(e: AfmEvent): string {
   if (e.seq !== undefined) return `seq:${e.seq}`

@@ -111,7 +111,6 @@ describe('AFM_EVENT_TYPES', () => {
       'user_answered',
       'agent_action',
       'agent_completed',
-      'supervisor_decision',
       'script_output',
       'hook_failed',
       'hook_resolved',
