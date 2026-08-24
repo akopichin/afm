@@ -2,12 +2,10 @@ package orchestrator
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
@@ -298,6 +296,58 @@ func setupMalformedTestOrch(t *testing.T, broken string) (*Orchestrator, *state.
 	return o, store, stageDir
 }
 
+// setupMalformedTestOrchNI is setupMalformedTestOrch for a NON-interactive
+// stage — the stage type where an unparseable question.json used to hang the
+// stage forever (the whole reason the fresh-agent repair is no longer
+// interactive-only).
+func setupMalformedTestOrchNI(t *testing.T, broken string) (*Orchestrator, *state.Store, string) {
+	t.Helper()
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Auto", Agents: []flow.AgentType{flow.AgentImplementation}}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, stage.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "implementation.q1.question.json"), []byte(broken), 0644); err != nil {
+		t.Fatal(err)
+	}
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	return o, store, stageDir
+}
+
+// injectFixStub replaces the orchestrator's real fix-agent spawner with a
+// synchronous test double, so unit tests never launch a real agent process.
+// If fixed != "", the stub writes it to the question.json (a fix agent that
+// succeeds); if "", it leaves the file broken (a fix agent that fails). It
+// always returns an already-closed channel (the agent "finished"). The
+// returned pointer counts how many times a fix agent was spawned.
+func injectFixStub(t *testing.T, o *Orchestrator, fixed string) *int {
+	t.Helper()
+	calls := 0
+	o.spawnJSONFix = func(s flow.Stage, phase, id string) <-chan struct{} {
+		calls++
+		if fixed != "" {
+			qPath := filepath.Join(o.opts.RunDir, s.ID, phase+"."+id+".question.json")
+			if err := os.WriteFile(qPath, []byte(fixed), 0644); err != nil {
+				t.Errorf("fix stub write: %v", err)
+			}
+		}
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return &calls
+}
+
 // TestPollQuestions_MalformedQuestion_GraceTickHidesFromUser is a regression
 // test for a bug found in a real production log, root-caused byte-for-byte:
 // a question.json that fails to parse on its FIRST observation is very
@@ -352,106 +402,86 @@ func TestPollQuestions_MalformedQuestion_ResolvesSilentlyIfWriteCompletes(t *tes
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_StableSendsNudge covers the genuinely-
-// broken case (the user's explicit request): once the SAME broken content is
-// observed on a second tick — proof the write is done, not still in flight —
-// afm nudges the agent through the exact channel its own bash polling loop
-// already reads (answer.json), still without bothering the user.
-func TestPollQuestions_MalformedQuestion_StableSendsNudge(t *testing.T) {
+// TestPollQuestions_MalformedQuestion_StableSpawnsFixAgent covers the
+// genuinely-broken case: once the SAME broken content is observed on a second
+// tick — proof the write is done, not still in flight — afm launches a fresh,
+// clean-context fix agent to repair the file, still without bothering the user
+// and without writing any synthetic answer.json.
+func TestPollQuestions_MalformedQuestion_StableSpawnsFixAgent(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
+	calls := injectFixStub(t, o, "") // a fix agent that does not repair the file
 	processed := map[string]bool{}
 	malformed := map[string]*malformedQuestionState{}
 
 	o.pollQuestions(processed, malformed) // grace tick: remembers the broken bytes
-	o.pollQuestions(processed, malformed) // same bytes again: stable, genuinely broken
+	if *calls != 0 {
+		t.Fatalf("no fix agent should spawn on the very first sighting, got %d", *calls)
+	}
+	o.pollQuestions(processed, malformed) // same bytes again: stable → spawn fix agent
 
+	if *calls != 1 {
+		t.Fatalf("want exactly one fix-agent spawn, got %d", *calls)
+	}
 	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusRunning {
-		t.Errorf("status = %s, want unchanged running (still nudging, not asking the user)", got)
+		t.Errorf("status = %s, want unchanged running (still repairing, not asking the user)", got)
 	}
-	data, err := os.ReadFile(filepath.Join(stageDir, "implementation.q1.answer.json"))
-	if err != nil {
-		t.Fatalf("expected a synthetic nudge answer.json: %v", err)
-	}
-	var got struct {
-		Answer string `json:"answer"`
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got.Answer, fmt.Sprintf("попытка 1 из %d", maxMalformedRetries)) {
-		t.Errorf("nudge message missing attempt count: %q", got.Answer)
+	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.answer.json")); err == nil {
+		t.Error("fresh-agent repair must not write a synthetic answer.json")
 	}
 	if entries, _ := mcp.ReadDialog(filepath.Join(stageDir, "implementation.dialog.jsonl")); len(entries) != 0 {
 		t.Errorf("no dialog entry should exist yet, got %+v", entries)
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_AgentRewriteUnblocksRetry proves the
-// agent's response to a nudge is actually picked up: it rewrites the SAME
-// id's question.json (per the "never reuse an id" rule, this is a
-// correction of the SAME question, not a new one) — the stale synthetic
-// answer.json left over from the nudge must not permanently hide it, the
-// way the unrelated id-reuse bug (TestPollQuestions_ReusedIDAfterAnswerAsksAgain)
-// used to hide a genuinely different question reusing an id.
-func TestPollQuestions_MalformedQuestion_AgentRewriteUnblocksRetry(t *testing.T) {
+// TestPollQuestions_MalformedQuestion_FixAgentRepairsQuestion proves the fix
+// agent's repair is actually picked up: once it rewrites the SAME id's
+// question.json with valid content, the question flows through completely
+// normally on the next tick (surfaced to the user), the tracking entry is
+// forgotten, and there is no trace the repair ever happened.
+func TestPollQuestions_MalformedQuestion_FixAgentRepairsQuestion(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
+	calls := injectFixStub(t, o, `{"id":"q1","question":"fixed now?"}`)
 	processed := map[string]bool{}
 	malformed := map[string]*malformedQuestionState{}
 
 	o.pollQuestions(processed, malformed) // grace tick
-	o.pollQuestions(processed, malformed) // stable + broken: nudge sent, answer.json written
-
-	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.answer.json")); err != nil {
-		t.Fatalf("nudge answer.json missing before rewrite: %v", err)
+	o.pollQuestions(processed, malformed) // stable + broken: fix agent repairs synchronously
+	if *calls != 1 {
+		t.Fatalf("want one fix-agent spawn, got %d", *calls)
 	}
+	o.pollQuestions(processed, malformed) // repaired file now surfaces normally
 
-	// Agent reads the nudge and rewrites the SAME id with valid content.
-	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
-	if err := os.WriteFile(qPath, []byte(`{"id":"q1","question":"fixed now?"}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	o.pollQuestions(processed, malformed)
-
-	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.answer.json")); err == nil {
-		t.Error("stale nudge answer.json should have been removed once the agent rewrote the file")
-	}
 	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusAwaitingUserInput {
-		t.Fatalf("status = %s, want awaiting_user_input once the rewritten question is visible", got)
+		t.Fatalf("status = %s, want awaiting_user_input once the repaired question is visible", got)
 	}
 	entries, err := mcp.ReadDialog(filepath.Join(stageDir, "implementation.dialog.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Question != "fixed now?" {
-		t.Fatalf("expected the rewritten question text, got %+v", entries)
+		t.Fatalf("expected the repaired question text, got %+v", entries)
+	}
+	if _, stillTracked := malformed["s1|implementation|q1"]; stillTracked {
+		t.Error("key should be forgotten once the file parses again")
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery is a
-// regression test for a bug found live in a real browser run (not by
-// inspection): once the agent fixes a nudged question and a human answers
-// it normally, the STALE malformed-retry tracking entry used to survive
-// forever with its old, permanently-stale lastRaw — so
-// unblockRewrittenMalformedQuestions kept seeing "content changed" on every
-// subsequent tick (the valid content never matches the old broken bytes)
-// and deleted the human's real answer.json before the agent's own bash
-// polling loop ever got to read it, hanging the stage even though the
-// dashboard had shown the recovery working correctly.
+// TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery guards
+// the class of bug the old nudge mechanism had to work around: after a
+// malformed question is repaired and a human answers it normally, later ticks
+// must not touch that real answer.json. With the fresh-agent mechanism no
+// synthetic answer.json is ever written and reconcileMalformedFixes forgets the
+// key the moment the file parses, so the bug is impossible by construction —
+// this test locks that in.
 func TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
+	injectFixStub(t, o, `{"id":"q1","question":"fixed?"}`)
 	processed := map[string]bool{}
 	malformed := map[string]*malformedQuestionState{}
 
 	o.pollQuestions(processed, malformed) // grace tick
-	o.pollQuestions(processed, malformed) // stable + broken: nudge sent
-
-	// Agent rewrites the SAME id with valid content in response to the nudge.
-	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
-	if err := os.WriteFile(qPath, []byte(`{"id":"q1","question":"fixed?"}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	o.pollQuestions(processed, malformed) // unblocks + surfaces the real question
+	o.pollQuestions(processed, malformed) // fix agent repairs the file
+	o.pollQuestions(processed, malformed) // surfaces the real question
 
 	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusAwaitingUserInput {
 		t.Fatalf("status = %s, want awaiting_user_input after recovery", got)
@@ -466,48 +496,37 @@ func TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery(t *test
 		t.Fatal(err)
 	}
 
-	// Further ticks (the stale malformed-retry entry, if still tracked,
-	// would delete this real answer on one of these) must leave it alone.
+	// Further ticks must leave the real answer alone.
 	for i := 0; i < 3; i++ {
 		o.pollQuestions(processed, malformed)
 	}
 
 	if _, err := os.Stat(answerPath); err != nil {
-		t.Fatalf("real answer.json was deleted by stale malformed-retry tracking: %v", err)
+		t.Fatalf("real answer.json was deleted by stale malformed tracking: %v", err)
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_UnresponsiveAgentEventuallyExhausts is
-// a regression test for a design gap found while fixing the integration test
-// covering this same scenario end-to-end: an agent that never responds to a
-// nudge at all (crashed, ignored it, hung) never changes question.json's
-// content, so a design that only unblocks a retry round on a detected
-// content change would wait forever — maxMalformedRetries would never be
-// reached and the stage would hang exactly like the original bug this whole
-// feature fixes. MalformedNudgeTimeout provides the other half of the
-// unblock condition: elapsed time with no response.
-func TestPollQuestions_MalformedQuestion_UnresponsiveAgentEventuallyExhausts(t *testing.T) {
-	origTimeout := MalformedNudgeTimeout
-	MalformedNudgeTimeout = 10 * time.Millisecond
-	t.Cleanup(func() { MalformedNudgeTimeout = origTimeout })
-
+// TestPollQuestions_MalformedQuestion_FixAgentExhaustionShowsStub covers the
+// interactive terminal fallback: when every fix agent fails to repair the
+// file, afm must stop spawning agents after maxJSONFixAttempts and surface a
+// parseable stub (no options, free text) to the user instead of hanging.
+func TestPollQuestions_MalformedQuestion_FixAgentExhaustionShowsStub(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, stageDir := setupMalformedTestOrch(t, broken)
+	calls := injectFixStub(t, o, "") // every fix agent fails to repair
 	processed := map[string]bool{}
 	malformed := map[string]*malformedQuestionState{}
 
-	o.pollQuestions(processed, malformed) // grace tick
-
-	// Never touch question.json again — the agent simply never responds.
-	// Drive enough ticks (with a short sleep to clear MalformedNudgeTimeout
-	// between them) for all maxMalformedRetries rounds to elapse.
-	for i := 0; i < maxMalformedRetries+1; i++ {
-		time.Sleep(15 * time.Millisecond)
+	// grace tick + maxJSONFixAttempts spawns + an exhaustion tick, with margin.
+	for i := 0; i < maxJSONFixAttempts+3; i++ {
 		o.pollQuestions(processed, malformed)
 	}
 
+	if *calls != maxJSONFixAttempts {
+		t.Fatalf("want exactly %d fix-agent spawns before giving up, got %d", maxJSONFixAttempts, *calls)
+	}
 	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusAwaitingUserInput {
-		t.Fatalf("status = %s, want awaiting_user_input once an unresponsive agent exhausts retries", got)
+		t.Fatalf("status = %s, want awaiting_user_input once fix attempts are exhausted", got)
 	}
 	data, err := os.ReadFile(filepath.Join(stageDir, "implementation.q1.question.json"))
 	if err != nil {
@@ -524,6 +543,75 @@ func TestPollQuestions_MalformedQuestion_UnresponsiveAgentEventuallyExhausts(t *
 	}
 }
 
+// TestPollQuestions_MalformedQuestion_NonInteractiveFixThenAutoAnswer is the
+// core of the incident this whole change fixes: a NON-interactive (agents:[auto])
+// stage whose question.json is unparseable. Before, the malformed branch was
+// interactive-only and such a stage's agent polled for an answer.json forever.
+// Now a fix agent repairs the file and the normal non-interactive auto-answer
+// path unblocks the stage — without ever awaiting a human.
+func TestPollQuestions_MalformedQuestion_NonInteractiveFixThenAutoAnswer(t *testing.T) {
+	o, store, stageDir := setupMalformedTestOrchNI(t, `not json at all {{{`)
+	injectFixStub(t, o, `{"id":"q1","question":"which?","options":["A","B (recommended)"],"allow_custom":true}`)
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	o.pollQuestions(processed, malformed) // grace tick
+	o.pollQuestions(processed, malformed) // fix agent repairs synchronously
+	o.pollQuestions(processed, malformed) // repaired → auto-answered
+
+	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusRunning {
+		t.Fatalf("status = %s, want running (non-interactive auto-answers, never awaits a human)", got)
+	}
+	data, err := os.ReadFile(filepath.Join(stageDir, "implementation.q1.answer.json"))
+	if err != nil {
+		t.Fatalf("answer.json not written: %v", err)
+	}
+	var got struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Answer != "B" {
+		t.Errorf("auto-answer = %q, want recommended option %q", got.Answer, "B")
+	}
+}
+
+// TestPollQuestions_MalformedQuestion_NonInteractiveFixFailsThenAutoAnswerFallback
+// covers the non-interactive terminal fallback: even when no fix agent can
+// repair the file, the stage must be unblocked by an auto-answer rather than
+// left polling forever (the exact hang seen in the production log).
+func TestPollQuestions_MalformedQuestion_NonInteractiveFixFailsThenAutoAnswerFallback(t *testing.T) {
+	o, store, stageDir := setupMalformedTestOrchNI(t, `not json at all {{{`)
+	calls := injectFixStub(t, o, "") // never repairs
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	for i := 0; i < maxJSONFixAttempts+3; i++ {
+		o.pollQuestions(processed, malformed)
+	}
+
+	if *calls != maxJSONFixAttempts {
+		t.Fatalf("want %d fix attempts, got %d", maxJSONFixAttempts, *calls)
+	}
+	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusRunning {
+		t.Fatalf("status = %s, want running (auto-answered fallback, never awaits)", got)
+	}
+	data, err := os.ReadFile(filepath.Join(stageDir, "implementation.q1.answer.json"))
+	if err != nil {
+		t.Fatalf("fallback answer.json not written — stage would hang forever: %v", err)
+	}
+	var got struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Answer == "" {
+		t.Error("fallback answer must be non-empty so the agent's bash loop unblocks")
+	}
+}
+
 // TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions covers the
 // user's explicit fallback: once retries are exhausted, afm stops asking the
 // agent for valid JSON, persists a real parseable stub (handleDialogAnswer
@@ -534,12 +622,11 @@ func TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, broken)
 	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
 
-	// Seed retry state as if maxMalformedRetries nudges already happened and
-	// this tick's content is stable — the exact state pollQuestions would have
-	// built up through repeated broken rewrites, without needing to simulate
-	// each round here.
+	// Seed state as if maxJSONFixAttempts fix agents already failed and this
+	// tick's content is stable — the exact state pollQuestions would have built
+	// up, without simulating each round here.
 	malformed := map[string]*malformedQuestionState{
-		"s1|implementation|q1": {lastRaw: []byte(broken), retries: maxMalformedRetries},
+		"s1|implementation|q1": {lastRaw: []byte(broken), attempts: maxJSONFixAttempts},
 	}
 
 	o.pollQuestions(map[string]bool{}, malformed)

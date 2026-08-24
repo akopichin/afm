@@ -31,6 +31,38 @@ func TestSpawnAgent_TracksActiveAndWaitGroup(t *testing.T) {
 	}
 }
 
+// TestSpawnDetached_TracksWaitGroupWithoutSemaphoreOrActiveMarker proves the
+// two properties the malformed-JSON fix agent depends on: a detached helper
+// runs even when the ONLY command semaphore slot is already taken (it must not
+// deadlock behind the blocked main agent), and it never marks the stage active
+// (so it can't clobber the main agent's active marker) — yet it is still
+// awaited by WaitAgents for clean shutdown.
+func TestSpawnDetached_TracksWaitGroupWithoutSemaphoreOrActiveMarker(t *testing.T) {
+	fullSem := ChannelSemaphore(make(chan struct{}, 1))
+	fullSem <- struct{}{} // occupy the only slot, as the blocked main agent would
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"": fullSem}, "")
+
+	var ran atomic.Bool
+	done := make(chan struct{})
+	m.SpawnDetached(context.Background(), func(ctx context.Context) {
+		if m.IsActive("a") {
+			t.Error("detached helper must not mark any stage active")
+		}
+		ran.Store(true)
+		close(done)
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached helper deadlocked behind the full command semaphore")
+	}
+	m.WaitAgents()
+	if !ran.Load() {
+		t.Fatal("detached helper did not run")
+	}
+}
+
 func TestSpawnAgent_BlocksOnFullSemaphore(t *testing.T) {
 	blockSem := ChannelSemaphore(make(chan struct{}, 1))
 	blockSem <- struct{}{} // занят

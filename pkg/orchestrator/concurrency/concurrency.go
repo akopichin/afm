@@ -145,6 +145,24 @@ func (m *Manager) SpawnAgent(ctx context.Context, s flow.Stage, run func(context
 	}()
 }
 
+// SpawnDetached запускает вспомогательную агентскую горутину, которая
+// учитывается в WaitGroup чистого shutdown (Run не вернётся, пока она не
+// завершится), но НЕ берёт командный семафор и НЕ помечает стадию активной.
+// Нужна для агентов-помощников (напр. агент починки битого question.json,
+// см. orchestrator.runJSONFixAgent), которые обязаны работать ПАРАЛЛЕЛЬНО с
+// основным агентом стадии, уже держащим её слот в семафоре: провести их
+// через SpawnAgent значило бы (1) заклинить на полном семафоре (основной
+// агент заблокирован в ожидании ответа, который может дать только помощник)
+// и (2) затереть active-маркер стадии, когда помощник завершится раньше
+// основного агента.
+func (m *Manager) SpawnDetached(ctx context.Context, run func(context.Context)) {
+	m.agentWG.Add(1)
+	go func() {
+		defer m.agentWG.Done()
+		run(ctx)
+	}()
+}
+
 // WakeEventLoop будит select Run()'а неблокирующей отправкой внутреннего
 // маркер-события через bus.CriticalBus.WakeEventLoop — используется
 // maybeRunAfterHook после того, как after-hook горутина реально завершилась,

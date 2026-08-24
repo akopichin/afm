@@ -417,15 +417,3 @@ func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered b
 	}
 	return nil
 }
-
-// WriteInternalAnswer writes <stageDir>/<phase>.<id>.answer.json WITHOUT any
-// dialog.jsonl side effect. For afm-to-agent signaling that must never
-// appear in a human-facing dialog history — currently only the
-// malformed-question-json retry nudge (pkg/orchestrator/dialog_poller.go):
-// an interactive stage's dialog panel is actively watched in real time, and
-// a stray "→ <internal nudge text>" bubble with no matching question would
-// be a confusing artifact of afm talking to the agent about something the
-// user was never asked about.
-func WriteInternalAnswer(stageDir, phase, id, answer string) error {
-	return writeAnswerFile(stageDir, phase, id, answer, false)
-}

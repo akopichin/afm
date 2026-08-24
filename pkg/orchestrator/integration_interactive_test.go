@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -545,17 +546,24 @@ func TestIntegration_BrokenQuestionStillSurfaces(t *testing.T) {
 }
 
 // TestIntegration_UnrepairableQuestionFallsBackToStub покрывает last-resort
-// fallback: агент пишет question.json настолько сломанный, что даже
-// jsonrepair не может его починить, и никогда не реагирует на просьбы afm
-// переписать файл (просто спит). Стадия всё равно должна дойти до
-// awaiting_user_input — после исчерпания retry-автомата (grace tick + до
-// maxMalformedRetries нуджей агенту) с вопросом-заглушкой без вариантов
-// ответа (свободный текст) вместо вечного зависания в "running" без следа.
+// fallback: агент пишет question.json настолько сломанный, что даже jsonrepair
+// не может его починить, и запускаемые afm отдельные fix-агенты тоже не могут
+// его восстановить. Стадия всё равно должна дойти до awaiting_user_input —
+// после исчерпания maxJSONFixAttempts fix-агентов afm показывает вопрос-заглушку
+// без вариантов ответа (свободный текст) вместо вечного зависания в "running".
+//
+// Один и тот же скрипт играет обе роли: как ОСНОВНОЙ агент стадии (afm
+// выставляет ему AFM_STAGE_DIR) он пишет битый question.json и спит, оставаясь
+// живым как настоящий агент в ожидании ответа; как FIX-агент (afm намеренно
+// запускает его БЕЗ AFM_STAGE_DIR — см. runJSONFixAgent) он не в состоянии
+// ничего починить и завершается сразу — быстрая, реалистичная модель
+// «отдельный агент тоже не смог».
 func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	dir := t.TempDir()
 
 	scriptPath := filepath.Join(dir, "garbageagent.sh")
 	script := "#!/bin/bash\n" +
+		"if [ -z \"$AFM_STAGE_DIR\" ]; then exit 1; fi\n" +
 		`printf 'not json at all {{{' > "$AFM_STAGE_DIR/planning.q1.question.json"` + "\n" +
 		"sleep 30\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
@@ -578,14 +586,6 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(dir, "state.json")
 
-	// The script never rewrites its own question.json (it just sleeps), so
-	// each retry round only advances once MalformedNudgeTimeout elapses with
-	// no response — shrink it so the test doesn't wait through 3 real-world
-	// nudge timeouts.
-	origTimeout := orchestrator.MalformedNudgeTimeout
-	orchestrator.MalformedNudgeTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { orchestrator.MalformedNudgeTimeout = origTimeout })
-
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir:  dir,
 		Stages:  stages,
@@ -597,8 +597,7 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
-	// grace tick + maxMalformedRetries rounds, each gated by the shrunk
-	// MalformedNudgeTimeout above — comfortably inside 15s.
+	// grace tick + maxJSONFixAttempts fast-failing fix agents, all inside 15s.
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 15*time.Second)
 
 	stageDir := filepath.Join(dir, "propose")
@@ -817,5 +816,152 @@ func TestIntegration_StaleAnsweredQuestionNotReopened(t *testing.T) {
 		t.Error("implementation.q1.question.json spuriously created from stale answered planning question")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat implementation.q1.question.json: %v", err)
+	}
+}
+
+// TestIntegration_RealMalformedQuestionRepairedByFreshAgent drives the EXACT
+// broken question.json captured from the production log
+// (testdata/malformed_q4.question.json — an over-escaped `\\"1\\"` that
+// prematurely terminates a JSON string; jsonrepair cannot recover it, verified
+// by mcp.CanParseQuestion) end-to-end through a REAL orchestrator with REAL
+// subprocesses, for BOTH stage types.
+//
+// One script plays two roles, distinguished by AFM_STAGE_DIR exactly as
+// production does (the main stage agent always gets it; runJSONFixAgent
+// deliberately does not):
+//   - main agent (AFM_STAGE_DIR set): copies the real broken q4 into the stage
+//     dir and blocks waiting for its answer, like a real agent polling.
+//   - fix agent (no AFM_STAGE_DIR): reads the file path from its prompt on
+//     stdin (buildJSONFixPrompt's "File (absolute path): ..." line) and
+//     deterministically repairs the over-escaping — a stand-in for what a real
+//     clean-context LLM agent does.
+//
+// Interactive → the repaired question surfaces to the user with its real
+// content intact. Non-interactive (the stage type that hung forever in prod)
+// → afm auto-answers and unblocks the stage instead of polling for an answer
+// that never comes.
+func TestIntegration_RealMalformedQuestionRepairedByFreshAgent(t *testing.T) {
+	brokenAbs, err := filepath.Abs(filepath.Join("testdata", "malformed_q4.question.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(brokenAbs); err != nil {
+		t.Fatalf("testdata missing: %v", err)
+	}
+
+	cases := []struct {
+		name        string
+		interactive bool
+		agent       flow.AgentType
+		phase       string
+	}{
+		{"interactive_surfaces_to_user", true, flow.AgentPlanning, "planning"},
+		// The real incident stage (architecture-review) was agents:[auto] —
+		// a non-interactive autonomous stage that runs the command directly
+		// (no plan.md needed), exactly as reproduced here.
+		{"non_interactive_auto_answers", false, flow.AgentAuto, "implementation"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			scriptPath := filepath.Join(dir, "agent.sh")
+			script := fmt.Sprintf(`#!/bin/bash
+if [ -n "$AFM_STAGE_DIR" ]; then
+  cp %q "$AFM_STAGE_DIR/%s.q4.question.json"
+  while [ ! -f "$AFM_STAGE_DIR/%s.q4.answer.json" ]; do sleep 0.2; done
+  exit 0
+fi
+prompt="$(cat)"
+qpath="$(printf '%%s' "$prompt" | sed -n 's/^File (absolute path): //p' | head -1)"
+[ -z "$qpath" ] && exit 1
+python3 - "$qpath" <<'PY'
+import sys
+p = sys.argv[1]
+raw = open(p, encoding='utf-8').read()
+open(p, 'w', encoding='utf-8').write(raw.replace(chr(92) + chr(92) + chr(34), chr(92) + chr(34)))
+PY
+`, brokenAbs, tc.phase, tc.phase)
+			if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			stages := []flow.Stage{{
+				ID:          "s",
+				Name:        "S",
+				Description: "writes the real broken q4 from the production log",
+				Agents:      []flow.AgentType{tc.agent},
+				Interactive: tc.interactive,
+				Command:     scriptPath,
+			}}
+			store, err := state.Open(dir, []string{"s"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { store.Close() })
+			stateFile := filepath.Join(dir, "state.json")
+
+			orch := orchestrator.New(orchestrator.Options{
+				RunDir:  dir,
+				Stages:  stages,
+				Store:   store,
+				Config:  config.Default(),
+				Prompts: orchestrator.DefaultPrompts(),
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			runOrchestratorAsync(ctx, t, orch, cancel)
+
+			stageDir := filepath.Join(dir, "s")
+
+			if tc.interactive {
+				// The repaired question must surface to the user, with real content.
+				waitForStatus(t, stateFile, "s", state.StatusAwaitingUserInput, 25*time.Second)
+				qs, err := mcp.FindUnansweredQuestions(stageDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(qs) != 1 || qs[0].ID != "q4" || qs[0].Malformed {
+					t.Fatalf("want exactly one repaired (non-malformed) q4, got %+v", qs)
+				}
+				if len(qs[0].Options) != 2 {
+					t.Errorf("repaired question lost its options: %+v", qs[0].Options)
+				}
+				if !strings.Contains(qs[0].Question, "Companion gate") {
+					t.Errorf("repaired question lost its real content: %q", qs[0].Question)
+				}
+				return
+			}
+
+			// Non-interactive: afm must AUTO-ANSWER the repaired question and
+			// unblock the stage — the exact thing that never happened in prod,
+			// where an unparseable question hung the stage forever.
+			answerPath := filepath.Join(stageDir, tc.phase+".q4.answer.json")
+			deadline := time.Now().Add(25 * time.Second)
+			var data []byte
+			for time.Now().Before(deadline) {
+				if b, err := os.ReadFile(answerPath); err == nil {
+					data = b
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if data == nil {
+				t.Fatal("no answer.json was written — the non-interactive stage would hang forever")
+			}
+			var got struct {
+				Answer      string `json:"answer"`
+				FromOptions bool   `json:"from_options"`
+			}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("answer.json is not valid JSON: %v", err)
+			}
+			// The repaired question's real first option flowed through PickAutoAnswer.
+			if !got.FromOptions || !strings.HasPrefix(got.Answer, "Apply suggested fix") {
+				t.Errorf("auto-answer did not pick the repaired question's real option: %+v", got)
+			}
+			if st := store.Snapshot().Stages["s"].Status; st == state.StatusAwaitingUserInput {
+				t.Errorf("non-interactive stage must never sit in awaiting_user_input, got %s", st)
+			}
+		})
 	}
 }

@@ -552,41 +552,6 @@ func TestWriteAnswer_DialogAppendFailureStillWritesAnswerFile(t *testing.T) {
 	}
 }
 
-// TestWriteInternalAnswer_WritesFileWithoutDialogEntry covers afm's own
-// internal signaling to an agent (currently: the malformed-question-json
-// retry nudge) — the answer.json file must appear so the agent's bash
-// polling loop finds it, but it must NOT leak into dialog.jsonl: an
-// interactive stage's dialog panel is watched live, and a stray answer with
-// no matching question would be a confusing artifact of an exchange the
-// user was never part of.
-func TestWriteInternalAnswer_WritesFileWithoutDialogEntry(t *testing.T) {
-	dir := t.TempDir()
-
-	if err := mcp.WriteInternalAnswer(dir, "implementation", "q1", "please rewrite your question.json"); err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, "implementation.q1.answer.json"))
-	if err != nil {
-		t.Fatalf("answer.json not written: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["answer"] != "please rewrite your question.json" {
-		t.Errorf("answer.json content mismatch: %v", got)
-	}
-
-	entries, err := mcp.ReadDialog(filepath.Join(dir, "implementation.dialog.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Errorf("dialog.jsonl must stay untouched, got %+v", entries)
-	}
-}
-
 // TestCanParseQuestion covers the three cases the malformed-question retry
 // state machine (pkg/orchestrator/dialog_poller.go) depends on to decide
 // whether an agent's rewrite actually fixed a file, without persisting

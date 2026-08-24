@@ -34,6 +34,7 @@ const (
 const keyAnswer = "answer"
 const keyID = "id"
 const keyPhase = "phase"
+const keyFromOptions = "from_options"
 
 // Prompts holds the prompt templates for each agent type.
 type Prompts struct {
@@ -108,10 +109,11 @@ type Orchestrator struct {
 	// Снапшот на инстансе устраняет гонку: горутины читают immutable-поля.
 	maxRetries   int
 	retryBackoff time.Duration
-	// malformedNudgeTimeout — снапшот package-level MalformedNudgeTimeout
-	// (dialog_poller.go), тем же способом и по той же причине, что maxRetries/
-	// retryBackoff выше.
-	malformedNudgeTimeout time.Duration
+	// spawnJSONFix запускает свежий изолированный агент, единственная задача
+	// которого — переписать битый question.json валидным JSON (см.
+	// runJSONFixAgent). Возвращает канал, закрываемый по завершении агента.
+	// Инъектируется в New(); тесты подменяют стабом, чинящим файл синхронно.
+	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
@@ -203,21 +205,22 @@ func New(opts Options) *Orchestrator {
 		sup = supervisor.NewSupervisor(opts.SupervisorRunner)
 	}
 
-	return &Orchestrator{
-		opts:                  opts,
-		graph:                 graph.NewGraph(opts.Stages),
-		runner:                r,
-		critical:              critical,
-		ui:                    ui,
-		fsm:                   bus.NewFSM(opts.Store),
-		concurrency:           conc,
-		violationCache:        make(map[string]violationCacheEntry),
-		lastRootScan:          make(map[string]time.Time),
-		supervisor:            sup,
-		maxRetries:            MaxRetries,
-		retryBackoff:          RetryBackoff,
-		malformedNudgeTimeout: MalformedNudgeTimeout,
+	o := &Orchestrator{
+		opts:           opts,
+		graph:          graph.NewGraph(opts.Stages),
+		runner:         r,
+		critical:       critical,
+		ui:             ui,
+		fsm:            bus.NewFSM(opts.Store),
+		concurrency:    conc,
+		violationCache: make(map[string]violationCacheEntry),
+		lastRootScan:   make(map[string]time.Time),
+		supervisor:     sup,
+		maxRetries:     MaxRetries,
+		retryBackoff:   RetryBackoff,
 	}
+	o.spawnJSONFix = o.runJSONFixAgent
+	return o
 }
 
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
