@@ -104,43 +104,6 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, logContent) //nolint:gosec // G705: log content from server-side files
 }
 
-// handleSupervisor возвращает последнее решение супервизора для стадии
-// (читает <runDir>/supervisor.jsonl). Даёт UI показать резолюцию
-// (autonomous/standard + reason) персистентно: событие шины EventSupervisorDecision
-// live-only и теряется, если дашборд подключился после старта стадии.
-func (s *Server) handleSupervisor(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/supervisor")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	data, err := os.ReadFile(filepath.Join(s.runDir, "supervisor.jsonl"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	var latest map[string]string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var entry map[string]string
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			continue
-		}
-		if entry["stage_id"] == stageID {
-			latest = entry
-		}
-	}
-	if latest == nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(latest)
-}
-
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/approve")
 	if !isValidStageID(stageID) {

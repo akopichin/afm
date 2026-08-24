@@ -32,18 +32,10 @@ const (
 	typeRetryExhausted     = "retry_exhausted"
 )
 
-// autonomousLabel — значение supervisor-решения (Task 3,
-// logSupervisorDecision track="autonomous") в can_execute_autonomously.
-// Не связано с flow.PhaseAutonomous ("autonomous_execution") — это
-// отдельный, случайно совпадающий по подстроке "autonomous" словарь
-// (supervisor-track "standard"/"autonomous", а не имя фазы).
-const autonomousLabel = "autonomous"
-
 // feedEvent — одна запись реплея истории ленты событий. Seq заполняется
 // только для событий, производных от реальной FSM-transition (events.jsonl) —
 // это стабильный ключ дедупликации на фронте при слиянии с live-потоком
-// WebSocket. Для остальных типов (agent_action/supervisor_decision/notices)
-// Seq остаётся нулевым.
+// WebSocket. Для остальных типов (agent_action/notices) Seq остаётся нулевым.
 type feedEvent struct {
 	Type      string    `json:"type"`
 	StageID   string    `json:"stage_id"`
@@ -71,7 +63,6 @@ func (s *Server) reconstructEventHistory() []feedEvent {
 		out = append(out, reconstructAgentActions(s.runDir, stageID)...)
 	}
 
-	out = append(out, reconstructSupervisorDecisions(s.runDir)...)
 	out = append(out, reconstructNotices(s.runDir)...)
 
 	slices.SortFunc(out, func(a, b feedEvent) int { return a.Timestamp.Compare(b.Timestamp) })
@@ -179,34 +170,6 @@ func readLines(path string) []string {
 		}
 	}
 	return lines
-}
-
-// reconstructSupervisorDecisions читает run-level supervisor.jsonl
-// (пишется logSupervisorDecision, pkg/orchestrator/supervisor_track.go).
-func reconstructSupervisorDecisions(runDir string) []feedEvent {
-	path := filepath.Join(runDir, "supervisor.jsonl")
-	var out []feedEvent
-	for _, line := range readLines(path) {
-		var e struct {
-			Ts       string `json:"ts"`
-			StageID  string `json:"stage_id"`
-			Decision string `json:"decision"`
-			Reason   string `json:"reason"`
-		}
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue
-		}
-		ts, err := time.Parse(time.RFC3339, e.Ts)
-		if err != nil {
-			continue
-		}
-		out = append(out, feedEvent{
-			Type: "supervisor_decision", StageID: e.StageID,
-			Data:      map[string]any{"can_execute_autonomously": e.Decision == autonomousLabel, "reason": e.Reason},
-			Timestamp: ts,
-		})
-	}
-	return out
 }
 
 // reconstructNotices читает run-level notices.jsonl (Task 3, appendNotice).
