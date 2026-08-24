@@ -78,10 +78,38 @@ static track keeps using unchanged.
   `pkg/orchestrator/supervisor_orchestrator_test.go`,
   `pkg/orchestrator/integration_supervisor_test.go`, plus the supervisor-only
   cases inside `pkg/orchestrator/bus/fsm_test.go`, `pkg/flow/flow_test.go`,
-  `pkg/flow/marshal_test.go`, `pkg/config/config_test.go`,
-  `pkg/docker/wrapper_test.go`, `pkg/executor/debug_test.go` (only the
+  `pkg/flow/marshal_test.go`, `pkg/config/config_test.go` (only the
   supervisor-labeled cases in each mixed file — the rest of each file is
   untouched).
+- **Explicitly NOT touched, despite mentioning "supervisor" in a
+  comment/string** (verified during planning — false positives from the
+  initial scan): `pkg/docker/wrapper_test.go` (the word "supervisor" there
+  names an example caller of the generic `--output-format json` wrapper
+  path, which any command can use — the test validates general wrapper
+  generation, not supervisor code) and `pkg/executor/debug_test.go` (tests
+  the generic empty-`StageID` debug-log case using `"supervisor"` only as an
+  example phase label — the debug-log mechanism itself is unrelated to the
+  supervisor feature). `executor.Runner.RunJSONQuery` / `Executor.RunJSONQuery`
+  also stay untouched: it's a general-purpose interface method implemented by
+  dozens of test mocks across the orchestrator test suite; the LLM supervisor
+  was its only production caller, but removing the method itself is a much
+  larger, unrelated blast radius for no benefit — it simply becomes
+  production-uncalled, which is fine.
+- **Dashboard frontend** (discovered during planning, not in the original
+  scope pass — it has a full supervisor UI surface that would otherwise be
+  left as dead code silently polling a permanently-404 endpoint forever):
+  - `pkg/web/dashboard/src/components/supervisor-decision/` — whole
+    directory (`SupervisorDecision.tsx`, `SupervisorDecision.test.tsx`,
+    `index.ts`).
+  - `pkg/web/dashboard/src/app/App.tsx` — the `SupervisorDecision` import and
+    its `<SupervisorDecision stageId={...} />` usage.
+  - `pkg/web/dashboard/src/components/event-feed/EventFeedPanel.tsx` — the
+    `case 'supervisor_decision':` branch, and the corresponding case in
+    `EventFeedPanel.test.tsx`.
+  - `pkg/web/dashboard/src/types/afm-event.ts` — the `'supervisor_decision'`
+    member of the event-type union, and its case in `afm-event.test.ts`.
+  - `pkg/web/dashboard/src/hooks/use-event-feed/use-event-feed.ts` — one
+    comment mentioning `supervisor_decision` (no code, cosmetic).
 
 ## Explicitly preserved
 
