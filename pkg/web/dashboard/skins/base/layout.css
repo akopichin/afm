@@ -25,6 +25,14 @@
   border: 1px solid var(--mint-soft);
   padding: 14px;
   overflow-y: auto;
+  /* Явный overflow-x:hidden обязателен: если overflow-x не задан, а overflow-y
+     не 'visible', спека CSS Overflow принуждает overflow-x тоже стать 'auto'
+     (не 'visible') — сабпиксельное переполнение на 1px (border/rounding/
+     декоративные ::before у активной стадии) тогда рисует горизонтальный
+     скроллбар во всю ширину панели без реального горизонтального контента.
+     Раньше не было заметно на overlay-скролле, всплыло после того как скролл
+     сделали тонким-но-видимым классическим. */
+  overflow-x: hidden;
   min-height: 0;
 }
 

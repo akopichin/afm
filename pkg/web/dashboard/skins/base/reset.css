@@ -32,31 +32,71 @@ a:hover { text-decoration: underline; }
 
 .hidden { display: none !important; }
 
-/* Тонкий, приглушённый скроллбар вместо стандартного OS-скролла — на некоторых
-   системах (Windows/Linux, macOS с "always show scrollbars") дефолтный
-   скроллбар выглядит как жирная светлая полоса, режущая тёмную тему.
+/* Скроллбар по умолчанию скрыт везде (textarea, кебаб-меню и т.п.) — на
+   Windows/Linux и на macOS с "always show scrollbars" дефолтный OS-скроллбар
+   выглядит как жирная светлая полоса, режущая тёмную тему. Полностью
+   скрытый вариант (см. git history) оказался "тухлым" — пропадает
+   визуальная подсказка "тут можно скроллить" и не за что зацепиться мышкой.
+   Взамен ниже точечно включён компактный "бегунок" только для реальных
+   скролл-контейнеров трёх основных колонок дашборда — это нативный
+   scrollbar-thumb браузера (drag мышкой, позиция/размер уже пропорциональны
+   реальному %% скролла — из коробки, без JS), просто стилизованный тонко.
    Firefox: */
 * {
-  scrollbar-width: thin;
-  scrollbar-color: var(--ink-dim) transparent;
+  scrollbar-width: none;
 }
 
 /* WebKit/Blink (Chrome, Safari, Edge): */
 ::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  display: none;
 }
-::-webkit-scrollbar-track {
+
+/* Реальные скролл-контейнеры трёх основных колонок (список стадий /
+   центральная панель — план, диалог, лог / лента событий). Список НЕ
+   включает #feed-panel и #plan-section/#dialog-section — у них
+   overflow:visible/без собственного скролла, реальный скролл — на детях
+   ниже (см. layout.css/plan-panel.css/dialog-channel.css/log-panel.css). */
+#stages-panel,
+.markdown-body,
+#plan-content,
+.dialog-scroll,
+.log-content,
+.event-feed-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink-dim) 60%, transparent) transparent;
+}
+#stages-panel::-webkit-scrollbar,
+.markdown-body::-webkit-scrollbar,
+#plan-content::-webkit-scrollbar,
+.dialog-scroll::-webkit-scrollbar,
+.log-content::-webkit-scrollbar,
+.event-feed-scroll::-webkit-scrollbar {
+  display: block;
+  width: 5px;
+}
+#stages-panel::-webkit-scrollbar-track,
+.markdown-body::-webkit-scrollbar-track,
+#plan-content::-webkit-scrollbar-track,
+.dialog-scroll::-webkit-scrollbar-track,
+.log-content::-webkit-scrollbar-track,
+.event-feed-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-::-webkit-scrollbar-thumb {
-  /* Без доп. opacity: --ink-dim уже приглушённый акцентный тон в каждом скине —
-     двойное затемнение (opacity поверх и так тусклого цвета) даёт контраст
-     ~1.7-2.9:1 к фону в светлых темах (проверено расчётом WCAG) — на грани
-     невидимости. Чистый --ink-dim держит 3.18-8.54:1 во всех 4 скинах х 2 темы. */
+#stages-panel::-webkit-scrollbar-thumb,
+.markdown-body::-webkit-scrollbar-thumb,
+#plan-content::-webkit-scrollbar-thumb,
+.dialog-scroll::-webkit-scrollbar-thumb,
+.log-content::-webkit-scrollbar-thumb,
+.event-feed-scroll::-webkit-scrollbar-thumb {
   background: var(--ink-dim);
-  border-radius: 4px;
+  border-radius: 999px;
+  opacity: 0.6;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: var(--ink);
+#stages-panel::-webkit-scrollbar-thumb:hover,
+.markdown-body::-webkit-scrollbar-thumb:hover,
+#plan-content::-webkit-scrollbar-thumb:hover,
+.dialog-scroll::-webkit-scrollbar-thumb:hover,
+.log-content::-webkit-scrollbar-thumb:hover,
+.event-feed-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--mint);
 }
