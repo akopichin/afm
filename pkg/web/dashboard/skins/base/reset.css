@@ -31,3 +31,32 @@ a:hover { text-decoration: underline; }
 ::selection { background: rgba(229, 212, 66, 0.35); color: var(--ink-hi); }
 
 .hidden { display: none !important; }
+
+/* Тонкий, приглушённый скроллбар вместо стандартного OS-скролла — на некоторых
+   системах (Windows/Linux, macOS с "always show scrollbars") дефолтный
+   скроллбар выглядит как жирная светлая полоса, режущая тёмную тему.
+   Firefox: */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-dim) transparent;
+}
+
+/* WebKit/Blink (Chrome, Safari, Edge): */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  /* Без доп. opacity: --ink-dim уже приглушённый акцентный тон в каждом скине —
+     двойное затемнение (opacity поверх и так тусклого цвета) даёт контраст
+     ~1.7-2.9:1 к фону в светлых темах (проверено расчётом WCAG) — на грани
+     невидимости. Чистый --ink-dim держит 3.18-8.54:1 во всех 4 скинах х 2 темы. */
+  background: var(--ink-dim);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink);
+}
