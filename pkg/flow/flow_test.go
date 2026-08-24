@@ -472,34 +472,6 @@ func TestParseRootPromptEmpty(t *testing.T) {
 	}
 }
 
-func TestFlow_SupervisorFields(t *testing.T) {
-	yaml := `
-name: test
-supervisor_command: glm51
-stages:
-  - id: s1
-    description: do something
-    supervisor: true
-    supervisor_prompt: "extra hint"
-    agents: [planning, implementation]
-    skills: [goga:apply]
-`
-	f, err := flow.ParseFile(writeTempYAML(t, yaml))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.SupervisorCommand != "glm51" {
-		t.Errorf("got SupervisorCommand=%q, want glm51", f.SupervisorCommand)
-	}
-	s := f.Stages[0]
-	if !s.Supervisor {
-		t.Error("expected Supervisor=true")
-	}
-	if s.SupervisorPrompt != "extra hint" {
-		t.Errorf("got SupervisorPrompt=%q, want 'extra hint'", s.SupervisorPrompt)
-	}
-}
-
 func TestParseScriptStageFields(t *testing.T) {
 	yaml := `
 name: f
@@ -658,19 +630,6 @@ stages:
 	if err != nil {
 		t.Fatalf("unexpected error for valid script-only stage: %v", err)
 	}
-}
-
-func writeTempYAML(t *testing.T, content string) string {
-	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "flow*.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	return f.Name()
 }
 
 func TestStage_AutoRunDisabled(t *testing.T) {

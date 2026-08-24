@@ -81,14 +81,9 @@ type Stage struct {
 	// Prompt is an optional explicit instruction delivered to the agent
 	// after the <stage> context block.
 	Prompt string `yaml:"prompt,omitempty"`
-	// Supervisor включает оценку стадии агентом-супервизором перед запуском.
-	// Стадия обязана содержать AgentPlanning в Agents.
-	Supervisor       bool   `yaml:"supervisor,omitempty"`
-	SupervisorPrompt string `yaml:"supervisor_prompt,omitempty"`
 	// Script, if set, makes this a script-only stage: it runs the given shell
-	// script (via sh -c) instead of any agent, with no planning/supervisor/
-	// approval gate. Mutually exclusive with Agents/Command/Interactive/Plan/
-	// Verify/Supervisor.
+	// script (via sh -c) instead of any agent, with no planning/approval gate.
+	// Mutually exclusive with Agents/Command/Interactive/Plan/Verify.
 	Script        string        `yaml:"script,omitempty"`
 	ScriptTimeout time.Duration `yaml:"script_timeout,omitempty"`
 	// ScriptBefore/ScriptAfter run a shell script immediately before/after this
@@ -189,11 +184,8 @@ type Flow struct {
 	// (напр. Docker-сетап: исходники в /workspace, а .afm — в другом каталоге).
 	// Без него агенты наследуют CWD afm и резолвят относительные пути проекта
 	// (docs/arch и т.п.) в чужом корне. Пусто → поведение не меняется.
-	RootDir string `yaml:"root_dir,omitempty"`
-	// SupervisorCommand задаёт команду для агента-супервизора (как command у стадии).
-	// Default: значение из config.Supervisor.Command или config.Client.Command.
-	SupervisorCommand string  `yaml:"supervisor_command,omitempty"`
-	Stages            []Stage `yaml:"stages"`
+	RootDir string  `yaml:"root_dir,omitempty"`
+	Stages  []Stage `yaml:"stages"`
 }
 
 // ParseFile reads and validates a flow YAML file.
@@ -276,9 +268,6 @@ func (f *Flow) validate() error {
 		if len(s.Agents) != 1 {
 			return fmt.Errorf("stage %q: \"auto\" must be the only agent", s.ID)
 		}
-		if s.Supervisor {
-			return fmt.Errorf("stage %q: \"auto\" is incompatible with supervisor: true", s.ID)
-		}
 	}
 
 	for _, s := range f.Stages {
@@ -299,9 +288,6 @@ func (f *Flow) validate() error {
 		}
 		if s.Verify != "" {
 			return fmt.Errorf("stage %q: \"script\" cannot be combined with verify", s.ID)
-		}
-		if s.Supervisor {
-			return fmt.Errorf("stage %q: \"script\" cannot be combined with supervisor", s.ID)
 		}
 	}
 

@@ -22,7 +22,7 @@ func TestStageMarshal_OmitsZeroValueFields(t *testing.T) {
 	out := string(data)
 	for _, unwanted := range []string{
 		"command:", "verify:", "interactive:", "script:", "max_parallel:",
-		"supervisor:", "auto_approve:", "eager_planning:", "plan:",
+		"auto_approve:", "eager_planning:", "plan:",
 		"description:",
 	} {
 		if strings.Contains(out, unwanted) {

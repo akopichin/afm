@@ -68,16 +68,3 @@ stages:
 		t.Fatalf("auto+planning: want 'only agent' error, got %v", err)
 	}
 }
-
-func TestParse_AutoIncompatibleWithSupervisor(t *testing.T) {
-	_, err := writeFlow(t, `
-name: f
-stages:
-  - id: a
-    agents: [auto]
-    supervisor: true
-`)
-	if err == nil || !strings.Contains(err.Error(), "supervisor") {
-		t.Fatalf("auto+supervisor: want 'supervisor' error, got %v", err)
-	}
-}
