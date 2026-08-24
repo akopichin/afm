@@ -222,21 +222,15 @@ func (d DockerConfig) GetImage() string {
 	return "akopichin/afm:latest"
 }
 
-// SupervisorConfig настраивает агента-супервизора.
-type SupervisorConfig struct {
-	Command string `yaml:"command"`
-}
-
 // Config is the merged configuration for afm.
 type Config struct {
-	Client     ClientConfig     `yaml:"client"`
-	Executor   ExecutorConfig   `yaml:"executor"`
-	Server     ServerConfig     `yaml:"server"`
-	Docker     DockerConfig     `yaml:"docker"`
-	Supervisor SupervisorConfig `yaml:"supervisor"`
-	PromptsDir string           `yaml:"prompts_dir"`
-	Theme      string           `yaml:"theme"`
-	SkinDir    string           `yaml:"skin_dir"`
+	Client     ClientConfig   `yaml:"client"`
+	Executor   ExecutorConfig `yaml:"executor"`
+	Server     ServerConfig   `yaml:"server"`
+	Docker     DockerConfig   `yaml:"docker"`
+	PromptsDir string         `yaml:"prompts_dir"`
+	Theme      string         `yaml:"theme"`
+	SkinDir    string         `yaml:"skin_dir"`
 	// AutoRecover controls whether failed stages are automatically reset to
 	// pending when a run starts/resumes (e.g. after a killed process/container
 	// left stages in failed). nil/true = enabled (default); explicit false disables.
@@ -367,9 +361,6 @@ func mergeFile(dst *Config, path string) error {
 		for k, v := range overlay.Docker.Agents {
 			dst.Docker.Agents[k] = v // per-key overlay: проектный слой дополняет/переопределяет глобальный
 		}
-	}
-	if overlay.Supervisor.Command != "" {
-		dst.Supervisor.Command = overlay.Supervisor.Command
 	}
 	if overlay.AutoRecover != nil {
 		dst.AutoRecover = overlay.AutoRecover
