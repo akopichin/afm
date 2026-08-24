@@ -3,8 +3,8 @@ package orchestrator_test
 // Сценарийный харнесс для интеграционных тестов оркестратора.
 //
 // Идея: вместо ручного написания mock-Runner + setup-кода для каждого нового
-// теста (см. supervisorTestRunner, rateLimitThenSuccessRunner, noDoneRunner в
-// integration_supervisor_test.go / integration_retry_test.go) — описать сценарий
+// теста (см. rateLimitThenSuccessRunner, noDoneRunner в integration_retry_test.go)
+// — описать сценарий
 // декларативно (Scenario{Stages, Agents, Expect, ...}) и прогнать его через
 // единый runScenario. scriptedRunner — единственная реализация executor.Runner,
 // конфигурируемая картой AgentSpec на стадию.
@@ -86,11 +86,10 @@ type Expectation struct {
 
 // Scenario — декларативное описание одного end-to-end прогона оркестратора.
 type Scenario struct {
-	Name       string
-	Stages     []flow.Stage
-	Supervisor []byte
-	Agents     map[string]AgentSpec
-	Expect     Expectation
+	Name   string
+	Stages []flow.Stage
+	Agents map[string]AgentSpec
+	Expect Expectation
 	// PreSeedEventsLog, если не nil, записывается в runDir/events.jsonl ДО
 	// state.Open (Task 3) — используется для проверки path'а восстановления
 	// после порчи лога (corrupt-log-recovery): state.Open должен вернуть
@@ -99,23 +98,21 @@ type Scenario struct {
 }
 
 // scriptedRunner — единственный mock executor.Runner для всех сценариев.
-// Поведение конфигурируется картой agents (stageID → AgentSpec) и supervisor
-// (ответ RunJSONQuery). Модель поведения — supervisorTestRunner,
-// rateLimitThenSuccessRunner, noDoneRunner из соседних *_test.go.
+// Поведение конфигурируется картой agents (stageID → AgentSpec). Модель
+// поведения — rateLimitThenSuccessRunner, noDoneRunner из соседних *_test.go.
 type scriptedRunner struct {
-	agents     map[string]AgentSpec
-	supervisor []byte
+	agents map[string]AgentSpec
 
 	mu    sync.Mutex
 	calls map[string]int // ключ agentType|logFile → счётчик (для InjectRateLimitThenOK)
 }
 
-func newScriptedRunner(agents map[string]AgentSpec, supervisor []byte) *scriptedRunner {
-	return &scriptedRunner{agents: agents, supervisor: supervisor, calls: map[string]int{}}
+func newScriptedRunner(agents map[string]AgentSpec) *scriptedRunner {
+	return &scriptedRunner{agents: agents, calls: map[string]int{}}
 }
 
 func (r *scriptedRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, error) {
-	return r.supervisor, nil
+	return nil, nil
 }
 
 // RunPlanning пишет валидный plan.md (проходит checkPlanCompletionFor: нужны
@@ -322,15 +319,14 @@ func runScenarioUpToAssert(t *testing.T, sc Scenario) (*orchestrator.Orchestrato
 	}
 	t.Cleanup(func() { store.Close() })
 
-	runner := newScriptedRunner(sc.Agents, sc.Supervisor)
+	runner := newScriptedRunner(sc.Agents)
 	orch := orchestrator.New(orchestrator.Options{
-		RunDir:           runDir,
-		Stages:           stages,
-		Store:            store,
-		Config:           config.Default(),
-		Prompts:          orchestrator.DefaultPrompts(),
-		Runner:           runner,
-		SupervisorRunner: runner,
+		RunDir:  runDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+		Runner:  runner,
 		// RootDir — верхний уровень "root_dir" для FaultWrongFolder (Task 2):
 		// relocateMisplacedQuestions сканирует top-level root_dir только когда
 		// он задан, поэтому харнесс использует runDir как root_dir, соответствуя

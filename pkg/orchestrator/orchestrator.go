@@ -18,7 +18,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/orchestrator/supervisor"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -63,9 +62,6 @@ type Options struct {
 	RootDir         string          // Flow.RootDir: project root as agent CWD (empty = inherit afm CWD)
 	RequireApproval bool            // headless: fail instead of auto-approve on awaiting_approval
 	Debug           bool            // if true, executors log the exact agent input to debug logs
-	// SupervisorRunner — runner для вызовов Supervisor.EvaluateStage.
-	// nil = Supervisor отключён глобально (DetermineStagePhases всегда вернёт базовые фазы).
-	SupervisorRunner executor.Runner
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -100,9 +96,6 @@ type Orchestrator struct {
 	// lastRootScan хранит время последнего скана root_dir на стадию (throttle
 	// в relocateMisplacedQuestions). Доступен только из горутины поллера.
 	lastRootScan map[string]time.Time
-	// supervisor оценивает, можно ли выполнить стадию автономно.
-	// nil, если SupervisorRunner не задан в Options.
-	supervisor *supervisor.Supervisor
 	// maxRetries/retryBackoff — снапшоты package-level RetryBackoff/MaxRetries,
 	// снятые в New(). Агентские горутины могут пережить возврат Run(), поэтому
 	// прямое чтение этих globals гонится с мутацией в тестах (data race).
@@ -198,13 +191,6 @@ func New(opts Options) *Orchestrator {
 	conc := concurrency.New(critical, opts.Stages, opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
 		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
 
-	// Supervisor включается только если задан SupervisorRunner; иначе
-	// DetermineStagePhases всегда возвращает базовые фазы.
-	var sup *supervisor.Supervisor
-	if opts.SupervisorRunner != nil {
-		sup = supervisor.NewSupervisor(opts.SupervisorRunner)
-	}
-
 	o := &Orchestrator{
 		opts:           opts,
 		graph:          graph.NewGraph(opts.Stages),
@@ -215,7 +201,6 @@ func New(opts Options) *Orchestrator {
 		concurrency:    conc,
 		violationCache: make(map[string]violationCacheEntry),
 		lastRootScan:   make(map[string]time.Time),
-		supervisor:     sup,
 		maxRetries:     MaxRetries,
 		retryBackoff:   RetryBackoff,
 	}

@@ -37,19 +37,6 @@ func TestScenarios(t *testing.T) {
 			}},
 		},
 		{
-			Name: "supervisor-autonomous",
-			Stages: []flow.Stage{
-				{ID: "auto1", Supervisor: true, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
-			},
-			Supervisor: []byte(`{"can_execute_autonomously":true,"reason":"x","recommended_phases":["autonomous_execution"]}`),
-			Agents:     map[string]AgentSpec{"auto1": {}},
-			Expect: Expectation{
-				Statuses:     map[string]state.StageStatus{"auto1": state.StatusDone},
-				FilesPresent: map[string][]string{"auto1": {"autonomous.flag", "execution_summary.md"}},
-				FilesAbsent:  map[string][]string{"auto1": {"plan.md"}},
-			},
-		},
-		{
 			Name:   "auto-phase",
 			Stages: []flow.Stage{{ID: "hard", Agents: []flow.AgentType{flow.AgentAuto}}},
 			Agents: map[string]AgentSpec{"hard": {}},

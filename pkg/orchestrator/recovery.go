@@ -157,7 +157,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				}
 			}
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
-			o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
+			o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
 		}
 	}
 
@@ -188,7 +188,7 @@ func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
 		return
 	}
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
-	o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
+	o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
 }
 
 // resumeStageAtStatus (re)spawns whatever goroutine a stage recorded as

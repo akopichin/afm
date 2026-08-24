@@ -17,21 +17,20 @@ const phasePlanning = string(flow.PhasePlanning)
 type FSMEvent string
 
 const (
-	EvStartPlanning      FSMEvent = "start_planning"
-	EvPlanReady          FSMEvent = "plan_ready"
-	EvApprove            FSMEvent = "approve"
-	EvRevise             FSMEvent = "revise"
-	EvStartRun           FSMEvent = "start_run"
-	EvComplete           FSMEvent = "complete"
-	EvFail               FSMEvent = "fail"
-	EvAskUser            FSMEvent = "ask_user"
-	EvUserAnswered       FSMEvent = "user_answered"
-	EvScheduleRetry      FSMEvent = "schedule_retry"
-	EvResumeAfterRetry   FSMEvent = "resume_after_retry"
-	EvManualRetry        FSMEvent = "manual_retry"
-	EvBlockedByDep       FSMEvent = "blocked_by_dep"
-	EvReady              FSMEvent = "ready"
-	EvSupervisorApproved FSMEvent = "supervisor_approved"
+	EvStartPlanning    FSMEvent = "start_planning"
+	EvPlanReady        FSMEvent = "plan_ready"
+	EvApprove          FSMEvent = "approve"
+	EvRevise           FSMEvent = "revise"
+	EvStartRun         FSMEvent = "start_run"
+	EvComplete         FSMEvent = "complete"
+	EvFail             FSMEvent = "fail"
+	EvAskUser          FSMEvent = "ask_user"
+	EvUserAnswered     FSMEvent = "user_answered"
+	EvScheduleRetry    FSMEvent = "schedule_retry"
+	EvResumeAfterRetry FSMEvent = "resume_after_retry"
+	EvManualRetry      FSMEvent = "manual_retry"
+	EvBlockedByDep     FSMEvent = "blocked_by_dep"
+	EvReady            FSMEvent = "ready"
 	// EvHookFailed: script_before exhausted its retries — blocks the stage.
 	// Only fired for the blocking "before" hook; "after" hook failures do not
 	// go through the FSM (the stage is already done and must stay done).
@@ -124,18 +123,17 @@ func NewFSM(store *state.Store) *FSM {
 			// ask mid-flight). Without retrying/revising here the transition is
 			// silently rejected and the stage never reaches awaiting_user_input,
 			// which breaks the cancel path and the onUserAnswered restart path.
-			EvAskUser:            {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
-			EvUserAnswered:       {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
-			EvScheduleRetry:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning}, To: to(state.StatusRetrying)},
-			EvResumeAfterRetry:   {From: []state.StageStatus{state.StatusRetrying}, To: phaseDispatch},
-			EvManualRetry:        {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending)},
-			EvBlockedByDep:       {From: []state.StageStatus{state.StatusPending}, To: to(state.StatusFailed)},
-			EvReady:              {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
-			EvSupervisorApproved: {From: []state.StageStatus{state.StatusPlanning}, To: to(state.StatusReady)},
-			EvHookFailed:         {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
-			EvHookResolved:       {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
-			EvPause:              {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying}, To: to(state.StatusPaused)},
-			EvContinue:           {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
+			EvAskUser:          {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
+			EvUserAnswered:     {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
+			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning}, To: to(state.StatusRetrying)},
+			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying}, To: phaseDispatch},
+			EvManualRetry:      {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending)},
+			EvBlockedByDep:     {From: []state.StageStatus{state.StatusPending}, To: to(state.StatusFailed)},
+			EvReady:            {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
+			EvHookFailed:       {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
+			EvHookResolved:     {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
+			EvPause:            {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying}, To: to(state.StatusPaused)},
+			EvContinue:         {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}
 }

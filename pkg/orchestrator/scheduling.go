@@ -136,7 +136,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 		if _, ok := o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "deps done"); !ok {
 			continue
 		}
-		o.concurrency.SpawnAgent(ctx, s, o.startWithSupervisor)
+		o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
 	}
 }
 

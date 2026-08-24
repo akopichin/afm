@@ -21,9 +21,8 @@ const (
 	// EventAutoAnswered fires when a non-interactive stage's open question was
 	// answered by afm itself (see pkg/mcp.PickAutoAnswer), not by a real user.
 	// Never triggers an FSM transition — the stage's status is unaffected.
-	EventAutoAnswered       EventType = "auto_answered"
-	EventSupervisorDecision EventType = "supervisor_decision"
-	EventContextWarning     EventType = "context_warning"
+	EventAutoAnswered   EventType = "auto_answered"
+	EventContextWarning EventType = "context_warning"
 	// EventScriptOutput carries one line of stdout from a script/hook run.
 	// Data: map[string]string{"hook": "before"|"script"|"after", "line": "..."}.
 	EventScriptOutput EventType = "script_output"
