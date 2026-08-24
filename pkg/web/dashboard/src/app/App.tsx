@@ -112,7 +112,7 @@ export function App(): ReactElement {
   const idleMs = useIdleMs(idleAccumulatedMs, idleSince, connected)
   const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, connected)
 
-  const refreshedForEvent = useRef<number>(-1)
+  const lastRefreshedEvent = useRef<object | null>(null)
 
   // Отслеживаем, была ли ТЕКУЩАЯ выбранная стадия хоть раз замечена «в работе»
   // (не done) под этим же выбором — отличает «пользователь выбрал уже
@@ -176,12 +176,21 @@ export function App(): ReactElement {
   // WebSocket как канал обновления: значимое событие → ре-запрос состояния флоу.
   useEffect(() => {
     if (events.length === 0) return
-    if (refreshedForEvent.current === events.length) return
 
-    refreshedForEvent.current = events.length
-
+    // Идентичность по ССЫЛКЕ на последнее событие, а не по events.length: лента
+    // капается в MAX_EVENTS=200 (use-event-feed), после чего length навсегда
+    // остаётся 200, и старое сравнение `refreshedForEvent === events.length`
+    // (200 === 200) возвращалось раньше НАВСЕГДА — WS-канал обновления статуса
+    // тихо умирал на длинных ранах, оставляя только тротлящийся в фоне 3s-poll.
+    // use-event-feed добавляет новый объект события в конец на каждое
+    // поступление, поэтому ссылка на последний элемент меняется ровно тогда,
+    // когда пришло новое событие. См. App.test.tsx "WS refresh survives past
+    // the 200-event feed cap".
     const latest = events[events.length - 1]
-    if (latest !== undefined && SIGNIFICANT_EVENT_TYPES.has(latest.type)) {
+    if (latest === undefined || latest === lastRefreshedEvent.current) return
+
+    lastRefreshedEvent.current = latest
+    if (SIGNIFICANT_EVENT_TYPES.has(latest.type)) {
       refresh()
     }
   }, [events, refresh])

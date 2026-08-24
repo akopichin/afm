@@ -27,23 +27,46 @@ func (o *Orchestrator) CancelDialog(stageID string) error {
 }
 
 // NotifyAnswer is called by the HTTP handler when the user submits an answer.
-// If the agent goroutine is still running (its bash loop is awaiting
-// answer.json), we only transition the status — the bash loop will detect the
-// file and continue without a restart. If the goroutine has exited, we publish
-// to the critical bus so onUserAnswered can restart it.
+// It is a thin wrapper over resumeAfterAnswer with the dialog-feed UI event
+// enabled (publishUI=true) — a human answer should show up in the event feed.
 func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
+	return o.resumeAfterAnswer(stageID, phase, qID, answer, true)
+}
+
+// resumeAfterAnswer drives a stage out of awaiting_user_input once answer.json
+// is already on disk. If the agent goroutine is still running (its bash loop is
+// polling for answer.json), we only transition the status — the loop detects
+// the file and continues without a restart. If the goroutine has exited, we
+// publish to the critical bus so onUserAnswered restarts it.
+//
+// Shared by two callers so auto-answer is symmetric with a human answer:
+//   - NotifyAnswer (human via HTTP) — publishUI=true adds the dialog-feed event.
+//   - the non-interactive auto-answer path (pollQuestions / autoAnswerMalformed)
+//     — publishUI=false, since it already published EventAutoAnswered for the feed.
+//
+// The non-interactive case is what fixes the permanent hang: a non-interactive
+// or agents:[auto] stage whose agent asked a question and exited (before writing
+// its completion artifact) is parked in awaiting_user_input by retry.go /
+// onAgentCompleted, and the ONLY driver out of that status is EvUserAnswered.
+// Writing answer.json alone never moved the FSM nor restarted the exited agent,
+// so the stage hung forever. In the normal case (agent still polling, stage
+// still running) this is a no-op: the IsActive branch fires EvUserAnswered,
+// which the FSM rejects from `running`, and no restart happens.
+func (o *Orchestrator) resumeAfterAnswer(stageID, phase, qID, answer string, publishUI bool) error {
 	if o.concurrency.IsActive(stageID) {
 		guardPhase := o.popPreAskPhase(stageID, phase)
 		_, seq, _ := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase}, "")
-		o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
-			keyID: qID, keyPhase: phase, keyAnswer: answer,
-		}, Seq: seq})
+		if publishUI {
+			o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
+				keyID: qID, keyPhase: phase, keyAnswer: answer,
+			}, Seq: seq})
+		}
 		return nil
 	}
 	return o.critical.Publish(context.Background(), bus.Event{
 		Type:    bus.EventUserAnswered,
 		StageID: stageID,
-		Data:    map[string]any{keyID: qID, "phase": phase, keyAnswer: answer},
+		Data:    map[string]any{keyID: qID, keyPhase: phase, keyAnswer: answer},
 	})
 }
 

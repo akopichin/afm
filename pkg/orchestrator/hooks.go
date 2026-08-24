@@ -156,6 +156,20 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 	return ex.RunScript(ctx, timeout, logFile)
 }
 
+// publishHookNotice publishes a hook_failed/hook_resolved event live to the UI
+// bus AND mirrors it to notices.jsonl so it survives a reload/reconnect. These
+// events have no durable FSM backing of their own: runAfterHook never touches
+// the FSM at all (the stage stays done through the failure), and runBeforeHook's
+// status transition reconstructs only as a generic stage_status_changed —
+// transitionToFeedEvents has no hook_failed/hook_resolved case, so the actual
+// error/resolution text was lost on reload. Mirrors the EventAutoAnswered /
+// EventScriptOutput persistence pattern. seq is the FSM transition seq where one
+// exists (before-hook), 0 otherwise (after-hook, no FSM transition).
+func (o *Orchestrator) publishHookNotice(stageID string, evType bus.EventType, seq uint64, data map[string]string) {
+	o.ui.Publish(bus.Event{Type: evType, StageID: stageID, Data: data, Seq: seq})
+	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(evType), data)
+}
+
 // runBeforeHook runs s.ScriptBefore with retries; on exhaustion it blocks the
 // stage in hook_failed until the user retries or skips via the dashboard.
 // Returns true once the stage should proceed to its main content (hook
@@ -191,16 +205,9 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		// signal — the transition already happened via triggerWithSeq above.
 		// o.critical has exactly one consumer (Run()'s event loop), and
 		// handleEvent's switch doesn't handle EventHookFailed, so publishing
-		// it there silently discarded it — the dashboard never saw the error
-		// text for a script_before failure, live or on reconnect. The other
-		// 3 sibling call sites (before-resolve, after-fail, after-resolve)
-		// already correctly use o.ui.
-		o.ui.Publish(bus.Event{
-			Type:    bus.EventHookFailed,
-			StageID: s.ID,
-			Data:    map[string]string{"hook": hookBefore, "error": err.Error()},
-			Seq:     seq,
-		})
+		// it there silently discarded it. publishHookNotice also mirrors it to
+		// notices.jsonl so the error text survives reload (see its comment).
+		o.publishHookNotice(s.ID, bus.EventHookFailed, seq, map[string]string{"hook": hookBefore, "error": err.Error()})
 
 		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
 		if !ok {
@@ -208,12 +215,7 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		}
 		clearHookPending(stageDir)
 		_, seq, _ = o.triggerWithSeq(s.ID, bus.EvHookResolved, bus.GuardCtx{}, "before hook "+resolutionName(decision))
-		o.ui.Publish(bus.Event{
-			Type:    bus.EventHookResolved,
-			StageID: s.ID,
-			Data:    map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)},
-			Seq:     seq,
-		})
+		o.publishHookNotice(s.ID, bus.EventHookResolved, seq, map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)})
 		if decision == hookDecisionSkip {
 			return true
 		}
@@ -252,22 +254,14 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 		waitCh := o.registerHookWaiter(s.ID)
 
 		_ = writeHookPending(stageDir, hookPending{Hook: hookAfter, Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout})
-		o.ui.Publish(bus.Event{
-			Type:    bus.EventHookFailed,
-			StageID: s.ID,
-			Data:    map[string]string{"hook": hookAfter, "error": err.Error()},
-		})
+		o.publishHookNotice(s.ID, bus.EventHookFailed, 0, map[string]string{"hook": hookAfter, "error": err.Error()})
 
 		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
 		if !ok {
 			return
 		}
 		clearHookPending(stageDir)
-		o.ui.Publish(bus.Event{
-			Type:    bus.EventHookResolved,
-			StageID: s.ID,
-			Data:    map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)},
-		})
+		o.publishHookNotice(s.ID, bus.EventHookResolved, 0, map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)})
 		if decision == hookDecisionSkip {
 			return
 		}
@@ -361,12 +355,7 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	}
 	clearHookPending(stageDir)
 	_, seq, _ := o.triggerWithSeq(s.ID, bus.EvHookResolved, bus.GuardCtx{}, "before hook "+resolutionName(decision))
-	o.ui.Publish(bus.Event{
-		Type:    bus.EventHookResolved,
-		StageID: s.ID,
-		Data:    map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)},
-		Seq:     seq,
-	})
+	o.publishHookNotice(s.ID, bus.EventHookResolved, seq, map[string]string{"hook": hookBefore, "resolution": resolutionName(decision)})
 	if decision == hookDecisionSkip {
 		o.dispatchMainAfterBeforeHook(ctx, s)
 		return
@@ -417,11 +406,7 @@ func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
 		return
 	}
 	clearHookPending(stageDir)
-	o.ui.Publish(bus.Event{
-		Type:    bus.EventHookResolved,
-		StageID: s.ID,
-		Data:    map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)},
-	})
+	o.publishHookNotice(s.ID, bus.EventHookResolved, 0, map[string]string{"hook": hookAfter, "resolution": resolutionName(decision)})
 	if decision == hookDecisionSkip {
 		return
 	}

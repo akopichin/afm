@@ -87,6 +87,44 @@ func TestFSM_Apply_RetryingStartPlanning(t *testing.T) {
 	}
 }
 
+// TestFSM_RetryFromAwaitingUserInput закрывает Finding #5: поллер вопросов мог
+// перевести стадию Running→AwaitingUserInput из-за брошенного вопроса, пока агент
+// ещё выполнялся; затем агент возвращал ретраибельную ошибку (529). Раньше
+// EvScheduleRetry (From={Planning,Running}) и EvResumeAfterRetry (From={Retrying})
+// молча отбрасывались из AwaitingUserInput, и всё время бэкоффа стадия показывала
+// неверный awaiting_user_input вместо retrying (и полагалась на fallthrough
+// повторного запуска агента + AwaitingUserInput-приём в EvComplete — хрупко). Оба
+// события теперь принимают AwaitingUserInput как исходный статус.
+func TestFSM_RetryFromAwaitingUserInput(t *testing.T) {
+	t.Run("EvScheduleRetry: awaiting_user_input->retrying", func(t *testing.T) {
+		fsm, store := newTestFSM(t, []string{"a"})
+		defer store.Close()
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
+
+		to, _, ok, err := fsm.Apply("a", EvScheduleRetry, GuardCtx{Phase: string(flow.PhaseImplementation)}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || to != state.StatusRetrying {
+			t.Fatalf("EvScheduleRetry from awaiting_user_input: got (%v, %v), want (retrying, true)", to, ok)
+		}
+	})
+
+	t.Run("EvResumeAfterRetry: awaiting_user_input->running", func(t *testing.T) {
+		fsm, store := newTestFSM(t, []string{"a"})
+		defer store.Close()
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
+
+		to, _, ok, err := fsm.Apply("a", EvResumeAfterRetry, GuardCtx{Phase: string(flow.PhaseImplementation)}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || to != state.StatusRunning {
+			t.Fatalf("EvResumeAfterRetry from awaiting_user_input: got (%v, %v), want (running, true)", to, ok)
+		}
+	})
+}
+
 func TestFSM_Apply_ReviseFromRunning(t *testing.T) {
 	fsm, store := newTestFSM(t, []string{"a"})
 	defer store.Close()

@@ -151,7 +151,6 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			if processed[key] {
 				continue
 			}
-			processed[key] = true
 			// Write to dialog.jsonl for history (idempotent via FindEntry check).
 			dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
 			if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
@@ -165,13 +164,18 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 
 			// Non-interactive stage (default, or agents:[auto]): afm answers the
 			// question itself instead of surfacing it to a human — the stage's
-			// FSM status is left untouched (no EvAskUser transition).
+			// FSM status is left untouched (no EvAskUser transition) in the normal
+			// case where the agent is still polling.
 			if stage != nil && !stage.Interactive {
 				answer, fromOptions := mcp.PickAutoAnswer(q)
 				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+					// НЕ помечаем processed: неудачная запись (диск / O_EXCL-гонка)
+					// должна ретраиться на следующем тике, иначе стадия зависнет в
+					// ожидании answer.json до idle-таймаута исполнителя (~30 мин).
 					continue
 				}
+				processed[key] = true
 				o.ui.Publish(bus.Event{
 					Type:    bus.EventAutoAnswered,
 					StageID: stageID,
@@ -182,8 +186,16 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
 					keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
 				})
+				// Если агент уже вышел, оставив стадию запаркованной в
+				// awaiting_user_input, написать answer.json недостаточно —
+				// стадию надо вывести из этого статуса и перезапустить агента
+				// (тем же путём, что human-ответ). В нормальном случае (агент
+				// ещё жив и опрашивает answer.json) это no-op. См.
+				// resumeAfterAnswer / TestPollQuestions_ParkedNonInteractiveStageIsUnparked.
+				_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
 				continue
 			}
+			processed[key] = true
 
 			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
 			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал

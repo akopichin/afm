@@ -142,11 +142,16 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// Incomplete work — retry once without backoff
 			if stagefiles.IsIncompleteWorkError(checkErr) && attempt == 0 {
 				incompleteReason = checkErr.Error()
-				o.ui.Publish(bus.Event{
-					Type:    bus.EventStageStatusChanged,
-					StageID: s.ID,
-					Data:    "incomplete work, retrying: " + checkErr.Error(),
-				})
+				// Раньше публиковалось как EventStageStatusChanged с Data-
+				// сообщением (а не статусом) — фронт (extractStatusString)
+				// рисовал это пустым бейджем "→ ", и на reload сообщение
+				// терялось (не FSM-переход → нет в events.jsonl). По смыслу
+				// это "сейчас будет повторная попытка": шлём EventRetryScheduled
+				// (рендерится как "retry: <msg>") и дублируем в notices.jsonl,
+				// чтобы пережить reload.
+				msg := "incomplete work, retrying: " + checkErr.Error()
+				o.ui.Publish(bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID, Data: msg})
+				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventRetryScheduled), msg)
 				continue
 			}
 			// Missing artifact or second incomplete attempt — fail
@@ -180,11 +185,18 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 
 		if attempt < maxRetries {
-			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, "")
+			// Сообщение кладём в reason самой transition, чтобы на reload
+			// transitionToFeedEvents реконструировал retry_scheduled с тем же
+			// payload'ом (Data: t.Reason), а не с пустой строкой — раньше reason
+			// был "", и после перезагрузки строка показывала "retry:" без
+			// attempt/backoff. Live и историческое событие дедуплицируются по
+			// seq, дубля не будет.
+			msg := fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff)
+			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, msg)
 			o.ui.Publish(bus.Event{
 				Type:    bus.EventRetryScheduled,
 				StageID: s.ID,
-				Data:    fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff),
+				Data:    msg,
 				Seq:     seq,
 			})
 			select {

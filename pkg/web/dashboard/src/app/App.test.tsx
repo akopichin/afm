@@ -165,6 +165,38 @@ describe('App', () => {
     expect(statusCalls).toBe(2)
   })
 
+  test('CRITICAL: WS refresh survives past the 200-event feed cap (Finding #2)', async () => {
+    let statusCalls = 0
+    mockFetchForStatus(
+      () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }),
+      () => {
+        statusCalls += 1
+      },
+    )
+
+    render(<App />)
+    await waitFor(() => expect(statusCalls).toBe(1))
+
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+
+    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=200) незначимыми agent_action —
+    // сами по себе refresh они не вызывают, но насыщают длину массива в 200.
+    act(() => {
+      for (let i = 0; i < 205; i += 1) {
+        ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { n: i }, stage_id: 's1' }) })
+      }
+    })
+    expect(statusCalls).toBe(1)
+
+    // Значимое событие ПОСЛЕ насыщения кэпа обязано снова триггерить refresh.
+    // При старой length-based проверке (200 === 200) этот вызов молча
+    // проглатывался — WS-канал обновления был мёртв до конца сессии.
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
+    })
+    await waitFor(() => expect(statusCalls).toBe(2))
+  })
+
   test('CRITICAL: an autonomous stage hides the plan panel', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

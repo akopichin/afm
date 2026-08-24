@@ -123,10 +123,19 @@ func NewFSM(store *state.Store) *FSM {
 			// ask mid-flight). Without retrying/revising here the transition is
 			// silently rejected and the stage never reaches awaiting_user_input,
 			// which breaks the cancel path and the onUserAnswered restart path.
-			EvAskUser:          {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
-			EvUserAnswered:     {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
-			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning}, To: to(state.StatusRetrying)},
-			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying}, To: phaseDispatch},
+			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
+			EvUserAnswered: {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
+			// AwaitingUserInput разрешён по той же причине, что и в EvComplete/
+			// EvPlanReady: поллер вопросов мог перевести стадию Running→
+			// AwaitingUserInput из-за постороннего брошенного вопроса, пока агент
+			// ещё выполнялся, и лишь ПОТОМ агент вернул ретраибельную ошибку (529).
+			// Без AwaitingUserInput здесь оба перехода молча отбрасывались, и всё
+			// время бэкоффа стадия показывала awaiting_user_input вместо retrying;
+			// работало только за счёт fallthrough (повторный запуск агента) —
+			// хрупко: любое будущее `return` на этой ветке превратило бы это в
+			// вечный висяк. См. TestFSM_RetryFromAwaitingUserInput.
+			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput}, To: to(state.StatusRetrying)},
+			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying, state.StatusAwaitingUserInput}, To: phaseDispatch},
 			EvManualRetry:      {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending)},
 			EvBlockedByDep:     {From: []state.StageStatus{state.StatusPending}, To: to(state.StatusFailed)},
 			EvReady:            {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},

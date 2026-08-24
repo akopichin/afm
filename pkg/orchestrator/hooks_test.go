@@ -403,6 +403,74 @@ func TestRunBeforeHook_PublishesEventHookFailedOnUIBus(t *testing.T) {
 	}
 }
 
+// TestRunBeforeHook_PersistsHookEventsToNotices закрывает Finding #3: события
+// hook_failed/hook_resolved публиковались только живьём в UI-шину без durable-
+// backing (у before-hook FSM-переход реконструируется лишь как общий
+// stage_status_changed — transitionToFeedEvents не имеет case'а для hook-событий,
+// теряя текст ошибки/резолюции; у after-hook FSM не трогается вовсе). Клиент,
+// перезагрузивший страницу после падения хука, терял диагностику навсегда.
+// Теперь оба события дублируются в notices.jsonl (reconstructNotices реплеит их).
+func TestRunBeforeHook_PersistsHookEventsToNotices(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptBefore: "exit 1"}
+
+	subID, ch := o.ui.Subscribe(16)
+	defer o.ui.Unsubscribe(subID)
+
+	done := make(chan bool, 1)
+	go func() { done <- o.runBeforeHook(context.Background(), s) }()
+
+	// Дожидаемся hook_failed — гарантирует, что хук исчерпал ретраи и
+	// заблокировался в ожидании решения (и уже дописал notices.jsonl).
+	deadline := time.After(15 * time.Second)
+	for waiting := true; waiting; {
+		select {
+		case ev := <-ch:
+			if ev.Type == bus.EventHookFailed {
+				waiting = false
+			}
+		case <-deadline:
+			t.Fatal("EventHookFailed never observed")
+		}
+	}
+
+	if !o.resolveHook("s1", hookDecisionSkip) {
+		t.Fatal("resolveHook returned false")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runBeforeHook to return")
+	}
+
+	data, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		t.Fatalf("read notices.jsonl: %v", err)
+	}
+	types := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var e struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &e) == nil {
+			types[e.Type] = true
+		}
+	}
+	if !types[string(bus.EventHookFailed)] {
+		t.Error("notices.jsonl missing hook_failed — потеряется на reload")
+	}
+	if !types[string(bus.EventHookResolved)] {
+		t.Error("notices.jsonl missing hook_resolved — потеряется на reload")
+	}
+}
+
 func TestRunAfterHook_SucceedsFirstTry_NoEvents(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {

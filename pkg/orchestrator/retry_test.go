@@ -2,11 +2,14 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -134,5 +137,54 @@ func TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion(t *testing.T) {
 
 	if got := o.opts.Store.Get("s1"); got == state.StatusAwaitingUserInput {
 		t.Error("stage must not be held in awaiting_user_input when completion is already satisfied")
+	}
+}
+
+// TestRunWithRetry_ScheduleRetryTransitionCarriesReason закрывает Finding #7:
+// EventRetryScheduled публикуется живьём с Data="attempt X/Y in Zs", но сама
+// FSM-transition EvScheduleRetry создавалась с reason="" — а на reload
+// transitionToFeedEvents реконструирует retry_scheduled именно из reason
+// (Data: t.Reason). Итог: после перезагрузки строка ленты показывала "retry:"
+// без attempt/backoff. Теперь reason == сообщению.
+func TestRunWithRetry_ScheduleRetryTransitionCarriesReason(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	// setupHookOrch строит Orchestrator вручную (не через New), поэтому
+	// maxRetries/retryBackoff нулевые — выставляем явно, иначе retry вообще не
+	// планируется (attempt < 0 == false → сразу EvFail).
+	o.maxRetries = 1
+	o.retryBackoff = time.Millisecond
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	o.runWithRetry(context.Background(), flow.Stage{ID: "s1"}, phaseImplementation,
+		func(string) error { return errors.New("overloaded") }, // retryable → планирует ровно один retry
+		nil,
+		func() {},
+	)
+
+	data, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var tr struct {
+			Event  string `json:"event"`
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal([]byte(line), &tr) != nil {
+			continue
+		}
+		if tr.Event == string(bus.EvScheduleRetry) {
+			found = true
+			if !strings.Contains(tr.Reason, "attempt") {
+				t.Errorf("schedule_retry reason = %q, want непустой 'attempt X/Y in Zs' — иначе retry_scheduled пуст на reload", tr.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("не найдено ни одной schedule_retry-transition в events.jsonl")
 	}
 }

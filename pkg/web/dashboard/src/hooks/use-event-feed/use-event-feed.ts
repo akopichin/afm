@@ -148,13 +148,20 @@ function dedupeKey(e: AfmEvent): string {
 }
 
 // mergeHistory сливает историю из /api/events (history) с уже накопленными
-// live-событиями (live), дедуплицируя по dedupeKey: если событие с тем же
-// ключом уже пришло по WS (могло случиться в гонке между открытием сокета и
-// резолвом REST-фетча), историческая запись-дубликат отбрасывается.
+// live-событиями (live). history — авторитетна и уже отсортирована сервером по
+// времени (reconstructEventHistory, slices.SortFunc по Timestamp), поэтому она
+// и есть база; из live дописываются в КОНЕЦ только те события, которых ещё нет в
+// истории (самые свежие, ещё не долетевшие до durable-логов на момент фетча).
+//
+// Раньше было наоборот — [...deduped, ...live], где deduped = history без
+// live-ключей. На реконнекте (или в гонке «WS обогнал /api/events») события,
+// случившиеся, пока их не было в live, попадали в deduped и уезжали в НАЧАЛО
+// ленты, ломая хронологию; а при полном буфере отсекались slice(-MAX_EVENTS)
+// первыми и пропадали вовсе. См. тест «Finding #4».
 function mergeHistory(history: AfmEvent[], live: AfmEvent[]): AfmEvent[] {
-  const liveKeys = new Set(live.map(dedupeKey))
-  const deduped = history.filter((e) => !liveKeys.has(dedupeKey(e)))
-  return [...deduped, ...live].slice(-MAX_EVENTS)
+  const historyKeys = new Set(history.map(dedupeKey))
+  const liveOnly = live.filter((e) => !historyKeys.has(dedupeKey(e)))
+  return [...history, ...liveOnly].slice(-MAX_EVENTS)
 }
 
 function statusOf(event: AfmEvent): string {

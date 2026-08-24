@@ -350,6 +350,49 @@ describe('useEventFeed', () => {
     })
   })
 
+  // Finding #4: mergeHistory при непустом live (реконнект ИЛИ гонка «WS обогнал
+  // /api/events») раньше делала [...deduped, ...live] — события, присутствующие
+  // только в свежей истории (случившиеся, пока их ещё не было в live), уезжали в
+  // НАЧАЛО ленты (визуально «самые старые»), ломая хронологию, а при полном
+  // буфере отсекались slice(-200) первыми. Теперь history (уже отсортирована
+  // сервером по времени) — база, а live-only дописывается в конец.
+  test('merge keeps chronological order when a live event races ahead of /api/events (Finding #4)', async () => {
+    // Полная упорядоченная история; seq=3 — «случилось, пока шёл фетч».
+    const history = [
+      { type: 'stage_status_changed', stage_id: 's1', data: 'running', timestamp: '2026-07-27T10:00:00.000Z', seq: 1 },
+      { type: 'stage_status_changed', stage_id: 's1', data: 'awaiting_approval', timestamp: '2026-07-27T10:01:00.000Z', seq: 2 },
+      { type: 'stage_status_changed', stage_id: 's1', data: 'done', timestamp: '2026-07-27T10:02:00.000Z', seq: 3 },
+    ]
+    let resolveFetch: (value: unknown) => void = () => {}
+    const fetchPromise = new Promise((res) => {
+      resolveFetch = res
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(fetchPromise),
+    )
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    // WS доставляет seq=2 ДО резолва /api/events → live = [seq2].
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', stage_id: 's1', data: 'awaiting_approval', seq: 2 })
+    })
+    // Теперь резолвим полную историю → срабатывает mergeHistory(history, [seq2]).
+    await act(async () => {
+      resolveFetch({ ok: true, json: () => Promise.resolve(history) })
+      await fetchPromise
+    })
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(3)
+    })
+    // Хронологический порядок сохранён: seq3 (done) — В КОНЦЕ, а не в начале.
+    expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3])
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })

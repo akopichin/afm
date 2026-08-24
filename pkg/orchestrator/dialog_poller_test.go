@@ -118,6 +118,112 @@ func TestPollQuestions_AutoStageAutoAnswers(t *testing.T) {
 	}
 }
 
+// TestPollQuestions_ParkedNonInteractiveStageIsUnparked закрывает постоянный
+// висяк: non-interactive/autonomous стадия, чей агент задал вопрос и завершился,
+// не дописав артефакт, паркуется в awaiting_user_input (retry.go при err==nil /
+// onAgentCompleted). Авто-ответ пишет answer.json, но раньше НЕ выводил стадию из
+// awaiting_user_input и не перезапускал вышедшего агента — единственный драйвер
+// выхода из этого статуса (EvUserAnswered) публиковался лишь human-путём
+// (NotifyAnswer через HTTP). Итог: стадия висела навсегда, даже рестарт afm не
+// спасал. Теперь авто-ответ симметричен human-пути: публикует EventUserAnswered
+// в critical-шину, откуда onUserAnswered перезапускает вышедшего агента.
+func TestPollQuestions_ParkedNonInteractiveStageIsUnparked(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Autonomous", Agents: []flow.AgentType{flow.AgentAuto}}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	// Агент задал вопрос и вышел → стадия запаркована в awaiting_user_input,
+	// агентской горутины больше нет (IsActive == false).
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusRunning, To: state.StatusAwaitingUserInput, Event: "test_park"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	writeQuestionFile(t, stageDir, "autonomous_execution", "q1", []string{"Вариант A (recommended)"})
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	o.pollQuestions(map[string]bool{}, map[string]*malformedQuestionState{})
+
+	if _, err := os.Stat(filepath.Join(stageDir, "autonomous_execution.q1.answer.json")); err != nil {
+		t.Fatalf("answer.json not written: %v", err)
+	}
+	// Ключевой инвариант фикса: авто-ответ опубликовал EventUserAnswered в
+	// critical-шину — сигнал, по которому onUserAnswered перезапускает вышедшего
+	// агента. Без него стадия зависла бы в awaiting_user_input навсегда.
+	select {
+	case ev := <-o.critical.Recv():
+		if ev.Type != bus.EventUserAnswered {
+			t.Fatalf("critical event = %s, want %s", ev.Type, bus.EventUserAnswered)
+		}
+		if ev.StageID != stage.ID {
+			t.Fatalf("critical event stage = %s, want %s", ev.StageID, stage.ID)
+		}
+	default:
+		t.Fatal("ожидался EventUserAnswered в critical-шине для вывода стадии из awaiting_user_input")
+	}
+}
+
+// TestPollQuestions_FailedAutoAnswerWriteIsRetried закрывает баг порядка
+// "пометил-до-записи": раньше processed[key] ставился ДО WriteAnswer, поэтому
+// упавшая запись answer.json (ошибка диска / O_EXCL-гонка) навсегда оставляла
+// ключ помеченным без файла на диске — авто-ответ никогда не переретраивался, и
+// bash-loop агента ждал answer.json до idle-таймаута исполнителя (~30 мин) →
+// падение. Теперь ключ помечается только после успешной записи.
+func TestPollQuestions_FailedAutoAnswerWriteIsRetried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only каталог не ограничивает root — проверка бессмысленна")
+	}
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"A (recommended)"})
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+
+	// Каталог стадии только для чтения → создание answer.json упадёт.
+	if err := os.Chmod(stageDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stageDir, 0o755) })
+
+	processed := map[string]bool{}
+	o.pollQuestions(processed, map[string]*malformedQuestionState{})
+
+	key := "s1|implementation|q1"
+	if processed[key] {
+		t.Fatalf("processed[%q] не должен ставиться при неудачной записи — иначе авто-ответ не переретраится", key)
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.answer.json")); !os.IsNotExist(err) {
+		t.Fatalf("answer.json не должен существовать после неудачной записи: err=%v", err)
+	}
+
+	// Восстанавливаем права → следующий тик обязан успешно записать answer.json.
+	if err := os.Chmod(stageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o.pollQuestions(processed, map[string]*malformedQuestionState{})
+	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.answer.json")); err != nil {
+		t.Fatalf("answer.json должен появиться на ретрае после восстановления прав: %v", err)
+	}
+}
+
 // noticeEnvelopeData — поле "data" одной строки notices.jsonl для
 // auto_answered-уведомления (см. TestPollQuestions_AutoAnswerPersistsToNotices).
 type noticeEnvelopeData struct {
