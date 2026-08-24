@@ -202,7 +202,46 @@ func ParseFile(path string) (*Flow, error) {
 		return nil, err
 	}
 	f.applyScriptTimeoutDefaults()
+	warnDeprecatedSupervisorFields(data, path)
 	return &f, nil
+}
+
+// deprecatedSupervisorStageProbe holds just the removed per-stage
+// LLM-supervisor keys, decoded by warnDeprecatedSupervisorFields.
+type deprecatedSupervisorStageProbe struct {
+	ID               string  `yaml:"id"`
+	Supervisor       *bool   `yaml:"supervisor"`
+	SupervisorPrompt *string `yaml:"supervisor_prompt"`
+}
+
+// warnDeprecatedSupervisorFields best-effort re-parses the raw YAML looking
+// for the removed LLM-supervisor keys (supervisor/supervisor_prompt on a
+// stage; supervisor_command at the flow root) and prints a non-fatal WARN to
+// stderr naming the affected stage id and key. The LLM supervisor was
+// removed (agents: [auto] replaces it for autonomous stages); ParseFile's
+// primary decode silently drops these now-unknown keys (yaml.Unmarshal isn't
+// KnownFields-strict), so a flow.yaml built for the old supervisor keeps
+// working exactly as it does today when the supervisor is unconfigured —
+// this only makes that behavior change visible instead of silent.
+func warnDeprecatedSupervisorFields(data []byte, path string) {
+	var probe struct {
+		SupervisorCommand *string                          `yaml:"supervisor_command"`
+		Stages            []deprecatedSupervisorStageProbe `yaml:"stages"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return
+	}
+	if probe.SupervisorCommand != nil {
+		fmt.Fprintf(os.Stderr, "WARN: %s: flow-level \"supervisor_command\" is no longer supported and is ignored (the LLM supervisor was removed; use \"agents: [auto]\" for autonomous stages)\n", path)
+	}
+	for _, s := range probe.Stages {
+		if s.Supervisor != nil {
+			fmt.Fprintf(os.Stderr, "WARN: %s: stage %q: \"supervisor\" is no longer supported and is ignored (use \"agents: [auto]\" for autonomous stages)\n", path, s.ID)
+		}
+		if s.SupervisorPrompt != nil {
+			fmt.Fprintf(os.Stderr, "WARN: %s: stage %q: \"supervisor_prompt\" is no longer supported and is ignored\n", path, s.ID)
+		}
+	}
 }
 
 // defaultScriptTimeout is applied to script/script_before/script_after when

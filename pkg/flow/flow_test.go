@@ -1,6 +1,7 @@
 package flow_test
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"testing"
@@ -672,5 +673,44 @@ func TestParseFile_AutoRunOmittedDefaultsEnabled(t *testing.T) {
 	}
 	if f.Stages[0].AutoRunDisabled() {
 		t.Error("expected omitted auto_run to default to enabled (not disabled)")
+	}
+}
+
+func TestParseFile_WarnsOnDeprecatedSupervisorKeys(t *testing.T) {
+	yaml := `
+name: test
+supervisor_command: glm51
+stages:
+  - id: s1
+    description: do something
+    supervisor: true
+    supervisor_prompt: "extra hint"
+    agents: [planning, implementation]
+`
+	path := writeTemp(t, yaml)
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	_, parseErr := flow.ParseFile(path)
+
+	os.Stderr = origStderr
+	w.Close()
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	stderr := buf.String()
+
+	if parseErr != nil {
+		t.Fatalf("ParseFile should succeed despite deprecated keys, got: %v", parseErr)
+	}
+	if !strings.Contains(stderr, "WARN") || !strings.Contains(stderr, "supervisor_command") {
+		t.Errorf("expected a WARN about supervisor_command, got stderr: %q", stderr)
+	}
+	if !strings.Contains(stderr, "s1") || !strings.Contains(stderr, "supervisor") {
+		t.Errorf("expected a WARN naming stage s1 and the supervisor key, got stderr: %q", stderr)
 	}
 }
