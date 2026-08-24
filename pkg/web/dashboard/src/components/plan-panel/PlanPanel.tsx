@@ -360,6 +360,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
               placeholder={`Comment on line ${item.line}...`}
               value={draft}
               onChange={setDraft}
+              autoFocus
             />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>

@@ -302,6 +302,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
               placeholder={`Comment on line ${item.line}...`}
               value={draft}
               onChange={setDraft}
+              autoFocus
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                   e.preventDefault()
