@@ -286,6 +286,8 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleApprove(w, r)
 	case strings.HasSuffix(path, "/revise") && r.Method == http.MethodPost:
 		s.handleRevise(w, r)
+	case strings.HasSuffix(path, "/note") && r.Method == http.MethodPost:
+		s.handleStageNote(w, r)
 	case strings.HasSuffix(path, "/retry") && r.Method == http.MethodPost:
 		s.handleRetry(w, r)
 	case strings.HasSuffix(path, "/pause") && r.Method == http.MethodPost:

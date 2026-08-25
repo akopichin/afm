@@ -499,6 +499,82 @@ func TestHandleRevise(t *testing.T) {
 	}
 }
 
+// setupPendingServer builds a server whose single stage stays pending (no
+// transition applied), for pre-note handler tests. isScript wires StageIsScript.
+func setupPendingServer(t *testing.T, isScript bool) (*Server, string) {
+	t.Helper()
+	runDir := t.TempDir()
+	store, err := state.Open(runDir, []string{testStageID})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	srv := New(Config{
+		Port:          0,
+		RunDir:        runDir,
+		Store:         store,
+		UIBus:         bus.NewUIBus(),
+		Actions:       fakeStageActions{},
+		StageIsScript: map[string]bool{testStageID: isScript},
+	})
+	return srv, runDir
+}
+
+func TestHandleStageNote_SaveAndClear(t *testing.T) {
+	srv, runDir := setupPendingServer(t, false)
+	notePath := filepath.Join(runDir, testStageID, "prenote.md")
+
+	// Прикрепляем заметку.
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/note", strings.NewReader(`{"note":"Учти лимиты API"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageNote(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: got %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	if data, _ := os.ReadFile(notePath); string(data) != "Учти лимиты API" {
+		t.Errorf("prenote.md = %q", string(data))
+	}
+
+	// /api/status отдаёт pre_note.
+	sreq := httptest.NewRequest("GET", "/api/status", nil)
+	sw := httptest.NewRecorder()
+	srv.handleStatus(sw, sreq)
+	if !strings.Contains(sw.Body.String(), "Учти лимиты API") {
+		t.Errorf("pre_note missing from /api/status: %s", sw.Body.String())
+	}
+
+	// Пустой текст = удалить.
+	req = httptest.NewRequest("POST", "/api/stages/"+testStageID+"/note", strings.NewReader(`{"note":""}`))
+	w = httptest.NewRecorder()
+	srv.handleStageNote(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clear: got %d, want 200", w.Code)
+	}
+	if _, err := os.Stat(notePath); !os.IsNotExist(err) {
+		t.Errorf("prenote.md should be deleted, stat err=%v", err)
+	}
+}
+
+func TestHandleStageNote_RejectsNonPending(t *testing.T) {
+	srv, _ := setupTestServer(t) // стадия в awaiting_approval
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/note", strings.NewReader(`{"note":"x"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageNote(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("non-pending: got %d, want 400", w.Code)
+	}
+}
+
+func TestHandleStageNote_RejectsScriptStage(t *testing.T) {
+	srv, _ := setupPendingServer(t, true)
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/note", strings.NewReader(`{"note":"x"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageNote(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("script stage: got %d, want 400", w.Code)
+	}
+}
+
 func TestHandleRetry(t *testing.T) {
 	var retriedID string
 	srv, _ := setupTestServer(t)

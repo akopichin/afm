@@ -11,7 +11,8 @@ type StagesListProps = {
   stages: Stage[]
   selectedStageId: string | null
   onSelect: (stageId: string) => void
-  onAddNote?: (stageId: string) => void // вызывается при клике на пункт меню
+  onAddNote?: (stageId: string) => void // «Add note for agent» (revise, живой агент)
+  onEditPreNote?: (stageId: string) => void // «Add note (before start)» (pending-стадия)
   onPause?: (stageId: string) => void
 }
 
@@ -29,11 +30,25 @@ const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'pla
 // interrupt-канал, так что заметка на running-скрипте была бы no-op.
 const ADD_NOTE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
+// Pre-note (заметка ДО старта) доступна только пока стадия pending и только у
+// стадий с агентом — у скрипта нет агента, которому вклеить заметку в контекст
+// (симметрично !isScript-гейту "Add note for agent").
+function canPreNote(stage: Stage): boolean {
+  return stage.status === 'pending' && !stage.isScript
+}
+
+// Кебаб показываем, если у стадии есть хоть один пункт: обычные действия
+// (KEBAB_STATUSES) ИЛИ pre-note на pending-стадии. Без этого добавление
+// pending в KEBAB_STATUSES показывало бы пустое меню на pending-скрипте.
+function hasKebab(stage: Stage): boolean {
+  return KEBAB_STATUSES.has(stage.status) || canPreNote(stage)
+}
+
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onPause }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -141,7 +156,8 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onPau
             </span>
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
-            {KEBAB_STATUSES.has(stage.status) && (
+            {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
+            {hasKebab(stage) && (
               <span className="stage-kebab-wrap">
                 <button
                   type="button"
@@ -182,6 +198,20 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onPau
                             }}
                           >
                             Add note for agent
+                          </button>
+                        </li>
+                      )}
+                      {canPreNote(stage) && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuStageId(null)
+                              setMenuPos(null)
+                              onEditPreNote?.(stage.id)
+                            }}
+                          >
+                            {stage.preNote === '' ? 'Add note (before start)' : 'Edit note (before start)'}
                           </button>
                         </li>
                       )}

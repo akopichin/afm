@@ -2,6 +2,17 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-25
+
+### Feature: attach a note to a stage before it starts (pre-note)
+
+While a flow runs you often realize a *later* stage needs to take something into account — a constraint, a gotcha, a "don't touch X". You can now write that down immediately instead of waiting for the stage to start: the pending stage's kebab menu gains an **"Add note (before start)"** item, and the note is spliced into the agent's context on its very first run — as part of the original task, not as a mid-run correction (that's what the existing "Add note for agent" / `agent_suggest` does for an *already-running* agent).
+
+- **One editable field per stage, stored as a plain `<stageDir>/prenote.md`** — saving replaces the text, saving an empty field removes the note (changed your mind → cleared it). No FSM event, no status change: the stage stays `pending`. The note survives an afm reload/restart (it's on disk) but lives within the current run.
+- **Injected on the fresh start of every agent-driven stage** (planning/implementation/review/`agents: [auto]`) via a shared `preNoteBlock` helper, mirroring exactly how the feedback-restart path splices `feedback.md` — the agent sees a `## User note (added before this stage started)` block. Script stages are excluded (no agent to receive it), same as the "Add note for agent" item.
+- **Dashboard:** the pending stage's row shows a 📝 indicator once a note is attached; re-opening the modal prefills the current text and the menu item reads "Edit note (before start)". New endpoint `POST /api/stages/{id}/note` (rejects non-`pending` and script stages with 400); the note text is served as `pre_note` on `/api/status`.
+- Verified end-to-end in a real browser (Chrome DevTools MCP) against a local afm run with a mock agent: the textarea (incl. Cyrillic), the 📝 indicator, edit-prefill, clear-to-delete, the backend write, and — the crux — the note appearing verbatim in the autonomous agent's actual prompt (`autonomous.prompt.log` under `--debug`). Tests: `TestSavePreNote_SaveLoadClear`, `TestHandleStageNote_*`, `TestIntegration_PreNoteReachesFreshPrompt`, plus `StagesList`/`use-status` frontend cases; `make lint` clean, full Go suite + 266 dashboard tests green.
+
 ## 2026-08-24
 
 ### Fix: FSM/frontend stability audit — one permanent hang, several lost-status/lost-message bugs

@@ -25,6 +25,13 @@ export async function reviseStage(stageId: string, feedback: string): Promise<vo
   await postJson(stageUrl(stageId, 'revise'), { feedback })
 }
 
+// setStageNote прикрепляет (или, при пустом note, удаляет) заметку к ещё не
+// стартовавшей стадии — доедет до агента в контексте при старте. В отличие от
+// reviseStage не трогает FSM: стадия остаётся pending.
+export async function setStageNote(stageId: string, note: string): Promise<void> {
+  await postJson(stageUrl(stageId, 'note'), { note })
+}
+
 export async function retryStage(stageId: string): Promise<void> {
   await postJson(stageUrl(stageId, 'retry'), null)
 }

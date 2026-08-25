@@ -41,6 +41,10 @@ type StageView struct {
 	// same plan) for the original rationale this mirrors exactly.
 	ShowPlan   bool `json:"show_plan"`
 	ShowDialog bool `json:"show_dialog"`
+	// PreNote — текст заметки, прикреплённой к стадии до её старта (prenote.md).
+	// Даёт фронту и текст для префилла модалки редактирования, и сигнал для
+	// индикатора 📝 «к стадии прикреплена заметка». Пусто, если заметки нет.
+	PreNote string `json:"pre_note,omitempty"`
 }
 
 // buildStageViews joins rs.Stages (event-log state) with the flow's static
@@ -82,6 +86,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			PausedFrom:  pausedFrom,
 			ShowPlan:    showPlan,
 			ShowDialog:  showDialog,
+			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
 		})
 	}
 	return views

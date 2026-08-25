@@ -46,15 +46,16 @@ describe('useStatus', () => {
       showDialog: false,
       isScript: false,
       pausedFrom: '',
+      preNote: '',
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })
 
-  test('парсит is_script/paused_from', () => {
+  test('парсит is_script/paused_from/pre_note', () => {
     const raw = {
       flow_name: 'demo',
       stages: [
-        { id: 's1', status: 'paused', is_script: true, paused_from: 'running' },
+        { id: 's1', status: 'paused', is_script: true, paused_from: 'running', pre_note: 'учти лимиты' },
         { id: 's2', status: 'running' },
       ],
     }
@@ -62,8 +63,10 @@ describe('useStatus', () => {
     const byId = new Map(stages.map((s) => [s.id, s]))
     expect(byId.get('s1')?.isScript).toBe(true)
     expect(byId.get('s1')?.pausedFrom).toBe('running')
+    expect(byId.get('s1')?.preNote).toBe('учти лимиты')
     expect(byId.get('s2')?.isScript).toBe(false)
     expect(byId.get('s2')?.pausedFrom).toBe('')
+    expect(byId.get('s2')?.preNote).toBe('')
   })
 
   test('парсит interactive/autonomous/has_dialog с дефолтом false', () => {

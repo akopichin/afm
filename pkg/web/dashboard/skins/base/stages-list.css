@@ -119,6 +119,15 @@
   color: var(--c-awaiting);
 }
 
+/* Badge на стадии, к которой прикреплена pre-note (заметка до старта). Тот же
+   слот, что у .dialog-badge/.approval-badge; приглушённый цвет — это не
+   attention-статус, а просто напоминание «заметка есть». */
+.prenote-badge {
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: 0.75;
+}
+
 /* === Active stage === */
 .stage-item.active {
   background: linear-gradient(90deg, rgba(229, 212, 66, 0.06), transparent);

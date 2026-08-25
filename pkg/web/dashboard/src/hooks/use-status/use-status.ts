@@ -154,6 +154,7 @@ function toStage(raw: unknown): Stage | null {
     showDialog: obj.show_dialog === true,
     isScript: obj.is_script === true,
     pausedFrom: isStageStatus(obj.paused_from) ? obj.paused_from : '',
+    preNote: typeof obj.pre_note === 'string' ? obj.pre_note : '',
   }
 }
 

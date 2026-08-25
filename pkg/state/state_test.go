@@ -66,6 +66,47 @@ func TestSaveFeedback(t *testing.T) {
 	}
 }
 
+func TestSavePreNote_SaveLoadClear(t *testing.T) {
+	dir := t.TempDir()
+	// stageDir намеренно не создаём: pending-стадия часто ещё без каталога.
+	stageDir := filepath.Join(dir, "s1")
+
+	if got := LoadPreNote(stageDir); got != "" {
+		t.Errorf("empty when no note, got %q", got)
+	}
+
+	if err := SavePreNote(stageDir, "Учти лимиты API на след. стадии"); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadPreNote(stageDir); got != "Учти лимиты API на след. стадии" {
+		t.Errorf("note not saved verbatim: %q", got)
+	}
+
+	// Повторное сохранение заменяет (одно редактируемое поле, не append).
+	if err := SavePreNote(stageDir, "Новый текст"); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadPreNote(stageDir); got != "Новый текст" {
+		t.Errorf("note not replaced: %q", got)
+	}
+
+	// Пустой текст = удалить заметку (передумал → очистил).
+	if err := SavePreNote(stageDir, "   "); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadPreNote(stageDir); got != "" {
+		t.Errorf("blank should delete, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "prenote.md")); !os.IsNotExist(err) {
+		t.Errorf("prenote.md should be gone, stat err=%v", err)
+	}
+
+	// Удаление отсутствующей заметки — не ошибка.
+	if err := SavePreNote(stageDir, ""); err != nil {
+		t.Errorf("clearing absent note should be a no-op, got %v", err)
+	}
+}
+
 func TestAwaitingUserInputStatus(t *testing.T) {
 	s := NewRunState([]string{"a"})
 	s.SetStageStatus("a", StatusAwaitingUserInput)

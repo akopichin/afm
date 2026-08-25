@@ -391,6 +391,48 @@ func SaveFeedback(stageDir, feedback string) error {
 	return nil
 }
 
+// preNoteFile — заметка, которую пользователь прикрепил к стадии, пока она ещё
+// была pending (до старта). В отличие от feedback.md (поправка по ходу работы,
+// дописывается с revision-разделителями), pre-note — одно редактируемое поле:
+// сохранение заменяет текст, сохранение пустого — удаляет файл. Оркестратор
+// вклеивает её в начальный контекст агента на первом старте стадии, см.
+// (*Orchestrator).preNoteBlock.
+const preNoteFile = "prenote.md"
+
+// SavePreNote атомарно (temp+rename) записывает pre-note стадии, либо удаляет
+// файл, когда note пустой/из одних пробелов (пользователь очистил поле =
+// «убрал заметку»). stageDir может ещё не существовать — pending-стадия часто
+// не имеет каталога на диске.
+func SavePreNote(stageDir, note string) error {
+	path := filepath.Join(stageDir, preNoteFile)
+	if strings.TrimSpace(note) == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove pre-note: %w", err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		return fmt.Errorf("mkdir stage dir: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(note), 0644); err != nil {
+		return fmt.Errorf("write pre-note: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename pre-note: %w", err)
+	}
+	return nil
+}
+
+// LoadPreNote возвращает текст pre-note стадии или "" если заметки нет.
+func LoadPreNote(stageDir string) string {
+	data, err := os.ReadFile(filepath.Join(stageDir, preNoteFile))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // VersionPlan renames plan.md to plan.v{N}.md and returns N.
 func VersionPlan(stageDir string) (int, error) {
 	planFile := filepath.Join(stageDir, "plan.md")

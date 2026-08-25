@@ -166,6 +166,49 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "revised", keyStageID: stageID})
 }
 
+type stageNoteRequest struct {
+	Note string `json:"note"`
+}
+
+// handleStageNote прикрепляет (или очищает) pre-note к стадии, которая ещё не
+// стартовала. В отличие от handleRevise (заметка живому агенту → FSM-переход +
+// SIGINT) здесь нет никакого FSM: стадия остаётся pending, заметка просто
+// пишется в prenote.md и вклеится в контекст агента на старте
+// (см. (*Orchestrator).preNoteBlock). Пустой текст = удалить заметку.
+func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/note")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	rs := s.store.Snapshot()
+	st, ok := rs.Stages[stageID]
+	if !ok {
+		http.Error(w, "stage not found", http.StatusNotFound)
+		return
+	}
+	if st.Status != state.StatusPending {
+		http.Error(w, fmt.Sprintf("stage is %s, not pending", st.Status), http.StatusBadRequest)
+		return
+	}
+	if s.stageIsScript[stageID] {
+		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
+		return
+	}
+	var req stageNoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	stageDir := filepath.Join(s.runDir, stageID)
+	if err := state.SavePreNote(stageDir, req.Note); err != nil {
+		http.Error(w, "save note failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "noted", keyStageID: stageID})
+}
+
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/retry")
 	if !isValidStageID(stageID) {

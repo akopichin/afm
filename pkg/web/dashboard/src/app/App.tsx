@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { pauseStage, reviseStage } from '../api/run-client'
+import { pauseStage, reviseStage, setStageNote } from '../api/run-client'
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -30,6 +30,24 @@ export function App(): ReactElement {
   // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
   // (agent_suggest, Task 8); null — модалка скрыта.
   const [noteModalStageId, setNoteModalStageId] = useState<string | null>(null)
+
+  // Стадия, для которой открыта модалка pre-note (заметка ДО старта, только
+  // pending-стадии); null — модалка скрыта. Отдельно от noteModalStageId:
+  // другой вариант модалки (префилл + пустой=удалить), другой обработчик.
+  const [preNoteModalStageId, setPreNoteModalStageId] = useState<string | null>(null)
+
+  async function handleSubmitPreNote(note: string): Promise<void> {
+    if (preNoteModalStageId === null) return
+    try {
+      await setStageNote(preNoteModalStageId, note)
+      setPreNoteModalStageId(null)
+    } catch (err) {
+      // Как handleSubmitNote: не закрываем молча — оставляем модалку открытой
+      // с введённым текстом, чтобы пользователь мог повторить (стадия могла
+      // уже стартовать, либо сеть отвалилась).
+      console.error('Failed to save pre-note:', err)
+    }
+  }
 
   async function handleSubmitNote(note: string): Promise<void> {
     if (noteModalStageId === null) return
@@ -219,6 +237,7 @@ export function App(): ReactElement {
                 selectedStageId={selectedStageId}
                 onSelect={setSelectedStageId}
                 onAddNote={setNoteModalStageId}
+                onEditPreNote={setPreNoteModalStageId}
                 onPause={handlePause}
               />
             }
@@ -265,6 +284,16 @@ export function App(): ReactElement {
           stageId={noteModalStageId}
           onCancel={() => setNoteModalStageId(null)}
           onSubmit={handleSubmitNote}
+        />
+      )}
+
+      {preNoteModalStageId !== null && (
+        <AgentNoteModal
+          stageId={preNoteModalStageId}
+          variant="prenote"
+          initialNote={stages.find((s) => s.id === preNoteModalStageId)?.preNote ?? ''}
+          onCancel={() => setPreNoteModalStageId(null)}
+          onSubmit={handleSubmitPreNote}
         />
       )}
     </>

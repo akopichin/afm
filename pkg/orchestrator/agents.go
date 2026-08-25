@@ -18,6 +18,20 @@ import (
 const planningContract = `## Output Contract (mandatory)
 The plan MUST contain sections: "## Tasks", "## Assumptions", "## Acceptance Criteria".`
 
+// preNoteBlock читает prenote.md стадии и возвращает блок для добавления в
+// контекст агента, либо "" если заметки нет. Вклеивается на ПЕРВОМ (свежем)
+// старте любой агентской стадии (planning/implementation/review/autonomous):
+// заметка, прикреплённая пользователем пока стадия была pending, становится
+// частью исходного задания, а не поправкой по ходу (ср. feedback.md в
+// *WithFeedback-раннерах — «User note (added while this stage was running)»).
+func (o *Orchestrator) preNoteBlock(stageDir string) string {
+	note := state.LoadPreNote(stageDir)
+	if note == "" {
+		return ""
+	}
+	return "\n\n## User note (added before this stage started)\n\n" + note
+}
+
 // phaseScript identifies a script-stage's own log namespace (script.log),
 // distinct from the before/after hook logs.
 const phaseScript = "script"
@@ -70,6 +84,8 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	// the stage to "planning" (e.g. startPlanningForUnblocked).
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
 
+	preNote := o.preNoteBlock(stageDir)
+
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
 		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
 			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
@@ -88,7 +104,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 			StageDir:         stageDir,
 			Interactive:      s.Interactive,
 			OutputContractMD: planningContract,
-			RetryContext:     retryContext,
+			RetryContext:     retryContext + preNote,
 			GlobalPrompt:     o.opts.GlobalPrompt,
 		})
 		outFile := filepath.Join(stageDir, "plan.md")
@@ -203,6 +219,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 
 func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	preNote := o.preNoteBlock(stageDir)
 
 	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
 		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
@@ -251,7 +268,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			Plan:            string(planData),
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + stageDirNote,
+			RetryContext:    retryContext + stageDirNote + preNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 		})
 		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseImplementation))
@@ -291,6 +308,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 		return
 	}
+	preNote := o.preNoteBlock(stageDir)
 
 	depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
 		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
@@ -310,7 +328,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 			Artifacts:       artCtx,
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext,
+			RetryContext:    retryContext + preNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 		})
 		reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
@@ -342,6 +360,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 		return
 	}
 	_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
+	preNote := o.preNoteBlock(stageDir)
 
 	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
@@ -364,7 +383,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			DependencyPlans: depCtx,
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
-			RetryContext:    retryContext + summaryNote,
+			RetryContext:    retryContext + summaryNote + preNote,
 		})
 		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseAutonomous))
 		r := o.runnerFor(s, phaseAutonomous)
