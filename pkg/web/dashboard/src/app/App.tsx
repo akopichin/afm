@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { pauseStage, reviseStage, setStageNote } from '../api/run-client'
+import { pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -76,6 +76,17 @@ export function App(): ReactElement {
     // между открытием меню и кликом) уйдёт в unhandled rejection молча.
     pauseStage(stageId).catch((err: unknown) => {
       console.error('Failed to pause stage:', err)
+    })
+  }
+
+  function handleButton(stageId: string, name: string): void {
+    // Fire-immediately, без модалки: StagesList закрывает кебаб синхронно ДО
+    // вызова onButton. Как и handlePause, onButton — не-async проп, поэтому
+    // свой catch обязателен, иначе отказ triggerStageButton (сеть, либо стадия
+    // успела уйти из running/awaiting_approval между открытием меню и кликом)
+    // уйдёт в unhandled rejection молча.
+    triggerStageButton(stageId, name).catch((err: unknown) => {
+      console.error('Failed to trigger stage button:', err)
     })
   }
 
@@ -239,6 +250,7 @@ export function App(): ReactElement {
                 onAddNote={setNoteModalStageId}
                 onEditPreNote={setPreNoteModalStageId}
                 onPause={handlePause}
+                onButton={handleButton}
               />
             }
             stageHeader={

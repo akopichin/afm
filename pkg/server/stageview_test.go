@@ -31,7 +31,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, map[string]bool{"a": false}, nil)
+	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, map[string]bool{"a": false}, nil, nil)
 
 	if len(views) != 2 || views[0].ID != "b" || views[1].ID != "a" {
 		t.Fatalf("order not preserved: %+v", views)
@@ -119,7 +119,7 @@ func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{"a": true}, nil)
+	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{"a": true}, nil, nil)
 
 	a, b := views[0], views[1]
 	if !a.IsScript {
@@ -159,10 +159,29 @@ func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil)
 
 	if !views[0].ShowPlan {
 		t.Errorf("autonomous stage paused: ShowPlan should be true (Continue button lives in PlanPanel), got %+v", views[0])
+	}
+}
+
+func TestBuildStageViews_IncludesButtons(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "a"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	rs := state.RunState{
+		StageOrder: []string{"a"},
+		Stages: map[string]state.StageState{
+			"a": {Status: state.StatusRunning},
+		},
+	}
+
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, map[string][]string{"a": {"Run linter", "Rebuild"}})
+
+	if !equalSlices(views[0].Buttons, []string{"Run linter", "Rebuild"}) {
+		t.Errorf("Buttons = %v, want [Run linter Rebuild]", views[0].Buttons)
 	}
 }
 

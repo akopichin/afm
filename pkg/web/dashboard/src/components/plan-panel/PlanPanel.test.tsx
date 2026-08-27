@@ -7,7 +7,7 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
     id: 's1', name: 'Stage', status: 'running', updatedAt: '',
     interactive: false, autonomous: false, autoApprove: false, hasDialog: false,
-    showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', ...overrides,
+    showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [], ...overrides,
   }
 }
 

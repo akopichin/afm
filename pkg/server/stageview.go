@@ -45,6 +45,10 @@ type StageView struct {
 	// Даёт фронту и текст для префилла модалки редактирования, и сигнал для
 	// индикатора 📝 «к стадии прикреплена заметка». Пусто, если заметки нет.
 	PreNote string `json:"pre_note,omitempty"`
+	// Buttons — подписи предопределённых кнопок кебаб-меню этой стадии
+	// (статический конфиг флоу). Пусто, если кнопок нет. Фронт рисует по одному
+	// пункту меню на подпись и POST'ит подпись в /button при клике.
+	Buttons []string `json:"buttons,omitempty"`
 }
 
 // buildStageViews joins rs.Stages (event-log state) with the flow's static
@@ -54,7 +58,7 @@ type StageView struct {
 // reordering. rs.StageOrder itself (the authoritative declaration order used
 // by state/scheduling) is never touched. Replaces handleStatus's previous
 // five-parallel-map construction.
-func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string) []StageView {
+func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string, stageButtons map[string][]string) []StageView {
 	order := topoOrder(rs.StageOrder, dependsOn)
 	views := make([]StageView, 0, len(order))
 	for _, id := range order {
@@ -87,6 +91,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			ShowPlan:    showPlan,
 			ShowDialog:  showDialog,
 			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
+			Buttons:     stageButtons[id],
 		})
 	}
 	return views

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		FlowName:             rs.FlowName,
 		StartedAt:            rs.StartedAt,
 		Description:          s.Description,
-		Stages:               buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn),
+		Stages:               buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn, s.stageButtons),
 		LastSeq:              rs.LastSeq,
 		IdleAccumulatedMs:    rs.IdleAccumulatedMs,
 		IdleSince:            rs.IdleSince(),
@@ -207,6 +208,58 @@ func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "noted", keyStageID: stageID})
+}
+
+type stageButtonRequest struct {
+	Name string `json:"name"`
+}
+
+// handleStageButton fires a predefined kebab-menu button: it resolves the
+// button by its declared label (never trusting a client-supplied prompt) and
+// routes it through the orchestrator's Button → Revise path — same effect as a
+// free-text note to the live agent. Gated exactly like handleRevise
+// (running/awaiting_approval, non-script) plus a check that the name is a
+// button actually declared for this stage.
+func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", "/button")
+	if !isValidStageID(stageID) {
+		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		return
+	}
+	rs := s.store.Snapshot()
+	st, ok := rs.Stages[stageID]
+	if !ok {
+		http.Error(w, "stage not found", http.StatusNotFound)
+		return
+	}
+	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning
+	if !allowed {
+		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
+		return
+	}
+	if s.stageIsScript[stageID] {
+		http.Error(w, "script stage has no agent", http.StatusBadRequest)
+		return
+	}
+	var req stageButtonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "button name is required", http.StatusBadRequest)
+		return
+	}
+	if !slices.Contains(s.stageButtons[stageID], req.Name) {
+		http.Error(w, "unknown button", http.StatusBadRequest)
+		return
+	}
+	if err := s.actions.Button(r.Context(), stageID, req.Name); err != nil {
+		http.Error(w, "button failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "button", keyStageID: stageID})
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {

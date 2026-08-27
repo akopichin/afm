@@ -47,8 +47,27 @@ describe('useStatus', () => {
       isScript: false,
       pausedFrom: '',
       preNote: '',
+      buttons: [],
     })
     expect(result.current.stages[1]?.status).toBe('running')
+  })
+
+  test('парсит buttons (массив строк), дефолт [] при отсутствии/мусоре', () => {
+    const raw = {
+      flow_name: 'demo',
+      stages: [
+        { id: 's1', status: 'running', buttons: ['Run linter', 'Rebuild'] },
+        { id: 's2', status: 'running' },
+        { id: 's3', status: 'running', buttons: 'not-an-array' },
+        { id: 's4', status: 'running', buttons: ['ok', 42, null] },
+      ],
+    }
+    const { stages } = normalizeStatus(raw)
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('s1')?.buttons).toEqual(['Run linter', 'Rebuild'])
+    expect(byId.get('s2')?.buttons).toEqual([])
+    expect(byId.get('s3')?.buttons).toEqual([])
+    expect(byId.get('s4')?.buttons).toEqual(['ok'])
   })
 
   test('парсит is_script/paused_from/pre_note', () => {

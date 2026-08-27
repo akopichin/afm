@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -50,6 +51,56 @@ func (inp *Input) UnmarshalYAML(value *yaml.Node) error {
 	}
 	type plain Input
 	return value.Decode((*plain)(inp))
+}
+
+// Button — предопределённая кнопка кебаб-меню стадии: Label — и отображаемая
+// подпись, и ключ поиска; Prompt — инструкция, которая доставляется живому
+// агенту через Revise при клике.
+type Button struct {
+	Label  string
+	Prompt string
+}
+
+// Buttons сохраняет порядок объявления кнопок из YAML (плоский
+// map[string]string итерировался бы случайно, тасуя меню). Декодируется из
+// mapping-узла обходом value.Content попарно.
+type Buttons []Button
+
+// UnmarshalYAML декодирует Buttons из YAML-mapping'а label: prompt, сохраняя
+// порядок объявления (зеркалит Input.UnmarshalYAML — обход value.Content).
+func (b *Buttons) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return errors.New("buttons must be a mapping of label: prompt")
+	}
+	out := make(Buttons, 0, len(value.Content)/2)
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		out = append(out, Button{
+			Label:  value.Content[i].Value,
+			Prompt: value.Content[i+1].Value,
+		})
+	}
+	*b = out
+	return nil
+}
+
+// Prompt возвращает prompt для кнопки с данной подписью, или "" если такой
+// кнопки нет.
+func (b Buttons) Prompt(label string) string {
+	for _, btn := range b {
+		if btn.Label == label {
+			return btn.Prompt
+		}
+	}
+	return ""
+}
+
+// Labels возвращает подписи кнопок в порядке объявления.
+func (b Buttons) Labels() []string {
+	out := make([]string, len(b))
+	for i, btn := range b {
+		out[i] = btn.Label
+	}
+	return out
 }
 
 // Stage represents a single stage in a flow.
@@ -105,6 +156,12 @@ type Stage struct {
 	// задано) или true — прежнее поведение, немедленный старт. Гейт
 	// срабатывает один раз: см. state.StageState.PausedFrom.
 	AutoRun *bool `yaml:"auto_run,omitempty"`
+	// Buttons — предопределённые пункты кебаб-меню этой стадии: label → prompt.
+	// Клик доставляет prompt живому агенту через Revise (тот же путь, что и
+	// свободная заметка). Порядок сохраняется из YAML. Недопустимо на скриптовой
+	// стадии (нет агента). См.
+	// docs/superpowers/specs/2026-08-27-stage-custom-buttons-design.md.
+	Buttons Buttons `yaml:"buttons,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -327,6 +384,28 @@ func (f *Flow) validate() error {
 		}
 		if s.Verify != "" {
 			return fmt.Errorf("stage %q: \"script\" cannot be combined with verify", s.ID)
+		}
+	}
+
+	for _, s := range f.Stages {
+		if len(s.Buttons) == 0 {
+			continue
+		}
+		if s.IsScript() {
+			return fmt.Errorf("stage %q: \"buttons\" cannot be combined with script", s.ID)
+		}
+		seen := make(map[string]bool, len(s.Buttons))
+		for _, btn := range s.Buttons {
+			if btn.Label == "" {
+				return fmt.Errorf("stage %q: button label cannot be empty", s.ID)
+			}
+			if btn.Prompt == "" {
+				return fmt.Errorf("stage %q: button %q has empty prompt", s.ID, btn.Label)
+			}
+			if seen[btn.Label] {
+				return fmt.Errorf("stage %q: duplicate button label %q", s.ID, btn.Label)
+			}
+			seen[btn.Label] = true
 		}
 	}
 

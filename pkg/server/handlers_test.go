@@ -73,6 +73,7 @@ type fakeStageActions struct {
 	retry     func(ctx context.Context, stageID string) error
 	pause     func(ctx context.Context, stageID string) error
 	continue_ func(ctx context.Context, stageID string) error
+	button    func(ctx context.Context, stageID, name string) error
 }
 
 func (f fakeStageActions) Approve(ctx context.Context, stageID string) error {
@@ -108,6 +109,13 @@ func (f fakeStageActions) Continue(ctx context.Context, stageID string) error {
 		return nil
 	}
 	return f.continue_(ctx, stageID)
+}
+
+func (f fakeStageActions) Button(ctx context.Context, stageID, name string) error {
+	if f.button == nil {
+		return nil
+	}
+	return f.button(ctx, stageID, name)
 }
 
 // fakeSecondaryActions is the SecondaryActions test double. Tests that only
@@ -572,6 +580,103 @@ func TestHandleStageNote_RejectsScriptStage(t *testing.T) {
 	srv.handleStageNote(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("script stage: got %d, want 400", w.Code)
+	}
+}
+
+func TestHandleStageButton_Success(t *testing.T) {
+	var gotStage, gotName string
+	srv, _ := setupTestServer(t) // seeded at awaiting_approval — allowed
+	srv.stageButtons = map[string][]string{testStageID: {"Run linter"}}
+	srv.actions = fakeStageActions{button: func(_ context.Context, id, name string) error {
+		gotStage, gotName = id, name
+		return nil
+	}}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	if gotStage != testStageID || gotName != "Run linter" {
+		t.Errorf("Button called with (%q, %q), want (%q, %q)", gotStage, gotName, testStageID, "Run linter")
+	}
+}
+
+func TestHandleStageButton_UnknownName(t *testing.T) {
+	called := false
+	srv, _ := setupTestServer(t)
+	srv.stageButtons = map[string][]string{testStageID: {"Run linter"}}
+	srv.actions = fakeStageActions{button: func(_ context.Context, _, _ string) error {
+		called = true
+		return nil
+	}}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Nope"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400", w.Code)
+	}
+	if called {
+		t.Error("Button must not be called for an unknown button name")
+	}
+}
+
+func TestHandleStageButton_WrongStatus(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	srv.stageButtons = map[string][]string{testStageID: {"Run linter"}}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400 (failed stage has no live agent)", w.Code)
+	}
+}
+
+func TestHandleStageButton_ScriptStage(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.stageIsScript = map[string]bool{testStageID: true}
+	srv.stageButtons = map[string][]string{testStageID: {"Run linter"}}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400 (script stage has no agent)", w.Code)
+	}
+}
+
+func TestHandleStageButton_MissingName(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.stageButtons = map[string][]string{testStageID: {"Run linter"}}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":""}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400 (empty name)", w.Code)
+	}
+}
+
+func TestHandleStageButton_NonexistentStage(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("POST", "/api/stages/ghost/button", strings.NewReader(`{"name":"Run linter"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want 404 (stage not found)", w.Code)
 	}
 }
 

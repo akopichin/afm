@@ -25,6 +25,13 @@ export async function reviseStage(stageId: string, feedback: string): Promise<vo
   await postJson(stageUrl(stageId, 'revise'), { feedback })
 }
 
+// triggerStageButton нажимает предопределённую в flow.yaml кнопку стадии: клиент
+// шлёт только имя (= label = ключ в YAML), сервер сам достаёт промпт из флоу и
+// доставляет его живому агенту через Revise (тот же путь, что и reviseStage).
+export async function triggerStageButton(stageId: string, name: string): Promise<void> {
+  await postJson(stageUrl(stageId, 'button'), { name })
+}
+
 // setStageNote прикрепляет (или, при пустом note, удаляет) заметку к ещё не
 // стартовавшей стадии — доедет до агента в контексте при старте. В отличие от
 // reviseStage не трогает FSM: стадия остаётся pending.

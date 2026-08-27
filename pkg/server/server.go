@@ -75,6 +75,7 @@ type Server struct {
 	stageAutoApprove map[string]bool     // id стадии → auto_approve (статический конфиг флоу)
 	stageIsScript    map[string]bool     // id стадии → IsScript() (статический конфиг флоу)
 	stageDependsOn   map[string][]string // id стадии → depends_on (статический конфиг флоу, для UI-порядка)
+	stageButtons     map[string][]string // id стадии → подписи кнопок кебаб-меню (статический конфиг флоу)
 	store            *state.Store
 	uiBus            *bus.UIBus
 	actions          StageActions     // never nil in practice — see StageActions doc
@@ -110,6 +111,7 @@ type Config struct {
 	StageAutoApprove map[string]bool
 	StageIsScript    map[string]bool
 	StageDependsOn   map[string][]string
+	StageButtons     map[string][]string
 	Store            *state.Store
 	UIBus            *bus.UIBus
 	Actions          StageActions
@@ -144,6 +146,7 @@ func New(cfg Config) *Server {
 		stageAutoApprove: cfg.StageAutoApprove,
 		stageIsScript:    cfg.StageIsScript,
 		stageDependsOn:   cfg.StageDependsOn,
+		stageButtons:     cfg.StageButtons,
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,
 		actions:          cfg.Actions,
@@ -288,6 +291,8 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleRevise(w, r)
 	case strings.HasSuffix(path, "/note") && r.Method == http.MethodPost:
 		s.handleStageNote(w, r)
+	case strings.HasSuffix(path, "/button") && r.Method == http.MethodPost:
+		s.handleStageButton(w, r)
 	case strings.HasSuffix(path, "/retry") && r.Method == http.MethodPost:
 		s.handleRetry(w, r)
 	case strings.HasSuffix(path, "/pause") && r.Method == http.MethodPost:

@@ -14,6 +14,10 @@ type StagesListProps = {
   onAddNote?: (stageId: string) => void // «Add note for agent» (revise, живой агент)
   onEditPreNote?: (stageId: string) => void // «Add note (before start)» (pending-стадия)
   onPause?: (stageId: string) => void
+  // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём
+  // только метку (= имя кнопки), сервер сам резолвит промпт и доставляет его
+  // живому агенту через Revise (тот же путь, что и «Add note for agent»).
+  onButton?: (stageId: string, name: string) => void
 }
 
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
@@ -48,7 +52,7 @@ function hasKebab(stage: Stage): boolean {
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause, onButton }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -200,6 +204,30 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                             Add note for agent
                           </button>
                         </li>
+                      )}
+                      {/* Кастомные кнопки стадии (flow.yaml). Тот же гейт, что и
+                          «Add note for agent» (running/awaiting_approval, не
+                          скрипт) — под ним и живёт живой агент, которому Revise
+                          доставит промпт. Сабблок с разделителем показывается,
+                          только если кнопки реально объявлены. */}
+                      {ADD_NOTE_STATUSES.has(stage.status) && !stage.isScript && stage.buttons.length > 0 && (
+                        <>
+                          <li className="stage-kebab-divider" role="separator" aria-hidden="true" />
+                          {stage.buttons.map((label) => (
+                            <li key={`btn-${label}`} className="stage-kebab-buttons">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuStageId(null)
+                                  setMenuPos(null)
+                                  onButton?.(stage.id, label)
+                                }}
+                              >
+                                {label}
+                              </button>
+                            </li>
+                          ))}
+                        </>
                       )}
                       {canPreNote(stage) && (
                         <li>

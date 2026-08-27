@@ -155,6 +155,7 @@ function toStage(raw: unknown): Stage | null {
     isScript: obj.is_script === true,
     pausedFrom: isStageStatus(obj.paused_from) ? obj.paused_from : '',
     preNote: typeof obj.pre_note === 'string' ? obj.pre_note : '',
+    buttons: Array.isArray(obj.buttons) ? obj.buttons.filter((x): x is string => typeof x === 'string') : [],
   }
 }
 

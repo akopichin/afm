@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { continueStage, pauseStage, retryStage } from './run-client'
+import { continueStage, pauseStage, retryStage, triggerStageButton } from './run-client'
 
 describe('run-client pause/continue', () => {
   afterEach(() => {
@@ -39,6 +39,18 @@ describe('run-client pause/continue', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/stages/s1/continue',
       expect.objectContaining({ method: 'POST', body: null }),
+    )
+  })
+
+  test('triggerStageButton POSTs the button name to /button', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await triggerStageButton('s1', 'Run linter')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/stages/s1/button',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Run linter' }) }),
     )
   })
 })

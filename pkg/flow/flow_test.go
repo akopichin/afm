@@ -714,3 +714,145 @@ stages:
 		t.Errorf("expected a WARN naming stage s1 and the supervisor key, got stderr: %q", stderr)
 	}
 }
+
+func TestParseButtons_LabelToPrompt(t *testing.T) {
+	yaml := `
+name: test-flow
+stages:
+  - id: s1
+    name: "S1"
+    agents: [planning, implementation]
+    buttons:
+      Run linter: "Запусти golangci-lint и почини все замечания"
+      Rebuild: "Пересобери проект с нуля"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	btns := f.Stages[0].Buttons
+	if len(btns) != 2 {
+		t.Fatalf("expected 2 buttons, got %d: %+v", len(btns), btns)
+	}
+	if got := btns.Prompt("Run linter"); got != "Запусти golangci-lint и почини все замечания" {
+		t.Errorf("Prompt(\"Run linter\") = %q", got)
+	}
+	if got := btns.Prompt("Rebuild"); got != "Пересобери проект с нуля" {
+		t.Errorf("Prompt(\"Rebuild\") = %q", got)
+	}
+	if got := btns.Prompt("does-not-exist"); got != "" {
+		t.Errorf("Prompt(unknown) = %q, want empty", got)
+	}
+	if want := []string{"Run linter", "Rebuild"}; !equalStrs(btns.Labels(), want) {
+		t.Errorf("Labels() = %v, want %v", btns.Labels(), want)
+	}
+}
+
+// TestParseButtons_DeclarationOrderPreserved — YAML-порядок кнопок сохраняется
+// (плоский map[string]string итерировался бы случайно, тасуя меню).
+func TestParseButtons_DeclarationOrderPreserved(t *testing.T) {
+	yaml := `
+name: test-flow
+stages:
+  - id: s1
+    name: "S1"
+    agents: [planning, implementation]
+    buttons:
+      Zebra: "z prompt"
+      Apple: "a prompt"
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Zebra", "Apple"}; !equalStrs(f.Stages[0].Buttons.Labels(), want) {
+		t.Errorf("order not preserved: %v, want %v", f.Stages[0].Buttons.Labels(), want)
+	}
+}
+
+func TestParseButtons_NoButtonsParsesUnchanged(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Stages[0].Buttons != nil {
+		t.Errorf("expected nil Buttons when none declared, got %+v", f.Stages[0].Buttons)
+	}
+}
+
+func TestValidateButtons_EmptyLabel(t *testing.T) {
+	yaml := `
+name: f
+stages:
+  - id: s1
+    name: S1
+    agents: [planning, implementation]
+    buttons:
+      "": "some prompt"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "button label cannot be empty") {
+		t.Fatalf("expected empty-label error, got %v", err)
+	}
+}
+
+func TestValidateButtons_EmptyPrompt(t *testing.T) {
+	yaml := `
+name: f
+stages:
+  - id: s1
+    name: S1
+    agents: [planning, implementation]
+    buttons:
+      Run linter: ""
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "has empty prompt") {
+		t.Fatalf("expected empty-prompt error, got %v", err)
+	}
+}
+
+func TestValidateButtons_DuplicateLabel(t *testing.T) {
+	yaml := `
+name: f
+stages:
+  - id: s1
+    name: S1
+    agents: [planning, implementation]
+    buttons:
+      Run linter: "first"
+      Run linter: "second"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "duplicate button label") {
+		t.Fatalf("expected duplicate-label error, got %v", err)
+	}
+}
+
+func TestValidateButtons_CannotCombineWithScript(t *testing.T) {
+	yaml := `
+name: f
+stages:
+  - id: s1
+    name: S1
+    script: "echo hi"
+    buttons:
+      Run linter: "lint"
+`
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), `"buttons" cannot be combined with script`) {
+		t.Fatalf("expected buttons+script error, got %v", err)
+	}
+}
+
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

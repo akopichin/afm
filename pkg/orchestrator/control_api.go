@@ -184,6 +184,22 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 	return nil
 }
 
+// Button resolves the named button's prompt from the flow and delivers it to
+// the live agent via Revise. Unknown name or a stage with no such button is a
+// no-op (returns nil). The status gate (running/awaiting_approval) lives in
+// Revise itself, so Button doesn't re-check it.
+func (o *Orchestrator) Button(ctx context.Context, stageID, name string) error {
+	stage := o.graph.Stage(stageID)
+	if stage == nil {
+		return nil
+	}
+	prompt := stage.Buttons.Prompt(name)
+	if prompt == "" {
+		return nil
+	}
+	return o.Revise(ctx, stageID, prompt)
+}
+
 // Pause synchronously transitions a stage to paused and, if it has a live
 // agent or is waiting out a retry backoff, signals the same interruptChans
 // channel Revise() already uses for a running stage. The only difference

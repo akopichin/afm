@@ -62,6 +62,14 @@
   background: var(--mint-soft);
 }
 
+/* Разделитель между «Add note for agent» и сабблоком кастомных кнопок стадии
+   (flow.yaml). Показывается только когда у стадии реально объявлены кнопки. */
+.stage-kebab-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--mint-soft);
+}
+
 /* === Модалка «Добавить поправку агенту» === */
 .modal-overlay {
   position: fixed;

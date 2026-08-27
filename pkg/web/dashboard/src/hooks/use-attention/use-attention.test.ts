@@ -4,7 +4,7 @@ import { useAttention, anyAwaiting, stagesNeedingAttention } from './use-attenti
 import type { Stage } from '../../types'
 
 const stage = (status: Stage['status'], id = 's'): Stage =>
-  ({ id, name: 'n', status, updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '' })
+  ({ id, name: 'n', status, updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] })
 
 describe('useAttention', () => {
   it('dialog для awaiting_user_input, plan для awaiting_approval, failed для failed/hook_failed, paused для paused, null иначе', () => {
