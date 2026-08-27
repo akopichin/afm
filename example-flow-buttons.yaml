@@ -1,0 +1,36 @@
+# Demo flow — predefined stage buttons in the kebab menu.
+#
+# A stage can declare named one-click actions under `buttons:` (label → prompt).
+# Each button appears in the stage's kebab menu (the ⋮ next to the stage name)
+# while the stage is `running` or `awaiting_approval`. Clicking it delivers the
+# canned prompt to the live agent through the same mechanism as the free-text
+# "Add note for agent" (a Revise: the agent restarts with the prompt as feedback).
+#
+# How to try it:
+#   AFM_DOCKER_IMAGE=akopichin/afm:buttons-dev afm run example-flow-buttons.yaml
+# then open the printed dashboard URL. When the stage reaches AWAITING APPROVAL,
+# open the ⋮ menu next to the stage — you'll see the three buttons below
+# "Add note for agent". Click one and watch the plan get re-generated with that
+# instruction folded in (feed shows revising → planning → awaiting_approval).
+#
+# Swap `command:` below for whatever agent you use (claude / glm51 / glm53f / …).
+
+name: buttons-demo
+description: "Демо: предопределённые кнопки стадии в кебаб-меню"
+
+stages:
+  - id: greeting
+    name: "Greeting file with buttons"
+    description: |
+      Спланируй и создай файл GREETING.md в корне проекта с коротким
+      дружелюбным приветствием (2–3 строки). Ничего больше не трогай.
+    agents: [planning, implementation]
+    command: glm52          # ← поменяй на свой агент, если нужно (claude / glm51 / …)
+
+    # Предопределённые кнопки кебаб-меню. Порядок здесь = порядок в меню.
+    # Каждый клик отправляет свой prompt живому агенту (Revise) и
+    # перезапускает его — план перегенерируется с учётом инструкции.
+    buttons:
+      Add a testing section: "Add a detailed 'Testing' section to the plan describing how the greeting file will be verified."
+      Make it minimal: "Cut the plan down to the bare minimum — a single task and a single acceptance criterion."
+      Write the plan in Russian: "Rewrite the entire plan in Russian, keeping the same structure."

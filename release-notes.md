@@ -12,8 +12,8 @@ A stage can now declare named one-click actions in `flow.yaml`. Each button carr
 stages:
   - name: build
     buttons:
-      Run linter: "Запусти golangci-lint и почини все замечания"
-      Rebuild:    "Пересобери проект с нуля и убедись что тесты зелёные"
+      Run linter: "Run golangci-lint and fix every finding"
+      Rebuild:    "Rebuild the project from scratch and make sure the tests are green"
 ```
 
 - **Click == Revise of the live agent.** A click routes the button's prompt into the existing `Revise` path (`feedback.md` + `EvRevise` + interrupt → the agent restarts with the prompt). No new agent-execution machinery. Available only on `running`/`awaiting_approval` (a live agent to feed), never on a `script:` stage — symmetric to the "Add note for agent" gate. Repeated clicks are allowed (each is another Revise).
