@@ -2,6 +2,25 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-27
+
+### Feature: predefined stage buttons in the kebab menu
+
+A stage can now declare named one-click actions in `flow.yaml`. Each button carries a canned prompt; clicking it in the dashboard delivers that prompt to the stage's live agent — the same mechanism as the free-text "Add note for agent", just written once in the flow and reusable with a single click.
+
+```yaml
+stages:
+  - name: build
+    buttons:
+      Run linter: "Запусти golangci-lint и почини все замечания"
+      Rebuild:    "Пересобери проект с нуля и убедись что тесты зелёные"
+```
+
+- **Click == Revise of the live agent.** A click routes the button's prompt into the existing `Revise` path (`feedback.md` + `EvRevise` + interrupt → the agent restarts with the prompt). No new agent-execution machinery. Available only on `running`/`awaiting_approval` (a live agent to feed), never on a `script:` stage — symmetric to the "Add note for agent" gate. Repeated clicks are allowed (each is another Revise).
+- **The client sends only the button *name*; the server resolves the prompt from the flow.** `POST /api/stages/{id}/button` `{"name":"Run linter"}` → the orchestrator looks up `Stage.Buttons.Prompt(name)` and delegates to `Revise` — client-supplied text is never trusted. An unknown name is rejected `400`. Menu items render in YAML declaration order (a custom ordered `UnmarshalYAML`, since a plain map would shuffle them).
+- **Dashboard:** the kebab menu shows one item per button, in a sub-block below "Add note for agent". Fire-immediately (no modal). Button labels are served as `buttons` on `/api/status`.
+- Verified end-to-end in a real browser (Chrome DevTools MCP) against a local afm run with a mock agent: both buttons appear in declaration order, each click writes its own distinct prompt into `feedback.md` (revision 1 = "Run linter", revision 2 = "Rebuild"), the prompt reaches the re-planning agent's actual stdin, and an unknown button name returns `400`. Tests: `TestParseButtons_*`/`TestValidateButtons_*` (flow), `TestButton_*` (orchestrator), `TestHandleStageButton_*`/`TestBuildStageViews_IncludesButtons` (server), plus `StagesList`/`use-status`/`run-client` frontend cases; `make lint` clean, full Go suite + 273 dashboard tests green.
+
 ## 2026-08-25
 
 ### Feature: attach a note to a stage before it starts (pre-note)
