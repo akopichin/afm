@@ -48,6 +48,14 @@ RUN apt-get update && apt-get install -y \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
+# uv — быстрый пакетный менеджер Python (astral-sh). Версия запинена по той же
+# причине, что и claude-code: пересборка образа не должна молча тянуть новый
+# релиз. Копируем готовый статический бинарник из официального образа — быстрее
+# и надёжнее curl-инсталлера. Обновлять вручную (актуальная версия:
+# https://github.com/astral-sh/uv/releases/latest).
+ARG UV_VERSION=0.12.6
+COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/
+
 # Go 1.26 (для verify: go test и подобных команд в flow)
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"

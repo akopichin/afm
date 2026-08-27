@@ -4,81 +4,81 @@
 
 By default afm stores runs, flows, and config under `.afm/` in the working directory. The parent directory is resolved in `PersistentPreRunE` (`cmd/afm/main.go`) with priority **flag > env > `.`**: the `--dir` persistent flag, else the `AFM_DIR` env variable, else the current directory. All subcommands read the effective `.afm` path via `fmDir()` (`filepath.Join(rootDir, ".afm")`); `state.FindLatestRunDir(base, flowName)` takes the runs base as an explicit argument instead of hardcoding the path.
 
-**Корень проекта для агентов: `flow.root_dir`.** afm предполагает, что afm-корень (родитель `.afm/`) == корень проекта. Если это не так (напр. Docker: исходники в `/workspace`, `.afm/` в другом каталоге), агенты, наследуя CWD процесса afm, резолвят относительные пути проекта (`docs/arch/…`) в чужом корне — стадии расходятся: одна пишет файл, другая его не находит. Поле `root_dir` в `flow.yaml` (`flow.Flow.RootDir`) задаёт CWD агентов: относительный путь резолвится от afm-корня в `cmd/afm/run.go`, прокидывается `orchestrator.Options.RootDir` → `executor.Config.Dir` → `cmd.Dir` в `executor.run`. Пусто → прежнее поведение (наследование CWD). `AFM_STAGE_DIR` (файлы диалога) остаётся привязан к afm-корню независимо от `root_dir`.
+**Project root for agents: `flow.root_dir`.** afm assumes the afm-root (the parent of `.afm/`) == the project root. When that isn't true (e.g. Docker: sources in `/workspace`, `.afm/` in another directory), agents — inheriting the CWD of the afm process — resolve relative project paths (`docs/arch/…`) against the wrong root, and stages diverge: one writes a file, another can't find it. The `root_dir` field in `flow.yaml` (`flow.Flow.RootDir`) sets the agents' CWD: a relative path is resolved from the afm-root in `cmd/afm/run.go`, then threaded through `orchestrator.Options.RootDir` → `executor.Config.Dir` → `cmd.Dir` in `executor.run`. Empty → previous behavior (inherit CWD). `AFM_STAGE_DIR` (dialog files) stays anchored to the afm-root regardless of `root_dir`.
 
-**Атрибуция `agent_action` к стадии.** События tool-действий агента получают `stageID` из `OnAction`-замыкания per-stage runner'а (`runnerFor`, `runner_factory.go`). Инъектированный `o.runner` (тесты, пустой stageID) используется ТОЛЬКО когда `opts.Runner != nil` и у стадии нет своего `command`; в проде каждая стадия всегда получает per-stage runner с правильным `s.ID` — иначе бейдж стадии в event feed дашборда пропадал (`EventFeedPanel.tsx` рисует бейдж только при непустом `stageId`).
+**Attributing `agent_action` to a stage.** Agent tool-action events get their `stageID` from the `OnAction` closure of the per-stage runner (`runnerFor`, `runner_factory.go`). The injected `o.runner` (tests, empty stageID) is used ONLY when `opts.Runner != nil` and the stage has no `command` of its own; in production every stage always gets a per-stage runner with the correct `s.ID` — otherwise the stage badge in the dashboard's event feed disappeared (`EventFeedPanel.tsx` renders the badge only when `stageId` is non-empty).
 
 ## State persistence & run lifecycle (reliability core)
 
-Событийный лог `.afm/runs/<run_id>/events.jsonl` — **единственный доверенный источник правды**. `state.json` — производный кэш (несёт `last_seq`), пути чтения (`afm check`, поиск run) читают состояние из лога через `state.LoadRunState` (без flock), не доверяя снапшоту.
+The event log `.afm/runs/<run_id>/events.jsonl` is the **single trusted source of truth**. `state.json` is a derived cache (it carries `last_seq`); read paths (`afm check`, run lookup) read state from the log via `state.LoadRunState` (no flock), not trusting the snapshot.
 
-- **flock между процессами.** `state.Open` берёт эксклюзивный `flock` на `<runDir>/.lock` на всё время жизни `Store`. Живой `afm run` держит его; CLI `approve`/`retry`/`revise` при активном run падают с `state.ErrRunLocked` и понятным сообщением. flock освобождается ОС при завершении процесса — упавший run не оставляет «залипшей» блокировки. `afm check` (read-only, без flock) живым run не блокируется.
-- **Недеструктивный replay.** Оборванный хвост (последняя запись без `\n`, crash при append) безопасно усекается. Битая **полная** строка в середине лога (валидные записи после неё) → карантин в `events.jsonl.corrupt-<ts>` + `state.ErrCorruptLog`, оригинал НЕ трогается (никогда не усекаем разрушительно).
-- **Долговечный snapshot.** `writeSnapshot` делает `f.Sync()` перед Close и fsync родительской директории после Rename. Ошибка записи снапшота нефатальна (это кэш), но read-пути всё равно берут состояние из лога.
-- **Уникальный run-id** — `<flow>-<timestamp>-<rand4hex>` (нет коллизий в одну секунду). `state.FindLatestRunDir` якорит префикс (после `<flow>-` обязана быть цифра — `foo` не матчит `foo-bar`); `state.FindLatestRunForStage` — единая точка поиска run по стадии из лога.
-- **Storage-fatal завершает run.** `Trigger` через `errors.As(*StorageError)` различает реальный сбой записи лога (→ `setFatal` + отмена run-ctx → `Run` возвращает ошибку) от доброкачественного `ErrConcurrentChange` (CAS-mismatch, тихий no-op) и `ErrNoRule` (log-and-drop, не валит run).
-- **Чистый shutdown.** Все агентские горутины запускаются через `spawnAgent` (семафор + маркер активности + `agentWG`). На выходе `Run`: `cancel()` (LIFO — раньше) → `waitAgents()` (bounded 10s) → потом `store.Close()`. Завершения агентов публикуются под run-ctx (не `context.Background()`) — не блокируются навсегда на мёртвой шине.
-- **Долговечный approve/revise/retry.** `Approve`/`Revise`/`Retry` синхронны: durable-переход фиксируется в логе ДО возврата (краш не теряет интент — recovery резюмит `ready`/`revising`/`running`). Headless auto-approve обрабатывается inline (нет блокирующего self-publish в event-loop). **Важно:** HTTP-инициированные approve/revise/retry спавнят агента под **run-scoped ctx** (`runContext`), а не под `r.Context()` — иначе net/http отменяет ctx при возврате хэндлера и агент убивается мгновенно. Спавны, достижимые и из HTTP-горутины, и из event-loop, guard'ятся по CAS-результату `Trigger` (нет двойного запуска).
-- **`startReadyStages` чтит `autonomous.flag`.** CAS-guard на `EvStartRun` предотвращает только повторный запуск ОДНОГО И ТОГО ЖЕ агента — но не гарантирует, что выигравший гонку код знает, какой агент запускать. `retryStage` для autonomous-стадии переводит её `Pending → Ready` через `EvReady`, а затем сам берёт `EvStartRun` — в узком окне между этими двумя переходами конкурентный вызов `startReadyStages` из другой ветки event-loop (например, `onAgentCompleted` другой стадии) мог выиграть CAS первым и слепо запустить `runImplementationAgent` (он читает `plan.md`, которого у autonomous-стадии нет → падение "no such file or directory"). Поэтому `startReadyStages` перед спавном проверяет `isAutonomousStage` и для таких стадий запускает `runAutonomousAgent` — симметрично уже существующим проверкам в `recovery.go` и в самом `retryStage`.
-- **Жёсткий автономный трек: `agents: [auto]`.** В YAML стадии можно статически задать автономный трек — `agents: [auto]` (тип `flow.AgentAuto`, детект `Stage.IsAuto()`). Такая стадия идёт `runAutonomousAgent` НАПРЯМУЮ — это единственный способ попасть на автономный трек (LLM-supervisor, который раньше мог принять то же решение динамически, был убран как избыточный: практика показала, что статического `agents: [auto]` достаточно). Активация — общий хелпер `activateAutoStage` (пишет `autonomous.flag` + `EvReady`, БЕЗ `plan.md`), вызываемый из ОБОИХ путей активации no-planning-стадии: `tryActivatePrePlanned` (scheduling.go) и `startPlanningForPending` (recovery.go) — иначе на fresh/zero-dep запуске recovery-ветка попыталась бы скопировать несуществующий `plan.md`. `startReadyStages` дополнительно чтит `stage.IsAuto()` (страховка, если флаг не записался). Короткое замыкание в `flow.HasAgent`/`ImplAgent` не даёт трактовать `auto` как custom-implementation-агента. Валидация `ParseFile`: `auto` — единственный агент. Спек/план: `docs/superpowers/specs/2026-07-21-auto-phase-design.md`.
+- **flock between processes.** `state.Open` takes an exclusive `flock` on `<runDir>/.lock` for the entire lifetime of the `Store`. A live `afm run` holds it; CLI `approve`/`retry`/`revise` against an active run fail with `state.ErrRunLocked` and a clear message. The flock is released by the OS on process exit — a crashed run leaves no "stuck" lock. `afm check` (read-only, no flock) is not blocked by a live run.
+- **Non-destructive replay.** A truncated tail (last record without `\n`, crash during append) is safely truncated. A corrupt **complete** line in the middle of the log (with valid records after it) → quarantined into `events.jsonl.corrupt-<ts>` + `state.ErrCorruptLog`, the original is NOT touched (we never truncate destructively).
+- **Durable snapshot.** `writeSnapshot` does `f.Sync()` before Close and fsyncs the parent directory after Rename. A snapshot write error is non-fatal (it's a cache), but read paths take state from the log anyway.
+- **Unique run-id** — `<flow>-<timestamp>-<rand4hex>` (no collisions within the same second). `state.FindLatestRunDir` anchors the prefix (after `<flow>-` there must be a digit — `foo` doesn't match `foo-bar`); `state.FindLatestRunForStage` is the single point for finding a run by stage from the log.
+- **Storage-fatal terminates the run.** `Trigger` via `errors.As(*StorageError)` distinguishes a real log-write failure (→ `setFatal` + cancel run-ctx → `Run` returns an error) from the benign `ErrConcurrentChange` (CAS-mismatch, silent no-op) and `ErrNoRule` (log-and-drop, doesn't fail the run).
+- **Clean shutdown.** All agent goroutines are launched via `spawnAgent` (semaphore + activity marker + `agentWG`). On exit `Run`: `cancel()` (LIFO — earlier) → `waitAgents()` (bounded 10s) → then `store.Close()`. Agent completions are published under the run-ctx (not `context.Background()`) — they don't block forever on a dead bus.
+- **Durable approve/revise/retry.** `Approve`/`Revise`/`Retry` are synchronous: the durable transition is committed to the log BEFORE returning (a crash doesn't lose intent — recovery resumes `ready`/`revising`/`running`). Headless auto-approve is handled inline (no blocking self-publish in the event loop). **Important:** HTTP-initiated approve/revise/retry spawn the agent under the **run-scoped ctx** (`runContext`), not under `r.Context()` — otherwise net/http cancels the ctx when the handler returns and the agent is killed instantly. Spawns reachable both from the HTTP goroutine and from the event loop are guarded by the CAS result of `Trigger` (no double launch).
+- **`startReadyStages` honors `autonomous.flag`.** The CAS-guard on `EvStartRun` only prevents re-launching the SAME agent — but it doesn't guarantee that the code that won the race knows which agent to launch. `retryStage` for an autonomous stage moves it `Pending → Ready` via `EvReady` and then takes `EvStartRun` itself — in the narrow window between these two transitions, a concurrent call to `startReadyStages` from another event-loop branch (e.g. `onAgentCompleted` for another stage) could win the CAS first and blindly launch `runImplementationAgent` (which reads `plan.md`, which an autonomous stage doesn't have → "no such file or directory" crash). So before spawning, `startReadyStages` checks `isAutonomousStage` and launches `runAutonomousAgent` for such stages — symmetric to the existing checks in `recovery.go` and in `retryStage` itself.
+- **Hard autonomous track: `agents: [auto]`.** A stage can statically declare an autonomous track in YAML — `agents: [auto]` (type `flow.AgentAuto`, detected by `Stage.IsAuto()`). Such a stage goes to `runAutonomousAgent` DIRECTLY — this is the only way onto the autonomous track (the LLM-supervisor, which used to be able to make the same decision dynamically, was removed as redundant: practice showed a static `agents: [auto]` is enough). Activation is the shared helper `activateAutoStage` (writes `autonomous.flag` + `EvReady`, WITHOUT `plan.md`), called from BOTH activation paths of a no-planning stage: `tryActivatePrePlanned` (scheduling.go) and `startPlanningForPending` (recovery.go) — otherwise, on a fresh/zero-dep start, the recovery branch would try to copy a nonexistent `plan.md`. `startReadyStages` additionally honors `stage.IsAuto()` (a safety net in case the flag wasn't written). A short-circuit in `flow.HasAgent`/`ImplAgent` prevents treating `auto` as a custom implementation agent. Validation in `ParseFile`: `auto` must be the only agent. Spec/plan: `docs/superpowers/specs/2026-07-21-auto-phase-design.md`.
 
-### Персистентные IDLE/BACKOFF метрики футера
+### Persistent IDLE/BACKOFF footer metrics
 
-Футер дашборда (`PROGRESS`/`STARTED`/`ELAPSED`/`IDLE`/`BACKOFF`) переживает reload и restart afm с той же точностью, что уже была у `STARTED`/`ELAPSED`, и не тикает, пока WebSocket не в сети.
+The dashboard footer (`PROGRESS`/`STARTED`/`ELAPSED`/`IDLE`/`BACKOFF`) survives reload and afm restart with the same accuracy `STARTED`/`ELAPSED` already had, and does not tick while the WebSocket is offline.
 
-- **Накопители в `RunState`, не события.** `pkg/state/state.go` хранит `IdleAccumulatedMs`/`BackoffAccumulatedMs` (`int64`, персистятся в снапшот и восстанавливаются replay'ем `events.jsonl`). `IdleSince() *time.Time`/`BackoffOpenSince() []time.Time` — не персистятся, вычисляются на чтении из `Stages[].UpdatedAt` (idle — максимум по всем стадиям; backoff — `UpdatedAt` каждой стадии, у которой `Status == StatusRetrying`).
-- **Один хелпер, два места вызова.** `accountIdleAndBackoff(rs, stageID, to, t)` обновляет оба накопителя, используя состояние `rs.Stages` ДО применения перехода. Вызывается из `Store.Apply` (живой путь) И из `parseEventLog` (replay-путь `Store.Open`/`LoadRunState`) — это **разные** функции, `parseEventLog` не проходит через `Apply`. Забыть один из двух call site'ов — значит разойтись в цифрах между live-раном и его restart'ом.
-- **Idle — общефлоуовое состояние**, не per-stage: idle, если любая стадия в `awaiting_user_input`/`awaiting_approval`, ИЛИ есть `failed`-стадия и при этом ни одна не `running`/`planning`/`revising` (`retrying` НЕ считается активной — это пассивный backoff, не работа агента).
-- **Backoff суммируется параллельно**, не мержится: если несколько стадий одновременно в `retrying`, их интервалы складываются независимо (та же упрощённая модель, что была в старом `useStatusDuration`).
-- **`Store.Apply` берёт `t.Time` один раз.** До фикса `SetStageStatus` внутри звал `time.Now()` повторно после fsync — расхождение между залогированным временем перехода и временем, использованным для учёта, портило точность на длительность fsync. `SetStageStatusAt(t.Time)` использует ровно тот timestamp, что попал в лог.
-- **`NewRunState` не штампует `UpdatedAt` для pending-стадий.** Иначе при каждом `Store.Open` (в т.ч. на resume, когда "сейчас" — момент рестарта процесса, а не момент реальной последней транзакции) непотронутая pending-стадия получала бы `UpdatedAt = time.Now()` и всегда перекрывала бы по времени реальные исторические переходы в `maxUpdatedAt()` — тихо портя `IdleSince`/недосчитывая Idle после каждого restart.
-- **API:** `/api/status` отдаёт `idle_accumulated_ms`, `idle_since` (omitempty), `backoff_accumulated_ms`, `backoff_open_since` (`[]time.Time`, пустой массив — если сейчас нет открытых эпизодов).
-- **Фронтенд — anchor + tick, без event-replay.** `useIdleMs`/`useBackoffMs` (`pkg/web/dashboard/src/hooks/`) считают `accumulated + (now - since)`, как уже работавший `useElapsed`, и принимают `connected: boolean` — при `false` тикер замирает на последнем значении; при реконнекте `useStatus`'ный poll подтягивает уже скорректированный сервером якорь, никакой клиентской доверстки не нужно. Заменили `useIdleTime`/`useStatusDuration` (event-replay по `useEventFeed`'ному 200-событийному кэшу — на длинных ранах старые переходы вываливались из кэша и IDLE/BACKOFF тихо недосчитывали после reload).
-- Спек/план: `docs/superpowers/specs/2026-08-07-persistent-idle-backoff-design.md`, `docs/superpowers/plans/2026-08-07-persistent-idle-backoff.md`.
+- **Accumulators in `RunState`, not events.** `pkg/state/state.go` stores `IdleAccumulatedMs`/`BackoffAccumulatedMs` (`int64`, persisted into the snapshot and restored by replaying `events.jsonl`). `IdleSince() *time.Time`/`BackoffOpenSince() []time.Time` are not persisted — they're computed on read from `Stages[].UpdatedAt` (idle — the maximum across all stages; backoff — the `UpdatedAt` of each stage whose `Status == StatusRetrying`).
+- **One helper, two call sites.** `accountIdleAndBackoff(rs, stageID, to, t)` updates both accumulators using the state of `rs.Stages` BEFORE applying the transition. It's called from `Store.Apply` (live path) AND from `parseEventLog` (replay path of `Store.Open`/`LoadRunState`) — these are **different** functions, `parseEventLog` does not go through `Apply`. Forgetting one of the two call sites means the numbers diverge between a live run and its restart.
+- **Idle is a flow-wide state**, not per-stage: idle if any stage is in `awaiting_user_input`/`awaiting_approval`, OR there's a `failed` stage and no stage is `running`/`planning`/`revising` (`retrying` does NOT count as active — it's passive backoff, not agent work).
+- **Backoff is summed in parallel**, not merged: if several stages are in `retrying` at once, their intervals are added independently (the same simplified model the old `useStatusDuration` had).
+- **`Store.Apply` takes `t.Time` once.** Before the fix, `SetStageStatus` called `time.Now()` again internally after fsync — the discrepancy between the logged transition time and the time used for accounting corrupted accuracy by the duration of the fsync. `SetStageStatusAt(t.Time)` uses exactly the timestamp that went into the log.
+- **`NewRunState` does not stamp `UpdatedAt` for pending stages.** Otherwise, on every `Store.Open` (including on resume, when "now" is the moment of process restart, not the moment of the real last transaction), an untouched pending stage would get `UpdatedAt = time.Now()` and would always dominate the real historical transitions in `maxUpdatedAt()` — silently corrupting `IdleSince`/undercounting Idle after every restart.
+- **API:** `/api/status` returns `idle_accumulated_ms`, `idle_since` (omitempty), `backoff_accumulated_ms`, `backoff_open_since` (`[]time.Time`, empty array if there are no open episodes right now).
+- **Frontend — anchor + tick, no event-replay.** `useIdleMs`/`useBackoffMs` (`pkg/web/dashboard/src/hooks/`) compute `accumulated + (now - since)`, like the already-working `useElapsed`, and take `connected: boolean` — when `false` the ticker freezes at the last value; on reconnect the `useStatus` poll pulls in the anchor already corrected by the server, so no client-side reconciliation is needed. They replaced `useIdleTime`/`useStatusDuration` (event-replay over `useEventFeed`'s 200-event cache — on long runs old transitions fell out of the cache and IDLE/BACKOFF silently undercounted after reload).
+- Spec/plan: `docs/superpowers/specs/2026-08-07-persistent-idle-backoff-design.md`, `docs/superpowers/plans/2026-08-07-persistent-idle-backoff.md`.
 
-### Порядок стадий в дашборде — топологический, не порядок объявления
+### Stage order in the dashboard — topological, not declaration order
 
-Список стадий слева в дашборде рендерится в порядке, который отдаёт `GET /api/status` (`stages []StageView`) — раньше это было ровно `state.RunState.StageOrder`, т.е. порядок объявления в `flow.yaml`. Стадия, объявленная в YAML раньше своей же зависимости (ради читаемости флоу), рисовалась выше неё, хотя реально стартует только когда зависимость завершится — список не отражал граф выполнения.
+The stage list on the left of the dashboard is rendered in the order returned by `GET /api/status` (`stages []StageView`) — this used to be exactly `state.RunState.StageOrder`, i.e. the declaration order in `flow.yaml`. A stage declared in YAML before its own dependency (for flow readability) was drawn above it, even though it actually starts only once the dependency finishes — the list didn't reflect the execution graph.
 
-- **`buildStageViews` (`pkg/server/stageview.go`) пересчитывает порядок через `topoOrder`** — устойчивый (stable) вариант алгоритма Кана: очередь готовых узлов заводится и пополняется в порядке исходного `StageOrder`, поэтому независимые стадии без связи между собой сохраняют взаимный порядок объявления (не тасуются итерацией по map), а зависимая стадия рендерится сразу после ВСЕХ своих `depends_on`, а не перед несвязанными соседями просто потому что была объявлена раньше.
-- **Пример:** `stage1 (deps:[stage2]), stage2, stage3, stage4, stage5, stage6 (deps:[stage2,3,4,5])` в объявлении → рендерится как `stage2, stage3, stage4, stage5, stage1, stage6`.
-- **`state.RunState.StageOrder` не трогается** — это авторитетный порядок для `state`/`scheduling` (реплей лога, CAS-переходы и т.д.); `topoOrder` — чисто display-слой поверх него, живёт только в `pkg/server`.
-- Новый `Server.stageDependsOn`/`Config.StageDependsOn` (`pkg/server/server.go`) заполняется из `flow.Stage.DependsOn` в `cmd/afm/run.go`, рядом с уже существующими `stageInteractive`/`stageAutoApprove`.
-- Защитный фолбэк в `topoOrder`: если результат не покрыл все id (цикл или ссылка на несуществующую стадию), возвращает исходный порядок как есть — на практике недостижимо, `flow.ParseFile`'s `detectCycles` уже отвергает такие флоу на этапе парсинга.
+- **`buildStageViews` (`pkg/server/stageview.go`) recomputes the order via `topoOrder`** — a stable variant of Kahn's algorithm: the ready-node queue is seeded and refilled in the order of the original `StageOrder`, so independent stages with no relation between them keep their mutual declaration order (they aren't shuffled by map iteration), while a dependent stage renders right after ALL of its `depends_on`, not before unrelated neighbors just because it was declared earlier.
+- **Example:** `stage1 (deps:[stage2]), stage2, stage3, stage4, stage5, stage6 (deps:[stage2,3,4,5])` in the declaration → renders as `stage2, stage3, stage4, stage5, stage1, stage6`.
+- **`state.RunState.StageOrder` is not touched** — it's the authoritative order for `state`/`scheduling` (log replay, CAS transitions, etc.); `topoOrder` is a pure display layer on top of it, living only in `pkg/server`.
+- The new `Server.stageDependsOn`/`Config.StageDependsOn` (`pkg/server/server.go`) is populated from `flow.Stage.DependsOn` in `cmd/afm/run.go`, next to the existing `stageInteractive`/`stageAutoApprove`.
+- A defensive fallback in `topoOrder`: if the result doesn't cover all ids (a cycle or a reference to a nonexistent stage), it returns the original order as-is — unreachable in practice, `flow.ParseFile`'s `detectCycles` already rejects such flows at parse time.
 
-### Автопродвижение выбранной стадии в дашборде — ретрай на каждом опросе, не одноразовая проверка
+### Auto-advancing the selected stage in the dashboard — retry on every poll, not a one-shot check
 
-`App.tsx` держит выбор пользователя (`selectedStageId`) и автоматически продвигает его к следующей активной стадии, когда стадия, за которой сейчас следят, завершается — но не перекидывает пользователя, если он сам вручную открыл уже завершённую стадию (посмотреть план/лог/диалог).
+`App.tsx` holds the user's selection (`selectedStageId`) and automatically advances it to the next active stage when the stage currently being followed finishes — but it doesn't move the user if they manually opened an already-finished stage (to look at its plan/log/dialog).
 
-- **`wasLive` — per-selection флаг, не per-tick.** Раньше продвижение проверялось РОВНО в тот тик, когда выбранная стадия переходила `!done → done` (сравнение с предыдущим статусом). На скриптовых стейджах (`Stage.IsScript()`, `pkg/flow/flow.go`) `running` может длиться доли секунды — несколько стадий подряд успевают пройти `running → done` МЕЖДУ двумя опросами `/api/status` (раз в 3с). К моменту, когда фронтенд наконец видит «стадия1 стала done», стадия2 уже тоже done — среди `ACTIVE_STAGE_STATUSES` искать нечего, и старая проверка сдавалась НАВСЕГДА (следующий опрос её уже не перезапускал, раз статус уже done) — выбор залипал на стадии1, хотя реально работает стадия3/4.
-- **Фикс:** `wasLive.current` живёт, пока текущий `selectedStageId` не поменяется (сбрасывается только при смене выбора, не при каждом опросе). Пока стадия done и была замечена «живой» под этим выбором — поиск следующей активной стадии повторяется на КАЖДОМ опросе, а не один раз. Самокорректируется в пределах одного цикла опроса вместо необратимого залипания. Ручной клик по уже завершённой стадии никогда не выставляет `wasLive` → её выбор не трогается (сохранено прежнее поведение).
+- **`wasLive` — a per-selection flag, not per-tick.** Advancement used to be checked EXACTLY on the tick when the selected stage transitioned `!done → done` (comparing with the previous status). On script stages (`Stage.IsScript()`, `pkg/flow/flow.go`) `running` can last a fraction of a second — several stages in a row can pass `running → done` BETWEEN two `/api/status` polls (every 3s). By the time the frontend finally sees "stage1 became done", stage2 is also already done — there's nothing left among `ACTIVE_STAGE_STATUSES` to look for, and the old check gave up FOREVER (the next poll no longer re-ran it, since the status was already done) — the selection stuck on stage1, even though stage3/4 was actually working.
+- **Fix:** `wasLive.current` lives as long as the current `selectedStageId` doesn't change (it's reset only on selection change, not on every poll). As long as the stage is done and was seen "live" under this selection, the search for the next active stage repeats on EVERY poll, not once. It self-corrects within one polling cycle instead of sticking irreversibly. A manual click on an already-finished stage never sets `wasLive` → its selection isn't touched (previous behavior preserved).
 
 ## Paused Stage Status
 
-Новый статус стадии `paused` — три сценария: (1) `auto_run: false` в `flow.yaml` гейтит первую активацию стадии (стадия не стартует сама, ждёт Continue); (2) ручная пауза через пункт "Pause" в кебаб-меню стадии, доступна для `running`/`planning`/`revising`/`retrying`; (3) скриптовые стадии (`script:`) паузятся только через (1) — mid-script graceful stop архитектурно не поддержан (`RunScript` не принимает interrupt-канал).
+The new stage status `paused` covers three scenarios: (1) `auto_run: false` in `flow.yaml` gates the first activation of a stage (the stage doesn't start on its own, it waits for Continue); (2) manual pause via the "Pause" item in the stage's kebab menu, available for `running`/`planning`/`revising`/`retrying`; (3) script stages (`script:`) can only be paused via (1) — a mid-script graceful stop is architecturally unsupported (`RunScript` doesn't accept an interrupt channel).
 
-- **Поле `auto_run` в `flow.yaml`** (`flow.Stage.AutoRun *bool`, yaml `auto_run,omitempty`) — булев указатель, не голый `bool`: нужно различать "поле не задано" (`nil`) от "задано `false`", иначе омиссия в YAML неотличима от явного отключения. `nil` (не задано) или `true` — прежнее поведение, стадия стартует сама, как только выполнены её `depends_on`. Только явное `auto_run: false` переводит стадию сразу в `paused` (`PausedFrom: pending`) вместо старта — ждёт нажатия Continue в дашборде. Легально на стадии ЛЮБОГО типа: обычной (planning/implementation/review), `agents: [auto]`, `script:` — гейт срабатывает до того, как определяется тип запуска. Проверяется хелпером `(Stage) AutoRunDisabled() bool` (`pkg/flow/flow.go`), гейт применяется через `(o *Orchestrator) shouldGateAutoRun` (`scheduling.go`) в обеих точках первой активации (`tryActivatePrePlanned` и recovery-путь `startPlanningForPending`). **Срабатывает один раз**, только на самую первую активацию стадии — см. `PausedFrom` ниже про то, как это гарантируется.
+- **The `auto_run` field in `flow.yaml`** (`flow.Stage.AutoRun *bool`, yaml `auto_run,omitempty`) is a boolean pointer, not a plain `bool`: you need to distinguish "field not set" (`nil`) from "set to `false`", otherwise an omission in YAML is indistinguishable from an explicit disable. `nil` (not set) or `true` — previous behavior, the stage starts on its own as soon as its `depends_on` are satisfied. Only an explicit `auto_run: false` moves the stage straight to `paused` (`PausedFrom: pending`) instead of starting — it waits for a Continue click in the dashboard. Legal on a stage of ANY type: regular (planning/implementation/review), `agents: [auto]`, `script:` — the gate fires before the launch type is determined. Checked by the helper `(Stage) AutoRunDisabled() bool` (`pkg/flow/flow.go`); the gate is applied via `(o *Orchestrator) shouldGateAutoRun` (`scheduling.go`) at both first-activation points (`tryActivatePrePlanned` and the recovery path `startPlanningForPending`). **It fires once**, only on the very first activation of a stage — see `PausedFrom` below for how this is guaranteed.
 
-- **`state.StageState.PausedFrom` — двойного назначения поле, не очищается при выходе из paused.** Хранит статус, из которого стадия ушла в паузу (`running`/`planning`/`revising`/`retrying`/`pending`). Пока стадия в `paused` — это то, куда резюмиться. После Continue (когда статус уже НЕ `paused`) поле остаётся непустым НАВСЕГДА — это постоянная метка "стадия уже проходила цикл паузы хотя бы раз", которую использует `shouldGateAutoRun` (`scheduling.go`), чтобы `auto_run:false` срабатывал только при самой первой активации, а не при каждом повторном заходе в `pending` после `failed`→retry. `pkg/server/stageview.go`'s `StageView.PausedFrom` (JSON `paused_from`) НЕ наследует эту перманентность — заполняется только когда `Status == StatusPaused`, иначе пустая строка, чтобы не светить в API устаревшее значение стадии, давно вышедшей из паузы.
-- **`Continue` == "притвориться, что afm только что перезапустился и нашёл эту стадию в статусе `PausedFrom`".** `Orchestrator.Continue` (`control_api.go`) для `PausedFrom == pending` заново прогоняет обычную активацию (`tryActivatePrePlanned`+`startPlanningForUnblocked`, гейт уже сам себя не пустит повторно благодаря непустому `PausedFrom`); для остальных четырёх статусов — `resumeStageAtStatus` (`recovery.go`), ТОТ ЖЕ диспетчер, которым `startPlanningForPending` уже резюмирует стадию после краша afm. Ручная пауза и "процесс упал, afm перезапустили" — с точки зрения планировщика одна и та же ситуация: "процесс, подразумеваемый этим статусом, сейчас не бежит — запусти его".
-- **Ручная пауза переиспользует `interruptChans`** — тот же канал/механизм (SIGINT + 15s grace), которым `Revise` уже пользуется для agent_suggest на `running`-стадии. `Orchestrator.Pause` (`control_api.go`) синхронно фиксирует `EvPause` в логе (до сигнала в канал) — durable-переход раньше, чем асинхронный эффект, тот же паттерн, что и `Approve`/`Revise`/`Retry`. `runWithRetry` (`retry.go`) при `ErrUserInterrupted` проверяет `currentStatus == paused`, чтобы отличить "это Pause" (ничего не резюмить, переход уже случился) от "это Revise" (перезапустить с фидбеком) — оба используют один и тот же канал. Для статуса `retrying` (пассивный бэкофф-таймер, живого процесса нет) в `runWithRetry`'s backoff-select добавлена ветка `case <-interruptCh:` — `Revise` туда доехать не может (её precondition — только `awaiting_approval`/`running`), так что сигнал в этом select однозначно означает `Pause`.
-- **`withBeforeHook` (`hooks.go`) перепроверяет статус после `script_before`.** `script_before` выполняется голым shell-скриптом БЕЗ interrupt-канала (тот регистрируется только внутри `runWithRetry`, для основного агента, уже ПОСЛЕ хука) — `Pause()` мог успешно увести стадию в `paused`, пока хук ещё крутился в фоне, и по его завершении `mainFn` запускался бы поверх уже поставленной на паузу стадии (плюс второй раз — если пользователь успел нажать Continue раньше). Фикс: `withBeforeHook` не вызывает `mainFn`, если `currentStatus(s.ID) == StatusPaused` после хука.
-- **Гонка "Pause во время очереди за семафором" закрыта централизованно в `concurrency.Manager.SpawnAgent`, не патчами по вызывающему коду.** Изначально (найдено отдельным аудитом "нет ли протечек в FSM") эта гонка чинилась точечной проверкой `currentStatus == paused` в начале `runWithRetry` — рабочий, но размазанный по двум местам фикс (второй — `withBeforeHook`). На вопрос "почему дыр для протечек несколько, нельзя сделать одно место управления?" логика была перенесена на уровень ниже: `Manager` (`pkg/orchestrator/concurrency/concurrency.go`) получил поле `shouldRun func(stageID string) bool`, которое `SpawnAgent` проверяет СРАЗУ ПОСЛЕ `sem.acquire()`+`markActive`, ДО вызова `run(ctx, s)` — то есть максимально близко к месту, где горутина реально просыпается после (возможно долгого) ожидания слота в `max_parallel`-семафоре. `orchestrator.New` передаёт замыкание `func(id string) bool { return opts.Store.Get(id) != state.StatusPaused }` в `concurrency.New` (единственный продакшн call site, `pkg/orchestrator/orchestrator.go`). Это единая точка для ЛЮБОГО пути запуска агента (planning/implementation/review/autonomous, fresh или `*WithFeedback` резюм, через `startReadyStages`/`retryStage`/`resumeStageAtStatus`/HTTP-хендлеры) — раз все они уже обязаны идти через `SpawnAgent` (это и есть его исходное назначение, см. "Чистый shutdown" выше). Проверка в `runWithRetry` стала избыточной и удалена вместе со своим тестом; проверка в `withBeforeHook` **осталась** — она защищает структурно другое окно (время выполнения самого `script_before`-хука, которое лежит ВНУТРИ `run(ctx,s)`, уже после единственной SpawnAgent-проверки, и `shouldRun` в неё заглянуть не может). Регрессионный тест на саму гонку — `TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore` (`pkg/orchestrator/concurrency/concurrency_test.go`), воспроизводит реальный сценарий через `ChannelSemaphore` (та же техника, что и уже существующий `TestSpawnAgent_BlocksOnFullSemaphore`): горутина стоит в очереди на занятый семафор, `shouldRun` переключается в false, семафор освобождается — `run` не должен вызваться.
-- **`resumeStageAtStatus`'s `StatusRetrying`-ветка проверяет autonomous/`agents:[auto]`**, симметрично уже существующей проверке в соседней `StatusRunning`-ветке — без этого Continue после ручной паузы автономной стадии во время retry-бэкоффа уводил её в `EvStartPlanning`+planning-агента, хотя у автономных стадий никогда нет `plan.md` и планирования вообще (баг, специфичный именно для нового пути Continue — раньше эта ветка `resumeStageAtStatus` вызывалась только из `startPlanningForPending`, куда автономная стадия не попадает: её перехватывает первый switch этой же функции).
-- **`pkg/server/stageview.go`'s `ShowPlan` учитывает `paused`, не только `failed`** (`showPlan := !autonomous || failed || paused`) — иначе autonomous-стадия (`agents:[auto]`), особенно с `interactive: true`, на паузе рендерила только `DialogChannel` без единой видимой кнопки Continue (PlanPanel, где она живёт, вообще не монтировался). Найдено на реальном флоу пользователя — правило для `showPlan` было написано в мире, где autonomous-стадия может дойти до `failed`, но не до `paused`.
-- **`use-attention.ts`**: `paused` — часть `ATTENTION_STATUSES`/`AttentionKind` (заголовочная точка "Action needed", favicon pulse, title flash, desktop-notification с заголовком "Stage paused" в `use-desktop-notifications.ts`'s `Record<AttentionKind, string>` — TS не даст забыть добавить новый kind туда, exhaustiveness-check самого типа).
-- **Найдено живым ручным прогоном (реальный glm47-агент, реальный браузер): `Continue()` мог навсегда подвесить зависимые стадии.** `resumeStageAtStatus`'s "уже завершено, восстановлено с диска" fast-path'и (autonomous `execution_summary.md` / script `.done`, обе ветки `StatusRetrying` и `StatusRunning`) финализировали саму стадию голым `Trigger(EvComplete)` + `maybeRunAfterHook`, минуя каскад `failBlockedStages`/`startPlanningForUnblocked`/`startReadyStages`/`tryActivatePrePlanned`, которым нормальное завершение агента (`onAgentCompleted` → `completeStage`) всегда сопровождается. Из bootstrap-пути (`startPlanningForPending`) это было безобидно — тот вызывает весь каскад ОДИН РАЗ после цикла по ВСЕМ стадиям флоу, так что пропуск каскада внутри одной итерации ничего не портил. Но `Continue()` резюмит ровно одну стадию и сразу возвращается — если она попадала в fast-path (типичный сценарий: агент уже дописал `execution_summary.md`, а `Pause()` сработал на долю секунды позже), никто и никогда не переоценивал стадии, ждущие её как зависимость — они зависали в `pending` навсегда, пока не перезапустишь весь процесс afm вручную. Фикс: обе "recovered" fast-path-ветки в `resumeStageAtStatus` теперь зовут тот же `completeStage(ctx, s.ID, status, reason)` (получил параметр `reason`, чтобы не терять текст вроде "recovered execution_summary.md" в логе), а не дублируют его тело вручную. Аналогичная ветка внутри `startPlanningForPending`'s собственного цикла НЕ тронута — она провably безопасна за счёт каскада после цикла, трогать её значило бы дважды звать `startReadyStages` и т.п. без driving-теста на реальную проблему. Регрессия: `TestContinue_RecoveredCompletion_UnblocksDependent` (`pause_continue_test.go`) — гоняет `orch.Continue` на стадии с уже написанным `execution_summary.md` и проверяет, что ЗАВИСИМАЯ стадия тоже доходит до `done`, не только резюмированная; тест изначально плавал (проходил по неверной причине из-за гонки между `go func(){ orch.Run(ctx) }()` и немедленным `orch.Continue()`) — стабилизирован явным `time.Sleep` после старта `Run`, чтобы гарантированно бить по пути `Continue()`, а не по каскаду bootstrap-цикла.
-- Спек/план: `docs/superpowers/specs/2026-08-17-paused-stage-status-design.md`, `docs/superpowers/plans/2026-08-17-paused-stage-status.md`.
+- **`state.StageState.PausedFrom` — a dual-purpose field, not cleared on exit from paused.** It stores the status the stage left when it went to pause (`running`/`planning`/`revising`/`retrying`/`pending`). While the stage is `paused` — that's where to resume to. After Continue (when the status is no longer `paused`) the field stays non-empty FOREVER — it's a permanent marker "this stage has already gone through the pause cycle at least once", which `shouldGateAutoRun` (`scheduling.go`) uses so that `auto_run:false` fires only on the very first activation, not on every re-entry into `pending` after `failed`→retry. `pkg/server/stageview.go`'s `StageView.PausedFrom` (JSON `paused_from`) does NOT inherit this permanence — it's populated only when `Status == StatusPaused`, otherwise an empty string, so as not to expose in the API a stale value from a stage that left pause long ago.
+- **`Continue` == "pretend afm just restarted and found this stage in status `PausedFrom`".** `Orchestrator.Continue` (`control_api.go`) for `PausedFrom == pending` re-runs normal activation (`tryActivatePrePlanned`+`startPlanningForUnblocked`, the gate won't let itself through again thanks to the non-empty `PausedFrom`); for the other four statuses — `resumeStageAtStatus` (`recovery.go`), the SAME dispatcher `startPlanningForPending` already uses to resume a stage after an afm crash. A manual pause and "the process crashed, afm was restarted" are the same situation from the scheduler's point of view: "the process implied by this status is not running right now — launch it".
+- **Manual pause reuses `interruptChans`** — the same channel/mechanism (SIGINT + 15s grace) `Revise` already uses for agent_suggest on a `running` stage. `Orchestrator.Pause` (`control_api.go`) synchronously commits `EvPause` to the log (before signaling the channel) — the durable transition earlier than the async effect, the same pattern as `Approve`/`Revise`/`Retry`. On `ErrUserInterrupted`, `runWithRetry` (`retry.go`) checks `currentStatus == paused` to distinguish "this is a Pause" (resume nothing, the transition already happened) from "this is a Revise" (restart with feedback) — both use the same channel. For status `retrying` (a passive backoff timer, no live process) a `case <-interruptCh:` branch was added to `runWithRetry`'s backoff-select — `Revise` can't reach there (its precondition is only `awaiting_approval`/`running`), so a signal in that select unambiguously means `Pause`.
+- **`withBeforeHook` (`hooks.go`) re-checks the status after `script_before`.** `script_before` runs as a bare shell script WITHOUT an interrupt channel (that's registered only inside `runWithRetry`, for the main agent, AFTER the hook) — `Pause()` could successfully move the stage to `paused` while the hook was still running in the background, and on its completion `mainFn` would launch on top of an already-paused stage (plus a second time — if the user managed to press Continue earlier). Fix: `withBeforeHook` doesn't call `mainFn` if `currentStatus(s.ID) == StatusPaused` after the hook.
+- **The "Pause while queued behind the semaphore" race is closed centrally in `concurrency.Manager.SpawnAgent`, not with patches across the calling code.** Initially (found by a separate "are there any FSM leaks?" audit) this race was fixed with a pinpoint `currentStatus == paused` check at the start of `runWithRetry` — a working but scattered fix across two places (the second being `withBeforeHook`). In answer to "why are there several leak holes, can't we have one control point?" the logic was moved one level down: `Manager` (`pkg/orchestrator/concurrency/concurrency.go`) got a field `shouldRun func(stageID string) bool` that `SpawnAgent` checks RIGHT AFTER `sem.acquire()`+`markActive`, BEFORE calling `run(ctx, s)` — i.e. as close as possible to the point where the goroutine actually wakes after a (possibly long) wait for a slot in the `max_parallel` semaphore. `orchestrator.New` passes the closure `func(id string) bool { return opts.Store.Get(id) != state.StatusPaused }` to `concurrency.New` (the only production call site, `pkg/orchestrator/orchestrator.go`). This is the single point for ANY agent launch path (planning/implementation/review/autonomous, fresh or `*WithFeedback` resume, via `startReadyStages`/`retryStage`/`resumeStageAtStatus`/HTTP handlers) — since all of them are already required to go through `SpawnAgent` (that's its original purpose, see "Clean shutdown" above). The check in `runWithRetry` became redundant and was removed along with its test; the check in `withBeforeHook` **remains** — it protects a structurally different window (the execution time of the `script_before` hook itself, which lies INSIDE `run(ctx,s)`, already past the single SpawnAgent check, where `shouldRun` can't look). The regression test for the race itself is `TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore` (`pkg/orchestrator/concurrency/concurrency_test.go`), which reproduces the real scenario via `ChannelSemaphore` (the same technique as the existing `TestSpawnAgent_BlocksOnFullSemaphore`): a goroutine queues on a busy semaphore, `shouldRun` flips to false, the semaphore frees up — `run` must not be called.
+- **`resumeStageAtStatus`'s `StatusRetrying` branch checks autonomous/`agents:[auto]`**, symmetric to the existing check in the neighboring `StatusRunning` branch — without it, Continue after a manual pause of an autonomous stage during retry backoff sent it into `EvStartPlanning`+a planning agent, even though autonomous stages never have a `plan.md` or planning at all (a bug specific to the new Continue path — previously this `resumeStageAtStatus` branch was only called from `startPlanningForPending`, which an autonomous stage never reaches: the first switch of the same function intercepts it).
+- **`pkg/server/stageview.go`'s `ShowPlan` accounts for `paused`, not just `failed`** (`showPlan := !autonomous || failed || paused`) — otherwise an autonomous stage (`agents:[auto]`), especially with `interactive: true`, rendered only `DialogChannel` when paused, with not a single visible Continue button (PlanPanel, where it lives, wasn't mounted at all). Found on a real user flow — the rule for `showPlan` was written in a world where an autonomous stage could reach `failed`, but not `paused`.
+- **`use-attention.ts`**: `paused` is part of `ATTENTION_STATUSES`/`AttentionKind` (the header "Action needed" dot, favicon pulse, title flash, desktop notification titled "Stage paused" in `use-desktop-notifications.ts`'s `Record<AttentionKind, string>` — TS won't let you forget to add the new kind there, the exhaustiveness-check of the type itself).
+- **Found by a live manual run (a real glm47 agent, a real browser): `Continue()` could hang dependent stages forever.** `resumeStageAtStatus`'s "already finished, recovered from disk" fast-paths (autonomous `execution_summary.md` / script `.done`, both the `StatusRetrying` and `StatusRunning` branches) finalized the stage itself with a bare `Trigger(EvComplete)` + `maybeRunAfterHook`, bypassing the cascade `failBlockedStages`/`startPlanningForUnblocked`/`startReadyStages`/`tryActivatePrePlanned` that normal agent completion (`onAgentCompleted` → `completeStage`) always carries. From the bootstrap path (`startPlanningForPending`) this was harmless — that one runs the whole cascade ONCE after looping over ALL stages of the flow, so skipping the cascade inside one iteration broke nothing. But `Continue()` resumes exactly one stage and returns immediately — if it hit the fast-path (a typical scenario: the agent already finished writing `execution_summary.md`, and `Pause()` fired a fraction of a second later), nobody ever re-evaluated the stages waiting on it as a dependency — they hung in `pending` forever, until you manually restart the whole afm process. Fix: both "recovered" fast-path branches in `resumeStageAtStatus` now call the same `completeStage(ctx, s.ID, status, reason)` (which gained a `reason` parameter, so as not to lose text like "recovered execution_summary.md" in the log), instead of duplicating its body by hand. The analogous branch inside `startPlanningForPending`'s own loop was NOT touched — it's provably safe thanks to the post-loop cascade, and touching it would mean calling `startReadyStages` etc. twice without a driving test for a real problem. Regression: `TestContinue_RecoveredCompletion_UnblocksDependent` (`pause_continue_test.go`) — runs `orch.Continue` on a stage with an already-written `execution_summary.md` and checks that the DEPENDENT stage also reaches `done`, not just the resumed one; the test initially flaked (it passed for the wrong reason due to a race between `go func(){ orch.Run(ctx) }()` and the immediate `orch.Continue()`) — stabilized with an explicit `time.Sleep` after starting `Run`, to guarantee it hits the `Continue()` path, not the bootstrap-loop cascade.
+- Spec/plan: `docs/superpowers/specs/2026-08-17-paused-stage-status-design.md`, `docs/superpowers/plans/2026-08-17-paused-stage-status.md`.
 
-## Pre-note: заметка стадии до её старта
+## Pre-note: a note for a stage before it starts
 
-К стадии, которая ещё **не стартовала** (`pending`), можно прикрепить заметку — по ходу работы иногда понимаешь, что следующей стадии надо что-то учесть, и это можно дописать сразу, не дожидаясь её запуска. Заметка вклеивается в контекст агента на его **первом** старте — как часть исходного задания, а не поправка к уже начатой работе (в отличие от `agent_suggest`/`Revise`, который через `feedback.md` перезапускает УЖЕ работающего агента).
+You can attach a note to a stage that hasn't **started yet** (`pending`) — as work progresses you sometimes realize the next stage needs to take something into account, and you can add it right away without waiting for it to launch. The note is spliced into the agent's context on its **first** start — as part of the original task, not a correction to work already begun (unlike `agent_suggest`/`Revise`, which restarts an ALREADY-running agent via `feedback.md`).
 
-- **Отдельный файл `<stageDir>/prenote.md`, не событие и не FSM.** Ключевое упрощение: pre-note не меняет статус стадии и не заводит новых FSM-событий — `pending` остаётся `pending`. `state.SavePreNote`/`state.LoadPreNote` (`pkg/state/state.go`) пишут/читают файл напрямую (тем же приёмом, что `SaveFeedback` пишет `feedback.md`). Одно редактируемое поле: сохранение **заменяет** текст (не append, в отличие от `feedback.md` с его revision-разделителями), сохранение пустого/из одних пробелов — **удаляет** файл (пользователь передумал → очистил поле). Запись атомарна (temp+rename); `stageDir` может ещё не существовать (`MkdirAll` внутри `SavePreNote`) — pending-стадия часто без каталога на диске. Живёт в пределах текущего run: переживает reload/restart afm (файл на диске), но новый run её не наследует; после старта стадии файл НЕ удаляется — 📝-индикатор остаётся как метка «заметка была применена».
-- **Вклейка — общий хелпер `(*Orchestrator).preNoteBlock(stageDir)`** (`pkg/orchestrator/agents.go`): читает `prenote.md`, возвращает блок `\n\n## User note (added before this stage started)\n\n<текст>` или `""`. Вызывается на первом (свежем) старте ВСЕХ четырёх агентских раннеров — `runPlanningAgent`/`runImplementationAgent`/`runReviewAgent`/`runAutonomousAgent` — и добавляется к `RetryContext` ровно так же, как `*WithFeedback`-раннеры добавляют свой `feedbackNote`. `*WithFeedback`-раннеры pre-note НЕ вклеивают (это перезапуск, не первый старт).
-- **HTTP `POST /api/stages/{id}/note`** `{"note":"..."}` (`handleStageNote`, `pkg/server/handlers.go`; роут в `server.go`): гейт — статус `pending` И стадия не скриптовая (у скрипта нет агента, куда вклеивать — симметрично `!isScript`-гейту у «Add note for agent»), иначе `400`. Пустой `note` → удаление. Запись идёт напрямую через `state.SavePreNote` (не через `StageActions` — оркестратор в записи не участвует, ему нужна только READ-сторона на старте). Текст отдаётся полем `pre_note` (omitempty) в `StageView`/`GET /api/status` (`pkg/server/stageview.go`) — оно же и префилит модалку редактирования, и служит сигналом для 📝-индикатора.
-- **Дашборд:** `AgentNoteModal` получил вариант `prenote` (`variant`/`initialNote`) — своя копирайт-строка «…added to the agent's context when the stage starts», префилл текущим текстом, кнопка «Save», пустой submit разрешён (= удалить). `StagesList`: `canPreNote(stage)` (`pending` && !`isScript`) добавляет пункт меню «Add note (before start)» / «Edit note (before start)» (лейбл зависит от наличия заметки); `hasKebab(stage)` показывает кебаб на pending-стадии ТОЛЬКО если pre-note доступна — иначе pending-скрипт рисовал бы пустое меню. Индикатор 📝 (`prenote-badge`) — в строке стадии при непустом `preNote`. `App.tsx` держит отдельный `preNoteModalStageId` (не переиспользует `noteModalStageId` от `agent_suggest`): другой вариант модалки, другой обработчик, `handleSubmitPreNote` при ошибке (напр. стадия успела уйти из `pending` → `400`) не закрывает модалку молча.
-- **Проверено вживую** (afm локально, mock-агент, реальный дашборд через Chrome DevTools): текстария/кебаб/индикатор/префилл/очистка, запись `prenote.md`, и — главное — вклейка в реальный промпт автономного агента (блок `## User note (added before this stage started)` в `autonomous.prompt.log` под `--debug`). Тесты: `TestSavePreNote_SaveLoadClear` (`pkg/state`), `TestHandleStageNote_{SaveAndClear,RejectsNonPending,RejectsScriptStage}` (`pkg/server`), `TestIntegration_PreNoteReachesFreshPrompt` (`pkg/orchestrator`), плюс фронтовые кейсы в `StagesList.test.tsx`/`use-status.test.ts`.
+- **A separate file `<stageDir>/prenote.md`, not an event and not FSM.** The key simplification: a pre-note doesn't change the stage's status and doesn't create new FSM events — `pending` stays `pending`. `state.SavePreNote`/`state.LoadPreNote` (`pkg/state/state.go`) write/read the file directly (the same technique `SaveFeedback` uses to write `feedback.md`). One editable field: saving **replaces** the text (not append, unlike `feedback.md` with its revision separators), saving empty/whitespace-only **deletes** the file (the user changed their mind → cleared the field). The write is atomic (temp+rename); `stageDir` may not exist yet (`MkdirAll` inside `SavePreNote`) — a pending stage often has no directory on disk. It lives within the current run: it survives afm reload/restart (the file on disk), but a new run doesn't inherit it; after the stage starts, the file is NOT deleted — the 📝 indicator stays as a marker "a note was applied".
+- **The splice is the shared helper `(*Orchestrator).preNoteBlock(stageDir)`** (`pkg/orchestrator/agents.go`): it reads `prenote.md` and returns the block `\n\n## User note (added before this stage started)\n\n<text>` or `""`. It's called on the first (fresh) start of ALL four agent runners — `runPlanningAgent`/`runImplementationAgent`/`runReviewAgent`/`runAutonomousAgent` — and is appended to `RetryContext` exactly the way the `*WithFeedback` runners append their `feedbackNote`. The `*WithFeedback` runners do NOT splice the pre-note (that's a restart, not a first start).
+- **HTTP `POST /api/stages/{id}/note`** `{"note":"..."}` (`handleStageNote`, `pkg/server/handlers.go`; route in `server.go`): the gate — status `pending` AND the stage isn't a script (a script has no agent to splice into — symmetric to the `!isScript` gate on "Add note for agent"), otherwise `400`. An empty `note` → deletion. The write goes directly through `state.SavePreNote` (not through `StageActions` — the orchestrator doesn't participate in the write, it only needs the READ side at start). The text is returned in the `pre_note` field (omitempty) of `StageView`/`GET /api/status` (`pkg/server/stageview.go`) — it both prefills the edit modal and serves as the signal for the 📝 indicator.
+- **Dashboard:** `AgentNoteModal` got a `prenote` variant (`variant`/`initialNote`) — its own copy line "…added to the agent's context when the stage starts", prefill with the current text, a "Save" button, empty submit allowed (= delete). `StagesList`: `canPreNote(stage)` (`pending` && !`isScript`) adds the menu item "Add note (before start)" / "Edit note (before start)" (the label depends on whether a note exists); `hasKebab(stage)` shows the kebab on a pending stage ONLY if pre-note is available — otherwise a pending script would draw an empty menu. The 📝 indicator (`prenote-badge`) is in the stage row when `preNote` is non-empty. `App.tsx` keeps a separate `preNoteModalStageId` (it doesn't reuse `noteModalStageId` from `agent_suggest`): a different modal variant, a different handler, and `handleSubmitPreNote` on error (e.g. the stage managed to leave `pending` → `400`) doesn't silently close the modal.
+- **Verified live** (afm locally, mock agent, real dashboard via Chrome DevTools): the textarea/kebab/indicator/prefill/clear, writing `prenote.md`, and — most importantly — the splice into the real prompt of an autonomous agent (the block `## User note (added before this stage started)` in `autonomous.prompt.log` under `--debug`). Tests: `TestSavePreNote_SaveLoadClear` (`pkg/state`), `TestHandleStageNote_{SaveAndClear,RejectsNonPending,RejectsScriptStage}` (`pkg/server`), `TestIntegration_PreNoteReachesFreshPrompt` (`pkg/orchestrator`), plus frontend cases in `StagesList.test.tsx`/`use-status.test.ts`.
 
 ## File-Based Dialog Protocol (Interactive Stages)
 
@@ -192,23 +192,23 @@ Common patterns:
 - **Answer received:** Both `*.question.json` and `*.answer.json` exist, agent should have exited
 - **Dialog history:** Check `*.dialog.jsonl` for full Q&A history (safe to ignore if missing)
 - **Agent error / hung:** Agent stdout (tool actions) is in `<phase>.log`; agent **stderr** (claude diagnostics, e.g. `stream-json requires --verbose`) is in `<phase>.stderr.log`. The bash polling loop times out after the executor's idle timeout (30 min default).
-- **Misplaced question (auto-relocate/normalize):** `relocateMisplacedQuestions` (`pkg/orchestrator/orchestrator.go`, читает Write-события из `<phase>.jsonl`) чинит два способа «спрятать» файл вопроса от поллера, оба ведут к вечному зависанию стадии: **(1) неверная директория** — `*.question.json` записан ВНЕ `$AFM_STAGE_DIR` (баг GLM-4.7: путь из CWD вместо env); **(2) неверный префикс** — файл внутри stageDir, но назван по id стадии (напр. `commit-changes.q1.question.json`) вместо канонической фазы (`planning.q1.question.json`), а `FindUnansweredQuestions` матчит только `planning`/`implementation`/`review`/`autonomous_execution`. В обоих случаях файл нормализуется к каноническому имени `<phase>.<id>.question.json` (правильная фаза берётся из того, в чьём `<phase>.jsonl` найден Write, а не из неверного префикса) + создаётся dangling-симлинк по пути, который опрашивает агент (его директория + его префикс), → канонический `<stageDir>/<phase>.<id>.answer.json`, чтобы bash-polling-loop нашёл ответ. Стадия уходит в `awaiting_user_input`, а не зависает. Первый слой защиты — сам промпт (`pkg/prompts/builder.go`, `<interactive_rules>`) с адресным constraint-ом «префикс — это фаза, а НЕ id стадии». (Прежнее поведение — fail-fast через `detectDialogViolation` — заменено relocate.) На ручном retry `<phase>.session.json` и `<phase>.jsonl` очищаются.
+- **Misplaced question (auto-relocate/normalize):** `relocateMisplacedQuestions` (`pkg/orchestrator/orchestrator.go`, reads Write events from `<phase>.jsonl`) fixes two ways to "hide" a question file from the poller, both leading to the stage hanging forever: **(1) wrong directory** — `*.question.json` written OUTSIDE `$AFM_STAGE_DIR` (a GLM-4.7 bug: path from CWD instead of env); **(2) wrong prefix** — the file is inside stageDir but named after the stage id (e.g. `commit-changes.q1.question.json`) instead of the canonical phase (`planning.q1.question.json`), while `FindUnansweredQuestions` only matches `planning`/`implementation`/`review`/`autonomous_execution`. In both cases the file is normalized to the canonical name `<phase>.<id>.question.json` (the correct phase is taken from whose `<phase>.jsonl` the Write was found in, not from the wrong prefix) + a dangling symlink is created at the path the agent polls (its directory + its prefix) → the canonical `<stageDir>/<phase>.<id>.answer.json`, so the bash polling loop finds the answer. The stage goes to `awaiting_user_input` instead of hanging. The first layer of defense is the prompt itself (`pkg/prompts/builder.go`, `<interactive_rules>`) with a targeted constraint "the prefix is the phase, NOT the stage id". (The previous behavior — fail-fast via `detectDialogViolation` — was replaced by relocate.) On a manual retry, `<phase>.session.json` and `<phase>.jsonl` are cleared.
 
-- **Реюз id вопроса после ответа — `pollQuestions`'s `processed`-карта must forget answered keys.** Найдено разбором реальной production-стадии (`agents:[auto]`, ревизионный цикл `goga-brainstorm`): промпт требует "never reuse an ID within a phase", но реальный агент всё равно переиспользовал тот же id (`q2`) для ВТОРОГО, содержательно другого вопроса после того, как первый `q2` был отвечен и агент возобновил работу с фидбеком пользователя (подтверждено байт-в-байт по `autonomous.log`: `Write q2.question.json` → `cat q2.answer.json` → правки по фидбеку → `Write q2.question.json` СНОВА → `rm -f q2.answer.json; while ...`). `processed[stageID|phase|id]` — карта в памяти процесса, живущая всё время поллинг-горутины — раз выставленная в `true`, никогда не сбрасывалась, поэтому второе, реально неотвеченное появление `q2` было НЕВИДИМО поллеру НАВСЕГДА: ни `EvAskUser`, ни записи в `dialog.jsonl`, стадия зависает в `running` с настоящим неотвеченным `question.json` на диске. Перезагрузка страницы не лечит — баг серверный, in-memory, а не во фронтенде; спасал только полный рестарт `afm run` (карта пересоздаётся с нуля). Фикс: `pollQuestions` перед обработкой очередного тика удаляет из `processed` любой ключ этой стадии, которого больше нет в текущем списке неотвеченных (`mcp.FindUnansweredQuestions`) — т.е. как только вопрос реально получил ответ и исчез из неотвеченных, его ключ забывается, и повторное появление ТОГО ЖЕ id как неотвеченного снова триггерит `EvAskUser`. Тест-регрессия: `TestPollQuestions_ReusedIDAfterAnswerAsksAgain`.
+- **Reusing a question id after it's answered — `pollQuestions`'s `processed` map must forget answered keys.** Found by dissecting a real production stage (`agents:[auto]`, the `goga-brainstorm` revision cycle): the prompt requires "never reuse an ID within a phase", but the real agent reused the same id (`q2`) anyway for a SECOND, semantically different question after the first `q2` was answered and the agent resumed work with the user's feedback (confirmed byte-for-byte against `autonomous.log`: `Write q2.question.json` → `cat q2.answer.json` → edits per feedback → `Write q2.question.json` AGAIN → `rm -f q2.answer.json; while ...`). `processed[stageID|phase|id]` — an in-process in-memory map living for the whole lifetime of the polling goroutine — once set to `true`, was never reset, so the second, genuinely unanswered appearance of `q2` was INVISIBLE to the poller FOREVER: no `EvAskUser`, no `dialog.jsonl` entry, the stage hangs in `running` with a real unanswered `question.json` on disk. A page reload doesn't cure it — the bug is server-side, in-memory, not in the frontend; only a full restart of `afm run` helped (the map is recreated from scratch). Fix: before processing each tick, `pollQuestions` removes from `processed` any key of this stage that's no longer in the current unanswered list (`mcp.FindUnansweredQuestions`) — i.e. as soon as a question is really answered and disappears from the unanswered set, its key is forgotten, and a repeat appearance of the SAME id as unanswered triggers `EvAskUser` again. Regression test: `TestPollQuestions_ReusedIDAfterAnswerAsksAgain`.
 
-- **Malformed `question.json` — torn-read race, не (только) агентская ошибка; единый механизм починки «либа → свежий агент → терминальный fallback» для ВСЕХ типов стадий.** Разбор реального лога: `FindUnansweredQuestions` не смогла распарсить `question.json` даже через `jsonrepair`. Байт-в-байт сравнение показало: захваченный в `dialog.jsonl` "битый" preview — точный префикс ПОЗЖЕ валидного, полного содержимого того же файла, ни разу не изменившегося по факту — т.е. поллер прочитал файл, пока `Write`-тул агента ещё не долетел до диска (torn read), а не то что агент реально сломал JSON.
-  - **Первопричина инцидента, ради которого механизм переписан: malformed-ветка была `interactive`-only, и non-interactive (`agents:[auto]`) стадия зависала НАВСЕГДА.** В проде стадия `architecture-review` (`agents:[auto]`, БЕЗ `interactive:true`) дошла до вопроса `q4`, чей `question.json` не парсился даже после jsonrepair. Старый `pollQuestions` вызывал автомат починки только под `if stage.Interactive`, а для non-interactive делал `continue` — при этом ветка авто-ответа (`PickAutoAnswer`), на которую рассчитывал старый комментарий («non-interactive и так толерантны»), стоит НИЖЕ и требует уже распарсенный вопрос: до неё поток при `Malformed` просто не доходил. Итог: `answer.json` не писался никогда, bash-loop агента опрашивал файл часами (в логе — с 03:27 до 07:28+, каждые ~10 мин), стадия висела в `running`. Человек через кебаб-меню фактически вручную «нуджнул» агента («поправь»), и тот переписал JSON — что и подсказало итоговое решение: механизм починки должен быть единым для обоих типов стадий, а разница interactive/non-interactive — только в ТЕРМИНАЛЬНОМ шаге.
-  - **`QuestionFile.Malformed bool`** (`pkg/mcp/dialog.go`) — `FindUnansweredQuestions` для "не распарсилось даже после repair" НЕ трогает файл на диске (только эта ветка; "repair сработал" по-прежнему персистит исправленный JSON), просто помечает `Malformed: true`. Решение "гонка или реальная поломка" — на вызывающем коде.
-  - **Единый автомат в `handleMalformedQuestion`** (`pkg/orchestrator/dialog_poller.go`), вызывается для ЛЮБОГО типа стадии (гейт `if stage != nil`, без `Interactive`): (1) **jsonrepair (либа)** — уже отработала внутри `FindUnansweredQuestions`; дошли сюда → она не справилась; (2) **grace tick** — первое появление битых байт просто запоминается (`malformedQuestionState.lastRaw`); если это torn read — на следующем тике (1с) файл уже дописан, парсится, `Malformed` больше не выставляется, автомат вообще не вовлекается; (3) **свежий агент-чинильщик** — те же битые байты на ВТОРОМ тике (запись завершена) → `spawnJSONFix` (`runJSONFixAgent`) запускает ОТДЕЛЬНЫЙ изолированный агент с чистым контекстом и единственной задачей «прочитай этот один файл, почини JSON, сохрани валидным под тем же id» (`buildJSONFixPrompt`); до `maxJSONFixAttempts` (3) раз; (4) **exhausted** → терминальный fallback: interactive → `giveUpOnMalformedQuestion` персистит валидный стаб (`Options:nil`, `AllowCustom:true`, сырой текст как объяснение) + `EvAskUser` человеку; non-interactive → `autoAnswerMalformed` пишет `answer.json` из `PickAutoAnswer` no-options fallback, чтобы стадия НЕ зависла (FSM не трогается). Фронтенд уже поддерживает опции-less вопрос (`DialogChannel.tsx`).
-  - **Почему свежий агент, а не in-context nudge тому же агенту (прежняя реализация).** Прежний механизм слал агенту через его же `answer.json` просьбу переписать файл (nudge). Пользователь выбрал fresh-agent: агент с чистым контекстом не отвлечён своей основной задачей и видит только битый файл, поэтому надёжнее (и попыток нужно меньше — 3 против прежних 5 нуджей). Побочный, но важный выигрыш: fresh-agent переписывает `question.json` НА МЕСТЕ и НЕ пишет никакого синтетического `answer.json` — значит целый класс багов «устаревшее tracking-состояние удаляет позже пришедший настоящий ответ» (который старый nudge-путь через `unblockRewrittenMalformedQuestions` вынужден был обходить) стал невозможен by construction. Реконсиляция схлопнулась до крошечной `reconcileMalformedFixes`: снять ключ, как только файл снова парсится (или исчез).
-  - **Изоляция fresh-агента (`runJSONFixAgent`):** свежая сессия (`SessionID`/`Resume` не заданы — смысл именно в чистом контексте, в отличие от `runnerFor`, который для interactive делает `--resume`); БЕЗ `StageDir`/`AFM_STAGE_DIR` (агент не участник диалога, правит только один файл по абсолютному пути из промпта, не может сам написать новый `question.json`); через **`concurrency.SpawnDetached`**, НЕ `SpawnAgent` — основной агент стадии заблокирован в ожидании ответа на этот же вопрос и держит слот командного семафора, так что `SpawnAgent` (1) заклинил бы на полном семафоре и (2) затёр бы active-маркер основного агента через `markActive`. `SpawnDetached` учитывает горутину в `agentWG` (чистый shutdown), но не берёт семафор и не трогает active-маркер. Завершение fix-агента ловится через done-канал (`malformedQuestionState.done`); отдельный таймаут не нужен — `RunAgent` уже ограничен idle-таймаутом. Лог fix-агента — отдельный `<phase>.<id>.jsonfix.log`, чтобы его tool-действия не попадали в `<phase>.jsonl` стадии (event feed / `WrittenFiles`).
-  - Тесты: `TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed` (файл не тронут); `TestPollQuestions_MalformedQuestion_{GraceTickHidesFromUser,ResolvesSilentlyIfWriteCompletes,StableSpawnsFixAgent,FixAgentRepairsQuestion,RealAnswerSurvivesAfterRecovery,FixAgentExhaustionShowsStub,NonInteractiveFixThenAutoAnswer,NonInteractiveFixFailsThenAutoAnswerFallback}`; `TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions`; `TestDialogGet_SkipsMalformedPendingQuestion` (guarantee-visibility fallback в `handlers.go` тоже фильтрует `Malformed`); `TestSpawnDetached_TracksWaitGroupWithoutSemaphoreOrActiveMarker` (`concurrency`); интеграционный `TestIntegration_UnrepairableQuestionFallsBackToStub` (один скрипт в двух ролях: как основной агент пишет битый JSON и спит, как fix-агент запущен без `AFM_STAGE_DIR` и падает сразу — быстрая модель «отдельный агент тоже не смог»). Тесты внедряют fix-агент через тестовый `o.spawnJSONFix` стаб (`injectFixStub`), не запуская реальный процесс.
+- **Malformed `question.json` — a torn-read race, not (only) an agent error; a unified repair mechanism "library → fresh agent → terminal fallback" for ALL stage types.** Dissecting a real log: `FindUnansweredQuestions` couldn't parse `question.json` even through `jsonrepair`. A byte-for-byte comparison showed: the "corrupt" preview captured in `dialog.jsonl` is an exact prefix of the LATER valid, complete content of the same file, which never actually changed — i.e. the poller read the file while the agent's `Write` tool hadn't yet reached disk (a torn read), not that the agent really broke the JSON.
+  - **The root cause of the incident that prompted the rewrite: the malformed branch was `interactive`-only, and a non-interactive (`agents:[auto]`) stage hung FOREVER.** In production the stage `architecture-review` (`agents:[auto]`, WITHOUT `interactive:true`) reached question `q4` whose `question.json` didn't parse even after jsonrepair. The old `pollQuestions` invoked the repair state machine only under `if stage.Interactive`, and for non-interactive did `continue` — while the auto-answer branch (`PickAutoAnswer`), which the old comment counted on ("non-interactive is tolerant anyway"), sits LOWER and requires an already-parsed question: the flow never reached it on `Malformed`. Result: `answer.json` was never written, the agent's bash loop polled the file for hours (in the log — from 03:27 to 07:28+, every ~10 min), the stage hung in `running`. A human effectively "nudged" the agent by hand via the kebab menu ("fix it"), and it rewrote the JSON — which suggested the final solution: the repair mechanism must be unified for both stage types, and the interactive/non-interactive difference only matters in the TERMINAL step.
+  - **`QuestionFile.Malformed bool`** (`pkg/mcp/dialog.go`) — for "didn't parse even after repair", `FindUnansweredQuestions` does NOT touch the file on disk (only this branch; "repair worked" still persists the fixed JSON), it just marks `Malformed: true`. The decision "race or real breakage" is left to the caller.
+  - **A unified state machine in `handleMalformedQuestion`** (`pkg/orchestrator/dialog_poller.go`), invoked for ANY stage type (gate `if stage != nil`, no `Interactive`): (1) **jsonrepair (library)** — already ran inside `FindUnansweredQuestions`; reaching here → it couldn't cope; (2) **grace tick** — the first appearance of corrupt bytes is just remembered (`malformedQuestionState.lastRaw`); if it's a torn read — on the next tick (1s) the file is already fully written, parses, `Malformed` is no longer set, and the state machine isn't involved at all; (3) **fresh repair agent** — the same corrupt bytes on the SECOND tick (write complete) → `spawnJSONFix` (`runJSONFixAgent`) launches a SEPARATE isolated agent with a clean context and the single task "read this one file, fix the JSON, save it valid under the same id" (`buildJSONFixPrompt`); up to `maxJSONFixAttempts` (3) times; (4) **exhausted** → terminal fallback: interactive → `giveUpOnMalformedQuestion` persists a valid stub (`Options:nil`, `AllowCustom:true`, the raw text as the explanation) + `EvAskUser` to the human; non-interactive → `autoAnswerMalformed` writes `answer.json` from `PickAutoAnswer`'s no-options fallback, so the stage does NOT hang (the FSM is untouched). The frontend already supports an options-less question (`DialogChannel.tsx`).
+  - **Why a fresh agent, not an in-context nudge to the same agent (the previous implementation).** The old mechanism sent the agent, via its own `answer.json`, a request to rewrite the file (a nudge). The user chose the fresh-agent approach: an agent with a clean context isn't distracted by its main task and sees only the corrupt file, so it's more reliable (and fewer attempts are needed — 3 vs the old 5 nudges). A side but important win: the fresh agent rewrites `question.json` IN PLACE and does NOT write any synthetic `answer.json` — which means a whole class of bugs "stale tracking state deletes a real answer that arrived later" (which the old nudge path had to work around via `unblockRewrittenMalformedQuestions`) became impossible by construction. Reconciliation collapsed to the tiny `reconcileMalformedFixes`: drop the key as soon as the file parses again (or is gone).
+  - **Isolation of the fresh agent (`runJSONFixAgent`):** a fresh session (`SessionID`/`Resume` not set — the point is precisely a clean context, unlike `runnerFor`, which does `--resume` for interactive); WITHOUT `StageDir`/`AFM_STAGE_DIR` (the agent isn't a dialog participant, it only edits one file at an absolute path from the prompt, it can't write a new `question.json` itself); via **`concurrency.SpawnDetached`**, NOT `SpawnAgent` — the stage's main agent is blocked waiting for an answer to this very question and holds the command semaphore slot, so `SpawnAgent` would (1) jam on the full semaphore and (2) overwrite the main agent's active marker via `markActive`. `SpawnDetached` accounts for the goroutine in `agentWG` (clean shutdown) but doesn't take the semaphore or touch the active marker. The fix agent's completion is caught via a done channel (`malformedQuestionState.done`); no separate timeout is needed — `RunAgent` is already bounded by the idle timeout. The fix agent's log is a separate `<phase>.<id>.jsonfix.log`, so its tool actions don't land in the stage's `<phase>.jsonl` (event feed / `WrittenFiles`).
+  - Tests: `TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed` (file untouched); `TestPollQuestions_MalformedQuestion_{GraceTickHidesFromUser,ResolvesSilentlyIfWriteCompletes,StableSpawnsFixAgent,FixAgentRepairsQuestion,RealAnswerSurvivesAfterRecovery,FixAgentExhaustionShowsStub,NonInteractiveFixThenAutoAnswer,NonInteractiveFixFailsThenAutoAnswerFallback}`; `TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions`; `TestDialogGet_SkipsMalformedPendingQuestion` (the guarantee-visibility fallback in `handlers.go` also filters `Malformed`); `TestSpawnDetached_TracksWaitGroupWithoutSemaphoreOrActiveMarker` (`concurrency`); the integration test `TestIntegration_UnrepairableQuestionFallsBackToStub` (one script in two roles: as the main agent it writes broken JSON and sleeps, as the fix agent it's launched without `AFM_STAGE_DIR` and fails immediately — a fast model of "the separate agent couldn't either"). Tests inject the fix agent via a test `o.spawnJSONFix` stub (`injectFixStub`), without launching a real process.
 
-- **Разбор третьего реального лога вскрыл архитектурный паттерн, а не единичный баг: "завершение стадии" решалось в НЕСКОЛЬКИХ независимых местах вместо одного.** Стадия `brainstorm` в проде дошла до 15/15 вопросов, агент честно записал `execution_summary.md` и корректно завершил процесс (`exit 0`) — но стадия НАВСЕГДА зависла в `awaiting_user_input`, потому что где-то РАНЬШЕ в её жизни (реюз id, см. выше) остался один-единственный брошенный, никогда не отвечаемый `question.json`. `hasOpenQuestion()` этого не различает: "вопрос ещё актуален" и "вопрос — многочасовой хвост, на который никто уже не ответит" для него неотличимы.
-  - **`runWithRetry`'s гейт открытого вопроса** (retry.go) при `err == nil` от агента различает "протухший" вопрос от "живого" по ТЕКУЩЕМУ статусу FSM в момент возврата агента: если стадия ещё НЕ в `AwaitingUserInput` (вопрос только что создан этим же вызовом, вживую), держим стадию через `EvAskUser` как раньше — completion не рассматривается вообще, чтобы не гонять реально ожидающего ответа пользователя. Если стадия УЖЕ в `AwaitingUserInput` (независимый поллер вопросов успел перевести её туда, пока агент ещё выполнялся — обогнал его собственный выход), вопрос считается протухшим хвостом, и решает `completionCheck()`: удовлетворён — публикуем `EventAgentCompleted`, нет — просто возвращаемся, ничего не публикуя. Регрессия: `TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion` (явно переводит стадию в `AwaitingUserInput` через `EvAskUser` до вызова `runWithRetry`, воспроизводя гонку по-настоящему, а не только по наличию файлов на диске).
-  - **`onAgentCompleted` (orchestrator.go) имеет СВОЮ, БЕЗ гейта на `s.Interactive`/`phase`, проверку `hasOpenQuestion`** — первая версия этой чистки посчитала её чистым дубликатом проверки в `runWithRetry` и удалила целиком; последующий разбор регрессии `TestIntegration_PlanningWithOpenQuestionWaits` (неинтерактивная planning-стадия с фейковым первым открытым вопросом внезапно доезжала сразу до `done`, минуя `awaiting_user_input`) показал, что это НЕ дубликат — у проверки в `runWithRetry` есть гейт `(s.Interactive || phase == phaseAutonomous)`, специально чтобы не трогать FSM для неинтерактивных стадий (это работа автоответчика, см. "Авто-ответ на вопросы" ниже); у проверки в `onAgentCompleted` такого гейта никогда не было — она ловит фазы/стадии, которые гейт `runWithRetry` пропускает мимо (напр. неинтерактивную planning-стадию, чей агент синхронно пишет вопрос и сразу же завершается, не дожидаясь поллера). Восстановлена с ТОЙ ЖЕ логикой "протух/жив", что и в `runWithRetry`: пропускается (не держит стадию), если текущий статус УЖЕ `AwaitingUserInput` — та же гонка "поллер обогнал агента", тот же протухший хвост.
-  - **`completeStage`'s precondition и FSM-правила `EvComplete`/`EvPlanReady` не признавали `AwaitingUserInput` валидным источником перехода.** Даже после исправления двух гейтов выше, если поллер вопросов УСПЕВАЕТ независимо перевести стадию в `AwaitingUserInput` (из-за того же брошенного вопроса) РАНЬШЕ, чем агентский процесс успевает вернуть `nil` — то есть DURING один и тот же вызов `runWithRetry`, конкурентно с поллинг-горутиной — то к моменту, когда `runWithRetry` публикует `EventAgentCompleted`, текущий статус УЖЕ `AwaitingUserInput`, а не `Running`. `completeStage` и `EvComplete`/`EvPlanReady` признавали источником перехода только `Running`/`Planning`/`Retrying` — молча отбрасывали переход, стадия зависала НАВСЕГДА (агентского процесса уже нет, чтобы попробовать снова). Оба правила расширены до `AwaitingUserInput`. Найдено и подтверждено живым браузерным тестом (`stale-question-verify` флоу) и двумя регрессионными интеграционными тестами: `TestIntegration_PollerRaceDoesNotStrandCompletedStage` (autonomous/implementation) и `TestIntegration_PollerRaceDoesNotStrandPlanningStage` (planning — тот же паттерн, найден аудитом по аналогии, не отдельным живым инцидентом).
-  - **Общий вывод для будущих похожих гонок**: если какой-то facts about "готова ли стадия" вычисляется через файловую систему (`FindUnansweredQuestions`, `Check*Completion`), а РЕШЕНИЕ на основе этого factsа принимается больше чем в одном месте — эти места ГАРАНТИРОВАННО разойдутся при следующей правке одного из них. Единственная надёжная защита — один canonical decision point (здесь: `runWithRetry`), все остальные потребители его РЕЗУЛЬТАТА (события), а не пересчитывают тот же факт заново. Плюс: FSM-таблица переходов должна перечислять ВСЕ статусы, до которых конкурентный поллер реально может успеть добежать, а не только "нормальный", последовательный путь — `EvComplete`/`EvPlanReady`'s `From`-списки моделировали синхронный мир, где поллер не мог обогнать текущий агентский вызов.
+- **Dissecting a third real log revealed an architectural pattern, not a single bug: "stage completion" was decided in SEVERAL independent places instead of one.** The `brainstorm` stage in production reached 15/15 questions, the agent honestly wrote `execution_summary.md` and exited the process correctly (`exit 0`) — but the stage hung FOREVER in `awaiting_user_input`, because somewhere EARLIER in its life (id reuse, see above) a single abandoned, never-answered `question.json` remained. `hasOpenQuestion()` doesn't distinguish this: "the question is still relevant" and "the question is a multi-hour tail nobody will ever answer" are indistinguishable to it.
+  - **`runWithRetry`'s open-question gate** (retry.go), on `err == nil` from the agent, distinguishes a "stale" question from a "live" one by the CURRENT FSM status at the moment the agent returns: if the stage is NOT yet in `AwaitingUserInput` (the question was just created live by this same call), we hold the stage via `EvAskUser` as before — completion isn't considered at all, so as not to rush a user who's really waiting to answer. If the stage is ALREADY in `AwaitingUserInput` (the independent question poller managed to move it there while the agent was still running — it outran the agent's own exit), the question is treated as a stale tail, and `completionCheck()` decides: satisfied — we publish `EventAgentCompleted`; not — we just return, publishing nothing. Regression: `TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion` (explicitly moves the stage into `AwaitingUserInput` via `EvAskUser` before calling `runWithRetry`, reproducing the race for real, not just by the presence of files on disk).
+  - **`onAgentCompleted` (orchestrator.go) has its OWN `hasOpenQuestion` check, WITHOUT a gate on `s.Interactive`/`phase`** — the first version of this cleanup considered it a pure duplicate of the check in `runWithRetry` and removed it entirely; a later analysis of the regression `TestIntegration_PlanningWithOpenQuestionWaits` (a non-interactive planning stage with a fake first open question suddenly drove straight to `done`, bypassing `awaiting_user_input`) showed it is NOT a duplicate — the check in `runWithRetry` has a gate `(s.Interactive || phase == phaseAutonomous)`, specifically so it doesn't touch the FSM for non-interactive stages (that's the auto-answerer's job, see "Auto-answering questions" below); the check in `onAgentCompleted` never had such a gate — it catches phases/stages the `runWithRetry` gate lets pass (e.g. a non-interactive planning stage whose agent synchronously writes a question and exits immediately, without waiting for the poller). It was restored with the SAME "stale/live" logic as in `runWithRetry`: it's skipped (doesn't hold the stage) if the current status is ALREADY `AwaitingUserInput` — the same "poller outran the agent" race, the same stale tail.
+  - **`completeStage`'s precondition and the FSM rules for `EvComplete`/`EvPlanReady` didn't recognize `AwaitingUserInput` as a valid source of a transition.** Even after fixing the two gates above, if the question poller manages to independently move the stage into `AwaitingUserInput` (because of the same abandoned question) BEFORE the agent process manages to return `nil` — i.e. DURING the same `runWithRetry` call, concurrently with the polling goroutine — then by the time `runWithRetry` publishes `EventAgentCompleted`, the current status is ALREADY `AwaitingUserInput`, not `Running`. `completeStage` and `EvComplete`/`EvPlanReady` recognized only `Running`/`Planning`/`Retrying` as a transition source — they silently dropped the transition, and the stage hung FOREVER (the agent process is already gone to try again). Both rules were extended to include `AwaitingUserInput`. Found and confirmed by a live browser test (the `stale-question-verify` flow) and two regression integration tests: `TestIntegration_PollerRaceDoesNotStrandCompletedStage` (autonomous/implementation) and `TestIntegration_PollerRaceDoesNotStrandPlanningStage` (planning — the same pattern, found by an audit by analogy, not a separate live incident).
+  - **General takeaway for future similar races**: if some fact about "is the stage ready" is computed through the filesystem (`FindUnansweredQuestions`, `Check*Completion`), and a DECISION based on that fact is made in more than one place — those places WILL GUARANTEED diverge on the next edit to one of them. The only reliable defense is a single canonical decision point (here: `runWithRetry`); everything else consumes its RESULT (events), rather than recomputing the same fact anew. Plus: the FSM transition table must list ALL statuses a concurrent poller can actually reach, not just the "normal", sequential path — `EvComplete`/`EvPlanReady`'s `From` lists modeled a synchronous world where the poller couldn't outrun the current agent call.
 
 ### Polling Latency
 
@@ -226,139 +226,139 @@ When adding new interactive features:
 4. Add integration tests. Note: interactive stages (`stage.Interactive=true`) **ignore** the injected `Runner` — `runnerFor` always builds a real `executor.New(...)` driven by `stage.Command`. So interactive tests run a real bash script via `stage.Command` (see `TestFullDialogCycle`, `TestIntegration_MisplacedQuestionRelocated`), not `eagerProbeRunner` (which only applies to non-interactive stages)
 5. Verify atomic write pattern (O_EXCL) is preserved in handlers
 
-### Авто-ответ на вопросы в non-interactive стадиях
+### Auto-answering questions in non-interactive stages
 
-Скилл/агент может использовать файловый диалоговый протокол независимо от того, помечена ли стадия `interactive: true` — просто потому что скилл сам всегда так делает, когда ему нужно уточнение. Раньше это вешало non-interactive стадию навечно (вопрос никто не отвечал) или ронял её («missing artifact or incomplete»). Теперь afm отвечает сам.
+A skill/agent may use the file-based dialog protocol regardless of whether the stage is marked `interactive: true` — simply because the skill itself always does so when it needs a clarification. Previously this hung a non-interactive stage forever (nobody answered the question) or crashed it ("missing artifact or incomplete"). Now afm answers on its own.
 
-- **`AFM_STAGE_DIR` — для всех стадий.** `runner_factory.go`'s `runnerFor` больше не гейтит `StageDir` условием `phase == phaseAutonomous` — он выставляется для ЛЮБОЙ non-interactive стадии, иначе агенту физически некуда писать `question.json`.
-- **`pollQuestions` ветвится по `stage.Interactive`.** Для `!stage.Interactive` (default, включая `agents: [auto]` — единственное исключение — явный `interactive: true`) стадия НЕ уходит в `awaiting_user_input`: `mcp.PickAutoAnswer` выбирает ответ (маркер `(recommended)`/`(default)`/`(рекомендую)`/`(рекомендуется)`/`(по умолчанию)`, case-insensitive substring, first-option-with-any-marker wins — маркер ищется в порядке options, не в порядке маркеров; без options — фиксированный текст «Прими самое релевантное решение автономно или предложи варианты ответов»), `mcp.WriteAnswer` атомарно (O_EXCL) пишет `answer.json` + best-effort дописывает `dialog.jsonl` с меткой `AutoAnswered: true` (единая точка записи, переиспользуется и HTTP-хендлером `handleDialogAnswer` с `autoAnswered=false`, и поллером — не дублируется). FSM стадии не трогается вообще (никакого `EvAskUser`/`Trigger`).
-- **`bus.EventAutoAnswered` — живой ПЛЮС notices.jsonl.** Это не FSM-переход, поэтому в `events.jsonl` (durable-лог) его нет. Публикуется живьём через `o.ui.Publish` — но, как и `EventAgentCompleted`/`EventContextWarning`/`EventScriptOutput`, ОБЯЗАН дублироваться через `stagefiles.AppendNotice(runDir, stageID, ..., data)` в run-level `notices.jsonl`: иначе клиент, подключившийся или перезагрузивший страницу ПОСЛЕ авто-ответа, никогда не увидит эту строку в event feed (`/api/events`'s `reconstructNotices` реплеит именно из `notices.jsonl`, а не из `events.jsonl`). Забыть про `AppendNotice` для нового non-FSM UI-события — легко воспроизводимый баг, есть готовый regression-тест на этот класс ошибки: `TestExecScript_PersistsOutputToNotices`.
-- **Дашборд: панель диалога гейтится по факту наличия истории, не только по типу стадии.** `App.tsx`'s `showDialog` раньше был `interactive || autonomous` — стадия могла иметь настоящую diалоговую историю (авто-отвеченный вопрос) и всё равно не показывать панель `DialogChannel`, потому что панель для НЕЁ вообще не монтировалась. Добавлен третий сигнал `stage_has_dialog` (`/api/status`, тот же файл-presence паттерн, что и `stage_autonomous`/`autonomous.flag` — проверка существования любого `<phase>.dialog.jsonl` в директории стадии), `showDialog = interactive || autonomous || hasDialog`. `DialogChannel.tsx`'s собственный внутренний гейт `hasContent` тоже учитывает `stage.hasDialog` (не только `entries.length > 0`) — иначе тестовый мок с пустым `/dialog`-фетчем маскирует баг, а в реальности есть окно, где `/api/status` уже знает про диалог, а собственный поллинг панели ещё не подтянул `entries`.
-- **`AutoAnswered bool`** — новое поле на `mcp.Answer`/`mcp.Entry` (json: `auto_answered`), НЕ строковый `role` — сценарий бинарный (человек/afm), enum из двух значений избыточен. Прокинуто через `dialogUIEntry`/`questionUIEntry` (`pkg/server/handlers.go`) в GET `/dialog`. Фронтенд (`DialogChannel.tsx`) рисует отдельным классом `qa-auto` + бейдж `⚙` (`title="Answered automatically by afm"`) на отвеченных записях истории с этим флагом.
-- Спек/план: `docs/superpowers/specs/2026-08-07-non-interactive-auto-answer-design.md`, `docs/superpowers/plans/2026-08-07-non-interactive-auto-answer.md`.
+- **`AFM_STAGE_DIR` — for all stages.** `runner_factory.go`'s `runnerFor` no longer gates `StageDir` on the condition `phase == phaseAutonomous` — it's set for ANY non-interactive stage, otherwise the agent physically has nowhere to write `question.json`.
+- **`pollQuestions` branches on `stage.Interactive`.** For `!stage.Interactive` (default, including `agents: [auto]` — the only exception is an explicit `interactive: true`) the stage does NOT go to `awaiting_user_input`: `mcp.PickAutoAnswer` picks an answer (a marker `(recommended)`/`(default)`/`(рекомендую)`/`(рекомендуется)`/`(по умолчанию)`, case-insensitive substring, first-option-with-any-marker wins — the marker is searched in option order, not in marker order; with no options — the fixed text "Make the most relevant decision autonomously or offer answer options"), `mcp.WriteAnswer` atomically (O_EXCL) writes `answer.json` + best-effort appends to `dialog.jsonl` with the label `AutoAnswered: true` (a single write point, reused both by the HTTP handler `handleDialogAnswer` with `autoAnswered=false` and by the poller — not duplicated). The stage's FSM is not touched at all (no `EvAskUser`/`Trigger`).
+- **`bus.EventAutoAnswered` — live PLUS notices.jsonl.** This is not an FSM transition, so it's not in `events.jsonl` (the durable log). It's published live via `o.ui.Publish` — but, like `EventAgentCompleted`/`EventContextWarning`/`EventScriptOutput`, it MUST be duplicated via `stagefiles.AppendNotice(runDir, stageID, ..., data)` into the run-level `notices.jsonl`: otherwise a client that connects or reloads the page AFTER the auto-answer will never see that line in the event feed (`/api/events`'s `reconstructNotices` replays precisely from `notices.jsonl`, not from `events.jsonl`). Forgetting `AppendNotice` for a new non-FSM UI event is an easily reproducible bug; there's a ready regression test for this class of error: `TestExecScript_PersistsOutputToNotices`.
+- **Dashboard: the dialog panel is gated by the actual presence of history, not just the stage type.** `App.tsx`'s `showDialog` used to be `interactive || autonomous` — a stage could have a real dialog history (an auto-answered question) and still not show the `DialogChannel` panel, because the panel wasn't mounted for it at all. A third signal `stage_has_dialog` was added (`/api/status`, the same file-presence pattern as `stage_autonomous`/`autonomous.flag` — checking for the existence of any `<phase>.dialog.jsonl` in the stage directory), `showDialog = interactive || autonomous || hasDialog`. `DialogChannel.tsx`'s own internal gate `hasContent` also accounts for `stage.hasDialog` (not just `entries.length > 0`) — otherwise a test mock with an empty `/dialog` fetch masks the bug, while in reality there's a window where `/api/status` already knows about the dialog but the panel's own polling hasn't pulled in `entries` yet.
+- **`AutoAnswered bool`** — a new field on `mcp.Answer`/`mcp.Entry` (json: `auto_answered`), NOT a string `role` — the scenario is binary (human/afm), a two-value enum is redundant. Threaded through `dialogUIEntry`/`questionUIEntry` (`pkg/server/handlers.go`) into GET `/dialog`. The frontend (`DialogChannel.tsx`) renders it with a separate class `qa-auto` + a `⚙` badge (`title="Answered automatically by afm"`) on answered history entries with this flag.
+- Spec/plan: `docs/superpowers/specs/2026-08-07-non-interactive-auto-answer-design.md`, `docs/superpowers/plans/2026-08-07-non-interactive-auto-answer.md`.
 
-## Флейк "storage failure: write events.jsonl: invalid argument" — process-group kill, не OS-квирк
+## The flake "storage failure: write events.jsonl: invalid argument" — process-group kill, not an OS quirk
 
-Долго выглядел как случайная нестабильность окружения при `go test ./pkg/orchestrator/...` — падал на РАЗНЫХ, не связанных друг с другом тестах, с ошибкой `write events.jsonl: invalid argument`, похожей на настоящий OS-level EINVAL. Настоящая причина — комбинация двух багов, один в тестовой инфраструктуре, один в проде.
+For a long time this looked like random environment instability during `go test ./pkg/orchestrator/...` — it failed on DIFFERENT, unrelated tests, with the error `write events.jsonl: invalid argument`, resembling a genuine OS-level EINVAL. The real cause is a combination of two bugs, one in the test infrastructure, one in production.
 
-- **Текст ошибки маскировал источник.** `(*os.File)` в Go nil-safe: вызов метода (`Write`) на `nil`-получателе не паникует, а тихо возвращает `fs.ErrInvalid`, чей `.Error()` — буквально `"invalid argument"`, неотличимо на глаз от настоящего `syscall.EINVAL`. `state.Store.Apply` вызывает `s.eventsLog.Write(data)`; если `Store.Close()` успел обнулить `s.eventsLog` РАНЬШЕ, чем агентская горутина, всё ещё пишущая в стор, вызвала `Apply` — ошибка выглядит как загадочный OS-флейк, а не как «мы закрыли файл раньше времени».
-- **Первопричина №1 (тестовая инфраструктура, ~35 мест в 11 файлах пакета `pkg/orchestrator`): `go func() { _ = orch.Run(ctx) }()` без ожидания завершения.** Тесты запускали `Run` в горутине fire-and-forget, дожидались нужного СТАТУСА стадии (`waitForStatus`/подписка на события), затем возвращались — а `t.Cleanup(func(){ store.Close() })` срабатывал, не дожидаясь, пока сама горутина `Run` реально вернётся. `Run`'s собственная гарантия чистого шатдауна (`defer o.concurrency.WaitAgents()` — см. "Чистый shutdown" выше) НЕ была задействована, потому что тест никогда не ждал возврата `Run()`, только терминального вида статуса — а статус может выглядеть терминальным ДО того, как агентская горутина, продолжающая писать в стор (напр. `EvFail` на отмену контекста), реально закончила. Фикс: единый тестовый хелпер `runOrchestratorAsync` (`pkg/orchestrator/testrun_helper_test.go`) — стартует `Run` в горутине и регистрирует `t.Cleanup`, который `cancel()`ит контекст и ЖДЁТ канал `done` (закрывается после возврата `Run`), с честным `t.Error` через 10с вместо молчаливой сдачи. Порядок важен: `t.Cleanup`-колбэки выполняются LIFO, так что регистрация ожидания ПОЗЖЕ регистрации `store.Close()` (которая тоже обязана быть через `t.Cleanup`, не голый `defer` — голый `defer` сработал бы ДО любых `t.Cleanup`, сведя фикс на нет) гарантирует, что ожидание отработает раньше закрытия стора.
-- **Первопричина №2 (настоящий прод-баг, `pkg/executor/executor.go`): `cmd.Process.Kill()` убивает только прямого потомка, не всю группу процессов.** Если `stage.Command`-скрипт порождает grandchild-процесс, не заменяя себя им через `exec` (например, скрипт из нескольких строк, последняя из которых — `sleep 30`), тот grandchild наследует stdout-pipe, созданный `cmd.StdoutPipe()`. При отмене контекста/idle-таймауте/просроченном grace-периоде SIGINT executor убивал только скрипт-обёртку (прямого потомка) — осиротевший grandchild продолжал жить и держать pipe открытым, так что `lineReader`, читающий из этого pipe, никогда не видел EOF, и `<-done` в `executor.run` блокировался на весь ОСТАТОК жизни сироты (наблюдалось как задержки 11–31с — ровно длина `sleep N` в тестовых скриптах). Фикс: `killProcessGroup(cmd, sig)` — `syscall.Kill(-cmd.Process.Pid, sig)` (отрицательный PID = вся группа процессов), плюс `cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}` перед `Start()`, чтобы скрипт стал лидером СВОЕЙ группы (иначе `-pid` резолвился бы в группу самого afm, что задело бы посторонние процессы). Применено во всех точках убийства процесса в `run()`: idle-таймаут, отмена контекста, оба шага SIGINT-прерывания (мягкий сигнал и принудительный fallback).
-- Это реальный, не только тестовый баг: при отмене `afm run` (Ctrl+C, `Pause()`, обычный shutdown) с `stage.Command`-скриптом, порождающим неexec'нутых потомков, "Чистый shutdown"'s `waitAgents()` (bounded 10s, см. выше) мог упереться в свой таймаут, оставляя такую горутину живой ДОЛЬШЕ заявленных 10 секунд — сам `waitAgents()` от этого не завис бы (у него свой bound), но агентская горутина технически продолжала бы работать в фоне после того, как `Run()` уже вернулся.
-- Найдено НЕ по логам прод-инцидента, а систематическим расследованием собственного флейка сессии (см. `superpowers:systematic-debugging`) — первая гипотеза (OS/sandbox-квирк) была отвергнута изоляцией через `git stash` (флейк воспроизводился и на чистом дереве) и стресс-тестом с искусственной параллельной нагрузкой (частота флейка росла вместе с нагрузкой на машину — типичный признак настоящей гонки, не случайного EINVAL).
+- **The error text masked the source.** `(*os.File)` in Go is nil-safe: calling a method (`Write`) on a `nil` receiver doesn't panic but quietly returns `fs.ErrInvalid`, whose `.Error()` is literally `"invalid argument"`, indistinguishable by eye from a real `syscall.EINVAL`. `state.Store.Apply` calls `s.eventsLog.Write(data)`; if `Store.Close()` managed to null out `s.eventsLog` BEFORE an agent goroutine still writing to the store called `Apply` — the error looks like a mysterious OS flake, not like "we closed the file too early".
+- **Root cause #1 (test infrastructure, ~35 places in 11 files of the `pkg/orchestrator` package): `go func() { _ = orch.Run(ctx) }()` without waiting for completion.** Tests launched `Run` in a fire-and-forget goroutine, waited for the desired stage STATUS (`waitForStatus`/an event subscription), then returned — while `t.Cleanup(func(){ store.Close() })` fired without waiting for the `Run` goroutine itself to actually return. `Run`'s own clean-shutdown guarantee (`defer o.concurrency.WaitAgents()` — see "Clean shutdown" above) was NOT engaged, because the test never waited for `Run()` to return, only for a terminal-looking status — and a status can look terminal BEFORE the agent goroutine, still writing to the store (e.g. `EvFail` on context cancellation), has actually finished. Fix: a single test helper `runOrchestratorAsync` (`pkg/orchestrator/testrun_helper_test.go`) — starts `Run` in a goroutine and registers a `t.Cleanup` that `cancel()`s the context and WAITS on the `done` channel (closed after `Run` returns), with an honest `t.Error` after 10s instead of silently giving up. Order matters: `t.Cleanup` callbacks run LIFO, so registering the wait LATER than registering `store.Close()` (which also must be via `t.Cleanup`, not a bare `defer` — a bare `defer` would fire BEFORE any `t.Cleanup`, defeating the fix) guarantees the wait runs before the store is closed.
+- **Root cause #2 (a real production bug, `pkg/executor/executor.go`): `cmd.Process.Kill()` kills only the direct child, not the whole process group.** If a `stage.Command` script spawns a grandchild process without replacing itself with it via `exec` (e.g. a multi-line script whose last line is `sleep 30`), that grandchild inherits the stdout pipe created by `cmd.StdoutPipe()`. On context cancellation/idle timeout/expired grace-period SIGINT, the executor killed only the wrapper script (the direct child) — the orphaned grandchild kept living and holding the pipe open, so `lineReader`, reading from that pipe, never saw EOF, and `<-done` in `executor.run` blocked for the ENTIRE REMAINING life of the orphan (observed as 11–31s delays — exactly the length of `sleep N` in the test scripts). Fix: `killProcessGroup(cmd, sig)` — `syscall.Kill(-cmd.Process.Pid, sig)` (a negative PID = the whole process group), plus `cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}` before `Start()`, so the script becomes the leader of ITS OWN group (otherwise `-pid` would resolve to afm's own group, which would hit unrelated processes). Applied at all process-kill points in `run()`: idle timeout, context cancellation, both steps of the SIGINT interruption (the soft signal and the forced fallback).
+- This is a real, not just a test, bug: on canceling `afm run` (Ctrl+C, `Pause()`, a normal shutdown) with a `stage.Command` script that spawns non-exec'd children, "Clean shutdown"'s `waitAgents()` (bounded 10s, see above) could hit its timeout, leaving such a goroutine alive LONGER than the declared 10 seconds — `waitAgents()` itself wouldn't hang (it has its own bound), but the agent goroutine would technically keep running in the background after `Run()` had already returned.
+- Found NOT from production incident logs, but by systematically investigating the session's own flake (see `superpowers:systematic-debugging`) — the first hypothesis (an OS/sandbox quirk) was rejected by isolation via `git stash` (the flake reproduced on a clean tree too) and by a stress test with artificial parallel load (the flake frequency grew with the load on the machine — a typical sign of a real race, not a random EINVAL).
 
 ## Docker Mode
 
-afm умеет автоматически перезапускать себя внутри Docker при включённом Docker-режиме.
+afm can automatically re-exec itself inside Docker when Docker mode is enabled.
 
-### Включение
+### Enabling
 
-Через конфиг (`.afm/config.yaml` или `~/.afm/config.yaml`):
+Via config (`.afm/config.yaml` or `~/.afm/config.yaml`):
 ```yaml
 docker:
   enabled: true
-  image: akopichin/afm:latest   # опционально, это дефолт
+  image: akopichin/afm:latest   # optional, this is the default
 ```
 
-Или через переменную окружения:
+Or via an environment variable:
 ```bash
 AFM_USE_DOCKER=1 afm run flow.yaml
 ```
 
-### Что монтируется автоматически
+### What is mounted automatically
 
-| Хост | Контейнер | Назначение |
-|------|-----------|------------|
-| `$(pwd)` (абсолютный путь) | тот же путь | Проект + `.afm/` (runs, flows, config) |
-| `~/.claude/` | `/home/afm/.claude` | Auth, skills, память (= `$HOME/.claude` в контейнере) |
-| `~/.afm/` | `/home/afm/.afm` | Глобальный конфиг afm |
-| Нестандартные агенты из flow | `/usr/local/bin/<cmd>` (`:ro`) | Кастомные команды |
-| `docker.extra_mounts` | `~`-пути → `/home/afm/…`, прочие — тот же путь (`:ro`) | Токены/конфиги кастомных агентов (напр. `~/.ai-free`) |
+| Host | Container | Purpose |
+|------|-----------|---------|
+| `$(pwd)` (absolute path) | the same path | Project + `.afm/` (runs, flows, config) |
+| `~/.claude/` | `/home/afm/.claude` | Auth, skills, memory (= `$HOME/.claude` in the container) |
+| `~/.afm/` | `/home/afm/.afm` | afm global config |
+| Non-standard agents from the flow | `/usr/local/bin/<cmd>` (`:ro`) | Custom commands |
+| `docker.extra_mounts` | `~`-paths → `/home/afm/…`, others — the same path (`:ro`) | Tokens/configs for custom agents (e.g. `~/.ai-free`) |
 
-`~/.claude.json` намеренно **НЕ** монтируется — claude создаёт свежий container-local конфиг (`/home/afm/.claude.json`). Попытка примонтировать его `:ro` приводила к падению (`corrupted: JSON Parse error`), т.к. claude обновляет файл атомарным rename.
+`~/.claude.json` is deliberately **NOT** mounted — claude creates a fresh container-local config (`/home/afm/.claude.json`). Trying to mount it `:ro` led to a crash (`corrupted: JSON Parse error`), because claude updates the file via atomic rename.
 
-**Auth для `command: claude` в Docker:** macOS хранит OAuth-токены в Keychain (`Claude Safe Storage`), который недоступен из Linux-контейнера. Поэтому `claude` внутри Docker пишет `not logged in`. Решение — передать токен через env var:
-1. Сгенерировать долгоживущий токен: `claude setup-token` → сохранить в `~/.zshrc` как `export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-si-...`
-2. Launcher автоматически прокинет `CLAUDE_CODE_OAUTH_TOKEN` в контейнер (если задан в env).
-   Также поддерживается `ANTHROPIC_API_KEY` (API-ключ) и `ANTHROPIC_AUTH_TOKEN`.
+**Auth for `command: claude` in Docker:** macOS stores OAuth tokens in the Keychain (`Claude Safe Storage`), which is inaccessible from a Linux container. So `claude` inside Docker reports `not logged in`. The solution is to pass the token via an env var:
+1. Generate a long-lived token: `claude setup-token` → save it in `~/.zshrc` as `export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-si-...`
+2. The launcher automatically forwards `CLAUDE_CODE_OAUTH_TOKEN` into the container (if set in env).
+   `ANTHROPIC_API_KEY` (API key) and `ANTHROPIC_AUTH_TOKEN` are also supported.
 
-**Dashboard:** порт из `server.port` пробрасывается на хост через `-p <port>:<port>`, иначе UI недоступен снаружи контейнера. **Браузер:** по умолчанию (`server.open_browser` отсутствует/`false`) НЕ открывается — в лог печатается URL дашборда с подсказкой `→ open this URL in your browser to follow the run`. При `server.open_browser: true` браузер открывает хост-side opener: afm внутри Linux-контейнера сам открыть браузер на macOS-хосте не может (`runtime.GOOS=linux` → `xdg-open` без display), поэтому отдельный процесс-помощник запускается на хосте ДО re-exec, опрашивает проброшенный порт и зовёт `open`/`xdg-open`. Внутри контейнера вызов `openBrowser` пропускается (`AFM_IN_DOCKER=1`).
+**Dashboard:** the port from `server.port` is forwarded to the host via `-p <port>:<port>`, otherwise the UI is inaccessible outside the container. **Browser:** by default (`server.open_browser` absent/`false`) it is NOT opened — the dashboard URL is printed to the log with the hint `→ open this URL in your browser to follow the run`. With `server.open_browser: true` the browser is opened by a host-side opener: afm inside the Linux container can't open a browser on the macOS host itself (`runtime.GOOS=linux` → `xdg-open` without a display), so a separate helper process is launched on the host BEFORE re-exec, polls the forwarded port and calls `open`/`xdg-open`. Inside the container the `openBrowser` call is skipped (`AFM_IN_DOCKER=1`).
 
-**Привилегии (важно):** контейнер стартует под root, но entrypoint (`docker-entrypoint.sh` + `gosu`) сразу дропает привилегии до хостового uid/gid (`AFM_HOST_UID/GID`, передаются из `os.Getuid/Getgid`) и выставляет `HOME=/home/afm`. Поэтому afm и агенты работают под тем же пользователем, что и на хосте — все записи в `~/.claude`, `~/.afm`, каталог проекта и `extra_mounts` принадлежат пользователю хоста, а не root (нет root-owned файлов и конфликтов с правами у хостового claude). Под non-root claude разрешает `--dangerously-skip-permissions` без `IS_SANDBOX`.
+**Privileges (important):** the container starts as root, but the entrypoint (`docker-entrypoint.sh` + `gosu`) immediately drops privileges to the host uid/gid (`AFM_HOST_UID/GID`, passed from `os.Getuid/Getgid`) and sets `HOME=/home/afm`. So afm and the agents run as the same user as on the host — all writes to `~/.claude`, `~/.afm`, the project directory and `extra_mounts` belong to the host user, not root (no root-owned files and no permission conflicts with the host's claude). Under a non-root user, claude allows `--dangerously-skip-permissions` without `IS_SANDBOX`.
 
 ### Environment Variables
 
-| Переменная | Назначение |
-|-----------|------------|
-| `AFM_USE_DOCKER=1` | Включить Docker mode без правки конфига |
-| `AFM_IN_DOCKER=1` | Выставляется внутри контейнера — предотвращает рекурсию (не трогать) |
-| `AFM_HOST_UID` / `AFM_HOST_GID` | Передаются внутрь; entrypoint дропает root до этого uid/gid (`gosu`), чтобы записи в тома принадлежали пользователю хоста |
-| `AFM_DOCKER_IMAGE` | Переопределить образ (например, для локальной сборки) |
-| `AFM_DEBUG` | Пробрасывается в контейнер значением (`-e AFM_DEBUG=…`, не секрет), чтобы re-exec внутри тоже логировал вход агента; на хосте выставляется флагом `--debug` в `PersistentPreRunE` |
-| `ANTHROPIC_API_KEY` | Пробрасывается в bare-форме `-e KEY` (без значения — не светится в `ps aux`/history) |
-| `ANTHROPIC_AUTH_TOKEN` | То же самое |
-| `ANTHROPIC_BASE_URL` | То же самое |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Долгоживущий OAuth-токен для `command: claude` (генерируется через `claude setup-token`) |
+| Variable | Purpose |
+|----------|---------|
+| `AFM_USE_DOCKER=1` | Enable Docker mode without editing the config |
+| `AFM_IN_DOCKER=1` | Set inside the container — prevents recursion (don't touch) |
+| `AFM_HOST_UID` / `AFM_HOST_GID` | Passed inside; the entrypoint drops root to this uid/gid (`gosu`), so writes to volumes belong to the host user |
+| `AFM_DOCKER_IMAGE` | Override the image (e.g. for a local build) |
+| `AFM_DEBUG` | Forwarded into the container by value (`-e AFM_DEBUG=…`, not a secret), so the re-exec inside also logs the agent input; on the host it's set by the `--debug` flag in `PersistentPreRunE` |
+| `ANTHROPIC_API_KEY` | Forwarded in bare form `-e KEY` (without a value — not exposed in `ps aux`/history) |
+| `ANTHROPIC_AUTH_TOKEN` | Same |
+| `ANTHROPIC_BASE_URL` | Same |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Long-lived OAuth token for `command: claude` (generated via `claude setup-token`) |
 
-### Публикация нового образа
+### Publishing a new image
 
-Версионированный релиз (SemVer, авто-бамп) — пушит иммутабельный `akopichin/afm:vX.Y.Z` и rolling `:latest`:
+A versioned release (SemVer, auto-bump) — pushes the immutable `akopichin/afm:vX.Y.Z` and the rolling `:latest`:
 
 ```bash
 make release-patch   # v1.2.3 → v1.2.4  (bugfix)
-make release-minor   # v1.2.3 → v1.3.0  (новая фича, обратная совместимость)
+make release-minor   # v1.2.3 → v1.3.0  (new feature, backward compatible)
 make release-major   # v1.2.3 → v2.0.0  (breaking change)
 ```
 
-`scripts/release.sh` читает последний SemVer git-тег, бампит уровень и
-**только** создаёт+пушит новый git-тег (`git push origin vX.Y.Z`) — сама
-сборка (docker-образ, бинарники, GitHub Release, Homebrew cask) в скрипте
-больше не происходит. Пуш тега триггерит `.github/workflows/release.yml`,
-который и делает всю фактическую работу. Дополнительно: любой push в
-`main` автоматически бампает и пушит следующий patch-тег через
-`.github/workflows/ci.yml` (`auto-release-tag` job) — `make release-patch`
-вручную нужен редко, в основном для minor/major.
+`scripts/release.sh` reads the latest SemVer git tag, bumps the level and
+**only** creates+pushes a new git tag (`git push origin vX.Y.Z`) — the actual
+build (docker image, binaries, GitHub Release, Homebrew cask) no longer
+happens in the script. Pushing the tag triggers `.github/workflows/release.yml`,
+which does all the actual work. Additionally: any push to
+`main` automatically bumps and pushes the next patch tag via
+`.github/workflows/ci.yml` (the `auto-release-tag` job) — `make release-patch`
+by hand is rarely needed, mostly for minor/major.
 
-**Релиз всегда мультиарх (`linux/amd64` + `linux/arm64`).**
-`release.yml` собирает и пушит через `docker buildx build --platform
-linux/amd64,linux/arm64 --push` одним шагом (раздельный `docker push` для
-манифест-листа не годится — образы не грузятся в локальный daemon), с
-предварительной регистрацией QEMU (`docker/setup-qemu-action`) для
-эмуляции arm64 на amd64-раннере GitHub Actions. Версия вшита в бинарник
-через `--build-arg AFM_VERSION`: `docker run akopichin/afm:vX.Y.Z afm
---version` покажет тег.
+**A release is always multi-arch (`linux/amd64` + `linux/arm64`).**
+`release.yml` builds and pushes via `docker buildx build --platform
+linux/amd64,linux/arm64 --push` in a single step (a separate `docker push` for
+the manifest list won't work — the images aren't loaded into the local daemon),
+with prior QEMU registration (`docker/setup-qemu-action`) to emulate arm64 on
+the amd64 GitHub Actions runner. The version is baked into the binary
+via `--build-arg AFM_VERSION`: `docker run akopichin/afm:vX.Y.Z afm
+--version` shows the tag.
 
-`make docker-build`/`docker-push` — dev-only, локальная сборка **single-arch**
-(быстрая итерация без релиза). Для реального релиза (мультиарх + бинарники +
-Homebrew) достаточно запушить тег `vX.Y.Z` (вручную через `make release-*`
-или автоматически при push в `main`) — остальное берёт на себя CI.
+`make docker-build`/`docker-push` — dev-only, a local **single-arch** build
+(fast iteration without a release). For a real release (multi-arch + binaries +
+Homebrew) it's enough to push the `vX.Y.Z` tag (by hand via `make release-*`
+or automatically on push to `main`) — CI takes care of the rest.
 
-### Версия claude-code CLI в образе — запинена, бампать вручную после теста
+### The claude-code CLI version in the image — pinned, bump by hand after testing
 
-`Dockerfile.runtime`'s `ARG CLAUDE_CODE_VERSION` фиксирует версию
-`@anthropic-ai/claude-code`, устанавливаемую внутри образа. Раньше строка
-была `npm install -g @anthropic-ai/claude-code` без версии — каждая
-пересборка молча подтягивала актуальный на тот момент npm-релиз, и разные
-собранные теги (`v0.5.x`, собранные в разные дни) могли гонять флоу на
-разных версиях CLI с разным поведением агентского цикла (например,
-модель решает не продолжать ход без явного tool-call иначе, чем раньше) —
-разница необнаружима по коду afm, только по факту разного рантайм-поведения
-одного и того же флоу между релизами.
+`Dockerfile.runtime`'s `ARG CLAUDE_CODE_VERSION` pins the version of
+`@anthropic-ai/claude-code` installed inside the image. The line used to be
+`npm install -g @anthropic-ai/claude-code` without a version — each rebuild
+silently pulled in whatever npm release was current at that moment, and
+different built tags (`v0.5.x`, built on different days) could run flows on
+different CLI versions with different agent-loop behavior (e.g. the
+model decides not to continue a turn without an explicit tool-call differently
+than before) — a difference undetectable from afm's code, only from the fact of
+different runtime behavior of the same flow between releases.
 
-**Правило бампа:** НЕ обновлять `CLAUDE_CODE_VERSION` вслепую на каждый
-npm-релиз claude-code. Обновлять только когда новая версия уже
-протестирована вручную (`AFM_USE_DOCKER=1 AFM_DOCKER_IMAGE=...` или
-`make docker-build` + ручной прогон флоу) в связке с готовящимся к тегу
-релизом afm — и только тогда включать бамп в тот же релизный коммит.
-Актуальная опубликованная версия: `npm view @anthropic-ai/claude-code version`.
+**Bump rule:** do NOT update `CLAUDE_CODE_VERSION` blindly on every
+claude-code npm release. Update it only once the new version has already been
+tested by hand (`AFM_USE_DOCKER=1 AFM_DOCKER_IMAGE=...` or
+`make docker-build` + a manual flow run) together with an afm release being
+prepared for a tag — and only then include the bump in that same release commit.
+The current published version: `npm view @anthropic-ai/claude-code version`.
 
-### Отладка
+### Debugging
 
 ```bash
-# Посмотреть что именно будет запущено
+# See exactly what will be launched
 AFM_USE_DOCKER=1 AFM_DOCKER_IMAGE=local/afm:dev afm run flow.yaml
 
-# Войти в контейнер вручную (привилегии дропаются до твоего uid через entrypoint)
+# Enter the container manually (privileges are dropped to your uid via the entrypoint)
 docker run --rm -it \
   -v $(pwd):/project \
   -v ~/.claude:/home/afm/.claude \
@@ -367,27 +367,27 @@ docker run --rm -it \
   akopichin/afm:latest bash
 ```
 
-### Нестандартные агенты (не claude)
+### Non-standard agents (not claude)
 
-Если в flow прописан `command: glm51` (или другой не-claude бинарник), afm автоматически:
-1. Находит бинарник через `which glm51`
-2. Монтирует его в контейнер: `-v /path/to/glm51:/usr/local/bin/glm51:ro`
+If a flow specifies `command: glm51` (or another non-claude binary), afm automatically:
+1. Finds the binary via `which glm51`
+2. Mounts it into the container: `-v /path/to/glm51:/usr/local/bin/glm51:ro`
 
-Бинарники, не найденные в PATH на хосте, молча пропускаются.
+Binaries not found in PATH on the host are silently skipped.
 
-Ограничения:
-- В контейнер монтируется только сам файл бинарника/скрипта агента (`:ro`). Если скрипт-обёртка вызывает сторонние зависимости (node/python/скрипты-сиблинги/файлы вроде `~/.glmrc`), они не перенесутся — используйте агентов, чьи зависимости уже есть в образе.
-- `command` в flow должен быть именем из `PATH` (базовым именем), а не абсолютным путём: монтируется только `filepath.Base(cmd)`, и внутри контейнера искался бы абсолютный путь хоста.
-- Если скрипт-агент читает свои токены/конфиги из дома (напр. GLM-обёртки `glm51`/`glm52`/`ai-free.claude-glm` — из `~/.ai-free/claude-glm/`), добавьте эту директорию в `docker.extra_mounts`, иначе агент упадёт с "файл не найден".
+Limitations:
+- Only the agent's binary/script file itself is mounted into the container (`:ro`). If the wrapper script calls third-party dependencies (node/python/sibling scripts/files like `~/.glmrc`), they won't be carried over — use agents whose dependencies are already in the image.
+- `command` in the flow must be a name from `PATH` (a base name), not an absolute path: only `filepath.Base(cmd)` is mounted, and inside the container the host's absolute path would be looked up.
+- If a script agent reads its tokens/configs from home (e.g. the GLM wrappers `glm51`/`glm52`/`ai-free.claude-glm` — from `~/.ai-free/claude-glm/`), add that directory to `docker.extra_mounts`, otherwise the agent will crash with "file not found".
 
-### autoShim: генерируемые врапперы без монтирования
+### autoShim: generated wrappers without mounting
 
-По `docker.autoShim: true` afm генерирует claude-совместимые врапперы для агентов,
-описанных в `docker.agents.<cmd>` (recipe: `model`/`url`/`system_prompt`/`auth`),
-прямо в контейнере — без `-v` монтирования хост-бинарника и без `extra_mounts`
-для токенов. Секрет и контент system_prompt читаются на хосте и передаются в
-контейнер как transient env (`AFM_SECRET_<CMD>`, `AFM_SYSPROMPT_<CMD>`); `url`/`model`
-контейнер берёт из смонтированного `config.yaml`.
+With `docker.autoShim: true` afm generates claude-compatible wrappers for the agents
+described in `docker.agents.<cmd>` (recipe: `model`/`url`/`system_prompt`/`auth`),
+right inside the container — without `-v` mounting the host binary and without `extra_mounts`
+for tokens. The secret and the system_prompt content are read on the host and passed into
+the container as transient env (`AFM_SECRET_<CMD>`, `AFM_SYSPROMPT_<CMD>`); the container takes
+`url`/`model` from the mounted `config.yaml`.
 
 ```yaml
 docker:
@@ -400,14 +400,14 @@ docker:
 ```
 
 - `auth.to` ∈ {`env:CLAUDE_CODE_OAUTH_TOKEN`, `env:ANTHROPIC_API_KEY`, `env:ANTHROPIC_AUTH_TOKEN`}.
-- Без recipe (при `autoShim: true`) команда монтируется `:ro` как раньше.
-- `url` bake'ится в враппер как `ANTHROPIC_BASE_URL` (z.ai, deepseek — напрямую, без прокси).
-- См. спек `docs/superpowers/specs/2026-07-14-docker-autoshim-design.md`.
+- Without a recipe (with `autoShim: true`) the command is mounted `:ro` as before.
+- `url` is baked into the wrapper as `ANTHROPIC_BASE_URL` (z.ai, deepseek — directly, without a proxy).
+- See the spec `docs/superpowers/specs/2026-07-14-docker-autoshim-design.md`.
 
-#### Тип `openai`: OpenAI-совместимые провайдеры
+#### Type `openai`: OpenAI-compatible providers
 
-Для провайдеров с **настоящим** API, совместимым с OpenAI (`v1/chat/completions`), укажи `type: openai`.
-Сгенерированный враппер использует `/usr/local/bin/openai-as-claude` вместо claude:
+For providers with a **genuine** OpenAI-compatible API (`v1/chat/completions`), specify `type: openai`.
+The generated wrapper uses `/usr/local/bin/openai-as-claude` instead of claude:
 
 ```yaml
 docker:
@@ -418,31 +418,31 @@ docker:
       model: deepseek-chat
       url: https://api.deepseek.com/v1
       auth:
-        from: env:DEEPSEEK_KEY        # секрет на хосте
-        to: env:OPENAI_API_KEY        # не ограничен ClaudeAuthEnvVars
+        from: env:DEEPSEEK_KEY        # secret on the host
+        to: env:OPENAI_API_KEY        # not restricted to ClaudeAuthEnvVars
 ```
 
-Поддерживаемые провайдеры: DeepSeek (`api.deepseek.com`), OpenAI, локальные Ollama/любые
-эндпоинты с `POST /v1/chat/completions` (в т.ч. SSE-стриминг). **Важно:** Cursor сюда
-НЕ относится — см. ниже `type: cursor`; IdeaLab тоже НЕ относится — этому провайдеру
-нужен реальный tool-loop, см. ниже `type: openai-agent`.
+Supported providers: DeepSeek (`api.deepseek.com`), OpenAI, local Ollama/any
+endpoints with `POST /v1/chat/completions` (including SSE streaming). **Important:** Cursor does
+NOT belong here — see `type: cursor` below; IdeaLab also does NOT belong here — that provider
+needs a real tool-loop, see `type: openai-agent` below.
 
-Поддерживает мультимодальные `[Screenshot: <path>]`-вставки из дашборда так
-же, как `openai-agent` (см. ниже) — единственный доступный здесь путь
-доставки маркера: сам начальный prompt, скрипт не крутит цикл и не читает
-диалоговые ответы сам.
+It supports multimodal `[Screenshot: <path>]` insertions from the dashboard the same
+way as `openai-agent` (see below) — the only marker-delivery path available here
+is the initial prompt itself; the script doesn't run a loop and doesn't read
+dialog answers on its own.
 
-Требования в образе: `jq`, `curl` (оба присутствуют в `Dockerfile.runtime`).
+Image requirements: `jq`, `curl` (both present in `Dockerfile.runtime`).
 
-#### Тип `openai-agent`: OpenAI-совместимые провайдеры с реальным tool-loop
+#### Type `openai-agent`: OpenAI-compatible providers with a real tool-loop
 
-`type: openai` (выше) даёт модели только текст — годится для planning/review
-стадий, но не годится для `agents: [auto]`/`interactive: true` стадий, которым
-нужно реально писать файлы, гонять скрипты и отвечать на диалоговые вопросы.
-`type: openai-agent` — для провайдеров, у которых `/chat/completions`
-поддерживает настоящий OpenAI-style function calling (`tools`/`tool_choice`,
-включая потоковые `tool_calls` со стандартной index-адресацией фрагментов).
-Сгенерированный враппер использует `/usr/local/bin/openai-agent-as-claude`:
+`type: openai` (above) gives the model only text — fine for planning/review
+stages, but not for `agents: [auto]`/`interactive: true` stages, which need to
+actually write files, run scripts and answer dialog questions.
+`type: openai-agent` — for providers whose `/chat/completions`
+supports genuine OpenAI-style function calling (`tools`/`tool_choice`,
+including streaming `tool_calls` with standard index-addressing of fragments).
+The generated wrapper uses `/usr/local/bin/openai-agent-as-claude`:
 
 ```yaml
 docker:
@@ -452,19 +452,19 @@ docker:
       type: openai-agent
       model: qwen3-max
       url: https://idealab.alibaba-inc.com/api/openai/v1
-      max_turns: 40          # опционально; дефолт скрипта — 40
+      max_turns: 40          # optional; the script's default is 40
       auth:
         from: "file:~/.ai-free/claude-glm/token-idealab"
         to: "env:OPENAI_API_KEY"
     balian:
-      # Balian/DashScope (Alibaba Cloud "百炼" Model Studio) — тот же
-      # compatible-mode /chat/completions, тот же streaming tool_calls формат.
-      # model: доступность моделей зависит от ключа — на проверенном ключе
-      # работают только qwen-plus и qwen3.5/3.6/3.7-plus; qwen3.8-max/qwen3-max/
-      # qwen-max/qwen-turbo/qwen3-coder-* дают Model.AccessDenied. qwen3.7-plus
-      # думает по умолчанию (300+ reasoning-токенов даже на тривиальный ответ,
-      # adapter reasoning_content не читает — просто лишние токены/задержка);
-      # qwen-plus того же провайдера отвечает без thinking-режима.
+      # Balian/DashScope (Alibaba Cloud "百炼" Model Studio) — the same
+      # compatible-mode /chat/completions, the same streaming tool_calls format.
+      # model: model availability depends on the key — on the tested key
+      # only qwen-plus and qwen3.5/3.6/3.7-plus work; qwen3.8-max/qwen3-max/
+      # qwen-max/qwen-turbo/qwen3-coder-* give Model.AccessDenied. qwen3.7-plus
+      # thinks by default (300+ reasoning tokens even for a trivial answer,
+      # the adapter doesn't read reasoning_content — just extra tokens/latency);
+      # qwen-plus from the same provider answers without thinking mode.
       type: openai-agent
       model: qwen3.7-plus
       url: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -473,55 +473,55 @@ docker:
         to: "env:OPENAI_API_KEY"
 ```
 
-Модели даётся ровно один инструмент — `bash` (команда → stdout+stderr+exit
-code). Никаких отдельных read/write/skill-инструментов: чтение и запись
-файлов, запуск `./scripts/*.sh`, поллинг диалоговых файлов
-(`<phase>.<id>.answer.json`) — всё это модель делает сама через `bash`,
-ровно как обычный shell-скрипт делал бы. Skill-конвенция (`<skills>name</skills>`
-в промпте, см. раздел "File-Based Dialog Protocol" выше) не поддержана нативно
-у стороннего провайдера — системный промпт адаптера явно учит модель при
-упоминании skill'а самой прочитать `.claude/skills/<name>/SKILL.md` через `bash`.
+The model is given exactly one tool — `bash` (command → stdout+stderr+exit
+code). No separate read/write/skill tools: reading and writing
+files, running `./scripts/*.sh`, polling dialog files
+(`<phase>.<id>.answer.json`) — the model does all of that itself via `bash`,
+exactly the way a regular shell script would. The skill convention (`<skills>name</skills>`
+in the prompt, see the "File-Based Dialog Protocol" section above) isn't natively
+supported by the third-party provider — the adapter's system prompt explicitly teaches the model
+to read `.claude/skills/<name>/SKILL.md` itself via `bash` when a skill is mentioned.
 
-Каждый tool-вызов сразу печатается в stdout как
+Each tool call is immediately printed to stdout as
 `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"..."}}]}}`
-— та же форма, что и настоящий Claude `Bash`-tool_use, поэтому дашборд
-показывает живой action feed, а не тишину до самого конца стадии; это же
-сбрасывает 30-минутный `idle_timeout` между ходами. `max_turns` (дефолт 40)
-ограничивает число обращений к API за одну стадию; при достижении лимита
-скрипт завершается штатно (exit 0) с пометкой в тексте — afm обрабатывает
-это как обычный незавершённый autonomous-прогон (нет `execution_summary.md` →
-retry), а не как отдельную ошибку. Сбой самого запроса к API (сеть, не-2xx) —
-это `exit 1`, стадия падает сразу, в отличие от `openai-as-claude.sh`
-(который на сбое `curl` проглатывает ошибку в пустой success — там это
-безопасно для одноразового текста, здесь тихий "успех" замаскировал бы
-реально незавершённый tool-loop).
+— the same shape as a real Claude `Bash` tool_use, so the dashboard
+shows a live action feed rather than silence until the very end of the stage; this also
+resets the 30-minute `idle_timeout` between turns. `max_turns` (default 40)
+limits the number of API calls per stage; when the limit is reached the
+script exits cleanly (exit 0) with a note in the text — afm treats
+this as an ordinary incomplete autonomous run (no `execution_summary.md` →
+retry), not as a separate error. A failure of the API request itself (network, non-2xx) —
+that's `exit 1`, the stage fails immediately, unlike `openai-as-claude.sh`
+(which on a `curl` failure swallows the error into an empty success — there it's
+safe for one-shot text, here a silent "success" would mask a
+genuinely incomplete tool-loop).
 
-Известное (не новое) ограничение: если модель зависает на диалоговом поллинге
-дольше 30 минут (человек долго не отвечает), сработает тот же `idle_timeout`,
-что уже документирован для файлового диалогового протокола выше — это
-свойство самого механизма, не специфика этого типа.
+A known (not new) limitation: if the model hangs on dialog polling
+longer than 30 minutes (the human takes a long time to answer), the same `idle_timeout`
+documented for the file-based dialog protocol above will fire — it's a
+property of the mechanism itself, not a specific of this type.
 
-**Мультимодальные скриншоты (`[Screenshot: <path>]`).** Вставленный в дашборде
-скриншот (см. "paste a clipboard screenshot" в release notes) доходит до
-`openai`/`openai-agent` не как путь-который-надо-прочитать самому, а как
-настоящая картинка: адаптер сам находит маркер, base64-кодирует файл и
-подставляет `image_url`-блок вместо/вместе с текстом — работает, только если
-сконфигурированная модель реально мультимодальна (отдельного `vision:`-флага
-в рецепте нет, шим просто всегда пытается встроить найденную картинку). Для
-`type: openai-agent` это покрывает оба пути, которыми маркер может дойти до
-агента: и начальный prompt (revise/заметка), и текст, который модель сама
-вычитывает через `bash cat` ответа на диалоговый вопрос внутри цикла — второй
-случай подставляется отдельным user-сообщением сразу за tool-результатом, а
-не в сам tool-результат (мультимодальный `tool`-content не гарантированно
-поддержан всеми провайдерами).
+**Multimodal screenshots (`[Screenshot: <path>]`).** A screenshot pasted in the dashboard
+(see "paste a clipboard screenshot" in the release notes) reaches
+`openai`/`openai-agent` not as a path-you-have-to-read-yourself, but as a
+real image: the adapter finds the marker itself, base64-encodes the file and
+substitutes an `image_url` block instead of/together with the text — it works only if
+the configured model is genuinely multimodal (there's no separate `vision:` flag
+in the recipe, the shim simply always tries to embed a found image). For
+`type: openai-agent` this covers both paths the marker can reach the
+agent through: the initial prompt (revise/note) and the text the model
+reads itself via `bash cat` of a dialog answer inside the loop — the second
+case is substituted as a separate user message right after the tool result, not
+into the tool result itself (multimodal `tool` content isn't guaranteed to be
+supported by all providers).
 
-Требования в образе: `jq`, `curl` (оба уже есть в `Dockerfile.runtime`).
+Image requirements: `jq`, `curl` (both already in `Dockerfile.runtime`).
 
-#### Тип `cursor`: Cursor Cloud Agents API
+#### Type `cursor`: Cursor Cloud Agents API
 
-Cursor Cloud API (`api.cursor.com`) **не имеет** синхронного `v1/chat/completions` (ответ 404) —
-это **Cloud Agents API**: асинхронный run-based API, где чат = запуск облачного код-агента.
-Поэтому для Cursor используется отдельный тип и адаптер `cursor-as-claude`:
+The Cursor Cloud API (`api.cursor.com`) **does not have** a synchronous `v1/chat/completions` (responds 404) —
+it's the **Cloud Agents API**: an asynchronous run-based API where a chat = launching a cloud code agent.
+So Cursor uses a separate type and the adapter `cursor-as-claude`:
 
 ```yaml
 docker:
@@ -529,32 +529,32 @@ docker:
   agents:
     cursor:
       type: cursor
-      model: auto                    # auto/пусто → Cursor default; иначе model.id из GET /v1/models
+      model: auto                    # auto/empty → Cursor default; otherwise model.id from GET /v1/models
       url: https://api.cursor.com/v1
       auth:
-        from: "file:~/.ai-free/claude-glm/token-cursor"   # секрет на хосте (CRSR_…)
-        to: env:CURSOR_API_KEY         # любой env:VAR; CURSOR_API_KEY по конвенции
+        from: "file:~/.ai-free/claude-glm/token-cursor"   # secret on the host (CRSR_…)
+        to: env:CURSOR_API_KEY         # any env:VAR; CURSOR_API_KEY by convention
 ```
 
-Адаптер `cursor-as-claude`: создаёт no-repo Cloud Agent (`POST /v1/agents`, `mode:"agent"`),
-опрашивает run до терминального статуса, эмитит claude stream-json с `result`-текстом и
-архивирует агента (чтобы не плодить мусор). `system_prompt` для cursor **не используется**
-(адаптер его не передаёт).
+The adapter `cursor-as-claude`: creates a no-repo Cloud Agent (`POST /v1/agents`, `mode:"agent"`),
+polls the run until a terminal status, emits claude stream-json with the `result` text and
+archives the agent (so as not to breed clutter). `system_prompt` for cursor is **not used**
+(the adapter doesn't pass it).
 
-Особенность: первый ответ ~30–90с (старт cloud-VM при создании агента); далее run быстрый.
-Токен — user API key из Cursor Dashboard → API Keys (префикс `crsr_`). Требования в образе: `jq`, `curl`.
+A quirk: the first response takes ~30–90s (a cloud VM starting when the agent is created); after that the run is fast.
+The token is a user API key from Cursor Dashboard → API Keys (prefix `crsr_`). Image requirements: `jq`, `curl`.
 
-#### Тип `codex`: OpenAI Codex CLI (ChatGPT-plan OAuth, без секрета в конфиге)
+#### Type `codex`: OpenAI Codex CLI (ChatGPT-plan OAuth, no secret in the config)
 
-В отличие от `claude`/`openai`/`cursor`, у `codex` **нет** `AFM_SECRET_<CMD>`-модели авторизации:
-`auth` в рецепте необязателен (`AgentRecipe.Validate()` — единственное исключение из трёх типов,
-где отсутствие `Auth` не ошибка). Авторизация идёт через ChatGPT-plan OAuth-состояние `~/.codex`
-на хосте: `docker.ReExec` монтирует его `:ro` во временный путь контейнера **только если** флоу
-реально использует codex (`docker.UsesCodex` — команда `codex-as-claude` напрямую или recipe
-`type: codex` где-то в `docker.agents`), а `docker-entrypoint.sh`, ещё под root до `gosu`,
-копирует смонтированное в `$HOME/.codex` (уже writable) — codex может обновлять `auth.json`
-(refresh token) внутри контейнера, не трогая хостовый файл; контейнер эфемерный, апдейт токена
-не переживает пересоздание.
+Unlike `claude`/`openai`/`cursor`, `codex` has **no** `AFM_SECRET_<CMD>` auth model:
+`auth` in the recipe is optional (`AgentRecipe.Validate()` — the only exception among the three types
+where a missing `Auth` isn't an error). Authorization goes through the ChatGPT-plan OAuth state `~/.codex`
+on the host: `docker.ReExec` mounts it `:ro` to a temporary container path **only if** the flow
+actually uses codex (`docker.UsesCodex` — the command `codex-as-claude` directly or a recipe
+`type: codex` somewhere in `docker.agents`), and `docker-entrypoint.sh`, still as root before `gosu`,
+copies the mounted directory into `$HOME/.codex` (already writable) — codex can update `auth.json`
+(refresh token) inside the container without touching the host file; the container is ephemeral, so the token update
+doesn't survive recreation.
 
 ```yaml
 docker:
@@ -562,25 +562,37 @@ docker:
   agents:
     codex:
       type: codex
-      model: gpt-5-codex          # опционально; "" / "default" → CODEX_MODEL не выставляется,
-                                   # решает сам codex / ~/.codex/config.toml
-      # auth: не указывается — авторизация через смонтированный ~/.codex
+      model: gpt-5-codex          # optional; "" / "default" → CODEX_MODEL is not set,
+                                   # codex / ~/.codex/config.toml decides
+      # auth: not specified — authorization via the mounted ~/.codex
 ```
 
-Сгенерированный враппер резолвит абсолютный путь к реальному бинарнику `codex` **до** того как
-директория враппера (где лежит одноимённый файл `codex`) попадёт в `PATH` — иначе адаптер
-`codex-as-claude` (сам вызывающий голый `codex`) поймал бы через PATH самого себя и ушёл
-в рекурсию; резолвленный путь передаётся адаптеру через `CODEX_BIN`. Адаптер (`scripts/codex-as-claude.sh`)
-запускает `codex exec --json --dangerously-bypass-approvals-and-sandbox` (сэндбокс контейнера и
-так изолирован), накапливает `agent_message`-события в один `assistant`-конверт claude
-stream-json (`CODEX_VERBOSE=1` — включить в накопление ещё и вывод команд). `system_prompt`
-рецепта для codex не используется. Требование в образе: `jq`.
+The generated wrapper resolves the absolute path to the real `codex` binary **before** the
+wrapper's directory (which holds a file also named `codex`) enters `PATH` — otherwise the adapter
+`codex-as-claude` (which itself calls a bare `codex`) would pick up itself via PATH and go
+into recursion; the resolved path is passed to the adapter via `CODEX_BIN`. The adapter (`scripts/codex-as-claude.sh`)
+runs `codex exec --json --dangerously-bypass-approvals-and-sandbox` (the container's sandbox is
+isolated anyway), accumulates `agent_message` events into a single `assistant` claude
+stream-json envelope (`CODEX_VERBOSE=1` — also include command output in the accumulation). The recipe's
+`system_prompt` isn't used for codex. Image requirement: `jq`.
 
-`command: codex-as-claude` также можно использовать напрямую в стадии flow (без autoShim-рецепта) —
-`docker.UsesCodex` детектит и этот путь для гейтинга монтирования `~/.codex`.
+`command: codex-as-claude` can also be used directly in a flow stage (without an autoShim recipe) —
+`docker.UsesCodex` detects this path too for gating the `~/.codex` mount.
 
-### Известные грабли (Docker-mode)
+### The uv version in the image — pinned, bump by hand
 
-- **gosu сбрасывает HOME для uid без записи в `/etc/passwd`** → ставит `HOME=/`. Поэтому в `docker-entrypoint.sh` HOME задаётся **после** gosu (`gosu uid:gid env HOME=/home/afm afm …`), а не до. Иначе агенты ищут `~/`-файлы в `/` (баг: токен искался в `//.ai-free/…`).
-- **`:ro` single-file bind-mount + атомарный rename = corruption.** Приложения, переписывающие конфиг через temp+rename (claude и `~/.claude.json`), не могут обновить `:ro`-маунт и квартитят его как corrupted. Не монтируй `:ro` то, что приложение пишет — пусть создаст свежий container-local файл.
-- **`os.ModeCharDevice` ≢ TTY.** `/dev/null` — тоже char device, поэтому эвристика `Stdin.Stat().Mode()&ModeCharDevice` ложно добавляла `-it` в не-TTY → `docker run` падал "the input device is not a TTY". Честная проверка — `golang.org/x/term.IsTerminal`.
+`Dockerfile.runtime`'s `ARG UV_VERSION` pins the version of `uv` (the fast
+astral-sh Python package manager) installed into the image. The binary is
+copied from the official `ghcr.io/astral-sh/uv:<version>` image
+(`COPY --from=… /uv /uvx /usr/local/bin/`) — faster and more reliable than the
+curl installer, and unlike `python3`/`pip`/`venv` (installed via apt) it isn't
+tied to Ubuntu's package feed. Pinned for the same reason as
+`CLAUDE_CODE_VERSION`: a rebuild must not silently pull a newer release. Bump it
+by hand; the current published version is at
+`https://github.com/astral-sh/uv/releases/latest`.
+
+### Known gotchas (Docker mode)
+
+- **gosu resets HOME for a uid not present in `/etc/passwd`** → sets `HOME=/`. So in `docker-entrypoint.sh` HOME is set **after** gosu (`gosu uid:gid env HOME=/home/afm afm …`), not before. Otherwise agents look for `~/` files in `/` (a bug: the token was looked up in `//.ai-free/…`).
+- **`:ro` single-file bind-mount + atomic rename = corruption.** Applications that rewrite a config via temp+rename (claude and `~/.claude.json`) can't update a `:ro` mount and mark it as corrupted. Don't mount `:ro` what an application writes — let it create a fresh container-local file.
+- **`os.ModeCharDevice` ≢ TTY.** `/dev/null` is also a char device, so the heuristic `Stdin.Stat().Mode()&ModeCharDevice` falsely added `-it` in a non-TTY → `docker run` failed with "the input device is not a TTY". The honest check is `golang.org/x/term.IsTerminal`.
