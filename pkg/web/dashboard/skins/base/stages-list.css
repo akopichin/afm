@@ -104,6 +104,17 @@
 }
 
 /* Dialog badge на стадии с awaiting_user_input */
+/* Трейлинг-слот строки стадии: занимает 3-ю (auto) колонку грида .stage-item и
+   держит бейджи (💬/📋/📝) вместе с кебабом (⋮) в один ряд, прижатыми вправо.
+   Группировка обязательна: два отдельных трейлинг-элемента не влезают в одну
+   auto-колонку и переносят кебаб на новую строку (кебаб «съезжал вниз-влево»). */
+.stage-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: end;
+}
+
 .dialog-badge {
   font-size: 11px;
   margin-left: 4px;

@@ -46,6 +46,27 @@ describe('StagesList', () => {
     expect(item.querySelector('.dialog-badge')).not.toBeInTheDocument()
   })
 
+  // Регресс: .stage-item — грид из 3 колонок (18px 1fr auto). Бейдж и кебаб —
+  // это ДВА трейлинг-элемента; если оба лежат прямо в гриде, кебаб не влезает в
+  // третью (auto) колонку и переносится на новую неявную строку в 1-ю колонку —
+  // «кебаб съезжает вниз-влево». Чиним, группируя бейджи+кебаб в единый слот
+  // .stage-actions, чтобы у грида всегда было ровно 3 in-flow ребёнка.
+  test('badge and kebab share one .stage-actions slot (grid does not overflow)', () => {
+    const stages: Stage[] = [
+      { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
+
+    const item = screen.getByRole('listitem')
+    const actions = item.querySelector('.stage-actions')
+    expect(actions).toBeInTheDocument()
+    expect(actions?.parentElement).toBe(item)
+    // и бейдж, и кебаб живут внутри общего слота — не отдельными детьми грида
+    expect(actions?.querySelector('.approval-badge')).toBeInTheDocument()
+    expect(actions?.querySelector('.stage-kebab')).toBeInTheDocument()
+  })
+
   test('does not mark running stage with attention', () => {
     const stages: Stage[] = [
       { id: 's1', name: 'Run', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },

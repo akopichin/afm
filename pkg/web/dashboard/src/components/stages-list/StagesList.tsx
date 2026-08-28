@@ -158,6 +158,10 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
               <span className="stage-id">{stage.id}</span>
               {stage.name !== '' && <span className="stage-name">{stage.name}</span>}
             </span>
+            {/* Единый трейлinг-слот: бейджи + кебаб. Это ОДИН in-flow ребёнок
+                грида .stage-item (18px 1fr auto) — иначе второй трейлинг-элемент
+                переносится на новую строку в 1-ю колонку (кебаб «съезжает вниз»). */}
+            <span className="stage-actions">
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
             {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
@@ -262,6 +266,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                   )}
               </span>
             )}
+            </span>
             {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
           </li>
         ))}
