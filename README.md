@@ -302,15 +302,16 @@ By default the agent inherits the CWD of the `afm` process, and `afm` assumes th
 
 ### Agent Memory
 
-Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes. Agent memory carries those findings forward: after a stage marked `reflect: true` completes, afm runs a small background pipeline of three agents that distills the stage's session into a project **memory** that later stages — and later runs — are told to read.
+Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes. Agent memory carries those findings forward: after a stage marked `reflect: true` completes, afm runs a small background pipeline of two agents that distills the stage's session into **structured findings**, stored in a YAML file that later stages are shown a **relevant slice** of.
 
 ```yaml
 name: my-feature
 root_dir: .
 memory:
-  project_file: docs/PROJECT_MEMORY.md   # relative to root_dir; a non-empty value ENABLES the feature
-  max_bytes: 20000                        # per-file size threshold that triggers compression (default 20000)
-  compress_retries: 2                     # compression attempts before the terminal fallback (default 2)
+  project_file: docs/PROJECT_MEMORY.yaml  # relative to root_dir; a non-empty value ENABLES the feature
+  max_findings: 60                        # per-scope eviction ceiling (default 60)
+  retrieval_threshold: 25                 # ≤ → inject everything (pointer); > → inline only the relevant slice (default 25)
+  core_confirm_count: 3                   # confirm_count at/above which a finding is always inlined (default 3)
   final_reflect: true                     # also run one reflection over the whole flow when it finishes (default false)
 stages:
   - id: build
@@ -325,12 +326,14 @@ stages:
 
 **Two memory files, two lifetimes:**
 
-- **`PROJECT_MEMORY.md`** — at `memory.project_file` in your repo, accumulates **across runs** (long-term project knowledge).
-- **`SESSION_MEMORY.md`** — auto-created at `.afm/runs/<run>/SESSION_MEMORY.md`, **reset every run** (this run's short-term context).
+- **`PROJECT_MEMORY.yaml`** — at `memory.project_file` in your repo, accumulates **across runs** (long-term project knowledge).
+- **`SESSION_MEMORY.yaml`** — auto-created at `.afm/runs/<run>/SESSION_MEMORY.yaml`, **reset every run** (this run's short-term context).
 
-Both are written in a "Do's / Don'ts" format (🟩 Best Practices / 🟥 Anti-Patterns). afm injects a short **pointer** to both files' absolute paths into every stage's prompt (regardless of that stage's own `reflect` value), so an agent reads the memory itself with its `Read` tool — the content is never inlined, so prompt size doesn't grow with memory.
+Each finding is a structured record — `scope` (`project`/`session`), `kind` (`fact`/`best_practice`/`anti_pattern`), `topic` tags, `statement`, required `evidence`, plus afm-owned metadata (`first_seen`/`last_seen`/`confirm_count`) that afm (not the agents) assigns and updates. A finding without evidence is rejected.
 
-The pipeline is **background and best-effort**: it never blocks downstream stages and never fails a stage or the run. Under the hood it runs three overridable agents — **reflect** (extract findings from the stage session), **updater** (merge/deduplicate into the two files), **compressor** (distill a file back under `max_bytes` when it grows too large; a FIFO drop of the oldest entries is the last resort). Their prompts ship as embedded defaults (`reflect.md`/`updater.md`/`compressor.md`) and can be overridden per project via `prompts_dir`. With `final_reflect: true`, one extra reflection runs over the whole flow's session at the end.
+Per stage, afm injects only what's relevant: if the store is still small (≤ `retrieval_threshold` findings total) it points the agent at both files' absolute paths and lets it read them itself; once the store grows past the threshold, afm inlines a bounded slice — every "core" finding (`confirm_count ≥ core_confirm_count`) plus findings whose tags/text match the stage's own id/name/description — instead of the whole file, so prompt size doesn't keep growing with memory.
+
+The pipeline is **background and best-effort**: it never blocks downstream stages and never fails a stage or the run. Under the hood it runs two overridable agents — **reflect** (extract candidate findings with required evidence, excluding afm/agent-protocol mechanics) and **consolidator** (merge/deduplicate against the current stores and verify each candidate is durable and project-specific). afm (code) then reconciles metadata, evicts the lowest-value findings past `max_findings` (by `confirm_count`, then recency), and writes each store atomically — agents never write the store files themselves. Prompts ship as embedded defaults (`reflect.md`/`consolidator.md`) and can be overridden per project via `prompts_dir`. With `final_reflect: true`, one extra reflection runs over the whole flow's session at the end.
 
 ### Passing Context Between Stages
 

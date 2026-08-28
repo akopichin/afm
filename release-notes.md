@@ -4,6 +4,22 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ## 2026-08-28
 
+### Feature: agent memory v2 (structured, afm-owned)
+
+A live 3-stage run of v1 (below) exposed four weaknesses: the captured memory was dominated by generic afm/agent-protocol mechanics rather than durable project-specific facts; every stage read the *entire* memory regardless of relevance; the prose `.md` store couldn't be deduplicated or evicted by value; and the updater/compressor agents rewrote the memory files in place with their own Write tool, so a killed agent could leave a partially written file. v2 replaces the prose store with a **structured, afm-owned YAML store** — `pkg/memory` now owns validation, metadata, eviction, and atomic writes; agents only extract and consolidate findings, never touch the store files themselves.
+
+- **Structured findings, not prose.** `PROJECT_MEMORY.yaml` / `SESSION_MEMORY.yaml` (same cross-run/per-run split as v1) hold `pkg/memory.Finding` records — `scope`/`kind`/`topic`/`statement`/required `evidence` — plus afm-owned metadata (`first_seen`/`last_seen`/`confirm_count`). A finding without evidence is rejected at reconciliation time.
+- **Two agents, not three.** **reflect** extracts candidate findings (prompt retuned to exclude afm/agent-protocol mechanics and require evidence); **consolidator** merges them against the current stores and verifies each candidate is durable/project-specific/evidenced (the compressor agent is **removed** — its job is subsumed by consolidation + code eviction).
+- **afm-owned reconcile + eviction + atomic writes.** afm code reconciles `new`/`reinforced`/`unchanged` metadata, evicts the lowest-value findings once a scope exceeds `max_findings` (by `confirm_count`, then recency — deterministic, replacing v1's FIFO drop), and writes each store atomically (temp+rename). Agents write only their own candidate/merged byproducts (`reflect_dataset.yaml`, `consolidated.yaml`), never the store files.
+- **Per-stage relevance retrieval, not a static pointer.** A small store (≤ `retrieval_threshold` findings) still gets a pointer to both files, read by the agent itself. Once the store grows past the threshold, afm inlines a bounded slice — every "core" finding (`confirm_count ≥ core_confirm_count`) plus findings whose tags/text match the current stage's id/name/description — computed and rendered in code, not by an agent.
+- **Config:** `max_findings` (default 60), `retrieval_threshold` (default 25), `core_confirm_count` (default 3), `final_reflect` (unchanged). Removed: `max_bytes`, `compress_retries` (meaningless without a compressor).
+- The enablement/scheduling layer is otherwise unchanged from v1: `memory:` + per-stage `reflect: true`, background/best-effort/serialized pipeline (`reflectMu`), `pendingReflections` gating `shouldExit`, never touches the FSM, `final_reflect` at `Run()` exit.
+- Tests: `pkg/memory` unit coverage (schema validation, metadata reconciliation, eviction ordering, retrieval selection, atomic writes); `pkg/orchestrator`'s `TestReflectionPipeline_*`/`TestMaybeRunReflection_*`/`TestFinalReflection_*` (kept-envelope regressions) plus the new `TestIntegration_MemoryV2_*` (full reflect→consolidator→reconcile pipeline produces a validated finding with correct metadata, and its statement/pointer reaches a later stage's actual built prompt via `memoryBlockForStage`+`prompts.Build`, in both the small-store/pointer and large-store/inlined-slice cases); `go test ./... -race` and `golangci-lint run ./...` green.
+- Spec: `docs/superpowers/specs/2026-08-28-agent-memory-v2-design.md` (supersedes the v1 spec's storage/pipeline layer, keeps its enablement layer).
+- LIVE-RUN: <to be filled after live verification>
+
+## 2026-08-28
+
 ### Feature: agent memory (reflect → updater → compressor)
 
 Every stage runs its agent in an isolated context, so whatever it learns — an API's real behavior, a required build flag, a rule it broke and had to correct — evaporates when the stage finishes, and the next stage starts blind. Agent memory carries those findings forward. Mark a stage `reflect: true` and, after it completes, afm runs a small **background, best-effort** pipeline of three agents that distills the stage's session into a persistent project memory that later stages (and later runs) are told to read.
