@@ -196,18 +196,41 @@ func newRunCmd() *cobra.Command {
 				agentRootDir = filepath.Join(rootDir, agentRootDir)
 			}
 
+			var memProjectPath, memSessionPath string
+			if f.MemoryEnabled() {
+				base := agentRootDir
+				if base == "" {
+					base = rootDir
+				}
+				memProjectPath = f.Memory.ProjectFile
+				if !filepath.IsAbs(memProjectPath) {
+					memProjectPath = filepath.Join(base, memProjectPath)
+				}
+				memSessionPath = filepath.Join(runDir, "SESSION_MEMORY.md")
+			}
+			globalPrompt := f.Prompt
+			if ptr := buildMemoryPointer(memProjectPath, memSessionPath); ptr != "" {
+				if globalPrompt != "" {
+					globalPrompt += "\n\n"
+				}
+				globalPrompt += ptr
+			}
+
 			orch := orchestrator.New(orchestrator.Options{
-				RunDir:          runDir,
-				Stages:          f.Stages,
-				Store:           store,
-				Config:          cfg,
-				Prompts:         prompts,
-				WrapperDir:      wrapperDir,
-				GeneratedAgents: generatedAgents,
-				GlobalPrompt:    f.Prompt,
-				RootDir:         agentRootDir,
-				RequireApproval: requireApproval,
-				Debug:           debugEnabled,
+				RunDir:            runDir,
+				Stages:            f.Stages,
+				Store:             store,
+				Config:            cfg,
+				Prompts:           prompts,
+				WrapperDir:        wrapperDir,
+				GeneratedAgents:   generatedAgents,
+				GlobalPrompt:      globalPrompt,
+				RootDir:           agentRootDir,
+				RequireApproval:   requireApproval,
+				Debug:             debugEnabled,
+				Memory:            f.Memory,
+				MemoryProjectPath: memProjectPath,
+				MemorySessionPath: memSessionPath,
 			})
 
 			// Disable interactive flags when dashboard is not running

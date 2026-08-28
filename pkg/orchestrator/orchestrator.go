@@ -52,19 +52,22 @@ func DefaultPrompts() Prompts { return Prompts{} }
 
 // Options configures an Orchestrator.
 type Options struct {
-	RunDir          string
-	Stages          []flow.Stage
-	Store           *state.Store
-	Config          config.Config
-	Prompts         Prompts
-	Runner          executor.Runner // nil = real Executor
-	DashboardURL    string          // e.g. "http://127.0.0.1:9876"
-	WrapperDir      string          // dir with generated wrapper scripts (prepended to agent PATH)
-	GeneratedAgents map[string]bool // autoShim: команды с generated-враппером (self-route)
-	GlobalPrompt    string          // Flow.Prompt, forwarded to every prompts.Build call
-	RootDir         string          // Flow.RootDir: project root as agent CWD (empty = inherit afm CWD)
-	RequireApproval bool            // headless: fail instead of auto-approve on awaiting_approval
-	Debug           bool            // if true, executors log the exact agent input to debug logs
+	RunDir            string
+	Stages            []flow.Stage
+	Store             *state.Store
+	Config            config.Config
+	Prompts           Prompts
+	Runner            executor.Runner   // nil = real Executor
+	DashboardURL      string            // e.g. "http://127.0.0.1:9876"
+	WrapperDir        string            // dir with generated wrapper scripts (prepended to agent PATH)
+	GeneratedAgents   map[string]bool   // autoShim: команды с generated-враппером (self-route)
+	GlobalPrompt      string            // Flow.Prompt, forwarded to every prompts.Build call
+	RootDir           string            // Flow.RootDir: project root as agent CWD (empty = inherit afm CWD)
+	RequireApproval   bool              // headless: fail instead of auto-approve on awaiting_approval
+	Debug             bool              // if true, executors log the exact agent input to debug logs
+	Memory            flow.MemoryConfig // agent-память: включена, если MemoryProjectPath != ""
+	MemoryProjectPath string            // abs путь к PROJECT_MEMORY.md ("" = выключено)
+	MemorySessionPath string            // abs путь к SESSION_MEMORY.md в run-папке
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
