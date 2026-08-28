@@ -106,6 +106,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext + preNote,
 			GlobalPrompt:     o.opts.GlobalPrompt,
+			MemoryBlock:      o.memoryBlockForStage(s),
 		})
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhasePlanning))
@@ -190,6 +191,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext,
 			GlobalPrompt:     o.opts.GlobalPrompt,
+			MemoryBlock:      o.memoryBlockForStage(s),
 		})
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, "planning-revision.log")
@@ -270,6 +272,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext + stageDirNote + preNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
+			MemoryBlock:     o.memoryBlockForStage(s),
 		})
 		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseImplementation))
 
@@ -288,6 +291,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 				StageDir:        stageDir,
 				Interactive:     s.Interactive,
 				GlobalPrompt:    o.opts.GlobalPrompt,
+				MemoryBlock:     o.memoryBlockForStage(s),
 			})
 			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 			rr := o.runnerFor(s, phaseReview)
@@ -330,6 +334,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext + preNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
+			MemoryBlock:     o.memoryBlockForStage(s),
 		})
 		reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 		rr := o.runnerFor(s, phaseReview)
@@ -383,6 +388,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			DependencyPlans: depCtx,
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
+			MemoryBlock:     o.memoryBlockForStage(s),
 			RetryContext:    retryContext + summaryNote + preNote,
 		})
 		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseAutonomous))
@@ -459,6 +465,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext + stageDirNote + feedbackNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
+			MemoryBlock:     o.memoryBlockForStage(s),
 		})
 		logFile := filepath.Join(stageDir, "implementation-feedback.log")
 
@@ -477,6 +484,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 				StageDir:        stageDir,
 				Interactive:     s.Interactive,
 				GlobalPrompt:    o.opts.GlobalPrompt,
+				MemoryBlock:     o.memoryBlockForStage(s),
 			})
 			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 			rr := o.runnerFor(s, phaseReview)
@@ -521,6 +529,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 			Interactive:     s.Interactive,
 			RetryContext:    retryContext + feedbackNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
+			MemoryBlock:     o.memoryBlockForStage(s),
 		})
 		reviewLog := filepath.Join(stageDir, "review-feedback.log")
 		rr := o.runnerFor(s, phaseReview)
@@ -566,6 +575,7 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 			DependencyPlans: depCtx,
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
+			MemoryBlock:     o.memoryBlockForStage(s),
 			RetryContext:    retryContext + summaryNote + feedbackNote,
 		})
 		logFile := filepath.Join(stageDir, "autonomous-feedback.log")

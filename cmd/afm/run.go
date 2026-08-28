@@ -206,14 +206,7 @@ func newRunCmd() *cobra.Command {
 				if !filepath.IsAbs(memProjectPath) {
 					memProjectPath = filepath.Join(base, memProjectPath)
 				}
-				memSessionPath = filepath.Join(runDir, "SESSION_MEMORY.md")
-			}
-			globalPrompt := f.Prompt
-			if ptr := buildMemoryPointer(memProjectPath, memSessionPath); ptr != "" {
-				if globalPrompt != "" {
-					globalPrompt += "\n\n"
-				}
-				globalPrompt += ptr
+				memSessionPath = filepath.Join(runDir, "SESSION_MEMORY.yaml")
 			}
 
 			orch := orchestrator.New(orchestrator.Options{
@@ -224,7 +217,7 @@ func newRunCmd() *cobra.Command {
 				Prompts:           prompts,
 				WrapperDir:        wrapperDir,
 				GeneratedAgents:   generatedAgents,
-				GlobalPrompt:      globalPrompt,
+				GlobalPrompt:      f.Prompt,
 				RootDir:           agentRootDir,
 				RequireApproval:   requireApproval,
 				Debug:             debugEnabled,

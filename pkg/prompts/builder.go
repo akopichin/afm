@@ -38,6 +38,12 @@ type Inputs struct {
 	// Autonomous — шаблон для автономного трека (без plan.md, с execution_summary.md).
 	// Если непустой, используется вместо Template.
 	Autonomous string
+	// MemoryBlock — по-стадийный срез agent-памяти (Task 9), посчитанный
+	// вызывающей стороной (см. Orchestrator.memoryBlockForStage) под конкретную
+	// стадию — либо inlined findings, либо pointer на файлы памяти. Заменяет
+	// v1's статический GlobalPrompt-указатель на память: тот был одним и тем
+	// же текстом для всех стадий флоу, этот пересчитывается на каждый Build.
+	MemoryBlock string
 }
 
 func Build(in Inputs) string {
@@ -104,6 +110,12 @@ func Build(in Inputs) string {
 		sb.WriteString("<global_prompt>\n")
 		sb.WriteString(escapeTags(in.GlobalPrompt))
 		sb.WriteString("\n</global_prompt>\n\n")
+	}
+
+	if in.MemoryBlock != "" {
+		sb.WriteString("<project_memory>\n")
+		sb.WriteString(escapeTags(in.MemoryBlock))
+		sb.WriteString("\n</project_memory>\n\n")
 	}
 
 	if in.DependencyPlans != "" || in.Artifacts != "" {
@@ -189,6 +201,8 @@ var tagReplacer = strings.NewReplacer(
 	"<prompt>", "<\u200bprompt>",
 	"</global_prompt>", "</\u200bglobal_prompt>",
 	"<global_prompt>", "<\u200bglobal_prompt>",
+	"</project_memory>", "</\u200bproject_memory>",
+	"<project_memory>", "<\u200bproject_memory>",
 )
 
 func escapeTags(s string) string {
