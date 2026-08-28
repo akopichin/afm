@@ -162,6 +162,12 @@ type Stage struct {
 	// стадии (нет агента). См.
 	// docs/superpowers/specs/2026-08-27-stage-custom-buttons-design.md.
 	Buttons Buttons `yaml:"buttons,omitempty"`
+	// Reflect (opt-in, дефолт false): после успешного завершения этой стадии
+	// запустить конвейер agent-памяти (reflect→updater→compressor) по её
+	// сессии. Требует непустой memory.project_file на уровне флоу. На script-
+	// стадии допустимо, но во время выполнения тихо пропускается (нет
+	// агентской сессии). Обычный bool — дефолт совпадает с нулевым значением.
+	Reflect bool `yaml:"reflect,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -227,6 +233,22 @@ func (s Stage) AutoRunDisabled() bool {
 	return s.AutoRun != nil && !*s.AutoRun
 }
 
+// MemoryConfig — настройки agent-памяти флоу. ProjectFile непустой включает
+// всю фичу (см. docs/superpowers/specs/2026-08-28-agent-memory-design.md).
+type MemoryConfig struct {
+	// ProjectFile — путь к PROJECT_MEMORY.md относительно root_dir; репозиторный
+	// файл, накапливается между ранами. Непусто = фича включена.
+	ProjectFile string `yaml:"project_file,omitempty"`
+	// MaxBytes — порог размера на КАЖДЫЙ файл памяти, выше которого запускается
+	// компрессор. 0 → дефолт 20000 (ставится в ParseFile).
+	MaxBytes int `yaml:"max_bytes,omitempty"`
+	// CompressRetries — попыток компрессии до терминального FIFO-fallback.
+	// 0 → дефолт 2.
+	CompressRetries int `yaml:"compress_retries,omitempty"`
+	// FinalReflect — один прогон конвейера по ВСЕЙ сессии флоу в конце Run().
+	FinalReflect bool `yaml:"final_reflect,omitempty"`
+}
+
 // Flow is the top-level structure parsed from a flow YAML file.
 type Flow struct {
 	Name        string `yaml:"name"`
@@ -241,9 +263,13 @@ type Flow struct {
 	// (напр. Docker-сетап: исходники в /workspace, а .afm — в другом каталоге).
 	// Без него агенты наследуют CWD afm и резолвят относительные пути проекта
 	// (docs/arch и т.п.) в чужом корне. Пусто → поведение не меняется.
-	RootDir string  `yaml:"root_dir,omitempty"`
-	Stages  []Stage `yaml:"stages"`
+	RootDir string       `yaml:"root_dir,omitempty"`
+	Memory  MemoryConfig `yaml:"memory,omitempty"`
+	Stages  []Stage      `yaml:"stages"`
 }
+
+// MemoryEnabled сообщает, включена ли agent-память для этого флоу.
+func (f *Flow) MemoryEnabled() bool { return f.Memory.ProjectFile != "" }
 
 // ParseFile reads and validates a flow YAML file.
 func ParseFile(path string) (*Flow, error) {
@@ -259,6 +285,14 @@ func ParseFile(path string) (*Flow, error) {
 		return nil, err
 	}
 	f.applyScriptTimeoutDefaults()
+	if f.MemoryEnabled() {
+		if f.Memory.MaxBytes == 0 {
+			f.Memory.MaxBytes = 20000
+		}
+		if f.Memory.CompressRetries == 0 {
+			f.Memory.CompressRetries = 2
+		}
+	}
 	warnDeprecatedSupervisorFields(data, path)
 	return &f, nil
 }
@@ -449,6 +483,17 @@ func (f *Flow) validate() error {
 			arts, ok := artifactIndex[stageID]
 			if !ok || !arts[artName] {
 				return fmt.Errorf("stage %q: input ref %q references unknown artifact %q in stage %q", s.ID, inp.Ref, artName, stageID)
+			}
+		}
+	}
+
+	if !f.MemoryEnabled() {
+		if f.Memory.FinalReflect {
+			return errors.New("memory.final_reflect requires memory.project_file")
+		}
+		for _, s := range f.Stages {
+			if s.Reflect {
+				return fmt.Errorf("stage %q: reflect requires memory.project_file", s.ID)
 			}
 		}
 	}

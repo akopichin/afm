@@ -856,3 +856,91 @@ func equalStrs(a, b []string) bool {
 	}
 	return true
 }
+
+func TestParseMemory_FieldsAndDefaults(t *testing.T) {
+	yaml := `
+name: f
+memory:
+  project_file: docs/PROJECT_MEMORY.md
+stages:
+  - name: build
+    reflect: true
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !f.MemoryEnabled() {
+		t.Fatal("expected memory enabled")
+	}
+	if f.Memory.MaxBytes != 20000 {
+		t.Errorf("MaxBytes default = %d, want 20000", f.Memory.MaxBytes)
+	}
+	if f.Memory.CompressRetries != 2 {
+		t.Errorf("CompressRetries default = %d, want 2", f.Memory.CompressRetries)
+	}
+	if !f.Stages[0].Reflect {
+		t.Error("expected stage.Reflect true")
+	}
+}
+
+func TestParseMemory_ReflectDefaultsFalse(t *testing.T) {
+	yaml := `
+name: f
+memory:
+  project_file: docs/PROJECT_MEMORY.md
+stages:
+  - name: build
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if f.Stages[0].Reflect {
+		t.Error("Reflect must default to false")
+	}
+}
+
+func TestValidateMemory_ReflectRequiresProjectFile(t *testing.T) {
+	yaml := `
+name: f
+stages:
+  - name: build
+    reflect: true
+    agents: [planning, implementation]
+`
+	if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
+		t.Fatal("expected error: reflect without memory.project_file")
+	}
+}
+
+func TestValidateMemory_FinalReflectRequiresProjectFile(t *testing.T) {
+	yaml := `
+name: f
+memory:
+  final_reflect: true
+stages:
+  - name: build
+    agents: [planning, implementation]
+`
+	if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
+		t.Fatal("expected error: final_reflect without memory.project_file")
+	}
+}
+
+func TestValidateMemory_ScriptStageReflectAllowed(t *testing.T) {
+	yaml := `
+name: f
+memory:
+  project_file: docs/PROJECT_MEMORY.md
+stages:
+  - name: gen
+    reflect: true
+    script: "echo hi"
+`
+	if _, err := flow.ParseFile(writeTemp(t, yaml)); err != nil {
+		t.Fatalf("script stage with reflect:true must parse: %v", err)
+	}
+}
