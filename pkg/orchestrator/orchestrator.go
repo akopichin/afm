@@ -150,6 +150,10 @@ type Orchestrator struct {
 	// reflectMu сериализует запись в общие файлы памяти: одновременно бежит
 	// максимум один конвейер (best-effort/фон, латентность очереди неважна).
 	reflectMu sync.Mutex
+	// finalReflectDone гарантирует, что финальный reflect по всей сессии
+	// флоу (см. runFinalReflectionOnce) прогонится не более одного раза.
+	// Читается/пишется только на единственной горутине Run — без мьютекса.
+	finalReflectDone bool
 
 	// runMu/runCtx хранят долгоживущий контекст event loop (см. Run), который
 	// HTTP-инициированные Approve/Revise/Retry подставляют вместо request-ctx
@@ -321,6 +325,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				return ferr
 			}
 			if o.shouldExit() {
+				o.runFinalReflectionOnce(ctx)
 				return nil
 			}
 		}

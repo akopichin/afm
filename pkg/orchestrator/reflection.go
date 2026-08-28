@@ -125,6 +125,20 @@ func (o *Orchestrator) reflectNotice(stageName, msg string) {
 	stagefiles.AppendNotice(o.opts.RunDir, "", string(bus.EventReflectFailed), data)
 }
 
+// runFinalReflectionOnce прогоняет конвейер памяти ОДИН раз по ВСЕЙ сессии
+// флоу в конце Run(). reflect читает логи всех стадий рана (директория RunDir).
+// Синхронный — Run() дожидается его перед завершением. Идемпотентен.
+func (o *Orchestrator) runFinalReflectionOnce(ctx context.Context) {
+	if o.finalReflectDone {
+		return
+	}
+	if o.opts.MemoryProjectPath == "" || !o.opts.Memory.FinalReflect {
+		return
+	}
+	o.finalReflectDone = true
+	o.runReflectionPipeline(ctx, "flow-final", []string{o.opts.RunDir}, o.opts.RunDir)
+}
+
 // initSessionMemory сбрасывает SESSION_MEMORY.md в свежий stub на старте рана
 // (пер-ран скоуп: предыдущий ран не переносится). No-op, если память выключена.
 func (o *Orchestrator) initSessionMemory() {

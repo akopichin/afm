@@ -116,3 +116,28 @@ func TestInitSessionMemory_ResetsEachRun(t *testing.T) {
 		t.Error("expected header stub")
 	}
 }
+
+func TestFinalReflection_RunsOnceWhenEnabled(t *testing.T) {
+	o, _, _, order := pipelineHarness(t, 100000, 2)
+	o.opts.Memory.FinalReflect = true
+
+	o.runFinalReflectionOnce(context.Background())
+	first := len(*order)
+	if first == 0 {
+		t.Fatal("final reflection did not run")
+	}
+	// A second call must be a no-op (finalReflectDone).
+	o.runFinalReflectionOnce(context.Background())
+	if len(*order) != first {
+		t.Error("final reflection ran twice; finalReflectDone not honored")
+	}
+}
+
+func TestFinalReflection_NoOpWhenDisabled(t *testing.T) {
+	o, _, _, order := pipelineHarness(t, 100000, 2)
+	o.opts.Memory.FinalReflect = false
+	o.runFinalReflectionOnce(context.Background())
+	if len(*order) != 0 {
+		t.Error("final reflection must not run when disabled")
+	}
+}
