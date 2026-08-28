@@ -469,7 +469,8 @@ func newRunID(flowName string) string {
 }
 
 func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
-	names := []string{"planning.md", "implementation.md", "review.md", "summary.md", "autonomous.md"}
+	names := []string{"planning.md", "implementation.md", "review.md", "summary.md", "autonomous.md",
+		"reflect.md", "updater.md", "compressor.md"}
 	texts := make([]string, len(names))
 	var custom, embedded []string
 	for i, name := range names {
@@ -495,6 +496,9 @@ func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 		Review:         texts[2],
 		Summary:        texts[3],
 		Autonomous:     texts[4],
+		Reflect:        texts[5],
+		Updater:        texts[6],
+		Compressor:     texts[7],
 	}, nil
 }
 

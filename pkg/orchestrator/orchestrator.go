@@ -42,6 +42,9 @@ type Prompts struct {
 	Review         string
 	Summary        string
 	Autonomous     string
+	Reflect        string
+	Updater        string
+	Compressor     string
 }
 
 // DefaultPrompts returns empty prompts (will be set from assets).
