@@ -180,10 +180,13 @@ unreliable — afm always exchanges via files):
              whole file.
 ```
 
-**Atomic writes:** the code wrapper writes each memory file via temp+rename
-(the agent produces content; afm commits it atomically) so a killed agent never
-leaves a half-written memory file. Do not rely on the agent's own tool for
-atomicity.
+**Atomic writes (afm's own direct touches only):** afm's own direct writes —
+`initSessionMemory` (session stub) and `fifoDropOldestBlocks` (terminal FIFO
+fallback) — go via temp+rename. The updater and compressor **agents** rewrite
+`PROJECT_MEMORY.md`/`SESSION_MEMORY.md` in place with their own Write tool, so
+a killed agent can leave a partially written memory file. This is accepted:
+memory is best-effort and outside crash-recovery — the next run's updater
+re-consolidates.
 
 **Agent isolation** (per `runJSONFixAgent`): fresh session (no `--resume`), no
 `AFM_STAGE_DIR` (these agents are not dialog participants — they read/write
@@ -218,8 +221,9 @@ complete run.
   while a pipeline is in flight. A long pipeline is bounded by `waitAgents`
   (10s) at shutdown — acceptable for a best-effort side effect.
 - **Failure of any step:** best-effort — the FSM is never touched (mirrors
-  `runAfterHook`). The pipeline aborts, leaving memory consistent (atomic
-  writes). A `reflect_failed` notice is surfaced via
+  `runAfterHook`). The pipeline aborts; memory may be left mid-consolidation
+  (the updater/compressor agents write the `.md` files in place, not
+  atomically — see §4) but never destroyed. A `reflect_failed` notice is surfaced via
   `publishHookNotice`/`notices.jsonl` (live + replayable), with no
   retry/skip blocking UI.
 - **Recovery:** after an afm crash, an interrupted pipeline is **not** resumed

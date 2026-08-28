@@ -8,8 +8,6 @@ import (
 // memoryAgentSpec — единый параметр для запуска одного агента конвейера памяти.
 // Заполняются только поля, релевантные kind. Один seam (o.runMemoryAgent)
 // принимает этот spec — так тесты подменяют реальный запуск процесса.
-//
-//nolint:unused
 type memoryAgentSpec struct {
 	kind      string // "reflect" | "updater" | "compressor"
 	stageName string // для лога/имени
@@ -38,7 +36,7 @@ func buildMemoryPrompt(p Prompts, spec memoryAgentSpec) string {
 		var b strings.Builder
 		b.WriteString(p.Reflect)
 		b.WriteString("\n\n# AFM FILE I/O (added by afm)\n")
-		b.WriteString("Read ONLY these sources (if a path is a directory, read every *.log file under it):\n")
+		b.WriteString("Read these sources (if a path is a directory, read every *.log file under it, plus execution_summary.md and plan.md if present):\n")
 		for _, s := range spec.sources {
 			fmt.Fprintf(&b, "  - %s\n", s)
 		}
