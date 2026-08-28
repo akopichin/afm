@@ -21,10 +21,6 @@ type StagesListProps = {
 }
 
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
-// "Add note for agent" остаётся ограничен running/awaiting_approval (см.
-// ниже, отдельное условие на сам пункт) — "Pause" доступен на остальных.
-const KEBAB_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval', 'planning', 'revising', 'retrying'])
-
 // Статусы, из которых можно поставить стадию на паузу вручную.
 const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying'])
 
@@ -41,11 +37,24 @@ function canPreNote(stage: Stage): boolean {
   return stage.status === 'pending' && !stage.isScript
 }
 
-// Кебаб показываем, если у стадии есть хоть один пункт: обычные действия
-// (KEBAB_STATUSES) ИЛИ pre-note на pending-стадии. Без этого добавление
-// pending в KEBAB_STATUSES показывало бы пустое меню на pending-скрипте.
+// "Add note for agent" (Revise) — только running/awaiting_approval и никогда на
+// скрипте (у скрипта нет агента; RunScript не принимает interrupt-канал).
+function canAddNote(stage: Stage): boolean {
+  return ADD_NOTE_STATUSES.has(stage.status) && !stage.isScript
+}
+
+// Ручная пауза — из PAUSABLE_STATUSES, но не на running-скрипте (его нельзя
+// прервать gracefully). Совпадает с гейтом пункта Pause в JSX.
+function canPause(stage: Stage): boolean {
+  return PAUSABLE_STATUSES.has(stage.status) && !(stage.isScript && stage.status === 'running')
+}
+
+// Кебаб показываем ТОЛЬКО если реально есть хоть один пункт меню — считаем из
+// тех же предикатов, что и сами пункты (canAddNote/canPreNote/canPause, они же
+// используются в JSX ниже). Иначе для стадии, где все пункты отфильтрованы
+// (напр. running-скрипт: не add-note, не pre-note, не pause), рисовался пустой ⋮.
 function hasKebab(stage: Stage): boolean {
-  return KEBAB_STATUSES.has(stage.status) || canPreNote(stage)
+  return canAddNote(stage) || canPreNote(stage) || canPause(stage)
 }
 
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
@@ -195,7 +204,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                       style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {ADD_NOTE_STATUSES.has(stage.status) && !stage.isScript && (
+                      {canAddNote(stage) && (
                         <li>
                           <button
                             type="button"
@@ -214,7 +223,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                           скрипт) — под ним и живёт живой агент, которому Revise
                           доставит промпт. Сабблок с разделителем показывается,
                           только если кнопки реально объявлены. */}
-                      {ADD_NOTE_STATUSES.has(stage.status) && !stage.isScript && stage.buttons.length > 0 && (
+                      {canAddNote(stage) && stage.buttons.length > 0 && (
                         <>
                           <li className="stage-kebab-divider" role="separator" aria-hidden="true" />
                           {stage.buttons.map((label) => (
@@ -247,7 +256,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                           </button>
                         </li>
                       )}
-                      {PAUSABLE_STATUSES.has(stage.status) && !(stage.isScript && stage.status === 'running') && (
+                      {canPause(stage) && (
                         <li>
                           <button
                             type="button"

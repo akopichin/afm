@@ -108,7 +108,7 @@ describe('StagesList', () => {
     expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(3)
   })
 
-  test('Pause menu item calls onPause and is hidden for a running script stage', () => {
+  test('Pause menu item calls onPause; a running script stage shows no kebab at all (Pause is its only possible item, and it is gated out)', () => {
     const onPause = vi.fn()
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
@@ -117,13 +117,11 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} />)
 
     const buttons = screen.getAllByRole('button', { name: /more actions/i })
+    expect(buttons).toHaveLength(1) // только stage a — у running-СКРИПТА (b) кебаба нет (пустое меню)
     fireEvent.click(buttons[0]!) // stage a: regular running stage
     expect(screen.getByText('Pause')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Pause'))
     expect(onPause).toHaveBeenCalledWith('a')
-
-    fireEvent.click(buttons[1]!) // stage b: running SCRIPT stage
-    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
   })
 
   test('"Add note for agent" stays limited to running/awaiting_approval even though the kebab now also opens for planning/revising/retrying', () => {
@@ -135,7 +133,7 @@ describe('StagesList', () => {
     expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
-  test('"Add note for agent" is hidden for a script stage (no agent to receive it)', () => {
+  test('"Add note for agent" is present on a regular running stage; a running script stage shows no kebab at all', () => {
     const onAddNote = vi.fn()
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
@@ -144,11 +142,9 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onAddNote={onAddNote} />)
 
     const buttons = screen.getAllByRole('button', { name: /more actions/i })
+    expect(buttons).toHaveLength(1) // running СКРИПТОВАЯ стадия (b) кебаба не имеет — единственный её пункт (add-note) отфильтрован
     fireEvent.click(buttons[0]!) // обычная running-стадия — пункт есть
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
-
-    fireEvent.click(buttons[1]!) // running СКРИПТОВАЯ стадия — агента нет, пункта быть не должно
-    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
   test('pre-note: pending non-script stage shows the "Add note (before start)" item, calling onEditPreNote', () => {
@@ -172,6 +168,14 @@ describe('StagesList', () => {
     expect(screen.getByTitle('Note attached for agent')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Edit note (before start)')).toBeInTheDocument()
+  })
+
+  test('no kebab for a running SCRIPT stage — every menu item is gated out, so an empty ⋮ must not show', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
   })
 
   test('pre-note: no kebab at all for a pending SCRIPT stage (no agent to note)', () => {
@@ -259,7 +263,9 @@ describe('StagesList', () => {
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    // running СКРИПТ: add-note/buttons/pre-note/pause — все отфильтрованы, поэтому
+    // кебаба нет вовсе (а значит и кнопки в нём).
+    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Run linter')).not.toBeInTheDocument()
   })
 
