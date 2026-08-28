@@ -114,6 +114,10 @@ type Orchestrator struct {
 	// Инъектируется в New(); тесты подменяют стабом, чинящим файл синхронно.
 	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
 
+	// runMemoryAgent запускает один агент конвейера памяти (reflect/updater/
+	// compressor). Реальная реализация — execMemoryAgent; тесты подменяют.
+	runMemoryAgent func(ctx context.Context, spec memoryAgentSpec) error
+
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
 	// сбой стораджа (StorageError) должен останавливать run, а не безобидный
@@ -211,6 +215,7 @@ func New(opts Options) *Orchestrator {
 		retryBackoff:   RetryBackoff,
 	}
 	o.spawnJSONFix = o.runJSONFixAgent
+	o.runMemoryAgent = o.execMemoryAgent
 	return o
 }
 
