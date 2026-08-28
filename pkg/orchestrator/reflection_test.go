@@ -95,3 +95,24 @@ func TestReflectionPipeline_Serialized(t *testing.T) {
 		t.Errorf("pipelines overlapped: maxConcurrent=%d (reflectMu not held)", maxConcurrent)
 	}
 }
+
+func TestInitSessionMemory_ResetsEachRun(t *testing.T) {
+	o := newTestOrchestrator(t)
+	runDir := t.TempDir()
+	sess := filepath.Join(runDir, "SESSION_MEMORY.md")
+	if err := os.WriteFile(sess, []byte("STALE CONTENT FROM A PREVIOUS RUN"), 0644); err != nil {
+		t.Fatalf("setup: failed to write stale session file: %v", err)
+	}
+	o.opts.MemoryProjectPath = filepath.Join(t.TempDir(), "P.md")
+	o.opts.MemorySessionPath = sess
+
+	o.initSessionMemory()
+
+	data, _ := os.ReadFile(sess)
+	if strings.Contains(string(data), "STALE") {
+		t.Error("session memory must be reset at run start")
+	}
+	if !strings.Contains(string(data), "SESSION MEMORY") {
+		t.Error("expected header stub")
+	}
+}

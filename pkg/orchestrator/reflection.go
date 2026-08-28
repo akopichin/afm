@@ -124,3 +124,12 @@ func (o *Orchestrator) reflectNotice(stageName, msg string) {
 	o.ui.Publish(bus.Event{Type: bus.EventReflectFailed, Data: data})
 	stagefiles.AppendNotice(o.opts.RunDir, "", string(bus.EventReflectFailed), data)
 }
+
+// initSessionMemory сбрасывает SESSION_MEMORY.md в свежий stub на старте рана
+// (пер-ран скоуп: предыдущий ран не переносится). No-op, если память выключена.
+func (o *Orchestrator) initSessionMemory() {
+	if o.opts.MemoryProjectPath == "" || o.opts.MemorySessionPath == "" {
+		return
+	}
+	_ = atomicWriteFile(o.opts.MemorySessionPath, []byte("# SESSION MEMORY\n"))
+}

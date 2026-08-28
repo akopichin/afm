@@ -302,6 +302,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 
+	o.initSessionMemory()
 	o.startPlanningForPending(ctx)
 	o.startQuestionPoller(ctx) // file-based dialog poller
 
