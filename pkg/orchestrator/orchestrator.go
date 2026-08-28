@@ -142,6 +142,15 @@ type Orchestrator struct {
 	// отдельный atomic.
 	pendingAfterHooks atomic.Int32
 
+	// pendingReflections — счётчик живых конвейеров памяти (инкремент в
+	// maybeRunReflection ДО SpawnDetached, декремент в обёртке), чтобы
+	// shouldExit не завершил ран, пока конвейер в полёте. Зеркалит
+	// pendingAfterHooks.
+	pendingReflections atomic.Int32
+	// reflectMu сериализует запись в общие файлы памяти: одновременно бежит
+	// максимум один конвейер (best-effort/фон, латентность очереди неважна).
+	reflectMu sync.Mutex
+
 	// runMu/runCtx хранят долгоживущий контекст event loop (см. Run), который
 	// HTTP-инициированные Approve/Revise/Retry подставляют вместо request-ctx
 	// перед спавном агента (см. runContext). net/http отменяет r.Context() сразу
@@ -468,6 +477,7 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	}
 	o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason)
 	o.maybeRunAfterHook(ctx, stageID)
+	o.maybeRunReflection(ctx, stageID)
 	o.failBlockedStages()
 	o.startPlanningForUnblocked(ctx)
 	o.startReadyStages(ctx)

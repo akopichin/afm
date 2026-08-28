@@ -389,8 +389,12 @@ func (o *Orchestrator) allTerminal() bool {
 // after-hooks only (not a general "any agent in flight" counter, see
 // SpawnAgent's doc comment) — every other agent type already moves its
 // stage's FSM status, which allTerminal() below already accounts for.
+// pendingReflections mirrors the same guard for the reflect→updater→
+// compressor memory pipeline (maybeRunReflection, reflection.go): it, too,
+// never touches the FSM, so a stage stays "done" while its pipeline is
+// still running in the background.
 func (o *Orchestrator) shouldExit() bool {
-	if o.pendingAfterHooks.Load() > 0 {
+	if o.pendingAfterHooks.Load() > 0 || o.pendingReflections.Load() > 0 {
 		return false
 	}
 	if !o.allTerminal() {

@@ -34,7 +34,7 @@ type memoryAgentSpec struct {
 // Compressor) конкретными абсолютными путями и инструкциями файлового I/O.
 func buildMemoryPrompt(p Prompts, spec memoryAgentSpec) string {
 	switch spec.kind {
-	case "reflect":
+	case memoryKindReflect:
 		var b strings.Builder
 		b.WriteString(p.Reflect)
 		b.WriteString("\n\n# AFM FILE I/O (added by afm)\n")
@@ -45,7 +45,7 @@ func buildMemoryPrompt(p Prompts, spec memoryAgentSpec) string {
 		fmt.Fprintf(&b, "Write the resulting YAML document to this EXACT file, and write nothing else:\n  %s\n", spec.datasetOut)
 		b.WriteString("Do not modify any other file. Do not ask questions.\n")
 		return b.String()
-	case "updater":
+	case memoryKindUpdater:
 		var b strings.Builder
 		b.WriteString(p.Updater)
 		b.WriteString("\n\n# AFM FILE I/O (added by afm)\n")
@@ -56,7 +56,7 @@ func buildMemoryPrompt(p Prompts, spec memoryAgentSpec) string {
 		b.WriteString("Rewrite BOTH memory files IN PLACE at the exact paths above with the consolidated content. ")
 		b.WriteString("Do not create any other file. Do not ask questions.\n")
 		return b.String()
-	case "compressor":
+	case memoryKindCompressor:
 		var b strings.Builder
 		b.WriteString(p.Compressor)
 		b.WriteString("\n\n# AFM FILE I/O (added by afm)\n")
