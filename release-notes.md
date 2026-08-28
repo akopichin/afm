@@ -2,6 +2,31 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-28
+
+### Feature: agent memory (reflect → updater → compressor)
+
+Every stage runs its agent in an isolated context, so whatever it learns — an API's real behavior, a required build flag, a rule it broke and had to correct — evaporates when the stage finishes, and the next stage starts blind. Agent memory carries those findings forward. Mark a stage `reflect: true` and, after it completes, afm runs a small **background, best-effort** pipeline of three agents that distills the stage's session into a persistent project memory that later stages (and later runs) are told to read.
+
+```yaml
+name: my-feature
+memory:
+  project_file: docs/PROJECT_MEMORY.md   # non-empty ENABLES the feature; path relative to root_dir
+  max_bytes: 20000                        # per-file compression threshold (default 20000)
+  compress_retries: 2                     # compressor attempts before the terminal fallback (default 2)
+  final_reflect: true                     # also reflect once over the whole flow at the end (default false)
+stages:
+  - id: build
+    reflect: true                         # this stage feeds memory after it completes
+```
+
+- **Two files, two lifetimes.** `PROJECT_MEMORY.md` lives in the repo at `memory.project_file` and accumulates **across runs** (long-term). `SESSION_MEMORY.md` is auto-created at `.afm/runs/<run>/SESSION_MEMORY.md` and **reset every run** (this run's short-term context). Both use a "Do's / Don'ts" format (🟩 Best Practices / 🟥 Anti-Patterns), written by the updater agent.
+- **The pointer, not the content, is injected into every prompt.** afm appends a short block naming the two files' absolute paths to the global prompt of *every* stage (regardless of its own `reflect` value) — the agent reads the files itself with `Read`, so prompt size never grows with the memory.
+- **A code-driven pipeline, not one smart agent.** After a `reflect: true` stage completes (in the background, the same ordering as `script_after`, so downstream stages are never blocked): **reflect** reads the stage session and writes an RL-shaped YAML dataset (`reflect_dataset.yaml`, kept on disk); **updater** merges/deduplicates it into both `.md` files in place; a pure-code **size check** then runs the **compressor** up to `compress_retries` times on any file over `max_bytes` (a dynamic "reduce to under N lines" pass on the last try), with a deterministic FIFO drop of the oldest entries as the terminal fallback (the header and the file itself are never destroyed).
+- **Opt-in, best-effort, never touches the FSM.** `reflect` defaults `false`; `script:` stages are silently skipped (no agent session). Any pipeline step failing aborts the rest for that stage and surfaces a `reflect_failed` notice, but never fails the stage or the run. Pipelines are serialized (one writer to the shared files at a time) and tracked so the run can't exit mid-pipeline. `final_reflect: true` runs one extra reflection over the whole flow's session at `Run()` exit.
+- **Three overridable prompts.** `reflect.md` / `updater.md` / `compressor.md` ship as embedded defaults under `assets/prompts/`, overridable per project via `prompts_dir` — the same mechanism as the existing phase prompts.
+- Verified end-to-end with a **real 3-stage flow driven by live `claude` agents** (`agents: [auto]`, `reflect: true` on each, `final_reflect: true`): all three stages completed; each wrote `reflect_dataset.yaml` and its isolated `reflect.log`/`updater.log`; the updater genuinely read both files and consolidated new items; `PROJECT_MEMORY.md` (cross-run) and `SESSION_MEMORY.md` (per-run) filled with correctly-scoped 🟩/🟥 findings; the memory pointer appeared in a later stage's actual prompt (`autonomous.prompt.log` under `--debug`); and the flow-final reflection ran exactly once over the whole run. Tests: `TestParseMemory_*`/`TestValidateMemory_*` (flow), `TestBuildMemoryPrompt_*`/`TestFileExceeds`/`TestFifoDropOldestBlocks`/`TestReflectionPipeline_*`/`TestMaybeRunReflection_*`/`TestInitSessionMemory_*`/`TestFinalReflection_*`/`TestIntegration_Memory*` (orchestrator), plus `TestBuildMemoryPointer_*`/`TestLoadPrompts_IncludesMemoryPrompts` (cmd/afm); `make lint` clean, full Go suite `-race` green. Spec: `docs/superpowers/specs/2026-08-28-agent-memory-design.md`; plan: `docs/superpowers/plans/2026-08-28-agent-memory.md`.
+
 ## 2026-08-27
 
 ### Feature: predefined stage buttons in the kebab menu

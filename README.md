@@ -286,8 +286,9 @@ stages:
 | `script_before_timeout` | no | Hard timeout for `script_before` (default `5m`) |
 | `script_after` | no | Shell script run right after the stage successfully completes |
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
+| `reflect` | no | `true` — after this stage completes, run the agent-memory pipeline over its session and feed the findings into the project's memory files. Default `false`. Requires the flow-level `memory:` block; silently skipped on `script:` stages (no agent session). See "Agent Memory" below |
 
-**Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `supervisor_command` (supervisor agent command), `root_dir` (project root = agents' working directory, see below), `stages`.
+**Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `supervisor_command` (supervisor agent command), `root_dir` (project root = agents' working directory, see below), `memory` (agent-memory config, see "Agent Memory" below), `stages`.
 
 **`root_dir` — the project root for agents.** Sets the working directory (CWD) in which stage agents run:
 
@@ -298,6 +299,38 @@ stages: ...
 ```
 
 By default the agent inherits the CWD of the `afm` process, and `afm` assumes the project root matches the afm root (the parent of `.afm/`). If that's not the case — for example, in a Docker setup where the sources are mounted at `/workspace` but `.afm/` lives in a different directory — relative project paths (`docs/arch/…`, etc.) resolve to different roots for different stages: one stage writes a file, another can't find it. `root_dir` fixes a single root for all stages. Dialog paths (`AFM_STAGE_DIR`) stay anchored to the afm root regardless of `root_dir`.
+
+### Agent Memory
+
+Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes. Agent memory carries those findings forward: after a stage marked `reflect: true` completes, afm runs a small background pipeline of three agents that distills the stage's session into a project **memory** that later stages — and later runs — are told to read.
+
+```yaml
+name: my-feature
+root_dir: .
+memory:
+  project_file: docs/PROJECT_MEMORY.md   # relative to root_dir; a non-empty value ENABLES the feature
+  max_bytes: 20000                        # per-file size threshold that triggers compression (default 20000)
+  compress_retries: 2                     # compression attempts before the terminal fallback (default 2)
+  final_reflect: true                     # also run one reflection over the whole flow when it finishes (default false)
+stages:
+  - id: build
+    name: build
+    agents: [planning, implementation]
+    reflect: true                         # this stage feeds memory after it completes
+  - id: test
+    name: test
+    agents: [implementation]
+    depends_on: [build]                   # no `reflect` → does not feed memory, but still reads it
+```
+
+**Two memory files, two lifetimes:**
+
+- **`PROJECT_MEMORY.md`** — at `memory.project_file` in your repo, accumulates **across runs** (long-term project knowledge).
+- **`SESSION_MEMORY.md`** — auto-created at `.afm/runs/<run>/SESSION_MEMORY.md`, **reset every run** (this run's short-term context).
+
+Both are written in a "Do's / Don'ts" format (🟩 Best Practices / 🟥 Anti-Patterns). afm injects a short **pointer** to both files' absolute paths into every stage's prompt (regardless of that stage's own `reflect` value), so an agent reads the memory itself with its `Read` tool — the content is never inlined, so prompt size doesn't grow with memory.
+
+The pipeline is **background and best-effort**: it never blocks downstream stages and never fails a stage or the run. Under the hood it runs three overridable agents — **reflect** (extract findings from the stage session), **updater** (merge/deduplicate into the two files), **compressor** (distill a file back under `max_bytes` when it grows too large; a FIFO drop of the oldest entries is the last resort). Their prompts ship as embedded defaults (`reflect.md`/`updater.md`/`compressor.md`) and can be overridden per project via `prompts_dir`. With `final_reflect: true`, one extra reflection runs over the whole flow's session at the end.
 
 ### Passing Context Between Stages
 
