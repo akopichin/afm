@@ -104,8 +104,8 @@ func TestLoadPrompts_IncludesMemoryPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadPrompts: %v", err)
 	}
-	if p.Reflect == "" || p.Updater == "" || p.Compressor == "" {
-		t.Fatalf("memory prompts empty: reflect=%d updater=%d compressor=%d",
-			len(p.Reflect), len(p.Updater), len(p.Compressor))
+	if p.Reflect == "" || p.Consolidator == "" {
+		t.Fatalf("memory prompts empty: reflect=%d consolidator=%d",
+			len(p.Reflect), len(p.Consolidator))
 	}
 }

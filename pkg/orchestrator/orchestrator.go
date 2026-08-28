@@ -43,8 +43,7 @@ type Prompts struct {
 	Summary        string
 	Autonomous     string
 	Reflect        string
-	Updater        string
-	Compressor     string
+	Consolidator   string
 }
 
 // DefaultPrompts returns empty prompts (will be set from assets).
