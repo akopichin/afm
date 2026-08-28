@@ -1,9 +1,12 @@
 package memory
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
+
+var slugReplaceRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 type Status string
 
@@ -27,8 +30,7 @@ func slugFromStatement(s string) string {
 	// Lowercase
 	s = strings.ToLower(s)
 	// Replace non-alphanumeric with dash
-	re := regexp.MustCompile(`[^a-z0-9]+`)
-	s = re.ReplaceAllString(s, "-")
+	s = slugReplaceRe.ReplaceAllString(s, "-")
 	// Trim dashes from both ends
 	s = strings.Trim(s, "-")
 	// Cap length at ~40 chars
@@ -60,10 +62,10 @@ func Reconcile(prev Store, merged MergedStore, runID string) Store {
 		if (mf.Status == StatusNew || mf.Status == StatusUnchanged) && (f.ID == "" || emittedIDs[f.ID]) {
 			baseSlug := slugFromStatement(f.Statement)
 			f.ID = baseSlug
-			suffix := 2
+			n := 2
 			for emittedIDs[f.ID] {
-				f.ID = baseSlug + "-" + string(rune('0'+suffix-2)) // -2, -3, etc.
-				suffix++
+				f.ID = fmt.Sprintf("%s-%d", baseSlug, n)
+				n++
 			}
 		}
 

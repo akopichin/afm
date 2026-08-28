@@ -42,3 +42,30 @@ func TestReconcile_DropsInvalidAndDedupesSlug(t *testing.T) {
 		t.Error("colliding slugs must be deduped")
 	}
 }
+
+func TestReconcile_CollisionSuffixesAreCorrect(t *testing.T) {
+	// Test that colliding slugs get -2, -3, -4 suffixes (not -0, -1, -2)
+	merged := MergedStore{Findings: []MergedFinding{
+		{Finding: Finding{Scope: ScopeProject, Kind: KindFact, Statement: "Same topic", Evidence: "a:1"}, Status: StatusNew},
+		{Finding: Finding{Scope: ScopeProject, Kind: KindFact, Statement: "Same topic", Evidence: "b:2"}, Status: StatusNew},
+		{Finding: Finding{Scope: ScopeProject, Kind: KindFact, Statement: "Same topic", Evidence: "c:3"}, Status: StatusNew},
+	}}
+	out := Reconcile(Store{}, merged, "r1")
+	if len(out.Findings) != 3 {
+		t.Fatalf("want 3 findings, got %d", len(out.Findings))
+	}
+	ids := map[string]bool{}
+	for _, f := range out.Findings {
+		ids[f.ID] = true
+	}
+	// First one gets the base slug, next two get -2 and -3
+	if !ids["same-topic"] {
+		t.Error("first collision must keep base slug")
+	}
+	if !ids["same-topic-2"] {
+		t.Error("second collision must get -2 suffix")
+	}
+	if !ids["same-topic-3"] {
+		t.Error("third collision must get -3 suffix")
+	}
+}

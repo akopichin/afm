@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+var tokenizeRe = regexp.MustCompile(`[a-z0-9]+`)
+
 type RetrievalConfig struct {
 	Threshold        int
 	CoreConfirmCount int
@@ -15,8 +17,7 @@ type RetrievalConfig struct {
 func Tokenize(s string) []string {
 	s = strings.ToLower(s)
 	// Split on non-alphanumeric
-	re := regexp.MustCompile(`[a-z0-9]+`)
-	tokens := re.FindAllString(s, -1)
+	tokens := tokenizeRe.FindAllString(s, -1)
 
 	// Drop tokens < 3 chars and deduplicate via map
 	seen := make(map[string]bool)
