@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -88,7 +89,7 @@ func (o *Orchestrator) reconcileAndSave(stageName, consolidatedPath string) {
 		return
 	}
 	var merged memory.MergedStore
-	if err := yaml.Unmarshal(data, &merged); err != nil {
+	if err := yaml.Unmarshal(stripYAMLFence(data), &merged); err != nil {
 		o.reflectFailed(stageName, memoryKindConsolidator, err)
 		return
 	}
@@ -96,7 +97,24 @@ func (o *Orchestrator) reconcileAndSave(stageName, consolidatedPath string) {
 	runID := filepath.Base(o.opts.RunDir)
 	prevProject, _ := memory.Load(o.opts.MemoryProjectPath)
 	prevSession, _ := memory.Load(o.opts.MemorySessionPath)
-	reconciled := memory.Reconcile(mergeStores(prevProject, prevSession), merged, runID)
+	combinedPrev := mergeStores(prevProject, prevSession)
+	reconciled := memory.Reconcile(combinedPrev, merged, runID)
+
+	// Data-loss guard: consolidator.md instructs the LLM to echo back every
+	// existing finding it doesn't touch (status: unchanged/reinforced), but
+	// nothing enforces that — if it silently drops one, reconciled.Findings
+	// would be missing it and the NEXT Save would permanently erase it. Retain
+	// unchanged any prev finding the consolidator failed to echo at all.
+	// Eviction (below) remains the only legitimate removal path.
+	keptIDs := make(map[string]bool, len(reconciled.Findings))
+	for _, f := range reconciled.Findings {
+		keptIDs[f.ID] = true
+	}
+	for _, f := range combinedPrev.Findings {
+		if !keptIDs[f.ID] {
+			reconciled.Findings = append(reconciled.Findings, f)
+		}
+	}
 
 	var projectStore, sessionStore memory.Store
 	for _, f := range reconciled.Findings {
@@ -113,6 +131,33 @@ func (o *Orchestrator) reconcileAndSave(stageName, consolidatedPath string) {
 	if err := memory.Save(o.opts.MemorySessionPath, memory.Evict(sessionStore, o.opts.Memory.MaxFindings)); err != nil {
 		o.reflectNotice(stageName, "failed to save session memory: "+err.Error())
 	}
+}
+
+const mdFence = "```"
+
+// stripYAMLFence снимает обрамляющий markdown-код-фенс (```yaml / ``` в первой
+// строке, ``` в последней непустой строке), если он есть — терпимость к тому,
+// что консолидатор иногда оборачивает consolidated.yaml в код-блок, хотя
+// просят сырой YAML (тот же посыл, что и jsonrepair в диалоговом пути). Без
+// фенса возвращает data как есть.
+func stripYAMLFence(data []byte) []byte {
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 {
+		return data
+	}
+	first := strings.TrimSpace(lines[0])
+	if first != mdFence+"yaml" && first != mdFence {
+		return data
+	}
+	lines = lines[1:]
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	if end > 0 && strings.TrimSpace(lines[end-1]) == mdFence {
+		lines = lines[:end-1]
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // mergeStores объединяет findings двух сторов (project+session) в один —

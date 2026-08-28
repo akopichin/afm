@@ -861,7 +861,7 @@ func TestParseMemory_FieldsAndDefaults(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.md
+  project_file: docs/PROJECT_MEMORY.yaml
 stages:
   - name: build
     reflect: true
@@ -892,7 +892,7 @@ func TestParseMemory_ExplicitFields(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.md
+  project_file: docs/PROJECT_MEMORY.yaml
   max_findings: 100
   retrieval_threshold: 30
   core_confirm_count: 5
@@ -919,7 +919,7 @@ func TestParseMemory_ReflectDefaultsFalse(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.md
+  project_file: docs/PROJECT_MEMORY.yaml
 stages:
   - name: build
     agents: [planning, implementation]
@@ -964,7 +964,7 @@ func TestValidateMemory_ScriptStageReflectAllowed(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.md
+  project_file: docs/PROJECT_MEMORY.yaml
 stages:
   - name: gen
     reflect: true

@@ -58,5 +58,5 @@ func memoryPointerBlock(projectPath, sessionPath string) string {
   %s
 Session memory — this run's short-term context — lives at:
   %s
-Before you start, read both files and take their Best Practices (🟩) and Anti-Patterns (🟥) into account. They may not exist yet on the first stage; that is fine.`, projectPath, sessionPath)
+Before you start, read both files: each is a YAML list of findings, and each finding's "kind" field is one of fact, best_practice, or anti_pattern — take the best_practice and anti_pattern findings into account. They may not exist yet on the first stage; that is fine.`, projectPath, sessionPath)
 }

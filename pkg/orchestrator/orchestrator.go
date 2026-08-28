@@ -65,8 +65,8 @@ type Options struct {
 	RequireApproval   bool              // headless: fail instead of auto-approve on awaiting_approval
 	Debug             bool              // if true, executors log the exact agent input to debug logs
 	Memory            flow.MemoryConfig // agent-память: включена, если MemoryProjectPath != ""
-	MemoryProjectPath string            // abs путь к PROJECT_MEMORY.md ("" = выключено)
-	MemorySessionPath string            // abs путь к SESSION_MEMORY.md в run-папке
+	MemoryProjectPath string            // abs путь к PROJECT_MEMORY.yaml ("" = выключено)
+	MemorySessionPath string            // abs путь к SESSION_MEMORY.yaml в run-папке
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.

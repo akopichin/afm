@@ -163,7 +163,7 @@ type Stage struct {
 	// docs/superpowers/specs/2026-08-27-stage-custom-buttons-design.md.
 	Buttons Buttons `yaml:"buttons,omitempty"`
 	// Reflect (opt-in, дефолт false): после успешного завершения этой стадии
-	// запустить конвейер agent-памяти (reflect→updater→compressor) по её
+	// запустить конвейер agent-памяти (reflect→consolidator) по её
 	// сессии. Требует непустой memory.project_file на уровне флоу. На script-
 	// стадии допустимо, но во время выполнения тихо пропускается (нет
 	// агентской сессии). Обычный bool — дефолт совпадает с нулевым значением.
@@ -236,7 +236,7 @@ func (s Stage) AutoRunDisabled() bool {
 // MemoryConfig — настройки agent-памяти флоу. ProjectFile непустой включает
 // всю фичу (см. docs/superpowers/specs/2026-08-28-agent-memory-design.md).
 type MemoryConfig struct {
-	// ProjectFile — путь к PROJECT_MEMORY.md относительно root_dir; репозиторный
+	// ProjectFile — путь к PROJECT_MEMORY.yaml относительно root_dir; репозиторный
 	// файл, накапливается между ранами. Непусто = фича включена.
 	ProjectFile string `yaml:"project_file,omitempty"`
 	// MaxFindings — максимальное количество findings для сохранения в памяти.

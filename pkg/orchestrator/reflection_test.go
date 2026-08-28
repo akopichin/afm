@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -84,6 +85,93 @@ func TestReflectionPipeline_ReflectThenConsolidatorThenReconcile(t *testing.T) {
 	}
 	if f.FirstSeen != runID || f.LastSeen != runID {
 		t.Errorf("FirstSeen/LastSeen = %q/%q, want both %q", f.FirstSeen, f.LastSeen, runID)
+	}
+}
+
+// TestReflectionPipeline_RetainsExistingFindingNotEchoedByConsolidator is the
+// data-loss-guard regression: a prev PROJECT store finding A exists; the
+// consolidator stub emits ONLY a brand-new finding B (the LLM failed to echo
+// A back at all, despite consolidator.md's "do not silently drop existing
+// findings" instruction). reconcileAndSave must retain A unchanged alongside
+// B — eviction is the only removal path. Must fail before the fix (A would be
+// dropped) and pass after.
+func TestReflectionPipeline_RetainsExistingFindingNotEchoedByConsolidator(t *testing.T) {
+	consolidatedOnlyB := "findings:\n" +
+		"  - scope: project\n" +
+		"    kind: fact\n" +
+		"    statement: new finding B\n" +
+		"    evidence: e-b:1\n" +
+		"    status: new\n"
+	o, proj, _, stageDir, _ := pipelineHarness(t, 60, consolidatedOnlyB)
+
+	seedA := memory.Finding{
+		ID: "finding-a", Scope: memory.ScopeProject, Kind: memory.KindFact,
+		Statement: "existing finding A", Evidence: "e-a:1",
+		FirstSeen: "r0", LastSeen: "r0", ConfirmCount: 3,
+	}
+	if err := memory.Save(proj, memory.Store{Findings: []memory.Finding{seedA}}); err != nil {
+		t.Fatalf("seed prev project store: %v", err)
+	}
+
+	o.runReflectionPipeline(context.Background(), "s1", nil, stageDir)
+
+	out, err := memory.Load(proj)
+	if err != nil {
+		t.Fatalf("project memory did not parse: %v", err)
+	}
+	if len(out.Findings) != 2 {
+		t.Fatalf("want 2 findings (A retained + B new), got %d: %+v", len(out.Findings), out.Findings)
+	}
+	var gotA *memory.Finding
+	var gotB *memory.Finding
+	for i := range out.Findings {
+		f := &out.Findings[i]
+		if f.ID == seedA.ID {
+			gotA = f
+		}
+		if f.Statement == "new finding B" {
+			gotB = f
+		}
+	}
+	if gotA == nil {
+		t.Fatal("existing finding A was lost — consolidator omitted it, must be retained unchanged")
+	}
+	if !reflect.DeepEqual(*gotA, seedA) {
+		t.Errorf("retained finding A must be unchanged: got %+v, want %+v", *gotA, seedA)
+	}
+	if gotB == nil {
+		t.Error("new finding B must also be present")
+	}
+}
+
+// TestReflectionPipeline_TolerantOfMarkdownFencedConsolidatedYAML — the
+// consolidator wraps consolidated.yaml in a ```yaml ... ``` markdown fence
+// (LLMs do this despite being asked for raw YAML). reconcileAndSave must
+// strip the fence before yaml.Unmarshal, not fail the whole pipeline. Must
+// fail before the fix (yaml.Unmarshal errors on the fence lines → no finding
+// saved) and pass after.
+func TestReflectionPipeline_TolerantOfMarkdownFencedConsolidatedYAML(t *testing.T) {
+	fenced := "```yaml\n" +
+		"findings:\n" +
+		"  - scope: project\n" +
+		"    kind: fact\n" +
+		"    statement: fenced finding\n" +
+		"    evidence: e:1\n" +
+		"    status: new\n" +
+		"```\n"
+	o, proj, _, stageDir, _ := pipelineHarness(t, 60, fenced)
+
+	o.runReflectionPipeline(context.Background(), "s1", nil, stageDir)
+
+	out, err := memory.Load(proj)
+	if err != nil {
+		t.Fatalf("project memory did not parse: %v", err)
+	}
+	if len(out.Findings) != 1 {
+		t.Fatalf("want 1 finding despite markdown fence, got %d: %+v", len(out.Findings), out.Findings)
+	}
+	if out.Findings[0].Statement != "fenced finding" {
+		t.Errorf("unexpected statement: %q", out.Findings[0].Statement)
 	}
 }
 
