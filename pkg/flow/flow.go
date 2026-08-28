@@ -239,12 +239,15 @@ type MemoryConfig struct {
 	// ProjectFile — путь к PROJECT_MEMORY.md относительно root_dir; репозиторный
 	// файл, накапливается между ранами. Непусто = фича включена.
 	ProjectFile string `yaml:"project_file,omitempty"`
-	// MaxBytes — порог размера на КАЖДЫЙ файл памяти, выше которого запускается
-	// компрессор. 0 → дефолт 20000 (ставится в ParseFile).
-	MaxBytes int `yaml:"max_bytes,omitempty"`
-	// CompressRetries — попыток компрессии до терминального FIFO-fallback.
-	// 0 → дефолт 2.
-	CompressRetries int `yaml:"compress_retries,omitempty"`
+	// MaxFindings — максимальное количество findings для сохранения в памяти.
+	// 0 → дефолт 60 (ставится в ParseFile).
+	MaxFindings int `yaml:"max_findings,omitempty"`
+	// RetrievalThreshold — порог для retrieval'а findings при инициализации памяти.
+	// 0 → дефолт 25 (ставится в ParseFile).
+	RetrievalThreshold int `yaml:"retrieval_threshold,omitempty"`
+	// CoreConfirmCount — количество подтверждений для core findings.
+	// 0 → дефолт 3 (ставится в ParseFile).
+	CoreConfirmCount int `yaml:"core_confirm_count,omitempty"`
 	// FinalReflect — один прогон конвейера по ВСЕЙ сессии флоу в конце Run().
 	FinalReflect bool `yaml:"final_reflect,omitempty"`
 }
@@ -286,11 +289,14 @@ func ParseFile(path string) (*Flow, error) {
 	}
 	f.applyScriptTimeoutDefaults()
 	if f.MemoryEnabled() {
-		if f.Memory.MaxBytes == 0 {
-			f.Memory.MaxBytes = 20000
+		if f.Memory.MaxFindings == 0 {
+			f.Memory.MaxFindings = 60
 		}
-		if f.Memory.CompressRetries == 0 {
-			f.Memory.CompressRetries = 2
+		if f.Memory.RetrievalThreshold == 0 {
+			f.Memory.RetrievalThreshold = 25
+		}
+		if f.Memory.CoreConfirmCount == 0 {
+			f.Memory.CoreConfirmCount = 3
 		}
 	}
 	warnDeprecatedSupervisorFields(data, path)

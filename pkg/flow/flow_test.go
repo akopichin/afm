@@ -874,14 +874,44 @@ stages:
 	if !f.MemoryEnabled() {
 		t.Fatal("expected memory enabled")
 	}
-	if f.Memory.MaxBytes != 20000 {
-		t.Errorf("MaxBytes default = %d, want 20000", f.Memory.MaxBytes)
+	if f.Memory.MaxFindings != 60 {
+		t.Errorf("MaxFindings default = %d, want 60", f.Memory.MaxFindings)
 	}
-	if f.Memory.CompressRetries != 2 {
-		t.Errorf("CompressRetries default = %d, want 2", f.Memory.CompressRetries)
+	if f.Memory.RetrievalThreshold != 25 {
+		t.Errorf("RetrievalThreshold default = %d, want 25", f.Memory.RetrievalThreshold)
+	}
+	if f.Memory.CoreConfirmCount != 3 {
+		t.Errorf("CoreConfirmCount default = %d, want 3", f.Memory.CoreConfirmCount)
 	}
 	if !f.Stages[0].Reflect {
 		t.Error("expected stage.Reflect true")
+	}
+}
+
+func TestParseMemory_ExplicitFields(t *testing.T) {
+	yaml := `
+name: f
+memory:
+  project_file: docs/PROJECT_MEMORY.md
+  max_findings: 100
+  retrieval_threshold: 30
+  core_confirm_count: 5
+stages:
+  - name: build
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if f.Memory.MaxFindings != 100 {
+		t.Errorf("MaxFindings = %d, want 100", f.Memory.MaxFindings)
+	}
+	if f.Memory.RetrievalThreshold != 30 {
+		t.Errorf("RetrievalThreshold = %d, want 30", f.Memory.RetrievalThreshold)
+	}
+	if f.Memory.CoreConfirmCount != 5 {
+		t.Errorf("CoreConfirmCount = %d, want 5", f.Memory.CoreConfirmCount)
 	}
 }
 
