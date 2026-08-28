@@ -10,6 +10,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -66,9 +67,8 @@ func TestIntegration_MemoryPipelineWritesFilesAndPointerReachesPrompt(t *testing
 		Store:  store,
 		Config: config.Default(),
 		Memory: flow.MemoryConfig{
-			ProjectFile:     proj,
-			MaxBytes:        1000,
-			CompressRetries: 2,
+			ProjectFile: proj,
+			MaxFindings: 60,
 		},
 		MemoryProjectPath: proj,
 		MemorySessionPath: sess,
@@ -88,12 +88,20 @@ func TestIntegration_MemoryPipelineWritesFilesAndPointerReachesPrompt(t *testing
 		order = append(order, spec.kind)
 		switch spec.kind {
 		case memoryKindReflect:
-			return os.WriteFile(spec.datasetOut, []byte("project_level: []\nsession_level: []\n"), 0644)
-		case memoryKindUpdater:
-			if err := os.WriteFile(spec.projectPath, []byte("# PROJECT MEMORY\n\n🟩 Best Practices\n- Run tests with -race.\n"), 0644); err != nil {
-				return err
-			}
-			return os.WriteFile(spec.sessionPath, []byte("# SESSION MEMORY\n\nStage s1 completed cleanly.\n"), 0644)
+			return os.WriteFile(spec.datasetOut, []byte("findings: []\n"), 0644)
+		case memoryKindConsolidator:
+			consolidated := "findings:\n" +
+				"  - scope: project\n" +
+				"    kind: best_practice\n" +
+				"    statement: Run tests with -race.\n" +
+				"    evidence: s1/autonomous.log:1\n" +
+				"    status: new\n" +
+				"  - scope: session\n" +
+				"    kind: fact\n" +
+				"    statement: Stage s1 completed cleanly.\n" +
+				"    evidence: s1/execution_summary.md:1\n" +
+				"    status: new\n"
+			return os.WriteFile(spec.outPath, []byte(consolidated), 0644)
 		default:
 			return nil
 		}
@@ -102,8 +110,8 @@ func TestIntegration_MemoryPipelineWritesFilesAndPointerReachesPrompt(t *testing
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
 
-	if got := strings.Join(order, ","); !strings.HasPrefix(got, "reflect,updater") {
-		t.Fatalf("pipeline order = %q, want reflect,updater,…", got)
+	if got := strings.Join(order, ","); got != "reflect,consolidator" {
+		t.Fatalf("pipeline order = %q, want exactly reflect,consolidator", got)
 	}
 
 	// (1) reflect_dataset.yaml exists in the stage dir.
@@ -114,20 +122,20 @@ func TestIntegration_MemoryPipelineWritesFilesAndPointerReachesPrompt(t *testing
 		t.Error("reflect_dataset.yaml is empty")
 	}
 
-	// (2) both memory files exist and are non-empty.
-	projData, err := os.ReadFile(proj)
+	// (2) both memory stores exist, parse, and hold the reconciled finding.
+	projStore, err := memory.Load(proj)
 	if err != nil {
-		t.Fatalf("PROJECT_MEMORY.md not written: %v", err)
+		t.Fatalf("PROJECT_MEMORY store did not parse: %v", err)
 	}
-	if len(projData) == 0 {
-		t.Error("PROJECT_MEMORY.md is empty")
+	if len(projStore.Findings) != 1 {
+		t.Errorf("PROJECT_MEMORY store: want 1 finding, got %d", len(projStore.Findings))
 	}
-	sessData, err := os.ReadFile(sess)
+	sessStore, err := memory.Load(sess)
 	if err != nil {
-		t.Fatalf("SESSION_MEMORY.md not written: %v", err)
+		t.Fatalf("SESSION_MEMORY store did not parse: %v", err)
 	}
-	if len(sessData) == 0 {
-		t.Error("SESSION_MEMORY.md is empty")
+	if len(sessStore.Findings) != 1 {
+		t.Errorf("SESSION_MEMORY store: want 1 finding, got %d", len(sessStore.Findings))
 	}
 
 	// (3) the memory pointer, once placed into GlobalPrompt exactly the way
