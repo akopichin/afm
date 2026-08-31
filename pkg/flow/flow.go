@@ -361,7 +361,56 @@ func ParseFile(path string) (*Flow, error) {
 		}
 	}
 	warnDeprecatedSupervisorFields(data, path)
+	warnMemorySettingsWithoutPath(data, path)
 	return &f, nil
+}
+
+// memorySettingsProbe holds the flow-level memory.* keys as pointers so
+// warnMemorySettingsWithoutPath can tell "key present" from "zero value".
+type memorySettingsProbe struct {
+	Path      *string `yaml:"path"`
+	Mode      *string `yaml:"mode"`
+	MemoryUse *bool   `yaml:"memory_use"`
+	MaxRules  *int    `yaml:"max_rules"`
+	Commit    *bool   `yaml:"commit"`
+}
+
+// warnMemorySettingsWithoutPath best-effort re-parses the raw YAML and warns if
+// any memory.* setting (mode/memory_use/max_rules/commit) is present while
+// memory.path is empty. Without a path the whole agent-memory feature is
+// disabled (MemoryEnabled() == false), so those settings are silently ignored —
+// this makes the likely footgun ("I set mode/memory_use but forgot path")
+// visible instead of quietly turning memory off. Unlike a stage-level reflect
+// without a path (a hard error), these flow-level knobs stay non-fatal: a flow
+// that merely carries stale memory settings keeps working.
+func warnMemorySettingsWithoutPath(data []byte, path string) {
+	var probe struct {
+		Memory *memorySettingsProbe `yaml:"memory"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return
+	}
+	m := probe.Memory
+	if m == nil || (m.Path != nil && *m.Path != "") {
+		return
+	}
+	var set []string
+	if m.Mode != nil {
+		set = append(set, "mode")
+	}
+	if m.MemoryUse != nil {
+		set = append(set, "memory_use")
+	}
+	if m.MaxRules != nil {
+		set = append(set, "max_rules")
+	}
+	if m.Commit != nil {
+		set = append(set, "commit")
+	}
+	if len(set) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "WARN: %s: memory.%s set without memory.path — agent memory is disabled and these settings are ignored (set memory.path to enable)\n", path, strings.Join(set, ", memory."))
 }
 
 // deprecatedSupervisorStageProbe holds just the removed per-stage
@@ -557,6 +606,13 @@ func (f *Flow) validate() error {
 	// memory.mode (global memory.md lifecycle) must be r/w/rw if set.
 	if f.Memory.Mode != "" && f.Memory.Mode != ReflectModeR && f.Memory.Mode != ReflectModeW && f.Memory.Mode != ReflectModeRW {
 		return errors.New("memory.mode must be r, w, or rw")
+	}
+
+	// memory.max_rules must be non-negative. 0 means "unset" (ParseFile then
+	// applies the default 25); a negative value would silently leak into the
+	// <MAX_RULES> substitution of the update prompt, so reject it up front.
+	if f.Memory.MaxRules < 0 {
+		return errors.New("memory.max_rules must be >= 0")
 	}
 
 	// Validate Reflect v3 configuration
