@@ -28,6 +28,7 @@ func TestMemoryBlockForStage_DisabledReturnsEmpty(t *testing.T) {
 func TestMemoryBlockForStage_NoFilesReturnsEmpty(t *testing.T) {
 	o := newTestOrchestrator(t)
 	o.opts.MemoryDir = t.TempDir()
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: true}
 
 	got := o.memoryBlockForStage(flow.Stage{ID: "s1", Name: "Stage", Description: "do thing"})
 	if got != "" {
@@ -41,6 +42,7 @@ func TestMemoryBlockForStage_ProjectFileNamedForEveryStage(t *testing.T) {
 	o := newTestOrchestrator(t)
 	dir := t.TempDir()
 	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: true}
 	projPath := memory.ProjectFile(dir)
 	if err := os.WriteFile(projPath, []byte("# Project rules\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -61,6 +63,7 @@ func TestMemoryBlockForStage_ReadableStageFileNamed(t *testing.T) {
 	o := newTestOrchestrator(t)
 	dir := t.TempDir()
 	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: true}
 	stagePath := memory.StageFile(dir, "s1.md")
 	if err := os.WriteFile(stagePath, []byte("# Project rules\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -82,6 +85,7 @@ func TestMemoryBlockForStage_WriteOnlyModeDoesNotNameStageFile(t *testing.T) {
 	o := newTestOrchestrator(t)
 	dir := t.TempDir()
 	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: true}
 	stagePath := memory.StageFile(dir, "s1.md")
 	if err := os.WriteFile(stagePath, []byte("# Project rules\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -101,10 +105,60 @@ func TestMemoryBlockForStage_NonexistentStageFileNotNamed(t *testing.T) {
 	o := newTestOrchestrator(t)
 	dir := t.TempDir()
 	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: true}
 
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s1.md", Mode: flow.ReflectModeRW}}
 	got := o.memoryBlockForStage(stage)
 	if strings.Contains(got, filepath.Join(dir, "s1.md")) {
 		t.Errorf("nonexistent stage file must not be named:\n%s", got)
+	}
+}
+
+// TestMemoryBlockForStage_ParticipationOff — глобальный memory_use=false и стадия
+// не переопределяет → ничего не подмешивается, даже если memory.md существует.
+func TestMemoryBlockForStage_ParticipationOff(t *testing.T) {
+	o := newTestOrchestrator(t)
+	dir := t.TempDir()
+	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: false}
+	if err := os.WriteFile(memory.ProjectFile(dir), []byte("# Project rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.memoryBlockForStage(flow.Stage{ID: "s1", Name: "Stage"}); got != "" {
+		t.Errorf("memory_use off must inject nothing, got:\n%s", got)
+	}
+}
+
+// TestMemoryBlockForStage_StageOverrideOptsIn — глобально memory_use=false, но
+// стадия задаёт memory_use=true → память для этой стадии подмешивается.
+func TestMemoryBlockForStage_StageOverrideOptsIn(t *testing.T) {
+	o := newTestOrchestrator(t)
+	dir := t.TempDir()
+	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: false}
+	projPath := memory.ProjectFile(dir)
+	if err := os.WriteFile(projPath, []byte("# Project rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	got := o.memoryBlockForStage(flow.Stage{ID: "s1", Name: "Stage", MemoryUse: &on})
+	if !strings.Contains(got, projPath) {
+		t.Errorf("stage memory_use=true override must inject memory.md, got:\n%s", got)
+	}
+}
+
+// TestMemoryBlockForStage_GlobalModeWriteOnlyHidesProject — memory.mode "w"
+// (write-only global): memory.md не подмешивается, даже если участие включено.
+func TestMemoryBlockForStage_GlobalModeWriteOnlyHidesProject(t *testing.T) {
+	o := newTestOrchestrator(t)
+	dir := t.TempDir()
+	o.opts.MemoryDir = dir
+	o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeW, MemoryUse: true}
+	projPath := memory.ProjectFile(dir)
+	if err := os.WriteFile(projPath, []byte("# Project rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.memoryBlockForStage(flow.Stage{ID: "s1", Name: "Stage"}); strings.Contains(got, projPath) {
+		t.Errorf("write-only global memory must NOT inject memory.md, got:\n%s", got)
 	}
 }

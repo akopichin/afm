@@ -194,6 +194,11 @@ type Stage struct {
 	// На script-стадии допустимо, но во время выполнения тихо пропускается (нет
 	// агентской сессии). Обязателен reflect.file; reflect.mode опционален (дефолт rw).
 	Reflect *Reflect `yaml:"reflect,omitempty"`
+	// MemoryUse (v3): переопределяет глобальный memory.memory_use для ЭТОЙ стадии.
+	// nil — наследует глобальное значение; true/false — задаёт явно. Управляет
+	// только участием стадии в ЧТЕНИИ памяти (инъекции memory.md и своего файла),
+	// не влияет на запись (та управляется reflect / memory.mode).
+	MemoryUse *bool `yaml:"memory_use,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -265,11 +270,43 @@ type MemoryConfig struct {
 	// Path — директория для хранения памяти (project-wide <path>/memory.md +
 	// per-stage файлы из Reflect.File), относительно root_dir. Непусто = фича включена.
 	Path string `yaml:"path,omitempty"`
+	// Mode — режим ГЛОБАЛЬНОГО memory.md: r (только читать/инъектить), w (только
+	// писать в конце рана), rw (оба). "" → дефолт "rw" (ставится в ParseFile).
+	// Не путать с Reflect.Mode, который про per-stage файл конкретной стадии.
+	Mode string `yaml:"mode,omitempty"`
+	// MemoryUse — глобальный выключатель УЧАСТИЯ стадий в чтении памяти. Дефолт
+	// false: по умолчанию память никуда не подмешивается, пока не включишь true
+	// (глобально или на стадии через Stage.MemoryUse). Управляет ТОЛЬКО чтением
+	// (инъекцией); запись per-stage файлов управляется Reflect, запись memory.md
+	// — полем Mode выше.
+	MemoryUse bool `yaml:"memory_use,omitempty"`
 	// MaxRules — максимальное количество паттернов на файл (project и per-stage).
 	// 0 → дефолт 25 (ставится в ParseFile).
 	MaxRules int `yaml:"max_rules,omitempty"`
 	// Commit — коммитить ли изменения памяти в git (опционально).
 	Commit bool `yaml:"commit,omitempty"`
+}
+
+// CanReadProject reports whether the project-wide memory.md may be injected
+// into stage prompts (Mode is "r" or "rw").
+func (c MemoryConfig) CanReadProject() bool {
+	return c.Mode == ReflectModeR || c.Mode == ReflectModeRW
+}
+
+// CanWriteProject reports whether the end-of-run pass may write/update the
+// project-wide memory.md (Mode is "w" or "rw").
+func (c MemoryConfig) CanWriteProject() bool {
+	return c.Mode == ReflectModeW || c.Mode == ReflectModeRW
+}
+
+// UseFor resolves the effective per-stage memory participation: the stage's own
+// MemoryUse override if set, otherwise the global MemoryUse. When false, the
+// stage's prompt gets no memory injected at all.
+func (c MemoryConfig) UseFor(stageMemoryUse *bool) bool {
+	if stageMemoryUse != nil {
+		return *stageMemoryUse
+	}
+	return c.MemoryUse
 }
 
 // Flow is the top-level structure parsed from a flow YAML file.
@@ -311,6 +348,9 @@ func ParseFile(path string) (*Flow, error) {
 	if f.MemoryEnabled() {
 		if f.Memory.MaxRules == 0 {
 			f.Memory.MaxRules = 25
+		}
+		if f.Memory.Mode == "" {
+			f.Memory.Mode = ReflectModeRW
 		}
 		// Set default reflect mode to "rw" for any stage with Reflect not nil
 		for i := range f.Stages {
@@ -512,6 +552,11 @@ func (f *Flow) validate() error {
 				return fmt.Errorf("stage %q: input ref %q references unknown artifact %q in stage %q", s.ID, inp.Ref, artName, stageID)
 			}
 		}
+	}
+
+	// memory.mode (global memory.md lifecycle) must be r/w/rw if set.
+	if f.Memory.Mode != "" && f.Memory.Mode != ReflectModeR && f.Memory.Mode != ReflectModeW && f.Memory.Mode != ReflectModeRW {
+		return errors.New("memory.mode must be r, w, or rw")
 	}
 
 	// Validate Reflect v3 configuration

@@ -131,7 +131,7 @@ func TestEndOfRunMemory_WritesProjectFile(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage"}
 	o, runDir := newReflectionTestOrchestrator(t, stage)
 	o.opts.MemoryDir = t.TempDir()
-	o.opts.Memory = flow.MemoryConfig{MaxRules: 25}
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Mode: flow.ReflectModeRW}
 
 	for _, id := range []string{"s1", "s2"} {
 		dir := filepath.Join(runDir, id)
@@ -167,6 +167,35 @@ func TestEndOfRunMemory_WritesProjectFile(t *testing.T) {
 	}
 }
 
+// TestEndOfRunMemory_ModeReadOnlyDoesNotWriteProject — при memory.mode "r"
+// глобальная память только для чтения: конец рана НЕ пишет memory.md, даже
+// если датасеты стадий есть на диске.
+func TestEndOfRunMemory_ModeReadOnlyDoesNotWriteProject(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage"}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Mode: flow.ReflectModeR} // read-only global memory
+
+	dir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "reflect_dataset.yaml"), []byte("project_level: []\nsession_level: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	stubMemoryAgentByKind(o, &order)
+
+	o.runEndOfRunMemory(context.Background())
+
+	if _, err := os.Stat(memory.ProjectFile(o.opts.MemoryDir)); err == nil {
+		t.Error("memory.mode:r must NOT write memory.md at end of run")
+	}
+	if len(order) != 0 {
+		t.Errorf("no distill agents should run for read-only global memory; got %v", order)
+	}
+}
+
 func TestEndOfRunMemory_NoOpWithoutDatasets(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage"}
 	o, _ := newReflectionTestOrchestrator(t, stage)
@@ -192,7 +221,7 @@ func TestEndOfRunMemory_CommitsWhenEnabled(t *testing.T) {
 	runGit(t, memDir, "config", "user.email", "test@example.com")
 	runGit(t, memDir, "config", "user.name", "test")
 	o.opts.MemoryDir = memDir
-	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Commit: true}
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Mode: flow.ReflectModeRW, Commit: true}
 
 	dir := filepath.Join(runDir, "s1")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

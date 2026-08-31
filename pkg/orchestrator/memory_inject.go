@@ -19,10 +19,20 @@ func (o *Orchestrator) memoryBlockForStage(s flow.Stage) string {
 	if o.opts.MemoryDir == "" {
 		return ""
 	}
+	// Participation gate (v3): per-stage memory_use override if set, else the
+	// global memory.memory_use (default false). false → nothing is injected.
+	if !o.opts.Memory.UseFor(s.MemoryUse) {
+		return ""
+	}
 
 	var paths []string
-	if projectFile := memory.ProjectFile(o.opts.MemoryDir); fileExists(projectFile) {
-		paths = append(paths, projectFile)
+	// Project-wide memory.md is injected only when memory.mode allows reading
+	// (r/rw). memory.mode governs the global file; Reflect.Mode governs the
+	// stage's own file below.
+	if o.opts.Memory.CanReadProject() {
+		if projectFile := memory.ProjectFile(o.opts.MemoryDir); fileExists(projectFile) {
+			paths = append(paths, projectFile)
+		}
 	}
 	if s.Reflect != nil && s.Reflect.CanRead() {
 		if stageFile := memory.StageFile(o.opts.MemoryDir, s.Reflect.File); fileExists(stageFile) {

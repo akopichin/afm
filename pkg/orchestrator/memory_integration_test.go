@@ -44,7 +44,7 @@ func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow
 		Stages:    []flow.Stage{stage},
 		Store:     store,
 		Config:    config.Default(),
-		Memory:    flow.MemoryConfig{MaxRules: 25},
+		Memory:    flow.MemoryConfig{MaxRules: 25, Mode: flow.ReflectModeRW, MemoryUse: true},
 		MemoryDir: memDir,
 	})
 

@@ -136,18 +136,21 @@ func (o *Orchestrator) runEndOfRunMemory(ctx context.Context) {
 	}
 	o.finalReflectDone = true
 
-	matches, _ := filepath.Glob(filepath.Join(o.opts.RunDir, "*", "reflect_dataset.yaml"))
-	var datasets []string
-	for _, m := range matches {
-		if _, err := os.Stat(m); err == nil {
-			datasets = append(datasets, m)
+	// The end-of-run pass writes the project-wide memory.md only when
+	// memory.mode allows writing (w/rw). With mode "r" the global memory is
+	// read-only — per-stage reflect files are still written during the run.
+	if o.opts.Memory.CanWriteProject() {
+		matches, _ := filepath.Glob(filepath.Join(o.opts.RunDir, "*", "reflect_dataset.yaml"))
+		var datasets []string
+		for _, m := range matches {
+			if _, err := os.Stat(m); err == nil {
+				datasets = append(datasets, m)
+			}
+		}
+		if len(datasets) > 0 {
+			o.distill(ctx, "flow-memory", datasets, o.opts.RunDir, memory.ProjectFile(o.opts.MemoryDir))
 		}
 	}
-	if len(datasets) == 0 {
-		return
-	}
-
-	o.distill(ctx, "flow-memory", datasets, o.opts.RunDir, memory.ProjectFile(o.opts.MemoryDir))
 
 	if o.opts.Memory.Commit {
 		if _, err := memory.Commit(o.opts.MemoryDir, "chore(memory): update project memory"); err != nil {

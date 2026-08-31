@@ -284,6 +284,7 @@ stages:
 | `script_after` | no | Shell script run right after the stage successfully completes |
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into agent memory: `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (read / write / both, default `rw`). Requires the flow-level `memory:` block. See "Agent Memory" below |
+| `memory_use` | no | Overrides the flow-level `memory.memory_use` for this stage (`true`/`false`; unset = inherit). Controls whether the stage **reads** memory. See "Agent Memory" below |
 
 **Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `root_dir` (project root = agents' working directory, see below), `memory` (agent-memory config, see "Agent Memory" below), `stages`.
 
@@ -310,13 +311,15 @@ name: my-feature
 root_dir: .
 memory:
   path: docs/memory        # a DIRECTORY (relative to root_dir); a non-empty value ENABLES the feature
+  mode: rw                  # lifecycle of the shared memory.md: r / w / rw (default rw)
+  memory_use: true          # do stages READ memory at all? default false → you opt in
   max_rules: 25             # max patterns kept per file (default 25)
   commit: false             # git-commit the memory directory at end of run (default false, no push)
 stages:
   - id: build
     name: build
     agents: [planning, implementation]
-    reflect: { file: build.md, mode: rw }   # writes docs/memory/build.md AND reads it back
+    reflect: { file: build.md, mode: rw }   # this stage's own file: writes AND reads it
   - id: test
     name: test
     agents: [implementation]
@@ -325,7 +328,8 @@ stages:
   - id: docs
     name: docs
     agents: [implementation]
-    depends_on: [build]                      # no `reflect:` → still reads memory.md, writes nothing
+    depends_on: [build]
+    memory_use: false                        # opt THIS stage out of reading memory entirely
 ```
 
 **Flow-level `memory:` fields:**
@@ -333,32 +337,40 @@ stages:
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `path` | — | Directory (relative to `root_dir`) where memory files live. **A non-empty value is what enables the whole feature.** |
+| `mode` | `rw` | Lifecycle of the **shared `memory.md`**: `r` = read-only (injected, never rewritten), `w` = write-only (updated at end of run, never injected), `rw` = both. |
+| `memory_use` | `false` | Master switch for **reading** memory into stage prompts. Off by default — you opt in globally (or per stage). Does not affect writing. |
 | `max_rules` | `25` | Maximum number of `## Pattern` blocks kept in each file. When the distiller would exceed it, it drops Low-priority patterns first, then Medium, preserving High. |
 | `commit` | `false` | When `true`, afm runs `git add`/`git commit` **scoped to the memory directory** at the end of the run (only if something changed; never pushes). |
 
-**Per-stage `reflect:` object** — `{ file, mode }`:
+**Per-stage fields:**
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `file` | — (required) | The stage's own memory file, relative to `memory.path` (e.g. `build.md`, or `sub/dir/file.md`). Parent directories are created as needed. |
-| `mode` | `rw` | `r` = read only, `w` = write only, `rw` = both. See the table below. |
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `reflect` | — | `{ file, mode }` — the stage's own memory file (relative to `memory.path`) and its `mode` (`r`/`w`/`rw`, default `rw`). Controls **this stage's own file** only. |
+| `memory_use` | inherit | Overrides the flow-level `memory_use` for this stage: `true`/`false`. Unset = inherit the global value. Controls **reading** only. |
 
-`mode` controls reading (injecting the file into the stage's prompt) and writing (running the distill chain into the file) **independently**:
+#### How reading and writing are decided
 
-| `mode` | Reads the file into this stage's prompt? | Runs the write chain into the file after this stage? |
-|--------|:---:|:---:|
-| `r`  | ✅ | ❌ |
-| `w`  | ❌ | ✅ |
-| `rw` | ✅ | ✅ |
+Reading and writing are two **independent** axes.
 
-This is what lets one stage read another's memory: give the producer `mode: w` (or `rw`) and a downstream `depends_on` stage `mode: r` on the **same** `file`.
+**Reading (what memory the stage's agent is pointed at):**
+1. First a participation gate — `memory_use`, resolved as *stage `memory_use` if set, else the flow-level `memory_use` (default `false`)*. If it resolves to `false`, the stage gets **no memory at all**.
+2. If it participates, it is pointed at:
+   - the shared **`memory.md`** — only if `memory.mode` includes read (`r`/`rw`) and the file exists;
+   - its **own `reflect.file`** — only if it has `reflect` with `mode` `r`/`rw` and the file exists.
+
+**Writing (what gets distilled after the run):**
+- a stage's **own `reflect.file`** is written if its `reflect.mode` includes write (`w`/`rw`) — independent of `memory_use`;
+- the shared **`memory.md`** is (re)written by the end-of-run pass only if `memory.mode` includes write (`w`/`rw`).
+
+So, for example: `memory.mode: r` + stages with `reflect: {mode: rw}` gives you a **read-only shared memory** (curated by hand, never overwritten) while each stage still reads and writes its own file. And with the default `memory_use: false`, reflect stages still *write* their files but nothing is *read* until you flip `memory_use: true`.
 
 #### What ends up on disk
 
 Two tiers of files, both plain Markdown, all under `<memory.path>/`:
 
-- **`memory.md`** — the project-wide rules file. Accumulates **across runs** (keep it in git). It is injected into **every** stage's prompt once it exists, regardless of whether that stage has its own `reflect:`.
-- **`<reflect.file>`** (e.g. `build.md`) — a per-stage file, rewritten by that stage's write chain, injected only into stages that name it with `mode` `r`/`rw`.
+- **`memory.md`** — the project-wide rules file. Accumulates **across runs** (keep it in git). It is injected into a stage's prompt when the stage participates (`memory_use`) and `memory.mode` allows reading — see "How reading and writing are decided" above.
+- **`<reflect.file>`** (e.g. `build.md`) — a per-stage file, rewritten by that stage's write chain, injected only into a participating stage that names it with `mode` `r`/`rw`.
 
 Both files have the same shape — a flat list of named patterns, highest-priority first (priority is encoded **only** by block order, never written into the file):
 
