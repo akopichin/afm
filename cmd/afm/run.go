@@ -196,34 +196,32 @@ func newRunCmd() *cobra.Command {
 				agentRootDir = filepath.Join(rootDir, agentRootDir)
 			}
 
-			var memProjectPath, memSessionPath string
+			var memDir string
 			if f.MemoryEnabled() {
 				base := agentRootDir
 				if base == "" {
 					base = rootDir
 				}
-				memProjectPath = f.Memory.ProjectFile
-				if !filepath.IsAbs(memProjectPath) {
-					memProjectPath = filepath.Join(base, memProjectPath)
+				memDir = f.Memory.Path
+				if !filepath.IsAbs(memDir) {
+					memDir = filepath.Join(base, memDir)
 				}
-				memSessionPath = filepath.Join(runDir, "SESSION_MEMORY.yaml")
 			}
 
 			orch := orchestrator.New(orchestrator.Options{
-				RunDir:            runDir,
-				Stages:            f.Stages,
-				Store:             store,
-				Config:            cfg,
-				Prompts:           prompts,
-				WrapperDir:        wrapperDir,
-				GeneratedAgents:   generatedAgents,
-				GlobalPrompt:      f.Prompt,
-				RootDir:           agentRootDir,
-				RequireApproval:   requireApproval,
-				Debug:             debugEnabled,
-				Memory:            f.Memory,
-				MemoryProjectPath: memProjectPath,
-				MemorySessionPath: memSessionPath,
+				RunDir:          runDir,
+				Stages:          f.Stages,
+				Store:           store,
+				Config:          cfg,
+				Prompts:         prompts,
+				WrapperDir:      wrapperDir,
+				GeneratedAgents: generatedAgents,
+				GlobalPrompt:    f.Prompt,
+				RootDir:         agentRootDir,
+				RequireApproval: requireApproval,
+				Debug:           debugEnabled,
+				Memory:          f.Memory,
+				MemoryDir:       memDir,
 			})
 
 			// Disable interactive flags when dashboard is not running

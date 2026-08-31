@@ -32,11 +32,11 @@ const (
 	// EventHookResolved fires when the user retries or skips a failed hook.
 	// Data: map[string]string{"hook": ..., "resolution": "retried"|"skipped"}.
 	EventHookResolved EventType = "hook_resolved"
-	// EventReflectFailed fires when a step of the reflect→consolidator
-	// memory pipeline (maybeRunReflection/runReflectionPipeline) returns an
-	// error. Best-effort notice only — never triggers an FSM transition and
-	// never fails the stage/run. Data: map[string]string{"stage": ...,
-	// "message": ...}.
+	// EventReflectFailed fires when a step of the memory pipeline
+	// (maybeRunReflection/distill: reflect→aggregate→prioritize→update)
+	// returns an error. Best-effort notice only — never triggers an FSM
+	// transition and never fails the stage/run. Data: map[string]string{
+	// "stage": ..., "message": ...}.
 	EventReflectFailed EventType = "reflect_failed"
 	// eventAgentDrained is an internal-only nudge published on the critical
 	// bus right after a script_after hook's goroutine finishes

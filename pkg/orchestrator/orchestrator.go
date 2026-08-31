@@ -53,22 +53,21 @@ func DefaultPrompts() Prompts { return Prompts{} }
 
 // Options configures an Orchestrator.
 type Options struct {
-	RunDir            string
-	Stages            []flow.Stage
-	Store             *state.Store
-	Config            config.Config
-	Prompts           Prompts
-	Runner            executor.Runner   // nil = real Executor
-	DashboardURL      string            // e.g. "http://127.0.0.1:9876"
-	WrapperDir        string            // dir with generated wrapper scripts (prepended to agent PATH)
-	GeneratedAgents   map[string]bool   // autoShim: команды с generated-враппером (self-route)
-	GlobalPrompt      string            // Flow.Prompt, forwarded to every prompts.Build call
-	RootDir           string            // Flow.RootDir: project root as agent CWD (empty = inherit afm CWD)
-	RequireApproval   bool              // headless: fail instead of auto-approve on awaiting_approval
-	Debug             bool              // if true, executors log the exact agent input to debug logs
-	Memory            flow.MemoryConfig // agent-память: включена, если MemoryProjectPath != ""
-	MemoryProjectPath string            // abs путь к PROJECT_MEMORY.yaml ("" = выключено)
-	MemorySessionPath string            // abs путь к SESSION_MEMORY.yaml в run-папке
+	RunDir          string
+	Stages          []flow.Stage
+	Store           *state.Store
+	Config          config.Config
+	Prompts         Prompts
+	Runner          executor.Runner   // nil = real Executor
+	DashboardURL    string            // e.g. "http://127.0.0.1:9876"
+	WrapperDir      string            // dir with generated wrapper scripts (prepended to agent PATH)
+	GeneratedAgents map[string]bool   // autoShim: команды с generated-враппером (self-route)
+	GlobalPrompt    string            // Flow.Prompt, forwarded to every prompts.Build call
+	RootDir         string            // Flow.RootDir: project root as agent CWD (empty = inherit afm CWD)
+	RequireApproval bool              // headless: fail instead of auto-approve on awaiting_approval
+	Debug           bool              // if true, executors log the exact agent input to debug logs
+	Memory          flow.MemoryConfig // agent-память v3: параметры конвейера (max_rules/commit)
+	MemoryDir       string            // abs путь к директории памяти ("" = выключено)
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -116,7 +115,8 @@ type Orchestrator struct {
 	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
 
 	// runMemoryAgent запускает один агент конвейера памяти (reflect/
-	// consolidator). Реальная реализация — execMemoryAgent; тесты подменяют.
+	// aggregate/prioritize/update). Реальная реализация — execMemoryAgent;
+	// тесты подменяют.
 	runMemoryAgent func(ctx context.Context, spec memoryAgentSpec) error
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
@@ -151,8 +151,8 @@ type Orchestrator struct {
 	// reflectMu сериализует запись в общие файлы памяти: одновременно бежит
 	// максимум один конвейер (best-effort/фон, латентность очереди неважна).
 	reflectMu sync.Mutex
-	// finalReflectDone гарантирует, что финальный reflect по всей сессии
-	// флоу (см. runFinalReflectionOnce) прогонится не более одного раза.
+	// finalReflectDone гарантирует, что финальный проход памяти по всей сессии
+	// флоу (см. runEndOfRunMemory) прогонится не более одного раза.
 	// Читается/пишется только на единственной горутине Run — без мьютекса.
 	finalReflectDone bool
 
@@ -307,7 +307,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 
-	o.initSessionMemory()
 	o.startPlanningForPending(ctx)
 	o.startQuestionPoller(ctx) // file-based dialog poller
 
@@ -326,7 +325,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				return ferr
 			}
 			if o.shouldExit() {
-				o.runFinalReflectionOnce(ctx)
+				o.runEndOfRunMemory(ctx)
 				return nil
 			}
 		}

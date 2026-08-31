@@ -54,7 +54,9 @@ func (inp *Input) UnmarshalYAML(value *yaml.Node) error {
 }
 
 // Reflect — конфиг отражения (reflection) стадии для agent-памяти v3.
-// File — путь к файлу, куда reflect-агент пишет dataset; обязателен.
+// File — путь (относительно memory.path) к ЦЕЛЕВОМУ файлу памяти этой стадии:
+// шаг update конвейера пишет туда смёрженные High-паттерны, а Mode с CanRead()
+// инъецирует его как указатель в промпт стадии; обязателен.
 // Mode — r|w|rw, режим доступа агентов к памяти (0 → по умолчанию rw).
 type Reflect struct {
 	File string `yaml:"file"`

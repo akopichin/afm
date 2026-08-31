@@ -3,345 +3,221 @@ package orchestrator
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
-	"sync"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
+	"github.com/akopichin/afm/pkg/state"
 )
 
-// pipelineHarness wires an orchestrator with memory enabled and a scripted
-// runMemoryAgent stub that simulates the two v2 agents' file effects: reflect
-// writes an (unread-by-code) candidate dataset, consolidator writes
-// consolidatedYAML verbatim to its outPath — afm code (reconcileAndSave) then
-// reconciles/evicts/saves for real, exactly as in production. Returns a
-// ready-made, already-created stageDir (<runDir>/s1) — in production the
-// stage's own agent always creates its directory before reflection ever
-// runs (see maybeRunReflection's caller); tests must reproduce that
-// precondition by hand since no real agent runs here.
-func pipelineHarness(t *testing.T, maxFindings int, consolidatedYAML string) (o *Orchestrator, proj, sess, stageDir string, order *[]string) {
+// newReflectionTestOrchestrator builds an *Orchestrator over a real
+// *state.Store on a temp run dir with the given stage — reflection_test.go
+// needs a stage carrying a specific Reflect config, unlike the generic
+// newTestOrchestrator (memory_agent_test.go), which hardcodes a plain stage.
+func newReflectionTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrator, string) {
 	t.Helper()
-	o = newTestOrchestrator(t)
 	runDir := t.TempDir()
-	proj = filepath.Join(t.TempDir(), "PROJECT_MEMORY.yaml")
-	sess = filepath.Join(runDir, "SESSION_MEMORY.yaml")
-	o.opts.RunDir = runDir
-	o.opts.Memory = flow.MemoryConfig{ProjectFile: proj, MaxFindings: maxFindings}
-	o.opts.MemoryProjectPath = proj
-	o.opts.MemorySessionPath = sess
-
-	stageDir = filepath.Join(runDir, "s1")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	return o, runDir
+}
 
-	order = &[]string{}
-	o.runMemoryAgent = func(ctx context.Context, spec memoryAgentSpec) error {
+// stubMemoryAgentByKind wires runMemoryAgent to simulate the v3 chain's file
+// effects for each step, and records the call order.
+func stubMemoryAgentByKind(o *Orchestrator, order *[]string) {
+	o.runMemoryAgent = func(_ context.Context, spec memoryAgentSpec) error {
 		*order = append(*order, spec.kind)
 		switch spec.kind {
 		case memoryKindReflect:
-			return os.WriteFile(spec.datasetOut, []byte("findings: []\n"), 0644)
-		case memoryKindConsolidator:
-			return os.WriteFile(spec.outPath, []byte(consolidatedYAML), 0644)
+			return os.WriteFile(spec.datasetOut, []byte("project_level: []\nsession_level: []\n"), 0o644)
+		case memoryKindAggregate:
+			return os.WriteFile(spec.out, []byte("1. P — desc\n"), 0o644)
+		case memoryKindPrioritize:
+			return os.WriteFile(spec.out, []byte("## High\n1. P — desc\n\n## Medium\n1. m\n\n## Low\n1. l\n"), 0o644)
+		case memoryKindUpdate:
+			return os.WriteFile(spec.targetFile, []byte("# Project rules\n\n## P\n\ndesc\n"), 0o644)
 		default:
 			return nil
 		}
-	}
-	return o, proj, sess, stageDir, order
-}
-
-func TestReflectionPipeline_ReflectThenConsolidatorThenReconcile(t *testing.T) {
-	consolidated := "findings:\n" +
-		"  - scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: uses sqlite\n" +
-		"    evidence: config.json:1\n" +
-		"    status: new\n"
-	o, proj, _, stageDir, order := pipelineHarness(t, 60, consolidated)
-	runID := filepath.Base(o.opts.RunDir)
-
-	o.runReflectionPipeline(context.Background(), "s1", []string{filepath.Join(stageDir, "autonomous.log")}, stageDir)
-
-	if got := strings.Join(*order, ","); got != "reflect,consolidator" {
-		t.Errorf("order = %q, want exactly reflect,consolidator (no compressor)", got)
-	}
-
-	out, err := memory.Load(proj)
-	if err != nil {
-		t.Fatalf("project memory did not parse: %v", err)
-	}
-	if len(out.Findings) != 1 {
-		t.Fatalf("want 1 finding, got %d: %+v", len(out.Findings), out.Findings)
-	}
-	f := out.Findings[0]
-	if f.Statement != "uses sqlite" {
-		t.Errorf("unexpected statement: %q", f.Statement)
-	}
-	if f.ConfirmCount != 1 {
-		t.Errorf("ConfirmCount = %d, want 1", f.ConfirmCount)
-	}
-	if f.FirstSeen != runID || f.LastSeen != runID {
-		t.Errorf("FirstSeen/LastSeen = %q/%q, want both %q", f.FirstSeen, f.LastSeen, runID)
-	}
-}
-
-// TestReflectionPipeline_RetainsExistingFindingNotEchoedByConsolidator is the
-// data-loss-guard regression: a prev PROJECT store finding A exists; the
-// consolidator stub emits ONLY a brand-new finding B (the LLM failed to echo
-// A back at all, despite consolidator.md's "do not silently drop existing
-// findings" instruction). reconcileAndSave must retain A unchanged alongside
-// B — eviction is the only removal path. Must fail before the fix (A would be
-// dropped) and pass after.
-func TestReflectionPipeline_RetainsExistingFindingNotEchoedByConsolidator(t *testing.T) {
-	consolidatedOnlyB := "findings:\n" +
-		"  - scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: new finding B\n" +
-		"    evidence: e-b:1\n" +
-		"    status: new\n"
-	o, proj, _, stageDir, _ := pipelineHarness(t, 60, consolidatedOnlyB)
-
-	seedA := memory.Finding{
-		ID: "finding-a", Scope: memory.ScopeProject, Kind: memory.KindFact,
-		Statement: "existing finding A", Evidence: "e-a:1",
-		FirstSeen: "r0", LastSeen: "r0", ConfirmCount: 3,
-	}
-	if err := memory.Save(proj, memory.Store{Findings: []memory.Finding{seedA}}); err != nil {
-		t.Fatalf("seed prev project store: %v", err)
-	}
-
-	o.runReflectionPipeline(context.Background(), "s1", nil, stageDir)
-
-	out, err := memory.Load(proj)
-	if err != nil {
-		t.Fatalf("project memory did not parse: %v", err)
-	}
-	if len(out.Findings) != 2 {
-		t.Fatalf("want 2 findings (A retained + B new), got %d: %+v", len(out.Findings), out.Findings)
-	}
-	var gotA *memory.Finding
-	var gotB *memory.Finding
-	for i := range out.Findings {
-		f := &out.Findings[i]
-		if f.ID == seedA.ID {
-			gotA = f
-		}
-		if f.Statement == "new finding B" {
-			gotB = f
-		}
-	}
-	if gotA == nil {
-		t.Fatal("existing finding A was lost — consolidator omitted it, must be retained unchanged")
-	}
-	if !reflect.DeepEqual(*gotA, seedA) {
-		t.Errorf("retained finding A must be unchanged: got %+v, want %+v", *gotA, seedA)
-	}
-	if gotB == nil {
-		t.Error("new finding B must also be present")
-	}
-}
-
-// TestReflectionPipeline_TolerantOfMarkdownFencedConsolidatedYAML — the
-// consolidator wraps consolidated.yaml in a ```yaml ... ``` markdown fence
-// (LLMs do this despite being asked for raw YAML). reconcileAndSave must
-// strip the fence before yaml.Unmarshal, not fail the whole pipeline. Must
-// fail before the fix (yaml.Unmarshal errors on the fence lines → no finding
-// saved) and pass after.
-func TestReflectionPipeline_TolerantOfMarkdownFencedConsolidatedYAML(t *testing.T) {
-	fenced := "```yaml\n" +
-		"findings:\n" +
-		"  - scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: fenced finding\n" +
-		"    evidence: e:1\n" +
-		"    status: new\n" +
-		"```\n"
-	o, proj, _, stageDir, _ := pipelineHarness(t, 60, fenced)
-
-	o.runReflectionPipeline(context.Background(), "s1", nil, stageDir)
-
-	out, err := memory.Load(proj)
-	if err != nil {
-		t.Fatalf("project memory did not parse: %v", err)
-	}
-	if len(out.Findings) != 1 {
-		t.Fatalf("want 1 finding despite markdown fence, got %d: %+v", len(out.Findings), out.Findings)
-	}
-	if out.Findings[0].Statement != "fenced finding" {
-		t.Errorf("unexpected statement: %q", out.Findings[0].Statement)
-	}
-}
-
-func TestReflectionPipeline_EmptyEvidenceDropped(t *testing.T) {
-	consolidated := "findings:\n" +
-		"  - scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: no evidence here\n" +
-		"    status: new\n"
-	o, proj, _, stageDir, _ := pipelineHarness(t, 60, consolidated)
-
-	o.runReflectionPipeline(context.Background(), "s1", nil, stageDir)
-
-	out, err := memory.Load(proj)
-	if err != nil {
-		t.Fatalf("project memory did not parse: %v", err)
-	}
-	if len(out.Findings) != 0 {
-		t.Errorf("finding without evidence must not land, got %+v", out.Findings)
-	}
-}
-
-func TestReflectionPipeline_EvictionCapsStoreSize(t *testing.T) {
-	const maxFindings = 2
-	proj := filepath.Join(t.TempDir(), "PROJECT_MEMORY.yaml")
-	seed := memory.Store{Findings: []memory.Finding{
-		{ID: "keep-hi", Scope: memory.ScopeProject, Kind: memory.KindFact, Statement: "a", Evidence: "e1", FirstSeen: "r0", LastSeen: "r0", ConfirmCount: 5},
-		{ID: "drop-lo", Scope: memory.ScopeProject, Kind: memory.KindFact, Statement: "b", Evidence: "e2", FirstSeen: "r0", LastSeen: "r0", ConfirmCount: 1},
-	}}
-	if err := memory.Save(proj, seed); err != nil {
-		t.Fatal(err)
-	}
-
-	consolidated := "findings:\n" +
-		"  - id: keep-hi\n" +
-		"    scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: a\n" +
-		"    evidence: e1\n" +
-		"    status: unchanged\n" +
-		"  - id: drop-lo\n" +
-		"    scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: b\n" +
-		"    evidence: e2\n" +
-		"    status: unchanged\n" +
-		"  - scope: project\n" +
-		"    kind: fact\n" +
-		"    statement: brand new fact\n" +
-		"    evidence: e3\n" +
-		"    status: new\n"
-
-	o := newTestOrchestrator(t)
-	runDir := t.TempDir()
-	sess := filepath.Join(runDir, "SESSION_MEMORY.yaml")
-	o.opts.RunDir = runDir
-	o.opts.Memory = flow.MemoryConfig{ProjectFile: proj, MaxFindings: maxFindings}
-	o.opts.MemoryProjectPath = proj
-	o.opts.MemorySessionPath = sess
-	o.runMemoryAgent = func(ctx context.Context, spec memoryAgentSpec) error {
-		switch spec.kind {
-		case memoryKindReflect:
-			return os.WriteFile(spec.datasetOut, []byte("findings: []\n"), 0644)
-		case memoryKindConsolidator:
-			return os.WriteFile(spec.outPath, []byte(consolidated), 0644)
-		default:
-			return nil
-		}
-	}
-
-	stageDir := filepath.Join(runDir, "s1")
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	o.runReflectionPipeline(context.Background(), "s1", nil, stageDir)
-
-	out, err := memory.Load(proj)
-	if err != nil {
-		t.Fatalf("project memory did not parse: %v", err)
-	}
-	if len(out.Findings) > maxFindings {
-		t.Errorf("store not evicted: len=%d, want <= %d", len(out.Findings), maxFindings)
 	}
 }
 
 func TestMaybeRunReflection_NoOpWhenDisabled(t *testing.T) {
-	o := newTestOrchestrator(t)
-	o.opts.MemoryProjectPath = "" // disabled
+	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = "" // disabled
+	if err := os.MkdirAll(filepath.Join(runDir, stage.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	called := false
-	o.runMemoryAgent = func(ctx context.Context, spec memoryAgentSpec) error { called = true; return nil }
-	o.maybeRunReflection(context.Background(), "s1")
+	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+
+	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
 	if called {
 		t.Error("must not run any memory agent when memory disabled")
 	}
 }
 
-func TestReflectionPipeline_Serialized(t *testing.T) {
-	o, _, _, _, _ := pipelineHarness(t, 60, "findings: []\n")
-	var mu sync.Mutex
-	concurrent, maxConcurrent := 0, 0
-	o.runMemoryAgent = func(ctx context.Context, spec memoryAgentSpec) error {
-		mu.Lock()
-		concurrent++
-		if concurrent > maxConcurrent {
-			maxConcurrent = concurrent
-		}
-		mu.Unlock()
-		// small yield to expose overlap if not serialized
-		mu.Lock()
-		concurrent--
-		mu.Unlock()
-		return nil
+func TestMaybeRunReflection_WritesStageFile(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, stage.ID), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
-		wg.Go(func() { o.runReflectionPipeline(context.Background(), "s", nil, t.TempDir()) })
-	}
-	wg.Wait()
-	if maxConcurrent > 1 {
-		t.Errorf("pipelines overlapped: maxConcurrent=%d (reflectMu not held)", maxConcurrent)
-	}
-}
+	var order []string
+	stubMemoryAgentByKind(o, &order)
 
-func TestInitSessionMemory_ResetsEachRun(t *testing.T) {
-	o := newTestOrchestrator(t)
-	runDir := t.TempDir()
-	sess := filepath.Join(runDir, "SESSION_MEMORY.yaml")
-	if err := os.WriteFile(sess, []byte("STALE CONTENT FROM A PREVIOUS RUN"), 0644); err != nil {
-		t.Fatalf("setup: failed to write stale session file: %v", err)
-	}
-	o.opts.MemoryProjectPath = filepath.Join(t.TempDir(), "P.yaml")
-	o.opts.MemorySessionPath = sess
+	o.maybeRunReflection(context.Background(), stage.ID)
+	o.concurrency.WaitAgents()
 
-	o.initSessionMemory()
-
-	data, _ := os.ReadFile(sess)
-	if strings.Contains(string(data), "STALE") {
-		t.Error("session memory must be reset at run start")
-	}
-	got, err := memory.Load(sess)
+	targetFile := memory.StageFile(o.opts.MemoryDir, "s.md")
+	data, err := os.ReadFile(targetFile)
 	if err != nil {
-		t.Fatalf("session memory must parse as a valid store: %v", err)
+		t.Fatalf("stage memory file not written: %v", err)
 	}
-	if len(got.Findings) != 0 {
-		t.Errorf("session memory must be reset to empty, got %d findings", len(got.Findings))
+	if !strings.Contains(string(data), "# Project rules") {
+		t.Errorf("stage memory file missing expected content: %q", string(data))
 	}
-}
-
-func TestFinalReflection_RunsOnceWhenEnabled(t *testing.T) {
-	o, _, _, _, order := pipelineHarness(t, 60, "findings: []\n")
-	o.opts.Memory.FinalReflect = true
-
-	o.runFinalReflectionOnce(context.Background())
-	first := len(*order)
-	if first == 0 {
-		t.Fatal("final reflection did not run")
-	}
-	// A second call must be a no-op (finalReflectDone).
-	o.runFinalReflectionOnce(context.Background())
-	if len(*order) != first {
-		t.Error("final reflection ran twice; finalReflectDone not honored")
+	if got := strings.Join(order, ","); got != "reflect,aggregate,prioritize,update" {
+		t.Errorf("order = %q, want reflect,aggregate,prioritize,update", got)
 	}
 }
 
-func TestFinalReflection_NoOpWhenDisabled(t *testing.T) {
-	o, _, _, _, order := pipelineHarness(t, 60, "findings: []\n")
-	o.opts.Memory.FinalReflect = false
-	o.runFinalReflectionOnce(context.Background())
-	if len(*order) != 0 {
-		t.Error("final reflection must not run when disabled")
+func TestMaybeRunReflection_ModeR_DoesNotWrite(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeR}}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, stage.ID), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	called := false
+	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+
+	o.maybeRunReflection(context.Background(), stage.ID)
+	o.concurrency.WaitAgents()
+	if called {
+		t.Error("mode:r must not run the write chain")
+	}
+}
+
+func TestMaybeRunReflection_ScriptSkipped(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage", Script: "echo hi", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, stage.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+
+	o.maybeRunReflection(context.Background(), stage.ID)
+	o.concurrency.WaitAgents()
+	if called {
+		t.Error("script stages have no agent session — must not run reflection")
+	}
+}
+
+func TestEndOfRunMemory_WritesProjectFile(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage"}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25}
+
+	for _, id := range []string{"s1", "s2"} {
+		dir := filepath.Join(runDir, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "reflect_dataset.yaml"), []byte("project_level: []\nsession_level: []\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var order []string
+	stubMemoryAgentByKind(o, &order)
+
+	o.runEndOfRunMemory(context.Background())
+
+	projFile := memory.ProjectFile(o.opts.MemoryDir)
+	data, err := os.ReadFile(projFile)
+	if err != nil {
+		t.Fatalf("project memory file not written: %v", err)
+	}
+	if !strings.Contains(string(data), "# Project rules") {
+		t.Errorf("project memory file missing expected content: %q", string(data))
+	}
+	if got := strings.Join(order, ","); got != "aggregate,prioritize,update" {
+		t.Errorf("order = %q, want aggregate,prioritize,update (no reflect at end-of-run)", got)
+	}
+
+	// A second call is a no-op (finalReflectDone).
+	before := len(order)
+	o.runEndOfRunMemory(context.Background())
+	if len(order) != before {
+		t.Error("end-of-run memory ran twice; finalReflectDone not honored")
+	}
+}
+
+func TestEndOfRunMemory_NoOpWithoutDatasets(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage"}
+	o, _ := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	called := false
+	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+
+	o.runEndOfRunMemory(context.Background())
+	if called {
+		t.Error("must not run the chain when no stage left a dataset")
+	}
+	if !o.finalReflectDone {
+		t.Error("finalReflectDone must still be set even on the no-dataset no-op path")
+	}
+}
+
+func TestEndOfRunMemory_CommitsWhenEnabled(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage"}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+
+	memDir := t.TempDir()
+	runGit(t, memDir, "init")
+	runGit(t, memDir, "config", "user.email", "test@example.com")
+	runGit(t, memDir, "config", "user.name", "test")
+	o.opts.MemoryDir = memDir
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Commit: true}
+
+	dir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "reflect_dataset.yaml"), []byte("project_level: []\nsession_level: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	stubMemoryAgentByKind(o, &order)
+
+	o.runEndOfRunMemory(context.Background())
+
+	out := runGit(t, memDir, "log", "--oneline")
+	if strings.TrimSpace(out) == "" {
+		t.Error("expected a commit in memory dir, git log is empty")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+	return string(out)
 }

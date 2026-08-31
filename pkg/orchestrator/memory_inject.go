@@ -2,61 +2,52 @@ package orchestrator
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
 )
 
-// memoryBlockForStage computes the per-stage memory slice to splice into the
-// agent's prompt (prompts.Inputs.MemoryBlock) — replaces v1's static
-// GlobalPrompt pointer, which was the SAME text for every stage of the flow
-// regardless of relevance. Recomputed on every prompts.Build call (planning,
-// implementation, review, autonomous and their *WithFeedback variants — see
-// agents.go), so each stage sees a slice tailored to its own id/name/description.
-//
-// "" is a valid, expected result: memory disabled, or both stores genuinely
-// have nothing to say (first stage of the first run, before any reflection
-// wrote a finding) — in that case there is nothing worth pointing at either.
+// memoryBlockForStage computes the pointer block to splice into the agent's
+// prompt (prompts.Inputs.MemoryBlock). Pointer-based, per §4 of the v3 design:
+// the project-wide memory.md (if it exists) is pointed at from EVERY stage;
+// the stage's own reflect file is additionally pointed at only when its mode
+// allows reading (r/rw) and the file already exists on disk. "" is a valid,
+// expected result — memory disabled, or nothing has been written yet.
 func (o *Orchestrator) memoryBlockForStage(s flow.Stage) string {
-	if o.opts.MemoryProjectPath == "" {
+	if o.opts.MemoryDir == "" {
 		return ""
 	}
 
-	proj, _ := memory.Load(o.opts.MemoryProjectPath)
-	sess, _ := memory.Load(o.opts.MemorySessionPath)
-	if len(proj.Findings) == 0 && len(sess.Findings) == 0 {
+	var paths []string
+	if projectFile := memory.ProjectFile(o.opts.MemoryDir); fileExists(projectFile) {
+		paths = append(paths, projectFile)
+	}
+	if s.Reflect != nil && s.Reflect.CanRead() {
+		if stageFile := memory.StageFile(o.opts.MemoryDir, s.Reflect.File); fileExists(stageFile) {
+			paths = append(paths, stageFile)
+		}
+	}
+	if len(paths) == 0 {
 		return ""
 	}
-
-	tokens := memory.Tokenize(s.ID + " " + s.Name + " " + s.Description)
-	sel, all := memory.Select(proj, sess, tokens, memory.RetrievalConfig{
-		Threshold:        o.opts.Memory.RetrievalThreshold,
-		CoreConfirmCount: o.opts.Memory.CoreConfirmCount,
-	})
-
-	if all {
-		return memoryPointerBlock(o.opts.MemoryProjectPath, o.opts.MemorySessionPath)
-	}
-
-	rendered := memory.Render(sel)
-	pointerLine := fmt.Sprintf("More project memory in %s — read it if relevant.", o.opts.MemoryProjectPath)
-	if rendered == "" {
-		// Select filtered everything out for this stage (no core/relevant
-		// findings), but the store isn't empty — still tell the agent where
-		// to look, never return "" while memory is enabled and non-empty.
-		return pointerLine
-	}
-	return rendered + "\n" + pointerLine
+	return memoryPointerBlock(paths)
 }
 
-// memoryPointerBlock reproduces the v1 pointer wording (moved here from the
-// removed cmd/afm.buildMemoryPointer, see Task 10): the agent reads the two
-// files itself via its own Read tool rather than the prompt growing with the
-// memory store.
-func memoryPointerBlock(projectPath, sessionPath string) string {
-	return fmt.Sprintf(`Project memory — accumulated findings from earlier stages and runs — lives at:
-  %s
-Session memory — this run's short-term context — lives at:
-  %s
-Before you start, read both files: each is a YAML list of findings, and each finding's "kind" field is one of fact, best_practice, or anti_pattern — take the best_practice and anti_pattern findings into account. They may not exist yet on the first stage; that is fine.`, projectPath, sessionPath)
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// memoryPointerBlock names the given memory files and instructs the agent to
+// read them before starting — the agent reads them itself via its own Read
+// tool rather than the prompt growing with the memory content.
+func memoryPointerBlock(paths []string) string {
+	var b strings.Builder
+	b.WriteString("Project memory lives in these files (Markdown \"# Project rules\" with \"## Pattern\" blocks). Read them before you start and follow the rules:\n")
+	for _, p := range paths {
+		fmt.Fprintf(&b, "  - %s\n", p)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

@@ -6,7 +6,12 @@ import (
 )
 
 func testPrompts() Prompts {
-	return Prompts{Reflect: "REFLECT-BASE", Consolidator: "CONSOLIDATOR-BASE"}
+	return Prompts{
+		Reflect:    "REFLECT-BASE",
+		Aggregate:  "AGGREGATE-BASE",
+		Prioritize: "PRIORITIZE-BASE",
+		Update:     "UPDATE-BASE for <FILEPATH>, cap <MAX_RULES>",
+	}
 }
 
 func TestBuildMemoryPrompt_Reflect(t *testing.T) {
@@ -15,24 +20,52 @@ func TestBuildMemoryPrompt_Reflect(t *testing.T) {
 		sources:    []string{"/run/s1/autonomous.log", "/run/s1/execution_summary.md"},
 		datasetOut: "/run/s1/reflect_dataset.yaml",
 	})
-	for _, want := range []string{"REFLECT-BASE", "/run/s1/autonomous.log", "/run/s1/execution_summary.md", "/run/s1/reflect_dataset.yaml", "findings"} {
+	for _, want := range []string{"REFLECT-BASE", "/run/s1/autonomous.log", "/run/s1/execution_summary.md", "/run/s1/reflect_dataset.yaml"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("reflect prompt missing %q", want)
 		}
 	}
 }
 
-func TestBuildMemoryPrompt_Consolidator(t *testing.T) {
+func TestBuildMemoryPrompt_Aggregate(t *testing.T) {
 	got := buildMemoryPrompt(testPrompts(), memoryAgentSpec{
-		kind:        "consolidator",
-		datasetPath: "/run/s1/reflect_dataset.yaml",
-		projectPath: "/proj/PROJECT_MEMORY.yaml",
-		sessionPath: "/run/SESSION_MEMORY.yaml",
-		outPath:     "/run/s1/consolidated.yaml",
+		kind:    "aggregate",
+		inPaths: []string{"/run/s1/reflect_dataset.yaml", "/run/s2/reflect_dataset.yaml"},
+		out:     "/run/s1/patterns.md",
 	})
-	for _, want := range []string{"CONSOLIDATOR-BASE", "/run/s1/reflect_dataset.yaml", "/proj/PROJECT_MEMORY.yaml", "/run/SESSION_MEMORY.yaml", "/run/s1/consolidated.yaml", "status"} {
+	for _, want := range []string{"AGGREGATE-BASE", "/run/s1/reflect_dataset.yaml", "/run/s2/reflect_dataset.yaml", "/run/s1/patterns.md"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("consolidator prompt missing %q", want)
+			t.Errorf("aggregate prompt missing %q", want)
+		}
+	}
+}
+
+func TestBuildMemoryPrompt_Prioritize(t *testing.T) {
+	got := buildMemoryPrompt(testPrompts(), memoryAgentSpec{
+		kind: "prioritize",
+		in:   "/run/s1/patterns.md",
+		out:  "/run/s1/prioritized.md",
+	})
+	for _, want := range []string{"PRIORITIZE-BASE", "/run/s1/patterns.md", "/run/s1/prioritized.md"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prioritize prompt missing %q", want)
+		}
+	}
+}
+
+func TestBuildMemoryPrompt_Update(t *testing.T) {
+	got := buildMemoryPrompt(testPrompts(), memoryAgentSpec{
+		kind:       "update",
+		highPath:   "/run/s1/high.md",
+		targetFile: "/proj/mem/s1.md",
+		maxRules:   25,
+	})
+	if strings.Contains(got, "<FILEPATH>") || strings.Contains(got, "<MAX_RULES>") {
+		t.Errorf("update prompt must substitute template placeholders:\n%s", got)
+	}
+	for _, want := range []string{"UPDATE-BASE for /proj/mem/s1.md, cap 25", "/run/s1/high.md", "/proj/mem/s1.md"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("update prompt missing %q", want)
 		}
 	}
 }

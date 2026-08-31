@@ -15,16 +15,16 @@ import (
 )
 
 // newMemoryIntegrationOrchestrator wires a real *state.Store + *Orchestrator
-// with memory enabled end-to-end (RunDir/Memory/MemoryProjectPath/
-// MemorySessionPath) for a single reflect:true stage, exactly the shape
-// production wires in cmd/afm/run.go. Returns the orchestrator plus the
-// resolved paths/dirs the test needs.
-func newMemoryIntegrationOrchestrator(t *testing.T, retrievalThreshold, coreConfirmCount int) (o *Orchestrator, stage flow.Stage, runDir, stageDir, projPath, sessPath string) {
+// with memory v3 enabled end-to-end (RunDir/Memory/MemoryDir) for a single
+// reflect:{mode:rw} stage, exactly the shape production wires in
+// cmd/afm/run.go. Returns the orchestrator plus the resolved paths/dirs the
+// test needs.
+func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow.Stage, runDir, stageDir, memDir string) {
 	t.Helper()
 	stage = flow.Stage{
 		ID:      "s1",
 		Name:    "Build",
-		Reflect: true,
+		Reflect: &flow.Reflect{File: "s1.md", Mode: flow.ReflectModeRW},
 		Agents:  []flow.AgentType{flow.AgentImplementation},
 	}
 
@@ -35,24 +35,17 @@ func newMemoryIntegrationOrchestrator(t *testing.T, retrievalThreshold, coreConf
 	}
 	t.Cleanup(func() { store.Close() })
 
-	// PROJECT_MEMORY.yaml lives outside the run dir (cross-run, in the repo);
-	// SESSION_MEMORY.yaml lives inside it (per-run) — same split as production.
-	projPath = filepath.Join(t.TempDir(), "PROJECT_MEMORY.yaml")
-	sessPath = filepath.Join(runDir, "SESSION_MEMORY.yaml")
+	// The memory directory lives outside the run dir (cross-run, in the
+	// repo), same split as production.
+	memDir = t.TempDir()
 
 	o = New(Options{
-		RunDir: runDir,
-		Stages: []flow.Stage{stage},
-		Store:  store,
-		Config: config.Default(),
-		Memory: flow.MemoryConfig{
-			ProjectFile:        projPath,
-			MaxFindings:        60,
-			RetrievalThreshold: retrievalThreshold,
-			CoreConfirmCount:   coreConfirmCount,
-		},
-		MemoryProjectPath: projPath,
-		MemorySessionPath: sessPath,
+		RunDir:    runDir,
+		Stages:    []flow.Stage{stage},
+		Store:     store,
+		Config:    config.Default(),
+		Memory:    flow.MemoryConfig{MaxRules: 25},
+		MemoryDir: memDir,
 	})
 
 	// completeStage only calls maybeRunReflection once the stage's own agent
@@ -61,224 +54,93 @@ func newMemoryIntegrationOrchestrator(t *testing.T, retrievalThreshold, coreConf
 	// call). Reproduce that precondition by hand since no real agent runs
 	// here — production dirs exist, tests must create them.
 	stageDir = filepath.Join(runDir, stage.ID)
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return o, stage, runDir, stageDir, projPath, sessPath
+	return o, stage, runDir, stageDir, memDir
 }
 
-// consolidatedFindingYAML builds a MergedStore YAML (as the consolidator
-// agent would emit) for a single brand-new project-scope finding with the
-// given statement/topic — real evidence attached, status: new so Reconcile
-// stamps first_seen=last_seen=<run-id> and confirm_count=1.
-func consolidatedFindingYAML(statement, topic string) string {
-	return "findings:\n" +
-		"  - scope: project\n" +
-		"    kind: best_practice\n" +
-		"    topic: [" + topic + "]\n" +
-		"    statement: " + statement + "\n" +
-		"    evidence: s1/autonomous.log:1\n" +
-		"    status: new\n"
-}
+// TestIntegration_MemoryV3_PipelineWritesStageFile drives a reflect:{mode:rw}
+// stage through maybeRunReflection (the real trigger point completeStage
+// calls, see reflection.go) with a stubbed runMemoryAgent, then checks the
+// full v3 write path: reflect_dataset.yaml/patterns.md/prioritized.md/high.md
+// land in the stage dir, and the stage's own memory file is rewritten with
+// the merged High patterns.
+func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
+	o, stage, _, stageDir, memDir := newMemoryIntegrationOrchestrator(t)
+	var order []string
+	stubMemoryAgentByKind(o, &order)
 
-// stubReflectThenConsolidate wires runMemoryAgent to simulate the two v2
-// agents' file effects exactly like reflection_test.go's pipelineHarness:
-// reflect writes an empty candidate dataset (afm never reads it back —
-// only the consolidator's output feeds reconcileAndSave), consolidator
-// writes consolidatedYAML verbatim to its outPath.
-func stubReflectThenConsolidate(o *Orchestrator, consolidatedYAML string) *[]string {
-	order := &[]string{}
-	o.runMemoryAgent = func(_ context.Context, spec memoryAgentSpec) error {
-		*order = append(*order, spec.kind)
-		switch spec.kind {
-		case memoryKindReflect:
-			return os.WriteFile(spec.datasetOut, []byte("findings: []\n"), 0644)
-		case memoryKindConsolidator:
-			return os.WriteFile(spec.outPath, []byte(consolidatedYAML), 0644)
-		default:
-			return nil
+	o.maybeRunReflection(context.Background(), stage.ID)
+	o.concurrency.WaitAgents()
+
+	if got := strings.Join(order, ","); got != "reflect,aggregate,prioritize,update" {
+		t.Fatalf("pipeline order = %q, want reflect,aggregate,prioritize,update", got)
+	}
+
+	for _, f := range []string{"reflect_dataset.yaml", "patterns.md", "prioritized.md", "high.md"} {
+		if data, err := os.ReadFile(filepath.Join(stageDir, f)); err != nil {
+			t.Errorf("%s not written: %v", f, err)
+		} else if len(data) == 0 {
+			t.Errorf("%s is empty", f)
 		}
 	}
-	return order
-}
 
-// TestIntegration_MemoryV2_PipelineWritesValidatedFinding drives a
-// reflect:true stage through maybeRunReflection (the real trigger point
-// completeStage calls, see reflection.go) with a stubbed runMemoryAgent, then
-// checks the full v2 write path: (a) reflect_dataset.yaml + consolidated.yaml
-// land in the stage dir; (b) memory.Load(projectPath) returns exactly one
-// validated finding with afm-owned metadata (ConfirmCount==1,
-// FirstSeen==LastSeen==<run-id>).
-func TestIntegration_MemoryV2_PipelineWritesValidatedFinding(t *testing.T) {
-	o, stage, runDir, stageDir, projPath, sessPath := newMemoryIntegrationOrchestrator(t, 25, 3)
-	consolidated := consolidatedFindingYAML(
-		"the build stage always runs go vet before go test",
-		"build",
-	)
-	order := stubReflectThenConsolidate(o, consolidated)
-
-	o.maybeRunReflection(context.Background(), stage.ID)
-	o.concurrency.WaitAgents()
-
-	if got := strings.Join(*order, ","); got != "reflect,consolidator" {
-		t.Fatalf("pipeline order = %q, want exactly reflect,consolidator (no compressor in v2)", got)
-	}
-
-	// (a) both per-stage byproduct files exist in the stage dir.
-	datasetPath := filepath.Join(stageDir, "reflect_dataset.yaml")
-	if data, err := os.ReadFile(datasetPath); err != nil {
-		t.Errorf("reflect_dataset.yaml not written: %v", err)
-	} else if len(data) == 0 {
-		t.Error("reflect_dataset.yaml is empty")
-	}
-	consolidatedPath := filepath.Join(stageDir, "consolidated.yaml")
-	if data, err := os.ReadFile(consolidatedPath); err != nil {
-		t.Errorf("consolidated.yaml not written: %v", err)
-	} else if len(data) == 0 {
-		t.Error("consolidated.yaml is empty")
-	}
-
-	// (b) the reconciled, validated finding landed in PROJECT_MEMORY.yaml
-	// with afm-assigned metadata — not whatever the (stubbed) agent said.
-	projStore, err := memory.Load(projPath)
+	target := memory.StageFile(memDir, stage.Reflect.File)
+	data, err := os.ReadFile(target)
 	if err != nil {
-		t.Fatalf("PROJECT_MEMORY store did not parse: %v", err)
+		t.Fatalf("stage memory file not written: %v", err)
 	}
-	if len(projStore.Findings) != 1 {
-		t.Fatalf("PROJECT_MEMORY store: want 1 finding, got %d: %+v", len(projStore.Findings), projStore.Findings)
-	}
-	f := projStore.Findings[0]
-	runID := filepath.Base(runDir)
-	if f.ConfirmCount != 1 {
-		t.Errorf("ConfirmCount = %d, want 1 (brand-new finding)", f.ConfirmCount)
-	}
-	if f.FirstSeen != runID {
-		t.Errorf("FirstSeen = %q, want run-id %q", f.FirstSeen, runID)
-	}
-	if f.LastSeen != runID {
-		t.Errorf("LastSeen = %q, want run-id %q", f.LastSeen, runID)
-	}
-	if !f.Valid() {
-		t.Errorf("reconciled finding must be Valid(): %+v", f)
-	}
-	if f.Evidence == "" {
-		t.Error("finding must carry non-empty evidence (P1 requirement)")
-	}
-
-	// SESSION_MEMORY.yaml must also exist (reset at run start) even though
-	// this test's finding is project-scoped only.
-	if _, err := memory.Load(sessPath); err != nil {
-		t.Errorf("SESSION_MEMORY store did not parse: %v", err)
+	if !strings.Contains(string(data), "# Project rules") {
+		t.Errorf("stage memory file missing expected content: %q", string(data))
 	}
 }
 
-// TestIntegration_MemoryV2_RetrievalInlinesFindingIntoPrompt runs the same
-// full pipeline, then forces a LARGE store (seeds enough filler findings via
-// memory.Save to exceed RetrievalThreshold) so a later stage's retrieval
-// takes the "inline relevant slice" path (P2) rather than the pointer path.
-// Verifies the finding's statement — not just a file path — survives
-// o.memoryBlockForStage + prompts.Build into the actual assembled prompt of
-// a later, topically-related stage.
-func TestIntegration_MemoryV2_RetrievalInlinesFindingIntoPrompt(t *testing.T) {
-	const threshold = 5
-	o, stage, _, _, projPath, _ := newMemoryIntegrationOrchestrator(t, threshold, 3)
-	consolidated := consolidatedFindingYAML(
-		"database migrations must run with the -allow-destructive flag in staging",
-		"database",
-	)
-	stubReflectThenConsolidate(o, consolidated)
+// TestIntegration_MemoryV3_PointerReachesLaterStagePrompt runs the full
+// pipeline for stage s1 (mode:rw — both writes AND reads its own file), then
+// verifies a later stage's prompt carries the memory pointer via the actual
+// prompts.Build path every runXxxAgent uses (agents.go: MemoryBlock:
+// o.memoryBlockForStage(s)) — the project file always, the stage's own file
+// only when its mode allows reading.
+func TestIntegration_MemoryV3_PointerReachesLaterStagePrompt(t *testing.T) {
+	o, stage, _, _, memDir := newMemoryIntegrationOrchestrator(t)
+	var order []string
+	stubMemoryAgentByKind(o, &order)
 
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
 
-	// Push the store size past the threshold with unrelated filler findings,
-	// keeping the pipeline-produced finding intact — memory.Save overwrites
-	// the whole file, so load-then-append-then-save.
-	current, err := memory.Load(projPath)
-	if err != nil {
-		t.Fatalf("failed to load store before seeding filler: %v", err)
+	// s1 itself (mode:rw) must see its own file pointed at.
+	blockForSelf := o.memoryBlockForStage(stage)
+	if blockForSelf == "" {
+		t.Fatal("memoryBlockForStage(s1) must not be empty after s1 wrote its own file")
 	}
-	if len(current.Findings) != 1 {
-		t.Fatalf("precondition: want 1 finding from the pipeline, got %d", len(current.Findings))
-	}
-	for i := 0; i < threshold+3; i++ {
-		current.Findings = append(current.Findings, memory.Finding{
-			ID:           "filler-" + string(rune('a'+i)),
-			Scope:        memory.ScopeProject,
-			Kind:         memory.KindFact,
-			Topic:        []string{"unrelated"},
-			Statement:    "some unrelated low-confidence filler finding",
-			Evidence:     "e:1",
-			FirstSeen:    "r0",
-			LastSeen:     "r0",
-			ConfirmCount: 1,
-		})
-	}
-	if err := memory.Save(projPath, current); err != nil {
-		t.Fatalf("failed to seed filler findings: %v", err)
+	if !strings.Contains(blockForSelf, memory.StageFile(memDir, stage.Reflect.File)) {
+		t.Errorf("block for s1 must name its own memory file:\n%s", blockForSelf)
 	}
 
-	// Sanity: the store is now large enough that Select must filter, not
-	// "inject all" (otherwise this test would pass for the wrong reason).
-	total := len(current.Findings)
-	if total <= threshold {
-		t.Fatalf("test setup bug: total findings %d must exceed threshold %d", total, threshold)
+	// A later, unrelated stage without its own reflect config must NOT see
+	// s1's file, but the project memory.md doesn't exist yet (no end-of-run
+	// pass has happened), so the block is empty.
+	laterStage := flow.Stage{ID: "s2", Name: "Deploy"}
+	blockForLater := o.memoryBlockForStage(laterStage)
+	if strings.Contains(blockForLater, memory.StageFile(memDir, stage.Reflect.File)) {
+		t.Errorf("later stage without reflect must not see s1's own file:\n%s", blockForLater)
 	}
 
-	laterStage := flow.Stage{
-		ID:          "database-migration",
-		Name:        "Database migration",
-		Description: "migrate the database schema in staging",
+	// Now run the end-of-run pass — memory.md is created — and confirm it
+	// reaches the later stage's built prompt.
+	o.runEndOfRunMemory(context.Background())
+	blockForLater = o.memoryBlockForStage(laterStage)
+	if blockForLater == "" {
+		t.Fatal("memoryBlockForStage(later) must not be empty once memory.md exists")
 	}
-	block := o.memoryBlockForStage(laterStage)
-	if block == "" {
-		t.Fatal("memoryBlockForStage returned empty for a large, relevant store")
+	projFile := memory.ProjectFile(memDir)
+	if !strings.Contains(blockForLater, projFile) {
+		t.Errorf("block for later stage must name the project memory file:\n%s", blockForLater)
 	}
-	if !strings.Contains(block, "database migrations must run with the -allow-destructive flag in staging") {
-		t.Errorf("inlined memory block missing the relevant finding's statement:\n%s", block)
-	}
-	if strings.Contains(block, "some unrelated low-confidence filler finding") {
-		t.Errorf("inlined memory block must NOT contain the irrelevant filler finding:\n%s", block)
-	}
-
-	// The block reaches the actual assembled prompt via prompts.Build, the
-	// same path every runXxxAgent uses (agents.go: MemoryBlock: o.memoryBlockForStage(s)).
-	built := prompts.Build(prompts.Inputs{Stage: laterStage, MemoryBlock: block})
-	if !strings.Contains(built, "database migrations must run with the -allow-destructive flag in staging") {
-		t.Errorf("built prompt missing the finding's statement:\n%s", built)
-	}
-}
-
-// TestIntegration_MemoryV2_RetrievalPointerForSmallStore is the small-store
-// counterpart: a single finding, well under RetrievalThreshold, must reach
-// the later stage's prompt as a POINTER (both absolute file paths) rather
-// than inlined content — the v1 behavior preserved for the "not enough
-// findings yet to bother filtering" case.
-func TestIntegration_MemoryV2_RetrievalPointerForSmallStore(t *testing.T) {
-	o, stage, _, _, projPath, sessPath := newMemoryIntegrationOrchestrator(t, 25, 3)
-	consolidated := consolidatedFindingYAML(
-		"the build stage always runs go vet before go test",
-		"build",
-	)
-	stubReflectThenConsolidate(o, consolidated)
-
-	o.maybeRunReflection(context.Background(), stage.ID)
-	o.concurrency.WaitAgents()
-
-	laterStage := flow.Stage{ID: "s2", Name: "Deploy", Description: "deploy the build artifact"}
-	block := o.memoryBlockForStage(laterStage)
-	if block == "" {
-		t.Fatal("memoryBlockForStage returned empty for a small, non-empty store")
-	}
-	if !strings.Contains(block, projPath) || !strings.Contains(block, sessPath) {
-		t.Errorf("small-store block must point at both absolute paths:\n%s", block)
-	}
-	if strings.Contains(block, "go vet before go test") {
-		t.Errorf("small-store block must NOT inline finding content, only point at files:\n%s", block)
-	}
-
-	built := prompts.Build(prompts.Inputs{Stage: laterStage, MemoryBlock: block})
-	if !strings.Contains(built, projPath) || !strings.Contains(built, sessPath) {
-		t.Errorf("built prompt missing memory pointer paths:\n%s", built)
+	built := prompts.Build(prompts.Inputs{Stage: laterStage, MemoryBlock: blockForLater})
+	if !strings.Contains(built, projFile) {
+		t.Errorf("built prompt missing project memory path:\n%s", built)
 	}
 }
