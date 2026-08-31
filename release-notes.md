@@ -2,6 +2,30 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-08-31
+
+### Feature: agent-memory read/write control — `memory.mode` + `memory_use`
+
+Agent memory (v3) previously injected the shared `memory.md` into **every** stage automatically and always rewrote it at end of run. Two new knobs make reading and writing independently controllable — and turn injection into an explicit opt-in.
+
+```yaml
+memory:
+  path: docs/memory
+  mode: rw          # lifecycle of the shared memory.md: r / w / rw (default rw)
+  memory_use: true  # do stages READ memory at all? (default false → opt-in)
+stages:
+  - id: build
+    reflect: { file: build.md, mode: rw }   # this stage's OWN file: r / w / rw
+  - id: audit
+    memory_use: false                        # opt THIS stage out of reading memory
+```
+
+- **`memory.mode` (`r`/`w`/`rw`, default `rw`)** governs the **shared `memory.md`**: `r` = read-only (injected into prompts, never rewritten), `w` = write-only (updated by the end-of-run pass, never injected), `rw` = both. `runEndOfRunMemory` now distills into `memory.md` only when the mode allows writing — with `mode: r` a hand-curated project memory is never overwritten, while per-stage `reflect` files are still written during the run.
+- **`memory.memory_use` (global, default `false`) + per-stage `memory_use` (`*bool` override, unset = inherit).** This is the master switch for **reading**: a stage is injected memory only if it participates (`stage.memory_use ?? memory.memory_use`). Off by default — you opt in globally or per stage. It does **not** affect writing.
+- **Two independent mode axes:** `memory.mode` controls the shared `memory.md`; `reflect.mode` (unchanged) controls a stage's OWN file; `memory_use` is the per-stage read master switch. Reading a stage's own file still additionally requires `reflect.mode` `r`/`rw`; `mode: w` writes it without reading it back.
+- **Gates in code:** `memoryBlockForStage` (`memory_inject.go`) applies the participation gate (`MemoryConfig.UseFor`) then `CanReadProject()` for `memory.md`; `runEndOfRunMemory` (`reflection.go`) applies `CanWriteProject()`. `flow.MemoryConfig.Mode`/`MemoryUse` + `flow.Stage.MemoryUse *bool`, defaulted/validated in `ParseFile` (`memory.mode` must be `r`/`w`/`rw`).
+- Verified live on real `claude` agents across two runs: with `memory.mode: r` + global `memory_use: true`, the seeded `memory.md` was injected into a plain stage and a `reflect: rw` stage but **not** into a stage overriding `memory_use: false`, and end-of-run left the seeded `memory.md` untouched while the stage's own file was written; with `memory.mode: w`, `memory.md` was **not** injected but was merged/rewritten by the end-of-run chain (preserving the existing seeded pattern). Tests: `pkg/flow` (mode/use helpers, parse defaults, per-stage override, invalid-mode validation), `pkg/orchestrator` (participation-off/override/write-only-hides read gates, read-only-skips-write end-of-run gate); `go build ./...` + `pkg/flow`/`pkg/orchestrator` `-race` + `golangci-lint` green. Docs: README "Agent Memory" (full read/write model + tables) and AGENTS.md.
+
 ## 2026-08-28
 
 ### Feature: agent memory v3 (directory + pattern chain)
