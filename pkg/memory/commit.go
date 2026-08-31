@@ -23,9 +23,10 @@ func Commit(dir, message string) (committed bool, err error) {
 		return false, err
 	}
 
-	// Step 2: Check if there are staged changes
-	// "git diff --cached --quiet" exits with 0 if no changes, 1 if there are changes
-	diffCmd := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet")
+	// Step 2: Check if there are staged changes under dir only
+	// "git diff --cached --quiet -- ." exits with 0 if no changes, 1 if there are changes
+	// The "-- ." pathspec ensures we only check changes under this directory
+	diffCmd := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet", "--", ".")
 	err = diffCmd.Run()
 
 	// If exit code is 0, there are no staged changes
@@ -40,8 +41,9 @@ func Commit(dir, message string) (committed bool, err error) {
 		return false, err
 	}
 
-	// Step 3: Commit the changes
-	commitCmd := exec.Command("git", "-C", dir, "commit", "-m", message)
+	// Step 3: Commit the changes under dir only
+	// The "-- ." pathspec ensures we only commit changes under this directory
+	commitCmd := exec.Command("git", "-C", dir, "commit", "-m", message, "--", ".")
 	if err := commitCmd.Run(); err != nil {
 		return false, err
 	}
