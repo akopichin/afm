@@ -286,7 +286,7 @@ stages:
 | `script_before_timeout` | no | Hard timeout for `script_before` (default `5m`) |
 | `script_after` | no | Shell script run right after the stage successfully completes |
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
-| `reflect` | no | `true` — after this stage completes, run the agent-memory pipeline over its session and feed the findings into the project's memory files. Default `false`. Requires the flow-level `memory:` block; silently skipped on `script:` stages (no agent session). See "Agent Memory" below |
+| `reflect` | no | An object `{ file, mode }` that opts the stage into agent memory: `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (read / write / both, default `rw`). Requires the flow-level `memory:` block. See "Agent Memory" below |
 
 **Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `supervisor_command` (supervisor agent command), `root_dir` (project root = agents' working directory, see below), `memory` (agent-memory config, see "Agent Memory" below), `stages`.
 
@@ -302,15 +302,19 @@ By default the agent inherits the CWD of the `afm` process, and `afm` assumes th
 
 ### Agent Memory
 
-Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes. Agent memory carries those findings forward: after a stage that opts in via `reflect:` completes, afm runs a small background pipeline that distills the stage's session into a handful of **project patterns** and merges them into a plain Markdown rules file.
+Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes, and the next stage starts blind. **Agent memory** carries those lessons forward: after a stage that opts in completes, afm runs a small background pipeline that distills the stage's session into a handful of durable **project patterns** and merges them into a plain Markdown rules file that later stages — and later runs — are told to read.
+
+Memory is entirely **opt-in** and off by default. Nothing runs and nothing is written unless you add a `memory:` block to the flow and mark at least one stage with `reflect:`.
+
+#### Turning it on
 
 ```yaml
 name: my-feature
 root_dir: .
 memory:
-  path: docs/memory        # a DIRECTORY, relative to root_dir; a non-empty value ENABLES the feature
-  max_rules: 25             # max patterns kept per file, project and per-stage (default 25)
-  commit: true              # git-commit the memory directory at end of run, no push (default false)
+  path: docs/memory        # a DIRECTORY (relative to root_dir); a non-empty value ENABLES the feature
+  max_rules: 25             # max patterns kept per file (default 25)
+  commit: false             # git-commit the memory directory at end of run (default false, no push)
 stages:
   - id: build
     name: build
@@ -320,27 +324,77 @@ stages:
     name: test
     agents: [implementation]
     depends_on: [build]
-    reflect: { file: build.md, mode: r }    # reads build's file without writing its own
+    reflect: { file: build.md, mode: r }    # reads build's file, writes nothing of its own
+  - id: docs
+    name: docs
+    agents: [implementation]
+    depends_on: [build]                      # no `reflect:` → still reads memory.md, writes nothing
 ```
 
-**Two tiers of files, both plain Markdown:**
+**Flow-level `memory:` fields:**
 
-- **`<memory.path>/memory.md`** — the project-wide rules file, accumulates **across runs**, injected into **every** stage's prompt once it exists.
-- **`<memory.path>/<reflect.file>`** — a per-stage file (e.g. `build.md`, or `sub/dir/file.md`) that the declaring stage's write chain rewrites; injected only into stages whose `reflect.mode` is `r` or `rw`.
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `path` | — | Directory (relative to `root_dir`) where memory files live. **A non-empty value is what enables the whole feature.** |
+| `max_rules` | `25` | Maximum number of `## Pattern` blocks kept in each file. When the distiller would exceed it, it drops Low-priority patterns first, then Medium, preserving High. |
+| `commit` | `false` | When `true`, afm runs `git add`/`git commit` **scoped to the memory directory** at the end of the run (only if something changed; never pushes). |
 
-`reflect.mode` controls both sides independently: `w` writes the stage's file but doesn't inject it back into that stage; `r` injects a stage's file (typically another stage's, via `depends_on`) without running the write chain; `rw` (the default when `mode` is omitted) does both. A `script:` stage may declare `reflect` for reading, but its write chain is always skipped — there's no agent session to reflect on.
+**Per-stage `reflect:` object** — `{ file, mode }`:
 
-Rules files look like this — priority is encoded only by the order of the blocks, high first:
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `file` | — (required) | The stage's own memory file, relative to `memory.path` (e.g. `build.md`, or `sub/dir/file.md`). Parent directories are created as needed. |
+| `mode` | `rw` | `r` = read only, `w` = write only, `rw` = both. See the table below. |
+
+`mode` controls reading (injecting the file into the stage's prompt) and writing (running the distill chain into the file) **independently**:
+
+| `mode` | Reads the file into this stage's prompt? | Runs the write chain into the file after this stage? |
+|--------|:---:|:---:|
+| `r`  | ✅ | ❌ |
+| `w`  | ❌ | ✅ |
+| `rw` | ✅ | ✅ |
+
+This is what lets one stage read another's memory: give the producer `mode: w` (or `rw`) and a downstream `depends_on` stage `mode: r` on the **same** `file`.
+
+#### What ends up on disk
+
+Two tiers of files, both plain Markdown, all under `<memory.path>/`:
+
+- **`memory.md`** — the project-wide rules file. Accumulates **across runs** (keep it in git). It is injected into **every** stage's prompt once it exists, regardless of whether that stage has its own `reflect:`.
+- **`<reflect.file>`** (e.g. `build.md`) — a per-stage file, rewritten by that stage's write chain, injected only into stages that name it with `mode` `r`/`rw`.
+
+Both files have the same shape — a flat list of named patterns, highest-priority first (priority is encoded **only** by block order, never written into the file):
 
 ```markdown
 # Project rules
 
-## Pattern Name
+## Single Source of Truth Propagation
 
-Pattern description.
+Treat the project's canonical config file as authoritative and propagate its exact values into every derived output.
+
+## Exact Path Fidelity
+
+Reproduce target paths precisely and verify the written file resolves to the intended location before declaring success.
 ```
 
-The write chain, run once per reflecting stage (into its own file) and once more at the end of the run (aggregating every stage's session into `memory.md`), is four steps: **reflect** (extract a raw RL-style dataset from the session, excluding afm/agent-protocol mechanics so memory stays project-specific) → **aggregate** (turn the dataset into a mutually-exclusive numbered pattern list) → **prioritize** (bucket every pattern into High/Medium/Low) → afm code keeps only High → **update** (merge the High patterns into the target file, cap at `max_rules`, rewrite it). The pipeline is **background and best-effort**: it never blocks downstream stages and never fails a stage or the run. Prompts ship as embedded defaults (`reflect.md`/`aggregate.md`/`prioritize.md`/`update.md`) and can be overridden per project via `prompts_dir`.
+afm reads the memory content by **pointing the agent at the file paths** (the agent reads them itself with its normal tools); it does not paste the file contents into the prompt, so prompts don't grow as memory grows.
+
+#### How a stage's session becomes patterns
+
+The distill chain runs **once per reflecting stage** (writing that stage's own file) and **once more at the end of the run** (aggregating every stage's session into `memory.md`). Four steps:
+
+1. **reflect** — a fresh-context agent reads the stage's session log and produces a raw RL-style dataset (`reflect_dataset.yaml`). Its prompt carries a hard **exclude list** for afm/agent-protocol mechanics (execution-summary format, stage directories, approval/retry flow, "read the memory files", generic SWE platitudes) so memory stays about **your project**, not the framework.
+2. **aggregate** — turns the dataset into a mutually-exclusive numbered list of named patterns.
+3. **prioritize** — buckets every pattern into High / Medium / Low.
+4. afm code keeps only the **High** patterns, then **update** — merges them into the target file (preferring to fold into existing patterns), caps at `max_rules`, and rewrites the file.
+
+The pipeline is **background and best-effort**: it never blocks downstream stages, never touches a stage's status, and never fails a stage or the run — if a step errors you get a `reflect_failed` notice in the dashboard and nothing else. The four prompts ship as embedded defaults (`reflect.md` / `aggregate.md` / `prioritize.md` / `update.md`) and can be overridden per project via the `prompts_dir` config.
+
+#### Practical notes
+
+- **Cross-run is the main payoff.** Because reflection runs in the background after a stage finishes, a *fast* downstream stage in the **same** run may start before the previous stage's memory has been written — so in-run forward carry isn't guaranteed. What *is* reliable is accumulation **across runs**: `memory.md` and the per-stage files are read at the start of every run, so each run stands on the previous run's lessons.
+- **Commit it (or ignore it).** `memory.md` is meant to live in your repo and grow over time. If you'd rather not track it, add `<memory.path>/` to `.gitignore`; if you want afm to commit it automatically after each run, set `commit: true`.
+- **Script stages** may declare `reflect:` for reading, but their write chain is always skipped — there is no agent session to reflect on.
 
 ### Passing Context Between Stages
 
