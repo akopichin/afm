@@ -302,38 +302,45 @@ By default the agent inherits the CWD of the `afm` process, and `afm` assumes th
 
 ### Agent Memory
 
-Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes. Agent memory carries those findings forward: after a stage marked `reflect: true` completes, afm runs a small background pipeline of two agents that distills the stage's session into **structured findings**, stored in a YAML file that later stages are shown a **relevant slice** of.
+Each stage runs its agent in an isolated context — whatever it learns (an API's real behavior, a required build flag, a rule it broke and had to correct) is lost when the stage finishes. Agent memory carries those findings forward: after a stage that opts in via `reflect:` completes, afm runs a small background pipeline that distills the stage's session into a handful of **project patterns** and merges them into a plain Markdown rules file.
 
 ```yaml
 name: my-feature
 root_dir: .
 memory:
-  project_file: docs/PROJECT_MEMORY.yaml  # relative to root_dir; a non-empty value ENABLES the feature
-  max_findings: 60                        # per-scope eviction ceiling (default 60)
-  retrieval_threshold: 25                 # ≤ → inject everything (pointer); > → inline only the relevant slice (default 25)
-  core_confirm_count: 3                   # confirm_count at/above which a finding is always inlined (default 3)
-  final_reflect: true                     # also run one reflection over the whole flow when it finishes (default false)
+  path: docs/memory        # a DIRECTORY, relative to root_dir; a non-empty value ENABLES the feature
+  max_rules: 25             # max patterns kept per file, project and per-stage (default 25)
+  commit: true              # git-commit the memory directory at end of run, no push (default false)
 stages:
   - id: build
     name: build
     agents: [planning, implementation]
-    reflect: true                         # this stage feeds memory after it completes
+    reflect: { file: build.md, mode: rw }   # writes docs/memory/build.md AND reads it back
   - id: test
     name: test
     agents: [implementation]
-    depends_on: [build]                   # no `reflect` → does not feed memory, but still reads it
+    depends_on: [build]
+    reflect: { file: build.md, mode: r }    # reads build's file without writing its own
 ```
 
-**Two memory files, two lifetimes:**
+**Two tiers of files, both plain Markdown:**
 
-- **`PROJECT_MEMORY.yaml`** — at `memory.project_file` in your repo, accumulates **across runs** (long-term project knowledge).
-- **`SESSION_MEMORY.yaml`** — auto-created at `.afm/runs/<run>/SESSION_MEMORY.yaml`, **reset every run** (this run's short-term context).
+- **`<memory.path>/memory.md`** — the project-wide rules file, accumulates **across runs**, injected into **every** stage's prompt once it exists.
+- **`<memory.path>/<reflect.file>`** — a per-stage file (e.g. `build.md`, or `sub/dir/file.md`) that the declaring stage's write chain rewrites; injected only into stages whose `reflect.mode` is `r` or `rw`.
 
-Each finding is a structured record — `scope` (`project`/`session`), `kind` (`fact`/`best_practice`/`anti_pattern`), `topic` tags, `statement`, required `evidence`, plus afm-owned metadata (`first_seen`/`last_seen`/`confirm_count`) that afm (not the agents) assigns and updates. A finding without evidence is rejected.
+`reflect.mode` controls both sides independently: `w` writes the stage's file but doesn't inject it back into that stage; `r` injects a stage's file (typically another stage's, via `depends_on`) without running the write chain; `rw` (the default when `mode` is omitted) does both. A `script:` stage may declare `reflect` for reading, but its write chain is always skipped — there's no agent session to reflect on.
 
-Per stage, afm injects only what's relevant: if the store is still small (≤ `retrieval_threshold` findings total) it points the agent at both files' absolute paths and lets it read them itself; once the store grows past the threshold, afm inlines a bounded slice — every "core" finding (`confirm_count ≥ core_confirm_count`) plus findings whose tags/text match the stage's own id/name/description — instead of the whole file, so prompt size doesn't keep growing with memory.
+Rules files look like this — priority is encoded only by the order of the blocks, high first:
 
-The pipeline is **background and best-effort**: it never blocks downstream stages and never fails a stage or the run. Under the hood it runs two overridable agents — **reflect** (extract candidate findings with required evidence, excluding afm/agent-protocol mechanics) and **consolidator** (merge/deduplicate against the current stores and verify each candidate is durable and project-specific). afm (code) then reconciles metadata, evicts the lowest-value findings past `max_findings` (by `confirm_count`, then recency), and writes each store atomically — agents never write the store files themselves. Prompts ship as embedded defaults (`reflect.md`/`consolidator.md`) and can be overridden per project via `prompts_dir`. With `final_reflect: true`, one extra reflection runs over the whole flow's session at the end.
+```markdown
+# Project rules
+
+## Pattern Name
+
+Pattern description.
+```
+
+The write chain, run once per reflecting stage (into its own file) and once more at the end of the run (aggregating every stage's session into `memory.md`), is four steps: **reflect** (extract a raw RL-style dataset from the session, excluding afm/agent-protocol mechanics so memory stays project-specific) → **aggregate** (turn the dataset into a mutually-exclusive numbered pattern list) → **prioritize** (bucket every pattern into High/Medium/Low) → afm code keeps only High → **update** (merge the High patterns into the target file, cap at `max_rules`, rewrite it). The pipeline is **background and best-effort**: it never blocks downstream stages and never fails a stage or the run. Prompts ship as embedded defaults (`reflect.md`/`aggregate.md`/`prioritize.md`/`update.md`) and can be overridden per project via `prompts_dir`.
 
 ### Passing Context Between Stages
 

@@ -262,10 +262,10 @@ func (s Stage) AutoRunDisabled() bool {
 // MemoryConfig — настройки agent-памяти флоу (v3 — директория).
 // Path непустой включает всю фичу (см. docs/superpowers/specs/2026-08-28-agent-memory-v3-design.md).
 type MemoryConfig struct {
-	// Path — директория для хранения памяти (PROJECT_MEMORY.yaml, SESSION_MEMORY.yaml),
-	// относительно root_dir. Непусто = фича включена.
+	// Path — директория для хранения памяти (project-wide <path>/memory.md +
+	// per-stage файлы из Reflect.File), относительно root_dir. Непусто = фича включена.
 	Path string `yaml:"path,omitempty"`
-	// MaxRules — максимальное количество findings для сохранения в памяти per-scope.
+	// MaxRules — максимальное количество паттернов на файл (project и per-stage).
 	// 0 → дефолт 25 (ставится в ParseFile).
 	MaxRules int `yaml:"max_rules,omitempty"`
 	// Commit — коммитить ли изменения памяти в git (опционально).

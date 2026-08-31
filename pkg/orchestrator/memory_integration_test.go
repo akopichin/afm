@@ -24,7 +24,7 @@ func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow
 	stage = flow.Stage{
 		ID:      "s1",
 		Name:    "Build",
-		Reflect: &flow.Reflect{File: "s1.md", Mode: flow.ReflectModeRW},
+		Reflect: &flow.Reflect{File: "build.md", Mode: flow.ReflectModeRW},
 		Agents:  []flow.AgentType{flow.AgentImplementation},
 	}
 
