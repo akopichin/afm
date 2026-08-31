@@ -9,7 +9,7 @@ A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML f
 - [Quick Start](#quick-start)
 - [Usage in Claude Code](#usage-in-claude-code)
 - [The flow.yaml File](#the-flowyaml-file)
-- [Supervisor and Autonomous Track](#supervisor-and-autonomous-track)
+- [Autonomous Track](#autonomous-track-agents-auto)
 - [Script Stages and Hooks](#script-stages-and-hooks)
 - [Stage Lifecycle](#stage-lifecycle)
 - [Configuration](#configuration)
@@ -30,7 +30,7 @@ Each stage goes through phases by default:
 
 Stages can run in parallel; dependencies via `depends_on` guarantee the correct order. Plans and artifacts of dependent stages are automatically substituted into the prompt.
 
-**Autonomous track (optional).** If a supervisor is enabled for a stage, an agent-supervisor (LLM) decides for itself whether the full cycle is needed. For simple stages it collapses planning/implementation/review into a single `autonomous_execution` step — an agent with skills does the work right away and writes `execution_summary.md`, without a plan and without approval. On any LLM error, there's a safe fallback to the regular phases. The autonomous track can also be forced without a supervisor — `agents: [auto]`. See [Supervisor and Autonomous Track](#supervisor-and-autonomous-track).
+**Autonomous track (optional).** A stage marked `agents: [auto]` skips planning/approval entirely: an agent with skills does the work in a single `autonomous_execution` step and writes `execution_summary.md` (the artifact dependent stages read instead of a plan). See [Autonomous Track](#autonomous-track-agents-auto).
 
 **Reliability.** The state of every run is written to an event log `.afm/runs/<run>/events.jsonl` (append + fsync) — this is the single source of truth. If a run is interrupted, `afm run` automatically resumes from the same point: completed stages are skipped, interrupted ones are retried. While `afm run` is active, it holds an exclusive lock on the run directory (`.lock`) — a concurrent `afm approve/retry/revise` from another process can't corrupt the live log.
 
@@ -216,7 +216,6 @@ After `./install.sh` the following skills are available:
 ```yaml
 name: my-feature
 description: "Short task description"
-# supervisor_command: glm51    # optional — supervisor agent command for the whole flow
 
 stages:
 
@@ -275,12 +274,10 @@ stages:
 | `interactive` | no | `true` — enables the file-based dialog protocol with the user via the dashboard (see below) |
 | `auto_approve` | no | `true` — approve this stage's plan automatically the instant it's ready, with no human interaction — regardless of a dashboard being attached or `--require-approval`. Default `false`. Intended for CI (see "Auto-Approving a Stage's Plan" below) |
 | `auto_run` | no | `false` — pause the stage the instant it's first eligible to start (`depends_on` satisfied), instead of starting immediately; it sits in `paused` until you hit **Continue** on the dashboard. Default `true` (starts on its own). Works on any stage type — regular, `agents: [auto]`, or `script`. Only gates the very first activation, not retries (see "Pausing a Stage Before It Starts" below) |
-| `supervisor` | no | `true` — allow the supervisor to evaluate the stage and possibly move it to the autonomous track (requires `supervisor_command`) |
-| `supervisor_prompt` | no | Extra context for the supervisor when evaluating this stage |
 | `artifacts` | no | Files the stage produces for other stages |
 | `inputs` | no | Artifacts from dependency stages (`stage.artifact`) |
 | `verify` | no | Shell command run after `.done`. Exit ≠ 0 — the stage is not counted as complete: one retry with the command's output in the prompt, then `failed`. Guards against a false "done" |
-| `script` | no | Makes this a script-only stage: runs the given shell script (`sh -c`) instead of any AI agent — no planning, no approval. Mutually exclusive with `agents`/`command`/`interactive`/`plan`/`verify`/`supervisor` |
+| `script` | no | Makes this a script-only stage: runs the given shell script (`sh -c`) instead of any AI agent — no planning, no approval. Mutually exclusive with `agents`/`command`/`interactive`/`plan`/`verify` |
 | `script_timeout` | no | Hard timeout for `script` (default `5m`) |
 | `script_before` | no | Shell script run immediately before this stage's own content (agent, autonomous track, interactive dialog, or another script). Works on any stage type |
 | `script_before_timeout` | no | Hard timeout for `script_before` (default `5m`) |
@@ -288,7 +285,7 @@ stages:
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into agent memory: `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (read / write / both, default `rw`). Requires the flow-level `memory:` block. See "Agent Memory" below |
 
-**Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `supervisor_command` (supervisor agent command), `root_dir` (project root = agents' working directory, see below), `memory` (agent-memory config, see "Agent Memory" below), `stages`.
+**Flow fields (top level):** `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`, `root_dir` (project root = agents' working directory, see below), `memory` (agent-memory config, see "Agent Memory" below), `stages`.
 
 **`root_dir` — the project root for agents.** Sets the working directory (CWD) in which stage agents run:
 
@@ -450,45 +447,20 @@ Full example: `example-flow-interactive.yaml`.
 
 > **Waiting for an answer and idle-timeout.** While a stage waits for an answer, the agent is idle and writes nothing to stdout. By default `executor.idle_timeout` = 30 min — if you don't answer within that time, the waiting agent may be killed. For long waits, raise the timeout: `executor: { idle_timeout: 24h }`.
 
-## Supervisor and Autonomous Track
+## Autonomous Track: `agents: [auto]`
 
-The supervisor is a separate LLM agent that, before a stage starts, decides whether it needs the full planning→approval→implementation cycle, or whether it can be executed autonomously in a single step.
-
-It's enabled for a stage when:
-1. a supervisor command is set in config/flow (`supervisor.command` in config or `supervisor_command` in the flow), and
-2. the stage has `supervisor: true`.
-
-If the supervisor decides `can_execute_autonomously`, the stage is moved to the `autonomous_execution` track: an agent with skills does the work right away (no `plan.md` and no approval) and is required to write `execution_summary.md` — it serves as the artifact for dependent stages instead of a plan. Otherwise the stage follows the regular cycle.
-
-- The supervisor's decision is published to the dashboard and written to `.afm/runs/<run>/supervisor.jsonl` (audit).
-- Any LLM/parsing error → safe fallback to the base phases (the flow doesn't fail).
-- A stage with an inline artifact always follows the regular cycle (the agent needs the artifact's context in the plan).
-
-```yaml
-# config.yaml
-supervisor:
-  command: glm51        # the supervisor agent's command
-
-# flow.yaml
-stages:
-  - id: rename-var
-    description: "Rename the foo → bar variable across the whole module"
-    agents: [planning, implementation]
-    supervisor: true     # let the supervisor collapse this into an autonomous step
-```
-
-### Hard Autonomous Track: `agents: [auto]`
-
-If you know in advance that a stage should follow the autonomous track (the supervisor doesn't always guess right), set `agents: [auto]` — the stage is immediately executed by an autonomous agent, **with no LLM decision from the supervisor and no fallback** to the regular phases. It behaves like a supervisor-autonomous stage (no `plan.md`, no approval, dialog available, writes `execution_summary.md`), except the decision is static — from YAML.
+Most stages go through the full planning → approval → implementation cycle. A stage that doesn't need that ceremony — a simple, well-defined task — can run on the **autonomous track** instead: set `agents: [auto]` and the stage is executed by a single autonomous agent in one step, with **no `plan.md`, no approval gate**. The agent (with its skills) does the work right away and is required to write `execution_summary.md`, which serves as the artifact for dependent stages in place of a plan. Interactive dialog is still available on an autonomous stage.
 
 ```yaml
 stages:
   - id: sync-manifests
     description: "Sync the CODEMANIFEST files with the code"
-    agents: [auto]        # hard autonomous, no supervisor
+    agents: [auto]        # autonomous — one step, no plan, no approval
 ```
 
-`auto` must be the stage's only agent; `auto` + `supervisor: true` is a configuration error (conflicting intents, caught during flow parsing).
+`auto` must be the stage's only agent (`agents: [auto]`, nothing else) — the flow parser rejects combining it with other agent phases.
+
+> **Note.** Earlier versions had an optional LLM *supervisor* that decided per-stage whether to collapse into the autonomous track. It was removed as redundant — declare `agents: [auto]` statically instead. The old `supervisor` / `supervisor_prompt` / `supervisor_command` keys are ignored (afm prints a non-fatal warning if it sees them).
 
 ## Script Stages and Hooks
 
@@ -503,7 +475,7 @@ stages:
 
 A `script` stage skips planning/approval entirely: as soon as its `depends_on` are done, the script runs, and the stage moves straight to `done`/`failed` based on the exit code.
 
-**`script_before` / `script_after`** are hooks that run immediately before/after *any* stage's own content — orthogonal to the stage type, so they combine freely with `agents`/`supervisor`/`interactive`/etc.:
+**`script_before` / `script_after`** are hooks that run immediately before/after *any* stage's own content — orthogonal to the stage type, so they combine freely with `agents`/`interactive`/etc.:
 
 ```yaml
 stages:
@@ -529,12 +501,12 @@ pending → planning → awaiting_approval → ready → running → done
          ↑                                         ↓
          └───────── revising ←────────────────────┘
 
-# autonomous track (supervisor):
-pending → (supervisor) → running(autonomous_execution) → done
+# autonomous track (agents: [auto]):
+pending → running(autonomous_execution) → done
 ```
 
 - `pending` — not started yet; planning starts once all `depends_on` are complete (unless `eager_planning: true`)
-- `planning` — the AI builds a plan (or the supervisor assesses the stage)
+- `planning` — the AI builds a plan
 - `awaiting_approval` — the plan is ready, awaiting approval (web or CLI)
 - `ready` — the plan is approved, waiting its turn
 - `running` — the AI implements the plan (or runs the autonomous track)
@@ -588,9 +560,6 @@ server:
   port: 9876                # web dashboard port
   open_browser: false       # open the browser on startup (default: false)
 
-supervisor:
-  command: glm51            # the supervisor agent's command (for stages with supervisor: true)
-
 # theme: coffee             # dashboard theme: coffee | goga | novacorps (default: coffee)
 # prompts_dir: .afm/prompts/  # custom prompt templates
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
@@ -617,7 +586,7 @@ On startup (if `server.open_browser: true`) the dashboard opens; otherwise its U
 
 - **Left panel** — list of stages with colored status indicators; the stage's `name` is shown under `id` (if set). The center panel's header also shows `name`, otherwise `id`
 - **Center panel** — the plan with line-by-line review and inline comments, the agent log (markdown), a "Dialog" section for interactive stages
-- **Right panel** — an event feed from all stages with source badges (including supervisor decisions)
+- **Right panel** — an event feed from all stages with source badges
 - **Progress bar** — at the bottom, showing how many stages are complete
 
 ### Themes
@@ -705,7 +674,6 @@ Need to drive afm from a Go service instead of the CLI — start a flow as a sub
       events.jsonl   # event log of transitions — SOURCE OF TRUTH (append + fsync)
       state.json     # derived status snapshot (cache; readers take the truth from the log)
       .lock          # flock of the active afm run
-      supervisor.jsonl       # supervisor decisions (if enabled)
       <stage-id>/
         plan.md          # stage plan
         feedback.md      # revision notes (plan revise, or a note added to a running stage)
@@ -715,7 +683,7 @@ Need to drive afm from a Go service instead of the CLI — start a flow as a sub
         implementation.log
         review.log
         .done                # implementation-completion marker
-        # autonomous track (if the supervisor switched the stage over):
+        # autonomous track (agents: [auto]):
         autonomous.flag      # autonomous-stage marker
         autonomous.log
         execution_summary.md # summary of the autonomous work (artifact for dependents)
