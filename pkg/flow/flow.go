@@ -53,6 +53,31 @@ func (inp *Input) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*plain)(inp))
 }
 
+// Reflect — конфиг отражения (reflection) стадии для agent-памяти v3.
+// File — путь к файлу, куда reflect-агент пишет dataset; обязателен.
+// Mode — r|w|rw, режим доступа агентов к памяти (0 → по умолчанию rw).
+type Reflect struct {
+	File string `yaml:"file"`
+	Mode string `yaml:"mode,omitempty"`
+}
+
+// Mode constants for Reflect.
+const (
+	ReflectModeR  = "r"
+	ReflectModeW  = "w"
+	ReflectModeRW = "rw"
+)
+
+// CanRead reports whether the reflect mode allows reading.
+func (r *Reflect) CanRead() bool {
+	return r.Mode == ReflectModeR || r.Mode == ReflectModeRW
+}
+
+// CanWrite reports whether the reflect mode allows writing.
+func (r *Reflect) CanWrite() bool {
+	return r.Mode == ReflectModeW || r.Mode == ReflectModeRW
+}
+
 // Button — предопределённая кнопка кебаб-меню стадии: Label — и отображаемая
 // подпись, и ключ поиска; Prompt — инструкция, которая доставляется живому
 // агенту через Revise при клике.
@@ -162,12 +187,11 @@ type Stage struct {
 	// стадии (нет агента). См.
 	// docs/superpowers/specs/2026-08-27-stage-custom-buttons-design.md.
 	Buttons Buttons `yaml:"buttons,omitempty"`
-	// Reflect (opt-in, дефолт false): после успешного завершения этой стадии
-	// запустить конвейер agent-памяти (reflect→consolidator) по её
-	// сессии. Требует непустой memory.project_file на уровне флоу. На script-
-	// стадии допустимо, но во время выполнения тихо пропускается (нет
-	// агентской сессии). Обычный bool — дефолт совпадает с нулевым значением.
-	Reflect bool `yaml:"reflect,omitempty"`
+	// Reflect (v3): конфиг отражения этой стадии для agent-памяти.
+	// nil (не задано) — reflect отключен. Непусто требует непустой memory.path на уровне флоу.
+	// На script-стадии допустимо, но во время выполнения тихо пропускается (нет
+	// агентской сессии). Обязателен reflect.file; reflect.mode опционален (дефолт rw).
+	Reflect *Reflect `yaml:"reflect,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -233,23 +257,17 @@ func (s Stage) AutoRunDisabled() bool {
 	return s.AutoRun != nil && !*s.AutoRun
 }
 
-// MemoryConfig — настройки agent-памяти флоу. ProjectFile непустой включает
-// всю фичу (см. docs/superpowers/specs/2026-08-28-agent-memory-design.md).
+// MemoryConfig — настройки agent-памяти флоу (v3 — директория).
+// Path непустой включает всю фичу (см. docs/superpowers/specs/2026-08-28-agent-memory-v3-design.md).
 type MemoryConfig struct {
-	// ProjectFile — путь к PROJECT_MEMORY.yaml относительно root_dir; репозиторный
-	// файл, накапливается между ранами. Непусто = фича включена.
-	ProjectFile string `yaml:"project_file,omitempty"`
-	// MaxFindings — максимальное количество findings для сохранения в памяти.
-	// 0 → дефолт 60 (ставится в ParseFile).
-	MaxFindings int `yaml:"max_findings,omitempty"`
-	// RetrievalThreshold — порог для retrieval'а findings при инициализации памяти.
+	// Path — директория для хранения памяти (PROJECT_MEMORY.yaml, SESSION_MEMORY.yaml),
+	// относительно root_dir. Непусто = фича включена.
+	Path string `yaml:"path,omitempty"`
+	// MaxRules — максимальное количество findings для сохранения в памяти per-scope.
 	// 0 → дефолт 25 (ставится в ParseFile).
-	RetrievalThreshold int `yaml:"retrieval_threshold,omitempty"`
-	// CoreConfirmCount — количество подтверждений для core findings.
-	// 0 → дефолт 3 (ставится в ParseFile).
-	CoreConfirmCount int `yaml:"core_confirm_count,omitempty"`
-	// FinalReflect — один прогон конвейера по ВСЕЙ сессии флоу в конце Run().
-	FinalReflect bool `yaml:"final_reflect,omitempty"`
+	MaxRules int `yaml:"max_rules,omitempty"`
+	// Commit — коммитить ли изменения памяти в git (опционально).
+	Commit bool `yaml:"commit,omitempty"`
 }
 
 // Flow is the top-level structure parsed from a flow YAML file.
@@ -272,7 +290,7 @@ type Flow struct {
 }
 
 // MemoryEnabled сообщает, включена ли agent-память для этого флоу.
-func (f *Flow) MemoryEnabled() bool { return f.Memory.ProjectFile != "" }
+func (f *Flow) MemoryEnabled() bool { return f.Memory.Path != "" }
 
 // ParseFile reads and validates a flow YAML file.
 func ParseFile(path string) (*Flow, error) {
@@ -289,14 +307,15 @@ func ParseFile(path string) (*Flow, error) {
 	}
 	f.applyScriptTimeoutDefaults()
 	if f.MemoryEnabled() {
-		if f.Memory.MaxFindings == 0 {
-			f.Memory.MaxFindings = 60
+		if f.Memory.MaxRules == 0 {
+			f.Memory.MaxRules = 25
 		}
-		if f.Memory.RetrievalThreshold == 0 {
-			f.Memory.RetrievalThreshold = 25
-		}
-		if f.Memory.CoreConfirmCount == 0 {
-			f.Memory.CoreConfirmCount = 3
+		// Set default reflect mode to "rw" for any stage with Reflect not nil
+		for i := range f.Stages {
+			s := &f.Stages[i]
+			if s.Reflect != nil && s.Reflect.Mode == "" {
+				s.Reflect.Mode = "rw"
+			}
 		}
 	}
 	warnDeprecatedSupervisorFields(data, path)
@@ -493,14 +512,22 @@ func (f *Flow) validate() error {
 		}
 	}
 
-	if !f.MemoryEnabled() {
-		if f.Memory.FinalReflect {
-			return errors.New("memory.final_reflect requires memory.project_file")
+	// Validate Reflect v3 configuration
+	for _, s := range f.Stages {
+		if s.Reflect == nil {
+			continue
 		}
-		for _, s := range f.Stages {
-			if s.Reflect {
-				return fmt.Errorf("stage %q: reflect requires memory.project_file", s.ID)
-			}
+		// Reflect requires memory.path to be set
+		if !f.MemoryEnabled() {
+			return fmt.Errorf("stage %q: reflect requires memory.path", s.ID)
+		}
+		// reflect.file is required
+		if s.Reflect.File == "" {
+			return fmt.Errorf("stage %q: reflect.file is required", s.ID)
+		}
+		// reflect.mode must be one of r, w, rw
+		if s.Reflect.Mode != "" && s.Reflect.Mode != ReflectModeR && s.Reflect.Mode != ReflectModeW && s.Reflect.Mode != ReflectModeRW {
+			return fmt.Errorf("stage %q: reflect.mode must be r, w, or rw", s.ID)
 		}
 	}
 

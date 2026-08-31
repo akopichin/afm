@@ -861,11 +861,12 @@ func TestParseMemory_FieldsAndDefaults(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.yaml
+  path: .goga/memory
 stages:
   - name: build
-    reflect: true
     agents: [planning, implementation]
+    reflect:
+      file: build.md
 `
 	f, err := flow.ParseFile(writeTemp(t, yaml))
 	if err != nil {
@@ -874,17 +875,14 @@ stages:
 	if !f.MemoryEnabled() {
 		t.Fatal("expected memory enabled")
 	}
-	if f.Memory.MaxFindings != 60 {
-		t.Errorf("MaxFindings default = %d, want 60", f.Memory.MaxFindings)
+	if f.Memory.MaxRules != 25 {
+		t.Errorf("MaxRules default = %d, want 25", f.Memory.MaxRules)
 	}
-	if f.Memory.RetrievalThreshold != 25 {
-		t.Errorf("RetrievalThreshold default = %d, want 25", f.Memory.RetrievalThreshold)
+	if f.Stages[0].Reflect == nil || f.Stages[0].Reflect.File != "build.md" {
+		t.Error("expected stage.Reflect to have file")
 	}
-	if f.Memory.CoreConfirmCount != 3 {
-		t.Errorf("CoreConfirmCount default = %d, want 3", f.Memory.CoreConfirmCount)
-	}
-	if !f.Stages[0].Reflect {
-		t.Error("expected stage.Reflect true")
+	if f.Stages[0].Reflect.Mode != "rw" {
+		t.Errorf("Mode default = %q, want rw", f.Stages[0].Reflect.Mode)
 	}
 }
 
@@ -892,10 +890,9 @@ func TestParseMemory_ExplicitFields(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.yaml
-  max_findings: 100
-  retrieval_threshold: 30
-  core_confirm_count: 5
+  path: .goga/memory
+  max_rules: 100
+  commit: true
 stages:
   - name: build
     agents: [planning, implementation]
@@ -904,22 +901,19 @@ stages:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if f.Memory.MaxFindings != 100 {
-		t.Errorf("MaxFindings = %d, want 100", f.Memory.MaxFindings)
+	if f.Memory.MaxRules != 100 {
+		t.Errorf("MaxRules = %d, want 100", f.Memory.MaxRules)
 	}
-	if f.Memory.RetrievalThreshold != 30 {
-		t.Errorf("RetrievalThreshold = %d, want 30", f.Memory.RetrievalThreshold)
-	}
-	if f.Memory.CoreConfirmCount != 5 {
-		t.Errorf("CoreConfirmCount = %d, want 5", f.Memory.CoreConfirmCount)
+	if !f.Memory.Commit {
+		t.Error("Commit should be true")
 	}
 }
 
-func TestParseMemory_ReflectDefaultsFalse(t *testing.T) {
+func TestParseMemory_ReflectDefaultsNil(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.yaml
+  path: .goga/memory
 stages:
   - name: build
     agents: [planning, implementation]
@@ -928,35 +922,22 @@ stages:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if f.Stages[0].Reflect {
-		t.Error("Reflect must default to false")
+	if f.Stages[0].Reflect != nil {
+		t.Error("Reflect must default to nil")
 	}
 }
 
-func TestValidateMemory_ReflectRequiresProjectFile(t *testing.T) {
+func TestValidateMemory_ReflectRequiresPath(t *testing.T) {
 	yaml := `
 name: f
 stages:
   - name: build
-    reflect: true
+    reflect:
+      file: build.md
     agents: [planning, implementation]
 `
 	if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
-		t.Fatal("expected error: reflect without memory.project_file")
-	}
-}
-
-func TestValidateMemory_FinalReflectRequiresProjectFile(t *testing.T) {
-	yaml := `
-name: f
-memory:
-  final_reflect: true
-stages:
-  - name: build
-    agents: [planning, implementation]
-`
-	if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
-		t.Fatal("expected error: final_reflect without memory.project_file")
+		t.Fatal("expected error: reflect without memory.path")
 	}
 }
 
@@ -964,13 +945,82 @@ func TestValidateMemory_ScriptStageReflectAllowed(t *testing.T) {
 	yaml := `
 name: f
 memory:
-  project_file: docs/PROJECT_MEMORY.yaml
+  path: .goga/memory
 stages:
   - name: gen
-    reflect: true
+    reflect:
+      file: gen.md
     script: "echo hi"
 `
 	if _, err := flow.ParseFile(writeTemp(t, yaml)); err != nil {
-		t.Fatalf("script stage with reflect:true must parse: %v", err)
+		t.Fatalf("script stage with reflect must parse: %v", err)
+	}
+}
+
+func TestParseMemoryV3_FieldsAndDefaults(t *testing.T) {
+	yaml := `
+name: f
+memory:
+  path: .goga/memory
+stages:
+  - name: build
+    agents: [planning, implementation]
+    reflect:
+      file: build.md
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !f.MemoryEnabled() || f.Memory.Path != ".goga/memory" {
+		t.Fatalf("path not parsed: %+v", f.Memory)
+	}
+	if f.Memory.MaxRules != 25 {
+		t.Errorf("MaxRules default = %d, want 25", f.Memory.MaxRules)
+	}
+	r := f.Stages[0].Reflect
+	if r == nil || r.File != "build.md" {
+		t.Fatalf("reflect not parsed: %+v", r)
+	}
+	if r.Mode != "rw" {
+		t.Errorf("mode default = %q, want rw", r.Mode)
+	}
+	if !r.CanRead() || !r.CanWrite() {
+		t.Error("rw must read and write")
+	}
+}
+
+func TestParseMemoryV3_ModeGates(t *testing.T) {
+	r := flow.Reflect{Mode: "r"}
+	if !r.CanRead() || r.CanWrite() {
+		t.Error("r: read-only")
+	}
+	w := flow.Reflect{Mode: "w"}
+	if w.CanRead() || !w.CanWrite() {
+		t.Error("w: write-only")
+	}
+}
+
+func TestValidateMemoryV3(t *testing.T) {
+	write := func(body string) error {
+		path := writeTemp(t, body)
+		_, err := flow.ParseFile(path)
+		return err
+	}
+	// reflect without memory.path → error
+	if err := write("name: f\nstages:\n  - name: s\n    agents: [planning]\n    reflect:\n      file: s.md\n"); err == nil {
+		t.Error("reflect without memory.path must error")
+	}
+	// empty file → error
+	if err := write("name: f\nmemory:\n  path: m\nstages:\n  - name: s\n    agents: [planning]\n    reflect:\n      mode: rw\n"); err == nil {
+		t.Error("empty reflect.file must error")
+	}
+	// bad mode → error
+	if err := write("name: f\nmemory:\n  path: m\nstages:\n  - name: s\n    agents: [planning]\n    reflect:\n      file: s.md\n      mode: x\n"); err == nil {
+		t.Error("bad mode must error")
+	}
+	// script stage with reflect parses OK
+	if err := write("name: f\nmemory:\n  path: m\nstages:\n  - name: s\n    script: \"echo hi\"\n    reflect:\n      file: s.md\n"); err != nil {
+		t.Errorf("script+reflect must parse: %v", err)
 	}
 }
