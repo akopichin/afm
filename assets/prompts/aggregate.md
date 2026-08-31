@@ -1,0 +1,1 @@
+Aggregate these datasets and extract project-level patterns without citing or referencing specific details. The identified patterns must be mutually exclusive with no conceptual overlaps. Output the result as a numbered list where each item includes a clear pattern name and its corresponding description.
