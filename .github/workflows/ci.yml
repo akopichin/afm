@@ -26,6 +26,15 @@ jobs:
       - name: Test
         run: make test
 
+      - name: UI unit tests
+        run: make web-test
+
+      - name: UI typecheck
+        run: make web-typecheck
+
+      - name: SDK tests
+        run: make sdk-test
+
       - name: Lint
         run: make lint-ci
 

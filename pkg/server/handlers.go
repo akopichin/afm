@@ -70,6 +70,9 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data) //nolint:gosec // G705: data read from server-side file, not user input
 }
 
+// maxLogBytes ограничивает размер ответа GET /log хвостом (finding #10).
+const maxLogBytes = 1 << 20 // 1 MB
+
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/log")
 	if !isValidStageID(stageID) {
@@ -100,6 +103,17 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	if logContent == "" {
 		http.Error(w, "no logs found", http.StatusNotFound)
 		return
+	}
+	// Tail-cap (finding #10): без ограничения ответ /log растёт неограниченно с
+	// длительностью рана, а UI перекачивает и перепарсивает его целиком каждые 3с
+	// (стоимость сети/аллокаций/GC/рендера растёт бесконечно). Отдаём только
+	// последние maxLogBytes, обрезая до границы строки, с маркером усечения.
+	if len(logContent) > maxLogBytes {
+		trimmed := logContent[len(logContent)-maxLogBytes:]
+		if nl := strings.IndexByte(trimmed, '\n'); nl >= 0 && nl+1 <= len(trimmed) {
+			trimmed = trimmed[nl+1:]
+		}
+		logContent = "… (log truncated to last 1 MB) …\n" + trimmed
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = fmt.Fprint(w, logContent) //nolint:gosec // G705: log content from server-side files
@@ -204,6 +218,15 @@ func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 	stageDir := filepath.Join(s.runDir, stageID)
 	if err := state.SavePreNote(stageDir, req.Note); err != nil {
 		http.Error(w, "save note failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Стадия могла стартовать между проверкой pending выше и записью prenote.md,
+	// прочитав ещё пустую заметку (finding #9): тогда заметка на диске уже не
+	// попадёт в первый промпт агента. Честно сообщаем об этом (409), а не молча
+	// возвращаем 200 «noted» — клиент (AgentNoteModal) на ошибке не закрывает
+	// модалку молча.
+	if s.store.Snapshot().Stages[stageID].Status != state.StatusPending {
+		http.Error(w, "stage started before the note was saved; it may not reach the first prompt", http.StatusConflict)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

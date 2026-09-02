@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -69,7 +70,40 @@ func writeHookPending(stageDir string, p hookPending) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(hookPendingPath(stageDir), data, 0644)
+	// Атомарная durable-запись (temp+fsync+rename+fsync каталога), не голый
+	// os.WriteFile: recovery резюмит hook_failed (before) и pending-решение
+	// after-hook'а исключительно по этому файлу, а после-hook при этом не двигает
+	// FSM — потеря или torn-запись при крахе оставила бы стадию без данных для
+	// Retry/Skip, причём для after-hook — незаметно после рестарта (finding #11).
+	path := hookPendingPath(stageDir)
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if dir, derr := os.Open(stageDir); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 func readHookPending(stageDir string) (hookPending, bool) {
@@ -199,7 +233,9 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		// listening (see registerHookWaiter's doc comment).
 		waitCh := o.registerHookWaiter(s.ID)
 
-		_ = writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout})
+		if werr := writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout}); werr != nil {
+			log.Printf("WARN: persist hook_pending (before) for %s: %v", s.ID, werr)
+		}
 		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvHookFailed, bus.GuardCtx{}, err.Error())
 		// o.ui, not o.critical: this is a dashboard notice, not an FSM-relevant
 		// signal — the transition already happened via triggerWithSeq above.
@@ -253,7 +289,12 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 		// listening and silently lose the decision.
 		waitCh := o.registerHookWaiter(s.ID)
 
-		_ = writeHookPending(stageDir, hookPending{Hook: hookAfter, Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout})
+		if werr := writeHookPending(stageDir, hookPending{Hook: hookAfter, Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout}); werr != nil {
+			// after-hook НЕ двигает FSM, значит pending-решение живёт только в
+			// этом файле — потеря делает Retry/Skip невосстановимым после
+			// рестарта (finding #11), поэтому логируем явно.
+			log.Printf("WARN: persist hook_pending (after) for %s: %v", s.ID, werr)
+		}
 		o.publishHookNotice(s.ID, bus.EventHookFailed, 0, map[string]string{"hook": hookAfter, "error": err.Error()})
 
 		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)

@@ -582,3 +582,33 @@ func TestWithBeforeHook_RunsMainFnWhenNotPaused(t *testing.T) {
 		t.Error("mainFn should run normally when the stage was not paused during the hook")
 	}
 }
+
+// TestWriteHookPending_AtomicRoundTrip is a regression test for finding #11:
+// the atomic (temp+fsync+rename) write must produce a readable file, leave no
+// stray temp behind, and replace cleanly on overwrite.
+func TestWriteHookPending_AtomicRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	p := hookPending{Hook: hookAfter, Script: "echo hi", Timeout: 5 * time.Second}
+	if err := writeHookPending(dir, p); err != nil {
+		t.Fatalf("writeHookPending: %v", err)
+	}
+	got, ok := readHookPending(dir)
+	if !ok {
+		t.Fatal("readHookPending: not found after write")
+	}
+	if got.Hook != p.Hook || got.Script != p.Script || got.Timeout != p.Timeout {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", got, p)
+	}
+	if _, err := os.Stat(hookPendingPath(dir) + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("stray temp file left behind by atomic write: %v", err)
+	}
+
+	p2 := hookPending{Hook: hookBefore, Script: "echo bye", Timeout: time.Second}
+	if err := writeHookPending(dir, p2); err != nil {
+		t.Fatalf("writeHookPending overwrite: %v", err)
+	}
+	got2, _ := readHookPending(dir)
+	if got2.Hook != hookBefore || got2.Script != "echo bye" {
+		t.Errorf("overwrite not applied atomically: %+v", got2)
+	}
+}

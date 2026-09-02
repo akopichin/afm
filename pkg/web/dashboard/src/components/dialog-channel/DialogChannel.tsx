@@ -42,6 +42,12 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [clickedSend, setClickedSend] = useState(false)
+  // submitting/submitError гейтят двойную отправку и делают ошибку мутирующего
+  // действия видимой (finding #8): без них кнопка SEND не блокировалась на время
+  // POST, показывала «✓ Sent» до ответа сервера, а reject (напр. 409 на второй
+  // клик) оставался необработанным промисом.
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [flash, setFlash] = useState(false)
 
   // Автоскролл канала к хвосту при появлении новых сообщений/вопросов,
@@ -183,12 +189,19 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
       return
     }
 
-    setClickedSend(true)
-    window.setTimeout(() => setClickedSend(false), 1200)
-
-    await answerDialog(stage.id, question.phase ?? '', question.id, answer, fromOptions)
-
-    await reload()
+    if (submitting) return // не даём второму клику отправить дубликат (→ 409)
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      await answerDialog(stage.id, question.phase ?? '', question.id, answer, fromOptions)
+      setClickedSend(true)
+      window.setTimeout(() => setClickedSend(false), 1200)
+      await reload()
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'failed to send answer')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   // Как только у вопроса есть хотя бы один комментарий, ответ пользователя —
@@ -204,12 +217,19 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     const feedback = buildFeedback(comments, question.question ?? '')
     if (feedback === '') return
 
-    setClickedSend(true)
-    window.setTimeout(() => setClickedSend(false), 1200)
-
-    await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false)
-
-    await reload()
+    if (submitting) return
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false)
+      setClickedSend(true)
+      window.setTimeout(() => setClickedSend(false), 1200)
+      await reload()
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'failed to send feedback')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   function handleLineClick(line: number) {
@@ -361,6 +381,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                           type="button"
                           className={selectedOption === option ? 'selected' : ''}
                           aria-pressed={selectedOption === option}
+                          disabled={submitting}
                           style={{ animationDelay: `${index * 40}ms` }}
                           onClick={() => selectOption(option)}
                         >
@@ -391,7 +412,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                     <button
                       className={`btn btn-send${clickedSend ? ' ok' : ''}`}
                       type="button"
-                      disabled={activeCommentLine !== null && draft.trim() !== ''}
+                      disabled={(activeCommentLine !== null && draft.trim() !== '') || submitting}
                       onClick={sendAnswer}
                     >
                       <span className="btn-ripple" aria-hidden="true" />
@@ -399,7 +420,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                       <span className="btn-done" aria-hidden="true">✓ Sent</span>
                     </button>
                   ) : (
-                    <button className={`btn btn-send${clickedSend ? ' ok' : ''}`} type="button" onClick={sendFeedback}>
+                    <button className={`btn btn-send${clickedSend ? ' ok' : ''}`} type="button" disabled={submitting} onClick={sendFeedback}>
                       <span className="btn-ripple" aria-hidden="true" />
                       <span className="btn-label">{`Send feedback (${commentCount})`}</span>
                       <span className="btn-done" aria-hidden="true">✓ Sent</span>
@@ -412,6 +433,11 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                     AGENT IS WAITING <span className="blink" />
                   </span>
                 </div>
+                {submitError !== null && (
+                  <div className="dialog-error" role="alert">
+                    {`Failed to send: ${submitError}. Try again.`}
+                  </div>
+                )}
               </div>
             )}
 

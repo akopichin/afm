@@ -869,4 +869,63 @@ describe('DialogChannel', () => {
     })
     expect(container.querySelector('#dialog-pending')).not.toBeNull()
   })
+
+  // Finding #8: the SEND button must disable while a submit is in flight so a
+  // second click can't fire a duplicate POST (which the server 409s).
+  test('SEND disables while a submit is in flight — no double-submit', async () => {
+    let resolvePost!: (r: Response) => void
+    const postPromise = new Promise<Response>((r) => {
+      resolvePost = r
+    })
+    const pending = { id: 'q1', phase: 'planning', question: 'Pick', answer: null, options: ['Alpha'], allow_custom: true }
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      if (String(input).includes('/dialog/answer')) return postPromise as unknown as Promise<Response>
+      return Promise.resolve(jsonResponse([pending]))
+    })
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+    })
+
+    const send = () => container.querySelector('.btn-send') as HTMLButtonElement
+    await act(async () => {
+      fireEvent.click(send())
+    })
+
+    expect(send().disabled).toBe(true) // in-flight → disabled
+    await act(async () => {
+      fireEvent.click(send()) // second click on the disabled button is a no-op
+    })
+    const postCalls = spy.mock.calls.filter((c) => String(c[0]).includes('/dialog/answer'))
+    expect(postCalls).toHaveLength(1)
+
+    resolvePost(jsonResponse([{ ...pending, answer: 'Alpha' }]))
+    await act(async () => {
+      await Promise.resolve()
+    })
+  })
+
+  // Finding #8: a failed mutating action must surface an error (not vanish as an
+  // unhandled promise rejection) and re-enable the button for a retry.
+  test('a failed answer submit shows an error and re-enables SEND', async () => {
+    const pending = { id: 'q1', phase: 'planning', question: 'Pick', answer: null, options: ['Alpha'], allow_custom: true }
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      if (String(input).includes('/dialog/answer')) return Promise.resolve({ ok: false, status: 409 } as Response)
+      return Promise.resolve(jsonResponse([pending]))
+    })
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+    })
+    await act(async () => {
+      fireEvent.click(container.querySelector('.btn-send') as HTMLButtonElement)
+    })
+
+    await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
+    expect((container.querySelector('.btn-send') as HTMLButtonElement).disabled).toBe(false)
+  })
 })

@@ -192,4 +192,26 @@ describe('EventFeedPanel', () => {
     expect(document.querySelector('.maximize-overlay #log-content')).not.toBeNull()
     expect(document.querySelector('.maximize-overlay #log-content')).toHaveTextContent('line')
   })
+
+  // Finding #12: several same-type live events accepted in the same millisecond
+  // used to share the React key `${timestamp}-${type}` → a duplicate-key warning
+  // and unstable DOM reuse. Keys must be unique (occurrence-disambiguated).
+  test('same-timestamp same-type events get unique keys (no duplicate-key warning)', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ts = '2026-07-10T10:00:00.000Z'
+    const events: AfmEvent[] = [
+      { type: 'agent_action', payload: { tool: 'read_file', detail: 'a' }, stageId: 's1', timestamp: ts },
+      { type: 'agent_action', payload: { tool: 'read_file', detail: 'b' }, stageId: 's1', timestamp: ts },
+      { type: 'agent_action', payload: { tool: 'read_file', detail: 'c' }, stageId: 's1', timestamp: ts },
+    ]
+
+    const { container } = render(<EventFeedPanel events={events} logEntries={[]} />)
+
+    expect(container.querySelectorAll('.feed-entry')).toHaveLength(3)
+    const sawDupKeyWarning = errSpy.mock.calls.some((call) =>
+      call.some((arg) => typeof arg === 'string' && arg.includes('same key')),
+    )
+    expect(sawDupKeyWarning).toBe(false)
+    errSpy.mockRestore()
+  })
 })

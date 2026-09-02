@@ -1426,3 +1426,43 @@ func TestHandleStatus_IncludesBackoffOpenSinceWhenRetrying(t *testing.T) {
 		t.Fatalf("backoff_open_since len = %d, want 1", len(resp.BackoffOpenSince))
 	}
 }
+
+// TestHandleLog_TailCapsLargeLog is a regression test for finding #10: an
+// oversized phase log must be returned tail-capped, not in full, so the /log
+// response (re-fetched every 3s) stays bounded regardless of run length.
+func TestHandleLog_TailCapsLargeLog(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+	stageDir := filepath.Join(runDir, testStageID)
+
+	var b strings.Builder
+	b.WriteString("HEAD-LINE-should-be-truncated\n")
+	filler := strings.Repeat("x", 120) + "\n"
+	for b.Len() < 2<<20 { // 2 MB, well over the 1 MB cap
+		b.WriteString(filler)
+	}
+	b.WriteString("TAIL-LINE-should-survive\n")
+	if err := os.WriteFile(filepath.Join(stageDir, "planning.log"), []byte(b.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/log", nil)
+	w := httptest.NewRecorder()
+	srv.handleLog(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if len(body) > (1<<20)+128 {
+		t.Errorf("response not capped: %d bytes (want <= ~1 MB)", len(body))
+	}
+	if !strings.Contains(body, "TAIL-LINE-should-survive") {
+		t.Error("the tail of an oversized log must survive the cap")
+	}
+	if strings.Contains(body, "HEAD-LINE-should-be-truncated") {
+		t.Error("the head of an oversized log must be truncated away")
+	}
+	if !strings.Contains(body, "truncated") {
+		t.Error("expected a truncation marker in the capped response")
+	}
+}

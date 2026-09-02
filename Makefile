@@ -38,6 +38,18 @@ build: web
 test:
 	$(GOENV) go test ./... -v -race
 
+# web-test/web-typecheck — Vitest и tsc для дашборда (finding #13): vite build
+# их НЕ гоняет, поэтому UI-регрессии могли попасть в main при зелёном CI.
+# node_modules ставит `web`/`build`, но гейтим и здесь на случай прямого вызова.
+.PHONY: web-test web-typecheck
+web-test:
+	@test -d $(DASHBOARD_DIR)/node_modules || (cd $(DASHBOARD_DIR) && npm install)
+	cd $(DASHBOARD_DIR) && npm test
+
+web-typecheck:
+	@test -d $(DASHBOARD_DIR)/node_modules || (cd $(DASHBOARD_DIR) && npm install)
+	cd $(DASHBOARD_DIR) && npm run typecheck
+
 .PHONY: generate
 generate:
 	$(GOENV) go run ./tools/genstagestatus

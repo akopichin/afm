@@ -36,6 +36,12 @@ export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): Rea
   const log = useStickToBottom<HTMLPreElement>()
   const { mode, toggle } = useFeedMode()
   const hasLogEntries = logEntries.length > 0
+  // Стабильные уникальные React-ключи (finding #12): прежний `${timestamp}-${type}`
+  // совпадал у нескольких однотипных live-событий, принятых в одну миллисекунду
+  // (agent_action и т.п.) → React duplicate-key warning и потенциально неверное
+  // переиспользование DOM-узлов. Здесь ключи disambiguates по occurrence-счётчику,
+  // детерминированно и стабильно при неизменном порядке ленты.
+  const entryKeys = feedEntryKeys(events)
 
   return (
     <Maximizable id="feed">
@@ -63,7 +69,7 @@ export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): Rea
                 const line = toFeedLine(event)
 
                 return (
-                  <div className={`feed-entry${line.entryClass !== '' ? ` ${line.entryClass}` : ''}`} data-ts={Number.isNaN(ts) ? 0 : ts} key={`${event.timestamp}-${event.type}`}>
+                  <div className={`feed-entry${line.entryClass !== '' ? ` ${line.entryClass}` : ''}`} data-ts={Number.isNaN(ts) ? 0 : ts} key={entryKeys[index]}>
                     <span className="feed-time">{formatEventGap(ts, prevTs)}</span>
                     <span className={line.msgClass}>
                       {event.stageId !== '' && (
@@ -97,6 +103,21 @@ export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): Rea
       </PanelFrame>
     </Maximizable>
   )
+}
+
+// feedEntryKeys строит уникальные стабильные React-ключи для ленты: базовый
+// ключ — seq (если есть) либо `timestamp|type|stageId`, а при повторе того же
+// базового ключа добавляется occurrence-суффикс `#N`. Детерминированно при
+// неизменном порядке событий, так что ключи не «прыгают» между рендерами
+// (finding #12).
+function feedEntryKeys(events: AfmEvent[]): string[] {
+  const counts = new Map<string, number>()
+  return events.map((e) => {
+    const base = e.seq !== undefined ? `seq:${e.seq}` : `${e.timestamp}|${e.type}|${e.stageId}`
+    const n = counts.get(base) ?? 0
+    counts.set(base, n + 1)
+    return n === 0 ? base : `${base}#${n}`
+  })
 }
 
 function toFeedLine(event: AfmEvent): FeedLine {
