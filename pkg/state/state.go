@@ -295,6 +295,16 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 			res.corrupted = true
 			return res
 		}
+		// Восстанавливаем реальное начало рана из первого события лога.
+		// NewRunState штампует StartedAt = time.Now(), что на resume/restart-Open
+		// равно моменту повторного открытия, а не старту рана — без этой
+		// перезаписи STARTED/ELAPSED в дашборде скачком обнулялись после каждого
+		// рестарта afm (лог хранит t.Time каждого перехода, первое событие —
+		// EvStartRun — и есть настоящее начало). На свежем ране лог при Open пуст,
+		// сюда не заходим, и StartedAt остаётся временем Open ≈ реальному старту.
+		if len(res.history) == 0 && !t.Time.IsZero() {
+			rs.StartedAt = t.Time
+		}
 		accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
 		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
 		res.history = append(res.history, t)

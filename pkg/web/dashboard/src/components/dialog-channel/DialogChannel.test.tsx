@@ -56,6 +56,7 @@ describe('DialogChannel', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
   test('hasContent=false: no entries and status not awaiting_user_input renders nothing', async () => {
@@ -793,5 +794,79 @@ describe('DialogChannel', () => {
 
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(container).toBeEmptyDOMElement()
+  })
+
+  // Finding #7: overlapping /dialog polls can resolve out of order. An older
+  // (pre-answer) response resolving AFTER a newer (answered) one must not revert
+  // the answered question back to pending.
+  test('stale dialog response does not revert an answered question to pending', async () => {
+    vi.useFakeTimers()
+
+    let resolveFirst!: (r: Response) => void
+    const firstPromise = new Promise<Response>((r) => {
+      resolveFirst = r
+    })
+    let resolveSecond!: (r: Response) => void
+    const secondPromise = new Promise<Response>((r) => {
+      resolveSecond = r
+    })
+
+    const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+    const answered = { id: 'q1', phase: 'p1', question: 'Pick', answer: 'A', options: ['A'], allow_custom: true }
+
+    vi.spyOn(globalThis, 'fetch')
+      .mockReturnValueOnce(firstPromise as unknown as Promise<Response>)
+      .mockReturnValueOnce(secondPromise as unknown as Promise<Response>)
+      .mockResolvedValue(jsonResponse([answered]))
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+
+    // Mount issued request #1 (firstPromise, still pending). Advance to the next
+    // poll → request #2 (secondPromise).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+
+    // Newer request resolves FIRST with the answered state.
+    await act(async () => {
+      resolveSecond(jsonResponse([answered]))
+      await Promise.resolve()
+    })
+    expect(container.querySelector('#dialog-pending')).toBeNull()
+
+    // Older (stale) request resolves LATER with the pre-answer pending state —
+    // the generation guard must drop it, keeping the answered view.
+    await act(async () => {
+      resolveFirst(jsonResponse([pending]))
+      await Promise.resolve()
+    })
+    expect(container.querySelector('#dialog-pending')).toBeNull()
+  })
+
+  // Finding #7: a transient fetch failure must not wipe the last successful
+  // dialog to an empty panel (loadDialog returns null, not []).
+  test('transient fetch error keeps the last successful dialog', async () => {
+    vi.useFakeTimers()
+
+    const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse([pending]))
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = render(<DialogChannel stage={makeStage()} />)
+
+    // First poll succeeds → pending question shown.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('#dialog-pending')).not.toBeNull()
+
+    // Second poll rejects → must NOT wipe the visible dialog.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(container.querySelector('#dialog-pending')).not.toBeNull()
   })
 })

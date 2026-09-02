@@ -514,3 +514,46 @@ func TestOpen_ResumeReconstructsIdleAndBackoffFromReplay(t *testing.T) {
 		t.Errorf("IdleSince() after resume = %v, want %v", afterSince, beforeSince)
 	}
 }
+
+// TestOpen_RestoresStartedAtFromFirstEvent is a regression test for finding #6:
+// STARTED/ELAPSED must survive an afm restart. NewRunState stamps StartedAt =
+// time.Now(), so on a resume Open the value would be the moment of re-opening,
+// not the real run start — replaying the first logged event (EvStartRun) must
+// restore it.
+func TestOpen_RestoresStartedAtFromFirstEvent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&Transition{StageID: "s1", From: StatusPending, To: StatusRunning, Event: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first logged event's time is the authoritative run start.
+	data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first Transition
+	if err := json.Unmarshal([]byte(strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+
+	// Widen the gap so a (buggy) reopen-now StartedAt is unambiguously later.
+	time.Sleep(10 * time.Millisecond)
+
+	reopened, err := Open(dir, []string{"s1"})
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	defer reopened.Close()
+
+	got := reopened.Snapshot().StartedAt
+	if !got.Equal(first.Time) {
+		t.Errorf("StartedAt after reopen = %v, want the first event's time %v (must survive restart, not reset to now)", got, first.Time)
+	}
+}

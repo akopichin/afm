@@ -68,6 +68,13 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
 
     let cancelled = false
     let lastPendingId: string | undefined
+    // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно в
+    // порядке отправки. requestGen — счётчик поколений (как latestRequestId в
+    // useStatus): каждый refresh запоминает свой номер ДО await и применяет
+    // ответ, только если он всё ещё самый свежий — иначе более старый
+    // (до-ответа) response, резолвнувшийся после нового (уже-отвеченного), снова
+    // открыл бы отвеченный вопрос.
+    let requestGen = 0
 
     setEntries([])
     setSelectedOption(null)
@@ -76,8 +83,11 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
     setActiveCommentLine(null)
 
     const refresh = (): void => {
+      const requestId = ++requestGen
       void loadDialog(current.id).then((data) => {
         if (cancelled) return
+        if (requestId !== requestGen) return // более свежий запрос уже применён
+        if (data === null) return // транзиентная ошибка — сохраняем последнее успешное состояние
         setEntries(data)
         const nextPendingId = findPending(data)?.id
         if (nextPendingId !== lastPendingId) {
@@ -146,6 +156,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
   async function reload() {
     if (stage === null) return
     const data = await loadDialog(stage.id)
+    if (data === null) return // транзиентная ошибка — сохраняем последнее успешное состояние
     setEntries(data)
     setSelectedOption(null)
     setCustomText('')
@@ -500,15 +511,18 @@ function findPending(entries: DialogEntry[]): DialogEntry | null {
   return null
 }
 
-async function loadDialog(stageId: string): Promise<DialogEntry[]> {
+// loadDialog возвращает null при транзиентной ошибке (сеть/не-OK), чтобы
+// вызывающий отличил её от реально пустого диалога ([]) и НЕ затирал последнее
+// успешное состояние пустотой на одну неудачную попытку опроса.
+async function loadDialog(stageId: string): Promise<DialogEntry[] | null> {
   let response: Response
   try {
     response = await fetch(`/api/stages/${encodeURIComponent(stageId)}/dialog`)
   } catch {
-    return []
+    return null
   }
 
-  if (!response.ok) return []
+  if (!response.ok) return null
 
   // Единственная точка приведения типа для внешнего JSON.
   const data: unknown = await response.json()
