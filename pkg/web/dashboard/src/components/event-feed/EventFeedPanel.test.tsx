@@ -145,6 +145,30 @@ describe('EventFeedPanel', () => {
     expect(container.querySelector('#log-empty')).toHaveTextContent('Log is empty')
   })
 
+  test('log mode auto-scrolls to the bottom (stick-to-bottom, like the feed)', () => {
+    // Лог должен сам прокручиваться к хвосту, как лента (фид) — раньше <pre>
+    // лога не был привязан к useStickToBottom и не докручивался (баг: «прогресс
+    // логов сам не прокручивается, как в фиде, надо листать»).
+    window.localStorage.setItem('afm-feed-mode', 'log')
+
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 777 })
+
+    try {
+      const logEntries: LogEntry[] = [{ timestamp: '10:00:00', message: 'line 1', level: 'info' }]
+      const { container } = render(<EventFeedPanel events={[]} logEntries={logEntries} />)
+
+      const pre = container.querySelector('#log-content') as HTMLElement | null
+      expect(pre).not.toBeNull()
+      // Контейнер примонтировался с готовым контентом → stick-to-bottom сразу
+      // докручивает вниз (scrollTop == scrollHeight).
+      expect(pre?.scrollTop).toBe(777)
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', original)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight')
+    }
+  })
+
   test('remembers the chosen mode across remounts via localStorage', () => {
     const first = render(<EventFeedPanel events={[]} logEntries={[]} />)
     fireEvent.click(screen.getByRole('button', { name: 'Switch to log' }))

@@ -29,6 +29,11 @@ export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): Rea
   // Автоскролл ленты к хвосту при появлении новых событий, пока пользователь
   // не уехал вверх сам. Кнопка «↓ к последнему» возвращается к актуальному.
   const feed = useStickToBottom<HTMLDivElement>()
+  // Лог — второй режим этой же панели — тоже должен сам докручиваться к хвосту,
+  // как лента: свой независимый стик-скролл на <pre>-контейнере (у него overflow-y
+  // от .log-content, см. log-panel.css). Раньше <pre> не был ни к чему привязан и
+  // не прокручивался — приходилось листать вручную.
+  const log = useStickToBottom<HTMLPreElement>()
   const { mode, toggle } = useFeedMode()
   const hasLogEntries = logEntries.length > 0
 
@@ -77,9 +82,14 @@ export function EventFeedPanel({ events, logEntries }: EventFeedPanelProps): Rea
             </div>
           ) : (
             <div className="section log-section">
-              <pre id="log-content" className={`log-content${hasLogEntries ? '' : ' hidden'}`}>
+              <pre id="log-content" ref={log.ref} className={`log-content${hasLogEntries ? '' : ' hidden'}`}>
                 {logEntries.map((entry) => entry.message).join('\n')}
               </pre>
+              {hasLogEntries && !log.stick && (
+                <button type="button" className="jump-latest" onClick={log.jumpToBottom}>
+                  ↓ latest
+                </button>
+              )}
               <div id="log-empty" className={`empty-hint${hasLogEntries ? ' hidden' : ''}`}>Log is empty</div>
             </div>
           )}

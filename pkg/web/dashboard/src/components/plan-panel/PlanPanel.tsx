@@ -44,8 +44,12 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   useEffect(() => {
     // stage === null: панель смонтирована для стабильности лейаута, но
     // реальной стадии нет — не гоняем пустой fetch GET /api/stages//plan.
+    // Скрипт-стадия (script:) НИКОГДА не имеет plan.md — запрос всегда вернёт
+    // 404 и лишь засоряет консоль (репорт тестировщика). Панель при этом всё
+    // равно рендерится (для failed/paused-скриптов в ней живут кнопки
+    // Retry/Continue), просто с пустым планом.
     const current = stage
-    if (current === null) return
+    if (current === null || current.isScript) return
 
     let cancelled = false
 

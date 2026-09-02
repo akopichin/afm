@@ -16,8 +16,10 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		}
 	}
 	// "b" is autonomous (has autonomous.flag) and failed → plan panel must
-	// still show (Retry lives there), dialog panel shows too (autonomous track
-	// is always dialog-capable).
+	// still show (Retry lives there). The dialog panel is NOT reserved here:
+	// без диалоговой истории и не в awaiting_user_input DialogChannel рендерит
+	// пусто, а зарезервированная строка давала пустую дыру (см. showDialog в
+	// stageview.go).
 	if err := os.WriteFile(filepath.Join(runDir, "b", "autonomous.flag"), nil, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +47,11 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 	if !a.ShowPlan {
 		t.Errorf("stage a (not autonomous): ShowPlan should be true, got %+v", a)
 	}
-	if !a.ShowDialog { // interactive:true → dialog shown
-		t.Errorf("stage a: ShowDialog should be true (interactive), got %+v", a)
+	// interactive:true, но pending и без диалоговой истории → строку под диалог
+	// НЕ резервируем (иначе пустая дыра). Панель появится, когда стадия реально
+	// задаст вопрос (awaiting_user_input) или запишет dialog.jsonl (hasDialog).
+	if a.ShowDialog {
+		t.Errorf("stage a (interactive, pending, no dialog): ShowDialog should be false, got %+v", a)
 	}
 
 	if !b.Autonomous {
@@ -55,8 +60,45 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 	if !b.ShowPlan {
 		t.Errorf("stage b (autonomous but failed): ShowPlan should still be true, got %+v", b)
 	}
-	if !b.ShowDialog {
-		t.Errorf("stage b (autonomous): ShowDialog should be true, got %+v", b)
+	// autonomous, но failed и без диалоговой истории → тоже не резервируем.
+	if b.ShowDialog {
+		t.Errorf("stage b (autonomous, failed, no dialog): ShowDialog should be false, got %+v", b)
+	}
+}
+
+// showDialog должен резервировать строку под диалог только когда есть что
+// показать: awaiting_user_input (живой вопрос) или уже записанный dialog.jsonl.
+func TestBuildStageViews_ShowDialogOnlyWithContent(t *testing.T) {
+	runDir := t.TempDir()
+	for _, id := range []string{"asking", "answered"} {
+		if err := os.MkdirAll(filepath.Join(runDir, id), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// "answered" уже писал диалог на диск → hasDialog=true.
+	if err := os.WriteFile(filepath.Join(runDir, "answered", "planning.dialog.jsonl"), []byte("{}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := state.RunState{
+		StageOrder: []string{"asking", "answered"},
+		Stages: map[string]state.StageState{
+			"asking":   {Status: state.StatusAwaitingUserInput},
+			"answered": {Status: state.StatusDone},
+		},
+	}
+
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil)
+	byID := map[string]StageView{}
+	for _, v := range views {
+		byID[v.ID] = v
+	}
+
+	if !byID["asking"].ShowDialog {
+		t.Errorf("asking (awaiting_user_input): ShowDialog should be true, got %+v", byID["asking"])
+	}
+	if !byID["answered"].ShowDialog {
+		t.Errorf("answered (hasDialog): ShowDialog should be true, got %+v", byID["answered"])
 	}
 }
 

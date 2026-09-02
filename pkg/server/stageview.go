@@ -71,7 +71,19 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 		// paused (Continue): обе требуют кнопки действия, которая живёт в
 		// PlanPanel, а не в DialogChannel.
 		showPlan := !autonomous || st.Status == state.StatusFailed || st.Status == state.StatusPaused
-		showDialog := interactive || autonomous || hasDialog
+		// ShowDialog резервирует строку под DialogChannel в лейауте. Условие ДОЛЖНО
+		// совпадать с внутренним гейтом hasContent самого DialogChannel.tsx
+		// (entries>0 || awaiting_user_input || hasDialog) — иначе для стадии, где
+		// панель зарезервирована, но рендерить нечего (interactive/autonomous БЕЗ
+		// диалоговой истории и не в awaiting_user_input), DialogChannel возвращает
+		// <></>, и строка остаётся пустой дырой во всю высоту центральной колонки
+		// (баг «ломается при клике на стадию»: клик по завершённой autonomous-стадии
+		// показывал пустой центр без even fallback «Nothing to show»). hasDialog
+		// покрывает авто-ответы/историю, awaiting_user_input — живой вопрос ещё до
+		// появления <phase>.dialog.jsonl (и гонку «status обогнал fetch entries»).
+		// interactive/autonomous сами по себе панель БОЛЬШЕ не открывают —
+		// раньше это и порождало пустую дыру.
+		showDialog := hasDialog || st.Status == state.StatusAwaitingUserInput
 		pausedFrom := state.StageStatus("")
 		if st.Status == state.StatusPaused {
 			pausedFrom = st.PausedFrom

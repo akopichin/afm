@@ -31,6 +31,24 @@ describe('PlanPanel', () => {
     expect(container.querySelector('#retry-section')).toBeNull()
   })
 
+  test('script stage: does not fetch a plan (no 404 noise — script stages never have plan.md)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+
+    const { container } = render(<PlanPanel stage={makeStage({ isScript: true, status: 'done' })} />)
+
+    // Никаких запросов на /plan для скрипт-стадии — именно они давали 404 в консоли.
+    await Promise.resolve()
+    const planCalls = fetchSpy.mock.calls.filter(([input]) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      return url.endsWith('/plan')
+    })
+    expect(planCalls).toHaveLength(0)
+    // Панель всё равно рендерится (для failed/paused-скриптов там живут кнопки),
+    // просто без плана.
+    expect(container.querySelector('#plan-content')).not.toBeNull()
+    expect(container.querySelector('#plan-empty')).not.toHaveClass('hidden')
+  })
+
   test('awaiting_approval: renders review lines with line numbers and opens a comment form on click', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 

@@ -50,7 +50,7 @@ function stageView(id: string, name: string, status: string, overrides: StageVie
     auto_approve: overrides.autoApprove ?? false,
     has_dialog: hasDialog,
     show_plan: overrides.showPlan ?? (!autonomous || status === 'failed'),
-    show_dialog: overrides.showDialog ?? (interactive || autonomous || hasDialog),
+    show_dialog: overrides.showDialog ?? (hasDialog || status === 'awaiting_user_input'),
   }
 }
 
