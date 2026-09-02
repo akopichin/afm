@@ -313,6 +313,9 @@ func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 // continuations of an already-hooked run).
 func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) func(context.Context, flow.Stage) {
 	return func(ctx context.Context, s flow.Stage) {
+		// Захватываем generation паузы ДО хука; любой Pause за время его
+		// исполнения его изменит (см. поле pauseGen).
+		gen := o.loadPauseGen(s.ID)
 		if s.ScriptBefore != "" {
 			if !o.runBeforeHook(ctx, s) {
 				return
@@ -321,11 +324,15 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 		// script_before runs as a bare shell script with no InterruptCh (only
 		// the main agent gets one, inside runWithRetry) — so a manual Pause()
 		// can succeed (durable EvPause transition) while the hook is still
-		// executing in the background, unnoticed. Without this check we'd
-		// spawn mainFn on a stage the user just paused — and a second time
-		// again if they'd already clicked Continue in the meantime (Continue
-		// spawns independently via resumeStageAtStatus).
-		if o.currentStatus(s.ID) == state.StatusPaused {
+		// executing in the background, unnoticed. A plain currentStatus==paused
+		// check catches "paused and still paused", but NOT the ABA
+		// running->paused->running that a Pause immediately followed by Continue
+		// produces: by the time the hook returns, status is running again and
+		// Continue has ALREADY spawned the agent independently (via
+		// resumeStageAtStatus) — running mainFn here too would double-launch.
+		// The generation guard catches both: any pause during the hook changed
+		// pauseGen, so we abdicate and let Continue own the (single) relaunch.
+		if o.loadPauseGen(s.ID) != gen || o.currentStatus(s.ID) == state.StatusPaused {
 			return
 		}
 		mainFn(ctx, s)

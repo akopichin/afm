@@ -94,13 +94,18 @@ func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
 	if o.currentStatus(stageID) == state.StatusAwaitingApproval {
 		stage := o.graph.Stage(stageID)
 		if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
-			o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, "planning-only stage")
-			// Планировочная стадия без implementation-агента доходит до done
-			// прямо здесь, минуя onAgentCompleted/completeStage — но
-			// script_after разрешён на любой стадии (flow.go), так что этот
-			// путь тоже обязан его запустить, иначе хук молча не выполнится
-			// для планировочных стадий.
-			o.maybeRunAfterHook(ctx, stageID)
+			// EvComplete из awaiting_approval может проиграть CAS конкурентному
+			// Revise (running/awaiting_approval -> revising) на HTTP-горутине —
+			// тогда стадия не завершилась, и after-hook запускать нельзя
+			// (симметрично гейту в completeStage). Планировочная стадия без
+			// implementation-агента доходит до done прямо здесь, минуя
+			// onAgentCompleted/completeStage — но script_after разрешён на любой
+			// стадии (flow.go), так что при успешном завершении этот путь обязан
+			// его запустить, иначе хук молча не выполнится для планировочных
+			// стадий.
+			if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, "planning-only stage"); ok {
+				o.maybeRunAfterHook(ctx, stageID)
+			}
 		} else {
 			o.Trigger(stageID, bus.EvApprove, bus.GuardCtx{}, "")
 		}
@@ -219,6 +224,11 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
 	if _, ok := o.Trigger(stageID, bus.EvPause, bus.GuardCtx{}, "manual pause"); !ok {
 		return nil
 	}
+	// Инвалидируем любой in-flight script_before этой стадии: если пауза
+	// случилась во время before-hook, его горутина после завершения скрипта
+	// увидит изменившийся generation и не запустит mainFn — повторный старт
+	// сделает Continue (см. withBeforeHook, hooks.go).
+	o.bumpPauseGen(stageID)
 	if ch, ok := o.interruptChans.Load(stageID); ok {
 		select {
 		case ch.(chan struct{}) <- struct{}{}:

@@ -166,6 +166,41 @@ type Orchestrator struct {
 	// проставит runCtx.
 	runMu  sync.Mutex
 	runCtx context.Context
+
+	// pauseGen — монотонный per-stage счётчик, инкрементируемый каждым Pause
+	// (см. control_api.go). withBeforeHook захватывает его на входе и сверяет
+	// после script_before: любой Pause за время хука (в т.ч. ABA
+	// running->paused->running через Continue) меняет счётчик, и хук
+	// отказывается запускать mainFn — повторный запуск становится
+	// ответственностью Continue/resumeStageAtStatus, что исключает двойной старт
+	// агента. Обычной проверки currentStatus==paused недостаточно: она не ловит
+	// ABA (после Continue статус снова running). Значение — *atomic.Uint64 на
+	// стадию (см. bumpPauseGen/loadPauseGen).
+	pauseGen sync.Map
+
+	// retryCASBarrier — тест-сейм (nil в проде): вызывается в retryStage сразу
+	// после проверки статуса failed и ДО CAS EvManualRetry, позволяя тесту
+	// детерминированно смоделировать проигрыш CAS (перевести стадию из failed
+	// на другой горутине) и проверить, что проигравший вызов не чистит
+	// session/jsonl победителя. Инъектируется через SetRetryCASBarrierForTest.
+	retryCASBarrier func(stageID string)
+}
+
+// bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле
+// pauseGen). Вызывается из Pause после успешного EvPause.
+func (o *Orchestrator) bumpPauseGen(stageID string) {
+	v, _ := o.pauseGen.LoadOrStore(stageID, new(atomic.Uint64))
+	v.(*atomic.Uint64).Add(1)
+}
+
+// loadPauseGen возвращает текущее значение generation-счётчика паузы стадии
+// (0, если стадию ещё ни разу не ставили на паузу).
+func (o *Orchestrator) loadPauseGen(stageID string) uint64 {
+	v, ok := o.pauseGen.Load(stageID)
+	if !ok {
+		return 0
+	}
+	return v.(*atomic.Uint64).Load()
 }
 
 // setFatal фиксирует первую storage-fatal ошибку и отменяет run-контекст,
@@ -481,7 +516,19 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	if current != state.StatusRunning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput {
 		return
 	}
-	o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason)
+	// current — снимок статуса, прочитанный вызывающим (onAgentCompleted/
+	// resumeStageAtStatus) ДО этого момента: между чтением и CAS сюда мог влезть
+	// Pause/Revise на другой горутине (HTTP-хендлер) и увести стадию из
+	// running/retrying. Тогда EvComplete не применится — и побочные эффекты
+	// (after-hook, reflection, каскад разблокировки зависимых) запускать НЕЛЬЗЯ:
+	// стадия не завершена. Отдельно это чинит утечку pendingAfterHooks —
+	// maybeRunAfterHook инкрементил счётчик, а SpawnAgent отбрасывал callback с
+	// декрементом на paused-стадии (см. concurrency.shouldRun); после успешного
+	// EvComplete стадия done, а из done Pause невозможен, так что callback
+	// after-hook гарантированно выполнится и декремент произойдёт.
+	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason); !ok {
+		return
+	}
 	o.maybeRunAfterHook(ctx, stageID)
 	o.maybeRunReflection(ctx, stageID)
 	o.failBlockedStages()

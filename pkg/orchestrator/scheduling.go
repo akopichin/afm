@@ -213,22 +213,37 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		return
 	}
 
-	// Manual retry of an interactive stage must start a fresh Claude session:
-	// a leftover <phase>.session.json may reference a conversation that was
-	// never created (phantom), which makes claude fail with "No conversation
-	// found". Clear all phase sessions for this stage.
+	// Тест-сейм (nil в проде): точка, где тест может смоделировать проигрыш
+	// CAS, переведя стадию из failed на другой горутине между проверкой статуса
+	// выше и CAS ниже.
+	if o.retryCASBarrier != nil {
+		o.retryCASBarrier(stageID)
+	}
+
+	// CAS ПЕРВЫМ: право на retry захватывает ровно один вызывающий. Два
+	// конкурентных Retry-запроса оба проходят устаревшую проверку failed выше,
+	// но EvManualRetry (failed -> pending) применится только у одного —
+	// проигравший выходит здесь, НЕ тронув файлы стадии. Раньше очистка
+	// session/jsonl шла ДО этого CAS: проигравший успевал снести уже свежие
+	// данные победителя, стартовавшего новый запуск.
+	if _, ok := o.Trigger(stageID, bus.EvManualRetry, bus.GuardCtx{}, ""); !ok {
+		return
+	}
+
+	// Только победитель CAS чистит. Manual retry of an interactive stage must
+	// start a fresh Claude session: a leftover <phase>.session.json may
+	// reference a conversation that was never created (phantom), which makes
+	// claude fail with "No conversation found". Clear all phase sessions for
+	// this stage.
 	//
 	// Also truncate <phase>.jsonl: detectDialogViolation re-scans the raw
 	// stream-json log every poll tick, and a *.question.json Write from a
 	// previous (violating) run would otherwise re-fire instantly and make the
-	// stage un-retryable. Truncating here (before re-activation) is race-free
-	// because the poller skips stages in non-active states.
+	// stage un-retryable. Truncating here stays race-free w.r.t. the poller:
+	// after EvManualRetry the stage is pending (non-active) and the poller
+	// skips it just the same.
 	if stage.Interactive {
 		clearInteractiveSessions(filepath.Join(o.opts.RunDir, stageID))
-	}
-
-	if _, ok := o.Trigger(stageID, bus.EvManualRetry, bus.GuardCtx{}, ""); !ok {
-		return
 	}
 
 	// Script-стадия (Stage.IsScript()): у неё нет ни plan.md, ни агента —
