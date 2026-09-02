@@ -2,6 +2,39 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-09-02
+
+### Fix: reliability audit — 13 races, hangs and durability gaps
+
+An external reliability audit surfaced 13 findings across the orchestrator↔UI boundary, the file-based dialog protocol, and CI. Each was verified against the code before fixing; every fix ships with a regression test that was confirmed to fail when the fix is reverted. Grouped by area below.
+
+**Orchestrator FSM races (Pause/Continue/Retry/complete)**
+
+- **`completeStage` no longer runs side effects when the `EvComplete` CAS is lost.** It previously ignored the `Trigger(EvComplete)` result and unconditionally ran the after-hook, reflection and unblock cascade — so a `Pause`/`Revise` landing between the status read and the transition still fired all of them on a stage that never completed. Worse, it leaked `pendingAfterHooks`: `maybeRunAfterHook` incremented the counter, but `SpawnAgent`'s `shouldRun` skip dropped the decrementing callback on a now-paused stage, so `shouldExit()` never returned true and the run couldn't exit. Both `completeStage` (`orchestrator.go`) and `approveStage`'s planning-only branch (`control_api.go`) now gate every side effect on a successful `EvComplete` — and since a `done` stage can't be paused, the after-hook callback (and its decrement) is now guaranteed to run.
+- **Pause→Continue during `script_before` no longer double-launches the stage.** `script_before` runs without an interrupt channel, so a `Pause` could succeed while it was still executing; by the time the hook returned, `Continue` had already spawned the agent independently (`resumeStageAtStatus`), and the hook goroutine — seeing status back at `running` (the ABA `running→paused→running`) — launched a second agent. A per-stage `pauseGen` generation counter (bumped by every `Pause`) is now captured before the hook and re-checked after: any pause during the hook makes `withBeforeHook` abdicate `mainFn`, leaving the single relaunch to `Continue`. This is strictly stronger than the old `currentStatus == paused` check, which the ABA slipped past.
+- **Two concurrent `Retry` requests can no longer corrupt an already-restarted run.** `retryStage` cleared the interactive session/`.jsonl` *before* the `EvManualRetry` CAS, so the retry that lost the CAS could still wipe the freshly-created session of the one that won. Cleanup now runs *after* the CAS — only the winner clears.
+
+**File-based dialog protocol (hangs)**
+
+- **Reusing a question id after it was answered no longer hangs an interactive stage.** When an agent removed `answer.json` and rewrote `question.json` with a new question under the same id, the UI kept showing the old *answered* question with no input box. `ReadDialog` (`pkg/mcp/dialog.go`) now re-opens the entry when a fresh question arrives over a complete Q+A pair (adopts the new text, drops the stale answer), and `pollQuestions` re-appends the reused question to `dialog.jsonl` once the prior incarnation is answered — so the entry renders as pending again.
+- **A question whose filename id differs from its JSON-body id no longer hangs forever.** `FindUnansweredQuestions` returned the id from the JSON body but checked the answer path by filename; the answer then landed at a path the agent never polled. The **filename id is now authoritative** (it's what the agent's polling loop and the answer-existence check both key off).
+
+**Metrics & dashboard**
+
+- **`STARTED`/`ELAPSED` survive an afm restart/resume.** `NewRunState` stamps `StartedAt = time.Now()`, and log replay restored stage statuses and idle/backoff accumulators but not the start time — so a resumed run's `STARTED` jumped to the moment of restart. `parseEventLog` (`pkg/state/state.go`) now restores `StartedAt` from the first logged event's timestamp; a fresh run's empty log leaves it at ≈Open time as before.
+- **`DialogChannel` no longer applies stale `/dialog` responses.** With a 2 s poll and overlapping in-flight requests, an older (pre-answer) response resolving after a newer (answered) one re-opened an already-answered question. A request-generation guard (the same pattern `useStatus` already uses) now applies only the latest response; and a transient fetch error returns `null` (not `[]`), so a single failed poll no longer wipes the visible dialog.
+- **Dialog actions can't double-submit and no longer hide errors (finding #8).** The SEND button and options disable while a POST is in flight (a second click used to fire a duplicate the server 409s), "✓ Sent" shows only after success, and a failed submit surfaces a visible, retryable error instead of an unhandled promise rejection.
+- **Event-feed rows use stable, unique React keys (finding #12).** The old `${timestamp}-${type}` key collided for several same-type events accepted in the same millisecond (duplicate-key warning, unstable DOM reuse). Keys are now occurrence-disambiguated (`seq` when present, else `timestamp|type|stageId` + `#N`).
+- **`GET /log` is tail-capped (finding #10).** The endpoint concatenated every phase log in full and the UI re-fetched and re-parsed it every 3 s, so cost grew unbounded with run length. The response is now capped to the last 1 MB (trimmed to a line boundary, with a truncation marker).
+- **Pre-note save is race-honest (finding #9).** `POST /note` re-checks the stage status after writing `prenote.md`; if the stage started between the `pending` check and the write (so the note won't reach the first prompt), it returns `409` instead of a silent `200`.
+
+**Durability & CI**
+
+- **`hook_pending.json` is written atomically (finding #11).** It used a bare `os.WriteFile` with the error ignored; a crash or torn write left an after-hook (which never touches the FSM) with no recoverable Retry/Skip decision. It now writes via temp + fsync + rename + parent-dir fsync, and write errors are logged.
+- **CI now runs the UI and SDK test suites (finding #13).** `make build` (a `vite build`) exercised neither Vitest nor `tsc --noEmit`, and SDK tests lived only in un-invoked Make targets — UI/SDK regressions could reach `main` on green CI. The `validate` job now runs `make web-test`, `make web-typecheck` and `make sdk-test` (new Makefile targets for the first two).
+
+- **Verified live** (native build of the branch, docker disabled so the real current source runs, mock agent, real dashboard via Chrome DevTools): a 4-stage flow (planning+auto-approve+hooks → script → autonomous → interactive) ran clean to all-done with hook/script markers written; Pause→Continue during a long `script_before` produced `running→paused→running→done` with the agent launched **exactly once**; a reused question id re-rendered with an input box (not stuck on the answered one); a filename/JSON id mismatch was auto-answered at the filename path and completed; and a kill-mid-run restart resumed the same run with `STARTED` preserved. Tests: `pkg/orchestrator` (completeStage lost-CAS + counter-leak, pause-during-before-hook single-launch, retry lost-CAS, hook_pending round-trip), `pkg/mcp` (reused-id re-open, filename-id authoritative), `pkg/state` (StartedAt restored from first event), `pkg/server` (log tail-cap), `DialogChannel.test.tsx`/`EventFeedPanel.test.tsx` (stale-response guard, error-keeps-history, no double-submit, error surfaced, unique feed keys). `go build ./...`, `pkg/orchestrator`/`pkg/state`/`pkg/mcp`/`pkg/server` `-race`, `golangci-lint` (0 issues), 282 UI tests + typecheck, and `make sdk-test` all green.
+
 ## 2026-08-31
 
 ### Feature: agent-memory read/write control — `memory.mode` + `memory_use`
