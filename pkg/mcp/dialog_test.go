@@ -574,3 +574,104 @@ func TestCanParseQuestion(t *testing.T) {
 		})
 	}
 }
+
+// TestReadDialog_ReusedIDReopens is a regression test for finding #2: an agent
+// that reuses a question id after it was answered (removes answer.json, rewrites
+// question.json) must not leave the dialog stuck showing the old answered
+// question. ReadDialog re-opens the entry — adopting the new question text and
+// dropping the stale answer — so the UI renders it as pending again.
+func TestReadDialog_ReusedIDReopens(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "planning.dialog.jsonl")
+
+	// First incarnation: asked and answered.
+	if err := mcp.AppendQuestion(path, mcp.Question{ID: testQ2, Question: "first?", Options: []string{answerYes, "no"}, AllowCustom: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.AppendAnswer(path, mcp.Answer{ID: testQ2, Answer: answerYes, FromOptions: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Second incarnation of the SAME id: a new, distinct question.
+	if err := mcp.AppendQuestion(path, mcp.Question{ID: testQ2, Question: "second?", AllowCustom: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := mcp.ReadDialog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want 1 collapsed entry for reused id, got %d: %+v", len(entries), entries)
+	}
+	e := entries[0]
+	if e.Question != "second?" {
+		t.Errorf("entry must adopt the NEW question text, got %q", e.Question)
+	}
+	if e.Answer != nil {
+		t.Errorf("entry must read as unanswered after the reused question re-opened it, got answer=%q", *e.Answer)
+	}
+	// Options/flags from the stale first incarnation must not linger.
+	if len(e.Options) != 0 || e.FromOptions {
+		t.Errorf("stale first-incarnation fields lingered: %+v", e)
+	}
+
+	// Answering the new incarnation collapses cleanly to the new Q + new A.
+	if err := mcp.AppendAnswer(path, mcp.Answer{ID: testQ2, Answer: "no"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = mcp.ReadDialog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Question != "second?" || entries[0].Answer == nil || *entries[0].Answer != "no" {
+		t.Fatalf("after answering the reused question, want {second?, no}, got %+v", entries)
+	}
+}
+
+// TestFindUnansweredQuestions_FilenameIDAuthoritative is a regression test for
+// finding #4: when a question file's name and its JSON body carry different
+// ids, the FILENAME id wins — that's the one the agent's polling loop derives
+// its answer path from. Trusting the body id would make afm write the answer to
+// a path the agent never polls, hanging the stage forever.
+func TestFindUnansweredQuestions_FilenameIDAuthoritative(t *testing.T) {
+	dir := t.TempDir()
+	// Filename id is "foo", JSON body id is "bar".
+	if err := os.WriteFile(filepath.Join(dir, "planning.foo.question.json"),
+		[]byte(`{"id":"bar","question":"mismatch?"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 unanswered question, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != "foo" {
+		t.Errorf("want filename id %q to win over JSON body id %q, got %q", "foo", "bar", got[0].ID)
+	}
+
+	// An answer at the FILENAME path (what the agent polls) marks it answered;
+	// an answer at the JSON-body-id path must NOT.
+	if err := os.WriteFile(filepath.Join(dir, "planning.bar.answer.json"), []byte(`{"id":"bar","answer":"x"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("answer at the JSON-body-id path must not satisfy the filename-keyed check, got %d: %+v", len(got), got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "planning.foo.answer.json"), []byte(`{"id":"foo","answer":"x"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = mcp.FindUnansweredQuestions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("answer at the filename path must mark it answered, got %d: %+v", len(got), got)
+	}
+}

@@ -373,6 +373,80 @@ func TestPollQuestions_ReusedIDAfterAnswerAsksAgain(t *testing.T) {
 	}
 }
 
+// TestPollQuestions_ReusedID_ReopensDialogHistory is the dialog-history half of
+// finding #2 (the test above only checks the FSM re-fires). When an id is
+// reused after being answered, the poller must APPEND the new question to
+// <phase>.dialog.jsonl even though an (answered) entry already exists — so
+// ReadDialog re-opens the entry as unanswered and the UI renders it with an
+// input box instead of the stale answered question. Uses the real answer path
+// (mcp.WriteAnswer → dialog.jsonl answer line), which is how an interactive
+// answer actually reaches history, unlike the FSM-only test above.
+func TestPollQuestions_ReusedID_ReopensDialogHistory(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
+	dialogPath := filepath.Join(stageDir, "implementation.dialog.jsonl")
+	writeQ := func(question string) {
+		payload, _ := json.Marshal(map[string]any{"id": "q1", "question": question, "allow_custom": true})
+		if err := os.WriteFile(qPath, payload, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	// Round 1: first question asked.
+	writeQ("first?")
+	o.pollQuestions(processed, malformed)
+
+	// User answers through the real path (writes answer.json AND the dialog
+	// answer line); agent resumes and consumes the answer file.
+	if err := mcp.WriteAnswer(stageDir, "implementation", "q1", "A", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusAwaitingUserInput, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	o.pollQuestions(processed, malformed) // prune the answered key
+	if err := os.Remove(filepath.Join(stageDir, "implementation.q1.answer.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 2: same id reused for a genuinely new question.
+	writeQ("second?")
+	o.pollQuestions(processed, malformed)
+
+	entries, err := mcp.ReadDialog(dialogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want 1 collapsed entry for q1, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Question != "second?" {
+		t.Errorf("dialog history must show the reused question's NEW text, got %q — poller did not re-append it", entries[0].Question)
+	}
+	if entries[0].Answer != nil {
+		t.Errorf("dialog history must read the reused question as unanswered, got answer=%q", *entries[0].Answer)
+	}
+}
+
 // setupMalformedTestOrch builds an interactive stage in StatusRunning with a
 // broken question.json, shared by the malformed-JSON retry tests below.
 func setupMalformedTestOrch(t *testing.T, broken string) (*Orchestrator, *state.Store, string) {

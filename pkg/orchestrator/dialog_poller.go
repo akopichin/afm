@@ -151,9 +151,17 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			if processed[key] {
 				continue
 			}
-			// Write to dialog.jsonl for history (idempotent via FindEntry check).
+			// Write to dialog.jsonl for history. Append when the id isn't
+			// recorded yet OR the recorded entry is already answered — the
+			// latter means the agent reused the id for a NEW question (removed
+			// answer.json, rewrote question.json). The new incarnation must
+			// reach dialog.jsonl so ReadDialog re-opens the entry as unanswered
+			// (see mcp.ReadDialog's reused-id handling); otherwise the reused
+			// question is never shown with an input box and the interactive
+			// stage hangs. FindEntry reflects that re-opening, so the next tick
+			// sees an unanswered entry and does not append a duplicate.
 			dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
-			if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
+			if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil || e.Answer != nil {
 				_ = mcp.AppendQuestion(dialogPath, mcp.Question{
 					ID:          q.ID,
 					Question:    q.Question,

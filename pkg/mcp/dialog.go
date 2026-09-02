@@ -118,14 +118,34 @@ func ReadDialog(path string) ([]Entry, error) {
 				continue
 			}
 			if e, ok := byID[q.ID]; ok {
-				// The answer line arrived before the question line (the two
-				// records are written by different goroutines). Fill in the
-				// question fields on the existing entry instead of dropping
-				// them, leaving the answer fields untouched.
-				e.TS = q.TS
-				e.Question = q.Question
-				e.Options = q.Options
-				e.AllowCustom = q.AllowCustom
+				if e.Answer != nil && e.Question != "" {
+					// A COMPLETE prior exchange (both question AND answer) exists
+					// for this id and a fresh question line arrived — the agent
+					// reused the id for a NEW question (removed answer.json,
+					// rewrote question.json). Re-open the entry as the latest
+					// incarnation: adopt the new question and drop the stale
+					// answer so it reads as unanswered again. Without this the UI
+					// keeps showing the old answered question with no input box
+					// and the interactive stage hangs forever in
+					// awaiting_user_input.
+					e.TS = q.TS
+					e.Question = q.Question
+					e.Options = q.Options
+					e.AllowCustom = q.AllowCustom
+					e.Answer = nil
+					e.AnswerTS = ""
+					e.FromOptions = false
+					e.AutoAnswered = false
+				} else {
+					// Same incarnation: either the answer line arrived before the
+					// question line (out-of-order writers — e.Question == "") or a
+					// still-unanswered question was rewritten. Fill in / refresh
+					// the question fields, leaving any answer untouched.
+					e.TS = q.TS
+					e.Question = q.Question
+					e.Options = q.Options
+					e.AllowCustom = q.AllowCustom
+				}
 			} else {
 				byID[q.ID] = &Entry{
 					ID: q.ID, TS: q.TS, Question: q.Question,
@@ -267,7 +287,6 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 				// здесь только сигнализируем Malformed и отдаём то, что есть.
 				log.Printf("WARN: %s: invalid JSON even after repair: %v", qPath, err)
 				malformed = true
-				qf.ID = id
 				qf.Question = string(raw)
 			} else if writeErr := os.WriteFile(qPath, []byte(repaired), 0644); writeErr != nil {
 				log.Printf("WARN: %s: repaired invalid JSON in memory but failed to persist fix: %v", qPath, writeErr)
@@ -275,11 +294,15 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 				log.Printf("INFO: %s: repaired invalid JSON: %v", qPath, err)
 			}
 		}
-		actualID := qf.ID
-		if actualID == "" {
-			actualID = id
-		}
-		if actualID == "" {
+		// The FILENAME id is authoritative — it's what the agent's polling loop
+		// derives its answer path from (<phase>.<id>.answer.json) and what the
+		// answerPath existence check above already keys off. If the JSON body
+		// carries a DIFFERENT id (agent bug: filename says <id>, body says
+		// <other>), trusting the body would make afm/UI write the answer to
+		// <other>.answer.json while the agent forever polls <id>.answer.json —
+		// an eternal hang that neither auto-answer nor the UI can break. So we
+		// ignore a divergent body id and key strictly off the filename.
+		if id == "" {
 			continue
 		}
 		allowCustom := true
@@ -287,7 +310,7 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 			allowCustom = *qf.AllowCustom
 		}
 		out = append(out, QuestionFile{
-			Phase: phase, ID: actualID, Question: qf.Question,
+			Phase: phase, ID: id, Question: qf.Question,
 			Options: qf.Options, AllowCustom: allowCustom, Malformed: malformed,
 		})
 	}
