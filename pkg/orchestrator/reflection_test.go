@@ -67,7 +67,11 @@ func TestMaybeRunReflection_NoOpWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestMaybeRunReflection_WritesStageFile(t *testing.T) {
+// Per-stage теперь ТОЛЬКО каптурит датасет (reflect_dataset.yaml). Вся сборка
+// (aggregate/prioritize/update) перенесена в end-of-run — после каждой стадии
+// ничего не строится, поэтому память видит все стадии вместе, а сборка бежит
+// один раз в конце (см. runEndOfRunMemory).
+func TestMaybeRunReflection_CapturesDatasetOnly(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
 	o, runDir := newReflectionTestOrchestrator(t, stage)
 	o.opts.MemoryDir = t.TempDir()
@@ -80,16 +84,14 @@ func TestMaybeRunReflection_WritesStageFile(t *testing.T) {
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
 
-	targetFile := memory.StageFile(o.opts.MemoryDir, "s.md")
-	data, err := os.ReadFile(targetFile)
-	if err != nil {
-		t.Fatalf("stage memory file not written: %v", err)
+	if got := strings.Join(order, ","); got != "reflect" {
+		t.Errorf("order = %q, want just reflect (build moved to end-of-run)", got)
 	}
-	if !strings.Contains(string(data), "# Project rules") {
-		t.Errorf("stage memory file missing expected content: %q", string(data))
+	if _, err := os.Stat(filepath.Join(runDir, stage.ID, "reflect_dataset.yaml")); err != nil {
+		t.Errorf("reflect_dataset.yaml must be captured per-stage: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "reflect,aggregate,prioritize,update" {
-		t.Errorf("order = %q, want reflect,aggregate,prioritize,update", got)
+	if _, err := os.Stat(memory.StageFile(o.opts.MemoryDir, "s.md")); err == nil {
+		t.Error("stage memory file must NOT be built per-stage anymore (moved to end-of-run)")
 	}
 }
 
@@ -164,6 +166,39 @@ func TestEndOfRunMemory_WritesProjectFile(t *testing.T) {
 	o.runEndOfRunMemory(context.Background())
 	if len(order) != before {
 		t.Error("end-of-run memory ran twice; finalReflectDone not honored")
+	}
+}
+
+// TestEndOfRunMemory_BuildsPerStageFiles — собственный файл стадии с reflect:write
+// строится в КОНЦЕ рана (из её датасета), плюс общий memory.md из всех датасетов.
+// Раньше per-stage файл собирался сразу после стадии; теперь — один раз в конце.
+func TestEndOfRunMemory_BuildsPerStageFiles(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
+	o, runDir := newReflectionTestOrchestrator(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Mode: flow.ReflectModeRW}
+
+	dir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "reflect_dataset.yaml"), []byte("project_level: []\nsession_level: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	stubMemoryAgentByKind(o, &order)
+
+	o.runEndOfRunMemory(context.Background())
+
+	if _, err := os.Stat(memory.StageFile(o.opts.MemoryDir, "s.md")); err != nil {
+		t.Errorf("per-stage reflect file must be built at end-of-run: %v", err)
+	}
+	if _, err := os.Stat(memory.ProjectFile(o.opts.MemoryDir)); err != nil {
+		t.Errorf("shared memory.md must be built at end-of-run: %v", err)
+	}
+	// per-stage distill (aggregate,prioritize,update) + project distill (то же).
+	if got := strings.Join(order, ","); got != "aggregate,prioritize,update,aggregate,prioritize,update" {
+		t.Errorf("order = %q, want two distill passes (stage file + project memory.md)", got)
 	}
 }
 

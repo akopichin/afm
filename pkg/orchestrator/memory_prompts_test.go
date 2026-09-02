@@ -25,6 +25,13 @@ func TestBuildMemoryPrompt_Reflect(t *testing.T) {
 			t.Errorf("reflect prompt missing %q", want)
 		}
 	}
+	// Диалоги и заметки пользователя тоже подаются в обработку reflect-агенту —
+	// файловая инструкция должна называть их явно.
+	for _, want := range []string{"dialog.jsonl", "prenote.md", "feedback.md"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reflect prompt must include user dialog/notes source %q", want)
+		}
+	}
 }
 
 func TestBuildMemoryPrompt_Aggregate(t *testing.T) {

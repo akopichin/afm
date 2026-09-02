@@ -10,10 +10,13 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
-// maybeRunReflection запускает конвейер памяти в фоне после завершения стадии.
-// No-op, если память выключена, стадия без reflect (или reflect не включает
-// write), или это script-стадия (нет агентской сессии). Best-effort: НИКОГДА
-// не трогает FSM.
+// maybeRunReflection в фоне ТОЛЬКО каптурит сессию завершившейся стадии в
+// reflect_dataset.yaml. Сама сборка памяти (aggregate → prioritize → update)
+// перенесена в конец рана (runEndOfRunMemory): после каждой стадии ничего не
+// строится — так память видит все стадии вместе, а сборка бежит один раз, а не
+// N раз по ходу флоу. No-op, если память выключена, стадия без reflect (или
+// reflect без write), или это script-стадия (нет агентской сессии).
+// Best-effort: НИКОГДА не трогает FSM.
 func (o *Orchestrator) maybeRunReflection(ctx context.Context, stageID string) {
 	if o.opts.MemoryDir == "" {
 		return
@@ -23,7 +26,6 @@ func (o *Orchestrator) maybeRunReflection(ctx context.Context, stageID string) {
 		return
 	}
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
-	targetFile := memory.StageFile(o.opts.MemoryDir, stage.Reflect.File)
 
 	o.pendingReflections.Add(1)
 	o.concurrency.SpawnDetached(ctx, func(ctx context.Context) {
@@ -41,10 +43,7 @@ func (o *Orchestrator) maybeRunReflection(ctx context.Context, stageID string) {
 			logFile:    filepath.Join(stageDir, "reflect.log"),
 		}); err != nil {
 			o.reflectFailed(stage.Name, memoryKindReflect, err)
-			return
 		}
-
-		o.distill(ctx, stage.Name, []string{dataset}, stageDir, targetFile)
 	})
 }
 
@@ -136,9 +135,26 @@ func (o *Orchestrator) runEndOfRunMemory(ctx context.Context) {
 	}
 	o.finalReflectDone = true
 
+	// Per-stage файлы памяти строятся ЗДЕСЬ, в конце (не после каждой стадии):
+	// для каждой стадии с reflect:write и её датасетом на диске — свой файл из
+	// её же датасета. Гейт — reflect.mode стадии (CanWrite), НЕ глобальный
+	// memory.mode. Идём в порядке объявления стадий ради детерминизма.
+	for _, stage := range o.opts.Stages {
+		if stage.Reflect == nil || !stage.Reflect.CanWrite() || stage.IsScript() {
+			continue
+		}
+		stageDir := filepath.Join(o.opts.RunDir, stage.ID)
+		dataset := filepath.Join(stageDir, "reflect_dataset.yaml")
+		if _, err := os.Stat(dataset); err != nil {
+			continue
+		}
+		o.distill(ctx, stage.Name, []string{dataset}, stageDir, memory.StageFile(o.opts.MemoryDir, stage.Reflect.File))
+	}
+
 	// The end-of-run pass writes the project-wide memory.md only when
 	// memory.mode allows writing (w/rw). With mode "r" the global memory is
-	// read-only — per-stage reflect files are still written during the run.
+	// read-only — per-stage reflect files above are governed by reflect.mode,
+	// not memory.mode.
 	if o.opts.Memory.CanWriteProject() {
 		matches, _ := filepath.Glob(filepath.Join(o.opts.RunDir, "*", "reflect_dataset.yaml"))
 		var datasets []string

@@ -71,12 +71,15 @@ func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
 	var order []string
 	stubMemoryAgentByKind(o, &order)
 
+	// Per-stage: только каптура датасета (сборка перенесена в end-of-run).
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
-
-	if got := strings.Join(order, ","); got != "reflect,aggregate,prioritize,update" {
-		t.Fatalf("pipeline order = %q, want reflect,aggregate,prioritize,update", got)
+	if got := strings.Join(order, ","); got != "reflect" {
+		t.Fatalf("per-stage order = %q, want just reflect (build deferred to end-of-run)", got)
 	}
+
+	// End-of-run строит файл стадии из её датасета (+ memory.md).
+	o.runEndOfRunMemory(context.Background())
 
 	for _, f := range []string{"reflect_dataset.yaml", "patterns.md", "prioritized.md", "high.md"} {
 		if data, err := os.ReadFile(filepath.Join(stageDir, f)); err != nil {
@@ -110,28 +113,28 @@ func TestIntegration_MemoryV3_PointerReachesLaterStagePrompt(t *testing.T) {
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
 
-	// s1 itself (mode:rw) must see its own file pointed at.
-	blockForSelf := o.memoryBlockForStage(stage)
-	if blockForSelf == "" {
-		t.Fatal("memoryBlockForStage(s1) must not be empty after s1 wrote its own file")
-	}
-	if !strings.Contains(blockForSelf, memory.StageFile(memDir, stage.Reflect.File)) {
-		t.Errorf("block for s1 must name its own memory file:\n%s", blockForSelf)
+	// Per-stage память строится в КОНЦЕ рана: до end-of-run ни файла стадии, ни
+	// memory.md ещё нет, инъекция пуста. Память (и своя стадии, и общая)
+	// переносится в СЛЕДУЮЩИЙ ран — как и общий memory.md.
+	if b := o.memoryBlockForStage(stage); b != "" {
+		t.Fatalf("before end-of-run nothing is built yet, block must be empty:\n%s", b)
 	}
 
-	// A later, unrelated stage without its own reflect config must NOT see
-	// s1's file, but the project memory.md doesn't exist yet (no end-of-run
-	// pass has happened), so the block is empty.
+	// End-of-run строит и собственный файл стадии, и memory.md.
+	o.runEndOfRunMemory(context.Background())
+
+	// Теперь s1 (mode:rw) видит указатель на свой файл.
+	blockForSelf := o.memoryBlockForStage(stage)
+	if !strings.Contains(blockForSelf, memory.StageFile(memDir, stage.Reflect.File)) {
+		t.Errorf("after end-of-run, block for s1 must name its own memory file:\n%s", blockForSelf)
+	}
+
+	// Более поздняя стадия без своего reflect НЕ видит файл s1, но видит memory.md.
 	laterStage := flow.Stage{ID: "s2", Name: "Deploy"}
 	blockForLater := o.memoryBlockForStage(laterStage)
 	if strings.Contains(blockForLater, memory.StageFile(memDir, stage.Reflect.File)) {
 		t.Errorf("later stage without reflect must not see s1's own file:\n%s", blockForLater)
 	}
-
-	// Now run the end-of-run pass — memory.md is created — and confirm it
-	// reaches the later stage's built prompt.
-	o.runEndOfRunMemory(context.Background())
-	blockForLater = o.memoryBlockForStage(laterStage)
 	if blockForLater == "" {
 		t.Fatal("memoryBlockForStage(later) must not be empty once memory.md exists")
 	}

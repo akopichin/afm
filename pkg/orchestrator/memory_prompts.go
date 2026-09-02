@@ -54,7 +54,7 @@ func buildMemoryPrompt(p Prompts, spec memoryAgentSpec) string {
 		var b strings.Builder
 		b.WriteString(p.Reflect)
 		b.WriteString("\n\n# AFM FILE I/O (added by afm)\n")
-		b.WriteString("Read these sources (if a path is a directory, read every *.log file under it, plus execution_summary.md and plan.md if present):\n")
+		b.WriteString("Read these sources (if a path is a directory, read every *.log file under it, plus execution_summary.md and plan.md if present, AND any direct user input in the stage dir — *.dialog.jsonl (user dialog answers), prenote.md and feedback.md (user notes) — if present):\n")
 		for _, s := range spec.sources {
 			fmt.Fprintf(&b, "  - %s\n", s)
 		}
