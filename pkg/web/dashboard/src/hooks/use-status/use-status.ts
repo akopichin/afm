@@ -25,6 +25,11 @@ export type FlowStatus = {
   idleSince: string | null
   backoffAccumulatedMs: number
   backoffOpenSince: string[]
+  // capabilities — фичефлаги бэкенда для текущего запуска (см. Go
+  // Server.Capabilities). Сейчас единственный флаг: включён ли файловый
+  // браузер проекта (Task 13 UI). Отсутствие поля в ответе — как на старом
+  // бэкенде без этого API — трактуется как выключено, а не как ошибка.
+  capabilities: { fileBrowser: boolean }
 }
 
 const EMPTY_STATUS: FlowStatus = {
@@ -35,6 +40,7 @@ const EMPTY_STATUS: FlowStatus = {
   idleSince: null,
   backoffAccumulatedMs: 0,
   backoffOpenSince: [],
+  capabilities: { fileBrowser: false },
 }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
@@ -130,7 +136,20 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? obj.backoff_open_since.filter((v): v is string => typeof v === 'string')
     : []
 
-  return { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince }
+  const rawCapabilities = isRecord(obj.capabilities) ? obj.capabilities : {}
+  const capabilities = { fileBrowser: rawCapabilities.file_browser === true }
+
+  return {
+    flowName,
+    stages,
+    startedAt,
+    description,
+    idleAccumulatedMs,
+    idleSince,
+    backoffAccumulatedMs,
+    backoffOpenSince,
+    capabilities,
+  }
 }
 
 function toStage(raw: unknown): Stage | null {

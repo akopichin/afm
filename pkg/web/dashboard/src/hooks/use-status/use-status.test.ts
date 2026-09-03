@@ -335,6 +335,22 @@ describe('useStatus', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  test('normalizeStatus maps capabilities.file_browser to capabilities.fileBrowser', () => {
+    const result = normalizeStatus({
+      flow_name: 'demo',
+      stages: [],
+      capabilities: { file_browser: true },
+    })
+
+    expect(result.capabilities.fileBrowser).toBe(true)
+  })
+
+  test('normalizeStatus defaults capabilities.fileBrowser to false when absent', () => {
+    const result = normalizeStatus({ flow_name: 'demo', stages: [] })
+
+    expect(result.capabilities.fileBrowser).toBe(false)
+  })
+
   test('refetches status on window focus', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
