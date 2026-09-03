@@ -174,15 +174,62 @@
   min-height: 0;
 }
 
-.file-browser-breadcrumb {
+.file-browser-breadcrumb-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 8px 16px;
+  border-bottom: 1px solid var(--mint-soft);
+}
+
+.file-browser-breadcrumb {
+  flex: 1;
+  min-width: 0;
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--ink-dim);
-  border-bottom: 1px solid var(--mint-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* === Метаданные текущего файла (modifiedAt) + Reload — Task "live-file UX" === */
+.file-browser-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.file-browser-modified {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.file-browser-reload-btn {
+  background: transparent;
+  border: 1px solid var(--mint-soft);
+  color: var(--ink);
+  cursor: pointer;
+  padding: 3px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: inherit;
+}
+.file-browser-reload-btn:hover:not(:disabled) {
+  color: var(--ink-hi);
+  border-color: var(--mint);
+}
+.file-browser-reload-btn:disabled {
+  color: var(--ink-dim);
+  cursor: default;
+}
+.file-browser-reload-error {
+  margin: 8px 16px 0;
+  padding: 5px 10px;
+  border: 1px solid var(--coral);
+  color: var(--coral);
+  font-size: 10px;
 }
 
 .file-browser-tabs {

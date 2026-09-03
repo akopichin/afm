@@ -4,7 +4,7 @@
 // следуя конвенции репозитория (см. DialogChannel.test.tsx: моки на уровне
 // fetch, не на уровне api-клиента). Не *.test.ts — vitest не подхватит его
 // как тестовый файл; используется из FileTree.test.tsx и FileBrowserModal.test.tsx.
-import { vi } from 'vitest'
+import { vi, type MockInstance } from 'vitest'
 
 type RootInput = { id: string; label: string; kind?: string; mountReadOnly?: boolean }
 type TreeEntryInput = {
@@ -40,7 +40,12 @@ export class FilesApiMock {
   private trees = new Map<string, { entries: TreeEntryInput[]; nextCursor?: string }>()
   private references = new Map<string, string>()
   private contents = new Map<string, ContentInput>()
+  private contentErrors = new Map<string, { errorCode: string; status: number }>()
   private diffs = new Map<string, DiffInput | { errorCode: string; status: number }>()
+  // Ссылка на сам мок fetch — тестам Reload/If-None-Match нужно проверять,
+  // с какими заголовками ушёл конкретный запрос (vi.spyOn возвращает мок с
+  // .mock.calls, install() сохраняет её сюда, чтобы не заводить второй spy).
+  fetchMock?: MockInstance<typeof fetch>
 
   setRoots(roots: RootInput[]): void {
     this.roots = roots
@@ -70,13 +75,22 @@ export class FilesApiMock {
     this.diffs.set(`${root}|${path}`, { errorCode: code, status })
   }
 
+  // setContentError форсирует ошибку /api/files/content для (root, path) —
+  // для теста "Reload error показывается инлайн, текущий content не стирается":
+  // сначала успешный начальный getContent, потом эта ошибка подставляется
+  // ПЕРЕД кликом Reload.
+  setContentError(root: string, path: string, code: string, status: number): void {
+    this.contentErrors.set(`${root}|${path}`, { errorCode: code, status })
+  }
+
   install(): void {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const rawUrl = typeof input === 'string' ? input : (input as Request).url
       const url = new URL(rawUrl, 'http://localhost')
       const root = url.searchParams.get('root') ?? ''
       const path = url.searchParams.get('path') ?? ''
       const cursor = url.searchParams.get('cursor') ?? ''
+      const ifNoneMatch = (init?.headers as Record<string, string> | undefined)?.['If-None-Match']
 
       if (url.pathname === '/api/files/roots') {
         return jsonResponse({
@@ -107,8 +121,14 @@ export class FilesApiMock {
       }
 
       if (url.pathname === '/api/files/content') {
+        const err = this.contentErrors.get(`${root}|${path}`)
+        if (err !== undefined) return errorResponse(err.errorCode, err.status)
         const c = this.contents.get(`${root}|${path}`)
         if (c === undefined) return errorResponse('not_found', 404)
+        const etag = c.etag ?? 'W/"1"'
+        if (ifNoneMatch !== undefined && ifNoneMatch === etag) {
+          return jsonResponse(null, { status: 304, etag })
+        }
         return jsonResponse(
           {
             path,
@@ -119,7 +139,7 @@ export class FilesApiMock {
             modified_at: c.modifiedAt ?? '2026-01-01T00:00:00Z',
             content: c.content,
           },
-          { etag: c.etag ?? 'W/"1"' },
+          { etag },
         )
       }
 
@@ -139,5 +159,6 @@ export class FilesApiMock {
 
       return errorResponse('not_found', 404)
     })
+    this.fetchMock = fetchMock
   }
 }

@@ -155,6 +155,109 @@ describe('FileBrowserModal', () => {
     expect(onRemoveSelect).toHaveBeenCalledWith('project', 'a.go')
   })
 
+  test('renders modifiedAt in the file header on initial open', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.setContent('project', 'a.go', { language: 'go', content: 'package a', modifiedAt: '2026-01-01T12:00:00Z' })
+    api.install()
+
+    renderModal()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByText('a.go'))
+
+    expect(await screen.findByText(/2026/)).toBeInTheDocument()
+  })
+
+  test('Reload sends If-None-Match with the etag captured from the last content load', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.setContent('project', 'a.go', { language: 'go', content: 'package a', etag: '"etag-1"' })
+    api.install()
+
+    const { container } = renderModal()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByText('a.go'))
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package a'))
+
+    fireEvent.click(screen.getByRole('button', { name: /reload/i }))
+
+    await waitFor(() => {
+      expect(api.fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/files/content?'),
+        expect.objectContaining({ headers: { 'If-None-Match': '"etag-1"' } }),
+      )
+    })
+  })
+
+  test('a 304 Reload keeps the current content without a loading flicker', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.setContent('project', 'a.go', { language: 'go', content: 'package a', etag: '"etag-1"' })
+    api.install()
+
+    const { container } = renderModal()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByText('a.go'))
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package a'))
+
+    fireEvent.click(screen.getByRole('button', { name: /reload/i }))
+
+    // 304 must not blank the pane while the reload is in flight or after it resolves.
+    expect(screen.queryByText(/loading file/i)).toBeNull()
+    expect(container.querySelector('code')?.textContent).toBe('package a')
+    await waitFor(() => expect(screen.getByRole('button', { name: /^reload$/i })).not.toBeDisabled())
+    expect(container.querySelector('code')?.textContent).toBe('package a')
+  })
+
+  test('a 200 Reload replaces content and updates modifiedAt', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.setContent('project', 'a.go', { language: 'go', content: 'package a', etag: '"etag-1"', modifiedAt: '2026-01-01T00:00:00Z' })
+    api.install()
+
+    const { container } = renderModal()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByText('a.go'))
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package a'))
+
+    // the file changes on disk before Reload is clicked — a different etag/content/modifiedAt
+    api.setContent('project', 'a.go', { language: 'go', content: 'package b', etag: '"etag-2"', modifiedAt: '2026-02-02T00:00:00Z' })
+
+    fireEvent.click(screen.getByRole('button', { name: /reload/i }))
+
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package b'))
+    expect(await screen.findByText(/2026/)).toBeInTheDocument()
+  })
+
+  test('a Reload error is shown inline without destroying the currently-shown content', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.setContent('project', 'a.go', { language: 'go', content: 'package a', etag: '"etag-1"' })
+    api.install()
+
+    const { container } = renderModal()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByText('a.go'))
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package a'))
+
+    api.setContentError('project', 'a.go', 'read_failed', 500)
+
+    fireEvent.click(screen.getByRole('button', { name: /reload/i }))
+
+    expect(await screen.findByText(/read_failed/)).toBeInTheDocument()
+    expect(container.querySelector('code')?.textContent).toBe('package a')
+  })
+
   test('Escape closes the modal', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])

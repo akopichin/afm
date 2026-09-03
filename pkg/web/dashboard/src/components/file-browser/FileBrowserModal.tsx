@@ -23,6 +23,15 @@ type Tab = 'FILE' | 'DIFF'
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
+// Живой файл может прийти с невалидной/пустой modified_at (см. бэкенд —
+// content.go отдаёт то, что вернул stat()) — тогда просто ничего не
+// показываем вместо "Invalid Date" в заголовке.
+function formatModifiedAt(modifiedAt: string): string | null {
+  if (modifiedAt === '') return null
+  const d = new Date(modifiedAt)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleString()
+}
+
 // Полноэкранная модалка файлового браузера: слева — список root'ов проекта +
 // ленивое дерево (FileTree) выбранного root'а, справа — хлебная крошка (с
 // меткой root'а — см. бриф: "identical relative paths from different roots
@@ -41,6 +50,13 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   const [content, setContent] = useState<FileContent | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
   const [contentError, setContentError] = useState<string | null>(null)
+  // Reload — отдельные loading/error от начальной загрузки (contentLoading/
+  // contentError): те двое блокируют весь FileViewer ("Loading file…"/
+  // ошибка на весь пейн), а Reload по дизайну обязан НЕ стирать уже
+  // показанный content — ни в полёте (никакого "loading flicker" на 304),
+  // ни при ошибке (см. бриф finding 10). Поэтому свой флаг + свой баннер.
+  const [reloading, setReloading] = useState(false)
+  const [reloadError, setReloadError] = useState<string | null>(null)
 
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
@@ -72,6 +88,7 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
     let cancelled = false
     setContent(null)
     setContentError(null)
+    setReloadError(null)
     setContentLoading(true)
     void getContent(activeFile.root, activeFile.entry.path)
       .then((c) => {
@@ -148,6 +165,25 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
     setActiveTab('FILE')
   }
 
+  // Reload — повторный запрос ТОГО ЖЕ файла с If-None-Match: currentEtag
+  // (в отличие от начальной загрузки выше, которая всегда идёт без etag).
+  // 304 (getContent вернул undefined) — файл не менялся, оставляем content/
+  // etag/modifiedAt как есть, никакого "loading flicker". 200 — заменяем
+  // целиком. Ошибка — показываем инлайн-баннером, НЕ трогая content.
+  async function handleReload(): Promise<void> {
+    if (activeFile === null || content === null) return
+    setReloading(true)
+    setReloadError(null)
+    try {
+      const updated = await getContent(activeFile.root, activeFile.entry.path, content.etag)
+      if (updated !== undefined) setContent(updated)
+    } catch (e: unknown) {
+      setReloadError(e instanceof Error ? e.message : 'failed to reload file')
+    } finally {
+      setReloading(false)
+    }
+  }
+
   function rootLabel(rootId: string): string {
     return roots.find((r) => r.id === rootId)?.label ?? rootId
   }
@@ -193,9 +229,22 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
           </aside>
 
           <section className="file-browser-content">
-            <div className="file-browser-breadcrumb">
-              {activeFile === null ? 'Select a file to preview' : `${rootLabel(activeFile.root)} / ${activeFile.entry.path}`}
+            <div className="file-browser-breadcrumb-row">
+              <div className="file-browser-breadcrumb">
+                {activeFile === null ? 'Select a file to preview' : `${rootLabel(activeFile.root)} / ${activeFile.entry.path}`}
+              </div>
+              {activeFile !== null && activeTab === 'FILE' && content !== null && (
+                <span className="file-browser-file-meta">
+                  {formatModifiedAt(content.modifiedAt) !== null && (
+                    <span className="file-browser-modified">Modified {formatModifiedAt(content.modifiedAt)}</span>
+                  )}
+                  <button type="button" className="file-browser-reload-btn" disabled={reloading} onClick={() => void handleReload()}>
+                    {reloading ? 'Reloading…' : 'Reload'}
+                  </button>
+                </span>
+              )}
             </div>
+            {reloadError !== null && activeTab === 'FILE' && <div className="file-browser-reload-error">{reloadError}</div>}
             <div className="file-browser-tabs" role="tablist">
               <button
                 type="button"
