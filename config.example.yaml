@@ -128,5 +128,35 @@ executor:
 #   # напр. ~/.ai-free для GLM-обёрток glm51/glm52). Пути с ~ → /home/afm/…, абсолютные —
 #   # тот же путь; монтируются только для чтения. При autoShim:on для recipe-агентов
 #   # токены идут через transient env — этот маунт им не нужен.
+#   #
+#   # extra_mounts поддерживает и старую scalar-форму (просто путь = browse:false,
+#   # приватный mount), и объектную форму с явным browse — какие mount-ы видны в
+#   # dashboard file browser (см. ниже), а какие остаются скрытыми (credentials/токены).
 #   # extra_mounts:
-#   #   - ~/.ai-free
+#   #   - path: ../shared-contracts   # соседний code-репозиторий
+#   #     name: contracts             # optional UI label; default = basename(path)
+#   #     browse: true                # source mount — ВИДЕН в file browser (read-only)
+#   #   - path: ~/.ai-free             # credential mount
+#   #     browse: false                # смонтирован агенту, но НЕ виден в file browser (default)
+#   #   - ~/.legacy-agent              # старый scalar-синтаксис — тоже означает browse:false
+#
+#   # File browser: только внутри Docker mode (нужен манифест от host launcher-а;
+#   # на обычном host-запуске без Docker эта возможность отсутствует полностью —
+#   # /api/files/* отдаёт 404, кнопки в dashboard нет).
+#   # Показывает: lazy source tree project mount-а + extra_mounts с browse:true,
+#   # текстовые файлы с подсветкой (Go/TypeScript/JavaScript/Python),
+#   # HEAD → working tree diff, вставку [AFM file: "<container-path>"] ссылок
+#   # в комментарии к плану/вопросу (агент читает файл сам, содержимое не копируется).
+#   # Всегда read-only: .git и .afm скрыты из дерева, ни создать, ни изменить,
+#   # ни удалить файл через dashboard нельзя. Лимиты: контент файла ≤ 2 MiB
+#   # (крупнее — "file too large", но сослаться всё равно можно), diff ≤ 4 MiB
+#   # (обрезается с баннером). Symlink виден в дереве, но не открывается.
+#   # На Linux-host со старым kernel (< 5.6, без openat2) фича мягко выключается.
+#   #
+#   # ВАЖНО: пока file browser включён, Docker публикует dashboard-порт только на
+#   # loopback (-p 127.0.0.1:<port>:<port>) вместо 0.0.0.0 — dashboard перестаёт быть
+#   # доступен из LAN. Обычные Docker-запуски без file browser сохраняют прежнее
+#   # поведение (0.0.0.0). Если нужен LAN-доступ — либо file_browser.enabled: false,
+#   # либо доступ через SSH-туннель на loopback.
+#   # file_browser:
+#   #   enabled: true   # default true внутри Docker mode; false — выключить
