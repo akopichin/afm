@@ -236,6 +236,23 @@ func (m *ExtraMounts) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// Validate rejects malformed extra_mounts entries: empty path, browse:true
+// with an empty path, or two entries pointing at the same normalized path.
+func (m ExtraMounts) Validate() error {
+	seen := map[string]bool{}
+	for i, em := range m {
+		if strings.TrimSpace(em.Path) == "" {
+			return fmt.Errorf("extra_mounts[%d]: path is empty", i)
+		}
+		key := filepath.Clean(em.Path)
+		if seen[key] {
+			return fmt.Errorf("extra_mounts[%d]: duplicate path %q", i, em.Path)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
 // IsAutoShim reports whether wrapper auto-generation is enabled.
 func (d DockerConfig) IsAutoShim() bool { return d.AutoShim != nil && *d.AutoShim }
 
@@ -340,6 +357,9 @@ func LoadFrom(globalDir, projectDir string) (Config, error) {
 	}
 	if err := mergeFile(&cfg, filepath.Join(projectDir, "config.yaml")); err != nil {
 		return cfg, err
+	}
+	if err := cfg.Docker.ExtraMounts.Validate(); err != nil {
+		return cfg, fmt.Errorf("docker.extra_mounts: %w", err)
 	}
 	return cfg, nil
 }

@@ -362,6 +362,25 @@ func TestFileBrowser_DefaultsEnabled(t *testing.T) {
 	}
 }
 
+func TestExtraMounts_Validate(t *testing.T) {
+	cases := []struct {
+		name string
+		in   config.ExtraMounts
+		ok   bool
+	}{
+		{"ok", config.ExtraMounts{{Path: "a", Browse: true}, {Path: "b"}}, true},
+		{"empty path", config.ExtraMounts{{Path: ""}}, false},
+		{"browse empty path", config.ExtraMounts{{Path: "", Browse: true}}, false},
+		{"dup", config.ExtraMounts{{Path: "a"}, {Path: "a", Browse: true}}, false},
+	}
+	for _, c := range cases {
+		err := c.in.Validate()
+		if (err == nil) != c.ok {
+			t.Errorf("%s: got err=%v want ok=%v", c.name, err, c.ok)
+		}
+	}
+}
+
 func TestThemeMerge(t *testing.T) {
 	dir := t.TempDir()
 	writeYAML(t, dir, "config.yaml", "theme: goga\n")
