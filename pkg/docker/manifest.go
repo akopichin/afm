@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/akopichin/afm/pkg/config"
 )
@@ -88,12 +87,11 @@ func BuildFileRootManifest(projectContainerPath string, mounts config.ExtraMount
 // containerPathFor резолвит путь extra_mounts в абсолютный путь внутри
 // контейнера: "~/..." — относительно домашнего каталога контейнера,
 // уже абсолютный путь — как есть, прочий относительный — относительно
-// корня проекта в контейнере.
+// корня проекта в контейнере. Делегирует resolveMountPath (launcher.go) —
+// той же функции, которой резолвится хост-сторона `-v` в ReExec, иначе
+// манифест (container_path) и реально смонтированный путь расходятся.
 func containerPathFor(projectContainerPath, path string) string {
-	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~") {
-		path = filepath.Join(projectContainerPath, path)
-	}
-	return expandHome(path, containerHome)
+	return resolveMountPath(projectContainerPath, path, containerHome)
 }
 
 // EncodeFileRootManifest сериализует манифест в JSON и кодирует его в

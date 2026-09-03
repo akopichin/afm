@@ -42,6 +42,18 @@ type ReExecConfig struct {
 	Recipes         map[string]config.AgentRecipe // autoShim: команды с recipe → генерируются, секрет → transient env
 	SecretsFile     string                        // опц. override для default-слоёв secrets.env
 	MountCodexState bool                          // codex использует ~/.codex (OAuth) → монтировать read-only в /tmp/host-codex (entrypoint копирует в $HOME/.codex, см. UsesCodex)
+
+	// FileBrowserEnabled — включён ли встроенный файловый браузер проекта
+	// (config.DockerFileBrowserConfig.IsEnabled()). Вместе с непустым
+	// FileRoots.Roots переключает публикацию dashboard-порта на loopback
+	// (127.0.0.1) — file browser даёт доступ на чтение к произвольным путям
+	// внутри смонтированных корней, поэтому порт не должен быть открыт наружу
+	// хоста — и передаёт FileRoots контейнеру через FileRootsEnvVar.
+	FileBrowserEnabled bool
+	// FileRoots — манифест корней file browser (см. BuildFileRootManifest),
+	// закодированный и передаваемый в контейнер только когда FileBrowserEnabled
+	// и Roots непусты.
+	FileRoots FileRootManifest
 }
 
 // CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker
@@ -269,8 +281,15 @@ func ReExec(cfg ReExecConfig) error {
 	}
 
 	// Dashboard: пробрасываем порт на хост, иначе UI недоступен извне контейнера.
+	// С включённым file browser (доступ на чтение к содержимому смонтированных
+	// корней через dashboard API) публикуем порт только на loopback — иначе
+	// файлы проекта были бы читаемы с любого хоста в той же сети.
 	if cfg.DashboardPort > 0 {
-		args = append(args, "-p", fmt.Sprintf("%d:%d", cfg.DashboardPort, cfg.DashboardPort))
+		bind := fmt.Sprintf("%d:%d", cfg.DashboardPort, cfg.DashboardPort)
+		if cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0 {
+			bind = fmt.Sprintf("127.0.0.1:%d:%d", cfg.DashboardPort, cfg.DashboardPort)
+		}
+		args = append(args, "-p", bind)
 	}
 
 	// Монтируем проект по тому же абсолютному пути — os.Args проходят без изменений.
@@ -297,10 +316,13 @@ func ReExec(cfg ReExecConfig) error {
 
 	// Доп. хост-директории кастомных агентов (токены/конфиги вне ~/.claude).
 	// Пути с ~ монтируем в домашний каталог контейнера (containerHome/…), чтобы
-	// скрипты находили их через $HOME; абсолютные пути — по тому же пути (как проект).
+	// скрипты находили их через $HOME; абсолютные пути — по тому же пути (как
+	// проект); прочий относительный путь — от корня проекта (тот же resolveMountPath,
+	// что использует манифест file browser'а — см. containerPathFor — иначе
+	// хост-путь `-v` и container_path в манифесте расходятся).
 	for _, m := range cfg.ExtraMounts {
-		hostPath := expandHome(m.Path, home)
-		containerPath := expandHome(m.Path, containerHome)
+		hostPath := resolveMountPath(cfg.ProjectDir, m.Path, home)
+		containerPath := resolveMountPath(cfg.ProjectDir, m.Path, containerHome)
 		args = append(args, "-v", hostPath+":"+containerPath+":ro")
 	}
 
@@ -330,6 +352,13 @@ func ReExec(cfg ReExecConfig) error {
 	// хосте включал логирование промптов и внутри контейнера.
 	if os.Getenv("AFM_DEBUG") != "" {
 		args = append(args, "-e", "AFM_DEBUG="+os.Getenv("AFM_DEBUG"))
+	}
+	// File browser: манифест корней (не секрет) передаём значением — контейнер
+	// читает его один раз при старте, чтобы знать, какие пути показывать в UI.
+	if cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0 {
+		if enc, encErr := EncodeFileRootManifest(cfg.FileRoots); encErr == nil {
+			args = append(args, "-e", FileRootsEnvVar+"="+enc)
+		}
 	}
 	// Передаём секреты только в bare-форме `-e KEY` (без значения): docker-клиент
 	// наследует окружение afm (см. os.Environ() в вызове execFunc ниже) и сам
@@ -409,4 +438,21 @@ func expandHome(p, home string) string {
 		return home + p[1:] // p[1:] == "/…"
 	}
 	return p
+}
+
+// resolveMountPath резолвит путь extra_mounts (или другого маунта проекта) в
+// абсолютный путь: "~..." — относительно home, уже абсолютный — как есть,
+// прочий относительный — относительно projectRoot. Единая точка правды для
+// обеих сторон `-v host:container` (см. вызов в ReExec) и для
+// containerPathFor (манифест file browser'а, pkg/docker/manifest.go) — иначе
+// относительный extra_mounts.path давал бы невалидный `-v ../x:../x` для
+// Docker и расходился бы с container_path, который видит file browser.
+func resolveMountPath(projectRoot, path, home string) string {
+	if strings.HasPrefix(path, "~") {
+		return expandHome(path, home)
+	}
+	if !filepath.IsAbs(path) {
+		return filepath.Join(projectRoot, path)
+	}
+	return path
 }

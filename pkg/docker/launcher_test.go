@@ -529,6 +529,172 @@ func TestReExec_CodexStateMount_SkippedWhenDirMissing(t *testing.T) {
 // это разрешает — авторизация идёт через смонтированную ~/.codex, а не через
 // секрет). Раньше ResolveAuthValue("", secrets) фейлил на пустом auth.from и
 // валил ВЕСЬ ReExec — это ломало главный (безсекретный) сценарий codex.
+// hasEnvKey ищет `-e KEY` (bare-форма) или `-e KEY=...` среди аргументов.
+func hasEnvKey(args []string, key string) bool {
+	for i, a := range args {
+		if a != "-e" || i+1 >= len(args) {
+			continue
+		}
+		v := args[i+1]
+		if v == key || strings.HasPrefix(v, key+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestReExec_FileBrowserWiring: при включённом file browser и непустом
+// манифесте порт публикуется только на loopback (127.0.0.1), а закодированный
+// манифест передаётся контейнеру через AFM_DOCKER_FILE_ROOTS.
+func TestReExec_FileBrowserWiring(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := docker.ReExecConfig{
+		Image: "img", ProjectDir: "/work/afm", DashboardPort: 8080,
+		ExtraArgs:          []string{"run", "flow.yaml"},
+		FileBrowserEnabled: true,
+		FileRoots: docker.FileRootManifest{Version: 1, Roots: []docker.FileRootManifestEntry{
+			{ID: "project", ContainerPath: "/work/afm", Kind: "project"},
+		}},
+	}
+	if err := docker.ReExec(cfg); err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "-p 127.0.0.1:8080:8080") {
+		t.Errorf("expected loopback publish, got: %s", joined)
+	}
+	if !hasEnvKey(capturedArgs, docker.FileRootsEnvVar) {
+		t.Errorf("expected -e %s, got: %s", docker.FileRootsEnvVar, joined)
+	}
+}
+
+// TestReExec_NoFileBrowser_KeepsOpenPublishNoEnv: без file browser (или с
+// пустым манифестом) поведение не меняется — открытая публикация порта, без
+// AFM_DOCKER_FILE_ROOTS.
+func TestReExec_NoFileBrowser_KeepsOpenPublishNoEnv(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := docker.ReExecConfig{
+		Image: "img", ProjectDir: "/work/afm", DashboardPort: 8080,
+		ExtraArgs:          []string{"run", "flow.yaml"},
+		FileBrowserEnabled: false,
+	}
+	if err := docker.ReExec(cfg); err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "-p 8080:8080") || strings.Contains(joined, "127.0.0.1") {
+		t.Errorf("expected open publish, got: %s", joined)
+	}
+	if hasEnvKey(capturedArgs, docker.FileRootsEnvVar) {
+		t.Errorf("did not expect file-roots env, got: %s", joined)
+	}
+}
+
+// TestReExec_ExtraMountPathResolution — регрессия R7: относительный
+// extra_mounts.path (не начинающийся ни с "/", ни с "~") раньше давал
+// невалидный `-v ../shared:../shared` (относительный путь Docker не
+// принимает) и расходился с манифестом (containerPathFor резолвил его в
+// абсолютный /work/shared). Единый хелпер resolveMountPath используется и в
+// -v петле, и в containerPathFor — расхождения быть не должно. Абсолютный и
+// "~"-путь должны резолвиться так же, как раньше.
+func TestReExec_ExtraMountPathResolution(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	mounts := config.ExtraMounts{
+		{Path: "../shared", Browse: true},   // относительный — резолвится от ProjectDir
+		{Path: "/abs/tokens", Browse: true}, // абсолютный — не меняется
+		{Path: "~/.ai-free", Browse: true},  // ~ — expandHome
+	}
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:       "img",
+		ProjectDir:  "/work/afm",
+		ExtraMounts: mounts,
+		ExtraArgs:   []string{"run", "flow.yaml"},
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	argsStr := strings.Join(capturedArgs, " ")
+
+	checks := []string{
+		"-v /work/shared:/work/shared:ro",                   // относительный: без расхождения хост/контейнер
+		"-v /abs/tokens:/abs/tokens:ro",                     // абсолютный: не изменился
+		"-v " + homeDir + "/.ai-free:/home/afm/.ai-free:ro", // ~: хост-home vs контейнер-home
+	}
+	for _, c := range checks {
+		if !strings.Contains(argsStr, c) {
+			t.Errorf("missing %q in args: %s", c, argsStr)
+		}
+	}
+	if strings.Contains(argsStr, "../shared") {
+		t.Errorf("relative path must not leak raw into docker args: %s", argsStr)
+	}
+
+	// Манифест (используемый file browser'ом) должен резолвить тот же
+	// относительный путь в тот же абсолютный /work/shared — без расхождения
+	// с тем, что реально смонтировано через -v.
+	manifest, err := docker.BuildFileRootManifest("/work/afm", mounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"extra-1": "/work/shared",
+		"extra-2": "/abs/tokens",
+		"extra-3": "/home/afm/.ai-free",
+	}
+	found := 0
+	for _, r := range manifest.Roots {
+		if r.Kind != "extra" {
+			continue
+		}
+		found++
+		if want[r.ID] != r.ContainerPath {
+			t.Errorf("manifest %s container path: got %q, want %q", r.ID, r.ContainerPath, want[r.ID])
+		}
+	}
+	if found != 3 {
+		t.Fatalf("expected 3 extra roots in manifest, got %d", found)
+	}
+}
+
 func TestReExec_CodexRecipeNoAuth_DoesNotFail(t *testing.T) {
 	var capturedArgs []string
 	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
