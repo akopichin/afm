@@ -61,7 +61,9 @@ a:hover { text-decoration: underline; }
 #plan-content,
 .dialog-scroll,
 .log-content,
-.event-feed-scroll {
+.event-feed-scroll,
+.file-tree,
+.file-browser-pane {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--ink-dim) 60%, transparent) transparent;
 }
@@ -70,7 +72,9 @@ a:hover { text-decoration: underline; }
 #plan-content::-webkit-scrollbar,
 .dialog-scroll::-webkit-scrollbar,
 .log-content::-webkit-scrollbar,
-.event-feed-scroll::-webkit-scrollbar {
+.event-feed-scroll::-webkit-scrollbar,
+.file-tree::-webkit-scrollbar,
+.file-browser-pane::-webkit-scrollbar {
   display: block;
   width: 5px;
 }
@@ -79,7 +83,9 @@ a:hover { text-decoration: underline; }
 #plan-content::-webkit-scrollbar-track,
 .dialog-scroll::-webkit-scrollbar-track,
 .log-content::-webkit-scrollbar-track,
-.event-feed-scroll::-webkit-scrollbar-track {
+.event-feed-scroll::-webkit-scrollbar-track,
+.file-tree::-webkit-scrollbar-track,
+.file-browser-pane::-webkit-scrollbar-track {
   background: transparent;
 }
 #stages-panel::-webkit-scrollbar-thumb,
@@ -87,7 +93,9 @@ a:hover { text-decoration: underline; }
 #plan-content::-webkit-scrollbar-thumb,
 .dialog-scroll::-webkit-scrollbar-thumb,
 .log-content::-webkit-scrollbar-thumb,
-.event-feed-scroll::-webkit-scrollbar-thumb {
+.event-feed-scroll::-webkit-scrollbar-thumb,
+.file-tree::-webkit-scrollbar-thumb,
+.file-browser-pane::-webkit-scrollbar-thumb {
   background: var(--ink-dim);
   border-radius: 999px;
   opacity: 0.6;
@@ -97,6 +105,8 @@ a:hover { text-decoration: underline; }
 #plan-content::-webkit-scrollbar-thumb:hover,
 .dialog-scroll::-webkit-scrollbar-thumb:hover,
 .log-content::-webkit-scrollbar-thumb:hover,
-.event-feed-scroll::-webkit-scrollbar-thumb:hover {
+.event-feed-scroll::-webkit-scrollbar-thumb:hover,
+.file-tree::-webkit-scrollbar-thumb:hover,
+.file-browser-pane::-webkit-scrollbar-thumb:hover {
   background: var(--mint);
 }

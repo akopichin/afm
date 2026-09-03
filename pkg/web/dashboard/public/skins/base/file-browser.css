@@ -1,0 +1,378 @@
+/* pkg/web/dashboard/public/skins/base/file-browser.css
+   Task 13 — файловый браузер проекта: провайдер + полноэкранная модалка +
+   дерево + просмотр файла (highlight.js) + дифф. Только токены переменных
+   из skins/<name>/index.css (см. header-комментарий agent-note-modal.css) —
+   ни одного захардкоженного цвета, чтобы работать во всех скинах и обеих
+   темах "из коробки".
+
+   .modal-overlay/.modal-content — общие с agent-note-modal.css (тот же
+   затемняющий scrim, центрирование). Здесь только то, что специфично для
+   ПОЛНОЭКРАННОЙ модалки файлового браузера — двойной класс
+   .modal-content.file-browser-modal побеждает базовый max-width: 480px по
+   специфичности (два класса против одного). */
+
+.file-browser-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 94vw);
+  height: 88vh;
+  max-width: none;
+  padding: 0;
+}
+
+.file-browser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--mint-soft);
+  flex: 0 0 auto;
+}
+.file-browser-header h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-hi);
+}
+
+.file-browser-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* === Левая колонка: root'ы + дерево === */
+.file-browser-roots {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-right: 1px solid var(--mint-soft);
+  min-height: 0;
+}
+
+.file-browser-root-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.file-browser-root {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-family: inherit;
+}
+.file-browser-root:hover {
+  color: var(--ink);
+  background: var(--mint-soft);
+}
+.file-browser-root.active {
+  color: var(--ink-hi);
+  border-color: var(--mint);
+  background: var(--mint-soft);
+}
+
+.file-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 11px;
+}
+
+.file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.file-tree-row:hover {
+  background: var(--mint-soft);
+}
+.file-tree-row.active {
+  background: var(--mint-soft);
+  color: var(--ink-hi);
+}
+.file-tree-row:focus-visible {
+  outline: 1px solid var(--mint);
+  outline-offset: -1px;
+}
+.file-tree-row input[type='checkbox'] {
+  flex: 0 0 auto;
+  accent-color: var(--mint);
+  cursor: pointer;
+}
+.file-tree-toggle {
+  flex: 0 0 12px;
+  text-align: center;
+  color: var(--ink-dim);
+  font-size: 9px;
+}
+.file-tree-icon {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-tree-row[data-kind='symlink'] {
+  cursor: default;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.file-tree-row[data-kind='symlink']:hover {
+  background: transparent;
+}
+
+.file-tree-load-more {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--mint);
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.file-tree-load-more:hover {
+  text-decoration: underline;
+}
+.file-tree-load-more:disabled {
+  color: var(--ink-dim);
+  cursor: default;
+  text-decoration: none;
+}
+
+.file-tree-hint {
+  color: var(--ink-dim);
+  padding: 4px 6px;
+  font-size: 10px;
+}
+.file-tree-error,
+.file-viewer-error {
+  color: var(--coral);
+}
+
+/* === Правая колонка: хлебная крошка + таб FILE/DIFF + содержимое === */
+.file-browser-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.file-browser-breadcrumb {
+  padding: 8px 16px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--mint-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-browser-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 16px 0;
+  flex: 0 0 auto;
+}
+.file-browser-tab {
+  background: transparent;
+  border: 1px solid var(--mint-soft);
+  border-bottom: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 5px 16px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-family: inherit;
+}
+.file-browser-tab.active {
+  color: var(--ink-hi);
+  border-color: var(--mint);
+  background: var(--bg-elev);
+}
+
+.file-browser-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-elev);
+}
+
+.file-viewer-hint {
+  padding: 24px;
+  text-align: center;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+.file-viewer-source {
+  margin: 0;
+  padding: 12px 16px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.file-viewer-source code {
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* === Дифф === */
+.diff-viewer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.diff-banner {
+  margin: 10px 16px 0;
+  padding: 5px 10px;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  font-size: 10px;
+}
+.diff-lines {
+  margin: 0;
+  padding: 8px 0;
+  white-space: pre;
+}
+.diff-line {
+  padding: 0 16px;
+}
+.diff-line-add {
+  color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 10%, transparent);
+}
+.diff-line-del {
+  color: var(--coral);
+  background: color-mix(in srgb, var(--coral) 10%, transparent);
+}
+.diff-line-hunk {
+  color: var(--violet);
+}
+.diff-line-header {
+  color: var(--ink-dim);
+}
+.diff-line-context {
+  color: var(--ink);
+}
+
+/* === Футер: чипы выбранных файлов + Copy/Insert references === */
+.file-browser-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--mint-soft);
+  flex: 0 0 auto;
+}
+.file-browser-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--mint-soft);
+  color: var(--ink);
+  padding: 3px 6px 3px 10px;
+  font-size: 10px;
+  max-width: 320px;
+}
+.file-chip button {
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px;
+}
+.file-chip button:hover {
+  color: var(--coral);
+}
+
+.file-browser-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1200;
+  background: var(--panel-bg);
+  border: 1px solid var(--coral);
+  color: var(--coral);
+  padding: 8px 14px;
+  font-size: 11px;
+}
+
+/* === Минимальная, тема-осознанная подсветка синтаксиса (hljs) ===
+   Своя палитра токенов вместо готовой темы highlight.js (github/atom-one-…):
+   те так или иначе хардкодят цвета и не реагируют на смену скина/темы. Здесь
+   — только переменные текущего скина, поэтому подсветка остаётся читаемой
+   в coffee/goga/novacorps и в light/dark без единого исключения. */
+.hljs-keyword,
+.hljs-built_in,
+.hljs-type,
+.hljs-selector-tag {
+  color: var(--violet);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-template-string {
+  color: var(--mint);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.hljs-number,
+.hljs-literal {
+  color: var(--amber);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_ {
+  color: var(--ink-hi);
+}
+.hljs-tag,
+.hljs-name,
+.hljs-attr {
+  color: var(--coral);
+}
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta,
+.hljs-deletion {
+  color: var(--ink-dim);
+}
+.hljs-addition {
+  color: var(--mint);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}
