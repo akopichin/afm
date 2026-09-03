@@ -279,7 +279,10 @@ func newRunCmd() *cobra.Command {
 				// это не фатально (см. task-10 brief).
 				var ws workspace.FS
 				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && os.Getenv("AFM_IN_DOCKER") == "1" {
-					if man, err := docker.DecodeFileRootManifest(raw); err == nil {
+					man, err := docker.DecodeFileRootManifest(raw)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: file browser disabled: decode file root manifest: %v\n", err)
+					} else {
 						roots := make([]workspace.Root, 0, len(man.Roots))
 						for _, r := range man.Roots {
 							roots = append(roots, workspace.Root{
@@ -290,7 +293,15 @@ func newRunCmd() *cobra.Command {
 								MountReadOnly: r.MountReadOnly,
 							})
 						}
-						ws, _ = workspace.New(roots)
+						fs, err := workspace.New(roots)
+						switch {
+						case err != nil:
+							fmt.Fprintf(os.Stderr, "warning: file browser disabled: open workspace: %v\n", err)
+						case len(fs.Roots()) == 0:
+							fmt.Fprintf(os.Stderr, "warning: file browser disabled: no roots could be opened (manifest had %d)\n", len(man.Roots))
+						default:
+							ws = fs
+						}
 					}
 				}
 

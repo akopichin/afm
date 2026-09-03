@@ -418,6 +418,9 @@ func mergeFile(dst *Config, path string) error {
 	if overlay.Docker.ExtraMounts != nil {
 		dst.Docker.ExtraMounts = overlay.Docker.ExtraMounts
 	}
+	if overlay.Docker.FileBrowser.Enabled != nil {
+		dst.Docker.FileBrowser.Enabled = overlay.Docker.FileBrowser.Enabled
+	}
 	if overlay.Docker.AutoShim != nil {
 		dst.Docker.AutoShim = overlay.Docker.AutoShim
 	}

@@ -328,6 +328,70 @@ docker:
 	_ = trueVal
 }
 
+func TestLoadFrom_FileBrowserEnabledMergesAcrossLayers(t *testing.T) {
+	cases := []struct {
+		name        string
+		globalYAML  string
+		projectYAML string
+		want        bool
+	}{
+		{
+			name: "global false, project unset -> disabled",
+			globalYAML: `
+docker:
+  file_browser:
+    enabled: false
+`,
+			projectYAML: ``,
+			want:        false,
+		},
+		{
+			name:       "global unset, project false -> disabled",
+			globalYAML: ``,
+			projectYAML: `
+docker:
+  file_browser:
+    enabled: false
+`,
+			want: false,
+		},
+		{
+			name: "global false, project true -> enabled (project overrides)",
+			globalYAML: `
+docker:
+  file_browser:
+    enabled: false
+`,
+			projectYAML: `
+docker:
+  file_browser:
+    enabled: true
+`,
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir := t.TempDir()
+			projectDir := t.TempDir()
+			if tc.globalYAML != "" {
+				writeYAML(t, globalDir, "config.yaml", tc.globalYAML)
+			}
+			if tc.projectYAML != "" {
+				writeYAML(t, projectDir, "config.yaml", tc.projectYAML)
+			}
+			cfg, err := config.LoadFrom(globalDir, projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Docker.FileBrowser.IsEnabled(); got != tc.want {
+				t.Errorf("FileBrowser.IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtraMounts_UnmarshalScalarAndObject(t *testing.T) {
 	var dc config.DockerConfig
 	yml := []byte(`
