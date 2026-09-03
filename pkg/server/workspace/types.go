@@ -31,10 +31,15 @@ type Entry struct {
 	Selectable bool   `json:"selectable"`
 }
 
-// Page is a (possibly partial) directory listing with cursor-based pagination.
+// Page is a (possibly partial) directory listing with cursor-based
+// pagination. Truncated is distinct from NextCursor: it's true when the
+// directory itself had more raw entries than the backend is willing to scan
+// in one call (see maxDirEntries in list.go) — a hard ceiling independent of
+// normal page-to-page cursor pagination.
 type Page struct {
 	Entries    []Entry `json:"entries"`
 	NextCursor string  `json:"next_cursor,omitempty"`
+	Truncated  bool    `json:"truncated,omitempty"`
 }
 
 // File is the full content of a single file, along with metadata needed to

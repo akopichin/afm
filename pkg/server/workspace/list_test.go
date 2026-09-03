@@ -98,6 +98,41 @@ func TestList_OrderHidingSymlinkPagination(t *testing.T) {
 	}
 }
 
+// TestList_TruncatesAtMaxDirEntries exercises finding 9's bounded scan
+// end-to-end through the real List/openat2 path, not just readDirBounded in
+// isolation (bounded_scan_test.go). maxDirEntries is a package var precisely
+// so a test can shrink it instead of building a real 50000-entry directory.
+func TestList_TruncatesAtMaxDirEntries(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 10; i++ {
+		mustWriteFile(t, filepath.Join(dir, "f"+string(rune('0'+i))), "x")
+	}
+
+	fs, err := New([]Root{{ID: "project", Path: dir, Kind: "project"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer fs.Close()
+	if len(fs.Roots()) == 0 {
+		t.Skip("secure file browser unavailable on this kernel (no openat2)")
+	}
+
+	orig := maxDirEntries
+	maxDirEntries = 4
+	t.Cleanup(func() { maxDirEntries = orig })
+
+	p, err := fs.List(context.Background(), "project", ".", "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !p.Truncated {
+		t.Error("Truncated = false, want true (directory has more raw entries than maxDirEntries)")
+	}
+	if len(p.Entries) != 4 {
+		t.Errorf("len(Entries) = %d, want 4 (capped at maxDirEntries)", len(p.Entries))
+	}
+}
+
 func mustMkdirAll(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {
