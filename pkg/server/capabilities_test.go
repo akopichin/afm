@@ -13,10 +13,13 @@ import (
 )
 
 // fakeFS is a workspace.FS test double: Roots() returns a configurable
-// number of entries, every other method is unused by this test and returns
+// number of entries. Read() serves from the files map keyed by path when
+// present (a "bin" key is used by tests to trigger workspace.ErrBinary);
+// every other method/miss is unused by these tests and returns
 // workspace.ErrNotFound / its zero value.
 type fakeFS struct {
 	roots int
+	files map[string]workspace.File
 }
 
 func (f fakeFS) Roots() []workspace.RootView {
@@ -35,7 +38,13 @@ func (f fakeFS) Reference(context.Context, string, string) (workspace.Reference,
 	return workspace.Reference{}, workspace.ErrNotFound
 }
 
-func (f fakeFS) Read(context.Context, string, string) (workspace.File, error) {
+func (f fakeFS) Read(_ context.Context, _ string, path string) (workspace.File, error) {
+	if path == "bin" {
+		return workspace.File{}, workspace.ErrBinary
+	}
+	if file, ok := f.files[path]; ok {
+		return file, nil
+	}
 	return workspace.File{}, workspace.ErrNotFound
 }
 

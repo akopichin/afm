@@ -225,6 +225,7 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/stages/", s.routeStages)
+	mux.HandleFunc("/api/files/", s.routeFiles)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {
 		mux.Handle(customSkinRoute, http.StripPrefix(customSkinRoute, s.customSkinServer))
