@@ -2,6 +2,50 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-09-03
+
+### Feature: Docker project file browser — read-only source tree, diffs and file references in the dashboard
+
+In Docker mode the dashboard now has a folder button that opens a read-only project file browser: browse the source tree, view files with syntax highlighting, see a per-file `HEAD → working tree` diff, and insert references to selected files into a plan or question review comment — the agent receives the exact container path and reads the file itself. The whole feature is **Docker-only** (it needs the host launcher's mount manifest) and **strictly read-only** (no create/edit/rename/delete from the dashboard). On a plain host run it is entirely absent: `/api/files/*` returns `404`, the capability is off, and no button renders.
+
+```yaml
+docker:
+  enabled: true
+  file_browser:
+    enabled: true            # optional; default true inside Docker mode
+  extra_mounts:
+    - path: ../shared-contracts
+      name: contracts         # optional UI label; default = basename(path)
+      browse: true            # a source mount — VISIBLE in the file browser (read-only)
+    - path: ~/.ai-free
+      browse: false           # credential mount — mounted to the agent, NOT browseable
+    - ~/.legacy-agent          # legacy scalar form still works = browse:false (stays private)
+```
+
+**What it does**
+
+- **Lazy source tree** of the project mount plus any `extra_mounts` explicitly opted in with `browse: true`; directories expand on demand, listings paginate, and `.git`/`.afm` are hidden.
+- **Syntax highlighting** for Go, TypeScript/TSX, JavaScript/JSX and Python via `highlight.js/lib/core` (only those four grammars are bundled); everything else renders as escaped plain text. Highlighting is theme-aware — token colors map to the dashboard palette, so it adapts to every skin (base/coffee/goga/novacorps) and to light/dark mode.
+- **`HEAD → working tree` diff** per file: tracked files show staged+unstaged changes together, untracked files render as fully added, a clean file returns an empty diff, and a live `modifiedAt` + **Reload** button let you re-check a file an agent is editing under you (a `304` keeps the current content with no flicker).
+- **File references**, not content copies: selecting one or more files inserts a `[AFM file: "<absolute container path>"]` marker (the path is JSON-encoded, so quotes/backslashes/newlines are safe) into a plan or pending-question comment. It rides the existing `revise`/`dialog-answer` chains — no new event types, no bytes copied into `feedback.md`; the agent opens the path with its own tools.
+
+**Security is part of the feature, not a follow-up**
+
+- **Manifest allowlist is the only source of roots.** The host launcher — the single place that knows every mount's real container target — emits a versioned, base64 manifest of browseable roots (`AFM_DOCKER_FILE_ROOTS`); the server never accepts an absolute path over HTTP, only `root=<opaque-id>&path=<relative>`. Credential mounts and legacy scalar `extra_mounts` are never in the manifest, so an afm upgrade never silently exposes a token directory.
+- **Kernel-enforced containment.** Every path open goes through Linux `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` — no check-then-open, no symlink escape, no `..` traversal. On a kernel too old for `openat2` (< 5.6) the feature degrades off rather than falling back to anything weaker.
+- **Loopback-only dashboard when the browser is on.** With the file browser enabled the Docker dashboard port is published on `127.0.0.1` instead of `0.0.0.0`, so the code the browser can read isn't reachable from other hosts on the LAN. Plain Docker runs keep their previous publish behavior. (Behavior change: existing Docker users who reached the dashboard over the LAN must set `file_browser.enabled: false` or use an SSH tunnel.)
+- **Bounded and shell-free.** File content is capped at 2 MiB and diffs at 4 MiB; git is invoked without a shell, with a 3 s timeout, reading only the `HEAD` blob from a verified in-root git dir. Error bodies carry a fixed code, never an absolute path or raw git stderr; source is served with `X-Content-Type-Options: nosniff` and rendered through exactly one `dangerouslySetInnerHTML` fed only by highlight.js output (no XSS, no Markdown path for file content).
+
+**Hardening from an external review (5 P1 + 5 P2, each verified then fixed with a regression test)**
+
+- **`docker.file_browser.enabled: false` is now honored through config merge** — `mergeFile` dropped `FileBrowser.Enabled`, so an explicit disable was silently lost and the browser stayed on.
+- **Diff can no longer read a git object store outside the allowlist.** A `.git` symlink or gitfile (`gitdir: /outside`, exactly how worktrees/submodules work) let `git -C` follow it out of the mount. `.git` is now located through the secure fd (a symlink `.git` is refused structurally), the resolved git dir must live inside the root, and git runs with an explicit `--git-dir` (no `-C` re-discovery). Reproduced before the fix; closed after.
+- **Diff can no longer OOM the process.** The `HEAD` baseline is size-checked (`cat-file -s`) before it's read, and an oversize baseline skips the in-memory diff entirely instead of buffering hundreds of MB and truncating afterward.
+- **FIFO/socket/device files can no longer wedge a handler.** Reads open with `O_NONBLOCK` and require a regular file, so opening a FIFO returns `not_found` instead of blocking a goroutine forever; special files are non-selectable in the tree. Directory scans are bounded by a hard entry cap.
+- **The capability flag now hides the comment picker too** — previously it gated only the header button, so a host run still showed "Attach project file" in comments and hit the disabled API. The gate is centralized in the browser provider; an in-flight file-reference request is generation-guarded so a stale response can't restore a selection after a run change, submit, or file switch. Frontend fixes also closed a root-switch tree race and made a failed "Load more" retryable.
+
+**Verified live** (a local image built from the branch, a real Docker container, a real browser via Chrome DevTools): the dashboard published on `127.0.0.1:<port>`, `capability.file_browser` was true, `/api/files/roots` listed the project and the `browse:true` neighbor but **not** the legacy-scalar credential mount, the tree hid `.git`/`.afm`, Go/TS/JS/Python rendered with highlighting, the `HEAD → working tree` diff showed a modified file's added line and marked an untracked file `added`, `../credential` traversal returned `400` and a `.git` segment `404`, the `modifiedAt`/Reload UI rendered, and a file reference selected through the browser picker reached `feedback.md` (`revision 1`) as an absolute container path through the real revise chain. The Linux-only secure-filesystem tests (openat2 traversal/symlink rejection, `.git` symlink/gitfile refusal, oversize-baseline bound, FIFO non-hang, bounded scan, real `git` diff) were run in a Linux container and all pass. `make lint` (0 issues), `make build`, `go test ./...` (all packages, `-race`, no data races), and the dashboard suite (`vitest` + `tsc --noEmit`) are all green. Spec: `docs/superpowers/specs/2026-09-03-docker-project-file-browser-design.md`; plan: `docs/superpowers/plans/2026-09-03-docker-project-file-browser.md`. Docs: README "Project File Browser (Docker mode)" and `config.example.yaml`.
+
 ## 2026-09-02
 
 ### Fix: reliability audit — 13 races, hangs and durability gaps
