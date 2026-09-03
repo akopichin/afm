@@ -36,9 +36,21 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
+  // Номер "поколения" root'а — инкрементируется СИНХРОННО при смене root
+  // (в эффекте ниже, до первого await), а не читается из замыкания над
+  // проп root: loadDir захватывает текущее значение ДО своего await, и
+  // сравнивает с ним же после — так поздний ответ устаревшего root'а
+  // отбрасывается независимо от того, в каком порядке резолвятся промисы
+  // (старый может ответить и раньше, и позже нового). Сравнение по числу,
+  // а не по строке root — корректно и при переключении туда-обратно
+  // (A→B→A): второй заход на A получает новый номер и не совпадёт со
+  // старым, ещё летящим запросом первого захода.
+  const rootGenerationRef = useRef(0)
+
   // Смена root — новое дерево с нуля: старое состояние (пути другого root'а)
   // не имеет смысла и не должно мелькать, пока грузится новое.
   useEffect(() => {
+    rootGenerationRef.current += 1
     setDirs({})
     setExpanded(new Set(['.']))
     setFocusedPath(null)
@@ -47,13 +59,14 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
   }, [root])
 
   async function loadDir(forRoot: string, path: string, cursor?: string): Promise<void> {
+    const generation = rootGenerationRef.current
     setDirs((prev) => ({
       ...prev,
       [path]: { entries: prev[path]?.entries ?? [], nextCursor: prev[path]?.nextCursor, loading: true, error: null },
     }))
     try {
       const page = await getTree(forRoot, path, cursor)
-      if (forRoot !== root) return // root сменился, пока запрос летел — не применяем устаревший ответ
+      if (generation !== rootGenerationRef.current) return // root сменился, пока запрос летел — не применяем устаревший ответ
       setDirs((prev) => ({
         ...prev,
         [path]: {
@@ -64,10 +77,20 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
         },
       }))
     } catch (e) {
-      if (forRoot !== root) return
+      if (generation !== rootGenerationRef.current) return
       setDirs((prev) => ({
         ...prev,
-        [path]: { entries: prev[path]?.entries ?? [], nextCursor: undefined, loading: false, error: e instanceof Error ? e.message : 'failed to load' },
+        // nextCursor СОХРАНЯЕТСЯ (не сбрасывается в undefined): при ошибке
+        // "Load more" это курсор той же страницы, которую только что не
+        // удалось загрузить — Retry должен продолжить именно с него, а не
+        // спрятать кнопку и оставить остаток каталога недостижимым. Для
+        // самой первой (не пагинационной) загрузки курсора и так не было.
+        [path]: {
+          entries: prev[path]?.entries ?? [],
+          nextCursor: prev[path]?.nextCursor,
+          loading: false,
+          error: e instanceof Error ? e.message : 'failed to load',
+        },
       }))
     }
   }
@@ -88,10 +111,12 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
   function activate(entry: TreeEntry): void {
     if (entry.kind === 'directory') {
       toggleDir(entry)
-    } else if (entry.kind === 'file') {
+    } else if (entry.kind === 'file' && entry.selectable) {
       onOpenFile(entry)
     }
-    // symlink: намеренно ничего не делаем (не раскрывается, не открывается)
+    // symlink, а также не-selectable файл (спецфайл вроде FIFO/сокета/устройства,
+    // который workspace.FS всё равно отклонит на чтение): намеренно ничего не
+    // делаем — не раскрывается, не открывается.
   }
 
   const visible = flattenVisible(dirs, expanded)
@@ -187,20 +212,32 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
             {dirState?.loading && dirState.entries.length === 0 && <div className="file-tree-hint">Loading…</div>}
             {dirState?.error !== null && dirState?.error !== undefined && <div className="file-tree-hint file-tree-error">{dirState.error}</div>}
             {dirState?.entries.map((child) => renderEntry(child, depth + 1))}
-            {dirState?.nextCursor !== undefined && (
-              <button
-                type="button"
-                className="file-tree-load-more"
-                style={{ paddingLeft: `${(depth + 1) * 16 + 6}px` }}
-                disabled={dirState.loading}
-                onClick={() => void loadDir(root, entry.path, dirState.nextCursor)}
-              >
-                Load more…
-              </button>
-            )}
+            {renderLoadMore(entry.path, dirState, (depth + 1) * 16 + 6)}
           </div>
         )}
       </div>
+    )
+  }
+
+  // Общая кнопка пагинации для каталога — используется и на верхнем уровне,
+  // и для любой раскрытой поддиректории (renderEntry выше). При ошибке
+  // предыдущей страницы (dirState.error) курсор уже сохранён вызывающей
+  // стороной (loadDir) — здесь просто меняем подпись на "Retry…", чтобы было
+  // явно видно, что это повторная попытка, а не следующая страница. onClick
+  // не меняется: тот же loadDir с тем же nextCursor.
+  function renderLoadMore(path: string, dirState: DirState | undefined, paddingPx?: number): ReactNode {
+    if (dirState?.nextCursor === undefined) return null
+    const failed = dirState.error !== null && dirState.error !== undefined
+    return (
+      <button
+        type="button"
+        className="file-tree-load-more"
+        style={paddingPx === undefined ? undefined : { paddingLeft: `${paddingPx}px` }}
+        disabled={dirState.loading}
+        onClick={() => void loadDir(root, path, dirState.nextCursor)}
+      >
+        {failed ? 'Retry…' : 'Load more…'}
+      </button>
     )
   }
 
@@ -211,11 +248,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
       {top?.loading && top.entries.length === 0 && <div className="file-tree-hint">Loading…</div>}
       {top?.error !== null && top?.error !== undefined && <div className="file-tree-hint file-tree-error">{top.error}</div>}
       {top?.entries.map((entry) => renderEntry(entry, 0))}
-      {top?.nextCursor !== undefined && (
-        <button type="button" className="file-tree-load-more" disabled={top.loading} onClick={() => void loadDir(root, '.', top.nextCursor)}>
-          Load more…
-        </button>
-      )}
+      {renderLoadMore('.', top)}
     </div>
   )
 }

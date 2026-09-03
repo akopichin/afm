@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { FileTree } from './FileTree'
-import { FilesApiMock } from './test-support'
+import { errorResponse, FilesApiMock, jsonResponse } from './test-support'
 
 describe('FileTree', () => {
   afterEach(() => {
@@ -114,6 +114,96 @@ describe('FileTree', () => {
 
     expect(await screen.findByText('b.py')).toBeInTheDocument()
     expect(screen.queryByText('a.go')).not.toBeInTheDocument()
+  })
+
+  test('root-switch race: a late response for a superseded root is dropped, not shown under the new root', async () => {
+    let resolveA!: (r: Response) => void
+    let resolveB!: (r: Response) => void
+    const responseA = new Promise<Response>((resolve) => {
+      resolveA = resolve
+    })
+    const responseB = new Promise<Response>((resolve) => {
+      resolveB = resolve
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const rawUrl = typeof input === 'string' ? input : (input as Request).url
+      const url = new URL(rawUrl, 'http://localhost')
+      if (url.pathname !== '/api/files/tree') return jsonResponse({ entries: [], next_cursor: '' })
+      const root = url.searchParams.get('root') ?? ''
+      if (root === 'A') return responseA
+      if (root === 'B') return responseB
+      return jsonResponse({ entries: [], next_cursor: '' })
+    })
+
+    const onOpenFile = vi.fn()
+    const { rerender } = render(
+      <FileTree root="A" onOpenFile={onOpenFile} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />,
+    )
+
+    // Переключаем root ДО того, как ответ для A успел прилететь — запрос для A
+    // всё ещё летит, пока рендерится уже B.
+    rerender(<FileTree root="B" onOpenFile={onOpenFile} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />)
+
+    // B отвечает первым.
+    resolveB(jsonResponse({ entries: [{ name: 'b.py', path: 'b.py', kind: 'file', selectable: true }], next_cursor: '' }))
+    expect(await screen.findByText('b.py')).toBeInTheDocument()
+
+    // A — устаревший root — отвечает ПОЗЖЕ. Его ответ не должен применяться.
+    resolveA(jsonResponse({ entries: [{ name: 'a.go', path: 'a.go', kind: 'file', selectable: true }], next_cursor: '' }))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText('a.go')).not.toBeInTheDocument()
+    expect(screen.getByText('b.py')).toBeInTheDocument()
+
+    // Открытие всё ещё соответствует актуальному (B) дереву, а не примешанным путям A.
+    fireEvent.click(screen.getByText('b.py'))
+    expect(onOpenFile).toHaveBeenCalledWith(expect.objectContaining({ path: 'b.py' }))
+  })
+
+  test('a "Load more" failure keeps already-loaded entries and offers Retry that resumes from the same cursor', async () => {
+    let page2Attempts = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const rawUrl = typeof input === 'string' ? input : (input as Request).url
+      const url = new URL(rawUrl, 'http://localhost')
+      if (url.pathname !== '/api/files/tree') return jsonResponse({ entries: [], next_cursor: '' })
+      const cursor = url.searchParams.get('cursor') ?? ''
+      if (cursor === '') {
+        return jsonResponse({ entries: [{ name: 'a.go', path: 'a.go', kind: 'file', selectable: true }], next_cursor: 'page2' })
+      }
+      page2Attempts += 1
+      if (page2Attempts === 1) return errorResponse('read_failed', 500)
+      return jsonResponse({ entries: [{ name: 'b.go', path: 'b.go', kind: 'file', selectable: true }], next_cursor: '' })
+    })
+
+    render(<FileTree root="project" onOpenFile={vi.fn()} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />)
+
+    await screen.findByText('a.go')
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }))
+
+    const retryButton = await screen.findByRole('button', { name: /retry/i })
+    // Уже загруженные записи никуда не делись после ошибки пагинации.
+    expect(screen.getByText('a.go')).toBeInTheDocument()
+
+    fireEvent.click(retryButton)
+
+    expect(await screen.findByText('b.go')).toBeInTheDocument()
+    expect(page2Attempts).toBe(2)
+  })
+
+  test('a non-selectable file entry (special file) does not attempt to open on click', async () => {
+    const api = new FilesApiMock()
+    api.setTree('project', '.', [{ name: 'pipe', path: 'pipe', kind: 'file', selectable: false }])
+    api.install()
+    const onOpenFile = vi.fn()
+
+    render(<FileTree root="project" onOpenFile={onOpenFile} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />)
+
+    fireEvent.click(await screen.findByText('pipe'))
+    expect(onOpenFile).not.toHaveBeenCalled()
   })
 
   test('keyboard: ArrowDown moves focus to the next row, Enter opens a file', async () => {
