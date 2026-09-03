@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, type ChangeEvent, type KeyboardEvent, t
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useImagePaste } from '../../hooks/use-image-paste'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
-import { useFileBrowser } from '../file-browser'
+import { useFileBrowser, useFileBrowserEnabled } from '../file-browser'
 
 type PasteableTextareaProps = {
   stageId: string
@@ -23,6 +23,10 @@ type PasteableTextareaProps = {
   // Компонент остаётся пригодным для использования ВНЕ FileBrowserProvider,
   // пока этот проп выключен: см. AttachFileButton ниже — вызов useFileBrowser()
   // живёт в отдельном компоненте, монтируемом только когда allowFileReferences=true.
+  // Кнопка также не рендерится, когда FileBrowserProvider отключён
+  // (capabilities.file_browser=false — Finding 5): PlanPanel/DialogChannel
+  // передают этот проп безусловно, реальный гейт живёт в провайдере/
+  // useFileBrowserEnabled(), а не разбросан по каждой панели.
   allowFileReferences?: boolean
 }
 
@@ -49,6 +53,14 @@ export function PasteableTextarea({
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
   const { nodeRef, attachments, uploadError, onPaste, removeAttachment } = useImagePaste(stageId, value, onChange)
   const { nodeRef: caretNodeRef, insertAtCaret } = useCaretInsert(value, onChange)
+  // useFileBrowserEnabled() (не useFileBrowser()) — читается безусловно, для
+  // ЛЮБОГО рендера, а не только когда allowFileReferences=true: useContext
+  // никогда не бросает исключение вне провайдера, поэтому это не нарушает
+  // инвариант "компонент работает без FileBrowserProvider". Нужен здесь (а не
+  // только внутри AttachFileButton), чтобы showStrip ниже не рисовал пустую
+  // полосу с отступом, когда кнопки в ней всё равно не будет (см. Finding 5).
+  const fileBrowserEnabled = useFileBrowserEnabled()
+  const showAttachButton = allowFileReferences && fileBrowserEnabled
 
   const setRefs = useCallback(
     (node: HTMLTextAreaElement | null) => {
@@ -64,7 +76,7 @@ export function PasteableTextarea({
     onChange(event.target.value)
   }
 
-  const showStrip = attachments.length > 0 || uploadError !== null || allowFileReferences
+  const showStrip = attachments.length > 0 || uploadError !== null || showAttachButton
 
   return (
     <div className="pasteable-textarea-wrap">
@@ -84,7 +96,7 @@ export function PasteableTextarea({
             </div>
           ))}
           {uploadError !== null && <span className="pasteable-attachment-error">{uploadError}</span>}
-          {allowFileReferences && <AttachFileButton onInsert={insertAtCaret} />}
+          {showAttachButton && <AttachFileButton onInsert={insertAtCaret} />}
         </div>
       )}
       <textarea
@@ -109,8 +121,8 @@ export function PasteableTextarea({
 // ТОЛЬКО когда allowFileReferences=true, мы просто не вызываем useFileBrowser(),
 // когда он не нужен — вместо того чтобы пытаться вызвать хук условно внутри одного
 // компонента (что нарушило бы Rules of Hooks).
-function AttachFileButton({ onInsert }: { onInsert: (text: string) => void }): ReactElement {
-  const { pickFiles } = useFileBrowser()
+function AttachFileButton({ onInsert }: { onInsert: (text: string) => void }): ReactElement | null {
+  const { pickFiles, enabled } = useFileBrowser()
 
   // Гвард от вставки в уже неактуальную цель (бриф Task 14, п.6 — "stale-picker
   // guard"): пока модалка пикера открыта, пользователь может уйти с этой конкретной
@@ -126,6 +138,12 @@ function AttachFileButton({ onInsert }: { onInsert: (text: string) => void }): R
     },
     [],
   )
+
+  // Защита в глубину (Finding 5): вызывающий (PasteableTextarea) уже не
+  // монтирует эту кнопку при выключенном enabled — этот return null тут на
+  // случай, если сама кнопка когда-нибудь начнёт монтироваться из другого
+  // места без внешнего гейта.
+  if (!enabled) return null
 
   function handleClick(): void {
     pickFiles((refs) => {

@@ -121,6 +121,19 @@ describe('PasteableTextarea', () => {
     expect(onChange).toHaveBeenCalledWith('see [AFM file: "/w/a.go"] end')
   })
 
+  it('allowFileReferences with a disabled provider (capabilities.file_browser=false): renders no Attach button and never calls the files API', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const onChange = vi.fn()
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={false}>
+        <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences />
+      </FileBrowserProvider>,
+    )
+
+    expect(screen.queryByRole('button', { name: /attach project file/i })).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('stale-picker guard: does not insert into a textarea that unmounted while the picker was still open, and warns instead', async () => {
     installFileBrowserApi()
     const onChange = vi.fn()

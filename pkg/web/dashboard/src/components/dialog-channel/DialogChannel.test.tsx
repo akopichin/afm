@@ -56,8 +56,12 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
 // useFileBrowser(), which throws outside a FileBrowserProvider. Every render
 // in this file goes through this wrapper, same as App.tsx wraps the whole
 // dashboard in prod.
-function renderDialogChannel(ui: ReactElement) {
-  return render(<FileBrowserProvider flowName="flow1" startedAt="t1">{ui}</FileBrowserProvider>)
+function renderDialogChannel(ui: ReactElement, enabled = true) {
+  return render(
+    <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={enabled}>
+      {ui}
+    </FileBrowserProvider>,
+  )
 }
 
 describe('DialogChannel', () => {
@@ -357,6 +361,33 @@ describe('DialogChannel', () => {
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
     expect(screen.getByRole('button', { name: /attach project file/i })).toBeInTheDocument()
+  })
+
+  // Finding 5: capabilities.file_browser=false must hide the comment picker
+  // too, not just the header button — otherwise host mode still shows
+  // "Attach project file" and clicking it hits the disabled /api/files/*.
+  test('capabilities.file_browser=false: the question-line comment textarea has no Attach project file button and never calls the files API', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />, false)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+
+    expect(screen.queryByRole('button', { name: /attach project file/i })).not.toBeInTheDocument()
+    const filesCalls = fetchSpy.mock.calls.filter(([input]) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      return url.includes('/api/files/')
+    })
+    expect(filesCalls).toHaveLength(0)
   })
 
   test('the custom-answer textarea has no attach button (only the per-line comment does)', async () => {

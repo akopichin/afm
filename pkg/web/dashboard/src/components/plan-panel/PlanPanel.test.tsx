@@ -21,8 +21,12 @@ function textResponse(text: string): Response {
 // (Task 14) — its "Attach project file" button calls useFileBrowser(), which
 // throws outside a FileBrowserProvider. Every render in this file goes
 // through this wrapper, same as App.tsx wraps the whole dashboard in prod.
-function renderPlanPanel(ui: ReactElement) {
-  return render(<FileBrowserProvider flowName="flow1" startedAt="t1">{ui}</FileBrowserProvider>)
+function renderPlanPanel(ui: ReactElement, enabled = true) {
+  return render(
+    <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={enabled}>
+      {ui}
+    </FileBrowserProvider>,
+  )
 }
 
 describe('PlanPanel', () => {
@@ -359,6 +363,25 @@ describe('PlanPanel', () => {
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
     expect(screen.getByRole('button', { name: /attach project file/i })).toBeInTheDocument()
+  })
+
+  // Finding 5: capabilities.file_browser=false must hide the comment picker
+  // too, not just the header button — otherwise host mode still shows
+  // "Attach project file" and clicking it hits the disabled /api/files/*.
+  test('capabilities.file_browser=false: the line-comment textarea has no Attach project file button and never calls the files API', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />, false)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+
+    expect(screen.queryByRole('button', { name: /attach project file/i })).not.toBeInTheDocument()
+    const filesCalls = fetchSpy.mock.calls.filter(([input]) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      return url.includes('/api/files/')
+    })
+    expect(filesCalls).toHaveLength(0)
   })
 
   // Kept before the scrollHeight-spying test below, not after: vi.spyOn(...,

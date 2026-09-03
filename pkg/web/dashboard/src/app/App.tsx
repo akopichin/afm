@@ -226,7 +226,7 @@ export function App(): ReactElement {
   }, [events, refresh])
 
   return (
-    <FileBrowserProvider flowName={flowName} startedAt={startedAt}>
+    <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser}>
       <FlowHeader
         flowName={flowName}
         connected={connected}
