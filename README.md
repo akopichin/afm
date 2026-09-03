@@ -2,6 +2,10 @@
 
 A CLI tool for orchestrating multi-stage AI tasks. Describe the task in a YAML file, break it into stages — afm runs AI agents sequentially or in parallel, waits for your approval of plans, and automatically carries out the implementation. Works with `claude` and with any claude-compatible agents (GLM, DeepSeek, Cursor, etc.).
 
+<p align="center">
+  <img src="docs/assets/afm-demo.gif" alt="afm demo — multi-stage AI orchestration with a live dashboard" width="900">
+</p>
+
 ## Contents
 
 - [How It Works](#how-it-works)
