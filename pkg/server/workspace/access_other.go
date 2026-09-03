@@ -26,3 +26,12 @@ func probeOpenat2Supported(int) error { return errUnsupported }
 
 // closeFD is a no-op off Linux — no descriptor was ever opened.
 func closeFD(int) error { return nil }
+
+// gitEntry mirrors the Linux helper for cross-platform compilation. Off Linux
+// the secure-open mechanism is unavailable, so it always errors — Diff never
+// runs here anyway (New degrades to zero roots).
+//
+//nolint:unused // parity stub for the Linux gitEntry; called by Diff's repo walk
+func (r *rootHandle) gitEntry(string) (isDir, isRegular bool, content []byte, err error) {
+	return false, false, nil, errUnsupported
+}

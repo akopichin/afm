@@ -4,6 +4,8 @@ package workspace
 
 import (
 	"errors"
+	"io"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
@@ -75,4 +77,47 @@ func probeOpenat2Supported(dirf int) error {
 // closeFD closes a file descriptor.
 func closeFD(fd int) error {
 	return unix.Close(fd)
+}
+
+// maxGitfileBytes bounds the read of a `.git` gitfile. A real gitfile holds a
+// single short `gitdir: <path>` line; anything larger is not a gitfile.
+const maxGitfileBytes = 4 << 10
+
+// gitEntry classifies the `.git` entry at relGit (root-relative, slash-path)
+// opened through the secure openat2 fd, so containment/symlink policy is the
+// kernel's job, not string math. It first opens O_PATH — which never follows a
+// symlink (RESOLVE_NO_SYMLINKS → ErrSymlink) and never blocks on a fifo/device
+// — to fstat the kind. Only a confirmed regular file is reopened O_RDONLY and
+// read (bounded), so a gitfile's target can be parsed. A directory reports
+// isDir; anything that is neither dir nor regular reports both false.
+func (r *rootHandle) gitEntry(relGit string) (isDir, isRegular bool, content []byte, err error) {
+	fd, err := r.openat(relGit, unix.O_PATH)
+	if err != nil {
+		return false, false, nil, err // ErrSymlink / ErrNotFound / raw errno
+	}
+	pf := os.NewFile(uintptr(fd), relGit)
+	st, serr := pf.Stat()
+	_ = pf.Close()
+	if serr != nil {
+		return false, false, nil, serr
+	}
+	mode := st.Mode()
+	switch {
+	case mode.IsDir():
+		return true, false, nil, nil
+	case mode.IsRegular():
+		rfd, rerr := r.openat(relGit, unix.O_RDONLY)
+		if rerr != nil {
+			return false, true, nil, rerr
+		}
+		rf := os.NewFile(uintptr(rfd), relGit)
+		data, derr := io.ReadAll(io.LimitReader(rf, maxGitfileBytes))
+		_ = rf.Close()
+		if derr != nil {
+			return false, true, nil, derr
+		}
+		return false, true, data, nil
+	default:
+		return false, false, nil, nil
+	}
 }
