@@ -36,7 +36,7 @@ type ReExecConfig struct {
 	ProjectDir      string // абсолютный путь к директории проекта
 	Commands        []CommandMount
 	DashboardPort   int                           // порт dashboard; при >0 пробрасывается на хост через -p
-	ExtraMounts     []string                      // доп. хост-директории (могут начинаться с ~) → монтируются :ro
+	ExtraMounts     config.ExtraMounts            // доп. хост-директории (могут начинаться с ~) → монтируются :ro
 	ExtraArgs       []string                      // os.Args[1:]
 	ClientCommand   string                        // имя агента из config (для проверки auth при command: claude)
 	Recipes         map[string]config.AgentRecipe // autoShim: команды с recipe → генерируются, секрет → transient env
@@ -299,8 +299,8 @@ func ReExec(cfg ReExecConfig) error {
 	// Пути с ~ монтируем в домашний каталог контейнера (containerHome/…), чтобы
 	// скрипты находили их через $HOME; абсолютные пути — по тому же пути (как проект).
 	for _, m := range cfg.ExtraMounts {
-		hostPath := expandHome(m, home)
-		containerPath := expandHome(m, containerHome)
+		hostPath := expandHome(m.Path, home)
+		containerPath := expandHome(m.Path, containerHome)
 		args = append(args, "-v", hostPath+":"+containerPath+":ro")
 	}
 

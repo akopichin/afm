@@ -183,7 +183,57 @@ type DockerConfig struct {
 	// ExtraMounts — дополнительные хост-пути (можно с ~), которые пробрасываются
 	// в контейнер по тому же пути только для чтения. Нужно кастомным агентам,
 	// хранящим токены/конфиги вне ~/.claude (напр. ~/.ai-free).
-	ExtraMounts []string `yaml:"extra_mounts"`
+	ExtraMounts ExtraMounts `yaml:"extra_mounts"`
+	// FileBrowser настраивает встроенный файловый браузер проекта в dashboard.
+	FileBrowser DockerFileBrowserConfig `yaml:"file_browser"`
+}
+
+// DockerFileBrowserConfig настраивает встроенный файловый браузер проекта.
+type DockerFileBrowserConfig struct {
+	Enabled *bool `yaml:"enabled"`
+}
+
+// IsEnabled сообщает, включён ли файловый браузер. По умолчанию (nil) — включён.
+func (c DockerFileBrowserConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// ExtraMount — один дополнительный хост-путь, монтируемый в контейнер.
+// Path может начинаться с ~. Name — опц. отображаемое имя (для file browser).
+// Browse включает показ этого пути в file browser (по умолчанию — false,
+// т.к. большинство extra_mounts — служебные токены/конфиги агентов).
+type ExtraMount struct {
+	Path   string `yaml:"path"`
+	Name   string `yaml:"name,omitempty"`
+	Browse bool   `yaml:"browse,omitempty"`
+}
+
+// ExtraMounts — список доп. хост-путей. Каждый элемент YAML-списка может
+// быть либо строкой (legacy-форма "~/path", Browse:false), либо мапой
+// {path, name, browse}.
+type ExtraMounts []ExtraMount
+
+// UnmarshalYAML принимает как строковые (legacy), так и объектные элементы
+// списка extra_mounts.
+func (m *ExtraMounts) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.SequenceNode {
+		return errors.New("extra_mounts must be a list")
+	}
+	out := make(ExtraMounts, 0, len(value.Content))
+	for _, item := range value.Content {
+		switch item.Kind {
+		case yaml.ScalarNode: // legacy "~/path" → browse:false
+			out = append(out, ExtraMount{Path: item.Value})
+		case yaml.MappingNode:
+			var em ExtraMount
+			if err := item.Decode(&em); err != nil {
+				return err
+			}
+			out = append(out, em)
+		default:
+			return errors.New("extra_mounts item must be a string or a mapping")
+		}
+	}
+	*m = out
+	return nil
 }
 
 // IsAutoShim reports whether wrapper auto-generation is enabled.

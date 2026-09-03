@@ -162,7 +162,7 @@ func TestReExec_BuildsDockerArgs(t *testing.T) {
 			{HostPath: "/usr/local/bin/glm51", ContainerName: "glm51"},
 		},
 		DashboardPort: 9876,
-		ExtraMounts:   []string{"~/.ai-free"},
+		ExtraMounts:   config.ExtraMounts{{Path: "~/.ai-free"}},
 		ExtraArgs:     []string{"run", "flow.yaml"},
 	})
 	if err != nil {

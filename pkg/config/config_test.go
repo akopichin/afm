@@ -3,9 +3,12 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/akopichin/afm/pkg/config"
 )
@@ -318,11 +321,45 @@ docker:
 		t.Fatalf("Docker.ExtraMounts: got %v, want %v", cfg.Docker.ExtraMounts, wantMounts)
 	}
 	for i, w := range wantMounts {
-		if cfg.Docker.ExtraMounts[i] != w {
-			t.Errorf("Docker.ExtraMounts[%d]: got %q, want %q", i, cfg.Docker.ExtraMounts[i], w)
+		if cfg.Docker.ExtraMounts[i].Path != w {
+			t.Errorf("Docker.ExtraMounts[%d].Path: got %q, want %q", i, cfg.Docker.ExtraMounts[i].Path, w)
 		}
 	}
 	_ = trueVal
+}
+
+func TestExtraMounts_UnmarshalScalarAndObject(t *testing.T) {
+	var dc config.DockerConfig
+	yml := []byte(`
+extra_mounts:
+  - path: ../shared-contracts
+    name: contracts
+    browse: true
+  - path: ~/.ai-free
+    browse: false
+  - ~/.legacy-agent
+`)
+	if err := yaml.Unmarshal(yml, &dc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := config.ExtraMounts{
+		{Path: "../shared-contracts", Name: "contracts", Browse: true},
+		{Path: "~/.ai-free", Browse: false},
+		{Path: "~/.legacy-agent", Browse: false}, // legacy scalar → browse:false
+	}
+	if !reflect.DeepEqual(dc.ExtraMounts, want) {
+		t.Fatalf("got %+v want %+v", dc.ExtraMounts, want)
+	}
+}
+
+func TestFileBrowser_DefaultsEnabled(t *testing.T) {
+	if !(config.DockerFileBrowserConfig{}).IsEnabled() {
+		t.Fatal("nil Enabled should default to true")
+	}
+	f := false
+	if (config.DockerFileBrowserConfig{Enabled: &f}).IsEnabled() {
+		t.Fatal("explicit false must disable")
+	}
 }
 
 func TestThemeMerge(t *testing.T) {
