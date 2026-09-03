@@ -9,6 +9,14 @@ import "errors"
 // no error, capability off.
 var errUnsupported = errors.New("workspace: secure file browser is only supported on Linux (openat2)")
 
+// Parity stubs for the Linux open-flag constants so list.go/content.go compile
+// cross-platform. Never used off Linux — openat always errors before the flags
+// would matter — so the concrete values are irrelevant.
+const (
+	openDirReadOnly      = 0
+	openFileReadNonblock = 0
+)
+
 // rootHandle mirrors the Linux type so workspace.go compiles cross-platform.
 // dirf is never populated here — openRootDir always errors, so New skips every
 // root and no handle is ever constructed off Linux.

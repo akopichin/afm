@@ -20,6 +20,15 @@ import (
 //     (including the final one) fails with ELOOP.
 const resolveFlags = unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS
 
+// Open-flag combinations for the read paths, defined per platform because
+// O_DIRECTORY / O_NONBLOCK are not portable — Windows' syscall package lacks
+// them, so referencing syscall.O_DIRECTORY from a build-tag-free file broke the
+// windows cross-build. list.go/content.go use these package constants instead.
+const (
+	openDirReadOnly      = unix.O_RDONLY | unix.O_DIRECTORY // List: open a directory fd
+	openFileReadNonblock = unix.O_RDONLY | unix.O_NONBLOCK  // Read/Reference: never block on a FIFO
+)
+
 // rootHandle pins one browsable root by an open directory fd. All access to
 // that root goes through openat, so the kernel — not string math — enforces
 // containment.

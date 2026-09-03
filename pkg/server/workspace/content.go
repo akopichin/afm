@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"unicode/utf8"
 )
 
@@ -47,7 +46,7 @@ func (fs *fsImpl) Read(ctx context.Context, rootID, relPath string) (File, error
 	// call (and ctx can't cancel a blocked open). It has no effect on a
 	// regular file's later io.ReadAll, so normal reads are unchanged; we
 	// don't bother clearing it afterward since IsRegular is confirmed below.
-	fd, err := rh.openat(clean, syscall.O_RDONLY|syscall.O_NONBLOCK)
+	fd, err := rh.openat(clean, openFileReadNonblock)
 	if err != nil {
 		return File{}, err
 	}
@@ -105,7 +104,7 @@ func (fs *fsImpl) Reference(ctx context.Context, rootID, relPath string) (Refere
 
 	// See the O_NONBLOCK note in Read: without it, opening a FIFO O_RDONLY
 	// can block this call forever waiting for a writer.
-	fd, err := rh.openat(clean, syscall.O_RDONLY|syscall.O_NONBLOCK)
+	fd, err := rh.openat(clean, openFileReadNonblock)
 	if err != nil {
 		return Reference{}, err
 	}

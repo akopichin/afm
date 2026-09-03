@@ -10,7 +10,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"syscall"
 )
 
 // listPageSize caps the number of entries returned by one List call. A
@@ -65,7 +64,7 @@ func (fs *fsImpl) List(ctx context.Context, rootID, relPath, cursor string) (Pag
 		}
 	}
 
-	fd, err := rh.openat(clean, syscall.O_RDONLY|syscall.O_DIRECTORY)
+	fd, err := rh.openat(clean, openDirReadOnly)
 	if err != nil {
 		return Page{}, err
 	}
