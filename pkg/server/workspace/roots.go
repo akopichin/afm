@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+// Hidden service subtrees, invisible everywhere under a root: rejected by
+// validateRelPath, and filtered out of directory listings in list.go.
+const (
+	hiddenGitDir = ".git"
+	hiddenAfmDir = ".afm"
+)
+
 // validateRelPath cleans and validates a path relative to a root: it rejects
 // absolute paths, `..` escapes, NUL bytes, and hidden service subtrees
 // (`.git`, `.afm`) anywhere in the path. An empty path or "." both mean "the
@@ -29,7 +36,7 @@ func validateRelPath(p string) (string, error) {
 	}
 	clean := path.Clean(p)
 	for _, seg := range strings.Split(clean, "/") {
-		if seg == ".git" || seg == ".afm" {
+		if seg == hiddenGitDir || seg == hiddenAfmDir {
 			return "", ErrNotFound // hidden service subtrees
 		}
 	}

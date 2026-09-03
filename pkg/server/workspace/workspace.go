@@ -40,11 +40,7 @@ func New(roots []Root) (FS, error) {
 // resolve is the single lookup+validation gate every read path shares (List,
 // Read, Reference, Diff). It maps a rootID to its handle and validates relPath,
 // returning the handle and the cleaned relative path. Tasks 7-9 build on this
-// and must not re-implement lookup or validation. It is exercised now by the
-// Linux security test; the not-yet-implemented stubs below keep it "unused" in
-// the non-Linux lint build until those tasks wire it in.
-//
-//nolint:unused // consumed by the Linux security test and by Tasks 7-9 (List/Read/Reference/Diff)
+// and must not re-implement lookup or validation.
 func (fs *fsImpl) resolve(rootID, relPath string) (*rootHandle, string, error) {
 	h, ok := fs.byID[rootID]
 	if !ok {
@@ -84,12 +80,10 @@ func (fs *fsImpl) Close() error {
 	return firstErr
 }
 
-// The methods below are stubs until Tasks 7-9 implement them. They exist now
-// only so fsImpl satisfies the FS interface.
+// List is implemented in list.go.
 
-func (fs *fsImpl) List(context.Context, string, string, string) (Page, error) {
-	return Page{}, ErrNotFound
-}
+// The methods below are stubs until Tasks 8-9 implement them. They exist now
+// only so fsImpl satisfies the FS interface.
 
 func (fs *fsImpl) Read(context.Context, string, string) (File, error) {
 	return File{}, ErrNotFound
