@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { TreeEntry } from '../../api/files-client'
 import { FileBrowserModal, type SelectedFile } from './FileBrowserModal'
-import { FilesApiMock } from './test-support'
+import { errorResponse, FilesApiMock, jsonResponse } from './test-support'
 
 function renderModal(overrides: Partial<React.ComponentProps<typeof FileBrowserModal>> = {}) {
   const props: React.ComponentProps<typeof FileBrowserModal> = {
@@ -256,6 +256,91 @@ describe('FileBrowserModal', () => {
 
     expect(await screen.findByText(/read_failed/)).toBeInTheDocument()
     expect(container.querySelector('code')?.textContent).toBe('package a')
+  })
+
+  test('a stale Reload response for a file that is no longer active does not clobber the newly-opened file, and Reload is not stuck', async () => {
+    // A's Reload is deliberately held open (deferred) — resolved by hand,
+    // late, AFTER B has already loaded — to reproduce the exact race from
+    // the review finding: Reload(A) in flight -> switch to B (fast, wins) ->
+    // A's stale response arrives -> must be dropped, not applied over B.
+    let resolveReloadA!: (r: Response) => void
+    const reloadAResponse = new Promise<Response>((resolve) => {
+      resolveReloadA = resolve
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const rawUrl = typeof input === 'string' ? input : (input as Request).url
+      const url = new URL(rawUrl, 'http://localhost')
+      const path = url.searchParams.get('path') ?? ''
+      const ifNoneMatch = (init?.headers as Record<string, string> | undefined)?.['If-None-Match']
+
+      if (url.pathname === '/api/files/roots') {
+        return jsonResponse({ roots: [{ id: 'project', label: 'afm', kind: 'project', mount_read_only: false }] })
+      }
+      if (url.pathname === '/api/files/tree') {
+        return jsonResponse({
+          entries: [
+            { name: 'a.go', path: 'a.go', kind: 'file', language: 'go', selectable: true },
+            { name: 'b.go', path: 'b.go', kind: 'file', language: 'go', selectable: true },
+          ],
+          next_cursor: '',
+        })
+      }
+      if (url.pathname === '/api/files/content' && path === 'a.go') {
+        // If-None-Match present == this is the Reload request, not the initial load — hold it open.
+        if (ifNoneMatch !== undefined) return reloadAResponse
+        return jsonResponse(
+          { path: 'a.go', display_path: 'afm/a.go', reference: 'x', language: 'go', size: 9, modified_at: '2026-01-01T00:00:00Z', content: 'package a' },
+          { etag: '"etag-a1"' },
+        )
+      }
+      if (url.pathname === '/api/files/content' && path === 'b.go') {
+        return jsonResponse(
+          { path: 'b.go', display_path: 'afm/b.go', reference: 'x', language: 'go', size: 9, modified_at: '2026-01-01T00:00:00Z', content: 'package b' },
+          { etag: '"etag-b1"' },
+        )
+      }
+      return errorResponse('not_found', 404)
+    })
+
+    const { container } = renderModal()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByText('a.go'))
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package a'))
+
+    // Reload A — slow, still in flight when we switch files below.
+    fireEvent.click(screen.getByRole('button', { name: /reload/i }))
+
+    // Switch to B before A's reload resolves — B's own (fast) initial load wins.
+    fireEvent.click(screen.getByText('b.go'))
+    await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('package b'))
+
+    // The freshly-opened B must not be stuck showing A's leftover "Reloading…".
+    expect(screen.getByRole('button', { name: /^reload$/i })).not.toBeDisabled()
+    expect(screen.queryByText(/reloading…/i)).toBeNull()
+
+    // A's stale reload response finally arrives — must NOT overwrite B's content.
+    resolveReloadA(
+      jsonResponse(
+        {
+          path: 'a.go',
+          display_path: 'afm/a.go',
+          reference: 'x',
+          language: 'go',
+          size: 12,
+          modified_at: '2026-03-03T00:00:00Z',
+          content: 'package a v2',
+        },
+        { etag: '"etag-a2"' },
+      ),
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('code')?.textContent).toBe('package b')
   })
 
   test('Escape closes the modal', async () => {

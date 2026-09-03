@@ -63,6 +63,13 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   const [diffError, setDiffError] = useState<Error | null>(null)
 
   const modalRef = useRef<HTMLDivElement | null>(null)
+  // handleReload — обработчик клика, а не эффект: у него нет своего cleanup,
+  // чтобы пометить "cancelled" в замыкании, как это делают эффекты загрузки
+  // выше/ниже. Вместо этого держим "текущий activeFile" в ref, обновляемом на
+  // каждом рендере, и после await сверяем с ним ЗАПРОШЕННЫЙ файл — тот же
+  // смысл, что и у cancelled-флага, просто через ref вместо замыкания эффекта.
+  const activeFileRef = useRef<ActiveFile | null>(activeFile)
+  activeFileRef.current = activeFile
 
   useEffect(() => {
     let cancelled = false
@@ -89,6 +96,7 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
     setContent(null)
     setContentError(null)
     setReloadError(null)
+    setReloading(false)
     setContentLoading(true)
     void getContent(activeFile.root, activeFile.entry.path)
       .then((c) => {
@@ -170,18 +178,35 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   // 304 (getContent вернул undefined) — файл не менялся, оставляем content/
   // etag/modifiedAt как есть, никакого "loading flicker". 200 — заменяем
   // целиком. Ошибка — показываем инлайн-баннером, НЕ трогая content.
+  //
+  // Гонка (найдена ревью): пока Reload файла A летит, пользователь может
+  // кликнуть файл B — эффект загрузки B применит свой (быстрый) ответ, а
+  // МЕДЛЕННЫЙ ответ Reload'а A придёт позже и без проверки перезаписал бы
+  // content B содержимым A. Фиксируем запрошенный файл (requested) и после
+  // await сверяем с activeFileRef.current — если пользователь успел
+  // переключиться на другой файл, ответ считается устаревшим и отбрасывается
+  // целиком (включая reloading/reloadError — тот файл больше не на экране,
+  // его reloading уже сброшен эффектом загрузки выше).
   async function handleReload(): Promise<void> {
     if (activeFile === null || content === null) return
+    const requested = activeFile
     setReloading(true)
     setReloadError(null)
+    let updated: FileContent | undefined
+    let failure: string | null = null
     try {
-      const updated = await getContent(activeFile.root, activeFile.entry.path, content.etag)
-      if (updated !== undefined) setContent(updated)
+      updated = await getContent(requested.root, requested.entry.path, content.etag)
     } catch (e: unknown) {
-      setReloadError(e instanceof Error ? e.message : 'failed to reload file')
-    } finally {
-      setReloading(false)
+      failure = e instanceof Error ? e.message : 'failed to reload file'
     }
+    const current = activeFileRef.current
+    if (current === null || current.root !== requested.root || current.entry.path !== requested.entry.path) return
+    setReloading(false)
+    if (failure !== null) {
+      setReloadError(failure)
+      return
+    }
+    if (updated !== undefined) setContent(updated)
   }
 
   function rootLabel(rootId: string): string {
