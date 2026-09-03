@@ -80,18 +80,11 @@ func (fs *fsImpl) Close() error {
 	return firstErr
 }
 
-// List is implemented in list.go.
+// List is implemented in list.go. Read and Reference are implemented in
+// content.go.
 
-// The methods below are stubs until Tasks 8-9 implement them. They exist now
-// only so fsImpl satisfies the FS interface.
-
-func (fs *fsImpl) Read(context.Context, string, string) (File, error) {
-	return File{}, ErrNotFound
-}
-
-func (fs *fsImpl) Reference(context.Context, string, string) (Reference, error) {
-	return Reference{}, ErrNotFound
-}
+// Diff is a stub until Task 9 implements it. It exists now only so fsImpl
+// satisfies the FS interface.
 
 func (fs *fsImpl) Diff(context.Context, string, string) (Diff, error) {
 	return Diff{}, ErrNotFound
