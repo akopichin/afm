@@ -15,6 +15,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/server/workspace"
 	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/web"
 )
@@ -80,6 +81,7 @@ type Server struct {
 	uiBus            *bus.UIBus
 	actions          StageActions     // never nil in practice — see StageActions doc
 	secondary        SecondaryActions // may be nil — see SecondaryActions doc
+	workspace        workspace.FS     // Docker project file browser backend; nil = capability off
 	theme            string           // "goga" или "" (default coffee)
 	indexBytes       []byte           // предподготовленный index.html (с заменами скина/favicon)
 	fileServer       http.Handler     // отдаёт встроенную статику (skins/, assets, ...)
@@ -116,6 +118,7 @@ type Config struct {
 	UIBus            *bus.UIBus
 	Actions          StageActions
 	Secondary        SecondaryActions
+	Workspace        workspace.FS // Docker project file browser backend; nil = capability off
 	Theme            string
 	SkinDir          string
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
@@ -151,6 +154,7 @@ func New(cfg Config) *Server {
 		uiBus:            cfg.UIBus,
 		actions:          cfg.Actions,
 		secondary:        cfg.Secondary,
+		workspace:        cfg.Workspace,
 		theme:            cfg.Theme,
 		wsPongWait:       pongWait,
 		wsPingPeriod:     pingPeriod,
@@ -333,5 +337,9 @@ func (s *Server) Start() (string, error) {
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.httpSrv.Shutdown(ctx)
+	err := s.httpSrv.Shutdown(ctx)
+	if s.workspace != nil {
+		_ = s.workspace.Close()
+	}
+	return err
 }

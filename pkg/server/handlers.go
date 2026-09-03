@@ -26,15 +26,22 @@ const (
 // ordered []StageView (see stageview.go) instead of five parallel per-stage
 // maps the frontend used to re-join by id.
 type statusResponse struct {
-	FlowName             string      `json:"flow_name"`
-	StartedAt            time.Time   `json:"started_at"`
-	Description          string      `json:"description,omitempty"`
-	Stages               []StageView `json:"stages"`
-	LastSeq              uint64      `json:"last_seq"`
-	IdleAccumulatedMs    int64       `json:"idle_accumulated_ms"`
-	IdleSince            *time.Time  `json:"idle_since,omitempty"`
-	BackoffAccumulatedMs int64       `json:"backoff_accumulated_ms"`
-	BackoffOpenSince     []time.Time `json:"backoff_open_since,omitempty"`
+	FlowName             string       `json:"flow_name"`
+	StartedAt            time.Time    `json:"started_at"`
+	Description          string       `json:"description,omitempty"`
+	Stages               []StageView  `json:"stages"`
+	LastSeq              uint64       `json:"last_seq"`
+	IdleAccumulatedMs    int64        `json:"idle_accumulated_ms"`
+	IdleSince            *time.Time   `json:"idle_since,omitempty"`
+	BackoffAccumulatedMs int64        `json:"backoff_accumulated_ms"`
+	BackoffOpenSince     []time.Time  `json:"backoff_open_since,omitempty"`
+	Capabilities         capabilities `json:"capabilities"`
+}
+
+// capabilities advertises optional dashboard features gated by server-side
+// setup (e.g. whether the Docker project file browser is wired up).
+type capabilities struct {
+	FileBrowser bool `json:"file_browser"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -50,6 +57,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		BackoffAccumulatedMs: rs.BackoffAccumulatedMs,
 		BackoffOpenSince:     rs.BackoffOpenSince(),
 	}
+	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

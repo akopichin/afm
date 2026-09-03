@@ -23,6 +23,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
+	"github.com/akopichin/afm/pkg/server/workspace"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -270,6 +271,29 @@ func newRunCmd() *cobra.Command {
 					stageDependsOn[st.ID] = st.DependsOn
 					stageButtons[st.ID] = st.Buttons.Labels()
 				}
+
+				// Docker project file browser: только внутри контейнера, где
+				// docker.ReExec передал манифест примонтированных корней через
+				// AFM_DOCKER_FILE_ROOTS. На хосте (или при отсутствии/битом
+				// манифесте) ws остаётся nil — capability просто выключена,
+				// это не фатально (см. task-10 brief).
+				var ws workspace.FS
+				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && os.Getenv("AFM_IN_DOCKER") == "1" {
+					if man, err := docker.DecodeFileRootManifest(raw); err == nil {
+						roots := make([]workspace.Root, 0, len(man.Roots))
+						for _, r := range man.Roots {
+							roots = append(roots, workspace.Root{
+								ID:            r.ID,
+								Label:         r.Label,
+								Path:          r.ContainerPath,
+								Kind:          r.Kind,
+								MountReadOnly: r.MountReadOnly,
+							})
+						}
+						ws, _ = workspace.New(roots)
+					}
+				}
+
 				srv = server.New(server.Config{
 					Port:             cfg.Server.GetPort(),
 					RunDir:           runDir,
@@ -285,6 +309,7 @@ func newRunCmd() *cobra.Command {
 					UIBus:            orch.UIBus(),
 					Actions:          orch,
 					Secondary:        orch,
+					Workspace:        ws,
 				})
 				addr, err := srv.Start()
 				if err != nil {
