@@ -109,12 +109,19 @@ describe('FileBrowserModal', () => {
     expect(onToggleSelect).toHaveBeenCalledWith('project', expect.objectContaining({ path: 'a.go' } satisfies Partial<TreeEntry>))
   })
 
-  test('renders a chip per selected file and calls onSubmit on the primary action', () => {
-    new FilesApiMock().install()
+  test('renders a chip per selected file and calls onSubmit on the primary action', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
     const selection: SelectedFile[] = [{ root: 'project', path: 'a.go', displayPath: 'a.go', reference: '[AFM file: "/w/afm/a.go"]' }]
     const onSubmit = vi.fn()
 
     renderModal({ mode: 'picker', selection, onSubmit })
+    // Ждём, пока разрешится getRoots() (эффект на маунте) — иначе assert ниже
+    // синхронно опережает setRoots из ещё не отработавшего промиса, и React
+    // ругается "not wrapped in act(...)" на обновление состояния уже после
+    // конца теста.
+    await screen.findByRole('button', { name: 'afm' })
 
     expect(screen.getByText(/a\.go/)).toBeInTheDocument()
     const button = screen.getByRole('button', { name: /insert references/i })
@@ -123,35 +130,52 @@ describe('FileBrowserModal', () => {
     expect(onSubmit).toHaveBeenCalled()
   })
 
-  test('the primary action button is disabled with no selection, and labeled per mode', () => {
-    new FilesApiMock().install()
+  test('the primary action button is disabled with no selection, and labeled per mode', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
+
     renderModal({ mode: 'browse', selection: [] })
+    await screen.findByRole('button', { name: 'afm' })
+
     expect(screen.getByRole('button', { name: /copy references/i })).toBeDisabled()
   })
 
-  test('a chip remove button calls onRemoveSelect with root and path', () => {
-    new FilesApiMock().install()
+  test('a chip remove button calls onRemoveSelect with root and path', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
     const selection: SelectedFile[] = [{ root: 'project', path: 'a.go', displayPath: 'a.go', reference: 'x' }]
     const onRemoveSelect = vi.fn()
 
     renderModal({ selection, onRemoveSelect })
+    await screen.findByRole('button', { name: 'afm' })
 
     fireEvent.click(screen.getByRole('button', { name: /remove a\.go/i }))
     expect(onRemoveSelect).toHaveBeenCalledWith('project', 'a.go')
   })
 
-  test('Escape closes the modal', () => {
-    new FilesApiMock().install()
+  test('Escape closes the modal', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
     const onClose = vi.fn()
+
     renderModal({ onClose })
+    await screen.findByRole('button', { name: 'afm' })
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
   })
 
-  test('focus starts inside the modal and Tab wraps from the last to the first focusable element', () => {
-    new FilesApiMock().install()
+  test('focus starts inside the modal and Tab wraps from the last to the first focusable element', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
+
     const { container } = renderModal()
+    await screen.findByRole('button', { name: 'afm' })
+
     const focusable = container.querySelectorAll<HTMLElement>('button, [tabindex]:not([tabindex="-1"])')
     expect(focusable.length).toBeGreaterThan(0)
     expect(container.contains(document.activeElement)).toBe(true)
