@@ -3,6 +3,7 @@ module github.com/akopichin/afm
 go 1.26.4
 
 require (
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/kaptinlin/jsonrepair v0.4.8
 	github.com/spf13/cobra v1.8.0

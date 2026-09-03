@@ -1,7 +1,5 @@
 package workspace
 
-import "context"
-
 // fsImpl is the concrete FS backend. It keeps one open directory handle per
 // root (byID) and preserves the declared order (order) for stable Roots()
 // output. When the platform or kernel lacks openat2, byID is simply empty and
@@ -81,11 +79,4 @@ func (fs *fsImpl) Close() error {
 }
 
 // List is implemented in list.go. Read and Reference are implemented in
-// content.go.
-
-// Diff is a stub until Task 9 implements it. It exists now only so fsImpl
-// satisfies the FS interface.
-
-func (fs *fsImpl) Diff(context.Context, string, string) (Diff, error) {
-	return Diff{}, ErrNotFound
-}
+// content.go. Diff is implemented in diff.go.
