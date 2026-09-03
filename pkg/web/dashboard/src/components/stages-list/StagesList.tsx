@@ -98,12 +98,18 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
     }
 
     document.addEventListener('mousedown', onMouseDown)
-    // capture:true — скролл не всплывает у скроллящихся контейнеров, но
-    // capture-фаза проходит через них независимо от bubbles.
-    window.addEventListener('scroll', close, true)
+    // Меню спозиционировано fixed относительно кнопки внутри #stages-panel.
+    // Если прокручивается САМА панель — кнопка уезжает, а меню нет: закрываем.
+    // Слушаем скролл ТОЛЬКО панели, а не window с capture:true — иначе любой
+    // посторонний скролл в документе (например автоскролл ленты событий вниз
+    // при новом событии, useStickToBottom дёргает scrollTop) ложно закрывал бы
+    // меню сразу после открытия. Скролл не всплывает, поэтому чужие контейнеры
+    // до этого слушателя не дойдут.
+    const panel = document.getElementById('stages-panel')
+    panel?.addEventListener('scroll', close)
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
-      window.removeEventListener('scroll', close, true)
+      panel?.removeEventListener('scroll', close)
     }
   }, [openMenuStageId])
 

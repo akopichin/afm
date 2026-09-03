@@ -216,7 +216,7 @@ describe('StagesList', () => {
     expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
 
-  test('scrolling the page closes the open kebab menu', () => {
+  test('scrolling the stages panel closes the open kebab menu (the menu is anchored to a button inside it)', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
@@ -225,8 +225,30 @@ describe('StagesList', () => {
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
 
-    fireEvent.scroll(window)
+    fireEvent.scroll(document.getElementById('stages-panel')!)
     expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
+  })
+
+  // Регресс: раньше меню слушало скролл на window с capture:true и закрывалось
+  // от ЛЮБОГО скролла в документе — в т.ч. от автоскролла ленты событий вниз
+  // при новом событии (useStickToBottom дёргает scrollTop). Из-за этого меню
+  // пропадало сразу после открытия, как только в фиде появлялось событие.
+  // Скролл постороннего контейнера НЕ должен закрывать меню.
+  test('scrolling an unrelated container (e.g. the event feed auto-scroll) does NOT close the open kebab menu', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+
+    // Отдельный скролл-контейнер вне #stages-panel — модель ленты событий.
+    const feed = document.createElement('div')
+    document.body.appendChild(feed)
+    fireEvent.scroll(feed)
+
+    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
   })
 
   test('custom buttons: renders one menu item per button in declared order', () => {
