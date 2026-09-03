@@ -9,6 +9,7 @@ import { EventFeedPanel } from '../components/event-feed'
 import { Footer } from '../components/footer'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardLayout } from '../components/layout/DashboardLayout'
+import { FileBrowserProvider } from '../components/file-browser'
 import { useStatus } from '../hooks/use-status'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageLog } from '../hooks/use-stage-log'
@@ -25,7 +26,7 @@ import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } f
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, refresh } = useStatus()
 
   // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
   // (agent_suggest, Task 8); null — модалка скрыта.
@@ -225,7 +226,7 @@ export function App(): ReactElement {
   }, [events, refresh])
 
   return (
-    <>
+    <FileBrowserProvider flowName={flowName} startedAt={startedAt}>
       <FlowHeader
         flowName={flowName}
         connected={connected}
@@ -235,6 +236,7 @@ export function App(): ReactElement {
         notificationsEnabled={notificationsEnabled}
         onRequestEnableNotifications={onRequestEnableNotifications}
         onDisableNotifications={onDisableNotifications}
+        capabilities={capabilities}
       />
 
       <main id="main">
@@ -308,7 +310,7 @@ export function App(): ReactElement {
           onSubmit={handleSubmitPreNote}
         />
       )}
-    </>
+    </FileBrowserProvider>
   )
 }
 

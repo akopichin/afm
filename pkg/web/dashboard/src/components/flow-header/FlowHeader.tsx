@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import { useThemeMode } from '../../hooks/use-theme-mode'
 import type { NotificationPermissionState } from '../../hooks/use-desktop-notifications'
+import { useFileBrowser } from '../file-browser'
 
 type FlowHeaderProps = {
   flowName: string
@@ -11,6 +12,11 @@ type FlowHeaderProps = {
   notificationsEnabled?: boolean
   onRequestEnableNotifications?: () => void
   onDisableNotifications?: () => void
+  // capabilities.fileBrowser — фичефлаг бэкенда (см. FlowStatus.capabilities,
+  // Task 12): включён ли файловый браузер проекта. Отсутствует/false — кнопка
+  // вообще не рендерится (значит, не вызывается и useFileBrowser() внутри
+  // OpenFileBrowserButton — см. её комментарий).
+  capabilities?: { fileBrowser: boolean }
 }
 
 // Шапка дашборда: декоративный логотип, имя флоу и индикатор WebSocket-соединения.
@@ -34,6 +40,7 @@ export function FlowHeader({
   notificationsEnabled = false,
   onRequestEnableNotifications,
   onDisableNotifications,
+  capabilities = { fileBrowser: false },
 }: FlowHeaderProps): ReactElement {
   const hasDescription = description !== undefined && description.trim() !== ''
   const statusText = connected ? 'LINK' : 'OFFLINE'
@@ -67,6 +74,7 @@ export function FlowHeader({
       <div className="header-actions">
         {attention && <span className="attention-dot" aria-label="Action needed" />}
         <div id="ws-status" className={`ws-status ${statusClass}`} title="WebSocket">{statusText}</div>
+        {capabilities.fileBrowser && <OpenFileBrowserButton />}
         <button
           type="button"
           className="icon-btn"
@@ -89,5 +97,21 @@ export function FlowHeader({
         )}
       </div>
     </header>
+  )
+}
+
+// Отдельный подкомпонент, а не инлайн-кнопка внутри FlowHeader: useFileBrowser()
+// бросает исключение вне FileBrowserProvider (см. FileBrowserProvider.tsx). App.tsx
+// оборачивает весь дашборд в провайдер, так что в проде это неважно — но монтируя
+// вызов хука только когда capabilities.fileBrowser=true (а не вызывая его условно
+// внутри FlowHeader, что нарушило бы Rules of Hooks), FlowHeader сам по себе
+// остаётся тестируемым без провайдера для случая capabilities.fileBrowser=false.
+function OpenFileBrowserButton(): ReactElement {
+  const { openBrowser } = useFileBrowser()
+
+  return (
+    <button type="button" className="icon-btn" aria-label="Open project files" onClick={openBrowser}>
+      📁
+    </button>
   )
 }

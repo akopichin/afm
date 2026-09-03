@@ -1,6 +1,13 @@
 import { render, screen, fireEvent } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { FlowHeader } from './FlowHeader'
+import { FileBrowserProvider } from '../file-browser'
+import { FilesApiMock } from '../file-browser/test-support'
+
+function renderWithProvider(ui: ReactElement) {
+  return render(<FileBrowserProvider flowName="flow1" startedAt="t1">{ui}</FileBrowserProvider>)
+}
 
 describe('FlowHeader', () => {
   beforeEach(() => {
@@ -105,5 +112,24 @@ describe('FlowHeader', () => {
     )
     fireEvent.click(screen.getByLabelText('Disable desktop notifications'))
     expect(onDisable).toHaveBeenCalled()
+  })
+
+  test('hides the file browser button when capabilities.fileBrowser is false or omitted', () => {
+    renderWithProvider(<FlowHeader flowName="demo" connected={true} capabilities={{ fileBrowser: false }} />)
+    expect(screen.queryByLabelText('Open project files')).not.toBeInTheDocument()
+
+    renderWithProvider(<FlowHeader flowName="demo" connected={true} />)
+    expect(screen.queryByLabelText('Open project files')).not.toBeInTheDocument()
+  })
+
+  test('shows the file browser button when capabilities.fileBrowser is true, and opens the browser on click', async () => {
+    new FilesApiMock().install()
+    renderWithProvider(<FlowHeader flowName="demo" connected={true} capabilities={{ fileBrowser: true }} />)
+
+    const button = screen.getByLabelText('Open project files')
+    expect(button).toBeInTheDocument()
+
+    fireEvent.click(button)
+    expect(await screen.findByRole('dialog', { name: /browse project files/i })).toBeInTheDocument()
   })
 })

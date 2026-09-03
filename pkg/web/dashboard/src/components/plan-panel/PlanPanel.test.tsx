@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { Stage } from '../../types'
 import { PlanPanel } from './PlanPanel'
+import { FileBrowserProvider } from '../file-browser'
 
 function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
@@ -15,6 +17,14 @@ function textResponse(text: string): Response {
   return { ok: true, text: async () => text } as Response
 }
 
+// PlanPanel's line-comment textarea now renders with allowFileReferences
+// (Task 14) — its "Attach project file" button calls useFileBrowser(), which
+// throws outside a FileBrowserProvider. Every render in this file goes
+// through this wrapper, same as App.tsx wraps the whole dashboard in prod.
+function renderPlanPanel(ui: ReactElement) {
+  return render(<FileBrowserProvider flowName="flow1" startedAt="t1">{ui}</FileBrowserProvider>)
+}
+
 describe('PlanPanel', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -23,7 +33,7 @@ describe('PlanPanel', () => {
   test('normal mode: fetches the plan and renders it as markdown', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Hello\n\nWorld'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(container.querySelector('.md')).not.toBeNull())
     expect(container.querySelector('.md')?.innerHTML).toContain('Hello')
@@ -34,7 +44,7 @@ describe('PlanPanel', () => {
   test('script stage: does not fetch a plan (no 404 noise — script stages never have plan.md)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
-    const { container } = render(<PlanPanel stage={makeStage({ isScript: true, status: 'done' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ isScript: true, status: 'done' })} />)
 
     // Никаких запросов на /plan для скрипт-стадии — именно они давали 404 в консоли.
     await Promise.resolve()
@@ -52,7 +62,7 @@ describe('PlanPanel', () => {
   test('awaiting_approval: renders review lines with line numbers and opens a comment form on click', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
@@ -80,7 +90,7 @@ describe('PlanPanel', () => {
       return textResponse('')
     })
 
-    render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
     const approveBtn = await screen.findByRole('button', { name: 'Approve' })
     expect(approveBtn).not.toBeDisabled()
@@ -96,7 +106,7 @@ describe('PlanPanel', () => {
   test('Approve is disabled while a draft comment exists, and re-enables once it is removed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     const approveBtn = screen.getByRole('button', { name: 'Approve' })
@@ -118,7 +128,7 @@ describe('PlanPanel', () => {
   test('Approve is disabled while a draft comment is open but unsaved, and re-enables once the form is closed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     const approveBtn = screen.getByRole('button', { name: 'Approve' })
@@ -148,7 +158,7 @@ describe('PlanPanel', () => {
       return textResponse('')
     })
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     const reviseBtn = screen.getByRole('button', { name: 'Send revision' })
@@ -180,7 +190,7 @@ describe('PlanPanel', () => {
   test('the X on a saved comment removes it without opening the edit form', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     // Add a comment on line 1.
@@ -204,7 +214,7 @@ describe('PlanPanel', () => {
   test('a non-empty draft ignores clicks on other lines and on itself; only × discards it', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
@@ -232,7 +242,7 @@ describe('PlanPanel', () => {
   test('an empty draft still lets a row click switch to a different line', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -246,7 +256,7 @@ describe('PlanPanel', () => {
   test('retry section is hidden unless the stage failed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     expect(container.querySelector('#retry-section')).toBeNull()
@@ -261,7 +271,7 @@ describe('PlanPanel', () => {
       return textResponse('')
     })
 
-    render(<PlanPanel stage={makeStage({ status: 'failed' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'failed' })} />)
 
     const retryBtn = await screen.findByRole('button', { name: 'Retry' })
     fireEvent.click(retryBtn)
@@ -272,7 +282,7 @@ describe('PlanPanel', () => {
   test('shows Retry and Skip buttons when the stage is hook_failed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
-    render(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
 
     const retryBtn = await screen.findByRole('button', { name: 'Retry' })
     const skipBtn = await screen.findByRole('button', { name: 'Skip' })
@@ -288,7 +298,7 @@ describe('PlanPanel', () => {
       return textResponse('')
     })
 
-    render(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
 
     const skipBtn = await screen.findByRole('button', { name: 'Skip' })
     fireEvent.click(skipBtn)
@@ -304,7 +314,7 @@ describe('PlanPanel', () => {
       return textResponse('')
     })
 
-    render(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
 
     const retryBtn = await screen.findByRole('button', { name: 'Retry' })
     fireEvent.click(retryBtn)
@@ -315,7 +325,7 @@ describe('PlanPanel', () => {
   test('stage.status done: renders the plan with all checkboxes checked', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('- [ ] item one\n- [ ] item two'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'done' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'done' })} />)
 
     await waitFor(() => expect(container.querySelectorAll('.cb-done').length).toBe(2))
     expect(container.querySelectorAll('.cb-open').length).toBe(0)
@@ -324,7 +334,7 @@ describe('PlanPanel', () => {
   test('autoApprove: true hides Approve/Revise and shows an Auto-approved badge instead', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Plan\n\nSome content'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval', autoApprove: true })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval', autoApprove: true })} />)
 
     await waitFor(() => expect(container.querySelector('.auto-approved-badge')).not.toBeNull())
     expect(container.querySelector('#actions-section')).toBeNull()
@@ -334,19 +344,36 @@ describe('PlanPanel', () => {
   test('autoApprove: false keeps the normal Approve/Revise actions (no badge)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Plan'))
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval', autoApprove: false })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval', autoApprove: false })} />)
 
     await waitFor(() => expect(container.querySelector('#actions-section')).not.toBeNull())
     expect(container.querySelector('.auto-approved-badge')).toBeNull()
   })
 
+  test('the line-comment textarea offers the file-browser picker (Attach project file)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+
+    expect(screen.getByRole('button', { name: /attach project file/i })).toBeInTheDocument()
+  })
+
+  // Kept before the scrollHeight-spying test below, not after: vi.spyOn(...,
+  // 'get').mockRestore() on this jsdom/tinyspy version does not fully restore
+  // the accessor on window.HTMLTextAreaElement.prototype — any later test in
+  // this file that renders a textarea (useAutoGrowTextarea reads scrollHeight
+  // on every render) hits a corrupted getter that recurses into itself and
+  // blows the call stack (see the identical note in PasteableTextarea.test.tsx).
   test('the comment textarea grows to fit its content via the auto-grow hook', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
     const scrollHeightSpy = vi
       .spyOn(window.HTMLTextAreaElement.prototype, 'scrollHeight', 'get')
       .mockReturnValue(150)
 
-    const { container } = render(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -361,7 +388,7 @@ describe('PlanPanel', () => {
   test('paused, pending: shows the pending-specific reason and a Continue button', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
-    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'pending' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'pending' })} />)
 
     expect(await screen.findByText(/before its first run/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
@@ -370,7 +397,7 @@ describe('PlanPanel', () => {
   test('paused, running: shows the running-specific reason', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
-    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'running' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'running' })} />)
 
     expect(await screen.findByText(/manually paused while it was running/i)).toBeInTheDocument()
   })
@@ -378,7 +405,7 @@ describe('PlanPanel', () => {
   test('paused, retrying: shows the retrying-specific reason', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
-    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'retrying' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'retrying' })} />)
 
     expect(await screen.findByText(/waiting to retry/i)).toBeInTheDocument()
   })
@@ -391,7 +418,7 @@ describe('PlanPanel', () => {
       return textResponse('')
     })
 
-    render(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'pending' })} />)
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'pending' })} />)
 
     const continueBtn = await screen.findByRole('button', { name: 'Continue' })
     fireEvent.click(continueBtn)
@@ -402,7 +429,7 @@ describe('PlanPanel', () => {
   test('stage=null: renders the panel shell without fetching or crashing', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    const { container } = render(<PlanPanel stage={null} />)
+    const { container } = renderPlanPanel(<PlanPanel stage={null} />)
 
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(container.querySelector('#plan-empty')).not.toBeNull()

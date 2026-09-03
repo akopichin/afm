@@ -75,3 +75,25 @@
   color: var(--coral);
   font-size: 11px;
 }
+
+/* «Attach project file» — кнопка пикера файлов проекта (Task 14, поверх
+   файлового браузера Task 13; PasteableTextarea's allowFileReferences).
+   Контурный стиль как у .comment-remove в plan-panel.css, но акцент mint —
+   действие не деструктивное. Живёт в той же строке .pasteable-attachments,
+   что и скриншот-миниатюры (если они есть), либо рендерится одна. */
+.pasteable-attach-btn {
+  background: transparent;
+  border: 1px solid rgba(111, 212, 204, 0.4);
+  color: var(--mint);
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  padding: 4px 8px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.pasteable-attach-btn:hover {
+  border-color: var(--mint);
+  box-shadow: 0 0 8px rgba(111, 212, 204, 0.35);
+}

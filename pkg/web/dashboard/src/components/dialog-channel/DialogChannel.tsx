@@ -334,6 +334,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
               value={draft}
               onChange={setDraft}
               autoFocus
+              allowFileReferences
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                   e.preventDefault()

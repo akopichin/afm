@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Stage } from '../../types'
 import { MaximizeProvider } from '../layout/Maximizable'
 import { DialogChannel } from './DialogChannel'
+import { FileBrowserProvider } from '../file-browser'
 
 // jumpToBottom заспайен на уровне модуля (не через spyOn существующего хука, у которого
 // в jsdom scrollHeight всегда 0 и реальный скролл незаметен) — так тест #7 может
@@ -49,6 +51,15 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
   }
 }
 
+// DialogChannel's per-line question-comment textarea now renders with
+// allowFileReferences (Task 14) — its "Attach project file" button calls
+// useFileBrowser(), which throws outside a FileBrowserProvider. Every render
+// in this file goes through this wrapper, same as App.tsx wraps the whole
+// dashboard in prod.
+function renderDialogChannel(ui: ReactElement) {
+  return render(<FileBrowserProvider flowName="flow1" startedAt="t1">{ui}</FileBrowserProvider>)
+}
+
 describe('DialogChannel', () => {
   beforeEach(() => {
     mockJumpToBottom.mockClear()
@@ -63,7 +74,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]))
 
     const stage = makeStage({ status: 'running' })
-    const { container } = render(<DialogChannel stage={stage} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={stage} />)
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     expect(container).toBeEmptyDOMElement()
@@ -80,7 +91,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
@@ -92,7 +103,7 @@ describe('DialogChannel', () => {
   test('новый pending-вопрос даёт one-shot класс dialog-flash', async () => {
     const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelector('#dialog-pending.dialog-flash')).not.toBeNull())
   })
 
@@ -107,7 +118,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
@@ -134,7 +145,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    render(<DialogChannel stage={makeStage()} />)
+    renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
@@ -157,7 +168,7 @@ describe('DialogChannel', () => {
   test('▸ SEND без выбора не показывает success-морф (нет класса ok)', async () => {
     const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
-    render(<DialogChannel stage={makeStage()} />)
+    renderDialogChannel(<DialogChannel stage={makeStage()} />)
     const send = await screen.findByRole('button', { name: '▸ SEND' })
     fireEvent.click(send)
     expect(send.className).not.toContain('ok')
@@ -183,7 +194,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
@@ -222,7 +233,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
@@ -258,7 +269,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
@@ -294,7 +305,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
@@ -318,7 +329,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
     expect(container.querySelector('.line-comment-form')).toBeNull()
@@ -327,6 +338,54 @@ describe('DialogChannel', () => {
     fireEvent.click(line1)
 
     expect(container.querySelector('.line-comment-form')).not.toBeNull()
+  })
+
+  test('the question-line comment textarea offers the file-browser picker (Attach project file)', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+
+    expect(screen.getByRole('button', { name: /attach project file/i })).toBeInTheDocument()
+  })
+
+  test('the custom-answer textarea has no attach button (only the per-line comment does)', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelector('textarea.dialog-custom')).not.toBeNull())
+
+    // No picker anywhere yet — the custom-answer box is visible and alone.
+    expect(screen.queryByRole('button', { name: /attach project file/i })).toBeNull()
+
+    // Even once the per-line comment form (which DOES get the picker) is
+    // open alongside it, the custom-answer box itself still has none —
+    // exactly one "Attach project file" button exists, not two.
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(1)
+
+    const customAnswerWrap = (container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement).closest(
+      '.pasteable-textarea-wrap',
+    ) as HTMLElement
+    expect(customAnswerWrap.querySelector('.pasteable-attach-btn')).toBeNull()
   })
 
   test('the question-line comment textarea grows to fit its content', async () => {
@@ -349,7 +408,7 @@ describe('DialogChannel', () => {
       configurable: true,
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -383,7 +442,7 @@ describe('DialogChannel', () => {
       configurable: true,
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'a much longer free-text answer' } })
@@ -406,7 +465,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
@@ -439,7 +498,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     const sendBtn = screen.getByRole('button', { name: '▸ SEND' })
@@ -468,7 +527,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -490,7 +549,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
     expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
@@ -526,7 +585,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -570,7 +629,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
@@ -613,7 +672,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
@@ -640,7 +699,7 @@ describe('DialogChannel', () => {
     })
     vi.spyOn(window, 'confirm').mockReturnValue(true)
 
-    render(<DialogChannel stage={makeStage()} />)
+    renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'CANCEL STAGE' })
     fireEvent.click(screen.getByRole('button', { name: 'CANCEL STAGE' }))
@@ -663,7 +722,7 @@ describe('DialogChannel', () => {
     })
     vi.spyOn(window, 'confirm').mockReturnValue(false)
 
-    render(<DialogChannel stage={makeStage()} />)
+    renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     await screen.findByRole('button', { name: 'CANCEL STAGE' })
     fireEvent.click(screen.getByRole('button', { name: 'CANCEL STAGE' }))
@@ -680,7 +739,7 @@ describe('DialogChannel', () => {
   test('loadDialog: a rejected fetch leaves entries empty and does not crash', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'))
 
-    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     expect(container).toBeEmptyDOMElement()
@@ -689,7 +748,7 @@ describe('DialogChannel', () => {
   test('loadDialog: response.ok=false leaves entries empty and does not crash', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response)
 
-    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     expect(container).toBeEmptyDOMElement()
@@ -698,7 +757,7 @@ describe('DialogChannel', () => {
   test('loadDialog: a non-array JSON payload leaves entries empty and does not crash', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ not: 'an array' }))
 
-    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     expect(container).toBeEmptyDOMElement()
@@ -707,7 +766,7 @@ describe('DialogChannel', () => {
   test('maximizing the panel scrolls the feed to the bottom via jumpToBottom', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]))
 
-    render(
+    renderDialogChannel(
       <MaximizeProvider>
         <DialogChannel stage={makeStage()} />
       </MaximizeProvider>,
@@ -725,7 +784,7 @@ describe('DialogChannel', () => {
   test('un-maximizing the panel does not call jumpToBottom again', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]))
 
-    render(
+    renderDialogChannel(
       <MaximizeProvider>
         <DialogChannel stage={makeStage()} />
       </MaximizeProvider>,
@@ -757,7 +816,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([history]))
 
-    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(container.querySelector('.qa')).not.toBeNull())
     expect(container.querySelector('.qa')).toHaveClass('qa-auto')
@@ -775,7 +834,7 @@ describe('DialogChannel', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([history]))
 
-    const { container } = render(<DialogChannel stage={makeStage({ status: 'running' })} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage({ status: 'running' })} />)
 
     await waitFor(() => expect(container.querySelector('.qa')).not.toBeNull())
     expect(container.querySelector('.qa')).not.toHaveClass('qa-auto')
@@ -786,7 +845,7 @@ describe('DialogChannel', () => {
   test('stage=null: renders nothing, fetches no dialog, and does not crash', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    const { container } = render(<DialogChannel stage={null} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={null} />)
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -819,7 +878,7 @@ describe('DialogChannel', () => {
       .mockReturnValueOnce(secondPromise as unknown as Promise<Response>)
       .mockResolvedValue(jsonResponse([answered]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     // Mount issued request #1 (firstPromise, still pending). Advance to the next
     // poll → request #2 (secondPromise).
@@ -854,7 +913,7 @@ describe('DialogChannel', () => {
       .mockRejectedValueOnce(new Error('network'))
       .mockResolvedValue(jsonResponse([pending]))
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
     // First poll succeeds → pending question shown.
     await act(async () => {
@@ -883,7 +942,7 @@ describe('DialogChannel', () => {
       return Promise.resolve(jsonResponse([pending]))
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await screen.findByRole('button', { name: 'Alpha' })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
@@ -916,7 +975,7 @@ describe('DialogChannel', () => {
       return Promise.resolve(jsonResponse([pending]))
     })
 
-    const { container } = render(<DialogChannel stage={makeStage()} />)
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await screen.findByRole('button', { name: 'Alpha' })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))

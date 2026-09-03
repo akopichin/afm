@@ -1,9 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PasteableTextarea } from './PasteableTextarea'
+import { FileBrowserProvider } from '../file-browser'
+import { FilesApiMock } from '../file-browser/test-support'
 
 function jsonResponse(data: unknown, ok = true): Response {
   return { ok, json: async () => data } as Response
+}
+
+function installFileBrowserApi(): void {
+  const api = new FilesApiMock()
+  api.setRoots([{ id: 'project', label: 'afm' }])
+  api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+  api.setReference('project', 'a.go', '[AFM file: "/w/a.go"]')
+  api.install()
 }
 
 function makeImageItem(): DataTransferItem {
@@ -79,6 +89,68 @@ describe('PasteableTextarea', () => {
 
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not render an attach button when allowFileReferences is omitted, and works without a FileBrowserProvider', () => {
+    const onChange = vi.fn()
+    render(<PasteableTextarea stageId="s1" value="hi" onChange={onChange} />)
+
+    expect(screen.queryByRole('button', { name: /attach project file/i })).toBeNull()
+  })
+
+  it('allowFileReferences: renders an Attach project file button and inserts picked references at the caret without clobbering existing text', async () => {
+    installFileBrowserApi()
+    const onChange = vi.fn()
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences />
+      </FileBrowserProvider>,
+    )
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    textarea.setSelectionRange(4, 4)
+
+    fireEvent.click(screen.getByRole('button', { name: /attach project file/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
+
+    const insertButton = await screen.findByRole('button', { name: /insert references/i })
+    await waitFor(() => expect(insertButton).not.toBeDisabled())
+    fireEvent.click(insertButton)
+
+    expect(onChange).toHaveBeenCalledWith('see [AFM file: "/w/a.go"] end')
+  })
+
+  it('stale-picker guard: does not insert into a textarea that unmounted while the picker was still open, and warns instead', async () => {
+    installFileBrowserApi()
+    const onChange = vi.fn()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+    function Harness({ show }: { show: boolean }) {
+      return (
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          {show && <PasteableTextarea stageId="s1" value="x" onChange={onChange} allowFileReferences />}
+        </FileBrowserProvider>
+      )
+    }
+
+    const { rerender } = render(<Harness show={true} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /attach project file/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
+
+    // The user navigated away from this comment (e.g. switched stage/question)
+    // while the picker modal was still open — the target textarea unmounts,
+    // but the provider (and hence the still-open modal) stays mounted.
+    rerender(<Harness show={false} />)
+
+    const insertButton = await screen.findByRole('button', { name: /insert references/i })
+    await waitFor(() => expect(insertButton).not.toBeDisabled())
+    fireEvent.click(insertButton)
+
+    expect(onChange).not.toHaveBeenCalled()
+    expect(alertSpy).toHaveBeenCalledWith('Target comment is no longer available')
   })
 
   // Kept last deliberately: vi.spyOn(..., 'get').mockRestore() on this jsdom/

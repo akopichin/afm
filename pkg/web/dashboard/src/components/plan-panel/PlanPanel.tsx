@@ -365,6 +365,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
               value={draft}
               onChange={setDraft}
               autoFocus
+              allowFileReferences
             />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
