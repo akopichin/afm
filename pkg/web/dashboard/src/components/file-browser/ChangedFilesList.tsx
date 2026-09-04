@@ -31,13 +31,11 @@ function dirPrefix(path: string): string {
 // Unstaged/vs HEAD в репозитории без изменений оставляло бы панель вообще без
 // доступного имени (FileBrowserModal ждёт именно эту метку, чтобы понять, что
 // панель изменений уже смонтирована и поисковая колонка ей уступила место).
-export function ChangedFilesList({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath }: ChangedFilesListProps): ReactElement {
+export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, isSelected, activePath }: ChangedFilesListProps): ReactElement {
   return (
     <div className="file-search-results" role="list" aria-label="Changed files">
       {error !== null ? (
         <div className="file-tree-hint file-tree-error">{error}</div>
-      ) : loading && result === null ? (
-        <div className="file-tree-hint">Loading changes…</div>
       ) : result === null ? (
         <div className="file-tree-hint">Loading changes…</div>
       ) : result.entries.length === 0 ? (

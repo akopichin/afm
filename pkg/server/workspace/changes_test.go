@@ -340,3 +340,78 @@ func TestChanges_UnbornRepoExcludesCachedDeleted(t *testing.T) {
 		t.Fatalf("present untracked file should be added+selectable, got %+v", got.Entries)
 	}
 }
+
+// TestChanges_SymlinkAtChangedPath_NotSelectable is the security-critical case
+// for isSelectable: git output is untrusted, so a changed path must not be
+// treated as viewable just because git reports it. A tracked regular file
+// replaced on disk by a symlink is reported by git as a typechange ('T',
+// mapped to ChangeModified) — the entry must still be listed (so the user sees
+// something changed there) but Selectable must be false, because the real
+// openat2 (RESOLVE_NO_SYMLINKS) refuses to follow the symlink.
+func TestChanges_SymlinkAtChangedPath_NotSelectable(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeFile(t, dir, "link-me.txt", "regular content\n")
+	gitCommitAll(t, dir, "init")
+
+	full := filepath.Join(dir, "link-me.txt")
+	if err := os.Remove(full); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", full); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+
+	got, err := fs.Changes(context.Background(), "r", ChangeModeIndex)
+	if err != nil {
+		t.Fatalf("Changes: %v", err)
+	}
+	var found bool
+	for _, c := range got.Entries {
+		if c.Path == "link-me.txt" {
+			found = true
+			if c.Selectable {
+				t.Fatalf("symlinked changed path must not be selectable, got %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("symlinked changed path should still be listed, got %+v", got.Entries)
+	}
+}
+
+// TestValidGitPath unit-tests the untrusted-git-output path filter directly:
+// it must drop any path escaping the root, any absolute path, any hidden
+// service subtree, any NUL byte, and any invalid-UTF-8 byte sequence — git
+// output is attacker-influenced (a malicious repo could report a crafted
+// path) and none of this may reach the secure openat layer unfiltered.
+func TestValidGitPath(t *testing.T) {
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: t.TempDir()})
+	defer fs.Close()
+	impl, ok := fs.(*fsImpl)
+	if !ok {
+		t.Fatal("fs is not *fsImpl")
+	}
+
+	reject := []string{
+		"../escape",
+		"/etc/passwd",
+		".git/config",
+		".afm/x",
+		"a\x00b",
+		string([]byte{0xff, 0xfe}),
+	}
+	for _, p := range reject {
+		if clean, ok := impl.validGitPath(p); ok {
+			t.Errorf("validGitPath(%q) = (%q, true), want ok=false", p, clean)
+		}
+	}
+
+	clean, ok := impl.validGitPath("dir/file.go")
+	if !ok || clean != "dir/file.go" {
+		t.Errorf(`validGitPath("dir/file.go") = (%q, %v), want ("dir/file.go", true)`, clean, ok)
+	}
+}
