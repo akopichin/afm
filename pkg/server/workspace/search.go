@@ -46,7 +46,8 @@ func rankMatch(needle, name, fullPath string) (int, bool) {
 }
 
 // sortScored orders results by tier, then by shorter path, then lexically —
-// a total, stable order (paths are unique within a root).
+// the full path is the final tie-break and paths are unique within a root,
+// so this is a total order over distinct paths and the result is deterministic.
 func sortScored(rs []scoredEntry) {
 	slices.SortFunc(rs, func(a, b scoredEntry) int {
 		if a.score != b.score {

@@ -31,28 +31,31 @@ export function FileSearchResults({ result, loading, error, onOpenFile, onToggle
 
   return (
     <div className="file-search-results" role="list" aria-label="Search results">
-      {result.entries.map((entry) => (
-        <div
-          key={entry.path}
-          role="listitem"
-          data-kind="file"
-          className={`file-tree-row file-search-row${activePath === entry.path ? ' active' : ''}`}
-          onClick={() => onOpenFile(entry)}
-        >
-          <input
-            type="checkbox"
-            aria-label={`Select ${entry.name}`}
-            checked={isSelected(entry.path)}
-            onClick={(e) => e.stopPropagation()}
-            onChange={() => onToggleSelect(entry)}
-          />
-          <span className="file-tree-icon file-tree-icon-file" aria-hidden="true">📄</span>
-          <span className="file-search-name">
-            {dirPrefix(entry.path) !== '' && <span className="file-search-dir">{dirPrefix(entry.path)}</span>}
-            <span className="file-tree-name">{entry.name}</span>
-          </span>
-        </div>
-      ))}
+      {result.entries.map((entry) => {
+        const prefix = dirPrefix(entry.path)
+        return (
+          <div
+            key={entry.path}
+            role="listitem"
+            data-kind="file"
+            className={`file-tree-row file-search-row${activePath === entry.path ? ' active' : ''}`}
+            onClick={() => onOpenFile(entry)}
+          >
+            <input
+              type="checkbox"
+              aria-label={`Select ${entry.name}`}
+              checked={isSelected(entry.path)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => onToggleSelect(entry)}
+            />
+            <span className="file-tree-icon file-tree-icon-file" aria-hidden="true">📄</span>
+            <span className="file-search-name">
+              {prefix !== '' && <span className="file-search-dir">{prefix}</span>}
+              <span className="file-tree-name">{entry.name}</span>
+            </span>
+          </div>
+        )
+      })}
       {result.truncated && <div className="file-tree-hint">Showing first 200 results — refine your search</div>}
     </div>
   )

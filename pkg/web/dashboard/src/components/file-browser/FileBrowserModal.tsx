@@ -162,6 +162,12 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
     }
     const generation = ++searchGenRef.current
     const controller = new AbortController()
+    // Сбрасываем результаты СРАЗУ, а не только при ошибке/успехе — иначе при
+    // смене root'а (или запроса) устаревшие строки предыдущего root'а остаются
+    // на экране под loading=true, и клик по строке в этом окне мог открыть файл
+    // из ЧУЖОГО root'а. Generation guard/abort ниже не спасают от этого:
+    // они лишь не дают ЗАПИСАТЬ устаревший ответ, но не чистят уже показанное.
+    setSearchResult(null)
     setSearchLoading(true)
     setSearchError(null)
     const timer = setTimeout(() => {
