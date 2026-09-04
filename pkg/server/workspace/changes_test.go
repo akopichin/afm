@@ -3,7 +3,12 @@
 package workspace
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -89,5 +94,80 @@ func TestParseUntrackedZ_TruncatedMidPathDropsFragment(t *testing.T) {
 	got := parseUntrackedZ([]byte("new.go\x00dir/frag")) // no trailing NUL
 	if len(got) != 1 || got[0] != "new.go" {
 		t.Fatalf("mid-path fragment should be dropped: got %v", got)
+	}
+}
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	full := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunGitChanges_TrackedModified(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeFile(t, dir, "a.go", "package a\n")
+	gitCommitAll(t, dir, "init")
+	writeFile(t, dir, "a.go", "package a\n// edit\n")
+
+	gitDir := filepath.Join(dir, ".git")
+	out, truncated, err := runGitChanges(context.Background(), gitDir, dir,
+		"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-status", "-z", "--")
+	if err != nil || truncated {
+		t.Fatalf("err=%v truncated=%v", err, truncated)
+	}
+	if !bytes.Contains(out, []byte("a.go")) {
+		t.Fatalf("expected a.go in output, got %q", out)
+	}
+}
+
+func TestRunGitChanges_ByteCapTruncates(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	for i := 0; i < 50; i++ {
+		writeFile(t, dir, "f"+strconv.Itoa(i)+".txt", "x")
+	}
+	old := maxChangesOutputBytes
+	maxChangesOutputBytes = 8
+	defer func() { maxChangesOutputBytes = old }()
+
+	gitDir := filepath.Join(dir, ".git")
+	out, truncated, err := runGitChanges(context.Background(), gitDir, dir,
+		"ls-files", "--others", "--exclude-standard", "-z", "--")
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !truncated || len(out) > 8 {
+		t.Fatalf("expected truncated at 8 bytes, got truncated=%v len=%d", truncated, len(out))
+	}
+}
+
+func TestRunGitChanges_NonZeroExitIsError(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	gitDir := filepath.Join(dir, ".git")
+	// A bogus subcommand exits non-zero → strict runner must surface an error,
+	// never a silent empty success (contrast with diff.go runGit).
+	if _, _, err := runGitChanges(context.Background(), gitDir, dir, "not-a-command"); err == nil {
+		t.Fatal("expected error for non-zero git exit")
+	}
+}
+
+func TestHeadExists(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	gitDir := filepath.Join(dir, ".git")
+	if ok, err := headExists(context.Background(), gitDir, dir); err != nil || ok {
+		t.Fatalf("unborn repo: ok=%v err=%v, want false,nil", ok, err)
+	}
+	writeFile(t, dir, "a.go", "package a\n")
+	gitCommitAll(t, dir, "init")
+	if ok, err := headExists(context.Background(), gitDir, dir); err != nil || !ok {
+		t.Fatalf("after commit: ok=%v err=%v, want true,nil", ok, err)
 	}
 }

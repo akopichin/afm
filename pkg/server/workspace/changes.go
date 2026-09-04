@@ -1,6 +1,11 @@
 package workspace
 
-import "bytes"
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os/exec"
+)
 
 // nameStatusRec is one record of `git diff --name-status -z` (rename/copy
 // detection is disabled, so there are never old+new path triples).
@@ -95,4 +100,102 @@ func splitZ(data []byte) [][]byte {
 		parts = parts[:n-1]
 	}
 	return parts
+}
+
+// maxChangesOutputBytes caps stdout captured from one git process; the rest is
+// drained and discarded and the result is flagged truncated. A var so tests can
+// shrink it. Distinct from an entry cap: exec buffering could otherwise grow
+// without bound before any entry cap applies.
+//
+//nolint:unused // wired into FS.Changes by Task 4
+var maxChangesOutputBytes = 4 << 20
+
+// maxChangesEntries caps how many Change entries Changes returns; exceeding it
+// sets ChangeList.Truncated. A var so tests can shrink it.
+//
+//nolint:unused // wired into FS.Changes by Task 4
+var maxChangesEntries = 5000
+
+// cappedBuffer captures up to cap bytes and records whether more arrived. It
+// keeps draining (returns len(p), nil) past the cap so the child process is
+// never blocked on a full pipe.
+//
+//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	cap      int
+	overflow bool
+}
+
+//nolint:unused // method of cappedBuffer, see above
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.cap - c.buf.Len(); room > 0 {
+		if len(p) <= room {
+			c.buf.Write(p)
+		} else {
+			c.buf.Write(p[:room])
+			c.overflow = true
+		}
+	} else if len(p) > 0 {
+		c.overflow = true
+	}
+	return len(p), nil
+}
+
+// gitCmd builds a hardened git *exec.Cmd: no shell, verified --git-dir,
+// allowlisted --work-tree, no pager, no repo-configured fsmonitor, optional
+// index locks disabled (read-only endpoint must never mutate the index).
+//
+//nolint:unused // wired into FS.Changes by Task 4
+func gitCmd(ctx context.Context, gitDir, workTree string, args ...string) *exec.Cmd {
+	full := append([]string{
+		"--no-pager",
+		"-c", "core.fsmonitor=false",
+		"--git-dir=" + gitDir,
+		"--work-tree=" + workTree,
+	}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	return cmd
+}
+
+// runGitChanges runs a git command that MUST succeed (exit 0). Any non-zero
+// exit, timeout, or exec failure is ErrReadFailed — unlike diff.go's runGit, it
+// never collapses a failure into an empty success. stdout is byte-capped;
+// stderr is discarded (never returned to the client).
+//
+//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
+func runGitChanges(ctx context.Context, gitDir, workTree string, args ...string) ([]byte, bool, error) {
+	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	cmd := gitCmd(cctx, gitDir, workTree, args...)
+	out := &cappedBuffer{cap: maxChangesOutputBytes}
+	cmd.Stdout = out
+	cmd.Stderr = nil // discard git diagnostics
+	if err := cmd.Run(); err != nil {
+		return nil, false, ErrReadFailed
+	}
+	return out.buf.Bytes(), out.overflow, nil
+}
+
+// headExists reports whether the repo has a HEAD commit. exit 0 → yes; exit 1 →
+// unborn (no commits yet, not an error); anything else → ErrReadFailed.
+//
+//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
+func headExists(ctx context.Context, gitDir, workTree string) (bool, error) {
+	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	cmd := gitCmd(cctx, gitDir, workTree, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if cctx.Err() != nil {
+		return false, ErrReadFailed
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil // unborn repo
+	}
+	return false, ErrReadFailed
 }
