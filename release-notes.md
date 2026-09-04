@@ -6,13 +6,15 @@ Newest features at the top, older ones further down. Dates follow commits to `fi
 
 ### Feature: Docker project file browser — read-only source tree, diffs and file references in the dashboard
 
-In Docker mode the dashboard now has a folder button that opens a read-only project file browser: browse the source tree, view files with syntax highlighting, see a per-file `HEAD → working tree` diff, and insert references to selected files into a plan or question review comment — the agent receives the exact container path and reads the file itself. The whole feature is **Docker-only** (it needs the host launcher's mount manifest) and **strictly read-only** (no create/edit/rename/delete from the dashboard). On a plain host run it is entirely absent: `/api/files/*` returns `404`, the capability is off, and no button renders.
+In Docker mode the dashboard can show a folder button that opens a read-only project file browser: browse the source tree, view files with syntax highlighting, see a per-file `HEAD → working tree` diff, and insert references to selected files into a plan or question review comment — the agent receives the exact container path and reads the file itself. The whole feature is **Docker-only** (it needs the host launcher's mount manifest) and **strictly read-only** (no create/edit/rename/delete from the dashboard). On a plain host run it is entirely absent: `/api/files/*` returns `404`, the capability is off, and no button renders.
+
+**It is OFF by default — opt in** with `docker.file_browser.enabled: true` in the config, or with the env var `AFM_FILE_BROWSER=1` (accepts `1`/`true`/`0`/`false`). The env var takes **priority over the config** in both directions: `AFM_FILE_BROWSER=1` force-enables even when the config disables it, `AFM_FILE_BROWSER=0` force-disables even when the config enables it (empty/unset → the config decides). The decision is made host-side before Docker re-exec, so it also governs whether the browseable-roots manifest is forwarded into the container at all.
 
 ```yaml
 docker:
   enabled: true
   file_browser:
-    enabled: true            # optional; default true inside Docker mode
+    enabled: true            # opt-in; OFF by default (env AFM_FILE_BROWSER overrides this)
   extra_mounts:
     - path: ../shared-contracts
       name: contracts         # optional UI label; default = basename(path)
@@ -33,12 +35,12 @@ docker:
 
 - **Manifest allowlist is the only source of roots.** The host launcher — the single place that knows every mount's real container target — emits a versioned, base64 manifest of browseable roots (`AFM_DOCKER_FILE_ROOTS`); the server never accepts an absolute path over HTTP, only `root=<opaque-id>&path=<relative>`. Credential mounts and legacy scalar `extra_mounts` are never in the manifest, so an afm upgrade never silently exposes a token directory.
 - **Kernel-enforced containment.** Every path open goes through Linux `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` — no check-then-open, no symlink escape, no `..` traversal. On a kernel too old for `openat2` (< 5.6) the feature degrades off rather than falling back to anything weaker.
-- **Loopback-only dashboard when the browser is on.** With the file browser enabled the Docker dashboard port is published on `127.0.0.1` instead of `0.0.0.0`, so the code the browser can read isn't reachable from other hosts on the LAN. Plain Docker runs keep their previous publish behavior. (Behavior change: existing Docker users who reached the dashboard over the LAN must set `file_browser.enabled: false` or use an SSH tunnel.)
+- **Loopback-only dashboard when the browser is on.** With the file browser enabled the Docker dashboard port is published on `127.0.0.1` instead of `0.0.0.0`, so the code the browser can read isn't reachable from other hosts on the LAN. Because the browser is OFF by default, this only affects runs that explicitly opted in (config `enabled: true` or `AFM_FILE_BROWSER=1`) — plain Docker runs keep the previous `0.0.0.0` publish behavior. If you opt in but still need LAN access to the dashboard, use an SSH tunnel.
 - **Bounded and shell-free.** File content is capped at 2 MiB and diffs at 4 MiB; git is invoked without a shell, with a 3 s timeout, reading only the `HEAD` blob from a verified in-root git dir. Error bodies carry a fixed code, never an absolute path or raw git stderr; source is served with `X-Content-Type-Options: nosniff` and rendered through exactly one `dangerouslySetInnerHTML` fed only by highlight.js output (no XSS, no Markdown path for file content).
 
 **Hardening from an external review (5 P1 + 5 P2, each verified then fixed with a regression test)**
 
-- **`docker.file_browser.enabled: false` is now honored through config merge** — `mergeFile` dropped `FileBrowser.Enabled`, so an explicit disable was silently lost and the browser stayed on.
+- **`docker.file_browser.enabled` is now honored through config merge** — `mergeFile` dropped `FileBrowser.Enabled`, so a per-layer override (e.g. a project `enabled: true` on top of a global default) was silently lost. Now every config layer's setting survives the merge.
 - **Diff can no longer read a git object store outside the allowlist.** A `.git` symlink or gitfile (`gitdir: /outside`, exactly how worktrees/submodules work) let `git -C` follow it out of the mount. `.git` is now located through the secure fd (a symlink `.git` is refused structurally), the resolved git dir must live inside the root, and git runs with an explicit `--git-dir` (no `-C` re-discovery). Reproduced before the fix; closed after.
 - **Diff can no longer OOM the process.** The `HEAD` baseline is size-checked (`cat-file -s`) before it's read, and an oversize baseline skips the in-memory diff entirely instead of buffering hundreds of MB and truncating afterward.
 - **FIFO/socket/device files can no longer wedge a handler.** Reads open with `O_NONBLOCK` and require a regular file, so opening a FIFO returns `not_found` instead of blocking a goroutine forever; special files are non-selectable in the tree. Directory scans are bounded by a hard entry cap.

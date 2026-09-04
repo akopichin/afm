@@ -13,8 +13,18 @@ import (
 
 // envFlag reports whether an environment variable is truthy ("1" or "true").
 func envFlag(name string) bool {
-	v := os.Getenv(name)
-	return v == "1" || v == "true"
+	v, _ := envBool(name)
+	return v
+}
+
+// envBool читает булев env-флаг, отличая "не задан" от "задан пустым".
+// set=false, если переменной нет или она пустая; иначе value = 1/true.
+func envBool(name string) (value, set bool) {
+	v, ok := os.LookupEnv(name)
+	if !ok || v == "" {
+		return false, false
+	}
+	return v == "1" || v == "true", true
 }
 
 // ClientConfig configures the AI client command.
@@ -190,11 +200,17 @@ type DockerConfig struct {
 
 // DockerFileBrowserConfig настраивает встроенный файловый браузер проекта.
 type DockerFileBrowserConfig struct {
-	Enabled *bool `yaml:"enabled"`
+	Enabled *bool `yaml:"enabled"` // nil = выключено; env AFM_FILE_BROWSER имеет приоритет
 }
 
-// IsEnabled сообщает, включён ли файловый браузер. По умолчанию (nil) — включён.
-func (c DockerFileBrowserConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+// IsEnabled сообщает, включён ли файловый браузер.
+// Приоритет: env AFM_FILE_BROWSER > config > по умолчанию выключено.
+func (c DockerFileBrowserConfig) IsEnabled() bool {
+	if v, set := envBool("AFM_FILE_BROWSER"); set {
+		return v
+	}
+	return c.Enabled != nil && *c.Enabled
+}
 
 // ExtraMount — один дополнительный хост-путь, монтируемый в контейнер.
 // Path может начинаться с ~. Name — опц. отображаемое имя (для file browser).

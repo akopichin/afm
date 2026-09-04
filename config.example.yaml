@@ -153,10 +153,14 @@ executor:
 #   # (обрезается с баннером). Symlink виден в дереве, но не открывается.
 #   # На Linux-host со старым kernel (< 5.6, без openat2) фича мягко выключается.
 #   #
+#   # По умолчанию ВЫКЛЮЧЕН — включается явно (enabled: true ниже) или env-переменной
+#   # AFM_FILE_BROWSER. Приоритет: env AFM_FILE_BROWSER > config > default false.
+#   # AFM_FILE_BROWSER=1/true форсирует включение поверх конфига, =0/false — выключение;
+#   # пусто/не задано — решает config. Решение принимается на хосте до Docker re-exec.
+#   #
 #   # ВАЖНО: пока file browser включён, Docker публикует dashboard-порт только на
 #   # loopback (-p 127.0.0.1:<port>:<port>) вместо 0.0.0.0 — dashboard перестаёт быть
-#   # доступен из LAN. Обычные Docker-запуски без file browser сохраняют прежнее
-#   # поведение (0.0.0.0). Если нужен LAN-доступ — либо file_browser.enabled: false,
-#   # либо доступ через SSH-туннель на loopback.
+#   # доступен из LAN. Запуски без file browser (по умолчанию) сохраняют прежнее
+#   # поведение (0.0.0.0). Если фичу включили, но нужен LAN-доступ — SSH-туннель на loopback.
 #   # file_browser:
-#   #   enabled: true   # default true внутри Docker mode; false — выключить
+#   #   enabled: true   # opt-in; по умолчанию OFF (env AFM_FILE_BROWSER перебивает)

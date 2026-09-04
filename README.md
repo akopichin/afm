@@ -129,9 +129,9 @@ Details and examples are in `config.example.yaml`, `example-flow-cursor.yaml`, a
 
 #### Project File Browser (Docker mode)
 
-Inside a running Docker container the dashboard header shows a folder-icon button that opens a project file browser. This is Docker-only — it needs the host launcher's manifest of container mount paths (`AFM_IN_DOCKER=1` plus that manifest); a plain host run without Docker doesn't have it at all: `/api/files/*` returns `404` and the button isn't shown.
+Inside a running Docker container the dashboard header can show a folder-icon button that opens a project file browser. This is Docker-only — it needs the host launcher's manifest of container mount paths (`AFM_IN_DOCKER=1` plus that manifest); a plain host run without Docker doesn't have it at all: `/api/files/*` returns `404` and the button isn't shown.
 
-- **Enabled by default.** `docker.file_browser.enabled` (default `true` inside Docker mode) — set `false` to disable it.
+- **Off by default — opt in.** `docker.file_browser.enabled` defaults to `false`; set it to `true` in the config to turn the browser on. The env var `AFM_FILE_BROWSER` takes **priority over the config** in both directions: `AFM_FILE_BROWSER=1` (or `true`) force-enables it even when the config disables it, `AFM_FILE_BROWSER=0` (or `false`) force-disables it even when the config enables it; empty/unset falls back to the config. The decision is made on the host before Docker re-exec, so it also controls whether the browseable-roots manifest is forwarded into the container.
 - **What it does:** a lazy-loading source tree of the project mount and any `extra_mounts` explicitly opted in with `browse: true` (see below); opens text files with syntax highlighting for Go, TypeScript/TSX, JavaScript/JSX, and Python; shows a `HEAD → working tree` diff per file; lets you select one or more files and insert `[AFM file: "<absolute container path>"]` references into a plan review comment or a pending-question comment — the agent reads the file itself with its own tools, nothing is copied into `feedback.md`/the answer.
 - **Strictly read-only.** `.git` and `.afm` are always hidden from the tree, even under an opted-in root. There's no create/edit/rename/delete from the dashboard.
 - **Limits.** File content is capped at 2 MiB (a larger file shows an inline "file too large" message but can still be selected/referenced); diffs are capped at 4 MiB (truncated with a banner). Symlinks are listed but can't be opened. On a Linux host with an old kernel (< 5.6, no `openat2`) the feature degrades off automatically instead of falling back to a less-safe path check.
@@ -141,7 +141,7 @@ Inside a running Docker container the dashboard header shows a folder-icon butto
   docker:
     enabled: true
     file_browser:
-      enabled: true          # optional; default true in Docker mode
+      enabled: true          # opt-in; OFF by default (env AFM_FILE_BROWSER overrides this)
 
     extra_mounts:
       - path: ../shared-contracts
@@ -155,7 +155,7 @@ Inside a running Docker container the dashboard header shows a folder-icon butto
   ```
 
   This is a deliberate safe default: after upgrading afm, every existing `extra_mounts` entry (scalar, or object without `browse: true`) stays private — nothing new is exposed to the browser. Only add `browse: true` for a code root you're comfortable showing in the dashboard, never for a credentials/token directory.
-- **Security: loopback-only port when the browser is on.** With the file browser enabled, the Docker dashboard port is published as `-p 127.0.0.1:<port>:<port>` instead of `-p <port>:<port>` — the dashboard (and everything the browser can read) stops being reachable from other hosts on your LAN. Docker runs with the file browser disabled keep the previous `0.0.0.0` publish behavior. If you relied on LAN access to the Docker dashboard, either set `file_browser.enabled: false` or plan for loopback-only access (e.g. an SSH tunnel).
+- **Security: loopback-only port when the browser is on.** With the file browser enabled, the Docker dashboard port is published as `-p 127.0.0.1:<port>:<port>` instead of `-p <port>:<port>` — the dashboard (and everything the browser can read) stops being reachable from other hosts on your LAN. Because the browser is off by default, this only applies to runs that opted in (config or `AFM_FILE_BROWSER=1`); every other Docker run keeps the previous `0.0.0.0` publish behavior. If you opt in but still need LAN access to the dashboard, use an SSH tunnel.
 
 ## Quick Start
 
@@ -615,7 +615,7 @@ docker:
   # image: akopichin/afm:latest
   # autoShim: true          # generate claude wrappers for agents.<cmd> inside the container
   # file_browser:
-  #   enabled: true          # dashboard file browser; default true in Docker mode
+  #   enabled: true          # dashboard file browser; OFF by default, env AFM_FILE_BROWSER overrides
   # extra_mounts: [~/.ai-free]  # extra host paths into the container (:ro); each entry can
   #   # also be {path, name, browse} — browse:true exposes it in the file browser (see
   #   # "Project File Browser (Docker mode)" above); scalar entries stay browse:false

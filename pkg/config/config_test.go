@@ -416,13 +416,40 @@ extra_mounts:
 	}
 }
 
-func TestFileBrowser_DefaultsEnabled(t *testing.T) {
-	if !(config.DockerFileBrowserConfig{}).IsEnabled() {
-		t.Fatal("nil Enabled should default to true")
+func TestFileBrowser_DefaultsDisabled(t *testing.T) {
+	if (config.DockerFileBrowserConfig{}).IsEnabled() {
+		t.Fatal("nil Enabled should default to disabled")
 	}
-	f := false
-	if (config.DockerFileBrowserConfig{Enabled: &f}).IsEnabled() {
-		t.Fatal("explicit false must disable")
+	tr := true
+	if !(config.DockerFileBrowserConfig{Enabled: &tr}).IsEnabled() {
+		t.Fatal("explicit true must enable")
+	}
+}
+
+func TestFileBrowser_EnvOverridesConfig(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name    string
+		env     string // "" = не задавать
+		enabled *bool
+		want    bool
+	}{
+		{name: "env on overrides config off", env: "1", enabled: &f, want: true},
+		{name: "env off overrides config on", env: "0", enabled: &tr, want: false},
+		{name: "env true, config nil", env: "true", enabled: nil, want: true},
+		{name: "env empty falls back to config", env: "", enabled: &tr, want: true},
+		{name: "env unset, config off", env: "", enabled: &f, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env != "" {
+				t.Setenv("AFM_FILE_BROWSER", tc.env)
+			}
+			c := config.DockerFileBrowserConfig{Enabled: tc.enabled}
+			if got := c.IsEnabled(); got != tc.want {
+				t.Errorf("IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
