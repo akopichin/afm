@@ -423,3 +423,33 @@
 .hljs-strong {
   font-weight: bold;
 }
+
+/* Поиск файлов: строки переиспользуют .file-tree-row; здесь только раскладка
+   имени с приглушённым префиксом каталога и поле ввода запроса. */
+.file-search-name {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0;
+}
+.file-search-dir {
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.file-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+  padding: 4px 8px;
+  color: var(--ink-hi);
+  background: var(--bg-elev);
+  border: 1px solid var(--ink-dim);
+  border-radius: 4px;
+}
+.file-search-input:focus-visible {
+  outline: none;
+  border-color: var(--amber);
+}
+.file-search-clear {
+  margin-left: 6px;
+}
