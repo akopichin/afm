@@ -67,8 +67,15 @@ SETSTATUSLINTER_BIN=$(LOCAL_BIN)/setstatuslinter
 $(SETSTATUSLINTER_BIN): $(LOCAL_BIN)
 	$(GOENV) go build -o $(SETSTATUSLINTER_BIN) ./tools/setstatuslinter
 
+# Two golangci-lint passes so build-tagged code is fully covered regardless of
+# the dev host's OS. The first pass runs for the host platform; the second forces
+# GOOS=linux so //go:build linux files (the pkg/server/workspace openat2/git code
+# and its tests) are linted on a macOS dev host too — otherwise errcheck/etc. in
+# linux-only code slips past `make lint` and surfaces only in CI (which runs on
+# linux). On a Linux host the second pass just re-confirms the same set.
 lint: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
 	$(GOENV) $(GOLANGCI_BIN) run --fix ./...
+	GOOS=linux $(GOENV) $(GOLANGCI_BIN) run --fix ./...
 	$(SETSTATUSLINTER_BIN) ./pkg/...
 
 # lint-ci — то же самое, но без --fix: CI должен падать явно на проблемах,
