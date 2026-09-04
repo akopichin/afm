@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { getContent, getDiff, getRoots, type FileContent, type FileDiff, type RootView, type TreeEntry } from '../../api/files-client'
+import { getContent, getDiff, getRoots, getSearch, type FileContent, type FileDiff, type RootView, type SearchResult, type TreeEntry } from '../../api/files-client'
 import { DiffViewer } from './DiffViewer'
+import { FileSearchResults } from './FileSearchResults'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 
@@ -61,6 +62,16 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState<Error | null>(null)
+
+  const [query, setQuery] = useState('')
+  const [searchResult, setSearchResult] = useState<SearchResult | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  // Поколение поиска: инкрементируется на КАЖДЫЙ запуск эффекта (смена запроса
+  // или root'а). Поздний ответ устаревшего запроса/root'а сверяется с текущим
+  // поколением и отбрасывается — та же техника, что rootGenerationRef в
+  // FileTree и activeFileRef в handleReload.
+  const searchGenRef = useRef(0)
 
   const modalRef = useRef<HTMLDivElement | null>(null)
   // handleReload — обработчик клика, а не эффект: у него нет своего cleanup,
@@ -135,6 +146,43 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
       cancelled = true
     }
   }, [activeFile, activeTab])
+
+  // Поиск с debounce ~250мс и отменой устаревшего запроса. Пустой запрос —
+  // немедленно сбрасываем результаты (дерево показывается снова), без сетевого
+  // вызова. Смена root'а при непустом запросе повторяет поиск в новом root'е
+  // (эффект зависит и от selectedRoot).
+  useEffect(() => {
+    if (selectedRoot === null) return
+    const trimmed = query.trim()
+    if (trimmed === '') {
+      setSearchResult(null)
+      setSearchError(null)
+      setSearchLoading(false)
+      return
+    }
+    const generation = ++searchGenRef.current
+    const controller = new AbortController()
+    setSearchLoading(true)
+    setSearchError(null)
+    const timer = setTimeout(() => {
+      void getSearch(selectedRoot, trimmed, controller.signal)
+        .then((r) => {
+          if (generation !== searchGenRef.current) return
+          setSearchLoading(false)
+          setSearchResult(r)
+        })
+        .catch((e: unknown) => {
+          // Отменённый запрос (abort) и устаревшее поколение — не ошибки UI.
+          if (controller.signal.aborted || generation !== searchGenRef.current) return
+          setSearchLoading(false)
+          setSearchError(e instanceof Error ? e.message : 'search failed')
+        })
+    }, 250)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [query, selectedRoot])
 
   // Esc закрывает, Tab крутит фокус по кругу внутри модалки (простая ловушка
   // фокуса — без сторонней библиотеки, весь фокусируемый набор пересчитывается
@@ -243,13 +291,48 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
               ))}
             </ul>
             {selectedRoot !== null && (
-              <FileTree
-                root={selectedRoot}
-                onOpenFile={(entry) => openFile(selectedRoot, entry)}
-                onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
-                isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
-                activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
-              />
+              <>
+                <div className="file-search-box">
+                  <input
+                    type="text"
+                    className="file-search-input"
+                    placeholder={`Search in ${rootLabel(selectedRoot)}…`}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    aria-label={`Search in ${rootLabel(selectedRoot)}`}
+                  />
+                  {query !== '' && (
+                    <button type="button" className="file-search-clear icon-btn" aria-label="Clear search" onClick={() => setQuery('')}>
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {query.trim() !== '' ? (
+                  <FileSearchResults
+                    result={searchResult}
+                    loading={searchLoading}
+                    error={searchError}
+                    onOpenFile={(entry) => openFile(selectedRoot, entry)}
+                    onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
+                    isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
+                    activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
+                  />
+                ) : null}
+
+                {/* Дерево остаётся смонтированным во время поиска (hidden, не
+                    размонтирование) — очистка запроса возвращает раскрытые
+                    каталоги без повторной загрузки. */}
+                <div className="file-browser-tree-wrap" hidden={query.trim() !== ''}>
+                  <FileTree
+                    root={selectedRoot}
+                    onOpenFile={(entry) => openFile(selectedRoot, entry)}
+                    onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
+                    isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
+                    activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
+                  />
+                </div>
+              </>
             )}
           </aside>
 

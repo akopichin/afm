@@ -42,6 +42,7 @@ export class FilesApiMock {
   private contents = new Map<string, ContentInput>()
   private contentErrors = new Map<string, { errorCode: string; status: number }>()
   private diffs = new Map<string, DiffInput | { errorCode: string; status: number }>()
+  private searches = new Map<string, { entries: TreeEntryInput[]; truncated?: boolean }>()
   // Ссылка на сам мок fetch — тестам Reload/If-None-Match нужно проверять,
   // с какими заголовками ушёл конкретный запрос (vi.spyOn возвращает мок с
   // .mock.calls, install() сохраняет её сюда, чтобы не заводить второй spy).
@@ -73,6 +74,10 @@ export class FilesApiMock {
 
   setDiffError(root: string, path: string, code: string, status: number): void {
     this.diffs.set(`${root}|${path}`, { errorCode: code, status })
+  }
+
+  setSearch(root: string, query: string, entries: TreeEntryInput[], opts: { truncated?: boolean } = {}): void {
+    this.searches.set(`${root}|${query}`, { entries, truncated: opts.truncated })
   }
 
   // setContentError форсирует ошибку /api/files/content для (root, path) —
@@ -154,6 +159,23 @@ export class FilesApiMock {
           binary: d.binary ?? false,
           truncated: d.truncated ?? false,
           diff: d.diff ?? '',
+        })
+      }
+
+      if (url.pathname === '/api/files/search') {
+        const q = url.searchParams.get('q') ?? ''
+        const hit = this.searches.get(`${root}|${q}`)
+        if (hit === undefined) return errorResponse('not_found', 404)
+        return jsonResponse({
+          entries: hit.entries.map((e) => ({
+            name: e.name,
+            path: e.path,
+            kind: e.kind,
+            language: e.language,
+            size: e.size,
+            selectable: e.selectable ?? e.kind === 'file',
+          })),
+          truncated: hit.truncated ?? false,
         })
       }
 

@@ -373,4 +373,42 @@ describe('FileBrowserModal', () => {
     fireEvent.keyDown(last, { key: 'Tab' })
     expect(document.activeElement).toBe(focusable[0])
   })
+
+  test('search replaces the tree with results, keeps the tree mounted, and clearing restores it', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.setTree('project', '.', [{ name: 'top.go', path: 'top.go', kind: 'file', language: 'go' }])
+      api.setSearch('project', 'work', [{ name: 'workspace.go', path: 'pkg/workspace.go', kind: 'file', language: 'go' }], { truncated: true })
+      api.install()
+
+      const onToggleSelect = vi.fn()
+      render(<FileBrowserModal mode="browse" selection={[]} onToggleSelect={onToggleSelect} onRemoveSelect={vi.fn()} onClose={vi.fn()} onSubmit={vi.fn()} />)
+
+      // roots + tree load
+      await vi.runOnlyPendingTimersAsync()
+      fireEvent.click(screen.getByRole('button', { name: 'afm' }))
+      await vi.runOnlyPendingTimersAsync()
+      expect(screen.getByText('top.go')).toBeTruthy()
+
+      // type a query → debounce → results replace tree
+      fireEvent.change(screen.getByPlaceholderText(/Search in afm/i), { target: { value: 'work' } })
+      await vi.advanceTimersByTimeAsync(300)
+      expect(screen.getByText('workspace.go')).toBeTruthy()
+      expect(screen.getByText(/Showing first 200/i)).toBeTruthy()
+
+      // the tree row is still in the DOM, just inside a hidden container
+      const treeContainer = document.querySelector('.file-browser-tree-wrap') as HTMLElement
+      expect(treeContainer.hasAttribute('hidden')).toBe(true)
+
+      // clear → tree visible again without a reload (top.go still there)
+      fireEvent.click(screen.getByRole('button', { name: /Clear search/i }))
+      await vi.runOnlyPendingTimersAsync()
+      expect(treeContainer.hasAttribute('hidden')).toBe(false)
+      expect(screen.getByText('top.go')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
