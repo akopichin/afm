@@ -70,8 +70,8 @@ export type FileDiff = {
 // (кроме 304 — это валидный "не изменилось", обрабатывается вызывающим).
 // Код ошибки разбирается из JSON-тела {"error":"<code>"}; если тело не JSON —
 // падаем на 'read_failed' по контракту бэкенда.
-async function fetchOk(url: string, headers?: Record<string, string>): Promise<Response> {
-  const response = await fetch(url, headers ? { headers } : undefined)
+async function fetchOk(url: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(url, init)
   if (response.ok || response.status === 304) return response
 
   let code = 'read_failed'
@@ -153,8 +153,7 @@ export async function getReference(root: string, path: string): Promise<FileRefe
 // сохраняет предыдущий контент как есть) вместо того, чтобы бросать ошибку:
 // это ожидаемый, а не исключительный исход условного запроса.
 export async function getContent(root: string, path: string, etag?: string): Promise<FileContent | undefined> {
-  const headers = etag ? { 'If-None-Match': etag } : undefined
-  const response = await fetchOk(`/api/files/content${query({ root, path })}`, headers)
+  const response = await fetchOk(`/api/files/content${query({ root, path })}`, etag ? { headers: { 'If-None-Match': etag } } : undefined)
   if (response.status === 304) return undefined
 
   const data = (await response.json()) as Record<string, unknown>
@@ -181,4 +180,20 @@ export async function getDiff(root: string, path: string): Promise<FileDiff> {
     truncated: data.truncated === true,
     diff: typeof data.diff === 'string' ? data.diff : '',
   }
+}
+
+export type SearchResult = {
+  entries: TreeEntry[]
+  truncated: boolean
+}
+
+// getSearch запрашивает GET /api/files/search. signal позволяет вызывающему
+// отменить устаревший запрос (см. FileBrowserModal — debounce + AbortController).
+export async function getSearch(root: string, query2: string, signal?: AbortSignal): Promise<SearchResult> {
+  const response = await fetchOk(`/api/files/search${query({ root, q: query2 })}`, signal ? { signal } : undefined)
+  const data = (await response.json()) as { entries?: unknown; truncated?: unknown }
+  const entries = Array.isArray(data.entries)
+    ? data.entries.map(toTreeEntry).filter((e): e is TreeEntry => e !== null)
+    : []
+  return { entries, truncated: data.truncated === true }
 }

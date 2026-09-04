@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { FilesApiError, getContent, getDiff, getReference, getRoots, getTree } from './files-client'
+import { FilesApiError, getContent, getDiff, getReference, getRoots, getSearch, getTree } from './files-client'
 
 describe('files-client', () => {
   afterEach(() => {
@@ -156,5 +156,36 @@ describe('files-client', () => {
     } as Response)
 
     await expect(getDiff('project', 'a.go')).rejects.toMatchObject({ code: 'diff_unavailable', status: 409 })
+  })
+
+  test('getSearch parses entries and truncated, and forwards the abort signal', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        entries: [{ name: 'a.go', path: 'pkg/a.go', kind: 'file', language: 'go', selectable: true }],
+        truncated: true,
+      }),
+    } as Response)
+
+    const controller = new AbortController()
+    const result = await getSearch('project', 'a', controller.signal)
+
+    expect(result.truncated).toBe(true)
+    expect(result.entries[0]).toMatchObject({ name: 'a.go', path: 'pkg/a.go', selectable: true })
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toContain('/api/files/search?root=project&q=a')
+    expect((init as RequestInit).signal).toBe(controller.signal)
+  })
+
+  test('getSearch defaults truncated to false when the backend omits it', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ entries: [] }),
+    } as Response)
+    const result = await getSearch('project', 'x')
+    expect(result.truncated).toBe(false)
+    expect(result.entries).toEqual([])
   })
 })
