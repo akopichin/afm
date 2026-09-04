@@ -43,13 +43,32 @@
 
 /* === Левая колонка: root'ы + дерево === */
 .file-browser-roots {
+  /* flex-basis is set inline from React state (resizable width); grow/shrink 0
+     keep it at exactly that width. min-width:0 is essential — without it a flex
+     item's default min-width:auto lets a long, nowrap row's min-content width
+     override the basis and blow the column up to fit the widest path. */
   flex: 0 0 260px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  border-right: 1px solid var(--mint-soft);
   min-height: 0;
+}
+
+/* Draggable divider between the file panel and the preview pane. It replaces
+   the aside's old 1px border-right and doubles as the resize grab handle. */
+.file-browser-resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--mint-soft);
+  border: none;
+  padding: 0;
+}
+.file-browser-resizer:hover,
+.file-browser-resizer:focus-visible {
+  background: var(--mint);
+  outline: none;
 }
 
 .file-browser-root-list {

@@ -20,6 +20,27 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof FileBrowserM
 describe('FileBrowserModal', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  test('the divider resizes the file panel via keyboard', async () => {
+    localStorage.clear()
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
+
+    const { container } = renderModal()
+    // Let the async roots load settle so its setState is inside act (pristine output).
+    await screen.findByRole('button', { name: 'afm' })
+    const aside = container.querySelector('.file-browser-roots') as HTMLElement
+    const separator = screen.getByRole('separator', { name: 'Resize file panel' })
+
+    expect(aside.style.flexBasis).toBe('300px') // default width
+    fireEvent.keyDown(separator, { key: 'ArrowRight' })
+    expect(aside.style.flexBasis).toBe('324px')
+    fireEvent.keyDown(separator, { key: 'ArrowLeft' })
+    fireEvent.keyDown(separator, { key: 'ArrowLeft' })
+    expect(aside.style.flexBasis).toBe('276px')
   })
 
   test('lazy-loads roots and tree, then highlights the selected file (escaped, hljs class present)', async () => {

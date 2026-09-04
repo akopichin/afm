@@ -37,6 +37,26 @@ type Tab = 'FILE' | 'DIFF'
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
+// Resizable left panel: the file list/tree column can be dragged wider/narrower
+// via the divider between it and the preview pane. LEFT_MIN keeps it usable,
+// RIGHT_MIN reserves room for the preview so the drag can't collapse it, and
+// KEY_STEP is the keyboard (Arrow) increment. The width persists across opens.
+const LEFT_MIN = 220
+const RIGHT_MIN = 300
+const KEY_STEP = 24
+const DEFAULT_LEFT_WIDTH = 300
+const LEFT_WIDTH_KEY = 'afm.fileBrowser.leftWidth'
+
+function loadLeftWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(LEFT_WIDTH_KEY))
+    if (Number.isFinite(saved) && saved >= LEFT_MIN) return saved
+  } catch {
+    // localStorage unavailable (private mode / SSR) — fall back to the default
+  }
+  return DEFAULT_LEFT_WIDTH
+}
+
 // Живой файл может прийти с невалидной/пустой modified_at (см. бэкенд —
 // content.go отдаёт то, что вернул stat()) — тогда просто ничего не
 // показываем вместо "Invalid Date" в заголовке.
@@ -62,6 +82,12 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null)
   const [activeFile, setActiveFile] = useState<ActiveFile | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('FILE')
+
+  // Left-panel width (px) + drag state. bodyRef anchors clientX to the body's
+  // left edge; draggingRef gates the document-level move/up listeners.
+  const [leftWidth, setLeftWidth] = useState<number>(loadLeftWidth)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const draggingRef = useRef(false)
 
   // Переключатель вида левой панели: 'all' — дерево + поиск (как раньше),
   // 'index'/'head' — плоский список изменённых файлов (git-статус относительно
@@ -296,6 +322,61 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose])
 
+  // Persist the panel width so it survives close/reopen and reload.
+  useEffect(() => {
+    try {
+      localStorage.setItem(LEFT_WIDTH_KEY, String(leftWidth))
+    } catch {
+      // localStorage unavailable — width just isn't persisted, no harm
+    }
+  }, [leftWidth])
+
+  // Document-level drag listeners: attached once, gated by draggingRef so they
+  // only act while a drag is in progress. Anchoring to bodyRef's left edge keeps
+  // the math correct regardless of where the centered modal sits. The right pane
+  // is kept at least RIGHT_MIN wide so a drag can't collapse the preview.
+  useEffect(() => {
+    function onMove(e: MouseEvent): void {
+      if (!draggingRef.current || bodyRef.current === null) return
+      const rect = bodyRef.current.getBoundingClientRect()
+      const max = Math.max(LEFT_MIN, rect.width - RIGHT_MIN)
+      setLeftWidth(Math.max(LEFT_MIN, Math.min(e.clientX - rect.left, max)))
+    }
+    function onUp(): void {
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  function onResizeStart(e: React.MouseEvent): void {
+    e.preventDefault()
+    draggingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none' // no text selection mid-drag
+  }
+
+  // Keyboard resize (the divider is a focusable separator): Left/Right nudge the
+  // width by KEY_STEP. The dynamic max needs the body width; fall back to a
+  // static upper bound when it isn't measurable (jsdom / before first layout).
+  function onResizeKey(e: React.KeyboardEvent): void {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    // width 0 means "not laid out yet" (jsdom / before first paint) — fall back
+    // to a static upper bound rather than clamping to the useless LEFT_MIN.
+    const bw = bodyRef.current?.getBoundingClientRect().width ?? 0
+    const max = bw > 0 ? Math.max(LEFT_MIN, bw - RIGHT_MIN) : 900
+    const delta = e.key === 'ArrowRight' ? KEY_STEP : -KEY_STEP
+    setLeftWidth((w) => Math.max(LEFT_MIN, Math.min(w + delta, max)))
+  }
+
   function openFile(root: string, entry: TreeEntry): void {
     setActiveFile({ root, entry })
     setActiveTab('FILE')
@@ -353,8 +434,8 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
           </button>
         </header>
 
-        <div className="file-browser-body">
-          <aside className="file-browser-roots">
+        <div className="file-browser-body" ref={bodyRef}>
+          <aside className="file-browser-roots" style={{ flexBasis: leftWidth }}>
             <div className="file-browser-toolbar">
               <div className="file-browser-viewswitch" role="group" aria-label="File panel view">
                 <button
@@ -472,6 +553,16 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
               </>
             )}
           </aside>
+
+          <div
+            className="file-browser-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize file panel"
+            tabIndex={0}
+            onMouseDown={onResizeStart}
+            onKeyDown={onResizeKey}
+          />
 
           <section className="file-browser-content">
             <div className="file-browser-breadcrumb-row">
