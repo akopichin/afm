@@ -361,8 +361,10 @@ func TestChanges_Matrix(t *testing.T) {
 	gitCommitAll(t, dir, "init")
 
 	writeFile(t, dir, "tracked.go", "package a\n// edit\n") // modified
-	os.Remove(filepath.Join(dir, "deleteme.go"))            // deleted
-	writeFile(t, dir, "brand-new.go", "package a\n")        // untracked → added
+	if err := os.Remove(filepath.Join(dir, "deleteme.go")); err != nil {
+		t.Fatal(err) // deleted
+	}
+	writeFile(t, dir, "brand-new.go", "package a\n") // untracked → added
 	writeFile(t, dir, "ignored.log", "x")
 	writeFile(t, dir, ".gitignore", "*.log\n")
 
