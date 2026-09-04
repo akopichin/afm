@@ -478,3 +478,67 @@
 .file-search-clear {
   margin-left: 6px;
 }
+
+/* Changed-files list: status badge (letter always visible — color is not the
+   only signal) + disabled/deleted row styling. Reuses .file-search-row/.file-tree-hint. */
+.change-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 0.4rem;
+  color: var(--bg-elev);
+}
+.change-badge-modified { background: var(--amber); }
+.change-badge-added { background: var(--mint); }
+.change-badge-deleted { background: var(--coral); }
+
+.file-change-row-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.file-change-reason {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
+
+/* Toolbar: view switch (All/Unstaged/vs HEAD) + Refresh, first child of
+   .file-browser-roots. --ink-line is not a token in any skin — the border
+   here reuses --mint-soft, the same divider token as .file-browser-header/
+   .file-browser-roots/.file-browser-tab elsewhere in this file. */
+.file-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.file-browser-viewswitch {
+  display: inline-flex;
+  border: 1px solid var(--mint-soft);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.file-browser-viewbtn {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  background: var(--bg-elev);
+  color: var(--ink);
+  border: none;
+  cursor: pointer;
+}
+.file-browser-viewbtn + .file-browser-viewbtn {
+  border-left: 1px solid var(--mint-soft);
+}
+.file-browser-viewbtn.active {
+  background: var(--amber);
+  color: var(--bg-elev);
+}
+.file-browser-refresh {
+  margin-left: auto;
+}

@@ -412,6 +412,49 @@ describe('FileBrowserModal', () => {
     }
   })
 
+  test('switches to Unstaged view and lists changed files', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file' }])
+    api.setChanged('project', 'index', [{ name: 'c.go', path: 'c.go', kind: 'file', status: 'modified' }])
+    api.install()
+
+    renderModal()
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Unstaged' }))
+
+    expect(await screen.findByLabelText('Changed files')).toBeInTheDocument()
+    expect(await screen.findByText('c.go')).toBeInTheDocument()
+  })
+
+  test('hides the search box outside the All view', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [])
+    api.setChanged('project', 'head', [])
+    api.install()
+
+    renderModal()
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    expect(await screen.findByLabelText(/Search in/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'vs HEAD' }))
+    await screen.findByLabelText('Changed files')
+    expect(screen.queryByLabelText(/Search in/)).toBeNull()
+  })
+
+  test('shows "Not a git repository" on 409', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [])
+    api.setChangedError('project', 'index', 'diff_unavailable', 409)
+    api.install()
+
+    renderModal()
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Unstaged' }))
+    expect(await screen.findByText('Not a git repository')).toBeInTheDocument()
+  })
+
   test('search request is debounced — nothing fires before 250ms', async () => {
     vi.useFakeTimers()
     try {

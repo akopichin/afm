@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { getContent, getDiff, getRoots, getSearch, type FileContent, type FileDiff, type RootView, type SearchResult, type TreeEntry } from '../../api/files-client'
+import {
+  getChanged,
+  getContent,
+  getDiff,
+  getRoots,
+  getSearch,
+  type ChangeList,
+  type FileContent,
+  type FileDiff,
+  type RootView,
+  type SearchResult,
+  type TreeEntry,
+} from '../../api/files-client'
+import { ChangedFilesList } from './ChangedFilesList'
 import { DiffViewer } from './DiffViewer'
 import { FileSearchResults } from './FileSearchResults'
 import { FileTree } from './FileTree'
@@ -41,12 +54,26 @@ function formatModifiedAt(modifiedAt: string): string | null {
 // таб/превью) — саму selection и mode ей передаёт FileBrowserProvider, чтобы
 // выбор переживал закрытие/переоткрытие модалки (Modal размонтируется, когда
 // закрыта — см. бриф "Renders FileBrowserModal when open").
+type ViewMode = 'all' | 'index' | 'head'
+
 export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSelect, onClose, onSubmit }: FileBrowserModalProps): ReactElement {
   const [roots, setRoots] = useState<RootView[]>([])
   const [rootsError, setRootsError] = useState<string | null>(null)
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null)
   const [activeFile, setActiveFile] = useState<ActiveFile | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('FILE')
+
+  // Переключатель вида левой панели: 'all' — дерево + поиск (как раньше),
+  // 'index'/'head' — плоский список изменённых файлов (git-статус относительно
+  // индекса/HEAD). changesRevision — ручной инкремент кнопкой Refresh, не
+  // связанный ни с чем ещё — тот же приём, что нигде в файле не был нужен
+  // раньше, потому что раньше нечего было "перезапрашивать по кнопке".
+  const [viewMode, setViewMode] = useState<ViewMode>('all')
+  const [changesRevision, setChangesRevision] = useState(0)
+  const [changes, setChanges] = useState<ChangeList | null>(null)
+  const [changesLoading, setChangesLoading] = useState(false)
+  const [changesError, setChangesError] = useState<string | null>(null)
+  const changesGenRef = useRef(0)
 
   const [content, setContent] = useState<FileContent | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
@@ -158,7 +185,16 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
     // .then/.catch see a stale generation and bail, even if the aborted fetch
     // still resolves.
     const generation = ++searchGenRef.current
-    if (selectedRoot === null) return
+    // Вне 'all' поисковая панель скрыта (см. рендер ниже) — не даём скрытому
+    // in-flight запросу дописать searchResult поверх невидимой (но по-прежнему
+    // смонтированной ветки) панели изменений: как только режим переключился,
+    // результат/ошибка/loading этого эффекта немедленно очищаются.
+    if (selectedRoot === null || viewMode !== 'all') {
+      setSearchResult(null)
+      setSearchError(null)
+      setSearchLoading(false)
+      return
+    }
     const trimmed = query.trim()
     if (trimmed === '') {
       setSearchResult(null)
@@ -193,7 +229,40 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
       clearTimeout(timer)
       controller.abort()
     }
-  }, [query, selectedRoot])
+  }, [query, selectedRoot, viewMode])
+
+  // Загрузка списка изменений для index/head. Как и поиск: generation растёт на
+  // КАЖДОМ запуске (включая ветки all/null-root), поздний ответ устаревшего
+  // режима/root'а отбрасывается по generation, старый список чистится сразу.
+  useEffect(() => {
+    const generation = ++changesGenRef.current
+    if (viewMode === 'all' || selectedRoot === null) {
+      setChanges(null)
+      setChangesError(null)
+      setChangesLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    setChanges(null)
+    setChangesError(null)
+    setChangesLoading(true)
+    void getChanged(selectedRoot, viewMode, controller.signal)
+      .then((r) => {
+        if (generation !== changesGenRef.current) return
+        setChangesLoading(false)
+        setChanges(r)
+      })
+      .catch((e: unknown) => {
+        if (controller.signal.aborted || generation !== changesGenRef.current) return
+        setChangesLoading(false)
+        setChangesError(
+          e !== null && typeof e === 'object' && 'code' in e && (e as { code?: unknown }).code === 'diff_unavailable'
+            ? 'Not a git repository'
+            : `Failed to load changes: ${e instanceof Error ? e.message : 'read_failed'}`,
+        )
+      })
+    return () => controller.abort()
+  }, [viewMode, selectedRoot, changesRevision])
 
   // Esc закрывает, Tab крутит фокус по кругу внутри модалки (простая ловушка
   // фокуса — без сторонней библиотеки, весь фокусируемый набор пересчитывается
@@ -286,6 +355,47 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
 
         <div className="file-browser-body">
           <aside className="file-browser-roots">
+            <div className="file-browser-toolbar">
+              <div className="file-browser-viewswitch" role="group" aria-label="File panel view">
+                <button
+                  type="button"
+                  aria-pressed={viewMode === 'all'}
+                  className={`file-browser-viewbtn${viewMode === 'all' ? ' active' : ''}`}
+                  onClick={() => setViewMode('all')}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={viewMode === 'index'}
+                  title="Working tree vs index; includes untracked files"
+                  className={`file-browser-viewbtn${viewMode === 'index' ? ' active' : ''}`}
+                  onClick={() => setViewMode('index')}
+                >
+                  Unstaged
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={viewMode === 'head'}
+                  title="Working tree vs last commit; includes untracked files"
+                  className={`file-browser-viewbtn${viewMode === 'head' ? ' active' : ''}`}
+                  onClick={() => setViewMode('head')}
+                >
+                  vs HEAD
+                </button>
+              </div>
+              {viewMode !== 'all' && (
+                <button
+                  type="button"
+                  className="file-browser-refresh icon-btn"
+                  aria-label="Refresh changed files"
+                  disabled={changesLoading}
+                  onClick={() => setChangesRevision((n) => n + 1)}
+                >
+                  ↻
+                </button>
+              )}
+            </div>
             {rootsError !== null && <div className="file-tree-hint file-tree-error">{rootsError}</div>}
             <ul className="file-browser-root-list">
               {roots.map((r) => (
@@ -303,27 +413,43 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
             </ul>
             {selectedRoot !== null && (
               <>
-                <div className="file-search-box">
-                  <input
-                    type="text"
-                    className="file-search-input"
-                    placeholder={`Search in ${rootLabel(selectedRoot)}…`}
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    aria-label={`Search in ${rootLabel(selectedRoot)}`}
-                  />
-                  {query !== '' && (
-                    <button type="button" className="file-search-clear icon-btn" aria-label="Clear search" onClick={() => setQuery('')}>
-                      ✕
-                    </button>
-                  )}
-                </div>
+                {viewMode === 'all' && (
+                  <>
+                    <div className="file-search-box">
+                      <input
+                        type="text"
+                        className="file-search-input"
+                        placeholder={`Search in ${rootLabel(selectedRoot)}…`}
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        aria-label={`Search in ${rootLabel(selectedRoot)}`}
+                      />
+                      {query !== '' && (
+                        <button type="button" className="file-search-clear icon-btn" aria-label="Clear search" onClick={() => setQuery('')}>
+                          ✕
+                        </button>
+                      )}
+                    </div>
 
-                {query.trim() !== '' ? (
-                  <FileSearchResults
-                    result={searchResult}
-                    loading={searchLoading}
-                    error={searchError}
+                    {query.trim() !== '' ? (
+                      <FileSearchResults
+                        result={searchResult}
+                        loading={searchLoading}
+                        error={searchError}
+                        onOpenFile={(entry) => openFile(selectedRoot, entry)}
+                        onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
+                        isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
+                        activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
+                      />
+                    ) : null}
+                  </>
+                )}
+
+                {viewMode !== 'all' ? (
+                  <ChangedFilesList
+                    result={changes}
+                    loading={changesLoading}
+                    error={changesError}
                     onOpenFile={(entry) => openFile(selectedRoot, entry)}
                     onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
                     isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
@@ -331,10 +457,10 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
                   />
                 ) : null}
 
-                {/* Дерево остаётся смонтированным во время поиска (hidden, не
-                    размонтирование) — очистка запроса возвращает раскрытые
-                    каталоги без повторной загрузки. */}
-                <div className="file-browser-tree-wrap" hidden={query.trim() !== ''}>
+                {/* Дерево остаётся смонтированным вне 'all' и во время поиска
+                    (hidden, не размонтирование) — переключение обратно
+                    возвращает раскрытые каталоги без повторной загрузки. */}
+                <div className="file-browser-tree-wrap" hidden={viewMode !== 'all' || query.trim() !== ''}>
                   <FileTree
                     root={selectedRoot}
                     onOpenFile={(entry) => openFile(selectedRoot, entry)}
