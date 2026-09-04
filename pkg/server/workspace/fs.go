@@ -14,6 +14,7 @@ type FS interface {
 	Reference(ctx context.Context, rootID, relPath string) (Reference, error)
 	Read(ctx context.Context, rootID, relPath string) (File, error)
 	Diff(ctx context.Context, rootID, relPath string) (Diff, error)
+	Search(ctx context.Context, rootID, query string) (SearchResult, error)
 	Close() error
 }
 

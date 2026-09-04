@@ -18,8 +18,9 @@ import (
 // every other method/miss is unused by these tests and returns
 // workspace.ErrNotFound / its zero value.
 type fakeFS struct {
-	roots int
-	files map[string]workspace.File
+	roots  int
+	files  map[string]workspace.File
+	search workspace.SearchResult
 }
 
 func (f fakeFS) Roots() []workspace.RootView {
@@ -50,6 +51,13 @@ func (f fakeFS) Read(_ context.Context, _ string, path string) (workspace.File, 
 
 func (f fakeFS) Diff(context.Context, string, string) (workspace.Diff, error) {
 	return workspace.Diff{}, workspace.ErrNotFound
+}
+
+func (f fakeFS) Search(_ context.Context, _ string, query string) (workspace.SearchResult, error) {
+	if query == "" {
+		return workspace.SearchResult{}, workspace.ErrInvalidRootOrPath
+	}
+	return f.search, nil
 }
 
 func (f fakeFS) Close() error {
