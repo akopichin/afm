@@ -52,3 +52,28 @@ func TestFiles_ContentAndErrorShape(t *testing.T) {
 		t.Errorf("binary body leaks details, got %q", body)
 	}
 }
+
+func TestFiles_Search(t *testing.T) {
+	srv := newTestServer(t, Config{Workspace: fakeFS{
+		roots: 1,
+		search: workspace.SearchResult{
+			Entries:   []workspace.Entry{{Name: "a.go", Path: "pkg/a.go", Kind: "file", Language: "go", Selectable: true}},
+			Truncated: true,
+		},
+	}})
+
+	rr := doGET(t, srv, "/api/files/search?root=project&q=a")
+	if rr.Code != 200 {
+		t.Fatalf("search: %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `"path":"pkg/a.go"`) || !strings.Contains(body, `"truncated":true`) {
+		t.Errorf("unexpected body: %s", body)
+	}
+
+	// Empty query → fakeFS returns ErrInvalidRootOrPath → 400 with scoped shape.
+	rr = doGET(t, srv, "/api/files/search?root=project&q=")
+	if rr.Code != 400 || strings.TrimSpace(rr.Body.String()) != `{"error":"invalid_root_or_path"}` {
+		t.Errorf("empty query: %d %s", rr.Code, rr.Body.String())
+	}
+}

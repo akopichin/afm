@@ -31,6 +31,8 @@ func (s *Server) routeFiles(w http.ResponseWriter, r *http.Request) {
 		s.filesContent(w, r)
 	case "diff":
 		s.filesDiff(w, r)
+	case "search":
+		s.filesSearch(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -126,4 +128,16 @@ func (s *Server) filesDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(d)
+}
+
+func (s *Server) filesSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	res, err := s.workspace.Search(r.Context(), q.Get("root"), q.Get("q"))
+	if err != nil {
+		status, code := filesErrStatus(err)
+		writeFilesError(w, status, code)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(res)
 }
