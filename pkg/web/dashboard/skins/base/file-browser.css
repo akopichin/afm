@@ -436,8 +436,13 @@
   color: var(--ink-dim);
   white-space: nowrap;
 }
+.file-search-box {
+  display: flex;
+  align-items: center;
+}
 .file-search-input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   box-sizing: border-box;
   margin: 6px 0;
   padding: 4px 8px;
