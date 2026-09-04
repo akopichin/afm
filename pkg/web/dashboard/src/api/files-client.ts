@@ -197,3 +197,40 @@ export async function getSearch(root: string, query2: string, signal?: AbortSign
     : []
   return { entries, truncated: data.truncated === true }
 }
+
+export type ChangeStatus = 'modified' | 'added' | 'deleted'
+export type ChangeEntry = TreeEntry & { status: ChangeStatus }
+export type ChangeList = { entries: ChangeEntry[]; truncated: boolean }
+
+function isChangeStatus(value: unknown): value is ChangeStatus {
+  return value === 'modified' || value === 'added' || value === 'deleted'
+}
+
+// toChangeEntry требует строковые name/path и известный status; иначе строка
+// отбрасывается (не выдумываем 'modified'). kind синтезируется как 'file' —
+// changed-entry структурно совместим с TreeEntry, чтобы openFile/onToggleSelect
+// принимали его без адаптеров.
+function toChangeEntry(raw: unknown): ChangeEntry | null {
+  if (!isRecord(raw) || typeof raw.name !== 'string' || typeof raw.path !== 'string' || !isChangeStatus(raw.status)) {
+    return null
+  }
+  return {
+    name: raw.name,
+    path: raw.path,
+    kind: 'file',
+    status: raw.status,
+    selectable: raw.selectable === true,
+  }
+}
+
+// getChanged запрашивает GET /api/files/changed (git-статус относительно
+// индекса или HEAD — переключатель mode). signal — тот же паттерн отмены
+// устаревшего запроса, что и у getSearch.
+export async function getChanged(root: string, mode: 'index' | 'head', signal?: AbortSignal): Promise<ChangeList> {
+  const response = await fetchOk(`/api/files/changed${query({ root, mode })}`, signal ? { signal } : undefined)
+  const data = (await response.json()) as { entries?: unknown; truncated?: unknown }
+  const entries = Array.isArray(data.entries)
+    ? data.entries.map(toChangeEntry).filter((e): e is ChangeEntry => e !== null)
+    : []
+  return { entries, truncated: data.truncated === true }
+}

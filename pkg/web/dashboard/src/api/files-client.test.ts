@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { FilesApiError, getContent, getDiff, getReference, getRoots, getSearch, getTree } from './files-client'
+import { FilesApiError, getChanged, getContent, getDiff, getReference, getRoots, getSearch, getTree } from './files-client'
 
 describe('files-client', () => {
   afterEach(() => {
@@ -187,5 +187,68 @@ describe('files-client', () => {
     const result = await getSearch('project', 'x')
     expect(result.truncated).toBe(false)
     expect(result.entries).toEqual([])
+  })
+
+  test('getChanged parses entries and synthesizes kind=file', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        entries: [
+          { name: 'a.go', path: 'a.go', status: 'modified', selectable: true },
+          { name: 'b.go', path: 'dir/b.go', status: 'deleted', selectable: false },
+        ],
+        truncated: true,
+      }),
+      headers: { get: () => null },
+    } as unknown as Response)
+
+    const res = await getChanged('r', 'head')
+    expect(res.truncated).toBe(true)
+    expect(res.entries).toHaveLength(2)
+    expect(res.entries[0]).toMatchObject({ path: 'a.go', status: 'modified', selectable: true, kind: 'file' })
+    expect(res.entries[1]).toMatchObject({ path: 'dir/b.go', status: 'deleted', selectable: false })
+  })
+
+  test('getChanged drops malformed entries and defaults truncated to false', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ entries: [{ name: 'x' }, { name: 'ok', path: 'ok.go', status: 'added' }] }),
+      headers: { get: () => null },
+    } as unknown as Response)
+
+    const res = await getChanged('r', 'index')
+    expect(res.truncated).toBe(false)
+    expect(res.entries).toHaveLength(1)
+    expect(res.entries[0]!.path).toBe('ok.go')
+  })
+
+  test('getChanged throws FilesApiError on 409', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'diff_unavailable' }),
+      headers: { get: () => null },
+    } as unknown as Response)
+
+    await expect(getChanged('r', 'index')).rejects.toMatchObject({ code: 'diff_unavailable', status: 409 })
+  })
+
+  test('getChanged forwards the abort signal and mode', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ entries: [] }),
+      headers: { get: () => null },
+    } as unknown as Response)
+
+    const controller = new AbortController()
+    await getChanged('r', 'head', controller.signal)
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toContain('/api/files/changed')
+    expect(String(url)).toContain('mode=head')
+    expect((init as RequestInit).signal).toBe(controller.signal)
   })
 })

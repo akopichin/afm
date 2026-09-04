@@ -2,6 +2,22 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-09-04
+
+### Feature: file browser — "changed files" view (All / Unstaged / vs HEAD)
+
+The Docker project file browser's left panel gained a tools toolbar at the top with a three-way view switch, so you can jump from the full source tree straight to just the files that changed — without hunting through the tree:
+
+- **All** — the existing lazy source tree (unchanged default).
+- **Unstaged** — a flat list of files that differ from the index (`git diff`, working tree vs index), plus untracked files as *added*.
+- **vs HEAD** — a flat list of files that differ from the last commit (`git diff HEAD`, working tree vs HEAD), plus untracked files as *added*.
+
+Untracked (new) files show up in **both** changed views — afm agents create files constantly, and you want to see them. The two modes only diverge when someone has staged edits (`git add`): a fully-staged file is absent from **Unstaged** (working tree matches the index) but present in **vs HEAD**. The name **Unstaged** describes the baseline precisely (staged edits are still uncommitted, but are deliberately excluded from working-tree-vs-index); a tooltip on each mode spells out the baseline and notes that untracked files are included.
+
+Each row carries a status badge — **M**(odified) / **A**(dded) / **D**(eleted) — where the letter, not just the color, is the signal, and the status word is exposed to screen readers. A selectable file opens on click (the right pane's **DIFF** tab still shows `HEAD → current file`) and can be checkbox-selected to insert `[AFM file: …]` references, exactly like the tree. Deleted files are shown as a muted, non-clickable marker row (there is nothing on disk to open or reference). The search box is hidden in the changed views (it searches the tree) and returns in **All**; a **Refresh** button re-fetches on demand (no background git polling). The list scrolls within the modal and adapts to every skin × light/dark.
+
+Backend: a new read-only, security-hardened `GET /api/files/changed?root&mode=index|head` (`workspace.FS.Changes`) that runs git only against the verified in-root `--git-dir`/`--work-tree`, with a sanitized environment (ambient `GIT_*` selectors stripped so nothing can redirect git at a foreign index/object store), treats every git-emitted path as untrusted (UTF-8 + path validation, and selectability decided by a real `openat2`+`fstat`, never by git's status letter), bounds its work (per-process byte cap, entry cap, per-path syscalls bounded to the capped survivors, cancellation on request close), and distinguishes a genuinely unborn repo from a corrupt HEAD. Like the rest of the browser it is Docker-only and returns `404` on a plain host run.
+
 ## 2026-09-03
 
 ### Feature: Docker project file browser — read-only source tree, diffs and file references in the dashboard

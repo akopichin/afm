@@ -478,3 +478,107 @@
 .file-search-clear {
   margin-left: 6px;
 }
+
+/* The scrollable content region of the left column, shared by the changed-files
+   list AND the search results (both render .file-search-results in place of the
+   tree). Without this it has no height/overflow of its own, so a long list (the
+   changed view can return up to maxChangesEntries rows) spills past the fixed
+   modal instead of scrolling within it — the tree (.file-tree) already scrolls
+   this way. */
+.file-search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Changed-files list: status badge (letter always visible — color is not the
+   only signal) + disabled/deleted row styling. Reuses .file-search-row/.file-tree-hint. */
+.change-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 0.4rem;
+  color: var(--bg-elev);
+}
+.change-badge-modified { background: var(--amber); }
+.change-badge-added { background: var(--mint); }
+.change-badge-deleted { background: var(--coral); }
+
+.file-change-row-disabled {
+  opacity: 0.55;
+  cursor: default;
+  overflow: hidden;
+}
+/* The name shrinks (with ellipsis via .file-tree-name) so the row never widens
+   the 260px column; without min-width:0 a flex item refuses to shrink below its
+   content and pushes the reason text into the right pane. */
+.file-change-row-disabled .file-search-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.file-change-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
+
+/* Visually hidden but exposed to assistive tech (screen-reader-only). Used to
+   voice the change status word that the decorative, aria-hidden badge letter
+   cannot. */
+.file-browser-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Toolbar: view switch (All/Unstaged/vs HEAD) + Refresh, first child of
+   .file-browser-roots. --ink-line is not a token in any skin — the border
+   here reuses --mint-soft, the same divider token as .file-browser-header/
+   .file-browser-roots/.file-browser-tab elsewhere in this file. */
+.file-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.file-browser-viewswitch {
+  display: inline-flex;
+  border: 1px solid var(--mint-soft);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.file-browser-viewbtn {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  background: var(--bg-elev);
+  color: var(--ink);
+  border: none;
+  cursor: pointer;
+}
+.file-browser-viewbtn + .file-browser-viewbtn {
+  border-left: 1px solid var(--mint-soft);
+}
+.file-browser-viewbtn.active {
+  background: var(--amber);
+  color: var(--bg-elev);
+}
+.file-browser-refresh {
+  margin-left: auto;
+}

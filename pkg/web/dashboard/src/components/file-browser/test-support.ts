@@ -43,6 +43,7 @@ export class FilesApiMock {
   private contentErrors = new Map<string, { errorCode: string; status: number }>()
   private diffs = new Map<string, DiffInput | { errorCode: string; status: number }>()
   private searches = new Map<string, { entries: TreeEntryInput[]; truncated?: boolean }>()
+  private changes = new Map<string, { entries: (TreeEntryInput & { status: string })[]; truncated?: boolean } | { errorCode: string; status: number }>()
   // Ссылка на сам мок fetch — тестам Reload/If-None-Match нужно проверять,
   // с какими заголовками ушёл конкретный запрос (vi.spyOn возвращает мок с
   // .mock.calls, install() сохраняет её сюда, чтобы не заводить второй spy).
@@ -78,6 +79,14 @@ export class FilesApiMock {
 
   setSearch(root: string, query: string, entries: TreeEntryInput[], opts: { truncated?: boolean } = {}): void {
     this.searches.set(`${root}|${query}`, { entries, truncated: opts.truncated })
+  }
+
+  setChanged(root: string, mode: string, entries: (TreeEntryInput & { status: string })[], opts: { truncated?: boolean } = {}): void {
+    this.changes.set(`${root}|${mode}`, { entries, truncated: opts.truncated })
+  }
+
+  setChangedError(root: string, mode: string, code: string, status: number): void {
+    this.changes.set(`${root}|${mode}`, { errorCode: code, status })
   }
 
   // setContentError форсирует ошибку /api/files/content для (root, path) —
@@ -174,6 +183,22 @@ export class FilesApiMock {
             language: e.language,
             size: e.size,
             selectable: e.selectable ?? e.kind === 'file',
+          })),
+          truncated: hit.truncated ?? false,
+        })
+      }
+
+      if (url.pathname === '/api/files/changed') {
+        const mode = url.searchParams.get('mode') ?? ''
+        const hit = this.changes.get(`${root}|${mode}`)
+        if (hit === undefined) return errorResponse('not_found', 404)
+        if ('errorCode' in hit) return errorResponse(hit.errorCode, hit.status)
+        return jsonResponse({
+          entries: hit.entries.map((e) => ({
+            name: e.name,
+            path: e.path,
+            status: e.status,
+            selectable: e.selectable ?? true,
           })),
           truncated: hit.truncated ?? false,
         })
