@@ -5,6 +5,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -220,5 +221,80 @@ func TestHeadExists(t *testing.T) {
 	gitCommitAll(t, dir, "init")
 	if ok, err := headExists(context.Background(), gitDir, dir); err != nil || !ok {
 		t.Fatalf("after commit: ok=%v err=%v, want true,nil", ok, err)
+	}
+}
+
+func TestChanges_Matrix(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeFile(t, dir, "tracked.go", "package a\n")
+	writeFile(t, dir, "deleteme.go", "package a\n")
+	gitCommitAll(t, dir, "init")
+
+	writeFile(t, dir, "tracked.go", "package a\n// edit\n") // modified
+	os.Remove(filepath.Join(dir, "deleteme.go"))            // deleted
+	writeFile(t, dir, "brand-new.go", "package a\n")        // untracked → added
+	writeFile(t, dir, "ignored.log", "x")
+	writeFile(t, dir, ".gitignore", "*.log\n")
+
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+
+	for _, mode := range []ChangeMode{ChangeModeIndex, ChangeModeHead} {
+		got, err := fs.Changes(context.Background(), "r", mode)
+		if err != nil {
+			t.Fatalf("mode %s: %v", mode, err)
+		}
+		byPath := map[string]Change{}
+		for _, c := range got.Entries {
+			byPath[c.Path] = c
+		}
+		if c := byPath["tracked.go"]; c.Status != ChangeModified || !c.Selectable {
+			t.Errorf("mode %s tracked.go = %+v", mode, c)
+		}
+		if c := byPath["deleteme.go"]; c.Status != ChangeDeleted || c.Selectable {
+			t.Errorf("mode %s deleteme.go = %+v", mode, c)
+		}
+		if c := byPath["brand-new.go"]; c.Status != ChangeAdded || !c.Selectable {
+			t.Errorf("mode %s brand-new.go = %+v", mode, c)
+		}
+		if _, ok := byPath["ignored.log"]; ok {
+			t.Errorf("mode %s: ignored file must not appear", mode)
+		}
+		if _, ok := byPath[".gitignore"]; !ok {
+			t.Errorf("mode %s: new .gitignore should appear as added", mode)
+		}
+	}
+}
+
+func TestChanges_UnbornRepoHeadMode(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir) // no commit → unborn HEAD
+	writeFile(t, dir, "a.go", "package a\n")
+
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+
+	got, err := fs.Changes(context.Background(), "r", ChangeModeHead)
+	if err != nil {
+		t.Fatalf("unborn head: %v", err)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Path != "a.go" || got.Entries[0].Status != ChangeAdded {
+		t.Fatalf("unborn head should list a.go as added, got %+v", got.Entries)
+	}
+}
+
+func TestChanges_Errors(t *testing.T) {
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: t.TempDir()}) // no .git
+	defer fs.Close()
+
+	if _, err := fs.Changes(context.Background(), "r", ChangeModeIndex); !errors.Is(err, ErrDiffUnavailable) {
+		t.Errorf("non-repo want ErrDiffUnavailable, got %v", err)
+	}
+	if _, err := fs.Changes(context.Background(), "r", "bogus"); !errors.Is(err, ErrInvalidRootOrPath) {
+		t.Errorf("bad mode want ErrInvalidRootOrPath, got %v", err)
+	}
+	if _, err := fs.Changes(context.Background(), "nope", ChangeModeIndex); !errors.Is(err, ErrInvalidRootOrPath) {
+		t.Errorf("bad root want ErrInvalidRootOrPath, got %v", err)
 	}
 }

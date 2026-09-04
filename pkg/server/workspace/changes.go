@@ -5,15 +5,16 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // nameStatusRec is one record of `git diff --name-status -z` (rename/copy
 // detection is disabled, so there are never old+new path triples).
-//
-//nolint:unused // consumed by parseNameStatusZ below; wired into FS.Changes by Task 4
 type nameStatusRec struct {
 	status byte
 	path   string
@@ -21,8 +22,6 @@ type nameStatusRec struct {
 
 // mapStatus maps a git single-letter status to a ChangeStatus. ok=false for any
 // status this feature does not expect (with --no-renames, R/C never appear).
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func mapStatus(s byte) (ChangeStatus, bool) {
 	switch s {
 	case 'A':
@@ -41,8 +40,6 @@ func mapStatus(s byte) (ChangeStatus, bool) {
 // A dangling final record (status without a path) is an error unless truncated
 // is true (byte-cap fired mid-record), in which case the partial tail is
 // dropped. An unknown/unmapped status is an error.
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func parseNameStatusZ(data []byte, truncated bool) ([]nameStatusRec, error) {
 	fields := splitZ(data)
 	// git -z terminates every field with NUL, so complete output ends in NUL
@@ -77,8 +74,6 @@ func parseNameStatusZ(data []byte, truncated bool) ([]nameStatusRec, error) {
 }
 
 // parseUntrackedZ parses `git ls-files -z` output: NUL-separated paths.
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func parseUntrackedZ(data []byte) []string {
 	fields := splitZ(data)
 	// A final field not terminated by NUL is a byte-cap fragment — drop it.
@@ -95,8 +90,6 @@ func parseUntrackedZ(data []byte) []string {
 // splitZ splits on NUL and drops the trailing empty element that a
 // NUL-terminated stream always produces. Empty fields elsewhere are impossible
 // (git never emits an empty path/status).
-//
-//nolint:unused // consumed by parseNameStatusZ/parseUntrackedZ above; wired into FS.Changes by Task 4
 func splitZ(data []byte) [][]byte {
 	parts := bytes.Split(data, []byte{0})
 	if n := len(parts); n > 0 && len(parts[n-1]) == 0 {
@@ -109,28 +102,21 @@ func splitZ(data []byte) [][]byte {
 // drained and discarded and the result is flagged truncated. A var so tests can
 // shrink it. Distinct from an entry cap: exec buffering could otherwise grow
 // without bound before any entry cap applies.
-//
-//nolint:unused // wired into FS.Changes by Task 4
 var maxChangesOutputBytes = 4 << 20
 
 // maxChangesEntries caps how many Change entries Changes returns; exceeding it
 // sets ChangeList.Truncated. A var so tests can shrink it.
-//
-//nolint:unused // wired into FS.Changes by Task 4
 var maxChangesEntries = 5000
 
 // cappedBuffer captures up to cap bytes and records whether more arrived. It
 // keeps draining (returns len(p), nil) past the cap so the child process is
 // never blocked on a full pipe.
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 type cappedBuffer struct {
 	buf      bytes.Buffer
 	cap      int
 	overflow bool
 }
 
-//nolint:unused // method of cappedBuffer, see above
 func (c *cappedBuffer) Write(p []byte) (int, error) {
 	if room := c.cap - c.buf.Len(); room > 0 {
 		if len(p) <= room {
@@ -148,8 +134,6 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 // gitCmd builds a hardened git *exec.Cmd: no shell, verified --git-dir,
 // allowlisted --work-tree, no pager, no repo-configured fsmonitor, optional
 // index locks disabled (read-only endpoint must never mutate the index).
-//
-//nolint:unused // wired into FS.Changes by Task 4
 func gitCmd(ctx context.Context, gitDir, workTree string, args ...string) *exec.Cmd {
 	full := append([]string{
 		"--no-pager",
@@ -166,8 +150,6 @@ func gitCmd(ctx context.Context, gitDir, workTree string, args ...string) *exec.
 // exit, timeout, or exec failure is ErrReadFailed — unlike diff.go's runGit, it
 // never collapses a failure into an empty success. stdout is byte-capped;
 // stderr is discarded (never returned to the client).
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func runGitChanges(ctx context.Context, gitDir, workTree string, args ...string) ([]byte, bool, error) {
 	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
@@ -183,8 +165,6 @@ func runGitChanges(ctx context.Context, gitDir, workTree string, args ...string)
 
 // headExists reports whether the repo has a HEAD commit. exit 0 → yes; exit 1 →
 // unborn (no commits yet, not an error); anything else → ErrReadFailed.
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func headExists(ctx context.Context, gitDir, workTree string) (bool, error) {
 	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
@@ -210,8 +190,6 @@ func headExists(ctx context.Context, gitDir, workTree string) (bool, error) {
 // other collision keeps the tracked entry (tracked wins). The result is sorted
 // by full Path (case-insensitive, original Path as tie-break) and capped to
 // maxChangesEntries — hitting the cap sets truncated.
-//
-//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func aggregateChanges(tracked, untracked []Change) (entries []Change, truncated bool) {
 	byPath := make(map[string]Change, len(tracked)+len(untracked))
 	for _, c := range tracked {
@@ -244,4 +222,138 @@ func aggregateChanges(tracked, untracked []Change) (entries []Change, truncated 
 		truncated = true
 	}
 	return entries, truncated
+}
+
+// Changes lists files that differ from the chosen baseline in rootID, plus
+// untracked files (as "added"). It works only when rootID is itself a git repo
+// root (findGitDir does not walk above the root). git output is untrusted:
+// every path is UTF-8- and validateRelPath-checked, and Selectable is decided
+// by a real openat+fstat. See the spec for the security rationale.
+func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (ChangeList, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangeList{}, err
+	}
+	if mode != ChangeModeIndex && mode != ChangeModeHead {
+		return ChangeList{}, ErrInvalidRootOrPath
+	}
+	rh, _, err := fs.resolve(rootID, ".")
+	if err != nil {
+		return ChangeList{}, err
+	}
+	gitDir, _, ok := findGitDir(rh, ".")
+	if !ok {
+		return ChangeList{}, ErrDiffUnavailable
+	}
+	workTree := rh.root.Path
+
+	var (
+		tracked  []Change
+		byteTrun bool
+	)
+	untrackedArgs := []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}
+
+	useDiff := mode == ChangeModeIndex
+	if mode == ChangeModeHead {
+		has, herr := headExists(ctx, gitDir, workTree)
+		if herr != nil {
+			return ChangeList{}, herr
+		}
+		useDiff = has
+		if !has {
+			// Unborn repo: no HEAD to diff against. Everything currently on
+			// disk (cached + untracked) is "added" vs the empty baseline;
+			// cached paths already deleted from the worktree are simply absent.
+			untrackedArgs = []string{"ls-files", "--cached", "--others", "--exclude-standard", "-z", "--"}
+		}
+	}
+
+	if useDiff {
+		diffArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-status", "-z"}
+		if mode == ChangeModeHead {
+			diffArgs = append(diffArgs, "HEAD")
+		}
+		diffArgs = append(diffArgs, "--")
+		out, trun, derr := runGitChanges(ctx, gitDir, workTree, diffArgs...)
+		if derr != nil {
+			return ChangeList{}, derr
+		}
+		byteTrun = byteTrun || trun
+		recs, perr := parseNameStatusZ(out, trun)
+		if perr != nil {
+			return ChangeList{}, perr
+		}
+		tracked = fs.recsToChanges(rh, recs)
+	}
+
+	uout, utrun, uerr := runGitChanges(ctx, gitDir, workTree, untrackedArgs...)
+	if uerr != nil {
+		return ChangeList{}, uerr
+	}
+	byteTrun = byteTrun || utrun
+	untracked := fs.pathsToChanges(rh, parseUntrackedZ(uout))
+
+	entries, capTrun := aggregateChanges(tracked, untracked)
+	return ChangeList{Entries: entries, Truncated: byteTrun || capTrun}, nil
+}
+
+// recsToChanges validates each diff record's path and builds a Change with a
+// disk-verified Selectable. A deleted path is not opened (it is gone); any path
+// that fails validation is dropped (git output is untrusted).
+func (fs *fsImpl) recsToChanges(rh *rootHandle, recs []nameStatusRec) []Change {
+	out := make([]Change, 0, len(recs))
+	for _, r := range recs {
+		status, ok := mapStatus(r.status)
+		if !ok {
+			continue
+		}
+		clean, ok := fs.validGitPath(r.path)
+		if !ok {
+			continue
+		}
+		selectable := status != ChangeDeleted && fs.isSelectable(rh, clean)
+		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: status, Selectable: selectable})
+	}
+	return out
+}
+
+// pathsToChanges builds "added" Changes for untracked paths, dropping any path
+// that fails validation.
+func (fs *fsImpl) pathsToChanges(rh *rootHandle, paths []string) []Change {
+	out := make([]Change, 0, len(paths))
+	for _, p := range paths {
+		clean, ok := fs.validGitPath(p)
+		if !ok {
+			continue
+		}
+		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: ChangeAdded, Selectable: fs.isSelectable(rh, clean)})
+	}
+	return out
+}
+
+// validGitPath requires valid UTF-8 and passes the path through validateRelPath
+// (rejecting absolute/.. /NUL and hidden .git/.afm). It returns the cleaned
+// path, or ok=false to drop it.
+func (fs *fsImpl) validGitPath(p string) (string, bool) {
+	if !utf8.ValidString(p) {
+		return "", false
+	}
+	clean, err := validateRelPath(p)
+	if err != nil || clean == "." {
+		return "", false
+	}
+	return clean, true
+}
+
+// isSelectable reports whether clean is currently a regular file, decided by a
+// real secure open (openFileReadNonblock never blocks on a FIFO) + fstat — not
+// by trusting git's name. A symlink/dir/special/vanished path is not selectable.
+func (fs *fsImpl) isSelectable(rh *rootHandle, clean string) bool {
+	fd, err := rh.openat(clean, openFileReadNonblock)
+	if err != nil {
+		return false
+	}
+	f := os.NewFile(uintptr(fd), clean)
+	st, serr := f.Stat()
+	_ = f.Close()
+	return serr == nil && st.Mode().IsRegular()
 }
