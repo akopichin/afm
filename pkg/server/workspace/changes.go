@@ -2,9 +2,12 @@ package workspace
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
+	"strings"
 )
 
 // nameStatusRec is one record of `git diff --name-status -z` (rename/copy
@@ -198,4 +201,47 @@ func headExists(ctx context.Context, gitDir, workTree string) (bool, error) {
 		return false, nil // unborn repo
 	}
 	return false, ErrReadFailed
+}
+
+// aggregateChanges merges tracked and untracked entries into the final listing.
+// Tracked entries seed the map. An untracked path that collides with a tracked
+// "deleted" collapses to a single "modified" (the file was re-created after a
+// staged deletion) with Selectable from the current (untracked) entry; any
+// other collision keeps the tracked entry (tracked wins). The result is sorted
+// by full Path (case-insensitive, original Path as tie-break) and capped to
+// maxChangesEntries — hitting the cap sets truncated.
+//
+//nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
+func aggregateChanges(tracked, untracked []Change) (entries []Change, truncated bool) {
+	byPath := make(map[string]Change, len(tracked)+len(untracked))
+	for _, c := range tracked {
+		byPath[c.Path] = c
+	}
+	for _, u := range untracked {
+		existing, ok := byPath[u.Path]
+		switch {
+		case !ok:
+			byPath[u.Path] = u
+		case existing.Status == ChangeDeleted:
+			byPath[u.Path] = Change{Name: u.Name, Path: u.Path, Status: ChangeModified, Selectable: u.Selectable}
+		default:
+			// tracked wins — keep existing
+		}
+	}
+
+	entries = make([]Change, 0, len(byPath))
+	for _, c := range byPath {
+		entries = append(entries, c)
+	}
+	slices.SortFunc(entries, func(a, b Change) int {
+		if c := cmp.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Path, b.Path)
+	})
+	if len(entries) > maxChangesEntries {
+		entries = entries[:maxChangesEntries]
+		truncated = true
+	}
+	return entries, truncated
 }

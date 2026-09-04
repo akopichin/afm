@@ -158,6 +158,57 @@ func TestRunGitChanges_NonZeroExitIsError(t *testing.T) {
 	}
 }
 
+func TestAggregateChanges_SortAndDedup(t *testing.T) {
+	tracked := []Change{
+		{Name: "b.go", Path: "z/b.go", Status: ChangeModified, Selectable: true},
+		{Name: "a.go", Path: "a/a.go", Status: ChangeModified, Selectable: true},
+	}
+	got, truncated := aggregateChanges(tracked, nil)
+	if truncated {
+		t.Fatal("unexpected truncation")
+	}
+	// Full-path case-insensitive sort: a/a.go before z/b.go.
+	if got[0].Path != "a/a.go" || got[1].Path != "z/b.go" {
+		t.Fatalf("bad order: %+v", got)
+	}
+}
+
+func TestAggregateChanges_DeletedPlusUntrackedCollapsesToModified(t *testing.T) {
+	tracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeDeleted, Selectable: false}}
+	untracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeAdded, Selectable: true}}
+	got, _ := aggregateChanges(tracked, untracked)
+	if len(got) != 1 {
+		t.Fatalf("want 1 entry, got %+v", got)
+	}
+	if got[0].Status != ChangeModified || !got[0].Selectable {
+		t.Fatalf("want modified+selectable, got %+v", got[0])
+	}
+}
+
+func TestAggregateChanges_TrackedWinsOtherCollisions(t *testing.T) {
+	tracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeModified, Selectable: true}}
+	untracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeAdded, Selectable: true}}
+	got, _ := aggregateChanges(tracked, untracked)
+	if len(got) != 1 || got[0].Status != ChangeModified {
+		t.Fatalf("tracked should win, got %+v", got)
+	}
+}
+
+func TestAggregateChanges_EntryCapTruncates(t *testing.T) {
+	old := maxChangesEntries
+	maxChangesEntries = 2
+	defer func() { maxChangesEntries = old }()
+	tracked := []Change{
+		{Path: "a", Name: "a", Status: ChangeModified},
+		{Path: "b", Name: "b", Status: ChangeModified},
+		{Path: "c", Name: "c", Status: ChangeModified},
+	}
+	got, truncated := aggregateChanges(tracked, nil)
+	if !truncated || len(got) != 2 {
+		t.Fatalf("want 2 entries + truncated, got len=%d truncated=%v", len(got), truncated)
+	}
+}
+
 func TestHeadExists(t *testing.T) {
 	dir := t.TempDir()
 	gitInit(t, dir)
