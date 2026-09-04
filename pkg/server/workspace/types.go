@@ -42,6 +42,14 @@ type Page struct {
 	Truncated  bool    `json:"truncated,omitempty"`
 }
 
+// SearchResult is a flat, ranked list of files matching a search query inside
+// one root. It deliberately has no pagination cursor (search returns a bounded
+// top-N in one shot); Truncated is true when any scan/result limit was hit.
+type SearchResult struct {
+	Entries   []Entry `json:"entries"`
+	Truncated bool    `json:"truncated,omitempty"`
+}
+
 // File is the full content of a single file, along with metadata needed to
 // render and diff it.
 type File struct {
