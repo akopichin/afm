@@ -37,14 +37,20 @@ func mapStatus(s byte) (ChangeStatus, bool) {
 //nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func parseNameStatusZ(data []byte, truncated bool) ([]nameStatusRec, error) {
 	fields := splitZ(data)
-	recs := make([]nameStatusRec, 0, len(fields)/2)
-	for i := 0; i < len(fields); i += 2 {
-		if i+1 >= len(fields) {
-			if truncated {
-				break // partial tail from a byte-capped stream — drop it
-			}
+	// git -z terminates every field with NUL, so complete output ends in NUL
+	// (splitZ drops that trailing empty). A non-NUL final byte means the stream
+	// was cut mid-field: legal only when the byte-cap fired, and the partial
+	// final field must be discarded before pairing.
+	if len(data) > 0 && data[len(data)-1] != 0 {
+		if !truncated {
 			return nil, ErrReadFailed
 		}
+		if len(fields) > 0 {
+			fields = fields[:len(fields)-1]
+		}
+	}
+	recs := make([]nameStatusRec, 0, len(fields)/2)
+	for i := 0; i+1 < len(fields); i += 2 {
 		st := fields[i]
 		if len(st) != 1 {
 			return nil, ErrReadFailed
@@ -54,6 +60,11 @@ func parseNameStatusZ(data []byte, truncated bool) ([]nameStatusRec, error) {
 		}
 		recs = append(recs, nameStatusRec{status: st[0], path: string(fields[i+1])})
 	}
+	// An odd leftover field (a status with no following path) is malformed
+	// unless the byte-cap fired.
+	if len(fields)%2 != 0 && !truncated {
+		return nil, ErrReadFailed
+	}
 	return recs, nil
 }
 
@@ -62,6 +73,10 @@ func parseNameStatusZ(data []byte, truncated bool) ([]nameStatusRec, error) {
 //nolint:unused // wired into FS.Changes by Task 4; exercised directly by changes_test.go (linux-only) until then
 func parseUntrackedZ(data []byte) []string {
 	fields := splitZ(data)
+	// A final field not terminated by NUL is a byte-cap fragment — drop it.
+	if len(data) > 0 && data[len(data)-1] != 0 && len(fields) > 0 {
+		fields = fields[:len(fields)-1]
+	}
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		out = append(out, string(f))

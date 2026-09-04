@@ -73,3 +73,21 @@ func TestParseUntrackedZ(t *testing.T) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 }
+
+func TestParseNameStatusZ_TruncatedMidPathDropsRecord(t *testing.T) {
+	data := []byte("M\x00a.go\x00D\x00dir/b") // byte-cap cut mid second path
+	recs, err := parseNameStatusZ(data, true)
+	if err != nil || len(recs) != 1 || recs[0].path != "a.go" {
+		t.Fatalf("mid-path truncation should drop the partial record: got %+v err %v", recs, err)
+	}
+	if _, err := parseNameStatusZ(data, false); err == nil {
+		t.Fatal("non-terminated stream without truncated flag must error")
+	}
+}
+
+func TestParseUntrackedZ_TruncatedMidPathDropsFragment(t *testing.T) {
+	got := parseUntrackedZ([]byte("new.go\x00dir/frag")) // no trailing NUL
+	if len(got) != 1 || got[0] != "new.go" {
+		t.Fatalf("mid-path fragment should be dropped: got %v", got)
+	}
+}
