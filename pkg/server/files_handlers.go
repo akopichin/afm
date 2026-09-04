@@ -31,6 +31,8 @@ func (s *Server) routeFiles(w http.ResponseWriter, r *http.Request) {
 		s.filesContent(w, r)
 	case "diff":
 		s.filesDiff(w, r)
+	case "changed":
+		s.filesChanged(w, r)
 	case "search":
 		s.filesSearch(w, r)
 	default:
@@ -128,6 +130,20 @@ func (s *Server) filesDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(d)
+}
+
+func (s *Server) filesChanged(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	list, err := s.workspace.Changes(r.Context(), q.Get("root"), workspace.ChangeMode(q.Get("mode")))
+	if err != nil {
+		status, code := filesErrStatus(err)
+		writeFilesError(w, status, code)
+		return
+	}
+	// Dynamic listing: Refresh must never get a browser-cached body.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(list)
 }
 
 func (s *Server) filesSearch(w http.ResponseWriter, r *http.Request) {
