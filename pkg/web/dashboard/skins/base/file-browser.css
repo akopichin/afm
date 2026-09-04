@@ -478,3 +478,32 @@
 .file-search-clear {
   margin-left: 6px;
 }
+
+/* Changed-files list: status badge (letter always visible — color is not the
+   only signal) + disabled/deleted row styling. Reuses .file-search-row/.file-tree-hint. */
+.change-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 0.4rem;
+  color: var(--bg-elev);
+}
+.change-badge-modified { background: var(--amber); }
+.change-badge-added { background: var(--mint); }
+.change-badge-deleted { background: var(--coral); }
+
+.file-change-row-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.file-change-reason {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
