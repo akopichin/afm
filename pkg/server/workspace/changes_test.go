@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -296,5 +297,46 @@ func TestChanges_Errors(t *testing.T) {
 	}
 	if _, err := fs.Changes(context.Background(), "nope", ChangeModeIndex); !errors.Is(err, ErrInvalidRootOrPath) {
 		t.Errorf("bad root want ErrInvalidRootOrPath, got %v", err)
+	}
+}
+
+func TestChanges_UnbornRepoExcludesCachedDeleted(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir) // no commit → unborn HEAD
+	writeFile(t, dir, "staged-then-gone.go", "package a\n")
+	// stage it, then remove it from the worktree before any commit
+	for _, args := range [][]string{{"add", "staged-then-gone.go"}} {
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, "staged-then-gone.go")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "present.go", "package a\n") // untracked, exists
+
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+
+	got, err := fs.Changes(context.Background(), "r", ChangeModeHead)
+	if err != nil {
+		t.Fatalf("unborn head: %v", err)
+	}
+	for _, c := range got.Entries {
+		if c.Path == "staged-then-gone.go" {
+			t.Fatalf("cached-but-deleted path must be excluded, got %+v", c)
+		}
+	}
+	// the still-present untracked file must survive as added
+	var found bool
+	for _, c := range got.Entries {
+		if c.Path == "present.go" && c.Status == ChangeAdded && c.Selectable {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("present untracked file should be added+selectable, got %+v", got.Entries)
 	}
 }

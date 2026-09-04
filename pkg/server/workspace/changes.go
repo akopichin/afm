@@ -252,6 +252,7 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 	)
 	untrackedArgs := []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}
 
+	unbornHead := false
 	useDiff := mode == ChangeModeIndex
 	if mode == ChangeModeHead {
 		has, herr := headExists(ctx, gitDir, workTree)
@@ -261,8 +262,13 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 		useDiff = has
 		if !has {
 			// Unborn repo: no HEAD to diff against. Everything currently on
-			// disk (cached + untracked) is "added" vs the empty baseline;
-			// cached paths already deleted from the worktree are simply absent.
+			// disk (cached + untracked) is "added" vs the empty baseline.
+			// `ls-files --cached` lists staged paths REGARDLESS of whether
+			// they still exist on disk — a path that was `git add`-ed and
+			// then deleted before any commit is not a difference from the
+			// empty baseline, so pathsToChanges below drops it via its
+			// dropMissing existence check (unbornHead=true).
+			unbornHead = true
 			untrackedArgs = []string{"ls-files", "--cached", "--others", "--exclude-standard", "-z", "--"}
 		}
 	}
@@ -290,7 +296,7 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 		return ChangeList{}, uerr
 	}
 	byteTrun = byteTrun || utrun
-	untracked := fs.pathsToChanges(rh, parseUntrackedZ(uout))
+	untracked := fs.pathsToChanges(rh, parseUntrackedZ(uout), unbornHead)
 
 	entries, capTrun := aggregateChanges(tracked, untracked)
 	return ChangeList{Entries: entries, Truncated: byteTrun || capTrun}, nil
@@ -317,12 +323,19 @@ func (fs *fsImpl) recsToChanges(rh *rootHandle, recs []nameStatusRec) []Change {
 }
 
 // pathsToChanges builds "added" Changes for untracked paths, dropping any path
-// that fails validation.
-func (fs *fsImpl) pathsToChanges(rh *rootHandle, paths []string) []Change {
+// that fails validation. dropMissing additionally drops a path that no longer
+// exists on disk at all — needed only for the unborn-repo head listing, whose
+// source (`ls-files --cached --others`) includes staged-but-since-deleted
+// paths that `ls-files --others` alone (the normal untracked source) never
+// would; passing false preserves the previous behavior for that normal case.
+func (fs *fsImpl) pathsToChanges(rh *rootHandle, paths []string, dropMissing bool) []Change {
 	out := make([]Change, 0, len(paths))
 	for _, p := range paths {
 		clean, ok := fs.validGitPath(p)
 		if !ok {
+			continue
+		}
+		if dropMissing && !fs.existsInWorktree(rh, clean) {
 			continue
 		}
 		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: ChangeAdded, Selectable: fs.isSelectable(rh, clean)})
@@ -356,4 +369,20 @@ func (fs *fsImpl) isSelectable(rh *rootHandle, clean string) bool {
 	st, serr := f.Stat()
 	_ = f.Close()
 	return serr == nil && st.Mode().IsRegular()
+}
+
+// existsInWorktree reports whether clean currently exists on disk at all —
+// unlike isSelectable, it does not care about the file's type. It is used
+// only to drop a `git ls-files --cached` path that was staged and then
+// deleted before any commit (see pathsToChanges' dropMissing). A failure
+// other than ErrNotFound (e.g. ErrSymlink, refused by RESOLVE_NO_SYMLINKS)
+// still means the path exists — isSelectable, computed separately, is what
+// decides whether it's viewable, not this check.
+func (fs *fsImpl) existsInWorktree(rh *rootHandle, clean string) bool {
+	fd, err := rh.openat(clean, openFileReadNonblock)
+	if err == nil {
+		_ = os.NewFile(uintptr(fd), clean).Close()
+		return true
+	}
+	return !errors.Is(err, ErrNotFound)
 }
