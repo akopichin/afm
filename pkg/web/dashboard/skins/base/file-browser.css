@@ -479,6 +479,18 @@
   margin-left: 6px;
 }
 
+/* The scrollable content region of the left column, shared by the changed-files
+   list AND the search results (both render .file-search-results in place of the
+   tree). Without this it has no height/overflow of its own, so a long list (the
+   changed view can return up to maxChangesEntries rows) spills past the fixed
+   modal instead of scrolling within it — the tree (.file-tree) already scrolls
+   this way. */
+.file-search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 /* Changed-files list: status badge (letter always visible — color is not the
    only signal) + disabled/deleted row styling. Reuses .file-search-row/.file-tree-hint. */
 .change-badge {
@@ -501,11 +513,39 @@
 .file-change-row-disabled {
   opacity: 0.55;
   cursor: default;
+  overflow: hidden;
+}
+/* The name shrinks (with ellipsis via .file-tree-name) so the row never widens
+   the 260px column; without min-width:0 a flex item refuses to shrink below its
+   content and pushes the reason text into the right pane. */
+.file-change-row-disabled .file-search-name {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .file-change-reason {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.72rem;
   color: var(--ink-dim);
+}
+
+/* Visually hidden but exposed to assistive tech (screen-reader-only). Used to
+   voice the change status word that the decorative, aria-hidden badge letter
+   cannot. */
+.file-browser-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Toolbar: view switch (All/Unstaged/vs HEAD) + Refresh, first child of

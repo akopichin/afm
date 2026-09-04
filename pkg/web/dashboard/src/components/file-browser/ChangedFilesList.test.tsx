@@ -33,6 +33,16 @@ describe('ChangedFilesList', () => {
     expect(screen.getByText(/Deleted or unavailable/i)).toBeInTheDocument()
   })
 
+  it('exposes the change status to assistive tech, not only via badge color', () => {
+    render(<ChangedFilesList result={list} loading={false} error={null} onOpenFile={vi.fn()} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />)
+    // The selectable row's button accessible name carries the status word
+    // (the visible badge letter is aria-hidden, so color/letter alone would
+    // leave a screen-reader user unable to tell added from modified/deleted).
+    expect(screen.getByRole('button', { name: /Modified: a\.go/ })).toBeInTheDocument()
+    // The deleted (non-button) row voices its status too.
+    expect(screen.getByText(/Deleted:/)).toBeInTheDocument()
+  })
+
   it('shows loading, empty, error and truncation states', () => {
     const { rerender } = render(<ChangedFilesList result={null} loading error={null} onOpenFile={vi.fn()} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />)
     expect(screen.getByText('Loading changes…')).toBeInTheDocument()

@@ -142,8 +142,28 @@ func gitCmd(ctx context.Context, gitDir, workTree string, args ...string) *exec.
 		"--work-tree=" + workTree,
 	}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	// Drop every ambient GIT_* variable before adding our own: the explicit
+	// --git-dir/--work-tree flags do NOT override env selectors like
+	// GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES,
+	// GIT_COMMON_DIR, or GIT_CONFIG*, so a stray one in the process environment
+	// would let git read an index/object store/config outside the verified root
+	// (e.g. GIT_INDEX_FILE pointing at another repo surfaces phantom paths).
+	cmd.Env = append(sanitizeGitEnv(cmd.Environ()), "GIT_OPTIONAL_LOCKS=0")
 	return cmd
+}
+
+// sanitizeGitEnv returns env with every GIT_* variable removed, so the only
+// git configuration the child process sees comes from the explicit --git-dir/
+// --work-tree flags and the -c overrides passed on the command line.
+func sanitizeGitEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // runGitChanges runs a git command that MUST succeed (exit 0). Any non-zero
@@ -163,33 +183,75 @@ func runGitChanges(ctx context.Context, gitDir, workTree string, args ...string)
 	return out.buf.Bytes(), out.overflow, nil
 }
 
-// headExists reports whether the repo has a HEAD commit. exit 0 → yes; exit 1 →
-// unborn (no commits yet, not an error); anything else → ErrReadFailed.
-func headExists(ctx context.Context, gitDir, workTree string) (bool, error) {
+// gitProbe runs a git command whose non-zero exit is a meaningful, benign
+// signal rather than a failure. It returns exitZero=true (and stdout) when git
+// exits 0; exitZero=false,err=nil for a clean non-zero exit; and err!=nil only
+// for a genuine infra failure (timeout, exec could not start git).
+func gitProbe(ctx context.Context, gitDir, workTree string, args ...string) (exitZero bool, stdout []byte, err error) {
 	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
-	cmd := gitCmd(cctx, gitDir, workTree, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
-	err := cmd.Run()
-	if err == nil {
-		return true, nil
+	out, rerr := gitCmd(cctx, gitDir, workTree, args...).Output()
+	if rerr == nil {
+		return true, out, nil
 	}
 	if cctx.Err() != nil {
-		return false, ErrReadFailed
+		return false, nil, ErrReadFailed
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return false, nil // unborn repo
+	if errors.As(rerr, &exitErr) {
+		return false, nil, nil // clean non-zero exit → benign signal
 	}
-	return false, ErrReadFailed
+	return false, nil, ErrReadFailed // could not start git
+}
+
+// headState reports whether the repo has a resolvable HEAD commit.
+//   - (true, nil)   HEAD peels to a commit.
+//   - (false, nil)  genuinely unborn: HEAD is a symbolic ref to a branch that
+//     does not exist yet (git init with no commits).
+//   - (false, err)  HEAD exists but cannot be resolved to a commit (corrupt or
+//     missing object, detached HEAD that won't peel) or any infra failure —
+//     the caller MUST treat this as a read error, never as unborn, so a damaged
+//     repo isn't silently reported as "everything added vs an empty baseline".
+func headState(ctx context.Context, gitDir, workTree string) (bool, error) {
+	ok, _, err := gitProbe(ctx, gitDir, workTree, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return true, nil
+	}
+	// The peel failed cleanly: unborn or corrupt. A genuinely unborn repo has
+	// HEAD as a symbolic ref pointing at a branch that does not exist yet.
+	symOK, refBytes, err := gitProbe(ctx, gitDir, workTree, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		return false, err
+	}
+	ref := strings.TrimSpace(string(refBytes))
+	if !symOK || ref == "" {
+		return false, ErrReadFailed // detached / unreadable HEAD that won't peel → corrupt
+	}
+	// Does the target branch hold a stored object id? for-each-ref prints it
+	// WITHOUT loading the object (unlike rev-parse HEAD^{commit} or show-ref
+	// --verify, both of which fail on a missing object): a non-empty oid means
+	// the ref exists but HEAD couldn't peel → corrupt object; an empty result
+	// means the branch has no commit yet → genuinely unborn.
+	_, oidBytes, err := gitProbe(ctx, gitDir, workTree, "for-each-ref", "--format=%(objectname)", ref)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(string(oidBytes)) != "" {
+		return false, ErrReadFailed // branch ref has an oid but HEAD won't peel → corrupt object
+	}
+	return false, nil // symbolic HEAD → branch with no commit → genuinely unborn
 }
 
 // aggregateChanges merges tracked and untracked entries into the final listing.
 // Tracked entries seed the map. An untracked path that collides with a tracked
 // "deleted" collapses to a single "modified" (the file was re-created after a
-// staged deletion) with Selectable from the current (untracked) entry; any
-// other collision keeps the tracked entry (tracked wins). The result is sorted
-// by full Path (case-insensitive, original Path as tie-break) and capped to
-// maxChangesEntries — hitting the cap sets truncated.
+// staged deletion); any other collision keeps the tracked entry (tracked wins).
+// The result is sorted by full Path (case-insensitive, original Path as
+// tie-break) and capped to maxChangesEntries — hitting the cap sets truncated.
+// Selectable is not set here; the caller resolves it on the capped survivors.
 func aggregateChanges(tracked, untracked []Change) (entries []Change, truncated bool) {
 	byPath := make(map[string]Change, len(tracked)+len(untracked))
 	for _, c := range tracked {
@@ -201,7 +263,9 @@ func aggregateChanges(tracked, untracked []Change) (entries []Change, truncated 
 		case !ok:
 			byPath[u.Path] = u
 		case existing.Status == ChangeDeleted:
-			byPath[u.Path] = Change{Name: u.Name, Path: u.Path, Status: ChangeModified, Selectable: u.Selectable}
+			// A path deleted from the index but re-created untracked is a
+			// modification, not a deletion. Selectable is resolved later.
+			byPath[u.Path] = Change{Name: u.Name, Path: u.Path, Status: ChangeModified}
 		default:
 			// tracked wins — keep existing
 		}
@@ -255,7 +319,7 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 	unbornHead := false
 	useDiff := mode == ChangeModeIndex
 	if mode == ChangeModeHead {
-		has, herr := headExists(ctx, gitDir, workTree)
+		has, herr := headState(ctx, gitDir, workTree)
 		if herr != nil {
 			return ChangeList{}, herr
 		}
@@ -288,7 +352,10 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 		if perr != nil {
 			return ChangeList{}, perr
 		}
-		tracked = fs.recsToChanges(rh, recs)
+		tracked, err = fs.recsToChanges(ctx, recs)
+		if err != nil {
+			return ChangeList{}, err
+		}
 	}
 
 	uout, utrun, uerr := runGitChanges(ctx, gitDir, workTree, untrackedArgs...)
@@ -296,18 +363,33 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 		return ChangeList{}, uerr
 	}
 	byteTrun = byteTrun || utrun
-	untracked := fs.pathsToChanges(rh, parseUntrackedZ(uout), unbornHead)
+	untracked, err := fs.pathsToChanges(ctx, rh, parseUntrackedZ(uout), unbornHead)
+	if err != nil {
+		return ChangeList{}, err
+	}
 
+	// Aggregation/sort/cap run on plain values (no syscalls); only then is the
+	// per-file Selectable resolved, and only for the survivors — so the number
+	// of secure openat+fstat calls is bounded by maxChangesEntries, not by the
+	// (possibly far larger) number of raw changed paths git reported.
 	entries, capTrun := aggregateChanges(tracked, untracked)
+	if err := fs.resolveSelectable(ctx, rh, entries); err != nil {
+		return ChangeList{}, err
+	}
 	return ChangeList{Entries: entries, Truncated: byteTrun || capTrun}, nil
 }
 
-// recsToChanges validates each diff record's path and builds a Change with a
-// disk-verified Selectable. A deleted path is not opened (it is gone); any path
-// that fails validation is dropped (git output is untrusted).
-func (fs *fsImpl) recsToChanges(rh *rootHandle, recs []nameStatusRec) []Change {
+// recsToChanges validates each diff record's path (git output is untrusted) and
+// builds a Change WITHOUT resolving Selectable — that is deferred to
+// resolveSelectable, which runs after the cap so the syscall count stays
+// bounded. A record with an unmapped status or a path that fails validation is
+// dropped. ctx is checked each iteration so a cancelled request stops promptly.
+func (fs *fsImpl) recsToChanges(ctx context.Context, recs []nameStatusRec) ([]Change, error) {
 	out := make([]Change, 0, len(recs))
 	for _, r := range recs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		status, ok := mapStatus(r.status)
 		if !ok {
 			continue
@@ -316,21 +398,26 @@ func (fs *fsImpl) recsToChanges(rh *rootHandle, recs []nameStatusRec) []Change {
 		if !ok {
 			continue
 		}
-		selectable := status != ChangeDeleted && fs.isSelectable(rh, clean)
-		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: status, Selectable: selectable})
+		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: status})
 	}
-	return out
+	return out, nil
 }
 
 // pathsToChanges builds "added" Changes for untracked paths, dropping any path
-// that fails validation. dropMissing additionally drops a path that no longer
-// exists on disk at all — needed only for the unborn-repo head listing, whose
-// source (`ls-files --cached --others`) includes staged-but-since-deleted
-// paths that `ls-files --others` alone (the normal untracked source) never
-// would; passing false preserves the previous behavior for that normal case.
-func (fs *fsImpl) pathsToChanges(rh *rootHandle, paths []string, dropMissing bool) []Change {
+// that fails validation. Selectable is resolved later (resolveSelectable), not
+// here. dropMissing additionally drops a path that no longer exists on disk at
+// all — needed only for the unborn-repo head listing, whose source
+// (`ls-files --cached --others`) includes staged-but-since-deleted paths that
+// `ls-files --others` alone (the normal untracked source) never would; passing
+// false preserves the previous behavior for that normal case. The existence
+// probe must run here (pre-cap) so a missing path never occupies a cap slot.
+// ctx is checked each iteration.
+func (fs *fsImpl) pathsToChanges(ctx context.Context, rh *rootHandle, paths []string, dropMissing bool) ([]Change, error) {
 	out := make([]Change, 0, len(paths))
 	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		clean, ok := fs.validGitPath(p)
 		if !ok {
 			continue
@@ -338,9 +425,27 @@ func (fs *fsImpl) pathsToChanges(rh *rootHandle, paths []string, dropMissing boo
 		if dropMissing && !fs.existsInWorktree(rh, clean) {
 			continue
 		}
-		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: ChangeAdded, Selectable: fs.isSelectable(rh, clean)})
+		out = append(out, Change{Name: path.Base(clean), Path: clean, Status: ChangeAdded})
 	}
-	return out
+	return out, nil
+}
+
+// resolveSelectable fills Selectable for the final, already-capped entries with
+// one secure openat+fstat per non-deleted path. A deleted path is never on disk,
+// so it stays non-selectable without a syscall. Running after aggregateChanges'
+// cap bounds the syscall count to maxChangesEntries regardless of how many raw
+// paths git reported. ctx is checked each iteration.
+func (fs *fsImpl) resolveSelectable(ctx context.Context, rh *rootHandle, entries []Change) error {
+	for i := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entries[i].Status == ChangeDeleted {
+			continue
+		}
+		entries[i].Selectable = fs.isSelectable(rh, entries[i].Path)
+	}
+	return nil
 }
 
 // validGitPath requires valid UTF-8 and passes the path through validateRelPath

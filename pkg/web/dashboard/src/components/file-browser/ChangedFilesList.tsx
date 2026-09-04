@@ -13,6 +13,10 @@ type ChangedFilesListProps = {
 }
 
 const BADGE: Record<ChangeStatus, string> = { modified: 'M', added: 'A', deleted: 'D' }
+// Full status word for screen readers — the visible badge letter is aria-hidden
+// (color is decorative), so the status must reach the accessible name some other
+// way, or an added file is indistinguishable from a modified/deleted one.
+const STATUS_LABEL: Record<ChangeStatus, string> = { modified: 'Modified', added: 'Added', deleted: 'Deleted' }
 
 // dirPrefix возвращает каталог файла с завершающим слэшем ("pkg/server/") или
 // пустую строку для файла в корне — приглушённый префикс перед именем.
@@ -45,9 +49,15 @@ export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, is
           {result.entries.map((entry: ChangeEntry) => {
             const prefix = dirPrefix(entry.path)
             const badge = (
-              <span className={`change-badge change-badge-${entry.status}`} aria-hidden="true">
-                {BADGE[entry.status]}
-              </span>
+              <>
+                <span className={`change-badge change-badge-${entry.status}`} aria-hidden="true">
+                  {BADGE[entry.status]}
+                </span>
+                {/* Screen-reader-only status word: the visible letter above is
+                    aria-hidden, so without this an added row sounds identical to
+                    a modified/deleted one. */}
+                <span className="file-browser-sr-only">{STATUS_LABEL[entry.status]}: </span>
+              </>
             )
             if (!entry.selectable) {
               return (

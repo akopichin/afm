@@ -11,8 +11,28 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
+
+// gitOut runs a git command in dir and returns its trimmed stdout, failing the
+// test on error.
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	c := exec.Command("git", args...)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s", args, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitRun runs a git command in dir, failing the test on error.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	_ = gitOut(t, dir, args...)
+}
 
 func TestMapStatus(t *testing.T) {
 	cases := map[byte]struct {
@@ -176,14 +196,17 @@ func TestAggregateChanges_SortAndDedup(t *testing.T) {
 }
 
 func TestAggregateChanges_DeletedPlusUntrackedCollapsesToModified(t *testing.T) {
-	tracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeDeleted, Selectable: false}}
-	untracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeAdded, Selectable: true}}
+	tracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeDeleted}}
+	untracked := []Change{{Name: "x.go", Path: "x.go", Status: ChangeAdded}}
 	got, _ := aggregateChanges(tracked, untracked)
 	if len(got) != 1 {
 		t.Fatalf("want 1 entry, got %+v", got)
 	}
-	if got[0].Status != ChangeModified || !got[0].Selectable {
-		t.Fatalf("want modified+selectable, got %+v", got[0])
+	// aggregateChanges collapses the pair to a single "modified"; Selectable is
+	// no longer resolved here (resolveSelectable does that on the capped
+	// survivors — verified end-to-end in TestChanges_* against a real repo).
+	if got[0].Status != ChangeModified {
+		t.Fatalf("want modified, got %+v", got[0])
 	}
 }
 
@@ -211,17 +234,122 @@ func TestAggregateChanges_EntryCapTruncates(t *testing.T) {
 	}
 }
 
-func TestHeadExists(t *testing.T) {
+func TestHeadState(t *testing.T) {
 	dir := t.TempDir()
 	gitInit(t, dir)
 	gitDir := filepath.Join(dir, ".git")
-	if ok, err := headExists(context.Background(), gitDir, dir); err != nil || ok {
+	if ok, err := headState(context.Background(), gitDir, dir); err != nil || ok {
 		t.Fatalf("unborn repo: ok=%v err=%v, want false,nil", ok, err)
 	}
 	writeFile(t, dir, "a.go", "package a\n")
 	gitCommitAll(t, dir, "init")
-	if ok, err := headExists(context.Background(), gitDir, dir); err != nil || !ok {
+	if ok, err := headState(context.Background(), gitDir, dir); err != nil || !ok {
 		t.Fatalf("after commit: ok=%v err=%v, want true,nil", ok, err)
+	}
+}
+
+// TestHeadState_CorruptHeadIsError proves the unborn/corrupt distinction: a HEAD
+// whose commit object is missing must be a read error, NOT silently treated as
+// unborn (which would mislabel a damaged repo's whole tree as "added").
+func TestHeadState_CorruptHeadIsError(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeFile(t, dir, "a.go", "package a\n")
+	gitCommitAll(t, dir, "init")
+	gitDir := filepath.Join(dir, ".git")
+
+	// Delete the loose commit object HEAD points at — the branch ref still
+	// resolves, but the object can no longer be peeled to a commit.
+	sha := gitOut(t, dir, "rev-parse", "HEAD")
+	obj := filepath.Join(gitDir, "objects", sha[:2], sha[2:])
+	if err := os.Remove(obj); err != nil {
+		t.Skipf("commit object not loose (packed?), can't corrupt: %v", err)
+	}
+
+	ok, err := headState(context.Background(), gitDir, dir)
+	if ok || !errors.Is(err, ErrReadFailed) {
+		t.Fatalf("corrupt HEAD: ok=%v err=%v, want false,ErrReadFailed", ok, err)
+	}
+
+	// And Changes(head) on a corrupt repo must surface the read error, not the
+	// unborn "everything added" listing.
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+	if _, cerr := fs.Changes(context.Background(), "r", ChangeModeHead); !errors.Is(cerr, ErrReadFailed) {
+		t.Fatalf("Changes(head) on corrupt repo: err=%v, want ErrReadFailed", cerr)
+	}
+}
+
+// TestChanges_StagedDiffersBetweenModes locks in the one semantic difference
+// between the two modes: a fully-staged edit (worktree == index) is absent from
+// Unstaged (worktree-vs-index) but present in vs HEAD (worktree-vs-HEAD). The
+// existing matrix test only exercises unstaged edits, where the modes agree.
+func TestChanges_StagedDiffersBetweenModes(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeFile(t, dir, "s.go", "package a\n")
+	gitCommitAll(t, dir, "init")
+
+	writeFile(t, dir, "s.go", "package a\n// staged edit\n")
+	gitRun(t, dir, "add", "s.go") // now worktree == index, but differs from HEAD
+
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+
+	idx, err := fs.Changes(context.Background(), "r", ChangeModeIndex)
+	if err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	for _, c := range idx.Entries {
+		if c.Path == "s.go" {
+			t.Errorf("Unstaged must not list a fully-staged file, got %+v", c)
+		}
+	}
+
+	head, err := fs.Changes(context.Background(), "r", ChangeModeHead)
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	var found bool
+	for _, c := range head.Entries {
+		if c.Path == "s.go" {
+			found = c.Status == ChangeModified
+		}
+	}
+	if !found {
+		t.Errorf("vs HEAD must list the staged edit as modified, got %+v", head.Entries)
+	}
+}
+
+// TestChanges_IgnoresAmbientGitEnv proves the env-sanitization hardening: an
+// ambient GIT_INDEX_FILE pointing at a different repo's index must not leak
+// phantom paths into this root's listing.
+func TestChanges_IgnoresAmbientGitEnv(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+	writeFile(t, dir, "real.go", "package a\n")
+	gitCommitAll(t, dir, "init")
+	writeFile(t, dir, "real.go", "package a\n// edit\n") // a genuine local change
+
+	// A separate repo whose index records a file that does NOT exist in dir.
+	other := t.TempDir()
+	gitInit(t, other)
+	writeFile(t, other, "phantom.go", "package b\n")
+	gitRun(t, other, "add", "phantom.go")
+
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+
+	fs := newFS(t, Root{ID: "r", Label: "root", Path: dir})
+	defer fs.Close()
+
+	got, err := fs.Changes(context.Background(), "r", ChangeModeIndex)
+	if err != nil {
+		t.Fatalf("changes: %v", err)
+	}
+	for _, c := range got.Entries {
+		if c.Path == "phantom.go" {
+			t.Fatalf("ambient GIT_INDEX_FILE leaked a foreign path: %+v", c)
+		}
 	}
 }
 
