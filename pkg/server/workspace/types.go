@@ -79,3 +79,31 @@ type Diff struct {
 	Truncated bool   `json:"truncated"`
 	Diff      string `json:"diff"`
 }
+
+// ChangeStatus is the git-derived state of a file in a changed-files listing.
+// Deliberately a separate vocabulary from Diff.Status (which also has "clean"
+// and describes a different object at a different moment).
+type ChangeStatus string
+
+const (
+	ChangeModified ChangeStatus = "modified"
+	ChangeAdded    ChangeStatus = "added"
+	ChangeDeleted  ChangeStatus = "deleted"
+)
+
+// Change is one file in a changed-files listing. Selectable is true only for a
+// path that is currently a regular file (a deleted/vanished/symlink/dir/special
+// path is listed but not openable).
+type Change struct {
+	Name       string       `json:"name"`
+	Path       string       `json:"path"` // root-relative, slash-separated
+	Status     ChangeStatus `json:"status"`
+	Selectable bool         `json:"selectable"`
+}
+
+// ChangeList is the flat result of FS.Changes. Truncated is true when any
+// entry- or byte-cap was hit; it is never an error.
+type ChangeList struct {
+	Entries   []Change `json:"entries"`
+	Truncated bool     `json:"truncated,omitempty"`
+}
