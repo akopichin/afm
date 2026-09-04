@@ -33,12 +33,17 @@ describe('FileSearchResults', () => {
     )
     expect(screen.getByText('workspace.go')).toBeTruthy()
     expect(screen.getByText('pkg/server/')).toBeTruthy() // muted parent dir
-    expect(screen.getByText(/Showing first 200/i)).toBeTruthy()
+    expect(screen.getByText(/Some matches may be hidden/i)).toBeTruthy()
 
-    fireEvent.click(screen.getByText('workspace.go'))
+    // The openable part is a real <button> — keyboard-focusable, activatable
+    // with Enter/Space (unlike the previous non-interactive div).
+    const openBtn = screen.getByRole('button', { name: /workspace\.go/i })
+    fireEvent.click(openBtn)
     expect(onOpenFile).toHaveBeenCalledWith(entry)
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select workspace.go/i }))
+    // The checkbox aria-label carries the FULL path, not just the basename, so
+    // identical basenames from different directories are distinguishable.
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select pkg\/server\/workspace\.go/i }))
     expect(onToggleSelect).toHaveBeenCalledWith(entry)
   })
 

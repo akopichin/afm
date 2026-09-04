@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +37,7 @@ func mkTempDirWithFiles(t *testing.T, n int) *os.File {
 func TestReadDirBounded(t *testing.T) {
 	t.Run("under cap reads everything, not truncated", func(t *testing.T) {
 		f := mkTempDirWithFiles(t, 3)
-		entries, truncated, err := readDirBounded(f, 10)
+		entries, truncated, err := readDirBounded(context.Background(), f, 10)
 		if err != nil {
 			t.Fatalf("readDirBounded: %v", err)
 		}
@@ -49,7 +51,7 @@ func TestReadDirBounded(t *testing.T) {
 
 	t.Run("over cap stops early and signals truncation", func(t *testing.T) {
 		f := mkTempDirWithFiles(t, 10)
-		entries, truncated, err := readDirBounded(f, 5)
+		entries, truncated, err := readDirBounded(context.Background(), f, 5)
 		if err != nil {
 			t.Fatalf("readDirBounded: %v", err)
 		}
@@ -63,7 +65,7 @@ func TestReadDirBounded(t *testing.T) {
 
 	t.Run("exact boundary is not falsely truncated", func(t *testing.T) {
 		f := mkTempDirWithFiles(t, 5)
-		entries, truncated, err := readDirBounded(f, 5)
+		entries, truncated, err := readDirBounded(context.Background(), f, 5)
 		if err != nil {
 			t.Fatalf("readDirBounded: %v", err)
 		}
@@ -75,11 +77,24 @@ func TestReadDirBounded(t *testing.T) {
 		}
 	})
 
+	t.Run("cancelled context stops before reading", func(t *testing.T) {
+		// A context cancelled before the first batch must abort with the ctx
+		// error rather than draining the directory — this is what lets a
+		// superseded search stop promptly on a huge root.
+		f := mkTempDirWithFiles(t, 10)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _, err := readDirBounded(ctx, f, 5)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+	})
+
 	t.Run("cap smaller than a single batch still works", func(t *testing.T) {
 		// dirReadBatch is 4096; this exercises the remaining-vs-batch clamp
 		// in readDirBounded's loop with a cap far below one batch.
 		f := mkTempDirWithFiles(t, 3)
-		entries, truncated, err := readDirBounded(f, 2)
+		entries, truncated, err := readDirBounded(context.Background(), f, 2)
 		if err != nil {
 			t.Fatalf("readDirBounded: %v", err)
 		}

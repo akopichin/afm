@@ -63,15 +63,16 @@ func sortScored(rs []scoredEntry) {
 // Search bounds and the search-only heavy-dir skip set. These dirs are skipped
 // ONLY by search (to keep the scan budget on files the user is likely after) —
 // List/tree still lets you browse into them by hand.
-const (
-	maxSearchQueryBytes = 256
-	maxSearchResults    = 200
-)
+const maxSearchQueryBytes = 256
 
 // maxSearchScan bounds how many directory entries one Search walks before
-// giving up (Truncated=true). A var so tests can shrink it instead of building
-// a 100000-entry tree.
-var maxSearchScan = 100_000
+// giving up (Truncated=true); maxSearchResults caps the ranked window returned.
+// Both are vars so tests can shrink them instead of building 100000-entry or
+// 200-match trees.
+var (
+	maxSearchScan    = 100_000
+	maxSearchResults = 200
+)
 
 var searchSkipDirs = map[string]bool{
 	"node_modules": true,
@@ -87,8 +88,13 @@ var searchSkipDirs = map[string]bool{
 // relative path. It reuses the secure openat2 path (rootHandle.openat) so
 // containment/symlink policy stays the kernel's job. Only regular selectable
 // files are returned; `.git`/`.afm` and the heavy-dir skip set are pruned.
-// The scan is bounded by maxSearchScan entries and maxSearchResults hits; any
-// limit sets Truncated. Ranking is rankMatch/sortScored (see search.go).
+//
+// ALL matches within the scan budget are collected first, then ranked, then
+// cut to the top maxSearchResults — so the returned list is the globally
+// best-ranked window, never just the first N encountered in filesystem order.
+// The scan itself is bounded by maxSearchScan entries; hitting that budget, or
+// having more matches than maxSearchResults, sets Truncated. Ranking is
+// rankMatch/sortScored (see above).
 func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return SearchResult{}, err
@@ -108,7 +114,7 @@ func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResul
 		truncated bool
 	)
 	queue := []string{"."}
-	for len(queue) > 0 && !truncated {
+	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
 			return SearchResult{}, err
 		}
@@ -123,18 +129,30 @@ func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResul
 		}
 		f := os.NewFile(uintptr(fd), dirRel)
 		remaining := maxSearchScan - scanned
-		dirents, _, rerr := readDirBounded(f, remaining)
+		// readDirBounded reads at most `remaining` entries and checks ctx
+		// between batches; dirTruncated means this directory had MORE entries
+		// than the remaining budget allowed (i.e. the global budget ran out
+		// inside it).
+		dirents, dirTruncated, rerr := readDirBounded(ctx, f, remaining)
 		_ = f.Close()
 		if rerr != nil {
+			// A cancelled context aborts the whole search; any other read error
+			// just skips this one directory.
+			if ctx.Err() != nil {
+				return SearchResult{}, ctx.Err()
+			}
 			continue
 		}
 
-		for _, d := range dirents {
-			scanned++
-			if scanned >= maxSearchScan {
-				truncated = true
-				break
+		for i, d := range dirents {
+			// Honor cancellation periodically while processing a large batch —
+			// the frontend aborts on every keystroke and root switch.
+			if i%1024 == 0 {
+				if err := ctx.Err(); err != nil {
+					return SearchResult{}, err
+				}
 			}
+			scanned++
 			name := d.Name()
 			if name == hiddenGitDir || name == hiddenAfmDir {
 				continue
@@ -145,23 +163,41 @@ func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResul
 				}
 				continue
 			}
+			// Rank on name/path BEFORE buildEntry, so buildEntry's per-file
+			// stat (DirEntry.Info for size) runs only for actual matches, not
+			// for every scanned file.
+			relPath := path.Join(dirRel, name)
+			score, ok := rankMatch(needle, name, relPath)
+			if !ok {
+				continue
+			}
 			e := buildEntry(dirRel, d, name)
 			if !e.Selectable { // symlink / FIFO / socket / device
 				continue
 			}
-			score, ok := rankMatch(needle, name, e.Path)
-			if !ok {
-				continue
-			}
 			results = append(results, scoredEntry{entry: e, score: score})
-			if len(results) >= maxSearchResults {
-				truncated = true
-				break
-			}
+		}
+
+		// The budget is checked AFTER fully processing the directory (whose
+		// entries readDirBounded already capped at the remaining budget), so an
+		// entry landing exactly on the boundary is still ranked — no off-by-one.
+		// A directory that fit exactly within the budget (dirTruncated=false)
+		// is only "truncated" if there are still more directories to visit.
+		if dirTruncated {
+			truncated = true
+			break
+		}
+		if scanned >= maxSearchScan {
+			truncated = len(queue) > 0
+			break
 		}
 	}
 
 	sortScored(results)
+	if len(results) > maxSearchResults {
+		results = results[:maxSearchResults]
+		truncated = true // more matches existed than we return
+	}
 	entries := make([]Entry, len(results))
 	for i, r := range results {
 		entries[i] = r.entry

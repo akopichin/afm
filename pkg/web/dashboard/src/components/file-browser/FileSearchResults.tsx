@@ -19,10 +19,12 @@ function dirPrefix(path: string): string {
   return slash === -1 ? '' : path.slice(0, slash + 1)
 }
 
-// Плоский список результатов поиска: переиспользует классы дерева
-// (file-tree-row/-name) ради единого вида и того же чекбокса/клика. Имя файла —
-// основной текст, каталог — приглушённый префикс. Клавиатурную навигацию
-// намеренно не тащим (MVP): клик открывает превью, чекбокс — выбор.
+// Плоский список результатов поиска: переиспользует классы дерева ради единого
+// вида. Имя файла — основной текст, каталог — приглушённый префикс. Открывающая
+// часть строки — настоящая <button> (нативный фокус + Enter/Space), чтобы поиск
+// не терял клавиатурную доступность дерева; чекбокс — отдельный сосед. В
+// aria-label чекбокса — полный путь: одинаковые basename из разных каталогов
+// иначе неразличимы для скринридера.
 export function FileSearchResults({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath }: FileSearchResultsProps): ReactElement {
   if (error !== null) return <div className="file-tree-hint file-tree-error">{error}</div>
   if (loading && result === null) return <div className="file-tree-hint">Searching…</div>
@@ -39,24 +41,24 @@ export function FileSearchResults({ result, loading, error, onOpenFile, onToggle
             role="listitem"
             data-kind="file"
             className={`file-tree-row file-search-row${activePath === entry.path ? ' active' : ''}`}
-            onClick={() => onOpenFile(entry)}
           >
             <input
               type="checkbox"
-              aria-label={`Select ${entry.name}`}
+              aria-label={`Select ${entry.path}`}
               checked={isSelected(entry.path)}
-              onClick={(e) => e.stopPropagation()}
               onChange={() => onToggleSelect(entry)}
             />
-            <span className="file-tree-icon file-tree-icon-file" aria-hidden="true">📄</span>
-            <span className="file-search-name">
-              {prefix !== '' && <span className="file-search-dir">{prefix}</span>}
-              <span className="file-tree-name">{entry.name}</span>
-            </span>
+            <button type="button" className="file-search-open" onClick={() => onOpenFile(entry)}>
+              <span className="file-tree-icon file-tree-icon-file" aria-hidden="true">📄</span>
+              <span className="file-search-name">
+                {prefix !== '' && <span className="file-search-dir">{prefix}</span>}
+                <span className="file-tree-name">{entry.name}</span>
+              </span>
+            </button>
           </div>
         )
       })}
-      {result.truncated && <div className="file-tree-hint">Showing first 200 results — refine your search</div>}
+      {result.truncated && <div className="file-tree-hint">Some matches may be hidden — refine your search</div>}
     </div>
   )
 }

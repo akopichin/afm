@@ -436,6 +436,26 @@
   color: var(--ink-dim);
   white-space: nowrap;
 }
+/* The openable part of a result row is a real <button> (keyboard focus +
+   Enter/Space) styled as a flat, full-width clickable region. */
+.file-search-open {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.file-search-open:focus-visible {
+  outline: 1px solid var(--mint);
+  outline-offset: -1px;
+}
 .file-search-box {
   display: flex;
   align-items: center;

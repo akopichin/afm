@@ -387,16 +387,16 @@ describe('FileBrowserModal', () => {
       render(<FileBrowserModal mode="browse" selection={[]} onToggleSelect={onToggleSelect} onRemoveSelect={vi.fn()} onClose={vi.fn()} onSubmit={vi.fn()} />)
 
       // roots + tree load
-      await vi.runOnlyPendingTimersAsync()
+      await act(async () => { await vi.runOnlyPendingTimersAsync() })
       fireEvent.click(screen.getByRole('button', { name: 'afm' }))
-      await vi.runOnlyPendingTimersAsync()
+      await act(async () => { await vi.runOnlyPendingTimersAsync() })
       expect(screen.getByText('top.go')).toBeTruthy()
 
       // type a query → debounce → results replace tree
       fireEvent.change(screen.getByPlaceholderText(/Search in afm/i), { target: { value: 'work' } })
-      await vi.advanceTimersByTimeAsync(300)
+      await act(async () => { await vi.advanceTimersByTimeAsync(300) })
       expect(screen.getByText('workspace.go')).toBeTruthy()
-      expect(screen.getByText(/Showing first 200/i)).toBeTruthy()
+      expect(screen.getByText(/Some matches may be hidden/i)).toBeTruthy()
 
       // the tree row is still in the DOM, just inside a hidden container
       const treeContainer = document.querySelector('.file-browser-tree-wrap') as HTMLElement
@@ -404,9 +404,36 @@ describe('FileBrowserModal', () => {
 
       // clear → tree visible again without a reload (top.go still there)
       fireEvent.click(screen.getByRole('button', { name: /Clear search/i }))
-      await vi.runOnlyPendingTimersAsync()
+      await act(async () => { await vi.runOnlyPendingTimersAsync() })
       expect(treeContainer.hasAttribute('hidden')).toBe(false)
       expect(screen.getByText('top.go')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('search request is debounced — nothing fires before 250ms', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.setTree('project', '.', [])
+      api.setSearch('project', 'work', [{ name: 'workspace.go', path: 'pkg/workspace.go', kind: 'file', language: 'go' }])
+      api.install()
+
+      render(<FileBrowserModal mode="browse" selection={[]} onToggleSelect={vi.fn()} onRemoveSelect={vi.fn()} onClose={vi.fn()} onSubmit={vi.fn()} />)
+      await act(async () => { await vi.runOnlyPendingTimersAsync() })
+      fireEvent.click(screen.getByRole('button', { name: 'afm' }))
+      await act(async () => { await vi.runOnlyPendingTimersAsync() })
+
+      const searched = (): boolean => api.fetchMock!.mock.calls.some(([u]) => String(u).includes('/api/files/search'))
+
+      fireEvent.change(screen.getByPlaceholderText(/Search in afm/i), { target: { value: 'work' } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(200) }) // still inside the debounce window
+      expect(searched()).toBe(false)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(100) }) // cross 250ms
+      expect(searched()).toBe(true)
     } finally {
       vi.useRealTimers()
     }

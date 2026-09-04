@@ -71,8 +71,11 @@ func (fs *fsImpl) List(ctx context.Context, rootID, relPath, cursor string) (Pag
 	f := os.NewFile(uintptr(fd), clean)
 	defer f.Close()
 
-	dirents, truncated, err := readDirBounded(f, maxDirEntries)
+	dirents, truncated, err := readDirBounded(ctx, f, maxDirEntries)
 	if err != nil {
+		if ctx.Err() != nil {
+			return Page{}, ctx.Err()
+		}
 		return Page{}, fmt.Errorf("%w: %v", ErrReadFailed, err)
 	}
 
@@ -97,8 +100,14 @@ func (fs *fsImpl) List(ctx context.Context, rootID, relPath, cursor string) (Pag
 // non-nil, non-EOF error is only guaranteed once the returned slice would
 // otherwise be empty, so the loop keeps requesting batches until it actually
 // observes io.EOF rather than inferring end-of-directory from a short batch.
-func readDirBounded(f *os.File, limit int) (entries []os.DirEntry, truncated bool, err error) {
+// ctx is checked before each batch so a cancelled request (e.g. the frontend
+// aborting a superseded search) stops reading a huge directory promptly rather
+// than draining it to the end.
+func readDirBounded(ctx context.Context, f *os.File, limit int) (entries []os.DirEntry, truncated bool, err error) {
 	for len(entries) < limit {
+		if cerr := ctx.Err(); cerr != nil {
+			return entries, false, cerr
+		}
 		n := dirReadBatch
 		if remaining := limit - len(entries); remaining < n {
 			n = remaining

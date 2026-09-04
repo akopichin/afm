@@ -152,6 +152,12 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   // вызова. Смена root'а при непустом запросе повторяет поиск в новом root'е
   // (эффект зависит и от selectedRoot).
   useEffect(() => {
+    // Bump the generation on EVERY run — including the empty-query and
+    // null-root branches — so clearing the query (or switching root) invalidates
+    // any request still in flight from a prior non-empty run: its late
+    // .then/.catch see a stale generation and bail, even if the aborted fetch
+    // still resolves.
+    const generation = ++searchGenRef.current
     if (selectedRoot === null) return
     const trimmed = query.trim()
     if (trimmed === '') {
@@ -160,7 +166,6 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
       setSearchLoading(false)
       return
     }
-    const generation = ++searchGenRef.current
     const controller = new AbortController()
     // Сбрасываем результаты СРАЗУ, а не только при ошибке/успехе — иначе при
     // смене root'а (или запроса) устаревшие строки предыдущего root'а остаются
