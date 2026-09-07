@@ -50,6 +50,18 @@ The binary is updated via `brew upgrade --cask afm`; skills don't need to be
 reinstalled on update, but you can re-run `afm install-skills` if new ones
 have appeared.
 
+**On Linux without Homebrew (prebuilt binary from GitHub Releases):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/akopichin/afm/main/install-linux.sh | bash
+# or a specific version:
+AFM_VERSION=v0.5.70 bash -c "$(curl -fsSL https://raw.githubusercontent.com/akopichin/afm/main/install-linux.sh)"
+```
+
+The script detects the architecture (amd64/arm64), downloads the matching
+`afm_linux_<arch>.tar.gz`, verifies its sha256 checksum, and installs the binary
+into `/usr/local/bin` (or `~/.local/bin` if `/usr/local` is not writable).
+Then optionally run `afm install-skills`.
+
 **From source:**
 ```bash
 make build        # build into bin/afm
