@@ -641,7 +641,21 @@ func workspaceResolveFile(ws workspace.FS, rootContainerPaths map[string]string)
 			ContentSHA:  state.FileContentSHA([]byte(f.Content)),
 		}
 		if line != nil {
-			lines := strings.Split(f.Content, "\n")
+			// f.Content almost always ends in "\n" for a real source file —
+			// a bare strings.Split would then produce a phantom trailing
+			// empty element (Split("a\nb\n", "\n") == ["a","b",""]), so
+			// len(lines) overcounts by one and a request for the line right
+			// after the real last line wrongly reports InRange=true with an
+			// empty LineText instead of InRange=false. Trim exactly one
+			// trailing newline first so lines counts only real lines. An
+			// empty file has 0 real lines (not the 1 a bare Split("", "\n")
+			// would report), so a line-1 request against it correctly comes
+			// back out of range.
+			content := strings.TrimSuffix(f.Content, "\n")
+			var lines []string
+			if content != "" {
+				lines = strings.Split(content, "\n")
+			}
 			if *line >= 1 && *line <= len(lines) {
 				rf.InRange = true
 				rf.LineText = lines[*line-1]

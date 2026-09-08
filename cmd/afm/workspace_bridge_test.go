@@ -141,6 +141,47 @@ func TestWorkspaceResolveFile_LineNote_OutOfRange(t *testing.T) {
 	}
 }
 
+// TestWorkspaceResolveFile_TrailingNewlineLineCount — регрессия на off-by-one
+// из-за завершающего "\n": почти любой реальный файл на диске оканчивается
+// переводом строки, и наивный strings.Split(content, "\n") на "a\nb\nc\nd\n"
+// даёт 5 элементов (["a","b","c","d",""]), а не 4 реальные строки — фантомный
+// последний элемент. Из-за этого запрос строки N+1 (на единицу за пределом
+// файла — ровно тот случай, когда пользователь удалил ОТМЕЧЕННУЮ строку и
+// файл стал короче на одну строку) ошибочно репортился как InRange=true с
+// пустым LineText, вместо InRange=false — что глушило ErrStaleLine в
+// AddNote и детект дрифта переставал работать для этого частного случая.
+// Здесь 4 реальные строки: N=4 должен резолвиться, N+1=5 — нет.
+func TestWorkspaceResolveFile_TrailingNewlineLineCount(t *testing.T) {
+	ws := &fakeWorkspace{files: map[string]workspace.File{
+		"project/main.go": {
+			Path:    "main.go",
+			Content: "a\nb\nc\nd\n",
+		},
+	}}
+	resolve := workspaceResolveFile(ws, map[string]string{"project": "/workspace"})
+
+	lastReal := 4
+	rf, ok := resolve("project", "main.go", &lastReal)
+	if !ok {
+		t.Fatal("resolve: got ok=false, want true")
+	}
+	if !rf.InRange {
+		t.Fatal("InRange: got false, want true for the last real line (4)")
+	}
+	if want := "d"; rf.LineText != want {
+		t.Errorf("LineText: got %q, want %q", rf.LineText, want)
+	}
+
+	phantom := 5
+	rf, ok = resolve("project", "main.go", &phantom)
+	if !ok {
+		t.Fatal("resolve: got ok=false, want true (file itself resolves fine)")
+	}
+	if rf.InRange {
+		t.Errorf("InRange: got true, want false — line 5 is the phantom trailing-newline element, not a real line (LineText=%q)", rf.LineText)
+	}
+}
+
 // TestWorkspaceResolveFile_WorkspaceError покрывает ErrStaleContent-путь
 // AddNote: любая ошибка workspace (файл удалён, слишком большой, бинарный,
 // симлинк, ...) должна репортиться единообразно как ok=false, а не паниковать
