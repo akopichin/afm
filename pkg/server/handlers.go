@@ -36,6 +36,14 @@ type statusResponse struct {
 	BackoffAccumulatedMs int64        `json:"backoff_accumulated_ms"`
 	BackoffOpenSince     []time.Time  `json:"backoff_open_since,omitempty"`
 	Capabilities         capabilities `json:"capabilities"`
+	// FlowPauseState/FlowPausedStages surface the flow-wide review-pause
+	// round (see pkg/orchestrator/reviewpause.go): "none"|"paused"|"resuming",
+	// plus the ids of stages this round is holding paused. Populated via
+	// Config.ReviewState (a lock-free closure over the orchestrator's
+	// reviewMarker) — nil means the server was wired without review-pause
+	// support, in which case FlowPauseState is always "none".
+	FlowPauseState   string   `json:"flow_pause_state"`
+	FlowPausedStages []string `json:"flow_paused_stages,omitempty"`
 }
 
 // capabilities advertises optional dashboard features gated by server-side
@@ -58,6 +66,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		BackoffOpenSince:     rs.BackoffOpenSince(),
 	}
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
+	if s.reviewState != nil {
+		st, owners := s.reviewState()
+		resp.FlowPauseState = st
+		resp.FlowPausedStages = owners
+	} else {
+		resp.FlowPauseState = "none"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

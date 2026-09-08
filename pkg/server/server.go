@@ -79,13 +79,15 @@ type Server struct {
 	stageButtons     map[string][]string // id стадии → подписи кнопок кебаб-меню (статический конфиг флоу)
 	store            *state.Store
 	uiBus            *bus.UIBus
-	actions          StageActions     // never nil in practice — see StageActions doc
-	secondary        SecondaryActions // may be nil — see SecondaryActions doc
-	workspace        workspace.FS     // Docker project file browser backend; nil = capability off
-	theme            string           // "goga" или "" (default coffee)
-	indexBytes       []byte           // предподготовленный index.html (с заменами скина/favicon)
-	fileServer       http.Handler     // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer http.Handler     // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	actions          StageActions              // never nil in practice — see StageActions doc
+	secondary        SecondaryActions          // may be nil — see SecondaryActions doc
+	flowActions      FlowActions               // review-pause commands; nil = respond 501 (see handlers)
+	reviewState      func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
+	workspace        workspace.FS              // Docker project file browser backend; nil = capability off
+	theme            string                    // "goga" или "" (default coffee)
+	indexBytes       []byte                    // предподготовленный index.html (с заменами скина/favicon)
+	fileServer       http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
 	httpSrv          *http.Server
 	// Keepalive-таймауты вебсокета. Immutable: задаются один раз в New и не
 	// мутируются после (хранение в полях, а не в глобальных переменных, убирает
@@ -118,6 +120,8 @@ type Config struct {
 	UIBus            *bus.UIBus
 	Actions          StageActions
 	Secondary        SecondaryActions
+	FlowActions      FlowActions
+	ReviewState      func() (string, []string)
 	Workspace        workspace.FS // Docker project file browser backend; nil = capability off
 	Theme            string
 	SkinDir          string
@@ -154,6 +158,8 @@ func New(cfg Config) *Server {
 		uiBus:            cfg.UIBus,
 		actions:          cfg.Actions,
 		secondary:        cfg.Secondary,
+		flowActions:      cfg.FlowActions,
+		reviewState:      cfg.ReviewState,
 		workspace:        cfg.Workspace,
 		theme:            cfg.Theme,
 		wsPongWait:       pongWait,

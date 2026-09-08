@@ -134,6 +134,34 @@ func (o *Orchestrator) PauseFlow(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
+// ReviewState reports the current flow-wide review-pause state for
+// /api/status (see pkg/server's Config.ReviewState wiring): "none" when no
+// review-pause round is active, "resuming" once InjectNotesAndResume/
+// CancelNotesAndResume has flipped the marker but the async resume hasn't
+// cleared it yet (no per-stage owners are meaningful at that point — they're
+// all mid-resume), or "paused" with the subset of owned stages that are
+// CURRENTLY sitting in StatusPaused (an owner may have already progressed
+// past paused if a resume is racing this read, so this recomputes from live
+// FSM status rather than trusting the marker's static Owned list wholesale).
+// Lock-free: reviewMarker is an atomic.Pointer, and currentStatus reads the
+// store directly — safe to call from the HTTP handler goroutine.
+func (o *Orchestrator) ReviewState() (string, []string) {
+	m := o.reviewMarker.Load()
+	if m == nil {
+		return "none", nil
+	}
+	if m.State == state.PauseStateResuming {
+		return "resuming", nil
+	}
+	var paused []string
+	for _, ow := range m.Owned {
+		if o.currentStatus(ow.ID) == state.StatusPaused {
+			paused = append(paused, ow.ID)
+		}
+	}
+	return "paused", paused
+}
+
 // ownerIDs extracts just the stage ids from a pause marker's owner list.
 func ownerIDs(m *state.PauseMarker) []string {
 	ids := make([]string, 0, len(m.Owned))

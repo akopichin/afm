@@ -32,3 +32,14 @@ type SecondaryActions interface {
 	NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error
 	CancelDialog(stageID string) error
 }
+
+// FlowActions are the flow-wide review-pause commands: hold every active
+// stage for review (PauseFlow), then close the round by either injecting the
+// collected notes into a target stage (InjectNotesAndResume) or discarding
+// them (CancelNotesAndResume). The orchestrator implements this directly
+// (pkg/orchestrator/reviewpause.go) — see cmd/afm/run.go for the wiring.
+type FlowActions interface {
+	PauseFlow(ctx context.Context) ([]string, error)
+	InjectNotesAndResume(ctx context.Context, targetStageID string) error
+	CancelNotesAndResume(ctx context.Context) error
+}

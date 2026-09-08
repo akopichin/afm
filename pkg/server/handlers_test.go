@@ -231,6 +231,40 @@ func TestHandleStatus_IncludesFlowName(t *testing.T) {
 	}
 }
 
+// TestHandleStatus_IncludesFlowPauseState guards the wiring between
+// Config.ReviewState (the orchestrator's lock-free closure over reviewMarker,
+// see pkg/orchestrator/reviewpause.go's ReviewState) and /api/status's
+// flow_pause_state/flow_paused_stages fields.
+func TestHandleStatus_IncludesFlowPauseState(t *testing.T) {
+	srv := newTestServer(t, Config{
+		ReviewState: func() (string, []string) { return "paused", []string{"s1"} },
+	})
+
+	resp := decodeStatus(t, srv)
+	if resp.FlowPauseState != "paused" {
+		t.Errorf("flow_pause_state = %q, want %q", resp.FlowPauseState, "paused")
+	}
+	if len(resp.FlowPausedStages) != 1 || resp.FlowPausedStages[0] != "s1" {
+		t.Errorf("flow_paused_stages = %v, want [s1]", resp.FlowPausedStages)
+	}
+}
+
+// TestHandleStatus_FlowPauseStateDefaultsToNone guards the nil-ReviewState
+// fallback: a Config without ReviewState wired (e.g. an older caller) must
+// not silently omit the field or leave it at Go's zero value in a way the
+// dashboard could confuse with a real state — it must read exactly "none".
+func TestHandleStatus_FlowPauseStateDefaultsToNone(t *testing.T) {
+	srv := newTestServer(t, Config{})
+
+	resp := decodeStatus(t, srv)
+	if resp.FlowPauseState != "none" {
+		t.Errorf("flow_pause_state = %q, want %q", resp.FlowPauseState, "none")
+	}
+	if len(resp.FlowPausedStages) != 0 {
+		t.Errorf("flow_paused_stages = %v, want empty", resp.FlowPausedStages)
+	}
+}
+
 func TestHandleStatus_IncludesInteractiveAndAutonomous(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 	srv.stageInteractive = map[string]bool{testStageID: true}

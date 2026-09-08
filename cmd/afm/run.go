@@ -320,6 +320,8 @@ func newRunCmd() *cobra.Command {
 					UIBus:            orch.UIBus(),
 					Actions:          orch,
 					Secondary:        orch,
+					FlowActions:      orch,
+					ReviewState:      orch.ReviewState,
 					Workspace:        ws,
 				})
 				addr, err := srv.Start()
