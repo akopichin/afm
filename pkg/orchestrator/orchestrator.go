@@ -207,6 +207,25 @@ type Orchestrator struct {
 	// на другой горутине) и проверить, что проигравший вызов не чистит
 	// session/jsonl победителя. Инъектируется через SetRetryCASBarrierForTest.
 	retryCASBarrier func(stageID string)
+
+	// flowPauseMu защищает activationHeld/finalizing от гонок между HTTP-
+	// обработчиками ревью-паузы (следующая задача фичи "review notes") —
+	// сами поля читаются lock-free через atomic, мьютекс нужен только на
+	// запись составных решений (несколько полей меняются как одна операция).
+	// Пока не используется: составные HTTP-обработчики паузы — следующая
+	// задача; уже используемая половина этой задачи — activationHeld.
+	flowPauseMu sync.Mutex //nolint:unused // используется следующей задачей ревью-паузы
+	// activationHeld — true, пока активен ревью-режим: НИ ОДНА новая стадия
+	// не должна активироваться (см. activationBlocked/guard-точки в
+	// scheduling.go и recovery.go). Уже бегущие стадии не трогаются —
+	// намеренно не меняется concurrency.shouldRun, чтобы не подвесить их.
+	activationHeld atomic.Bool
+	// finalizing — true, пока идёт финализация ревью-транзакции (следующая
+	// задача); здесь только объявлено и guard'ится flowPauseMu.
+	finalizing atomic.Bool //nolint:unused // используется следующей задачей ревью-паузы
+	// reviewMarker — in-memory кэш текущего маркера паузы ревью (nil = его
+	// нет). atomic.Pointer делает reviewTxnActive() lock-free.
+	reviewMarker atomic.Pointer[state.PauseMarker] //nolint:unused // читается reviewTxnActive, используется следующей задачей
 }
 
 // bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле
@@ -662,6 +681,19 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 func (o *Orchestrator) currentStatus(id string) state.StageStatus {
 	return o.opts.Store.Get(id)
 }
+
+// reviewTxnActive reports whether a review-pause marker is currently present
+// (in-memory cache, lock-free read). Not yet called anywhere — wired in by
+// the next task of the "review notes" feature (HTTP handlers that open/close
+// the review-pause transaction).
+//
+//nolint:unused // используется следующей задачей ревью-паузы
+func (o *Orchestrator) reviewTxnActive() bool { return o.reviewMarker.Load() != nil }
+
+// activationBlocked reports whether new stage activations must be held
+// (review mode is on). Already-running stages are never affected — callers
+// only skip the transition that would START a new stage.
+func (o *Orchestrator) activationBlocked() bool { return o.activationHeld.Load() }
 
 // resolvePlanSource превращает путь stage.Plan в путь к существующему файлу.
 // Plan — путь к существующему файлу плана. Если путь относительный (./…), план

@@ -135,10 +135,19 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Re-enter the wait (not a silent retry) — see resumeHookFailedWait.
 			o.concurrency.SpawnAgent(ctx, s, o.resumeHookFailedWait)
 		case state.StatusRetrying:
+			if o.activationBlocked() {
+				continue // review mode: hold new activations; the stage stays pending/ready
+			}
 			o.resumeStageAtStatus(ctx, s, state.StatusRetrying)
 		case state.StatusRevising:
+			if o.activationBlocked() {
+				continue // review mode: hold new activations; the stage stays pending/ready
+			}
 			o.resumeStageAtStatus(ctx, s, state.StatusRevising)
 		case state.StatusRunning:
+			if o.activationBlocked() {
+				continue // review mode: hold new activations; the stage stays pending/ready
+			}
 			o.resumeStageAtStatus(ctx, s, state.StatusRunning)
 		default:
 			stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -155,6 +164,9 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 					o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
 					continue
 				}
+			}
+			if o.activationBlocked() {
+				continue // review mode: hold new activations; the stage stays pending/ready
 			}
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
 			o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)

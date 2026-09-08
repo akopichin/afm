@@ -89,6 +89,10 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 			continue
 		}
 
+		if o.activationBlocked() {
+			continue // review mode: hold new activations; the stage stays pending/ready
+		}
+
 		if o.activateAutoStage(s) {
 			continue
 		}
@@ -131,6 +135,9 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 			o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
 			continue
 		}
+		if o.activationBlocked() {
+			continue // review mode: hold new activations; the stage stays pending/ready
+		}
 		// Synchronous transition out of pending guards against double
 		// start: a second call sees "planning" and skips the stage.
 		if _, ok := o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "deps done"); !ok {
@@ -153,6 +160,9 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		stage := o.graph.Stage(id)
 		if stage == nil {
 			continue
+		}
+		if o.activationBlocked() {
+			continue // review mode: hold new activations; the stage stays pending/ready
 		}
 		if _, ok := o.Trigger(id, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			continue

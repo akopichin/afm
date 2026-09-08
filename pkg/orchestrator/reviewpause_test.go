@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -117,5 +120,44 @@ func TestRunWithRetry_SelfAbortsWhenAlreadyPaused(t *testing.T) {
 
 	if called {
 		t.Fatal("agentFn must not run when stage is already paused")
+	}
+}
+
+// TestActivationHold_BlocksNewActivation закрывает Task 9 фичи "review notes":
+// пока activationHeld взведён (ревью-режим), startReadyStages не должен
+// переводить уже готовую (Ready) стадию в Running — она обязана остаться на
+// месте (already-running стадии здесь ни при чём, только НОВЫЕ активации).
+// Собран напрямую (по образцу TestCancelDialog_FailsStage в
+// control_api_test.go), а не через setupHookOrch: нужен реальный
+// concurrency.Manager, иначе незагаженный путь (до реализации guard'а)
+// упадёт в nil-панике на o.concurrency.SpawnAgent вместо честного assert-fail.
+func TestActivationHold_BlocksNewActivation(t *testing.T) {
+	dir := t.TempDir()
+	stages := []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}}
+	store, err := state.Open(dir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// Стадия без зависимостей, уже в Ready — единственное, что мешает
+	// startReadyStages её забрать, должен быть activationHeld.
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusReady, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	cb := bus.NewCriticalBus(16)
+	o := &Orchestrator{
+		opts:        Options{RunDir: dir, Stages: stages, Store: store},
+		graph:       graph.NewGraph(stages),
+		fsm:         bus.NewFSM(store),
+		ui:          bus.NewUIBus(),
+		critical:    cb,
+		concurrency: concurrency.NewWithSemaphores(cb, map[string]concurrency.Semaphore{}, ""),
+	}
+	o.activationHeld.Store(true)
+
+	o.startReadyStages(context.Background())
+
+	if got := o.currentStatus("s1"); got != state.StatusReady {
+		t.Fatalf("held stage should stay ready, got %v", got)
 	}
 }
