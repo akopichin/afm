@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -166,19 +167,16 @@ func renderReviewFeedback(notes []state.ReviewNote, current func(root, path stri
 		group := byFile[dp]
 		slices.SortStableFunc(group, func(i, j state.ReviewNote) int { // line notes by line asc, file-level last
 			li, lj := i.Line, j.Line
+			if li == nil && lj == nil {
+				return 0 // both file-level, equal
+			}
 			if li == nil {
-				return 1 // file-level note goes last
+				return 1 // i is file-level, goes last
 			}
 			if lj == nil {
-				return -1 // line note comes first
+				return -1 // j is file-level, goes last
 			}
-			if *li < *lj {
-				return -1
-			}
-			if *li > *lj {
-				return 1
-			}
-			return 0
+			return cmp.Compare(*li, *lj)
 		})
 		curSHA, ok := current(group[0].Root, group[0].Path)
 		header := fmt.Sprintf("### %s  %s", group[0].Reference, jsonQuote(dp))

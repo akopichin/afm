@@ -335,3 +335,56 @@ func TestRenderReviewFeedback_UnavailableFile(t *testing.T) {
 		t.Fatalf("unavailable marker missing:\n%s", out)
 	}
 }
+
+// TestRenderReviewFeedback_TwoFileLevelNotesStableOrder закрывает Fix round 1:
+// регрессионная проверка strict-weak-ordering контракта SortStableFunc.
+// renderReviewFeedback должна корректно обрабатывать несколько file-level
+// notes (Line==nil) на том же файле, что и line notes, и выдать
+// детерминированный порядок (line notes первыми, потом file-level notes) без
+// паники и переупорядочивания.
+func TestRenderReviewFeedback_TwoFileLevelNotesStableOrder(t *testing.T) {
+	l10 := 10
+	lineOrig := "var x int"
+
+	// Три замечания: одно на строке 10, два на файле (Line==nil)
+	notes := []state.ReviewNote{
+		{
+			Root: "proj", Path: "a.go", DisplayPath: "proj/a.go",
+			Reference: `[AFM file: "/w/a.go"]`, Line: &l10, OrigLineText: &lineOrig,
+			ContentSHA: "sha256:ABC", Text: "add type annotation",
+		},
+		{
+			Root: "proj", Path: "a.go", DisplayPath: "proj/a.go",
+			Reference: `[AFM file: "/w/a.go"]`, Line: nil, OrigLineText: nil,
+			ContentSHA: "sha256:ABC", Text: "file-level comment 1",
+		},
+		{
+			Root: "proj", Path: "a.go", DisplayPath: "proj/a.go",
+			Reference: `[AFM file: "/w/a.go"]`, Line: nil, OrigLineText: nil,
+			ContentSHA: "sha256:ABC", Text: "file-level comment 2",
+		},
+	}
+	out := renderReviewFeedback(notes, func(root, path string) (string, bool) {
+		return "sha256:ABC", true
+	})
+
+	// Проверяем, что выход содержит оба file-level замечания.
+	if !strings.Contains(out, "file-level comment 1") {
+		t.Fatalf("file-level comment 1 missing:\n%s", out)
+	}
+	if !strings.Contains(out, "file-level comment 2") {
+		t.Fatalf("file-level comment 2 missing:\n%s", out)
+	}
+
+	// Проверяем порядок: line note (Line 10) должен быть ПЕРЕД file-level нотами.
+	pos1 := strings.Index(out, "Line 10")
+	pos2 := strings.Index(out, "file-level comment 1")
+	pos3 := strings.Index(out, "file-level comment 2")
+
+	if pos1 < 0 || pos2 < 0 || pos3 < 0 {
+		t.Fatalf("missing required text in output:\n%s", out)
+	}
+	if pos1 >= pos2 || pos1 >= pos3 {
+		t.Fatalf("line note must come before file-level notes, got positions: line=%d, file1=%d, file2=%d", pos1, pos2, pos3)
+	}
+}
