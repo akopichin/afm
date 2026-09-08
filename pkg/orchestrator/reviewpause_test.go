@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // TestRunnerKind_SetGetClear проверяет базовый контракт реестра runnerKind
@@ -86,5 +87,35 @@ func TestRunWithRetry_Attempt0ResumeContext(t *testing.T) {
 		nil, func() {})
 	if secondCtx != "" {
 		t.Fatalf("resume-context flag must be consumed after first use, got %q on next call", secondCtx)
+	}
+}
+
+// TestRunWithRetry_SelfAbortsWhenAlreadyPaused закрывает Task 8 фичи "review
+// notes": окно между проверкой shouldRun в concurrency.Manager.SpawnAgent и
+// регистрацией interruptCh в начале runWithRetry — если Pause() успевает
+// закоммитить транзишн в этом окне, интерраптор ещё не зарегистрирован и
+// сигнал некому доставить. Симулируем это, заранее переведя стадию в
+// state.StatusPaused (как будто Pause() уже случился ДО входа в
+// runWithRetry) и проверяя, что agentFn вообще не вызывается — attempt-loop
+// должен сам себя прервать на самом первом обращении к currentStatus, до
+// запуска подпроцесса.
+func TestRunWithRetry_SelfAbortsWhenAlreadyPaused(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	agentFn := func(string) error { called = true; return nil }
+	done := make(chan struct{})
+	go func() {
+		o.runWithRetry(context.Background(), flow.Stage{ID: "s1", Name: "s1"}, phaseImplementation,
+			agentFn, func() error { return nil }, func() {})
+		close(done)
+	}()
+	<-done
+
+	if called {
+		t.Fatal("agentFn must not run when stage is already paused")
 	}
 }

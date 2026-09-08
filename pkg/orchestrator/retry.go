@@ -107,6 +107,10 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		}
 		resumeCtx = false // только самая первая попытка резюмируемого запуска получает его
 
+		if o.currentStatus(s.ID) == state.StatusPaused {
+			return // a pause landed in the shouldRun->register gap; do not start the subprocess
+		}
+
 		err := agentFn(retryCtx)
 		if err == nil {
 			// afm bug: интерактивный агент может завершиться (выйти из claude),
