@@ -450,6 +450,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 
+	// recoverReviewPause MUST run before startPlanningForPending: it
+	// re-establishes activationHeld/reviewMarker from the durable
+	// notes-pause.json marker (or finishes an interrupted resume
+	// transaction) so a frozen review owner is never picked up by the
+	// ordinary scheduler below. A non-nil error here means the marker was a
+	// corrupt `resuming` one (fail-closed, see recoverReviewPause's doc
+	// comment) — activationHeld is already set in that case, which is
+	// enough to keep new stages from starting; we log prominently and keep
+	// the run (and its dashboard/HTTP server) alive rather than aborting
+	// Run() outright, so an operator can inspect the quarantined file and
+	// the paused stages instead of losing all visibility into the run.
+	if err := o.recoverReviewPause(ctx); err != nil {
+		log.Printf("review-pause: recovery error, activation held pending manual intervention: %v", err)
+	}
 	o.startPlanningForPending(ctx)
 	o.startQuestionPoller(ctx) // file-based dialog poller
 

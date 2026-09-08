@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,6 +14,75 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+// recoverReviewPause re-establishes review-pause state from disk BEFORE
+// ordinary bootstrap (startPlanningForPending) runs — otherwise the normal
+// scheduler could resume a stage a review round had frozen, racing the
+// review operator. It reads the durable notes-pause.json marker
+// (state.ReadNotesPauseMarker) and reacts per state:
+//
+//   - absent: no review pause was in flight — nil, nothing to do.
+//   - paused: PauseFlow committed the hold but afm restarted before an
+//     operator finished the round — re-establish activationHeld and cache
+//     the marker (o.reviewMarker) exactly as PauseFlow itself would; the
+//     owned stages are already durably StatusPaused in the event log, so
+//     nothing else needs to happen here.
+//   - resuming: InjectNotesAndResume/CancelNotesAndResume committed the
+//     durable state=resuming transition (and, for inject, wrote
+//     feedback.md) but crashed before finishing the actual resume —
+//     runResumeTransaction is idempotent (SaveFeedbackOnce's op-id
+//     sentinel, per-owner Trigger CAS, delete-if-exists on notes/marker), so
+//     re-running it to completion is always safe, including a repeat call
+//     against a transaction that had actually already finished.
+//
+// A corrupt marker (state.ErrCorruptPauseMarker: ReadNotesPauseMarker already
+// quarantined the bad file into notes-pause.json.corrupt-<ts> and returns
+// found=true with a best-effort State guess) is handled asymmetrically:
+//
+//   - corrupt paused: fail OPEN. The owned stages are durably StatusPaused
+//     in the event log regardless of the marker (PauseFlow committed EvPause
+//     before ever writing the marker file) — they simply wait for a manual
+//     Continue. There's no marker left to re-cache, but nothing is lost
+//     either. Logged and returns nil so ordinary bootstrap proceeds.
+//   - corrupt resuming: fail CLOSED. This marker may be the ONLY record that
+//     a resume transaction was in flight — e.g. feedback.md may already have
+//     been delivered to the target — and we cannot safely guess which
+//     owners were already resumed from a best-effort state guess alone. We
+//     keep activationHeld set (blocking new activations) and return an
+//     error instead of silently falling through to normal scheduling, so
+//     the caller can surface it prominently and leave the hold in place for
+//     an operator to resolve by hand.
+func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
+	m, found, err := state.ReadNotesPauseMarker(o.opts.RunDir)
+	if !found {
+		return nil // no review pause was in flight
+	}
+	switch {
+	case errors.Is(err, state.ErrCorruptPauseMarker):
+		if m.State == state.PauseStateResuming {
+			o.activationHeld.Store(true)
+			return fmt.Errorf("review-pause: corrupt resuming marker quarantined in %q (manual recovery needed): owners may be partially resumed", o.opts.RunDir)
+		}
+		log.Printf("review-pause: corrupt paused marker quarantined in %q, continuing without review mode", o.opts.RunDir)
+		return nil
+	case err != nil:
+		return fmt.Errorf("review-pause: %w", err)
+	}
+
+	switch m.State {
+	case state.PauseStatePaused:
+		o.activationHeld.Store(true)
+		o.reviewMarker.Store(&m)
+		return nil
+	case state.PauseStateResuming:
+		o.reviewMarker.Store(&m)
+		o.activationHeld.Store(false)
+		o.runResumeTransaction(ctx, m) // idempotent: SaveFeedbackOnce sentinel + reconcile + delete
+		return nil
+	default:
+		return fmt.Errorf("review-pause: unknown marker state %q", m.State)
+	}
+}
 
 // autoRecoverFailedStages resets every stage currently in StatusFailed back
 // to Pending when auto_recover is enabled (default true), so a run

@@ -705,3 +705,99 @@ func TestShouldExit_HeldByReviewMarker(t *testing.T) {
 		t.Fatal("shouldExit must be false while review marker exists")
 	}
 }
+
+// TestRecoverReviewPause_PausedReestablishesHold закрывает Task 15 фичи
+// "review notes": на старте afm (перед обычным bootstrap'ом) durable-маркер
+// state=paused должен ре-установить и activationHeld, и in-memory кэш
+// маркера (reviewTxnActive()) — ровно то, что PauseFlow сам установил бы,
+// не будь afm перезапущен между PauseFlow и решением оператора.
+func TestRecoverReviewPause_PausedReestablishesHold(t *testing.T) {
+	o := newTestOrchestrator(t)
+	m := state.PauseMarker{Version: 1, State: state.PauseStatePaused,
+		Owned: []state.PauseOwner{{ID: "s1", ResumeKind: kindImplementation}}}
+	if err := state.WriteNotesPauseMarker(o.opts.RunDir, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.recoverReviewPause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !o.activationHeld.Load() || !o.reviewTxnActive() {
+		t.Fatal("paused recovery must re-establish the hold + marker")
+	}
+}
+
+// TestRecoverReviewPause_ResumingFinishes закрывает Task 15: durable-маркер
+// state=resuming (интерраптед resume-транзакция) должен быть ДОВЕДЁН до
+// конца прямо на старте (runResumeTransaction идемпотентна) — маркер и
+// review notes должны исчезнуть с диска, а не просто быть закэшированы.
+// o.testRunnerHook — тот же тест-сейм, что и в TestInject_WritesFeedback…/
+// TestResumeOwner_…, подменяет реальный Trigger+SpawnAgent внутри
+// resumeOwner, чтобы не спавнить настоящий процесс агента.
+func TestRecoverReviewPause_ResumingFinishes(t *testing.T) {
+	o := newTestOrchestrator(t)
+	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)
+	m := state.PauseMarker{Version: 1, OperationID: "op1", State: state.PauseStateResuming,
+		Mode: state.PauseModeCancel, Owned: []state.PauseOwner{{ID: "s1", ResumeKind: kindImplementation}}}
+	if err := state.WriteNotesPauseMarker(o.opts.RunDir, m); err != nil {
+		t.Fatal(err)
+	}
+	o.testRunnerHook = func(string, bool) {}
+	if err := o.recoverReviewPause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := state.ReadNotesPauseMarker(o.opts.RunDir); found {
+		t.Fatal("resuming recovery must finish and delete the marker")
+	}
+}
+
+// TestRecoverReviewPause_Absent закрывает Task 15: без маркера на диске
+// recoverReviewPause не должен ничего трогать — ни activationHeld, ни
+// reviewMarker — и должен вернуть nil.
+func TestRecoverReviewPause_Absent(t *testing.T) {
+	o := newTestOrchestrator(t)
+	if err := o.recoverReviewPause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if o.activationHeld.Load() || o.reviewTxnActive() {
+		t.Fatal("no marker on disk: recovery must be a no-op")
+	}
+}
+
+// TestRecoverReviewPause_CorruptResumingFailsClosed закрывает Task 15: если
+// на диске лежит НЕПАРСИМЫЙ маркер, но его сырые байты содержат "resuming"
+// (best-effort State detection в state.ReadNotesPauseMarker), recoverReviewPause
+// обязан вернуть ошибку и оставить activationHeld взведённым — мы не можем
+// понять по повреждённому файлу, какие owner'ы уже резюмированы, поэтому
+// fail-closed: держим hold, не пропускаем обычный bootstrap на резюм.
+func TestRecoverReviewPause_CorruptResumingFailsClosed(t *testing.T) {
+	o := newTestOrchestrator(t)
+	path := filepath.Join(o.opts.RunDir, "notes-pause.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"state":"resuming",`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.recoverReviewPause(context.Background()); err == nil {
+		t.Fatal("corrupt resuming marker must fail closed with a non-nil error")
+	}
+	if !o.activationHeld.Load() {
+		t.Fatal("corrupt resuming marker must keep activationHeld set")
+	}
+}
+
+// TestRecoverReviewPause_CorruptPausedFailsOpen закрывает Task 15: маркер
+// корраптед, но лучший угадываемый State не "resuming" (по умолчанию
+// paused) — recoverReviewPause должен fail-open (вернуть nil, ничего не
+// взводить): owned-стадии уже durable-paused в event-логе независимо от
+// маркера, ждут ручного Continue.
+func TestRecoverReviewPause_CorruptPausedFailsOpen(t *testing.T) {
+	o := newTestOrchestrator(t)
+	path := filepath.Join(o.opts.RunDir, "notes-pause.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"state":"paused",`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.recoverReviewPause(context.Background()); err != nil {
+		t.Fatalf("corrupt paused marker must fail open (nil error), got %v", err)
+	}
+	if o.activationHeld.Load() || o.reviewTxnActive() {
+		t.Fatal("corrupt paused marker must not set activationHeld/reviewMarker")
+	}
+}
