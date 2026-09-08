@@ -66,14 +66,15 @@ describe('FileViewer', () => {
     expect(screen.getByTestId('file-line-3')).toHaveTextContent('line three')
   })
 
-  test('a line is not clickable/annotatable when flowPaused is not set', () => {
+  test('a line is not clickable/annotatable when flowPauseState is not set and there is no pauseFlow', () => {
     render(<FileViewer content={makeContent({ content: 'a\nb' })} loading={false} error={null} root="project" addNote={vi.fn()} />)
     fireEvent.click(screen.getByTestId('file-line-2'))
     expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByText(/поставить флоу на паузу/i)).toBeNull()
   })
 
-  test('a line is not annotatable without an addNote/root (flowPaused alone is not enough)', () => {
-    render(<FileViewer content={makeContent({ content: 'a\nb' })} loading={false} error={null} flowPaused />)
+  test('a line is not annotatable without an addNote/root (flowPauseState alone is not enough)', () => {
+    render(<FileViewer content={makeContent({ content: 'a\nb' })} loading={false} error={null} flowPauseState="paused" />)
     fireEvent.click(screen.getByTestId('file-line-2'))
     expect(screen.queryByRole('textbox')).toBeNull()
   })
@@ -86,7 +87,7 @@ describe('FileViewer', () => {
         loading={false}
         error={null}
         root="project"
-        flowPaused
+        flowPauseState="paused"
         addNote={addNote}
         contentSha="sha256:x"
       />,
@@ -111,7 +112,7 @@ describe('FileViewer', () => {
         loading={false}
         error={null}
         root="project"
-        flowPaused
+        flowPauseState="paused"
         addNote={addNote}
         contentSha="sha256:x"
       />,
@@ -140,7 +141,7 @@ describe('FileViewer', () => {
         loading={false}
         error={null}
         root="project"
-        flowPaused
+        flowPauseState="paused"
         addNote={addNote}
         contentSha="sha256:x"
       />,
@@ -161,7 +162,7 @@ describe('FileViewer', () => {
         loading={false}
         error={null}
         root="project"
-        flowPaused
+        flowPauseState="paused"
         addNote={vi.fn()}
         contentSha="sha256:x"
       />,
@@ -169,5 +170,75 @@ describe('FileViewer', () => {
 
     fireEvent.click(screen.getByTestId('file-line-1'))
     expect(screen.getByText('Save')).toBeDisabled()
+  })
+
+  test('prompts to pause on the first note when not paused', async () => {
+    const pauseFlow = vi.fn().mockResolvedValue({ paused_stages: ['s1'] })
+    const sampleFile = makeContent({ content: 'line one\nline two\nline three' })
+    render(
+      <FileViewer content={sampleFile} loading={false} error={null} root="project" addNote={vi.fn()} flowPauseState="none" pauseFlow={pauseFlow} />,
+    )
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    expect(screen.getByText(/поставить флоу на паузу/i)).toBeInTheDocument()
+    // The confirm blocks the editor from opening on this same click.
+    expect(screen.queryByRole('textbox')).toBeNull()
+    fireEvent.click(screen.getByText('Да'))
+    await waitFor(() => expect(pauseFlow).toHaveBeenCalled())
+  })
+
+  test('declining the pause-gate confirm closes it without calling pauseFlow', () => {
+    const pauseFlow = vi.fn()
+    render(
+      <FileViewer
+        content={makeContent({ content: 'a\nb' })}
+        loading={false}
+        error={null}
+        root="project"
+        addNote={vi.fn()}
+        flowPauseState="none"
+        pauseFlow={pauseFlow}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    expect(screen.getByText(/поставить флоу на паузу/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Нет'))
+    expect(screen.queryByText(/поставить флоу на паузу/i)).toBeNull()
+    expect(pauseFlow).not.toHaveBeenCalled()
+  })
+
+  test('opens the editor for the pending line once the flow reports paused', () => {
+    const pauseFlow = vi.fn().mockResolvedValue({ paused_stages: ['s1'] })
+    const { rerender } = render(
+      <FileViewer
+        content={makeContent({ content: 'a\nb' })}
+        loading={false}
+        error={null}
+        root="project"
+        addNote={vi.fn()}
+        flowPauseState="none"
+        pauseFlow={pauseFlow}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    fireEvent.click(screen.getByText('Да'))
+
+    // The caller's poll picks up the new status and re-renders with 'paused'.
+    rerender(
+      <FileViewer
+        content={makeContent({ content: 'a\nb' })}
+        loading={false}
+        error={null}
+        root="project"
+        addNote={vi.fn()}
+        flowPauseState="paused"
+        pauseFlow={pauseFlow}
+      />,
+    )
+
+    expect(screen.queryByText(/поставить флоу на паузу/i)).toBeNull()
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 })
