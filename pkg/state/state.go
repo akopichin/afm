@@ -403,6 +403,32 @@ func SaveFeedback(stageDir, feedback string) error {
 	return nil
 }
 
+// SaveFeedbackOnce appends a feedback block tagged with opID, but only once:
+// if feedback.md already contains the operation sentinel it is a no-op. The
+// whole file is rewritten atomically so a crash yields either the old complete
+// file or the old file plus exactly one complete new block — never a partial or
+// sentinel-only block. Callers must serialize concurrent feedback writers.
+func SaveFeedbackOnce(stageDir, opID, feedback string) (bool, error) {
+	fbFile := filepath.Join(stageDir, "feedback.md")
+	sentinel := fmt.Sprintf("<!-- afm-review-op: %s -->", opID)
+	existing, err := os.ReadFile(fbFile)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read feedback: %w", err)
+	}
+	if strings.Contains(string(existing), sentinel) {
+		return false, nil
+	}
+	var b strings.Builder
+	b.Write(existing)
+	n := strings.Count(string(existing), "--- revision ") + 1
+	fmt.Fprintf(&b, "\n--- revision %d | %s ---\n%s\n%s\n",
+		n, time.Now().Format("2006-01-02 15:04"), sentinel, feedback)
+	if err := atomicWriteFile(fbFile, []byte(b.String()), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // preNoteFile — заметка, которую пользователь прикрепил к стадии, пока она ещё
 // была pending (до старта). В отличие от feedback.md (поправка по ходу работы,
 // дописывается с revision-разделителями), pre-note — одно редактируемое поле:

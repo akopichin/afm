@@ -468,3 +468,27 @@ func TestAtomicWriteFile_ReplacesAndPersists(t *testing.T) {
 		t.Fatal("temp file left behind")
 	}
 }
+
+func TestSaveFeedbackOnce_ExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	wrote, err := SaveFeedbackOnce(dir, "op-A", "please fix line 42")
+	if err != nil || !wrote {
+		t.Fatalf("first write: wrote=%v err=%v", wrote, err)
+	}
+	wrote2, err := SaveFeedbackOnce(dir, "op-A", "please fix line 42")
+	if err != nil || wrote2 {
+		t.Fatalf("second write must be no-op: wrote=%v err=%v", wrote2, err)
+	}
+	body, _ := os.ReadFile(filepath.Join(dir, "feedback.md"))
+	if strings.Count(string(body), "please fix line 42") != 1 {
+		t.Fatalf("feedback duplicated:\n%s", body)
+	}
+	// A different operation appends a second block.
+	if wrote3, _ := SaveFeedbackOnce(dir, "op-B", "and line 88"); !wrote3 {
+		t.Fatal("different op should write")
+	}
+	body, _ = os.ReadFile(filepath.Join(dir, "feedback.md"))
+	if !strings.Contains(string(body), "and line 88") {
+		t.Fatal("op-B block missing")
+	}
+}
