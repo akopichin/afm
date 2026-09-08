@@ -18,6 +18,7 @@
 @import url("../base/agent-note-modal.css");
 @import url("../base/pasteable-textarea.css");
 @import url("../base/file-browser.css");
+@import url("../base/review-banner.css");
 
 :root[data-theme="dark"] {
   /* base surfaces — тёмная обжарка */

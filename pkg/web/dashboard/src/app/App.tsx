@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
+import { cancelNotes, listNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -10,6 +10,7 @@ import { Footer } from '../components/footer'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardLayout } from '../components/layout/DashboardLayout'
 import { FileBrowserProvider } from '../components/file-browser'
+import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageLog } from '../hooks/use-stage-log'
@@ -26,7 +27,7 @@ import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } f
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, refresh } = useStatus()
 
   // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
   // (agent_suggest, Task 8); null — модалка скрыта.
@@ -89,6 +90,58 @@ export function App(): ReactElement {
     triggerStageButton(stageId, name).catch((err: unknown) => {
       console.error('Failed to trigger stage button:', err)
     })
+  }
+
+  // Число собранных ревью-заметок для ReviewBanner (Task 22) — реальный счётчик
+  // через listNotes(), а не заглушка: только пока флоу реально на review-паузе
+  // (flowPauseState === 'paused'), с тем же интервалом опроса, что и useStatus,
+  // чтобы не заводить отдельный WS/событийный канал ради одного числа. Вне
+  // паузы опрос не идёт и счётчик сбрасывается — баннер всё равно не рендерит
+  // текст с числом заметок ни в 'none' (не рендерится вовсе), ни в 'resuming'
+  // (фиксированный текст "Resuming…" без счётчика).
+  const [reviewNoteCount, setReviewNoteCount] = useState(0)
+  useEffect(() => {
+    if (flowPauseState !== 'paused') {
+      setReviewNoteCount(0)
+      return
+    }
+
+    let cancelled = false
+    const load = () => {
+      listNotes()
+        .then(({ notes }) => {
+          if (!cancelled) setReviewNoteCount(notes.length)
+        })
+        .catch(() => {
+          /* сеть отвалилась — оставляем предыдущее значение, следующий тик повторит */
+        })
+    }
+
+    load()
+    const timer = setInterval(load, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [flowPauseState])
+
+  // onCancel баннера отменяет раунд ревью без доставки заметок (Task 19's
+  // cancelNotes) — не требует выбора целевой стадии, поэтому можно вызвать
+  // напрямую отсюда, тем же fire-and-forget-с-catch приёмом, что и handlePause
+  // выше (onCancel — не-async проп кнопки).
+  function handleReviewCancel(): void {
+    cancelNotes().catch((err: unknown) => {
+      console.error('Failed to cancel review notes:', err)
+    })
+  }
+
+  // onSend, в отличие от onCancel, не может просто вызвать injectNotes здесь:
+  // тому нужен id целевой стадии, которую пока выбирает пользователь — этим
+  // займётся модалка ревью-заметок из Task 23 (список заметок + выбор стадии
+  // + сам injectNotes). Пока эта модалка не построена, кнопка — документированная
+  // заглушка: Task 23 подставит сюда открытие своего состояния модалки.
+  function handleReviewSend(): void {
+    console.info('Send notes: modal not implemented yet (Task 23)')
   }
 
   const wsUrl = buildWebSocketUrl()
@@ -237,6 +290,13 @@ export function App(): ReactElement {
         onRequestEnableNotifications={onRequestEnableNotifications}
         onDisableNotifications={onDisableNotifications}
         capabilities={capabilities}
+      />
+
+      <ReviewBanner
+        flowPauseState={flowPauseState}
+        noteCount={reviewNoteCount}
+        onSend={handleReviewSend}
+        onCancel={handleReviewCancel}
       />
 
       <main id="main">

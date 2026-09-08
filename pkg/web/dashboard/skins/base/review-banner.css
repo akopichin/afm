@@ -1,0 +1,36 @@
+/* pkg/web/dashboard/public/skins/base/review-banner.css
+   Полноширинный баннер flow-wide review-паузы (Task 22) — между шапкой
+   (#header) и основным контентом (#main). Токенизировано под --amber (тот же
+   цвет, что и статус paused/retrying — см. --c-paused в index.css каждого
+   скина) и --panel-bg/--ink, чтобы автоматически подхватывать тему любого
+   скина и light/dark без переопределений здесь. */
+
+.review-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, var(--panel-bg));
+}
+
+.review-banner-text {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.review-banner[data-state='resuming'] .review-banner-text {
+  color: var(--ink-dim);
+}
+
+.review-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
