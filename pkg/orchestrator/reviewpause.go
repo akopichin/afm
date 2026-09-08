@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -137,4 +140,75 @@ func ownerIDs(m *state.PauseMarker) []string {
 		ids = append(ids, ow.ID)
 	}
 	return ids
+}
+
+// renderReviewFeedback renders collected review notes into feedback-markdown
+// text that gets injected into a stage. It groups notes by display_path
+// (deterministic order), sorts line notes ascending by line number (file-level
+// notes last), and for each note includes the JSON-quoted original line text.
+// A content_sha mismatch adds "(⚠ content differed at injection)"; an
+// unavailable file (current() returns ok==false) adds "(⚠ file unavailable at
+// injection)" on the file header.
+func renderReviewFeedback(notes []state.ReviewNote, current func(root, path string) (string, bool)) string {
+	// Group by display_path, deterministic order.
+	byFile := map[string][]state.ReviewNote{}
+	var order []string
+	for _, n := range notes {
+		if _, seen := byFile[n.DisplayPath]; !seen {
+			order = append(order, n.DisplayPath)
+		}
+		byFile[n.DisplayPath] = append(byFile[n.DisplayPath], n)
+	}
+	slices.Sort(order)
+	var b strings.Builder
+	b.WriteString("## Review notes\n")
+	for _, dp := range order {
+		group := byFile[dp]
+		slices.SortStableFunc(group, func(i, j state.ReviewNote) int { // line notes by line asc, file-level last
+			li, lj := i.Line, j.Line
+			if li == nil {
+				return 1 // file-level note goes last
+			}
+			if lj == nil {
+				return -1 // line note comes first
+			}
+			if *li < *lj {
+				return -1
+			}
+			if *li > *lj {
+				return 1
+			}
+			return 0
+		})
+		curSHA, ok := current(group[0].Root, group[0].Path)
+		header := fmt.Sprintf("### %s  %s", group[0].Reference, jsonQuote(dp))
+		if !ok {
+			header += "  (⚠ file unavailable at injection)"
+		}
+		b.WriteString(header + "\n")
+		for _, n := range group {
+			if n.Line == nil {
+				fmt.Fprintf(&b, "- File: %s\n", n.Text)
+				continue
+			}
+			drift := ""
+			if ok && curSHA != n.ContentSHA {
+				drift = " (⚠ content differed at injection)"
+			}
+			origTxt := ""
+			if n.OrigLineText != nil {
+				origTxt = *n.OrigLineText
+			}
+			fmt.Fprintf(&b, "- Line %d%s; original: %s: %s\n",
+				*n.Line, drift, jsonQuote(origTxt), n.Text)
+		}
+	}
+	return b.String()
+}
+
+// jsonQuote returns a JSON-quoted string (the string literal as it would appear
+// in JSON output).
+func jsonQuote(s string) string {
+	q, _ := json.Marshal(s)
+	return string(q)
 }

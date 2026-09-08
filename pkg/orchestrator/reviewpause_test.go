@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/config"
@@ -291,5 +292,46 @@ func TestPauseFlow_RejectedDuringFinalization(t *testing.T) {
 	o.finalizing.Store(true)
 	if _, err := o.PauseFlow(context.Background()); !errors.Is(err, ErrRunFinalizing) {
 		t.Fatalf("want ErrRunFinalizing, got %v", err)
+	}
+}
+
+// TestRenderReviewFeedback_AlwaysCarriesOriginal закрывает Task 11 фичи
+// "review notes": рендер ревью-фидбэка ВСЕГДА выводит JSON-quoted исходный
+// текст строки, а при расхождении контентной ХЭШ'и добавляет диагностику
+// "content differed at injection".
+func TestRenderReviewFeedback_AlwaysCarriesOriginal(t *testing.T) {
+	l42 := 42
+	orig := "\tif err != nil {"
+	notes := []state.ReviewNote{{
+		Root: "project", Path: "a.go", DisplayPath: "project/a.go",
+		Reference: `[AFM file: "/w/a.go"]`, Line: &l42, OrigLineText: &orig,
+		ContentSHA: "sha256:OLD", Text: "handle this",
+	}}
+	// current sha differs -> changed-at-injection warning, but original still present.
+	out := renderReviewFeedback(notes, func(root, path string) (string, bool) {
+		return "sha256:NEW", true
+	})
+	if !strings.Contains(out, `original: "\tif err != nil {"`) {
+		t.Fatalf("original line text missing:\n%s", out)
+	}
+	if !strings.Contains(out, "content differed at injection") {
+		t.Fatalf("drift warning missing:\n%s", out)
+	}
+	if !strings.Contains(out, `[AFM file: "/w/a.go"]`) {
+		t.Fatal("reference marker missing")
+	}
+}
+
+// TestRenderReviewFeedback_UnavailableFile закрывает Task 11: файл
+// недоступен при injection-времени (current() возвращает ok=false) ->
+// добавляется диагностика на заголовке файла.
+func TestRenderReviewFeedback_UnavailableFile(t *testing.T) {
+	l5 := 5
+	orig := "package gone"
+	notes := []state.ReviewNote{{DisplayPath: "project/gone.go", Reference: `[AFM file: "/w/gone.go"]`,
+		Line: &l5, OrigLineText: &orig, ContentSHA: "sha256:X", Text: "note"}}
+	out := renderReviewFeedback(notes, func(root, path string) (string, bool) { return "", false })
+	if !strings.Contains(out, "file unavailable at injection") {
+		t.Fatalf("unavailable marker missing:\n%s", out)
 	}
 }
