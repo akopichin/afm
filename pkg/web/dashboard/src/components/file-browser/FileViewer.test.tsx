@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, test } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, test, vi } from 'vitest'
 import type { FileContent } from '../../api/files-client'
 import { FileViewer } from './FileViewer'
 
@@ -57,5 +57,117 @@ describe('FileViewer', () => {
     const { container } = render(<FileViewer content={makeContent({ language: 'plain', content: 'hello <world>' })} loading={false} error={null} />)
     const code = container.querySelector('code.language-plain')
     expect(code?.innerHTML).toBe('hello &lt;world&gt;')
+  })
+
+  test('renders one addressable row per source line', () => {
+    render(<FileViewer content={makeContent({ content: 'line one\nline two\nline three' })} loading={false} error={null} />)
+    expect(screen.getByTestId('file-line-1')).toHaveTextContent('line one')
+    expect(screen.getByTestId('file-line-2')).toHaveTextContent('line two')
+    expect(screen.getByTestId('file-line-3')).toHaveTextContent('line three')
+  })
+
+  test('a line is not clickable/annotatable when flowPaused is not set', () => {
+    render(<FileViewer content={makeContent({ content: 'a\nb' })} loading={false} error={null} root="project" addNote={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  test('a line is not annotatable without an addNote/root (flowPaused alone is not enough)', () => {
+    render(<FileViewer content={makeContent({ content: 'a\nb' })} loading={false} error={null} flowPaused />)
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  test('opens a comment editor on line click and calls addNote on save', async () => {
+    const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
+    render(
+      <FileViewer
+        content={makeContent({ content: 'line one\nline two\nline three' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPaused
+        addNote={addNote}
+        contentSha="sha256:x"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() =>
+      expect(addNote).toHaveBeenCalledWith(
+        expect.objectContaining({ root: 'project', path: 'a.go', line: 2, text: 'fix this', content_sha: 'sha256:x' }),
+      ),
+    )
+  })
+
+  test('marks a line with a saved comment and lets it be reopened for editing', async () => {
+    const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
+    render(
+      <FileViewer
+        content={makeContent({ content: 'line one\nline two' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPaused
+        addNote={addNote}
+        contentSha="sha256:x"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'note text' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1))
+
+    expect(screen.getByTestId('file-line-1').className).toContain('has-comment')
+
+    // Reopening the same line prefills the previously saved text and offers
+    // "Update" instead of "Save" — the backend addNote call replaces the note
+    // for the same root/path/line rather than creating a duplicate.
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    expect(screen.getByRole('textbox')).toHaveValue('note text')
+    expect(screen.getByText('Update')).toBeInTheDocument()
+  })
+
+  test('clicking the same line again closes the editor without saving', () => {
+    const addNote = vi.fn()
+    render(
+      <FileViewer
+        content={makeContent({ content: 'line one' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPaused
+        addNote={addNote}
+        contentSha="sha256:x"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(addNote).not.toHaveBeenCalled()
+  })
+
+  test('Save is disabled while the draft is empty', () => {
+    render(
+      <FileViewer
+        content={makeContent({ content: 'line one' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPaused
+        addNote={vi.fn()}
+        contentSha="sha256:x"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    expect(screen.getByText('Save')).toBeDisabled()
   })
 })

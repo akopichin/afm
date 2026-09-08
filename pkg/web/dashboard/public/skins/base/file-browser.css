@@ -291,14 +291,92 @@
 
 .file-viewer-source {
   margin: 0;
-  padding: 12px 16px;
-  white-space: pre;
-  overflow-wrap: normal;
+  padding: 8px 0;
+  overflow-x: auto;
 }
-.file-viewer-source code {
+
+/* === Построчный рендер файла (Task 20) ===
+   Один div на строку исходника — по образцу .plan-line (plan-panel.css): та же
+   grid-раскладка "номер / контент / маркер", тот же ●-маркер и та же инлайновая
+   .line-comment-form (класс переиспользован без изменений — форма комментария
+   не зависит от того, план это или файл). Отдельные .file-line-* классы (не
+   .plan-line/.line-num/.line-content/.line-comment-marker) — потому что здесь
+   контент preformatted-код (white-space: pre), а не обтекающий markdown, как
+   в плане: делить один класс между двумя разными white-space-режимами через
+   !important было бы более хрупко, чем завести короткий отдельный набор. */
+.file-line {
+  display: grid;
+  grid-template-columns: 40px 1fr 20px;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 0 16px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre;
+  position: relative;
+  transition: background 0.1s;
+}
+.file-line.annotatable {
+  cursor: pointer;
+}
+.file-line.annotatable:hover {
+  background: rgba(111, 212, 204, 0.06);
+}
+.file-line.has-comment {
+  background: rgba(229, 212, 66, 0.07);
+  border-left: 2px solid var(--amber);
+  margin-left: -2px;
+  padding-left: 14px;
+}
+.file-line.has-comment:hover {
+  background: rgba(229, 212, 66, 0.12);
+}
+
+.file-line-num {
+  text-align: right;
+  padding-right: 8px;
+  color: var(--ink-dim);
+  font-size: 10px;
+  opacity: 0.5;
+  user-select: none;
+  transition: color 0.1s, opacity 0.1s;
+}
+.file-line.annotatable:hover .file-line-num {
+  color: var(--mint);
+  opacity: 1;
+}
+
+.file-line code {
   font-family: inherit;
   font-size: 11px;
   line-height: 1.6;
+  min-width: 0;
+}
+
+.file-line-comment-marker {
+  text-align: center;
+  font-size: 9px;
+  color: var(--amber);
+  opacity: 0;
+  transition: opacity 0.15s;
+  user-select: none;
+}
+.file-line.annotatable:hover .file-line-comment-marker {
+  opacity: 0.6;
+}
+.file-line.has-comment .file-line-comment-marker {
+  opacity: 1;
+}
+
+/* Форма комментария (.line-comment-form/.comment-actions/.btn-send/.btn-cancel/
+   .comment-display-header/.comment-remove) занимает всю ширину grid-строки,
+   как и в PlanPanel — те же классы, определены один раз в plan-panel.css и
+   загружаются в каждый скин вместе с этим файлом (см. skins/*/index.css), так
+   что здесь их переопределять не нужно. white-space: pre строки-контейнера
+   (.file-line) не наследуется в форму — сама форма не preformatted. */
+.file-line .line-comment-form {
+  white-space: normal;
+  margin-left: 40px;
 }
 
 /* === Дифф === */

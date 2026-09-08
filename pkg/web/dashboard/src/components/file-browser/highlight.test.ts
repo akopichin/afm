@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { escapeHtml, highlight } from './highlight'
+import { escapeHtml, highlight, splitHighlightedLines } from './highlight'
 
 describe('highlight', () => {
   test('highlights a registered language and wraps recognized tokens', () => {
@@ -26,5 +26,25 @@ describe('highlight', () => {
 
   test('escapeHtml escapes &, <, >', () => {
     expect(escapeHtml('a & b < c > d')).toBe('a &amp; b &lt; c &gt; d')
+  })
+})
+
+describe('splitHighlightedLines', () => {
+  test('splits plain (no-tag) HTML one entry per line', () => {
+    expect(splitHighlightedLines('a\nb\nc')).toEqual(['a', 'b', 'c'])
+  })
+
+  test('a span fully contained in one line stays on that line only', () => {
+    const html = 'x<span class="hljs-keyword">go</span>y\nplain'
+    expect(splitHighlightedLines(html)).toEqual(['x<span class="hljs-keyword">go</span>y', 'plain'])
+  })
+
+  test('re-balances a span that spans multiple lines so every line is self-contained', () => {
+    const html = 'a<span class="hljs-comment">/*\nmulti\nline*/</span>b'
+    expect(splitHighlightedLines(html)).toEqual([
+      'a<span class="hljs-comment">/*</span>',
+      '<span class="hljs-comment">multi</span>',
+      '<span class="hljs-comment">line*/</span>b',
+    ])
   })
 })

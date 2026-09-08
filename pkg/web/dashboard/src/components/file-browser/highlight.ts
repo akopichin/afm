@@ -34,3 +34,46 @@ export function highlight(language: string, source: string): string {
   }
   return hljs.highlight(source, { language }).value
 }
+
+// splitHighlightedLines splits an already-highlighted HTML string (the output
+// of highlight() above) into one HTML fragment per source line — needed by
+// FileViewer's per-line render (Task 20: a line must be its own addressable
+// DOM node so it can be clicked to attach a review comment, the way
+// PlanPanel's line-by-line review already works for plan markdown).
+//
+// A naive html.split('\n') is unsafe: hljs freely emits a <span class="hljs-…">
+// that SPANS multiple output lines (a multi-line block comment or template
+// string is one token, one <span>, with raw newlines inside it) — splitting
+// on '\n' would leave that <span> unclosed on its own line and strand its
+// closing </span> on a later, unrelated line, breaking both lines' HTML and
+// bleeding highlight color onto text that was never part of the token.
+//
+// The fix: walk the tag stream once, tracking currently-open <span>s. Each
+// output line starts with the tags still open from the previous line
+// (reopened verbatim) and ends with those same tags closed (without popping
+// them — they stay "open" going into the next line); only a real </span> pops
+// the stack. Every returned line is therefore well-formed HTML on its own.
+export function splitHighlightedLines(html: string): string[] {
+  const rawLines = html.split('\n')
+  const openTags: string[] = []
+  const tagRe = /<span class="[^"]*">|<\/span>/g
+
+  return rawLines.map((rawLine) => {
+    let line = openTags.join('')
+    let lastIndex = 0
+    tagRe.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = tagRe.exec(rawLine)) !== null) {
+      line += rawLine.slice(lastIndex, match.index) + match[0]
+      lastIndex = match.index + match[0].length
+      if (match[0] === '</span>') {
+        openTags.pop()
+      } else {
+        openTags.push(match[0])
+      }
+    }
+    line += rawLine.slice(lastIndex)
+    line += '</span>'.repeat(openTags.length)
+    return line
+  })
+}
