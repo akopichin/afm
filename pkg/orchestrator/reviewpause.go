@@ -300,3 +300,152 @@ func (o *Orchestrator) resumeOwner(ctx context.Context, ow state.PauseOwner, isT
 	}
 	o.concurrency.SpawnAgent(ctx, *stage, o.plainRunner(ow.ResumeKind))
 }
+
+// currentFileSHA resolves the current content_sha of a file (root/path — the
+// same pair stored on a state.ReviewNote), used by renderReviewFeedback to
+// detect drift between when a note was taken and when it's injected. Backed
+// by Options.CurrentFileSHA, wired in at construction (the server plugs in a
+// workspace-backed resolver in a later task) — nil (the default, e.g. host
+// runs with no workspace) means "can't tell", and every note renders with
+// "(⚠ file unavailable at injection)" rather than a false drift/no-drift
+// verdict.
+func (o *Orchestrator) currentFileSHA(root, path string) (string, bool) {
+	if o.opts.CurrentFileSHA == nil {
+		return "", false
+	}
+	return o.opts.CurrentFileSHA(root, path)
+}
+
+// Sentinels for InjectNotesAndResume/CancelNotesAndResume: the durable
+// resume transaction that closes out a review-pause round (PauseFlow,
+// reviewpause.go above) opened by an operator either injecting collected
+// review notes into a target stage or discarding them outright.
+var (
+	ErrNoReviewPause   = errors.New("no review pause active")
+	ErrNoNotes         = errors.New("no notes to inject")
+	ErrTargetNotPaused = errors.New("target is not paused")
+	ErrNotOwned        = errors.New("stage is not owned by the review pause")
+)
+
+// ownsStage reports whether id is one of the stages a pause marker claims
+// ownership of (see PauseFlow: only stages whose EvPause CAS actually won
+// are recorded as owners).
+func ownsStage(m *state.PauseMarker, id string) bool {
+	for _, ow := range m.Owned {
+		if ow.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// InjectNotesAndResume closes a review-pause round by delivering the
+// collected review notes to targetStageID and resuming every owned stage.
+// The durable part — flipping the marker to State=resuming/Mode=inject and
+// writing feedback.md — happens synchronously, under flowPauseMu, before this
+// call returns: a crash right after doesn't lose the operator's intent (a
+// future recovery pass has enough on disk to know injection was decided and
+// which stage it targets), it only leaves the actual resume unfinished. The
+// resume itself (waiting out in-flight agents, transitioning FSM, spawning
+// runners, then deleting notes+marker) runs asynchronously under the run's
+// own context (runContext) via runResumeTransaction — reqCtx is an HTTP
+// request context that dies the moment the handler returns, and the resume
+// of several stages plus their drain-waits can easily outlive that.
+func (o *Orchestrator) InjectNotesAndResume(reqCtx context.Context, targetStageID string) error {
+	o.flowPauseMu.Lock()
+	m := o.reviewMarker.Load()
+	if m == nil {
+		o.flowPauseMu.Unlock()
+		return ErrNoReviewPause
+	}
+	if !ownsStage(m, targetStageID) {
+		o.flowPauseMu.Unlock()
+		return ErrNotOwned
+	}
+	if o.currentStatus(targetStageID) != state.StatusPaused {
+		o.flowPauseMu.Unlock()
+		return ErrTargetNotPaused
+	}
+	notes, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		o.flowPauseMu.Unlock()
+		return err
+	}
+	if len(notes.Notes) == 0 {
+		o.flowPauseMu.Unlock()
+		return ErrNoNotes
+	}
+
+	updated := *m
+	updated.State = state.PauseStateResuming
+	updated.Mode = state.PauseModeInject
+	updated.TargetStage = targetStageID
+	if err := state.WriteNotesPauseMarker(o.opts.RunDir, updated); err != nil {
+		o.flowPauseMu.Unlock()
+		return err
+	}
+	o.reviewMarker.Store(&updated)
+
+	rendered := renderReviewFeedback(notes.Notes, o.currentFileSHA)
+	targetDir := filepath.Join(o.opts.RunDir, targetStageID)
+	if _, err := state.SaveFeedbackOnce(targetDir, updated.OperationID, rendered); err != nil {
+		o.flowPauseMu.Unlock()
+		return err
+	}
+	o.activationHeld.Store(false)
+	o.flowPauseMu.Unlock()
+
+	o.concurrency.SpawnDetached(o.runContext(reqCtx), func(ctx context.Context) {
+		o.runResumeTransaction(ctx, updated)
+	})
+	return nil
+}
+
+// CancelNotesAndResume closes a review-pause round by discarding the
+// collected review notes: every owned stage resumes plain (no target, no
+// feedback.md), the same async transaction as InjectNotesAndResume minus the
+// target/feedback step. See InjectNotesAndResume's comment for why the
+// durable marker flip is synchronous but the actual resume isn't.
+func (o *Orchestrator) CancelNotesAndResume(reqCtx context.Context) error {
+	o.flowPauseMu.Lock()
+	m := o.reviewMarker.Load()
+	if m == nil {
+		o.flowPauseMu.Unlock()
+		return ErrNoReviewPause
+	}
+
+	updated := *m
+	updated.State = state.PauseStateResuming
+	updated.Mode = state.PauseModeCancel
+	if err := state.WriteNotesPauseMarker(o.opts.RunDir, updated); err != nil {
+		o.flowPauseMu.Unlock()
+		return err
+	}
+	o.reviewMarker.Store(&updated)
+	o.activationHeld.Store(false)
+	o.flowPauseMu.Unlock()
+
+	o.concurrency.SpawnDetached(o.runContext(reqCtx), func(ctx context.Context) {
+		o.runResumeTransaction(ctx, updated)
+	})
+	return nil
+}
+
+// runResumeTransaction is the async second half of InjectNotesAndResume/
+// CancelNotesAndResume: resume every owner (the review target gets feedback,
+// see resumeOwner), nudge the scheduler in case activationHeld was gating
+// pending stages, and only then delete the review notes and the pause marker
+// — last, because as long as the marker is on disk a crash mid-transaction
+// is recoverable (the notes/marker are still there to retry from), whereas
+// deleting them first and crashing before resuming every owner would strand
+// paused stages with no marker left to explain why.
+func (o *Orchestrator) runResumeTransaction(ctx context.Context, m state.PauseMarker) {
+	for _, ow := range m.Owned {
+		isTarget := m.Mode == state.PauseModeInject && ow.ID == m.TargetStage
+		o.resumeOwner(ctx, ow, isTarget)
+	}
+	o.startReadyStages(ctx) // re-drive activation-held pending stages
+	_ = state.DeleteReviewNotes(o.opts.RunDir)
+	_ = state.ClearNotesPauseMarker(o.opts.RunDir)
+	o.reviewMarker.Store(nil)
+}

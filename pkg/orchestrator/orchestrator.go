@@ -68,6 +68,13 @@ type Options struct {
 	Debug           bool              // if true, executors log the exact agent input to debug logs
 	Memory          flow.MemoryConfig // agent-память v3: параметры конвейера (max_rules/commit)
 	MemoryDir       string            // abs путь к директории памяти ("" = выключено)
+	// CurrentFileSHA резолвит текущий content_sha файла (root/path — та же
+	// пара, что в state.ReviewNote) для renderReviewFeedback — сравнить с
+	// content_sha ноты на момент injection и пометить дрифт. nil (по
+	// умолчанию) означает "нет доступа к воркспейсу" — see currentFileSHA:
+	// каждая нота рендерится с "(⚠ file unavailable at injection)". Сервер
+	// подключит workspace-backed резолвер отдельной задачей.
+	CurrentFileSHA func(root, path string) (string, bool)
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
@@ -712,11 +719,9 @@ func (o *Orchestrator) currentStatus(id string) state.StageStatus {
 }
 
 // reviewTxnActive reports whether a review-pause marker is currently present
-// (in-memory cache, lock-free read). Not yet called anywhere — wired in by
-// the next task of the "review notes" feature (HTTP handlers that open/close
-// the review-pause transaction).
-//
-//nolint:unused // используется следующей задачей ревью-паузы
+// (in-memory cache, lock-free read). Used by InjectNotesAndResume/
+// CancelNotesAndResume's async worker (reviewpause.go) to signal completion
+// of the resume transaction back to the caller/tests.
 func (o *Orchestrator) reviewTxnActive() bool { return o.reviewMarker.Load() != nil }
 
 // activationBlocked reports whether new stage activations must be held

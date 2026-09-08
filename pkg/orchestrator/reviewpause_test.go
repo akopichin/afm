@@ -531,3 +531,133 @@ func TestResumeOwner_WaitsForDrain(t *testing.T) {
 		t.Fatal("resume should proceed after drain")
 	}
 }
+
+// waitFor polls cond every 10ms until it returns true or a 2s deadline
+// passes (t.Fatal on timeout) — a small generic helper for asserting on the
+// effect of an async worker (SpawnDetached) that this package's other
+// wait-helpers (waitForStatus, waitForAgentAction) don't cover: they poll a
+// specific status/event, this one polls an arbitrary caller-supplied
+// condition.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatal("waitFor: condition not met within timeout")
+	}
+}
+
+// TestInject_WritesFeedbackOnceAndResumes закрывает Task 13 фичи "review
+// notes": InjectNotesAndResume должен (1) синхронно, до возврата, зафиксировать
+// маркер State=resuming/Mode=inject и записать feedback.md РОВНО ОДИН раз
+// (SaveFeedbackOnce's op-id sentinel), (2) снять activationHeld, (3)
+// асинхронно (под runContext, через SpawnDetached — testRunnerHook подменяет
+// реальный Trigger+SpawnAgent внутри resumeOwner) резюмировать owner'а и
+// только ПОСЛЕ этого удалить notes+marker (reviewTxnActive() -> false).
+func TestInject_WritesFeedbackOnceAndResumes(t *testing.T) {
+	o := newTestOrchestrator(t)
+	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)
+	m := state.PauseMarker{Version: 1, OperationID: "op1", State: state.PauseStatePaused,
+		Owned: []state.PauseOwner{{ID: "s1", ResumeKind: kindImplementation}}}
+	if err := state.WriteNotesPauseMarker(o.opts.RunDir, m); err != nil {
+		t.Fatal(err)
+	}
+	o.reviewMarker.Store(&m)
+	o.activationHeld.Store(true)
+
+	l := 1
+	orig := "x"
+	if err := state.SaveReviewNotes(o.opts.RunDir, state.ReviewNotes{Version: 1, NextID: 2,
+		Notes: []state.ReviewNote{{ID: "n1", Root: "project", Path: "a.go", DisplayPath: "project/a.go",
+			Reference: `[AFM file: "/w/a.go"]`, Line: &l, OrigLineText: &orig, ContentSHA: "sha256:x", Text: "fix"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var resumed []string
+	o.testRunnerHook = func(kind string, _ bool) {
+		mu.Lock()
+		resumed = append(resumed, kind)
+		mu.Unlock()
+	}
+
+	if err := o.InjectNotesAndResume(context.Background(), "s1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Synchronous effects: assertable immediately, before the async worker runs.
+	if o.activationHeld.Load() {
+		t.Fatal("activationHeld should be cleared synchronously")
+	}
+	body, err := os.ReadFile(filepath.Join(o.opts.RunDir, "s1", "feedback.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(body), "fix") != 1 {
+		t.Fatalf("feedback not written once:\n%s", body)
+	}
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(resumed) == 1
+	}) // async worker ran
+	mu.Lock()
+	if resumed[0] != kindImplementation {
+		t.Fatalf("resumed kind = %q, want %q", resumed[0], kindImplementation)
+	}
+	mu.Unlock()
+
+	waitFor(t, func() bool { return !o.reviewTxnActive() })
+	if _, found, _ := state.ReadNotesPauseMarker(o.opts.RunDir); found {
+		t.Fatal("marker should be deleted after resume")
+	}
+	if notes, err := state.LoadReviewNotes(o.opts.RunDir); err != nil || len(notes.Notes) != 0 {
+		t.Fatalf("notes should be deleted after resume, got %+v (err=%v)", notes, err)
+	}
+}
+
+// TestInject_RejectsUnpausedTargetAndEmptyNotes закрывает Task 13: три пути
+// отказа InjectNotesAndResume — нет активного ревью-раунда вовсе, целевая
+// стадия не paused, заметок нет — не должны трогать диск (никакого
+// feedback.md, маркер/статус остаются как были).
+func TestInject_RejectsUnpausedTargetAndEmptyNotes(t *testing.T) {
+	o := newTestOrchestrator(t)
+
+	// No review-pause marker at all.
+	if err := o.InjectNotesAndResume(context.Background(), "s1"); !errors.Is(err, ErrNoReviewPause) {
+		t.Fatalf("want ErrNoReviewPause, got %v", err)
+	}
+
+	// Marker present, s1 owned, but target not (yet) paused -> ErrTargetNotPaused.
+	m := state.PauseMarker{Version: 1, OperationID: "op1", State: state.PauseStatePaused,
+		Owned: []state.PauseOwner{{ID: "s1", ResumeKind: kindImplementation}}}
+	o.reviewMarker.Store(&m)
+	if err := o.InjectNotesAndResume(context.Background(), "s1"); !errors.Is(err, ErrTargetNotPaused) {
+		t.Fatalf("want ErrTargetNotPaused, got %v", err)
+	}
+
+	// Target not owned by the marker at all -> ErrNotOwned.
+	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)
+	unowned := state.PauseMarker{Version: 1, OperationID: "op1", State: state.PauseStatePaused}
+	o.reviewMarker.Store(&unowned)
+	if err := o.InjectNotesAndResume(context.Background(), "s1"); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("want ErrNotOwned, got %v", err)
+	}
+
+	// Owned and paused, but no review notes on disk -> ErrNoNotes.
+	o.reviewMarker.Store(&m)
+	if err := o.InjectNotesAndResume(context.Background(), "s1"); !errors.Is(err, ErrNoNotes) {
+		t.Fatalf("want ErrNoNotes, got %v", err)
+	}
+
+	// None of the rejected paths should have written a feedback.md.
+	if _, err := os.Stat(filepath.Join(o.opts.RunDir, "s1", "feedback.md")); !os.IsNotExist(err) {
+		t.Fatalf("feedback.md should not exist after rejected injections, stat err=%v", err)
+	}
+}
