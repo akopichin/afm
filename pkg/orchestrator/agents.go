@@ -67,6 +67,7 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 const sectionAssumptions = "Assumptions"
 
 func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindPlanning)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
@@ -159,6 +160,7 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 }
 
 func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindPlanning)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
@@ -220,6 +222,7 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 }
 
 func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindImplementation)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	preNote := o.preNoteBlock(stageDir)
 
@@ -307,6 +310,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 }
 
 func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindReview)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
@@ -359,6 +363,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 // "open log file: ... no such file or directory" — фикс в единой точке
 // покрывает retry, resume-после-рестарта (recovery.go) и любой будущий caller.
 func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
@@ -405,6 +410,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 // Interactive, автоматически получает --resume <session-id> (существующий
 // stagefiles.SessionExists/LoadOrCreateSession в runnerFor не меняется).
 func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindImplementation)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// Возвращаемся в Running (могли прийти из Revising — Revise() перевёл
 	// сюда стадию, чтобы доставить прерывание). Без этого onAgentCompleted и
@@ -500,6 +506,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 
 // runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
 func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindReview)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
@@ -545,6 +552,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 // RetryContext; MkdirAll/autonomous.flag не повторяются — стадия уже была
 // активирована исходным runAutonomousAgent до прерывания.
 func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")

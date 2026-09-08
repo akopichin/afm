@@ -178,6 +178,18 @@ type Orchestrator struct {
 	// стадию (см. bumpPauseGen/loadPauseGen).
 	pauseGen sync.Map
 
+	// runnerKind хранит, каким раннером (planning/implementation/review/
+	// autonomous) сейчас активирована стадия — stageID -> одна из констант
+	// kindPlanning/kindImplementation/kindReview/kindAutonomous. Нужно
+	// последующей задаче (детерминированный resume-dispatch после паузы), чтобы
+	// не гадать по файлам на диске, какой раннер запускать заново. Выставляется
+	// в начале каждого из 8 run*Agent/run*WithFeedback раннеров (agents.go) и
+	// снимается централизованно в triggerWithSeq при переходах EvComplete/
+	// EvFail/EvAskUser (стадия завершилась, упала или ушла ждать пользователя —
+	// раннер для неё больше не актуален). НЕ снимается на EvScheduleRetry
+	// (retrying) — значение должно пережить backoff ретрая.
+	runnerKind sync.Map
+
 	// retryCASBarrier — тест-сейм (nil в проде): вызывается в retryStage сразу
 	// после проверки статуса failed и ДО CAS EvManualRetry, позволяя тесту
 	// детерминированно смоделировать проигрыш CAS (перевести стадию из failed
@@ -201,6 +213,37 @@ func (o *Orchestrator) loadPauseGen(stageID string) uint64 {
 		return 0
 	}
 	return v.(*atomic.Uint64).Load()
+}
+
+// Значения runnerKind — какой из 8 раннеров (agents.go) сейчас/последним
+// активирован для стадии. См. комментарий у поля runnerKind.
+const (
+	kindPlanning       = "planning"
+	kindImplementation = "implementation"
+	kindReview         = "review"
+	kindAutonomous     = "autonomous"
+)
+
+// setRunnerKind фиксирует, каким раннером активирована стадия stageID.
+// Вызывается первой строкой в каждом из 8 run*Agent/run*WithFeedback.
+func (o *Orchestrator) setRunnerKind(stageID, kind string) {
+	o.runnerKind.Store(stageID, kind)
+}
+
+// clearRunnerKind снимает отметку о раннере стадии (завершилась/упала/ждёт
+// пользователя — см. triggerWithSeq). Значение просто отсутствует до
+// следующего setRunnerKind, ничего не ломает.
+func (o *Orchestrator) clearRunnerKind(stageID string) {
+	o.runnerKind.Delete(stageID)
+}
+
+// runnerKindOf возвращает текущий runnerKind стадии либо "" если ни разу не
+// выставлялся (или уже снят).
+func (o *Orchestrator) runnerKindOf(stageID string) string {
+	if v, ok := o.runnerKind.Load(stageID); ok {
+		return v.(string)
+	}
+	return ""
 }
 
 // setFatal фиксирует первую storage-fatal ошибку и отменяет run-контекст,
@@ -325,6 +368,18 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		o.ui.Publish(pubEv)
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
+		// runnerKind больше не актуален: стадия завершилась (EvComplete),
+		// провалилась (EvFail) или ушла ждать пользователя (EvAskUser) — во
+		// всех трёх случаях раннер, который её вёл, для неё закончил работу.
+		// Единая точка вместо ~15 разрозненных call site'ов Trigger(EvFail)/
+		// Trigger(EvAskUser) по всему пакету: Trigger/triggerWithSeq — общий
+		// funnel для всех переходов FSM (см. комментарий выше), так что
+		// проверка здесь не пропустит ни один существующий или будущий call
+		// site. EvScheduleRetry (retrying) сюда намеренно не входит — значение
+		// должно пережить backoff.
+		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvAskUser {
+			o.clearRunnerKind(stageID)
+		}
 	}
 	return to, seq, ok
 }
