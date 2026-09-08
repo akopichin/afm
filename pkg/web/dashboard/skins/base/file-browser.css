@@ -379,6 +379,14 @@
   margin-left: 40px;
 }
 
+/* Инлайновая ошибка сохранения заметки (409 stale_content/rev_conflict и т.п.):
+   форма остаётся открытой, ошибка показывается между textarea и кнопками. */
+.file-line .line-comment-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--coral);
+}
+
 /* Task 21: конфирм "поставить флоу на паузу?" — показывается вместо формы
    комментария на первый клик по строке, пока flowPauseState === 'none'.
    .comment-actions/.btn-send/.btn-cancel переиспользованы из plan-panel.css,

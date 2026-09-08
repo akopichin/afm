@@ -1,8 +1,24 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
-import type { AddNoteRequest } from '../../api/run-client'
+import { FlowApiError, type AddNoteRequest } from '../../api/run-client'
 import type { FileContent } from '../../api/files-client'
 import type { ReviewNote } from '../../types'
 import { highlight, splitHighlightedLines } from './highlight'
+
+// Машиночитаемые коды ошибок бэкенда (см. FlowApiError.code в run-client.ts)
+// в человекочитаемый текст — тот же набор, что ReviewNotesModal's
+// describeApiError, но продублирован локально: FileViewer — лист file-browser
+// и не должен тянуть модуль review-notes-modal ради одной функции. 409-конфликт
+// addNote'а: stale_content (файл изменился с момента постановки заметки —
+// перечитать и заново привязать) и rev_conflict (стор заметок поменяли где-то
+// ещё).
+function describeAddNoteError(err: unknown): string {
+  if (err instanceof FlowApiError) {
+    if (err.code === 'stale_content') return 'File changed since it was opened — reload and re-anchor the note.'
+    if (err.code === 'rev_conflict') return 'Notes changed elsewhere — reload and retry.'
+    if (err.code !== undefined) return `Request failed: ${err.code}`
+  }
+  return err instanceof Error ? err.message : 'Request failed'
+}
 
 // Совпадает с use-status.ts's FlowStatus['flowPauseState'] — 'none' (флоу
 // активен), 'paused' (заметки можно писать прямо сейчас), 'resuming'
@@ -74,6 +90,10 @@ export function FileViewer({
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  // Инлайновая ошибка последнего addNote (напр. 409 stale_content/rev_conflict):
+  // форма остаётся открытой, пользователь видит причину рядом с редактором и
+  // может перечитать/повторить — а не молча закрывшуюся форму без сигнала.
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [computedSha, setComputedSha] = useState<string | null>(null)
   // Line clicked while flowPauseState === 'none', awaiting the user's
   // yes/no on the pause-gate confirm. Cleared on "Нет", on reopening the
@@ -108,6 +128,7 @@ export function FileViewer({
     setComments({})
     setActiveCommentLine(null)
     setDraft('')
+    setSaveError(null)
   }, [content?.path])
 
   // content_sha считается один раз на загруженный файл — не на каждый рендер
@@ -150,6 +171,7 @@ export function FileViewer({
 
       setActiveCommentLine(line)
       setDraft(comments[line] ?? '')
+      setSaveError(null)
       return
     }
 
@@ -163,6 +185,7 @@ export function FileViewer({
   function closeCommentForm() {
     setActiveCommentLine(null)
     setDraft('')
+    setSaveError(null)
   }
 
   function confirmPause() {
@@ -184,6 +207,7 @@ export function FileViewer({
     if (text === '') return
 
     setSaving(true)
+    setSaveError(null)
     try {
       await addNote({
         root,
@@ -196,6 +220,10 @@ export function FileViewer({
       setComments((prev) => ({ ...prev, [line]: text }))
       setActiveCommentLine(null)
       setDraft('')
+    } catch (err) {
+      // Keep the form open with the draft intact so the user can reload/retry
+      // rather than losing the note to a silently-closed editor.
+      setSaveError(describeAddNoteError(err))
     } finally {
       setSaving(false)
     }
@@ -257,6 +285,11 @@ export function FileViewer({
               placeholder={`Comment on line ${lineNumber}...`}
               autoFocus
             />
+            {saveError !== null && (
+              <p className="line-comment-error" role="alert">
+                {saveError}
+              </p>
+            )}
             <div className="comment-actions">
               <button
                 className="btn btn-send"

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import type { FileContent } from '../../api/files-client'
+import { FlowApiError } from '../../api/run-client'
 import { FileViewer } from './FileViewer'
 
 function makeContent(overrides: Partial<FileContent> = {}): FileContent {
@@ -102,6 +103,33 @@ describe('FileViewer', () => {
         expect.objectContaining({ root: 'project', path: 'a.go', line: 2, text: 'fix this', content_sha: 'sha256:x' }),
       ),
     )
+  })
+
+  test('surfaces a rejected addNote inline and keeps the form open', async () => {
+    const addNote = vi.fn().mockRejectedValue(new FlowApiError('/api/flow/notes', 409, 'stale_content'))
+    render(
+      <FileViewer
+        content={makeContent({ content: 'line one\nline two' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPauseState="paused"
+        addNote={addNote}
+        contentSha="sha256:x"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1))
+
+    // The 409 is shown inline (mentioning the reload guidance), and the editor
+    // stays open with the draft intact instead of silently closing.
+    expect(screen.getByRole('alert')).toHaveTextContent(/reload/i)
+    expect(screen.getByRole('textbox')).toHaveValue('fix this')
+    expect(screen.getByTestId('file-line-2').className).not.toContain('has-comment')
   })
 
   test('marks a line with a saved comment and lets it be reopened for editing', async () => {
