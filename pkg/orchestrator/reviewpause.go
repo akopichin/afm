@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -476,4 +477,212 @@ func (o *Orchestrator) runResumeTransaction(ctx context.Context, m state.PauseMa
 	_ = state.DeleteReviewNotes(o.opts.RunDir)
 	_ = state.ClearNotesPauseMarker(o.opts.RunDir)
 	o.reviewMarker.Store(nil)
+}
+
+// Sentinels for the notes CRUD methods below (AddNote/UpdateNote/DeleteNote).
+// ErrRevConflict/ErrStaleContent/ErrStaleLine/ErrEmptyText map to 409/400 in
+// pkg/server's flowErrCode; ErrNoteNotFound is the natural extension for
+// Update/Delete against an id that isn't in the store (not requested by the
+// original task list explicitly, but Update/Delete need SOME answer for a
+// stale/typoed id, and silently no-op'ing would be worse than a clear 404).
+var (
+	ErrRevConflict  = errors.New("notes revision conflict")
+	ErrStaleContent = errors.New("file content changed since the note was captured")
+	ErrStaleLine    = errors.New("line is out of range for the current file")
+	ErrEmptyText    = errors.New("note text is empty")
+	ErrNoteNotFound = errors.New("note not found")
+)
+
+// resolveFile is the nil-safe wrapper around Options.ResolveFile, mirroring
+// the currentFileSHA pattern above: nil (host runs, no file browser wired)
+// means "can't resolve anything", not a panic.
+func (o *Orchestrator) resolveFile(root, path string, line *int) (ResolvedFile, bool) {
+	if o.opts.ResolveFile == nil {
+		return ResolvedFile{}, false
+	}
+	return o.opts.ResolveFile(root, path, line)
+}
+
+// requireReviewPaused is the shared precondition for every notes CRUD method:
+// a review-pause round must be active AND currently sitting in the paused
+// state (not mid-resume) — the same fact ReviewState() reports, checked
+// directly against the marker rather than going through the string-based
+// ReviewState() API.
+func (o *Orchestrator) requireReviewPaused() error {
+	m := o.reviewMarker.Load()
+	if m == nil || m.State != state.PauseStatePaused {
+		return ErrNoReviewPause
+	}
+	return nil
+}
+
+// sameLine reports whether two line pointers denote the same review-note key:
+// both nil (a file-level note) or both non-nil with an equal value.
+func sameLine(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// AddNote adds (or, for the same (root,path,line) key, replaces) a review
+// note while the flow is paused for review. It resolves the file via
+// Options.ResolveFile to capture display_path/reference/content_sha (and, for
+// a line note, the original line text) and to detect two kinds of staleness
+// against the client's view of the file: a changed content_sha
+// (ErrStaleContent, also returned when the file can't be resolved at all —
+// e.g. it no longer exists) and a line number that's fallen out of range
+// (ErrStaleLine). expectedRev implements optimistic concurrency against
+// concurrent editors of the same note list (ErrRevConflict on mismatch).
+// Replacing an existing note keeps its id/created_at — only text/content_sha/
+// orig_line_text and the notes-wide rev change.
+func (o *Orchestrator) AddNote(root, path string, line *int, text, clientSHA string, expectedRev int) (state.ReviewNote, int, error) {
+	o.flowPauseMu.Lock()
+	defer o.flowPauseMu.Unlock()
+
+	if err := o.requireReviewPaused(); err != nil {
+		return state.ReviewNote{}, 0, err
+	}
+
+	notes, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		return state.ReviewNote{}, 0, err
+	}
+	if expectedRev != notes.Rev {
+		return state.ReviewNote{}, 0, ErrRevConflict
+	}
+	if strings.TrimSpace(text) == "" {
+		return state.ReviewNote{}, 0, ErrEmptyText
+	}
+
+	rf, ok := o.resolveFile(root, path, line)
+	if !ok || rf.ContentSHA != clientSHA {
+		return state.ReviewNote{}, 0, ErrStaleContent
+	}
+
+	note := state.ReviewNote{
+		Root:        root,
+		Path:        path,
+		DisplayPath: rf.DisplayPath,
+		Reference:   rf.Reference,
+		Line:        line,
+		ContentSHA:  rf.ContentSHA,
+		Text:        text,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if line != nil {
+		if !rf.InRange {
+			return state.ReviewNote{}, 0, ErrStaleLine
+		}
+		lineText := rf.LineText
+		note.OrigLineText = &lineText
+	}
+
+	replaced := false
+	for i, existing := range notes.Notes {
+		if existing.Root == root && existing.Path == path && sameLine(existing.Line, line) {
+			note.ID = existing.ID
+			note.CreatedAt = existing.CreatedAt
+			notes.Notes[i] = note
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		note.ID = "n" + strconv.Itoa(notes.NextID)
+		notes.NextID++
+		notes.Notes = append(notes.Notes, note)
+	}
+	notes.Rev++
+
+	if err := state.SaveReviewNotes(o.opts.RunDir, notes); err != nil {
+		return state.ReviewNote{}, 0, err
+	}
+	return note, notes.Rev, nil
+}
+
+// UpdateNote edits the text of an existing note while the flow is paused for
+// review, rev-checked like AddNote.
+func (o *Orchestrator) UpdateNote(id, text string, expectedRev int) (int, error) {
+	o.flowPauseMu.Lock()
+	defer o.flowPauseMu.Unlock()
+
+	if err := o.requireReviewPaused(); err != nil {
+		return 0, err
+	}
+
+	notes, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		return 0, err
+	}
+	if expectedRev != notes.Rev {
+		return 0, ErrRevConflict
+	}
+	if strings.TrimSpace(text) == "" {
+		return 0, ErrEmptyText
+	}
+
+	found := false
+	for i := range notes.Notes {
+		if notes.Notes[i].ID == id {
+			notes.Notes[i].Text = text
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, ErrNoteNotFound
+	}
+	notes.Rev++
+
+	if err := state.SaveReviewNotes(o.opts.RunDir, notes); err != nil {
+		return 0, err
+	}
+	return notes.Rev, nil
+}
+
+// DeleteNote removes an existing note while the flow is paused for review,
+// rev-checked like AddNote.
+func (o *Orchestrator) DeleteNote(id string, expectedRev int) (int, error) {
+	o.flowPauseMu.Lock()
+	defer o.flowPauseMu.Unlock()
+
+	if err := o.requireReviewPaused(); err != nil {
+		return 0, err
+	}
+
+	notes, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		return 0, err
+	}
+	if expectedRev != notes.Rev {
+		return 0, ErrRevConflict
+	}
+
+	idx := -1
+	for i, n := range notes.Notes {
+		if n.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return 0, ErrNoteNotFound
+	}
+	notes.Notes = slices.Delete(notes.Notes, idx, idx+1)
+	notes.Rev++
+
+	if err := state.SaveReviewNotes(o.opts.RunDir, notes); err != nil {
+		return 0, err
+	}
+	return notes.Rev, nil
+}
+
+// ListNotes reads the current review notes. Unlike Add/Update/Delete it has
+// no pause gate and takes no lock — a plain read of state.LoadReviewNotes is
+// safe to call anytime (e.g. from the HTTP handler goroutine, whether or not
+// a review-pause round is active), matching the read-side pattern used
+// elsewhere (ReviewState/currentStatus).
+func (o *Orchestrator) ListNotes() (state.ReviewNotes, error) {
+	return state.LoadReviewNotes(o.opts.RunDir)
 }

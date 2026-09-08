@@ -81,7 +81,7 @@ type Server struct {
 	uiBus            *bus.UIBus
 	actions          StageActions              // never nil in practice — see StageActions doc
 	secondary        SecondaryActions          // may be nil — see SecondaryActions doc
-	flowActions      FlowActions               // review-pause commands; nil = respond 501 (see handlers)
+	flowActions      FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
 	reviewState      func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
 	workspace        workspace.FS              // Docker project file browser backend; nil = capability off
 	theme            string                    // "goga" или "" (default coffee)

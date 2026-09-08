@@ -75,6 +75,32 @@ type Options struct {
 	// каждая нота рендерится с "(⚠ file unavailable at injection)". Сервер
 	// подключит workspace-backed резолвер отдельной задачей.
 	CurrentFileSHA func(root, path string) (string, bool)
+	// ResolveFile резолвит {root,path} (+ line, если нота построчная) в
+	// ResolvedFile для AddNote (reviewpause.go) — abs/display/reference,
+	// текущий content_sha (сравнить с тем, что прислал клиент — детект
+	// stale-правки) и, для построчной ноты, текст строки + её валидность.
+	// nil (по умолчанию в хостовом режиме — там нет file browser) означает
+	// "файл не резолвится вообще": AddNote возвращает ErrStaleContent. Реальный
+	// workspace-backed резолвер подключается отдельной задачей (см. cmd/afm).
+	ResolveFile func(root, path string, line *int) (ResolvedFile, bool)
+}
+
+// ResolvedFile — то, что Options.ResolveFile возвращает про файл, к которому
+// привязывается review-нота: абсолютный путь, отображаемый путь и ссылка (те
+// же поля, что renderReviewFeedback уже кладёт в state.ReviewNote), текущий
+// content_sha (для сравнения с content_sha, который прислал клиент — детект
+// stale-правки между тем, как пользователь открыл файл в браузере, и тем,
+// как он отправил ноту) и, для построчной ноты (line != nil на входе),
+// текст этой строки (LineText) и попадает ли номер строки в текущий файл
+// (InRange). Для файловой ноты (line == nil на входе) LineText/InRange не
+// используются вызывающим кодом.
+type ResolvedFile struct {
+	Abs         string
+	DisplayPath string
+	Reference   string
+	ContentSHA  string
+	LineText    string
+	InRange     bool
 }
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.

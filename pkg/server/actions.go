@@ -1,6 +1,10 @@
 package server
 
-import "context"
+import (
+	"context"
+
+	"github.com/akopichin/afm/pkg/state"
+)
 
 // StageActions are the commands the dashboard can always trigger for any
 // stage: approve/revise a plan, retry a failed stage, or pause/continue a
@@ -34,12 +38,21 @@ type SecondaryActions interface {
 }
 
 // FlowActions are the flow-wide review-pause commands: hold every active
-// stage for review (PauseFlow), then close the round by either injecting the
-// collected notes into a target stage (InjectNotesAndResume) or discarding
-// them (CancelNotesAndResume). The orchestrator implements this directly
-// (pkg/orchestrator/reviewpause.go) — see cmd/afm/run.go for the wiring.
+// stage for review (PauseFlow), collect review notes against the paused
+// files (AddNote/UpdateNote/DeleteNote/ListNotes), then close the round by
+// either injecting the collected notes into a target stage
+// (InjectNotesAndResume) or discarding them (CancelNotesAndResume). The
+// orchestrator implements this directly (pkg/orchestrator/reviewpause.go) —
+// see cmd/afm/run.go for the wiring. The notes CRUD methods serialize with
+// the review-pause lifecycle under the orchestrator's flowPauseMu and require
+// the flow to be paused (ListNotes is the one exception — a lock-free read,
+// safe to call anytime).
 type FlowActions interface {
 	PauseFlow(ctx context.Context) ([]string, error)
 	InjectNotesAndResume(ctx context.Context, targetStageID string) error
 	CancelNotesAndResume(ctx context.Context) error
+	AddNote(root, path string, line *int, text, contentSHA string, expectedRev int) (state.ReviewNote, int, error)
+	UpdateNote(id, text string, expectedRev int) (int, error)
+	DeleteNote(id string, expectedRev int) (int, error)
+	ListNotes() (state.ReviewNotes, error)
 }

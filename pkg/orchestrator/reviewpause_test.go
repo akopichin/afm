@@ -801,3 +801,249 @@ func TestRecoverReviewPause_CorruptPausedFailsOpen(t *testing.T) {
 		t.Fatal("corrupt paused marker must not set activationHeld/reviewMarker")
 	}
 }
+
+// stubResolveFile returns an Options.ResolveFile stub that always resolves
+// successfully with a fixed content_sha/line text/in-range verdict — the
+// AddNote tests below (Task 18) drive staleness purely by varying the
+// clientSHA/line the CALLER passes in, not by changing what the "workspace"
+// reports.
+func stubResolveFile(sha, lineText string, inRange bool) func(root, path string, line *int) (ResolvedFile, bool) {
+	return func(root, path string, line *int) (ResolvedFile, bool) {
+		return ResolvedFile{
+			Abs:         "/w/" + path,
+			DisplayPath: root + "/" + path,
+			Reference:   `[AFM file: "/w/` + path + `"]`,
+			ContentSHA:  sha,
+			LineText:    lineText,
+			InRange:     inRange,
+		}, true
+	}
+}
+
+// pausedNotesTestOrch builds a single-stage orchestrator with a live
+// PauseStatePaused review marker (the precondition AddNote/UpdateNote/
+// DeleteNote all require) and the given ResolveFile stub wired in.
+func pausedNotesTestOrch(t *testing.T, resolve func(root, path string, line *int) (ResolvedFile, bool)) *Orchestrator {
+	t.Helper()
+	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
+	o.reviewMarker.Store(&state.PauseMarker{Version: 1, State: state.PauseStatePaused})
+	o.opts.ResolveFile = resolve
+	return o
+}
+
+// TestAddNote_RejectedWhenNotPaused закрывает Task 18: без активного
+// review-pause маркера (или маркер есть, но State != paused) AddNote должен
+// вернуть ErrNoReviewPause и не трогать review-notes.json.
+func TestAddNote_RejectedWhenNotPaused(t *testing.T) {
+	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
+	o.opts.ResolveFile = stubResolveFile("sha256:x", "orig", true)
+	if _, _, err := o.AddNote("project", "a.go", nil, "fix", "sha256:x", 0); !errors.Is(err, ErrNoReviewPause) {
+		t.Fatalf("err=%v, want ErrNoReviewPause", err)
+	}
+}
+
+// TestAddNote_RevMismatch закрывает Task 18: expectedRev != текущий Rev
+// (0 при первой ноте) должен вернуть ErrRevConflict.
+func TestAddNote_RevMismatch(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
+	if _, _, err := o.AddNote("project", "a.go", nil, "fix", "sha256:x", 7); !errors.Is(err, ErrRevConflict) {
+		t.Fatalf("err=%v, want ErrRevConflict", err)
+	}
+}
+
+// TestAddNote_EmptyText закрывает Task 18: пустой/whitespace-only text
+// должен вернуть ErrEmptyText.
+func TestAddNote_EmptyText(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
+	if _, _, err := o.AddNote("project", "a.go", nil, "   ", "sha256:x", 0); !errors.Is(err, ErrEmptyText) {
+		t.Fatalf("err=%v, want ErrEmptyText", err)
+	}
+}
+
+// TestAddNote_StaleContent закрывает Task 18: клиентский content_sha не
+// совпадает с тем, что резолвит ResolveFile сейчас — ErrStaleContent.
+func TestAddNote_StaleContent(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:current", "orig", true))
+	if _, _, err := o.AddNote("project", "a.go", nil, "fix", "sha256:stale", 0); !errors.Is(err, ErrStaleContent) {
+		t.Fatalf("err=%v, want ErrStaleContent", err)
+	}
+}
+
+// TestAddNote_UnresolvableFileIsStaleContent закрывает Task 18: если
+// ResolveFile не смог резолвить файл вообще (ok=false — например, файл
+// удалили), AddNote должен вернуть ErrStaleContent, а не панику/500.
+func TestAddNote_UnresolvableFileIsStaleContent(t *testing.T) {
+	o := pausedNotesTestOrch(t, func(root, path string, line *int) (ResolvedFile, bool) { return ResolvedFile{}, false })
+	if _, _, err := o.AddNote("project", "a.go", nil, "fix", "sha256:x", 0); !errors.Is(err, ErrStaleContent) {
+		t.Fatalf("err=%v, want ErrStaleContent", err)
+	}
+}
+
+// TestAddNote_StaleLine закрывает Task 18: построчная нота с InRange=false
+// (номер строки за пределами текущего файла) должна вернуть ErrStaleLine.
+func TestAddNote_StaleLine(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", false))
+	line := 999
+	if _, _, err := o.AddNote("project", "a.go", &line, "fix", "sha256:x", 0); !errors.Is(err, ErrStaleLine) {
+		t.Fatalf("err=%v, want ErrStaleLine", err)
+	}
+}
+
+// TestAddNote_HappyPath закрывает Task 18: первая нота получает id "n1",
+// Rev поднимается до 1, и записанное на диск review-notes.json совпадает с
+// возвращённым значением.
+func TestAddNote_HappyPath(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "original line", true))
+	line := 42
+	note, rev, err := o.AddNote("project", "a.go", &line, "fix this", "sha256:x", 0)
+	if err != nil {
+		t.Fatalf("AddNote: %v", err)
+	}
+	if note.ID != "n1" {
+		t.Fatalf("id=%q, want n1", note.ID)
+	}
+	if rev != 1 {
+		t.Fatalf("rev=%d, want 1", rev)
+	}
+	if note.DisplayPath != "project/a.go" || note.ContentSHA != "sha256:x" {
+		t.Fatalf("note=%+v", note)
+	}
+	if note.OrigLineText == nil || *note.OrigLineText != "original line" {
+		t.Fatalf("orig_line_text=%v", note.OrigLineText)
+	}
+
+	onDisk, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.Rev != 1 || len(onDisk.Notes) != 1 || onDisk.Notes[0].ID != "n1" {
+		t.Fatalf("on disk: %+v", onDisk)
+	}
+}
+
+// TestAddNote_DedupReplacesSameKey закрывает Task 18: две ноты на один и тот
+// же (root,path,line) — вторая ЗАМЕНЯЕТ первую, сохраняя id/created_at, а не
+// плодит дубликат; Rev поднимается на каждый вызов, NextID — только на
+// НОВУЮ ноту.
+func TestAddNote_DedupReplacesSameKey(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "original line", true))
+	line := 42
+	first, rev1, err := o.AddNote("project", "a.go", &line, "first text", "sha256:x", 0)
+	if err != nil {
+		t.Fatalf("first AddNote: %v", err)
+	}
+	if first.ID != "n1" || rev1 != 1 {
+		t.Fatalf("first=%+v rev=%d", first, rev1)
+	}
+
+	second, rev2, err := o.AddNote("project", "a.go", &line, "second text", "sha256:x", rev1)
+	if err != nil {
+		t.Fatalf("second AddNote: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("dedup must keep the same id: first=%q second=%q", first.ID, second.ID)
+	}
+	if !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("dedup must keep created_at: first=%v second=%v", first.CreatedAt, second.CreatedAt)
+	}
+	if second.Text != "second text" {
+		t.Fatalf("dedup must refresh text: %q", second.Text)
+	}
+	if rev2 != 2 {
+		t.Fatalf("rev2=%d, want 2", rev2)
+	}
+
+	onDisk, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk.Notes) != 1 {
+		t.Fatalf("dedup must not create a second note: %+v", onDisk.Notes)
+	}
+	if onDisk.NextID != 2 {
+		t.Fatalf("NextID must only bump for a genuinely new note: %d", onDisk.NextID)
+	}
+}
+
+// TestUpdateNote_RevConflictAndSuccess закрывает Task 18: UpdateNote
+// отклоняет мисматч ревизии и, при успехе, меняет только text.
+func TestUpdateNote_RevConflictAndSuccess(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
+	note, rev, err := o.AddNote("project", "a.go", nil, "first", "sha256:x", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := o.UpdateNote(note.ID, "updated", rev+1); !errors.Is(err, ErrRevConflict) {
+		t.Fatalf("err=%v, want ErrRevConflict", err)
+	}
+
+	newRev, err := o.UpdateNote(note.ID, "updated", rev)
+	if err != nil {
+		t.Fatalf("UpdateNote: %v", err)
+	}
+	if newRev != rev+1 {
+		t.Fatalf("newRev=%d, want %d", newRev, rev+1)
+	}
+
+	onDisk, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.Notes[0].Text != "updated" {
+		t.Fatalf("text not updated: %+v", onDisk.Notes[0])
+	}
+}
+
+// TestUpdateNote_NotFound закрывает Task 18: обновление несуществующего id
+// возвращает ErrNoteNotFound, а не тихий no-op.
+func TestUpdateNote_NotFound(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
+	if _, err := o.UpdateNote("n404", "updated", 0); !errors.Is(err, ErrNoteNotFound) {
+		t.Fatalf("err=%v, want ErrNoteNotFound", err)
+	}
+}
+
+// TestDeleteNote_Success закрывает Task 18: DeleteNote убирает ноту и
+// поднимает Rev; повторное удаление того же id — ErrNoteNotFound.
+func TestDeleteNote_Success(t *testing.T) {
+	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
+	note, rev, err := o.AddNote("project", "a.go", nil, "first", "sha256:x", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newRev, err := o.DeleteNote(note.ID, rev)
+	if err != nil {
+		t.Fatalf("DeleteNote: %v", err)
+	}
+	if newRev != rev+1 {
+		t.Fatalf("newRev=%d, want %d", newRev, rev+1)
+	}
+
+	onDisk, err := state.LoadReviewNotes(o.opts.RunDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk.Notes) != 0 {
+		t.Fatalf("note not deleted: %+v", onDisk.Notes)
+	}
+
+	if _, err := o.DeleteNote(note.ID, newRev); !errors.Is(err, ErrNoteNotFound) {
+		t.Fatalf("second delete err=%v, want ErrNoteNotFound", err)
+	}
+}
+
+// TestListNotes_NoPauseGate закрывает Task 18: ListNotes читает
+// review-notes.json без проверки паузы — доступен даже когда review-pause
+// вообще не активен.
+func TestListNotes_NoPauseGate(t *testing.T) {
+	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
+	notes, err := o.ListNotes()
+	if err != nil {
+		t.Fatalf("ListNotes: %v", err)
+	}
+	if notes.Rev != 0 || len(notes.Notes) != 0 {
+		t.Fatalf("expected empty notes, got %+v", notes)
+	}
+}
