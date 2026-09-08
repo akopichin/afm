@@ -418,7 +418,17 @@ func (o *Orchestrator) allTerminal() bool {
 // memory pipeline (maybeRunReflection, reflection.go): it, too,
 // never touches the FSM, so a stage stays "done" while its pipeline is
 // still running in the background.
+//
+// reviewTxnActive() is checked first and unconditionally: every owned stage
+// a PauseFlow round holds sits in status paused, which allTerminal() below
+// treats as non-terminal anyway — but the check is kept explicit and first so
+// the intent ("never finalize a run mid review-pause") doesn't depend on that
+// coincidence, and so it also covers the brief window where the marker exists
+// but ownership/counting hasn't settled yet.
 func (o *Orchestrator) shouldExit() bool {
+	if o.reviewTxnActive() {
+		return false // a review-pause round is in progress; stay alive for the reviewer
+	}
 	if o.pendingAfterHooks.Load() > 0 || o.pendingReflections.Load() > 0 {
 		return false
 	}

@@ -468,8 +468,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				return ferr
 			}
 			if o.shouldExit() {
-				o.runEndOfRunMemory(ctx)
-				return nil
+				// The finalize decision must be atomic with PauseFlow (see
+				// reviewpause.go): both take flowPauseMu, so if a review-pause
+				// round starts concurrently right in this window, either it
+				// sees finalizing==true first (and backs off with
+				// ErrRunFinalizing) or we see reviewTxnActive()==true first
+				// (and stay alive for the reviewer) — never both proceeding.
+				o.flowPauseMu.Lock()
+				if !o.reviewTxnActive() {
+					o.finalizing.Store(true)
+					o.flowPauseMu.Unlock()
+					o.runEndOfRunMemory(ctx)
+					return nil
+				}
+				o.flowPauseMu.Unlock()
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -10,6 +11,27 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+// ErrFlowPaused is returned by any public forward-driving control action
+// (Approve/Revise/Retry/Pause/Continue/Button/RetryHook/SkipHook/
+// NotifyAnswer/CancelDialog) while a review-pause transaction is active
+// (reviewTxnActive()). The dashboard's review-pause flow (PauseFlow /
+// InjectNotesAndResume / CancelNotesAndResume, reviewpause.go) is the only
+// thing allowed to drive stages while the flow is held for review — every
+// other entry point must back off with a clear, typed error rather than
+// racing the pause transaction's own transitions.
+var ErrFlowPaused = errors.New("flow_paused")
+
+// rejectIfReviewPaused is the single gate every public forward-driving
+// control action calls first: while a review-pause marker is present
+// (reviewTxnActive()), the action is rejected outright rather than reading
+// or mutating any stage state. See ErrFlowPaused.
+func (o *Orchestrator) rejectIfReviewPaused() error {
+	if o.reviewTxnActive() {
+		return ErrFlowPaused
+	}
+	return nil
+}
 
 // FailStage marks a stage as failed with a reason.
 func (o *Orchestrator) FailStage(stageID, reason string) {
@@ -22,6 +44,9 @@ func (o *Orchestrator) FailStage(stageID, reason string) {
 // can require a real method instead of the HTTP layer building a closure around
 // FailStage with a hardcoded reason string.
 func (o *Orchestrator) CancelDialog(stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	o.FailStage(stageID, "cancelled by user")
 	return nil
 }
@@ -30,6 +55,9 @@ func (o *Orchestrator) CancelDialog(stageID string) error {
 // It is a thin wrapper over resumeAfterAnswer with the dialog-feed UI event
 // enabled (publishUI=true) — a human answer should show up in the event feed.
 func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOptions bool) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	return o.resumeAfterAnswer(stageID, phase, qID, answer, true)
 }
 
@@ -134,6 +162,9 @@ func (o *Orchestrator) runContext(fallback context.Context) context.Context {
 // или Run ctx у headless auto-approve) — подставляем run ctx перед спавном
 // агента, см. runContext.
 func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	o.approveStage(o.runContext(ctx), stageID)
 	return nil
 }
@@ -148,6 +179,9 @@ func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
 // onUserInterrupted изнутри уже идущего runWithRetry, когда SIGINT реально
 // завершит текущий subprocess (см. pkg/executor: Config.InterruptCh).
 func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	current := o.currentStatus(stageID)
 	if current != state.StatusAwaitingApproval && current != state.StatusRunning {
 		return nil
@@ -194,6 +228,9 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 // no-op (returns nil). The status gate (running/awaiting_approval) lives in
 // Revise itself, so Button doesn't re-check it.
 func (o *Orchestrator) Button(ctx context.Context, stageID, name string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	stage := o.graph.Stage(stageID)
 	if stage == nil {
 		return nil
@@ -212,6 +249,9 @@ func (o *Orchestrator) Button(ctx context.Context, stageID, name string) error {
 // with feedback, Pause doesn't restart anything — the durable transition to
 // paused already happened here, synchronously, before the signal was sent.
 func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	switch o.currentStatus(stageID) {
 	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying:
 	default:
@@ -247,6 +287,9 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
 // scheduler's point of view, the same situation: "the process implied by
 // this status isn't running right now."
 func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	if o.currentStatus(stageID) != state.StatusPaused {
 		return nil
 	}
@@ -274,6 +317,9 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 // Retry retries a failed stage by transitioning it to pending and restarting
 // (синхронно и долговечно).
 func (o *Orchestrator) Retry(ctx context.Context, stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	o.retryStage(o.runContext(ctx), stageID)
 	return nil
 }
@@ -281,6 +327,9 @@ func (o *Orchestrator) Retry(ctx context.Context, stageID string) error {
 // RetryHook resumes a stage currently blocked on a failed before/after hook
 // by re-running that hook's 3x/1-2-3s retry cycle.
 func (o *Orchestrator) RetryHook(stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	if !o.resolveHook(stageID, hookDecisionRetry) {
 		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
 	}
@@ -290,6 +339,9 @@ func (o *Orchestrator) RetryHook(stageID string) error {
 // SkipHook resumes a stage currently blocked on a failed before/after hook
 // by skipping it entirely.
 func (o *Orchestrator) SkipHook(stageID string) error {
+	if err := o.rejectIfReviewPaused(); err != nil {
+		return err
+	}
 	if !o.resolveHook(stageID, hookDecisionSkip) {
 		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
 	}

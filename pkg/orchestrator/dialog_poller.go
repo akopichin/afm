@@ -175,6 +175,13 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			// FSM status is left untouched (no EvAskUser transition) in the normal
 			// case where the agent is still polling.
 			if stage != nil && !stage.Interactive {
+				if o.reviewTxnActive() {
+					// Review-pause is active: afm must not auto-answer on the
+					// stage's behalf while the flow is held for a human
+					// reviewer — leave the question unanswered and retry on
+					// the next tick, same as a failed WriteAnswer above.
+					continue
+				}
 				answer, fromOptions := mcp.PickAutoAnswer(q)
 				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)

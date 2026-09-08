@@ -661,3 +661,47 @@ func TestInject_RejectsUnpausedTargetAndEmptyNotes(t *testing.T) {
 		t.Fatalf("feedback.md should not exist after rejected injections, stat err=%v", err)
 	}
 }
+
+// makeAllTerminal moves every stage of o's flow directly to StatusDone
+// (bypassing the FSM, same technique as seedStageStatus) so that allTerminal()
+// — and therefore shouldExit(), absent any other gate — would report true.
+// Used to isolate the reviewTxnActive() gate from shouldExit's other
+// conditions in TestShouldExit_HeldByReviewMarker.
+func makeAllTerminal(t *testing.T, o *Orchestrator) {
+	t.Helper()
+	for _, s := range o.opts.Stages {
+		seedStageStatus(t, o.opts.Store, s.ID, state.StatusDone)
+	}
+}
+
+// TestControlPolicy_RejectsWhileReviewPaused закрывает Task 14: пока активен
+// маркер ревью-паузы (reviewTxnActive()), любое внешнее forward-driving
+// control-действие обязано вернуть ErrFlowPaused ПЕРВЫМ делом — до чтения
+// или изменения состояния стадии. Continue и Retry выбраны как
+// представители двух разных путей (Continue гейтится по текущему статусу,
+// Retry — нет), оба должны отклоняться одинаково.
+func TestControlPolicy_RejectsWhileReviewPaused(t *testing.T) {
+	o := newTestOrchestrator(t)
+	m := state.PauseMarker{Version: 1, State: state.PauseStatePaused}
+	o.reviewMarker.Store(&m)
+	if err := o.Continue(context.Background(), "s1"); !errors.Is(err, ErrFlowPaused) {
+		t.Fatalf("Continue want ErrFlowPaused, got %v", err)
+	}
+	if err := o.Retry(context.Background(), "s1"); !errors.Is(err, ErrFlowPaused) {
+		t.Fatalf("Retry want ErrFlowPaused, got %v", err)
+	}
+}
+
+// TestShouldExit_HeldByReviewMarker закрывает Task 14: shouldExit() должен
+// вернуть false, пока существует маркер ревью-паузы, даже если все прочие
+// условия для выхода (allTerminal, DashboardURL=="") уже выполнены — иначе
+// Run() финализировал бы ран прямо под ревьюером.
+func TestShouldExit_HeldByReviewMarker(t *testing.T) {
+	o := newTestOrchestrator(t)
+	makeAllTerminal(t, o) // so shouldExit would otherwise be true
+	m := state.PauseMarker{Version: 1, State: state.PauseStateResuming}
+	o.reviewMarker.Store(&m)
+	if o.shouldExit() {
+		t.Fatal("shouldExit must be false while review marker exists")
+	}
+}
