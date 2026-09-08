@@ -208,24 +208,25 @@ type Orchestrator struct {
 	// session/jsonl победителя. Инъектируется через SetRetryCASBarrierForTest.
 	retryCASBarrier func(stageID string)
 
-	// flowPauseMu защищает activationHeld/finalizing от гонок между HTTP-
-	// обработчиками ревью-паузы (следующая задача фичи "review notes") —
-	// сами поля читаются lock-free через atomic, мьютекс нужен только на
-	// запись составных решений (несколько полей меняются как одна операция).
-	// Пока не используется: составные HTTP-обработчики паузы — следующая
-	// задача; уже используемая половина этой задачи — activationHeld.
-	flowPauseMu sync.Mutex //nolint:unused // используется следующей задачей ревью-паузы
+	// flowPauseMu защищает составные решения PauseFlow (и последующей задачи
+	// финализации ревью-паузы) от гонок между конкурентными HTTP-вызовами —
+	// сами поля activationHeld/finalizing/reviewMarker читаются lock-free
+	// через atomic, мьютекс нужен только там, где несколько полей меняются
+	// как одна операция (см. PauseFlow, reviewpause.go).
+	flowPauseMu sync.Mutex
 	// activationHeld — true, пока активен ревью-режим: НИ ОДНА новая стадия
 	// не должна активироваться (см. activationBlocked/guard-точки в
 	// scheduling.go и recovery.go). Уже бегущие стадии не трогаются —
 	// намеренно не меняется concurrency.shouldRun, чтобы не подвесить их.
 	activationHeld atomic.Bool
 	// finalizing — true, пока идёт финализация ревью-транзакции (следующая
-	// задача); здесь только объявлено и guard'ится flowPauseMu.
-	finalizing atomic.Bool //nolint:unused // используется следующей задачей ревью-паузы
+	// задача фичи "review notes"); PauseFlow отклоняет новый раунд, пока флаг
+	// взведён (см. ErrRunFinalizing).
+	finalizing atomic.Bool
 	// reviewMarker — in-memory кэш текущего маркера паузы ревью (nil = его
-	// нет). atomic.Pointer делает reviewTxnActive() lock-free.
-	reviewMarker atomic.Pointer[state.PauseMarker] //nolint:unused // читается reviewTxnActive, используется следующей задачей
+	// нет). atomic.Pointer делает reviewTxnActive() lock-free. Пишется
+	// PauseFlow (reviewpause.go) после успешной записи маркера на диск.
+	reviewMarker atomic.Pointer[state.PauseMarker]
 }
 
 // bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле

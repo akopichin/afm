@@ -2,10 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -159,5 +161,135 @@ func TestActivationHold_BlocksNewActivation(t *testing.T) {
 
 	if got := o.currentStatus("s1"); got != state.StatusReady {
 		t.Fatalf("held stage should stay ready, got %v", got)
+	}
+}
+
+// newPauseFlowTestOrch строит *Orchestrator поверх реального *state.Store с
+// НЕСКОЛЬКИМИ стадиями через New() — в отличие от newTestOrchestrator
+// (memory_agent_test.go), которая жёстко собирает Store с единственной
+// стадией "s1" и не годится тестам PauseFlow, которым нужно независимо
+// сидировать статусы s1/s2/s3. stages сами решают, какая из них script
+// (flow.Stage.Script непусто) — граф собирается один раз внутри New() и
+// после этого неизменен, так что "is this a script stage" нельзя пришить
+// постфактум, только объявить при конструировании.
+func newPauseFlowTestOrch(t *testing.T, stages []flow.Stage) *Orchestrator {
+	t.Helper()
+	runDir := t.TempDir()
+	ids := make([]string, len(stages))
+	for i, s := range stages {
+		ids[i] = s.ID
+	}
+	store, err := state.Open(runDir, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return New(Options{RunDir: runDir, Stages: stages, Store: store, Config: config.Default()})
+}
+
+// seedStageStatus переводит стадию id из state.StatusPending (начальное
+// состояние любой свежесозданной Store) прямо в status одной транзакцией.
+// Store.Apply проверяет только совпадение From с текущим статусом (FSM-guard
+// тут ни при чём — это сырая подмена состояния для теста), поэтому это
+// работает для любого целевого статуса ровно так же, как уже делают
+// setupHookOrch/TestActivationHold_BlocksNewActivation в этом пакете.
+func seedStageStatus(t *testing.T, store *state.Store, id string, status state.StageStatus) {
+	t.Helper()
+	if err := store.Apply(&state.Transition{StageID: id, From: state.StatusPending, To: status, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedScriptStage — то же самое, что seedStageStatus, но для стадии,
+// объявленной в графе как script (Script непусто в её flow.Stage) —
+// именование отдельным хелпером в тесте документирует намерение "эта стадия
+// должна быть проигнорирована PauseFlow как скриптовая", а не просто
+// переиспользует seedStageStatus напрямую.
+func seedScriptStage(t *testing.T, o *Orchestrator, id string, status state.StageStatus) {
+	t.Helper()
+	stage := o.graph.Stage(id)
+	if stage == nil || !stage.IsScript() {
+		t.Fatalf("seedScriptStage: %q is not declared as a script stage in the graph", id)
+	}
+	seedStageStatus(t, o.opts.Store, id, status)
+}
+
+// markActiveForTest делает concurrency.Manager.IsActive(stageID) истинным по-
+// настоящему, через реальный SpawnAgent (markActive/markDone — приватные
+// методы concurrency.Manager, недоступные этому пакету напрямую — тест
+// использует единственную существующую производственную точку входа, а не
+// заводит теневой способ выставить активность). run блокируется на release,
+// закрываемом в t.Cleanup, так что стадия остаётся "активной" на всё время
+// теста; close(ready) гарантирует, что markActive внутри SpawnAgent уже
+// отработал к моменту, когда <-ready возвращается здесь.
+func markActiveForTest(t *testing.T, o *Orchestrator, stageID string) {
+	t.Helper()
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	o.concurrency.SpawnAgent(context.Background(), flow.Stage{ID: stageID}, func(context.Context, flow.Stage) {
+		close(ready)
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+	<-ready
+}
+
+// TestPauseFlow_OwnsOnlyActiveWinners закрывает Task 10 фичи "review notes":
+// PauseFlow не должен пытаться поставить на паузу всё подряд, что похоже на
+// "бегущую" стадию — только те, что действительно живы прямо сейчас
+// (concurrency.IsActive), и никогда скриптовые стадии (у них нет точки
+// прерывания, см. Pause в control_api.go).
+func TestPauseFlow_OwnsOnlyActiveWinners(t *testing.T) {
+	stages := []flow.Stage{
+		{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}},
+		{ID: "s2", Agents: []flow.AgentType{flow.AgentImplementation}},
+		{ID: "s3", Script: "echo hi"},
+	}
+	o := newPauseFlowTestOrch(t, stages)
+
+	// s1: running + IsActive -> owned as implementation.
+	seedStageStatus(t, o.opts.Store, "s1", state.StatusRunning)
+	o.setRunnerKind("s1", kindImplementation)
+	markActiveForTest(t, o, "s1") // helper making IsActive("s1")==true
+
+	// s2: running but NOT active (queued) -> not owned.
+	seedStageStatus(t, o.opts.Store, "s2", state.StatusRunning)
+
+	// s3: script running -> not owned.
+	seedScriptStage(t, o, "s3", state.StatusRunning)
+
+	owners, err := o.PauseFlow(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owners) != 1 || owners[0] != "s1" {
+		t.Fatalf("owners = %v, want [s1]", owners)
+	}
+	if o.currentStatus("s1") != state.StatusPaused {
+		t.Fatal("s1 not paused")
+	}
+	if o.currentStatus("s2") != state.StatusRunning {
+		t.Fatalf("s2 must be left running (not owned), got %v", o.currentStatus("s2"))
+	}
+	if o.currentStatus("s3") != state.StatusRunning {
+		t.Fatalf("s3 (script) must be left running, got %v", o.currentStatus("s3"))
+	}
+
+	m := o.reviewMarker.Load()
+	if m == nil || m.State != state.PauseStatePaused || len(m.Owned) != 1 || m.Owned[0].ResumeKind != kindImplementation {
+		t.Fatalf("marker wrong: %+v", m)
+	}
+	if !o.activationHeld.Load() {
+		t.Fatal("activationHeld must be set")
+	}
+}
+
+// TestPauseFlow_RejectedDuringFinalization закрывает Task 10: PauseFlow не
+// должен запускать новый ревью-раунд поверх ещё финализирующегося.
+func TestPauseFlow_RejectedDuringFinalization(t *testing.T) {
+	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
+	o.finalizing.Store(true)
+	if _, err := o.PauseFlow(context.Background()); !errors.Is(err, ErrRunFinalizing) {
+		t.Fatalf("want ErrRunFinalizing, got %v", err)
 	}
 }
