@@ -2,6 +2,8 @@ package state
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -495,4 +497,53 @@ func LatestPlanVersion(stageDir string) (version int, content string, err error)
 		return 0, "", fmt.Errorf("read %s: %w", bestName, err)
 	}
 	return best, string(data), nil
+}
+
+// FileContentSHA returns a stable "sha256:<hex>" digest of the given bytes.
+// Used as the review-note content anchor (a content hash, not mtime+size).
+func FileContentSHA(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// atomicWriteFile writes data to path via a unique temp file, fsyncing the file
+// and the parent directory, then renaming into place. Durable + torn-read safe.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dirName := filepath.Dir(path)
+	if err := os.MkdirAll(dirName, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dirName, err)
+	}
+	tmp, err := os.CreateTemp(dirName, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("fsync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temp: %w", err)
+	}
+	dir, err := os.Open(dirName)
+	if err != nil {
+		return fmt.Errorf("open dir for fsync: %w", err)
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("fsync dir: %w", err)
+	}
+	return nil
 }

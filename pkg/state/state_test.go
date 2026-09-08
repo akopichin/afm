@@ -438,3 +438,32 @@ func TestStore_PausedFrom(t *testing.T) {
 		t.Errorf("PausedFrom after pause = %q, want %q", got, StatusRunning)
 	}
 }
+
+func TestFileContentSHA_Stable(t *testing.T) {
+	a := FileContentSHA([]byte("hello\n"))
+	b := FileContentSHA([]byte("hello\n"))
+	if a != b || !strings.HasPrefix(a, "sha256:") {
+		t.Fatalf("unstable or unprefixed: %q %q", a, b)
+	}
+	if FileContentSHA([]byte("other")) == a {
+		t.Fatalf("collision")
+	}
+}
+
+func TestAtomicWriteFile_ReplacesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f.json")
+	if err := atomicWriteFile(p, []byte("v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(p, []byte("v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(p)
+	if string(got) != "v2" {
+		t.Fatalf("got %q", got)
+	}
+	if _, err := os.Stat(p + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp file left behind")
+	}
+}
