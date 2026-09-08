@@ -351,6 +351,27 @@ describe('useStatus', () => {
     expect(result.capabilities.fileBrowser).toBe(false)
   })
 
+  test('maps flow_pause_state and flow_paused_stages', () => {
+    const s = normalizeStatus({ flow_name: 'demo', stages: [], flow_pause_state: 'paused', flow_paused_stages: ['s1'] })
+    expect(s.flowPauseState).toBe('paused')
+    expect(s.flowPausedStages).toEqual(['s1'])
+  })
+
+  test('normalizeStatus maps flow_pause_state "resuming"', () => {
+    const s = normalizeStatus({ flow_name: 'demo', stages: [], flow_pause_state: 'resuming' })
+    expect(s.flowPauseState).toBe('resuming')
+  })
+
+  test('normalizeStatus defaults flow_pause_state to "none" and flow_paused_stages to [] when absent/malformed', () => {
+    const s = normalizeStatus({ flow_name: 'demo', stages: [] })
+    expect(s.flowPauseState).toBe('none')
+    expect(s.flowPausedStages).toEqual([])
+
+    const s2 = normalizeStatus({ flow_name: 'demo', stages: [], flow_pause_state: 'bogus', flow_paused_stages: 'not-an-array' })
+    expect(s2.flowPauseState).toBe('none')
+    expect(s2.flowPausedStages).toEqual([])
+  })
+
   test('refetches status on window focus', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

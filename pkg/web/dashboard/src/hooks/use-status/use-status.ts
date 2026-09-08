@@ -30,6 +30,15 @@ export type FlowStatus = {
   // браузер проекта (Task 13 UI). Отсутствие поля в ответе — как на старом
   // бэкенде без этого API — трактуется как выключено, а не как ошибка.
   capabilities: { fileBrowser: boolean }
+  // flowPauseState/flowPausedStages — состояние flow-wide review-pause (см.
+  // Go handlers.go's statusResponse.FlowPauseState/FlowPausedStages): 'none' —
+  // обычная работа; 'paused' — активные стадии приостановлены для сбора
+  // ревью-заметок (flowPausedStages — их id); 'resuming' — заметки уже
+  // инжектированы/отменены, флоу возобновляется. Любое незнакомое значение
+  // (в т.ч. отсутствие поля — старый бэкенд без этой фичи) трактуется как
+  // 'none', а не как ошибка.
+  flowPauseState: 'none' | 'paused' | 'resuming'
+  flowPausedStages: string[]
 }
 
 const EMPTY_STATUS: FlowStatus = {
@@ -41,6 +50,8 @@ const EMPTY_STATUS: FlowStatus = {
   backoffAccumulatedMs: 0,
   backoffOpenSince: [],
   capabilities: { fileBrowser: false },
+  flowPauseState: 'none',
+  flowPausedStages: [],
 }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
@@ -139,6 +150,12 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const rawCapabilities = isRecord(obj.capabilities) ? obj.capabilities : {}
   const capabilities = { fileBrowser: rawCapabilities.file_browser === true }
 
+  const flowPauseState: FlowStatus['flowPauseState'] =
+    obj.flow_pause_state === 'paused' || obj.flow_pause_state === 'resuming' ? obj.flow_pause_state : 'none'
+  const flowPausedStages = Array.isArray(obj.flow_paused_stages)
+    ? obj.flow_paused_stages.filter((v): v is string => typeof v === 'string')
+    : []
+
   return {
     flowName,
     stages,
@@ -149,6 +166,8 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     backoffAccumulatedMs,
     backoffOpenSince,
     capabilities,
+    flowPauseState,
+    flowPausedStages,
   }
 }
 
