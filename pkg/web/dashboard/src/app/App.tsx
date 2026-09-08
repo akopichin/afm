@@ -3,6 +3,7 @@ import { cancelNotes, listNotes, pauseStage, reviseStage, setStageNote, triggerS
 import { FlowHeader } from '../components/flow-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
+import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { EventFeedPanel } from '../components/event-feed'
@@ -27,7 +28,12 @@ import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } f
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, flowPausedStages, refresh } = useStatus()
+
+  // Модалка ревью-раунда (Task 23) — открывается по клику ReviewBanner's "Send
+  // notes". Держит только флаг открытия: сам список заметок/выбор стадии
+  // модалка загружает и владеет собой (listNotes() на маунте).
+  const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
   // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
   // (agent_suggest, Task 8); null — модалка скрыта.
@@ -137,11 +143,10 @@ export function App(): ReactElement {
 
   // onSend, в отличие от onCancel, не может просто вызвать injectNotes здесь:
   // тому нужен id целевой стадии, которую пока выбирает пользователь — этим
-  // займётся модалка ревью-заметок из Task 23 (список заметок + выбор стадии
-  // + сам injectNotes). Пока эта модалка не построена, кнопка — документированная
-  // заглушка: Task 23 подставит сюда открытие своего состояния модалки.
+  // занимается ReviewNotesModal (список заметок + выбор стадии + сам
+  // injectNotes), эта функция лишь её открывает.
   function handleReviewSend(): void {
-    console.info('Send notes: modal not implemented yet (Task 23)')
+    setReviewModalOpen(true)
   }
 
   const wsUrl = buildWebSocketUrl()
@@ -279,7 +284,7 @@ export function App(): ReactElement {
   }, [events, refresh])
 
   return (
-    <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser}>
+    <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState}>
       <FlowHeader
         flowName={flowName}
         connected={connected}
@@ -369,6 +374,10 @@ export function App(): ReactElement {
           onCancel={() => setPreNoteModalStageId(null)}
           onSubmit={handleSubmitPreNote}
         />
+      )}
+
+      {reviewModalOpen && (
+        <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} />
       )}
     </FileBrowserProvider>
   )

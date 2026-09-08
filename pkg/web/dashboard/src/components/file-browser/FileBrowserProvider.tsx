@@ -4,6 +4,11 @@ import { FileBrowserModal, type SelectedFile } from './FileBrowserModal'
 
 type FileBrowserMode = 'browse' | 'picker'
 
+// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — продублирован тем
+// же приёмом, что и в FileViewer.tsx/FileBrowserModal.tsx/ReviewBanner.tsx (не
+// тянуть весь модуль use-status ради одного литерала).
+type FlowPauseState = 'none' | 'paused' | 'resuming'
+
 type FileBrowserContextValue = {
   // Открывает модалку в свободном режиме просмотра проекта (кнопка снизу —
   // "Copy references", кладёт выбранное в буфер обмена).
@@ -56,6 +61,12 @@ type FileBrowserProviderProps = {
   // неизвестное/загружающееся состояние уже трактуется как false
   // (см. DEFAULT_STATUS.capabilities в use-status.ts).
   enabled?: boolean
+  // Флоу-wide review-pause состояние (см. use-status.ts), проброшенное в
+  // FileBrowserModal → FileViewer, чтобы аннотирование строк файла было живым
+  // только пока флоу реально на паузе (Task 23's "make annotation live"). По
+  // умолчанию 'none' — существующие вызывающие (тесты, места без review-pause
+  // фичи) не обязаны его передавать.
+  flowPauseState?: FlowPauseState
 }
 
 // JSON.stringify — не разделитель-символ, а безопасная сериализация пары:
@@ -80,7 +91,7 @@ function selectionKey(root: string, path: string): string {
 // open") — сама модалка полностью размонтируется на закрытии, поэтому вся
 // её "долгоживущая" часть состояния (что выбрано) обязана жить здесь, а не в
 // самой модалке.
-export function FileBrowserProvider({ children, flowName, startedAt, enabled = true }: FileBrowserProviderProps): ReactElement {
+export function FileBrowserProvider({ children, flowName, startedAt, enabled = true, flowPauseState = 'none' }: FileBrowserProviderProps): ReactElement {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<FileBrowserMode>('browse')
   const [selection, setSelection] = useState<Map<string, SelectedFile>>(new Map())
@@ -204,6 +215,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
           onRemoveSelect={removeSelect}
           onClose={close}
           onSubmit={submit}
+          flowPauseState={flowPauseState}
         />
       )}
       {selectionError !== null && (

@@ -12,6 +12,8 @@ import {
   type SearchResult,
   type TreeEntry,
 } from '../../api/files-client'
+import { addNote, listNotes, pauseFlow, type AddNoteRequest } from '../../api/run-client'
+import type { ReviewNote } from '../../types'
 import { ChangedFilesList } from './ChangedFilesList'
 import { DiffViewer } from './DiffViewer'
 import { FileSearchResults } from './FileSearchResults'
@@ -19,6 +21,12 @@ import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
+
+// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — см. её же
+// комментарий в FileViewer.tsx/ReviewBanner.tsx для семантики. Продублирован
+// намеренно тем же приёмом: эта клетка не должна тянуть весь модуль use-status
+// ради одного литерала.
+type FlowPauseState = 'none' | 'paused' | 'resuming'
 
 export type FileBrowserModalProps = {
   // 'browse' — свободный просмотр проекта, кнопка снизу копирует референсы в
@@ -30,6 +38,13 @@ export type FileBrowserModalProps = {
   onRemoveSelect: (root: string, path: string) => void
   onClose: () => void
   onSubmit: () => void
+  // Флоу-wide review-pause состояние (см. use-status.ts) — проброшено сюда из
+  // App.tsx через FileBrowserProvider, чтобы FileViewer мог показывать
+  // кликабельные строки/маркер комментария только пока флоу реально на паузе
+  // (см. её же гейт canAnnotate). По умолчанию 'none' — те же вызывающие
+  // (тесты), что не передают этот проп, получают прежнее поведение "аннотации
+  // выключены".
+  flowPauseState?: FlowPauseState
 }
 
 type ActiveFile = { root: string; entry: TreeEntry }
@@ -76,7 +91,15 @@ function formatModifiedAt(modifiedAt: string): string | null {
 // закрыта — см. бриф "Renders FileBrowserModal when open").
 type ViewMode = 'all' | 'index' | 'head'
 
-export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSelect, onClose, onSubmit }: FileBrowserModalProps): ReactElement {
+export function FileBrowserModal({
+  mode,
+  selection,
+  onToggleSelect,
+  onRemoveSelect,
+  onClose,
+  onSubmit,
+  flowPauseState = 'none',
+}: FileBrowserModalProps): ReactElement {
   const [roots, setRoots] = useState<RootView[]>([])
   const [rootsError, setRootsError] = useState<string | null>(null)
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null)
@@ -115,6 +138,37 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState<Error | null>(null)
+
+  // Optimistic-concurrency rev для FileViewer's addNote (см. её проп
+  // expectedRev): flow-wide, а не per-file — тот же rev, что ReviewNotesModal
+  // (Task 23) читает/пишет через listNotes/addNote/updateNote/deleteNote.
+  // Загружается один раз при открытии модалки как базовая точка отсчёта;
+  // best-effort (нет активного review-раунда/бэкенд без поддержки заметок —
+  // остаётся 0, тот же дефолт, с которым стартует свежий стор на бэкенде).
+  // Каждый успешный addNote корректирует её значением из ответа сервера, без
+  // отдельного повторного listNotes() на каждую заметку.
+  const [notesRev, setNotesRev] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    void listNotes()
+      .then((res) => {
+        if (!cancelled) setNotesRev(res.rev)
+      })
+      .catch(() => {
+        // Нет активного review-раунда либо бэкенд ещё не отдаёт эту ручку —
+        // не критично, FileViewer просто не сможет ставить заметки, пока
+        // flowPauseState не 'paused' (см. её canAnnotate).
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  async function handleAddNote(body: AddNoteRequest): Promise<{ note: ReviewNote; rev: number }> {
+    const result = await addNote(body)
+    setNotesRev(result.rev)
+    return result
+  }
 
   const [query, setQuery] = useState('')
   const [searchResult, setSearchResult] = useState<SearchResult | null>(null)
@@ -603,7 +657,16 @@ export function FileBrowserModal({ mode, selection, onToggleSelect, onRemoveSele
             </div>
             <div className="file-browser-pane">
               {activeTab === 'FILE' ? (
-                <FileViewer content={content} loading={contentLoading} error={contentError} />
+                <FileViewer
+                  content={content}
+                  loading={contentLoading}
+                  error={contentError}
+                  root={activeFile?.root}
+                  flowPauseState={flowPauseState}
+                  pauseFlow={pauseFlow}
+                  addNote={handleAddNote}
+                  expectedRev={notesRev}
+                />
               ) : (
                 <DiffViewer diff={diff} loading={diffLoading} error={diffError} />
               )}

@@ -1,0 +1,132 @@
+/* pkg/web/dashboard/public/skins/base/review-notes-modal.css
+   Модалка ревью-раунда (Task 23) — открывается из ReviewBanner's "Send notes".
+   Переиспользует .modal-overlay/.modal-content/.modal-actions/.btn-* из
+   agent-note-modal.css (общая база модалок дашборда) — здесь только то, что
+   специфично именно этой модалке: список заметок по файлам и выбор целевой
+   стадии. Только токены переменных из skins/<name>/index.css. */
+
+.review-notes-modal {
+  max-width: 640px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-notes-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.review-notes-error {
+  color: var(--coral);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+
+.review-notes-hint {
+  color: var(--ink-dim);
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.review-notes-list {
+  overflow-y: auto;
+  margin-bottom: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.review-notes-group + .review-notes-group {
+  margin-top: 14px;
+}
+
+.review-notes-file {
+  font-size: 12px;
+  color: var(--mint);
+  margin: 0 0 6px;
+  word-break: break-all;
+}
+
+.review-notes-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-note-item {
+  background: var(--bg);
+  border: 1px solid var(--mint-soft);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.review-note-line {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+  margin-bottom: 4px;
+}
+
+.review-note-text {
+  font-size: 12px;
+  color: var(--ink);
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-note-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.review-note-textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--mint-soft);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+  min-height: 50px;
+  margin-bottom: 8px;
+}
+.review-note-textarea:focus {
+  outline: none;
+  border-color: var(--mint);
+}
+
+.review-notes-target {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.review-notes-target-label {
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+}
+
+.review-notes-target select {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--mint-soft);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.review-notes-target select:disabled {
+  color: var(--ink-dim);
+  cursor: not-allowed;
+}

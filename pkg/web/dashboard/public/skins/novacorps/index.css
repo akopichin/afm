@@ -15,6 +15,7 @@
 @import url("../base/pasteable-textarea.css");
 @import url("../base/file-browser.css");
 @import url("../base/review-banner.css");
+@import url("../base/review-notes-modal.css");
 
 :root[data-theme="dark"] {
   /* base surfaces — идентичны текущему style.css:23-56 */
