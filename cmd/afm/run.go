@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -223,7 +224,53 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
-			orch := orchestrator.New(orchestrator.Options{
+			// Docker project file browser: только внутри контейнера, где
+			// docker.ReExec передал манифест примонтированных корней через
+			// AFM_DOCKER_FILE_ROOTS. На хосте (или при отсутствии/битом
+			// манифесте) ws остаётся nil — capability просто выключена,
+			// это не фатально (см. task-10 brief). Собирается ДО
+			// orchestrator.New, чтобы ResolveFile/CurrentFileSHA ниже могли
+			// замкнуться на реальный ws (nil в хостовом режиме — оба поля
+			// Options остаются незаданными).
+			var ws workspace.FS
+			// rootContainerPaths mirrors workspace.Root.Path (unexported, not
+			// readable back from workspace.FS) so workspaceResolveFile below
+			// can compute ResolvedFile.Abs the same way workspace.Read itself
+			// does internally (filepath.Join(root path, relPath)), without
+			// reaching into the workspace package's internals.
+			var rootContainerPaths map[string]string
+			if cfg.Server.GetPort() > 0 {
+				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && os.Getenv("AFM_IN_DOCKER") == "1" {
+					man, err := docker.DecodeFileRootManifest(raw)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: file browser disabled: decode file root manifest: %v\n", err)
+					} else {
+						roots := make([]workspace.Root, 0, len(man.Roots))
+						rootContainerPaths = make(map[string]string, len(man.Roots))
+						for _, r := range man.Roots {
+							roots = append(roots, workspace.Root{
+								ID:            r.ID,
+								Label:         r.Label,
+								Path:          r.ContainerPath,
+								Kind:          r.Kind,
+								MountReadOnly: r.MountReadOnly,
+							})
+							rootContainerPaths[r.ID] = r.ContainerPath
+						}
+						fs, err := workspace.New(roots)
+						switch {
+						case err != nil:
+							fmt.Fprintf(os.Stderr, "warning: file browser disabled: open workspace: %v\n", err)
+						case len(fs.Roots()) == 0:
+							fmt.Fprintf(os.Stderr, "warning: file browser disabled: no roots could be opened (manifest had %d)\n", len(man.Roots))
+						default:
+							ws = fs
+						}
+					}
+				}
+			}
+
+			orchOpts := orchestrator.Options{
 				RunDir:          runDir,
 				Stages:          f.Stages,
 				Store:           store,
@@ -237,7 +284,16 @@ func newRunCmd() *cobra.Command {
 				Debug:           debugEnabled,
 				Memory:          f.Memory,
 				MemoryDir:       memDir,
-			})
+			}
+			// ResolveFile/CurrentFileSHA питают review-ноты (AddNote,
+			// renderReviewFeedback): без workspace (host-режим, ws == nil)
+			// оба поля остаются nil — orchestrator сам трактует это как
+			// "файл не резолвится" (ErrStaleContent / "file unavailable").
+			if ws != nil {
+				orchOpts.ResolveFile = workspaceResolveFile(ws, rootContainerPaths)
+				orchOpts.CurrentFileSHA = workspaceCurrentFileSHA(ws)
+			}
+			orch := orchestrator.New(orchOpts)
 
 			// Disable interactive flags when dashboard is not running
 			if cfg.Server.GetPort() == 0 {
@@ -272,38 +328,9 @@ func newRunCmd() *cobra.Command {
 					stageButtons[st.ID] = st.Buttons.Labels()
 				}
 
-				// Docker project file browser: только внутри контейнера, где
-				// docker.ReExec передал манифест примонтированных корней через
-				// AFM_DOCKER_FILE_ROOTS. На хосте (или при отсутствии/битом
-				// манифесте) ws остаётся nil — capability просто выключена,
-				// это не фатально (см. task-10 brief).
-				var ws workspace.FS
-				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && os.Getenv("AFM_IN_DOCKER") == "1" {
-					man, err := docker.DecodeFileRootManifest(raw)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: file browser disabled: decode file root manifest: %v\n", err)
-					} else {
-						roots := make([]workspace.Root, 0, len(man.Roots))
-						for _, r := range man.Roots {
-							roots = append(roots, workspace.Root{
-								ID:            r.ID,
-								Label:         r.Label,
-								Path:          r.ContainerPath,
-								Kind:          r.Kind,
-								MountReadOnly: r.MountReadOnly,
-							})
-						}
-						fs, err := workspace.New(roots)
-						switch {
-						case err != nil:
-							fmt.Fprintf(os.Stderr, "warning: file browser disabled: open workspace: %v\n", err)
-						case len(fs.Roots()) == 0:
-							fmt.Fprintf(os.Stderr, "warning: file browser disabled: no roots could be opened (manifest had %d)\n", len(man.Roots))
-						default:
-							ws = fs
-						}
-					}
-				}
+				// ws (nil in host mode) was already built above, before
+				// orchestrator.New, so ResolveFile/CurrentFileSHA could close
+				// over it too — reused here as-is for server.Config.Workspace.
 
 				srv = server.New(server.Config{
 					Port:             cfg.Server.GetPort(),
@@ -584,5 +611,56 @@ func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.W
 		HasSysPrompt: recipe.SystemPrompt != "",
 		Bare:         bare,
 		MaxTurns:     recipe.MaxTurns,
+	}
+}
+
+// workspaceResolveFile adapts a workspace.FS into orchestrator.Options.
+// ResolveFile: it reads the file's full content through ws.Read (which also
+// gives us DisplayPath/Reference for free, since Read embeds the same
+// "[AFM file: ...]" marker Reference alone would), hashes it for AddNote's
+// stale-content check, and — for a line-scoped note — slices out the
+// requested 1-indexed line. Any workspace error (not found, too large,
+// binary, symlink, ...) is reported as "can't resolve" rather than surfaced
+// to the caller: AddNote already turns that into ErrStaleContent.
+//
+// rootContainerPaths maps a workspace root ID to its absolute container path
+// (the same value workspace.Root.Path holds internally, which the FS
+// interface itself doesn't expose) so Abs can be computed exactly the way
+// workspace.Read does it (filepath.Join(root path, relPath)) without
+// reaching into the workspace package.
+func workspaceResolveFile(ws workspace.FS, rootContainerPaths map[string]string) func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
+	return func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
+		f, err := ws.Read(context.Background(), root, path)
+		if err != nil {
+			return orchestrator.ResolvedFile{}, false
+		}
+		rf := orchestrator.ResolvedFile{
+			Abs:         filepath.Join(rootContainerPaths[root], f.Path),
+			DisplayPath: f.DisplayPath,
+			Reference:   f.Reference,
+			ContentSHA:  state.FileContentSHA([]byte(f.Content)),
+		}
+		if line != nil {
+			lines := strings.Split(f.Content, "\n")
+			if *line >= 1 && *line <= len(lines) {
+				rf.InRange = true
+				rf.LineText = lines[*line-1]
+			}
+		}
+		return rf, true
+	}
+}
+
+// workspaceCurrentFileSHA adapts a workspace.FS into orchestrator.Options.
+// CurrentFileSHA: the same content-read path as workspaceResolveFile above,
+// minus the line-splitting, used by renderReviewFeedback to detect drift
+// between when a review note was taken and when it's injected.
+func workspaceCurrentFileSHA(ws workspace.FS) func(root, path string) (string, bool) {
+	return func(root, path string) (string, bool) {
+		f, err := ws.Read(context.Background(), root, path)
+		if err != nil {
+			return "", false
+		}
+		return state.FileContentSHA([]byte(f.Content)), true
 	}
 }
