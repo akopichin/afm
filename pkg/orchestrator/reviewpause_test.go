@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
@@ -215,24 +217,87 @@ func seedScriptStage(t *testing.T, o *Orchestrator, id string, status state.Stag
 	seedStageStatus(t, o.opts.Store, id, status)
 }
 
+// testActiveRelease хранит per-stageID idempotent release-функцию,
+// установленную markActiveForTest — markDoneForTest использует её, чтобы
+// освободить стадию ПРЯМО ВНУТРИ теста (не только на t.Cleanup), когда нужно
+// проверить логику, реагирующую на переход IsActive true->false (см.
+// resumeOwner's drain-wait в TestResumeOwner_WaitsForDrain).
+var testActiveRelease sync.Map // stageID -> func() (закрывает release-канал не более раза)
+
 // markActiveForTest делает concurrency.Manager.IsActive(stageID) истинным по-
 // настоящему, через реальный SpawnAgent (markActive/markDone — приватные
 // методы concurrency.Manager, недоступные этому пакету напрямую — тест
 // использует единственную существующую производственную точку входа, а не
-// заводит теневой способ выставить активность). run блокируется на release,
-// закрываемом в t.Cleanup, так что стадия остаётся "активной" на всё время
-// теста; close(ready) гарантирует, что markActive внутри SpawnAgent уже
-// отработал к моменту, когда <-ready возвращается здесь.
+// заводит теневой способ выставить активность). run блокируется на release;
+// releaseFn (sync.Once-обёрнутая) регистрируется и в testActiveRelease (для
+// markDoneForTest), и в t.Cleanup (страховка, если тест сам не вызвал
+// markDoneForTest) — идемпотентность гарантирует, что оба пути закрытия не
+// паникуют на двойном close. close(ready) гарантирует, что markActive внутри
+// SpawnAgent уже отработал к моменту, когда <-ready возвращается здесь.
 func markActiveForTest(t *testing.T, o *Orchestrator, stageID string) {
 	t.Helper()
 	ready := make(chan struct{})
 	release := make(chan struct{})
+	var once sync.Once
+	releaseFn := func() { once.Do(func() { close(release) }) }
+	testActiveRelease.Store(stageID, releaseFn)
 	o.concurrency.SpawnAgent(context.Background(), flow.Stage{ID: stageID}, func(context.Context, flow.Stage) {
 		close(ready)
 		<-release
 	})
-	t.Cleanup(func() { close(release) })
+	t.Cleanup(func() {
+		releaseFn()
+		testActiveRelease.Delete(stageID)
+	})
 	<-ready
+}
+
+// markDoneForTest releases a stage marked active by markActiveForTest so
+// concurrency.Manager.IsActive(stageID) flips to false DURING the test
+// (rather than only at t.Cleanup) — needed to test drain-wait logic such as
+// resumeOwner's polling loop. Blocks until the effect is actually observable
+// (the SpawnAgent goroutine's deferred markDone has run), so the caller never
+// races its own subsequent IsActive check against that goroutine.
+func markDoneForTest(t *testing.T, o *Orchestrator, stageID string) {
+	t.Helper()
+	v, ok := testActiveRelease.Load(stageID)
+	if !ok {
+		t.Fatalf("markDoneForTest(%q): not marked active (call markActiveForTest first)", stageID)
+	}
+	v.(func())()
+	for o.concurrency.IsActive(stageID) {
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// setPausedFrom seeds a stage straight into StatusPaused with PausedFrom set
+// to a specific prior status, via two real Store.Apply transitions
+// (Pending -> from -> Paused) — the same derivation production code uses
+// (RunState.SetStageStatusAt stamps PausedFrom from the status immediately
+// preceding a transition INTO Paused), rather than hand-poking the field.
+// Requires the stage to still be Pending (true for any freshly-opened Store,
+// e.g. newTestOrchestrator's), and from != state.StatusPaused.
+func setPausedFrom(t *testing.T, store *state.Store, id string, from state.StageStatus) {
+	t.Helper()
+	if from != state.StatusPending {
+		if err := store.Apply(&state.Transition{StageID: id, From: state.StatusPending, To: from, Event: "test_setup"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Apply(&state.Transition{StageID: id, From: from, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// boolStr renders a bool the same way the test-only observer closure in
+// TestResumeOwner_TargetImplementationUsesWithFeedback does, so assertions
+// read as a single comparable string ("implementation/true") instead of two
+// separate fields.
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // TestPauseFlow_OwnsOnlyActiveWinners закрывает Task 10 фичи "review notes":
@@ -386,5 +451,83 @@ func TestRenderReviewFeedback_TwoFileLevelNotesStableOrder(t *testing.T) {
 	}
 	if pos1 >= pos2 || pos1 >= pos3 {
 		t.Fatalf("line note must come before file-level notes, got positions: line=%d, file1=%d, file2=%d", pos1, pos2, pos3)
+	}
+}
+
+// TestResumeOwner_TargetImplementationUsesWithFeedback закрывает Task 12
+// фичи "review notes": стадия-цель (isTarget=true, review notes ЕЙ
+// адресованы) резюмируется через withFeedbackRunner независимо от
+// FromRevising — она должна увидеть feedback.md с ревью-заметками.
+// o.testRunnerHook — тест-сейм: подменяет реальный Trigger+SpawnAgent
+// наблюдением "какой kind, с фидбеком или без", без запуска процесса.
+func TestResumeOwner_TargetImplementationUsesWithFeedback(t *testing.T) {
+	o := newTestOrchestrator(t)
+	setPausedFrom(t, o.opts.Store, "s1", state.StatusRunning)
+
+	var chosen string
+	o.testRunnerHook = func(kind string, withFeedback bool) { chosen = kind + "/" + boolStr(withFeedback) }
+
+	o.resumeOwner(context.Background(), state.PauseOwner{ID: "s1", ResumeKind: kindImplementation}, true)
+
+	if chosen != "implementation/true" {
+		t.Fatalf("target should use implementation WithFeedback, got %q", chosen)
+	}
+}
+
+// TestResumeOwner_WaitsForDrain закрывает Task 12: resumeOwner не должен
+// транзишнить/спавнить раннер, пока concurrency.IsActive(ow.ID) истинно —
+// это сигнал, что старый (прерванный PauseFlow'ом) callback стадии ещё не
+// вернулся. Резюмировать раньше значит рисковать гонкой: старый callback,
+// вернувшись позже с ErrUserInterrupted, увидит статус уже не paused (мы его
+// сменили) и не распознает свой возврат как обычный Pause — см. комментарий
+// у resumeOwner.
+//
+// markActiveForTest seeds the stage to Running (not Paused) BEFORE spawning:
+// the real concurrency.Manager built by New() carries the production
+// shouldRun gate (opts.Store.Get(id) != Paused, see orchestrator.New) checked
+// right after the semaphore is acquired — seeding Paused first would make
+// that gate reject the spawned run() before it ever reaches `close(ready)`,
+// hanging markActiveForTest itself instead of exercising the drain wait. The
+// stage is moved Running->Paused only AFTER the goroutine is confirmed live,
+// reproducing the real sequence: PauseFlow's EvPause fires while an agent
+// goroutine started earlier (when the stage was still Running) is still in
+// flight — IsActive stays true for a stage that is already Paused.
+//
+// testRunnerHook is stubbed (no-op) here too, even though this test isn't
+// about which runner gets picked: without it, resumeOwner's real path spawns
+// a genuine runImplementationAgent, which fails fast (no plan.md on disk) and
+// calls Trigger(EvFail) on a goroutine this test never waits for — a leftover
+// write racing t.Cleanup's store.Close() right after the test returns
+// (exactly the "storage failure: write events.jsonl: invalid argument" flake
+// documented in AGENTS.md: nil *os.File after Close returns fs.ErrInvalid,
+// not a real OS error). The stub keeps resumeOwner's observable side effect
+// bounded to the drain wait this test actually exercises.
+func TestResumeOwner_WaitsForDrain(t *testing.T) {
+	o := newTestOrchestrator(t)
+	o.testRunnerHook = func(string, bool) {}
+	seedStageStatus(t, o.opts.Store, "s1", state.StatusRunning)
+	markActiveForTest(t, o, "s1")
+	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	go func() {
+		o.resumeOwner(context.Background(), state.PauseOwner{ID: "s1", ResumeKind: kindImplementation}, false)
+		close(started)
+	}()
+
+	select {
+	case <-started:
+		t.Fatal("resume must block until IsActive(s1)==false")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	markDoneForTest(t, o, "s1") // IsActive -> false
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resume should proceed after drain")
 	}
 }

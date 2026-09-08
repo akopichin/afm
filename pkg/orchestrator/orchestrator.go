@@ -227,6 +227,13 @@ type Orchestrator struct {
 	// нет). atomic.Pointer делает reviewTxnActive() lock-free. Пишется
 	// PauseFlow (reviewpause.go) после успешной записи маркера на диск.
 	reviewMarker atomic.Pointer[state.PauseMarker]
+
+	// testRunnerHook — тест-сейм (nil в проде) для resumeOwner (Task 12
+	// фичи "review notes", reviewpause.go): если задан, resumeOwner вызывает
+	// его вместо реального Trigger+SpawnAgent, чтобы тест мог наблюдать, какой
+	// раннер (resume_kind) и в каком режиме (withFeedback) был бы выбран, без
+	// запуска настоящего процесса-агента.
+	testRunnerHook func(kind string, withFeedback bool)
 }
 
 // bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле
@@ -575,8 +582,29 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// (interruptChans не регистрируется вне runWithRetry, Revise() на
 		// script-стадию не осмыслен) — просто done, как остальные фазы.
 		o.completeStage(ctx, ev.StageID, current, "")
+	case phaseReview:
+		// Standalone review-раннер (runReviewAgent/runReviewWithFeedback,
+		// resume-dispatcher Task 12 фичи "review notes", reviewpause.go)
+		// публикует своё собственное EventAgentCompleted{Data: phaseReview}
+		// через тот же runWithRetry, что и остальные фазы — раньше review
+		// здесь всегда падал в default и НЕ завершал стадию, оставляя её
+		// висеть в running/revising навсегда. Inline review (вызванный ИЗ
+		// runImplementationAgent/runImplementationWithFeedback как
+		// подшаг implementation-раннера, agents.go) своего
+		// EventAgentCompleted не публикует — он идёт напрямую через
+		// rr.RunAgent, и вся implementation-стадия завершается через ветку
+		// phaseImplementation выше, так что эта ветка её не задваивает.
+		// Revising допущен по аналогии с agent_suggest-гонкой в ветке
+		// phaseImplementation/phaseAutonomous выше (конкурентный Revise()
+		// мог успеть перевести running->revising, пока review-агент уже
+		// возвращался естественно) — completeStage сама отклонит переход,
+		// если Revising не входит в её From-набор EvComplete, так что это
+		// безопасный no-op, а не задваивание завершения.
+		if current == state.StatusRunning || current == state.StatusRevising {
+			o.completeStage(ctx, ev.StageID, current, "review complete")
+		}
 	default:
-		// review or unknown agent type: no status change needed
+		// unknown agent type: no status change needed
 	}
 	return nil
 }

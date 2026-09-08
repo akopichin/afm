@@ -210,3 +210,93 @@ func jsonQuote(s string) string {
 	q, _ := json.Marshal(s)
 	return string(q)
 }
+
+// withFeedbackRunner maps a resume_kind (see computeResumeKind/kindPlanning
+// etc.) to the *WithFeedback variant of the matching runner — used by
+// resumeOwner when the resumed stage must see a feedback.md (it's the review
+// target, or it was paused mid-revising: ow.FromRevising).
+func (o *Orchestrator) withFeedbackRunner(kind string) func(context.Context, flow.Stage) {
+	switch kind {
+	case kindPlanning:
+		return o.runPlanningWithFeedback
+	case kindReview:
+		return o.runReviewWithFeedback
+	case kindAutonomous:
+		return o.runAutonomousWithFeedback
+	default:
+		return o.runImplementationWithFeedback
+	}
+}
+
+// plainRunner maps a resume_kind to the plain (fresh, no feedback.md) variant
+// of the matching runner — used by resumeOwner for a non-target owner that
+// wasn't paused mid-revising.
+func (o *Orchestrator) plainRunner(kind string) func(context.Context, flow.Stage) {
+	switch kind {
+	case kindPlanning:
+		return o.runPlanningAgent
+	case kindReview:
+		return o.runReviewAgent
+	case kindAutonomous:
+		return o.runAutonomousAgent
+	default:
+		return o.runImplementationAgent
+	}
+}
+
+// resumeOwner resumes a single owned, paused stage (ow) after finalize
+// decided review notes should be injected (or discarded). It first waits for
+// the OLD callback (the one interrupted by PauseFlow's Pause) to drain —
+// concurrency.IsActive(ow.ID) — so that when the interrupted RunAgent call
+// returns with ErrUserInterrupted, it still observes status==paused and
+// treats it as a genuine Pause (no re-spawn), rather than racing the resume's
+// own transition/spawn below. Only after the drain does it transition the
+// stage out of paused and spawn the correct runner for ow.ResumeKind:
+//   - isTarget (the stage the review notes are FOR) always gets feedback
+//     (EvRevise -> Revising, withFeedbackRunner) so the notes reach it.
+//   - a non-target owner gets feedback too if it was paused mid-revising
+//     (ow.FromRevising) — it already had its own feedback.md in flight,
+//     unrelated to review notes, and must resume the same way it would have
+//     without PauseFlow ever intervening.
+//   - every other non-target owner resumes plain (EvContinue back to
+//     PausedFrom, plainRunner) and gets armResumeContext so its non-
+//     interactive agent replays "previously completed actions" from attempt 0
+//     instead of starting over (see the resumeContextOnce field comment).
+func (o *Orchestrator) resumeOwner(ctx context.Context, ow state.PauseOwner, isTarget bool) {
+	for o.concurrency.IsActive(ow.ID) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	stage := o.graph.Stage(ow.ID)
+	if stage == nil {
+		return
+	}
+	useFeedback := isTarget || ow.FromRevising
+
+	if o.testRunnerHook != nil {
+		o.testRunnerHook(ow.ResumeKind, useFeedback)
+		return
+	}
+
+	if !isTarget {
+		o.armResumeContext(ow.ID) // A′: attempt-0 replay for non-interactive
+	}
+
+	if useFeedback {
+		if _, ok := o.Trigger(ow.ID, bus.EvRevise, bus.GuardCtx{}, "review resume"); !ok {
+			return
+		}
+		o.concurrency.SpawnAgent(ctx, *stage, o.withFeedbackRunner(ow.ResumeKind))
+		return
+	}
+
+	pausedFrom := o.opts.Store.PausedFrom(ow.ID)
+	if _, ok := o.Trigger(ow.ID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "review resume"); !ok {
+		return
+	}
+	o.concurrency.SpawnAgent(ctx, *stage, o.plainRunner(ow.ResumeKind))
+}
