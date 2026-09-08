@@ -78,6 +78,18 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	o.interruptChans.Store(s.ID, interruptCh)
 	defer o.interruptChans.Delete(s.ID)
 
+	// resumeCtx — однократный флаг, взведённый armResumeContext снаружи
+	// (Continue после паузы non-interactive стадии, Task 7 "review notes"):
+	// заставляет собрать retry-контекст ("Previously completed actions") уже
+	// на attempt 0, а не только начиная с attempt > 0, — иначе резюмируемый
+	// агент перезапускается с чистого листа, не видя уже сделанную работу.
+	// LoadAndDelete снимает флаг сразу, чтобы следующий вызов той же стадии
+	// (без повторного arm) снова получил обычное attempt-0 поведение.
+	resumeCtx := false
+	if _, ok := o.resumeContextOnce.LoadAndDelete(s.ID); ok {
+		resumeCtx = true
+	}
+
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// maxRetries/retryBackoff — снапшоты с инстанса (см. Orchestrator-комментарий):
@@ -86,13 +98,14 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	retryBackoff := o.retryBackoff
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
-		if attempt > 0 {
+		if attempt > 0 || resumeCtx {
 			retryCtx = buildRetryContext(stageDir, phase)
 			if incompleteReason != "" {
 				retryCtx += "\n\n## Completion check failed\n\n" + incompleteReason +
 					"\n\nFix the underlying problem and make the check pass before finishing.\n"
 			}
 		}
+		resumeCtx = false // только самая первая попытка резюмируемого запуска получает его
 
 		err := agentFn(retryCtx)
 		if err == nil {

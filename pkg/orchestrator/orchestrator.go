@@ -190,6 +190,17 @@ type Orchestrator struct {
 	// (retrying) — значение должно пережить backoff ретрая.
 	runnerKind sync.Map
 
+	// resumeContextOnce хранит однократный флаг stageID -> взведён: следующий
+	// вызов runWithRetry для этой стадии должен собрать buildRetryContext
+	// (блок "Previously completed actions") уже на attempt 0, а не только
+	// начиная с attempt > 0 (обычное ретрай-поведение). Нужно для Continue
+	// после паузы non-interactive стадии (Task 7 фичи "review notes"): агент
+	// перезапускается заново (attempt 0), но должен видеть, что уже сделано,
+	// иначе повторяет работу с нуля. Взводится armResumeContext, снимается
+	// (LoadAndDelete) внутри runWithRetry — однократно, следующий resume той
+	// же стадии должен быть заармлен заново явно.
+	resumeContextOnce sync.Map
+
 	// retryCASBarrier — тест-сейм (nil в проде): вызывается в retryStage сразу
 	// после проверки статуса failed и ДО CAS EvManualRetry, позволяя тесту
 	// детерминированно смоделировать проигрыш CAS (перевести стадию из failed
@@ -244,6 +255,14 @@ func (o *Orchestrator) runnerKindOf(stageID string) string {
 		return v.(string)
 	}
 	return ""
+}
+
+// armResumeContext взводит однократный флаг resumeContextOnce для стадии
+// stageID — следующий вызов runWithRetry соберёт retry-контекст ("Previously
+// completed actions") уже на attempt 0 (см. комментарий у поля
+// resumeContextOnce).
+func (o *Orchestrator) armResumeContext(stageID string) {
+	o.resumeContextOnce.Store(stageID, struct{}{})
 }
 
 // setFatal фиксирует первую storage-fatal ошибку и отменяет run-контекст,
