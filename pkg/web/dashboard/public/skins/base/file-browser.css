@@ -379,6 +379,24 @@
   margin-left: 40px;
 }
 
+/* Task 21: конфирм "поставить флоу на паузу?" — показывается вместо формы
+   комментария на первый клик по строке, пока flowPauseState === 'none'.
+   .comment-actions/.btn-send/.btn-cancel переиспользованы из plan-panel.css,
+   как и .line-comment-form выше. */
+.file-line .review-pause-confirm {
+  white-space: normal;
+  margin-left: 40px;
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border: 1px solid var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+}
+.file-line .review-pause-confirm p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
 /* === Дифф === */
 .diff-viewer {
   display: flex;
