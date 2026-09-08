@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,5 +49,53 @@ func TestDeleteReviewNotes_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	if err := DeleteReviewNotes(dir); err != nil {
 		t.Fatalf("delete on missing should be nil: %v", err)
+	}
+}
+
+func TestPauseMarker_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	_, found, err := ReadNotesPauseMarker(dir)
+	if found || err != nil {
+		t.Fatalf("absent marker: found=%v err=%v", found, err)
+	}
+	m := PauseMarker{
+		Version: 1, OperationID: "op1", State: PauseStatePaused,
+		CreatedAt: time.Unix(0, 0).UTC(),
+		Owned:     []PauseOwner{{ID: "s1", ResumeKind: "implementation", FromRevising: false}},
+	}
+	if err := WriteNotesPauseMarker(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := ReadNotesPauseMarker(dir)
+	if !found || err != nil || got.State != PauseStatePaused || got.Owned[0].ID != "s1" {
+		t.Fatalf("roundtrip wrong: %+v found=%v err=%v", got, found, err)
+	}
+	if err := ClearNotesPauseMarker(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := ReadNotesPauseMarker(dir); found {
+		t.Fatal("marker should be gone")
+	}
+}
+
+func TestPauseMarker_CorruptReturnsErr(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, notesPauseMarkerFile), []byte("{bad"), 0644)
+	_, found, err := ReadNotesPauseMarker(dir)
+	if !found || err == nil || !errors.Is(err, ErrCorruptPauseMarker) {
+		t.Fatalf("want found+ErrCorrupt, got found=%v err=%v", found, err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, notesPauseMarkerFile+".corrupt-*"))
+	if len(matches) != 1 {
+		t.Fatal("want quarantine copy")
+	}
+}
+
+func TestPauseMarker_CorruptDetectsState(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, notesPauseMarkerFile), []byte(`{"state":"resuming" bad`), 0644)
+	m, found, err := ReadNotesPauseMarker(dir)
+	if !found || err == nil || !errors.Is(err, ErrCorruptPauseMarker) || m.State != PauseStateResuming {
+		t.Fatalf("want resuming best-effort, got state=%q found=%v err=%v", m.State, found, err)
 	}
 }
