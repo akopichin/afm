@@ -98,7 +98,7 @@ func NewFSM(store *state.Store) *FSM {
 			// ещё жив и вот-вот вернёт валидный plan.md.
 			EvPlanReady: {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingApproval)},
 			EvApprove:   {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
-			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning}, To: to(state.StatusRevising)},
+			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused}, To: to(state.StatusRevising)},
 			// Revising тоже разрешён здесь: run<Phase>WithFeedback (кроме
 			// planning-варианта, у которого свой EvStartPlanning) переводит
 			// стадию обратно в Running этим же событием ПЕРЕД повторным

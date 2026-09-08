@@ -139,6 +139,22 @@ func TestFSM_Apply_ReviseFromRunning(t *testing.T) {
 	}
 }
 
+// TestEvRevise_FromPaused закрывает Task 5 фичи review-notes: инъекция
+// ревью-заметки в приостановленную стадию должна суметь перезапустить её
+// агента через тот же путь, что и обычный Revise (feedback.md + EvRevise),
+// поэтому paused обязан быть легальным источником EvRevise, как
+// running/awaiting_approval.
+func TestEvRevise_FromPaused(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusPaused, Event: "test_setup"})
+
+	to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{}, "review inject")
+	if err != nil || !ok || to != state.StatusRevising {
+		t.Fatalf("EvRevise from paused: to=%v ok=%v err=%v", to, ok, err)
+	}
+}
+
 func TestFSM_Apply_AskUser(t *testing.T) {
 	fsm, store := newTestFSM(t, []string{"a"})
 	defer store.Close()
