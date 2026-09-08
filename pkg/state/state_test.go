@@ -446,7 +446,7 @@ func TestFileContentSHA_Stable(t *testing.T) {
 		t.Fatalf("unstable or unprefixed: %q %q", a, b)
 	}
 	if FileContentSHA([]byte("other")) == a {
-		t.Fatalf("collision")
+		t.Fatal("collision")
 	}
 }
 
@@ -463,7 +463,8 @@ func TestAtomicWriteFile_ReplacesAndPersists(t *testing.T) {
 	if string(got) != "v2" {
 		t.Fatalf("got %q", got)
 	}
-	if _, err := os.Stat(p + ".tmp"); !os.IsNotExist(err) {
-		t.Fatalf("temp file left behind")
+	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp-*"))
+	if len(leftovers) != 0 {
+		t.Fatal("temp file left behind")
 	}
 }
