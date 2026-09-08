@@ -1,75 +1,62 @@
-# File-browser review notes with best-effort pause — design (v4, hybrid)
+# File-browser review notes with best-effort pause — design (v5, hybrid)
 
 Date: 2026-09-08
-Status: revised after three design-review rounds; **architecture pivoted to the
-hybrid model** (user decision). Pending final user review → implementation plan.
+Status: revised after four review rounds; hybrid model confirmed sound, v5 closes
+the remaining bounded correctness gaps. Pending final user review → plan.
 Branch: `file-notes`
 
-> **v4 supersedes v1–v3.** The first three drafts pursued a *strong* contract —
-> note correctness depended on perfectly freezing every AFM writer (quiescence).
-> Three review rounds showed that guaranteeing this correctly requires a refactor
-> of the orchestrator's core launch/activity accounting (launch tokens,
-> reference-counted writer handles, executing-hook-subprocess counting, admission
-> ABA elimination). Per the "prefer simplicity" bar, we pivot: **note correctness
-> rests on a content anchor (digest + original line text captured at write time),
-> and the flow pause becomes a best-effort UX affordance, not a correctness
-> boundary.** This removes the need for quiescence detection, launch tokens,
-> writer counting, and the perfect admission barrier — and with them the bulk of
-> the v3 review's blocking findings, which existed *only* because quiescence was
-> load-bearing. The earlier "strong contract / wait-for-scripts" decision is
-> superseded by this hybrid choice.
+> **v5 supersedes v1–v4.** v4 pivoted to the hybrid model (note correctness via a
+> content anchor; pause is best-effort UX) — the review confirmed that pivot is
+> sound and removed the v3 quiescence/launch-token/writer-counting machinery for
+> good. v5 fixes the four bounded issues the v4 review found — all *within* the
+> hybrid model, none reintroducing quiescence: truthful pause ownership, a small
+> durable resume transaction, deterministic feedback-runner dispatch, and a
+> timing-independent line anchor.
 
 ## Problem
 
-The Docker file browser can browse/view/diff files mid-run but has no way to
-click a line and attach a note (as `PlanPanel`/`DialogChannel` do for plan lines
-and dialog questions). A reviewer who spots issues across several files has no
+The Docker file browser can browse/view/diff files mid-run but has no way to click
+a line and attach a note (as `PlanPanel`/`DialogChannel` do for plan lines and
+dialog questions). A reviewer who spots issues across several files has no
 structured way to collect them and steer a stage.
 
-We *want* files to be stable while notes are written, but we do not need to make
-that a hard concurrency guarantee. In practice the flow pause stops the agent
-stages (the common writers); for the rare case a file still changes (an
-uninterruptible script, a race), the note carries exactly what the user saw, and
-any drift is detected and surfaced at injection.
+We *want* files stable while notes are written, but do not make it a hard
+concurrency guarantee. The flow pause stops the agent stages (the common writers);
+for the rare case a file still changes (an uninterruptible script, a race), each
+note carries the exact original line text it was written against, so the target
+agent always reconciles against what the reviewer actually saw.
 
 ## Goal
 
 In the file browser, click a line → write a note anchored to the file's current
-content. The first note prompts a yes/no gate: to write notes the flow is put on
-a best-effort pause (active agent stages stopped, new activations held) and a
-full-width "flow paused" banner appears. The user accumulates notes across any
-number of files; each note stores its text, line, the **original line text**, and
-a **content digest** of the file as seen. When done, the user picks one stage to
-receive all notes as feedback (reusing the existing feedback mechanism); the
+content. The first note prompts a yes/no gate: the flow goes on a best-effort
+pause (active agent stages stopped, new activations held) and a full-width "flow
+paused" banner appears. The user accumulates notes across files; each note stores
+its text, line, the **original line text**, and a **content digest** of the file
+as seen. When done, the user picks one stage to receive all notes as feedback; the
 chosen stage restarts with the notes, every other paused stage resumes, the pause
 lifts, and the flow continues.
 
 ## Locked decisions
 
-- **Hybrid model.** Note correctness = content anchor; pause = best-effort UX.
+- **Hybrid model.** Note correctness = content anchor (always carried); pause =
+  best-effort UX.
 - **Approach A — durable marker + reuse.** No flow-level FSM event; per-stage
   pause, `Revise`/`Continue`/`*WithFeedback`, marker+direct-IO reused.
-- **Injection = resume-with-feedback (Revise-style)** into the chosen paused stage.
+- **Injection = resume-with-feedback (Revise-style)** into the chosen paused stage,
+  dispatched by a recorded `resume_kind` (not phase-guessing).
 - **Other paused stages resume via the existing `Continue` path.** Interactive →
-  real `--resume`; **non-interactive → the resume injects the `buildRetryContext`
-  replay block at attempt 0** (decision A′), so they don't redo work. We reuse
-  afm's existing resume/recovery dispatch (`resumeStageAtStatus`) unchanged — we
-  inherit its shipped semantics rather than inventing a new continuation model.
-- **Durable.** Notes + pause marker survive reload/restart. Recovery reuses the
-  existing paused-stage recovery; the marker only re-establishes the best-effort
-  activation hold.
-- **Content digest, not mtime+size.** The stale-detection anchor is a content hash
-  (the workspace ETag is `mtime+size` — fine as an HTTP cache validator, not as a
-  correctness anchor).
+  `--resume`; **non-interactive → attempt-0 `buildRetryContext` replay** (A′).
+- **Durable resume transaction.** The marker is a small crash-recoverable record
+  (`paused`/`resuming`), kept until every resume transition commits.
+- **Content digest, not mtime+size** for the anchor.
 
 ## Non-goals (YAGNI)
 
-- **No quiescence guarantee, no launch tokens, no writer counting.** Correctness
-  does not depend on perfectly stopping writers.
-- No new flow-scoped FSM event; no new continuation-descriptor/session machinery
-  (we reuse existing resume paths).
-- No forcible interruption of scripts/hooks (they finish; if they write, drift is
-  detected).
+- No quiescence guarantee, launch tokens, writer counting, or continuous
+  continuation descriptor.
+- No new flow-scoped FSM event.
+- No forcible interruption of scripts/hooks.
 - Single injection target; text edit/delete only (no re-anchoring).
 
 ---
@@ -78,280 +65,326 @@ lifts, and the flow continues.
 
 ### Notes storage — content-anchored (durable, `.afm/runs/<run_id>/`)
 
-`review-notes.json`, a single whole-file-rewritten document (tiny, human-typed):
+`review-notes.json`, a single whole-file-rewritten document:
 
 ```json
 {
-  "version": 1,
-  "rev": 7,                 // ETag; bumped per write; multi-tab 409
-  "next_id": 8,             // persisted; IDs never reused after delete
+  "version": 1, "rev": 7, "next_id": 8,
   "notes": [
     {
       "id": "n7", "root": "project", "path": "pkg/foo/bar.go",
       "display_path": "project/pkg/foo/bar.go",
-      "reference": "[AFM file: \"/work/pkg/foo/bar.go\"]",   // from the workspace marker builder, NOT fmt
+      "reference": "[AFM file: \"/work/pkg/foo/bar.go\"]",   // workspace marker builder, NOT fmt
       "line": 42,                       // >=1 = line note; null = file-level note
-      "orig_line_text": "\tif err != nil {",   // the exact line as seen (null for file-level)
-      "content_sha": "sha256:...",      // digest of the whole file as seen — the correctness anchor
+      "orig_line_text": "\tif err != nil {",   // exact line as seen (null for file-level) — ALWAYS rendered
+      "content_sha": "sha256:...",      // digest of the whole file as seen
       "text": "...", "created_at": "..."
     }
   ]
 }
 ```
 
-- `content_sha` is computed server-side from the file the user actually annotated
-  (the same bytes the browser served). It is the drift anchor: at injection we
-  recompute and compare.
-- `line: null` ⇒ file-level note (`orig_line_text` null). This is an explicit,
-  validated wire shape (the v3 render had a `File:` branch with no schema for it).
-- Durability: atomic temp+rename (unique temp name), fsync file + parent dir.
+- `content_sha` is computed server-side from the same bytes the browser served.
+- `line: null` ⇒ file-level note (`orig_line_text` null), an explicit validated
+  wire shape.
+- **Replacement** (a second note on an existing `(root,path,line)`) keeps the
+  existing `id`/`created_at` and refreshes `text`/`content_sha`/`orig_line_text`
+  from the newly viewed content (stable id, refreshed anchor — least surprising).
+- Durability: atomic temp+rename (unique temp), fsync file + parent dir.
   Corrupt/unknown-version → quarantine to `<name>.corrupt-<ts>` and start empty
-  (notes are advisory; losing a corrupt notes file is not a safety violation).
-- Storage API (direct IO, like `SavePreNote`): `SaveReviewNotes`/`LoadReviewNotes`/
-  `DeleteReviewNotes` (delete idempotent); `SaveFeedbackOnce(stageDir, opID, text)`.
+  (notes are advisory).
+- Storage API: `SaveReviewNotes`/`LoadReviewNotes`/`DeleteReviewNotes` (idempotent);
+  `SaveFeedbackOnce(stageDir, opID, text)`; a content-hash helper.
 
-### Best-effort pause — a simple flag + marker (NOT a correctness boundary)
+### The pause marker — a small durable resume transaction
 
-`o.flowPaused atomic.Bool`, mirrored by a durable marker `notes-pause.json`:
+`notes-pause.json`, written after `EvPause` has actually been applied:
 
 ```json
 {
   "version": 1,
-  "operation_id": "<128-bit hex>",   // crypto/rand; part of the feedback-once protocol
-  "paused_stages": ["stage-a"],      // stages THIS pause put into `paused` (for resume ownership)
-  "created_at": "..."
+  "operation_id": "<128-bit hex>",         // crypto/rand; part of the feedback-once protocol
+  "state": "paused",                        // paused | resuming
+  "mode": "",                               // "" while paused; inject | cancel while resuming
+  "target_stage": "",                       // the inject target while resuming
+  "created_at": "...",
+  "owned": [
+    { "id": "stage-a", "resume_kind": "implementation" }   // ONLY stages whose EvPause CAS won
+  ]
 }
 ```
 
-- **Activation hold.** While `flowPaused` is set, activation sites
-  (`startReadyStages`, `tryActivatePrePlanned`, `startPlanningForUnblocked`,
-  bootstrap `startPlanningForPending`) skip the `EvStart*` transition and leave the
-  stage in `pending`/`ready`. `concurrency.shouldRun` is left untouched (so no
-  stranding, no `script_after` leak — the v1 mistakes). This is a plain flag check,
-  not an atomic barrier: a stage already mid-activation when the pause lands may
-  still run — acceptable, because a resulting file change is caught by the note's
-  `content_sha` at injection. Best-effort by design.
-- **Pausing active stages.** `PauseFlow` snapshots stages with status ∈ {running,
-  planning, revising, retrying}, non-script, not already `paused`, records them as
-  `paused_stages`, sets `flowPaused`, writes the marker, then applies the existing
-  per-stage `Pause` internals (`EvPause` + `bumpPauseGen` + signal
-  `interruptChans`) to each. Running **script** stages are left to finish (their
-  successors are held by the flag). We do **not** wait for drain before enabling
-  note editing — notes are content-anchored, so a still-draining agent that writes
-  is caught by drift detection.
-- **Banner honesty.** The banner shows "⏸ Flow paused". Optionally it lists stages
-  still transitioning to `paused` as informational text, but note editing is not
-  gated on it.
+`owned` lists only stages this pause **actually** moved to `paused` (truthful
+ownership). `resume_kind ∈ {planning, implementation, review, autonomous}` is the
+deterministic feedback-runner selector, computed once at pause time (below).
 
-### Injection & cancel — reuse Revise/Continue
+### Best-effort pause — flag + truthful marker
 
-`InjectNotesAndResume(targetStageID)` (server-enforced: `flowPaused` set,
-`len(notes) > 0` else `no_notes` 400, target ∈ `paused_stages` else 400):
+`o.flowPaused atomic.Bool` mirrors the marker's existence and drives the
+activation hold and the banner. `PauseFlow` (under `o.flowPauseMu`, and atomically
+exclusive with finalization — see below):
 
-1. Render notes → feedback text (with drift annotations, below). Deliver **once**:
-   `SaveFeedbackOnce(targetDir, operation_id, rendered)` embeds
-   `<!-- afm-review-op: <id> -->` and no-ops if present (crash-safe against
-   double-append). `operation_id` is 128-bit, so it can't collide.
-2. Clear `flowPaused` and delete the marker **after** feedback is delivered but
-   **before** resuming (so the resume spawns aren't held by the flag).
-3. Resume the target with feedback: FSM adds `paused` to `EvRevise`'s From-set;
-   `EvRevise` (paused→revising) + `SpawnAgent(run<phase>WithFeedback)` via the
-   **existing** `resumeStageAtStatus` revising dispatch (we inherit its phase
-   detection — the same one afm-restart recovery already relies on).
-4. Resume every other `paused_stages` entry via the existing `Continue` path
-   (`EvContinue` → `resumeStageAtStatus`); interactive `--resume`, non-interactive
-   attempt-0 replay (decision A′).
-5. Re-drive scheduling so flag-held pending stages activate.
-6. `DeleteReviewNotes`.
+1. **Set `flowPaused=true`** (activation hold starts immediately; the in-memory
+   flag, not the marker, is the authority). Activation sites (`startReadyStages`,
+   `tryActivatePrePlanned`, `startPlanningForUnblocked`, bootstrap
+   `startPlanningForPending`, **and the active-status recovery respawns** in
+   `startPlanningForPending`) skip work while it is set, leaving stages in place.
+   `concurrency.shouldRun` is untouched (no stranding, no `script_after` leak).
+   Best-effort: a stage already mid-activation may still run — acceptable, the note
+   anchor covers any resulting change.
+2. **Snapshot candidates:** status ∈ {running, planning, revising, retrying},
+   non-script, not already `paused`.
+3. **Apply `EvPause` to each candidate** (existing per-stage `Pause` internals:
+   `EvPause` + `bumpPauseGen` + signal `interruptChans`). A candidate that left the
+   From-set first (completed, `awaiting_user_input`, failed) **loses the CAS and is
+   dropped** — it never enters `owned`.
+4. **For each successful owner, compute `resume_kind`:** autonomous
+   (`IsAuto()`/`autonomous.flag`) → `autonomous`; else `PausedFrom==planning` →
+   `planning`; else (`running`/`retrying`/`revising`) → `implementation` for
+   non-interactive, or for interactive use `detectInterruptedPhase` to pick
+   `review` vs `implementation` (session files exist for interactive). Recorded so
+   dispatch never re-guesses.
+5. **Persist the marker** (`state=paused`, `owned=winners`).
 
-`CancelNotesAndResume()` = clear flag + marker, resume all `paused_stages` plainly,
-delete notes. No target, no feedback.
+Running **script** stages are left to finish (successors held by the flag); we do
+not wait for drain — notes are content-anchored.
+
+**Weak crash semantics on pause creation (explicit):** a crash after some `EvPause`
+but before the marker write leaves those stages durably `paused` with **no marker**
+→ "the pause request was never durably accepted." Recovery finds no marker and the
+user manually Continues those stages. This is the accepted best-effort trade
+(stated per the review); it needs no intent/reconciliation phase because the pause
+itself carries no payload yet.
+
+### Injection & cancel — a recoverable resume transaction
+
+`InjectNotesAndResume(targetStageID)` (server-enforced: `flowPaused` set;
+`len(notes)>0` else `no_notes` 400; target ∈ `owned` **and currently
+`StatusPaused`** else 400 — a target that silently left `paused` must not receive
+feedback). Under `flowPauseMu`:
+
+1. **Persist `state=resuming, mode=inject, target_stage`** (marker still present —
+   this is the durable resume intent).
+2. Render notes → feedback (§ rendering). `SaveFeedbackOnce(targetDir,
+   operation_id, rendered)` — the `<!-- afm-review-op: <id> -->` sentinel makes a
+   crash-replayed append a no-op.
+3. **Clear the in-memory `flowPaused` flag** (so resume spawns aren't held) — but
+   keep the marker.
+4. **Resume the target with feedback**, dispatched by its `resume_kind`:
+   `EvRevise` (paused→revising) + `SpawnAgent(run<resume_kind>WithFeedback)`. This
+   bypasses `detectInterruptedPhase`, so a non-interactive implementation/auto
+   target is not mis-dispatched as planning.
+5. **Resume every other owner** via the existing `Continue` path by `resume_kind`;
+   interactive `--resume`, non-interactive attempt-0 replay (A′).
+6. Re-drive scheduling so flag-held pending stages activate.
+7. **`DeleteReviewNotes`, then delete the marker — last.**
+
+`CancelNotesAndResume()`: `state=resuming, mode=cancel`; resume all owners plainly;
+delete notes + marker last. No feedback.
+
+**Recovery finishes the transaction idempotently.** On start, `ReadNotesPauseMarker`:
+- **absent** → normal.
+- **`state=paused`** → `flowPaused=true` (re-establish the hold); owners are already
+  durably `paused` (existing recovery keeps them paused); **suppress every
+  bootstrap respawn for owned stages** (the flag gates the active-status recovery
+  paths too, per PauseFlow step 1); banner returns; nothing auto-resumes.
+- **`state=resuming`** → finish: `SaveFeedbackOnce` (no-op if the sentinel exists);
+  for each owner, reconcile from the event log and re-drive its resume by
+  `resume_kind` if not already running (idempotent); the inject target uses the
+  `*WithFeedback` runner, others plain; then `DeleteReviewNotes` + delete marker.
+  So a crash after feedback-append / after some Continues / after note-delete all
+  converge to exactly one feedback block and no stage left paused by the operation.
+- **corrupt/unreadable** → log + quarantine + treat as no active pause (fail-open;
+  owners stay `paused` for manual Continue; correctness unaffected).
 
 **Control policy.** While `flowPaused` is set, external forward-driving actions
-(`Continue`, `Approve`, `Retry`, `Revise`, `Button`, dialog `NotifyAnswer`, manual
-`Pause`) return a machine-readable 409 `{"error":"flow_paused"}`; the lifecycle's
-own resume uses private helpers that bypass the guard. This keeps the UX coherent
-(no conflicting user actions mid-review); it is not a correctness barrier for note
-anchoring.
+(`Continue`/`Approve`/`Retry`/`Revise`/`Button`/dialog `NotifyAnswer`/manual
+`Pause`) return `409 {"error":"flow_paused"}`; the lifecycle resumes via private
+helpers that bypass the guard.
 
-### Drift detection at injection (the payoff of content-anchoring)
+### The content anchor is always carried (timing-independent)
 
-For each note, recompute the target file's `content_sha`. If it differs from the
-stored one, the rendered feedback annotates the note as possibly stale and
-includes the `orig_line_text` verbatim, so the agent reconciles against what the
-reviewer actually saw:
+Best-effort pause permits a late writer to change a file *after* injection
+recomputes the hash but before the target reads feedback. So the hash comparison is
+**diagnostic, not proof**: every line note **always** renders its stored
+`orig_line_text` (JSON-quoted — source lines can contain backticks), and the
+comparison only adds a `changed-at-injection` flag. The agent can always reconcile
+the line number against the original text regardless of timing:
 
 ```
+<!-- afm-review-op: <id> -->
+## Review notes
 ### [AFM file: "/work/pkg/foo/bar.go"]  "project/pkg/foo/bar.go"
-- Line 42 (⚠ file changed since note; original line was: `if err != nil {`): <text>
-- Line 88: <text>
-- File: <text>            // line-level == null
+- Line 42; original: "\tif err != nil {": <text>
+- Line 88 (⚠ content differed at injection); original: "\tfoo()": <text>
+- File: <text>
+### [AFM file: "/work/gone.go"]  "project/gone.go"  (⚠ file unavailable at injection)
+- Line 5; original: "package gone": <text>
 ```
 
-`display_path` is JSON-quoted in the header (filenames may contain `)`/newlines).
-Deterministic order (files by `display_path`, notes by line, file-level last).
-Total rendered size capped (`maxRenderedFeedback`); overflow reported before
-inject.
+**Missing/unreadable at injection** (deleted, renamed, symlink, binary, over the
+read limit): the note is rendered with a `file unavailable at injection` marker,
+its stored safe `reference`, and its original text — the rest of the injection is
+never aborted. Tests distinguish `changed` from `unavailable`. `display_path` is
+JSON-quoted; deterministic order (files by `display_path`, notes by line, file-level
+last); total size capped (`maxRenderedFeedback`, overflow reported pre-inject).
 
-### Recovery — reuse existing, fail-open on the advisory marker
+### Finalization guard (atomic with pause acceptance)
 
-On start, `ReadNotesPauseMarker`:
-- **absent** → normal.
-- **present & valid** → set `flowPaused=true` (re-establish the activation hold);
-  the `paused_stages` are already durably `paused` in the event log (existing
-  recovery keeps them paused); notes file persists; the banner returns. The user
-  finishes and injects/cancels. Nothing auto-resumes.
-- **corrupt/unreadable** → log + quarantine + **treat as no active pause**
-  (fail-open is safe here: the only consequence is the activation hold isn't
-  re-established; any durably-`paused` stages simply stay paused for the user to
-  Continue manually). Correctness doesn't depend on the marker.
+`PauseFlow` must be rejected once run finalization has begun, and the two must be
+one atomic decision. A small mutex/CAS (`o.finalizeMu` or a `finalizing atomic.Bool`
+flipped under a shared lock) is held by **both** the event-loop transition into
+`runEndOfRunMemory`/`Run` return **and** `PauseFlow` from its finalization check
+through setting `flowPaused`. So finalization can't start while a pause is being
+accepted, and vice versa. `PauseFlow` during finalization → `409 run_finalizing`; a
+pause requested after `Run` returns is a no-op. `shouldExit` consults the in-memory
+`flowPaused` flag (not just marker visibility) and stays false while it is set.
 
-Feedback delivery idempotency across a crash is handled by the `SaveFeedbackOnce`
-sentinel, not by the marker. `DeleteReviewNotes` is idempotent. There is no
-multi-phase transaction to recover — the pivot removed it.
+### Direct-IO failure semantics (deterministic, not storage-fatal)
 
-### What we deliberately do NOT build (and why it's safe)
-
-- **No quiescence detection / writer counting / launch tokens / admission ABA
-  elimination** — correctness comes from `content_sha`, so a stale launch or a
-  late-draining agent that writes a file is *detected*, not *prevented*. (Resolves
-  v3-review findings 1–6 by removing their premise.)
-- **No new continuation descriptor / session-timing work** — we reuse the shipped
-  `resumeStageAtStatus` dispatch; whatever it does for crash recovery today is what
-  Continue does here. (Resolves v3-review finding 6.)
-- **No hook-subprocess accounting** — hooks aren't waited on. (Resolves finding 3.)
-- **End-of-run memory writers** (`runEndOfRunMemory`) — `PauseFlow` is rejected once
-  run finalization has begun, and a pause requested after `Run` returns is a no-op
-  (documented), so there's nothing to track. (Resolves the additional gap.)
+- **Initial marker write fails** (in `PauseFlow`) → roll back `flowPaused=false`
+  and return an error; never leave the flag set with no marker.
+- **Feedback write fails** (`SaveFeedbackOnce`) → leave the marker (`state=paused`
+  or the already-persisted `resuming`) and notes in place for retry; return an
+  error.
+- **A resume FSM transition's log write fails** → the existing storage-fatal path
+  applies (that's an event-log write); the `resuming` marker lets recovery re-drive.
+- **Marker-clear (final delete) fails after a successful resume** → recoverable:
+  recovery re-enters `state=resuming`, `SaveFeedbackOnce`/Continue are idempotent,
+  no second live spawn (reconciled from the log), then retries the delete.
 
 ---
 
 ## HTTP API (`/api/flow/*`)
 
-- `POST /api/flow/pause` → `{ paused_stages:[] }`; existing marker → returns it.
-  Rejected (`run_finalizing` 409) once run finalization has begun.
-- `GET  /api/flow/notes` → `{ rev, notes:[] }` (lock-free read).
+- `POST /api/flow/pause` → `{ paused_stages:[] }` (the `owned` ids); existing marker
+  → returns it; during finalization → `409 run_finalizing`.
+- `GET  /api/flow/notes` → `{ rev, notes:[] }`.
 - `POST /api/flow/notes` `{ root, path, line|null, text, content_sha, expected_rev }`
-  → created note. `flowPaused` required (else `flow_not_paused` 409). Server resolves
-  `abs`/`display_path`/`reference` from `{root,path}` via `workspace` (client
-  absolute path never trusted); recomputes `content_sha` from the current file and
-  requires it to match the client's (`stale_content` 409 — the reviewer viewed an
-  old version); for a line note validates `line` within content and snapshots
-  `orig_line_text`; `line:null` = file-level; `expected_rev` (`rev_conflict` 409),
-  non-blank `text` ≤ `maxNoteTextLen`, count ≤ `maxNotes`. One note per
-  `(root,path,line)` (replace).
+  → created/replaced note. `flowPaused` required (`flow_not_paused` 409). Server
+  resolves `abs`/`display_path`/`reference` from `{root,path}` via `workspace`
+  (absolute path never trusted); recomputes `content_sha` and requires the client's
+  to match (`stale_content` 409); line note → validate `line` in range + snapshot
+  `orig_line_text`; `line:null` = file-level; `expected_rev` (`rev_conflict` 409);
+  non-blank `text` ≤ `maxNoteTextLen`; count ≤ `maxNotes`.
 - `PUT /api/flow/notes/{id}` `{ text, expected_rev }` / `DELETE .../{id}?expected_rev=`.
-- `POST /api/flow/notes/inject` `{ stage_id }` (`no_notes` 400 if empty) /
-  `POST /api/flow/notes/cancel`.
+- `POST /api/flow/notes/inject` `{ stage_id }` (`no_notes` 400 if empty; target must
+  be `owned` and `StatusPaused`) / `POST /api/flow/notes/cancel`.
 - `/api/status` gains `flow_paused` bool and `flow_paused_stages` []string (the
-  picker). (No `pausing`/`quiescent`/`blockers` — there's no quiescence phase.)
+  currently-`paused` owners, for the picker).
 
-A single `o.flowPauseMu` serializes `PauseFlow`/CRUD/`Inject`/`Cancel` so
-whole-file note writes and the lifecycle don't interleave; `rev`/`expected_rev`
-guards multi-tab conflicts.
+`o.flowPauseMu` serializes `PauseFlow`/CRUD/`Inject`/`Cancel`; `rev`/`expected_rev`
+guard multi-tab conflicts.
 
 ## Frontend (`pkg/web/dashboard/src`)
 
 - FileViewer line-comment UX (reuse `PlanPanel`'s `.plan-line`/`line-comment-*` +
-  `PasteableTextarea`, `●` on annotated lines). The client sends the `content_sha`
-  of the file it rendered (computed from the fetched content) with each add.
+  `PasteableTextarea`, `●` on annotated lines). The client computes and sends the
+  `content_sha` of the fetched file with each add.
 - Pause gate: first note while `!flow_paused` → confirm *"…поставить на паузу?"*;
-  **Yes** → `POST /api/flow/pause`, then enable the editor; **No** → close, flow
-  untouched.
+  **Yes** → `POST /api/flow/pause`, enable editor; **No** → close.
 - Full-width banner (App.tsx, after `<FlowHeader/>`), gated by `flow_paused`:
   *"⏸ Flow paused — review notes (N)"* + **Send notes** + **Cancel**.
 - Notes modal (from **Send**): grouped by file, edit/delete, stage **picker**
-  (`flow_paused_stages`); empty picker → disclosed *"no active stage to receive
-  notes"*, **Send** disabled. A `stale_content` 409 on add tells the user the file
-  changed — reload and re-anchor.
+  (`flow_paused_stages`); empty → disclosed, **Send** disabled. `stale_content` 409
+  → "file changed, reload & re-anchor"; `rev_conflict` → "notes changed elsewhere".
 - `use-status.ts` maps `flow_paused`/`flow_paused_stages`; `run-client.ts` gains the
   seven calls.
 
 ## Edge cases
 
-- **No pausable agent stage** — pause still engages (flag + banner);
-  `flow_paused_stages` empty → Send disabled, disclosed upfront. `shouldExit` is
-  held open while the marker exists so the server stays up for the reviewer.
-- **A script (or a racing agent) changes a file during review** — allowed; the
-  note's `content_sha` mismatch surfaces the drift at injection with the original
-  line text.
-- **User-manually-paused stage before review pause** — not in `paused_stages`;
-  never resumed by inject/cancel.
-- **Crash mid-inject** — `SaveFeedbackOnce` sentinel prevents double feedback;
-  `DeleteReviewNotes` idempotent; no transaction to reconcile.
-- **Forward control during pause** — 409 `flow_paused`.
+- **No pausable stage** — pause engages (flag + banner); empty picker → Send
+  disabled; `shouldExit` held by the flag.
+- **Script / racing agent writes during review** — allowed; the always-present
+  `orig_line_text` (plus the injection-time `changed`/`unavailable` diagnostic) lets
+  the agent reconcile.
+- **Target left `paused` before inject** — rejected (validate `StatusPaused`), no
+  feedback written.
+- **Crash mid-lifecycle** — resume transaction + `SaveFeedbackOnce` + idempotent
+  deletes converge on recovery.
+- **User-manually-paused stage** — not in `owned`; untouched by inject/cancel.
 
 ---
 
 ## Testing
 
 **`pkg/state`** — notes roundtrip (`next_id` monotonic across delete, `rev` bump,
-`line:null` file-level, missing→empty); corrupt/unknown-version quarantine;
-`SaveFeedbackOnce` no-ops on repeated op-id; marker write/read/clear; fsync path.
+`line:null`, replacement keeps id/created_at & refreshes anchor, missing→empty);
+corrupt/unknown-version quarantine; `SaveFeedbackOnce` no-op on repeat op-id; marker
+write/read/clear; fsync path; content-hash helper.
 
 **`pkg/orchestrator`**
-- `PauseFlow` sets the flag + marker, snapshots the right stages, applies `EvPause`;
-  the activation hold keeps a newly-unblocked dependent in `pending` (no stranding,
-  `shouldRun` untouched); a running script finishing during pause does not start its
-  successor.
-- Inject writes rendered feedback **once** (repeat inject / crash-replay doesn't
-  double-append), `EvRevise`-from-`paused` resumes the target via the existing
-  dispatch, others resume via Continue, flag+marker+notes cleared, held stages
-  activate. Cancel resumes all plainly, no feedback.
-- **Drift:** a note whose file changed between add and inject renders the
-  stale-warning + `orig_line_text`; an unchanged file renders clean.
-- Resume context (A′): first resumed non-interactive attempt's prompt contains the
-  replay block; interactive resumes its session.
-- Control policy: forward actions → 409 `flow_paused`; `shouldExit` held by marker;
-  `PauseFlow` rejected during finalization; pause after `Run` returns is a no-op.
-- FSM: `EvRevise` From includes `paused`.
-- Recovery: valid marker re-establishes the hold; corrupt marker fails open (logged,
-  quarantined, no stranded transaction).
+- **Truthful ownership:** candidate completing / entering `awaiting_user_input`
+  before its `EvPause` is dropped from `owned`; the marker lists only CAS winners.
+- **Activation hold:** a newly-unblocked dependent stays `pending`; bootstrap
+  active-status respawns are suppressed for owned stages on valid-marker recovery; a
+  script finishing during pause doesn't start its successor.
+- **Dispatch (finding 3):** inject into non-interactive planning, non-interactive
+  implementation, `agents:[auto]`, planning-retry, implementation-retry, and
+  interactive inline review each select the correct `run*WithFeedback` runner —
+  assert the actual runner/prompt, not just FSM status.
+- **Anchor (finding 4):** digest matches yet the file mutates before the target
+  reads feedback → the feedback still carries `orig_line_text`; JSON-quoted lines
+  with backticks survive.
+- **Resume transaction (finding 2):** crash after feedback append / after
+  `state=resuming` before target transition / after target transition before spawn /
+  after some non-target Continues / after note delete before marker delete — repeated
+  recovery → one feedback block, no owner left paused by the operation.
+- **Pause creation (finding 1):** crash after some `EvPause` before marker write →
+  no marker, stages manually continuable (documented weak semantics).
+- **Finalization:** `PauseFlow` and finalize are atomically exclusive; pause after
+  `Run` returns is a no-op; `shouldExit` held by the flag.
+- **Direct-IO failures:** initial-marker failure rolls back the flag;
+  feedback-failure retains marker+notes; marker-clear-failure recovers without a
+  second spawn.
+- Control policy → 409 `flow_paused`. FSM: `EvRevise` From includes `paused`.
 
 **`pkg/server`** — CRUD gating + `stale_content`/`rev_conflict`/`no_notes`/
-`flow_not_paused` codes; server-side `{root,path}` resolution + `content_sha`
-recompute (absolute path never trusted); `line:null` file-level validation;
-`/api/status` fields; paths with quotes/backslashes/newlines/non-ASCII round-trip
-via stored `reference`; `display_path` JSON-quoted in the render.
+`flow_not_paused`/`run_finalizing` codes; server-side `{root,path}` resolution +
+`content_sha` recompute; `line:null` validation; unavailable-file rendering path;
+`/api/status` fields; reference round-trips odd filenames.
 
-**Frontend** — line comment + `●`; client `content_sha` computation; pause confirm;
-banner; notes edit/delete; picker inject; `stale_content`/`rev_conflict` handling;
-`use-status` mapping.
+**Frontend** — line comment + `●`; client `content_sha`; pause confirm; banner;
+notes edit/delete; picker inject; `stale_content`/`rev_conflict` handling;
+`use-status`.
 
 **Live verification** (`verify` skill, Docker + real browser): click a line → pause
-gate → banner + real agent stage stops → write notes across two files → inject into
-one stage, see its `feedback.md` receive the notes once + others resume → banner
-clears → flow continues; reload mid-pause and confirm the pause + notes survive;
-force a file change during pause and see the drift warning in the injected feedback.
+gate → banner + a real **non-interactive** agent stage stops → notes across two
+files → inject into that stage and confirm it restarts as **implementation** (not
+planning) reading the notes once → others resume → banner clears; reload mid-pause
+(survives); mutate a file during pause and see the `orig_line_text` + `changed`
+diagnostic in the injected feedback; delete a reviewed file and see the
+`unavailable` render without aborting other notes.
 
 ## Files touched (anticipated)
 
-- `pkg/state/state.go` — content-anchored notes IO, marker IO, `SaveFeedbackOnce`,
-  content-hash helper.
-- `pkg/orchestrator/` — `flowPaused` flag, `flowPauseMu`, marker, `PauseFlow`/
-  `Inject`/`Cancel`/note CRUD, the activation-site flag check, control policy,
-  `shouldExit` guard, finalization guard, drift-annotated rendering, recovery
-  (fail-open marker).
-- `pkg/orchestrator/retry.go` — attempt-0 replay context for resumed runs (A′).
+- `pkg/state/state.go` — content-anchored notes IO, resume-transaction marker IO,
+  `SaveFeedbackOnce`, content-hash helper.
+- `pkg/orchestrator/` — `flowPaused`, `flowPauseMu`, `finalizing` guard, marker
+  transaction, `PauseFlow` (EvPause-first + `resume_kind`), `Inject`/`Cancel`/CRUD,
+  activation-hold at all activation + active-status-recovery sites, control policy,
+  `shouldExit` guard, drift/unavailable rendering, recovery, direct-IO error rules.
+- `pkg/orchestrator/retry.go` — attempt-0 replay context (A′).
 - `pkg/orchestrator/bus/fsm.go` — `EvRevise` From += `paused`.
 - `pkg/executor`/runner_factory — thread the attempt-0 resume context.
 - `pkg/server/` — `/api/flow/*`, `statusResponse` fields, `FlowActions` wiring, note
-  resolution/validation + `content_sha` recompute, machine-readable error codes.
-- `pkg/web/dashboard/src/` — FileViewer line comments + client content hashing, pause
-  confirm, banner, notes modal + picker, `run-client`, `use-status`, CSS.
+  resolution/validation + `content_sha`, error codes.
+- `pkg/web/dashboard/src/` — FileViewer line comments + client hashing, pause confirm,
+  banner, notes modal + picker, `run-client`, `use-status`, CSS.
 - `docs/superpowers/plans/2026-09-08-file-browser-review-notes.md` — the plan.
 
 ## Acceptance criteria (mechanically testable in the plan)
 
-1. Note correctness is independent of pause timing: a file changed between add and
-   inject is detected (`content_sha`) and surfaced, never silently mis-anchored.
-2. The activation hold never strands a stage (`shouldRun` untouched; held stages
-   stay `pending`/`ready` and activate on resume).
-3. Feedback is delivered at most once per operation across crash/replay.
-4. Inject resumes the target with feedback and every other paused stage plainly,
-   via the existing resume dispatch; the first non-interactive resumed attempt
-   carries the replay context.
-5. A corrupt marker fails open (no stranded transaction, evidence quarantined); a
-   valid marker survives restart and re-establishes the hold + banner.
-6. Pause is unavailable during/after run finalization; `shouldExit` stays open
-   while a marker exists.
+1. `owned` contains only stages whose `EvPause` CAS won; inject also re-validates
+   `StatusPaused` before writing feedback.
+2. A crash anywhere in inject/cancel cannot lose resume ownership or orphan
+   delivered feedback (durable `resuming` transaction + idempotent recovery).
+3. Every target type selects the correct `run*WithFeedback` runner via `resume_kind`
+   (non-interactive implementation/auto and retrying included).
+4. Every line note always carries `orig_line_text` into feedback; a post-comparison
+   write cannot destroy the anchor.
+5. Deleted/unreadable reviewed files yield actionable feedback, not an aborted
+   injection.
+6. Pause acceptance and run finalization are atomically exclusive; `shouldExit` is
+   held by the in-memory flag.
+7. Every direct-IO failure leaves a documented retryable/manually-recoverable state.
