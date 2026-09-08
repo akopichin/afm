@@ -209,15 +209,24 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if o.activationBlocked() {
 				continue // review mode: hold new activations; the stage stays pending/ready
 			}
+			if _, done := o.reviewResumed.Load(s.ID); done {
+				continue // already resumed by review-pause recovery; don't double-spawn
+			}
 			o.resumeStageAtStatus(ctx, s, state.StatusRetrying)
 		case state.StatusRevising:
 			if o.activationBlocked() {
 				continue // review mode: hold new activations; the stage stays pending/ready
 			}
+			if _, done := o.reviewResumed.Load(s.ID); done {
+				continue // already resumed by review-pause recovery; don't double-spawn
+			}
 			o.resumeStageAtStatus(ctx, s, state.StatusRevising)
 		case state.StatusRunning:
 			if o.activationBlocked() {
 				continue // review mode: hold new activations; the stage stays pending/ready
+			}
+			if _, done := o.reviewResumed.Load(s.ID); done {
+				continue // already resumed by review-pause recovery; don't double-spawn
 			}
 			o.resumeStageAtStatus(ctx, s, state.StatusRunning)
 		default:

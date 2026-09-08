@@ -129,7 +129,6 @@ func (r *pauseInjectRunner) getResumedPrompt() string {
 // orchestrator_test).
 func pauseInjectResolveFile(root, path string, _ *int) (orchestrator.ResolvedFile, bool) {
 	return orchestrator.ResolvedFile{
-		Abs:         "/w/" + path,
 		DisplayPath: root + "/" + path,
 		Reference:   `[AFM file: "/w/` + path + `"]`,
 		ContentSHA:  "sha256:current",

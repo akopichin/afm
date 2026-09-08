@@ -233,12 +233,6 @@ func newRunCmd() *cobra.Command {
 			// замкнуться на реальный ws (nil в хостовом режиме — оба поля
 			// Options остаются незаданными).
 			var ws workspace.FS
-			// rootContainerPaths mirrors workspace.Root.Path (unexported, not
-			// readable back from workspace.FS) so workspaceResolveFile below
-			// can compute ResolvedFile.Abs the same way workspace.Read itself
-			// does internally (filepath.Join(root path, relPath)), without
-			// reaching into the workspace package's internals.
-			var rootContainerPaths map[string]string
 			if cfg.Server.GetPort() > 0 {
 				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && os.Getenv("AFM_IN_DOCKER") == "1" {
 					man, err := docker.DecodeFileRootManifest(raw)
@@ -246,7 +240,6 @@ func newRunCmd() *cobra.Command {
 						fmt.Fprintf(os.Stderr, "warning: file browser disabled: decode file root manifest: %v\n", err)
 					} else {
 						roots := make([]workspace.Root, 0, len(man.Roots))
-						rootContainerPaths = make(map[string]string, len(man.Roots))
 						for _, r := range man.Roots {
 							roots = append(roots, workspace.Root{
 								ID:            r.ID,
@@ -255,7 +248,6 @@ func newRunCmd() *cobra.Command {
 								Kind:          r.Kind,
 								MountReadOnly: r.MountReadOnly,
 							})
-							rootContainerPaths[r.ID] = r.ContainerPath
 						}
 						fs, err := workspace.New(roots)
 						switch {
@@ -290,7 +282,7 @@ func newRunCmd() *cobra.Command {
 			// оба поля остаются nil — orchestrator сам трактует это как
 			// "файл не резолвится" (ErrStaleContent / "file unavailable").
 			if ws != nil {
-				orchOpts.ResolveFile = workspaceResolveFile(ws, rootContainerPaths)
+				orchOpts.ResolveFile = workspaceResolveFile(ws)
 				orchOpts.CurrentFileSHA = workspaceCurrentFileSHA(ws)
 			}
 			orch := orchestrator.New(orchOpts)
@@ -622,20 +614,13 @@ func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.W
 // requested 1-indexed line. Any workspace error (not found, too large,
 // binary, symlink, ...) is reported as "can't resolve" rather than surfaced
 // to the caller: AddNote already turns that into ErrStaleContent.
-//
-// rootContainerPaths maps a workspace root ID to its absolute container path
-// (the same value workspace.Root.Path holds internally, which the FS
-// interface itself doesn't expose) so Abs can be computed exactly the way
-// workspace.Read does it (filepath.Join(root path, relPath)) without
-// reaching into the workspace package.
-func workspaceResolveFile(ws workspace.FS, rootContainerPaths map[string]string) func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
+func workspaceResolveFile(ws workspace.FS) func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
 	return func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
 		f, err := ws.Read(context.Background(), root, path)
 		if err != nil {
 			return orchestrator.ResolvedFile{}, false
 		}
 		rf := orchestrator.ResolvedFile{
-			Abs:         filepath.Join(rootContainerPaths[root], f.Path),
 			DisplayPath: f.DisplayPath,
 			Reference:   f.Reference,
 			ContentSHA:  state.FileContentSHA([]byte(f.Content)),

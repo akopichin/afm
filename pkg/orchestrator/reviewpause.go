@@ -470,8 +470,21 @@ func (o *Orchestrator) CancelNotesAndResume(reqCtx context.Context) error {
 // paused stages with no marker left to explain why.
 func (o *Orchestrator) runResumeTransaction(ctx context.Context, m state.PauseMarker) {
 	for _, ow := range m.Owned {
+		// Record BEFORE driving the resume: when this transaction runs from
+		// recoverReviewPause (a resuming marker on restart), the very next
+		// thing Run() does is startPlanningForPending, which would otherwise
+		// see this owner already out of paused and re-spawn a second agent for
+		// it (recovery.go consults reviewResumed to skip exactly these).
+		o.reviewResumed.Store(ow.ID, struct{}{})
 		isTarget := m.Mode == state.PauseModeInject && ow.ID == m.TargetStage
 		o.resumeOwner(ctx, ow, isTarget)
+	}
+	// If the run context was cancelled mid-loop (shutdown during resume), the
+	// remaining resumeOwner calls returned early — leave notes+marker on disk
+	// so a later start can finish the resume, instead of discarding the intent
+	// for owners we never got to.
+	if ctx.Err() != nil {
+		return
 	}
 	o.startReadyStages(ctx) // re-drive activation-held pending stages
 	_ = state.DeleteReviewNotes(o.opts.RunDir)

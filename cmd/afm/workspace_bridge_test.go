@@ -57,9 +57,8 @@ func (f *fakeWorkspace) Search(context.Context, string, string) (workspace.Searc
 func (f *fakeWorkspace) Close() error { return nil }
 
 // TestWorkspaceResolveFile_FileNote проверяет happy-path для ноты без
-// привязки к строке: Abs собирается из rootContainerPaths + File.Path,
-// DisplayPath/Reference берутся из File как есть, ContentSHA считается через
-// state.FileContentSHA от реального содержимого.
+// привязки к строке: DisplayPath/Reference берутся из File как есть,
+// ContentSHA считается через state.FileContentSHA от реального содержимого.
 func TestWorkspaceResolveFile_FileNote(t *testing.T) {
 	ws := &fakeWorkspace{files: map[string]workspace.File{
 		"project/main.go": {
@@ -69,14 +68,11 @@ func TestWorkspaceResolveFile_FileNote(t *testing.T) {
 			Content:     "package main\n\nfunc main() {}\n",
 		},
 	}}
-	resolve := workspaceResolveFile(ws, map[string]string{"project": "/workspace"})
+	resolve := workspaceResolveFile(ws)
 
 	rf, ok := resolve("project", "main.go", nil)
 	if !ok {
 		t.Fatal("resolve: got ok=false, want true")
-	}
-	if want := "/workspace/main.go"; rf.Abs != want {
-		t.Errorf("Abs: got %q, want %q", rf.Abs, want)
 	}
 	if want := "project/main.go"; rf.DisplayPath != want {
 		t.Errorf("DisplayPath: got %q, want %q", rf.DisplayPath, want)
@@ -105,7 +101,7 @@ func TestWorkspaceResolveFile_LineNote_InRange(t *testing.T) {
 			Content:     "line one\nline two\nline three\n",
 		},
 	}}
-	resolve := workspaceResolveFile(ws, map[string]string{"project": "/workspace"})
+	resolve := workspaceResolveFile(ws)
 
 	line := 2
 	rf, ok := resolve("project", "main.go", &line)
@@ -129,7 +125,7 @@ func TestWorkspaceResolveFile_LineNote_OutOfRange(t *testing.T) {
 			Content: "only one line\n",
 		},
 	}}
-	resolve := workspaceResolveFile(ws, map[string]string{"project": "/workspace"})
+	resolve := workspaceResolveFile(ws)
 
 	line := 5
 	rf, ok := resolve("project", "main.go", &line)
@@ -158,7 +154,7 @@ func TestWorkspaceResolveFile_TrailingNewlineLineCount(t *testing.T) {
 			Content: "a\nb\nc\nd\n",
 		},
 	}}
-	resolve := workspaceResolveFile(ws, map[string]string{"project": "/workspace"})
+	resolve := workspaceResolveFile(ws)
 
 	lastReal := 4
 	rf, ok := resolve("project", "main.go", &lastReal)
@@ -189,7 +185,7 @@ func TestWorkspaceResolveFile_TrailingNewlineLineCount(t *testing.T) {
 // это в единый ErrStaleContent.
 func TestWorkspaceResolveFile_WorkspaceError(t *testing.T) {
 	ws := &fakeWorkspace{err: workspace.ErrTooLarge}
-	resolve := workspaceResolveFile(ws, map[string]string{"project": "/workspace"})
+	resolve := workspaceResolveFile(ws)
 
 	rf, ok := resolve("project", "huge.bin", nil)
 	if ok {

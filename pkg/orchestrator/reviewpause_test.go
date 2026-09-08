@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -750,6 +751,119 @@ func TestRecoverReviewPause_ResumingFinishes(t *testing.T) {
 	}
 }
 
+// countingBlockingRunner реализует executor.Runner и для RunAgent считает,
+// сколько раз агент КАЖДОЙ стадии реально был заспавнен, после чего блокируется
+// до отмены ctx — стадия остаётся "running", так что ошибочный ВТОРОЙ спавн
+// можно наблюдать по счётчику, а не гоняться с завершением стадии. Не блокирующий
+// раннер (пишущий .done и завершающий стадию) сделал бы тест флейки: bootstrap
+// мог бы увидеть стадию уже done и не задвоить спавн даже при отсутствии guard'а.
+type countingBlockingRunner struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (r *countingBlockingRunner) RunAgent(ctx context.Context, _, stageName, _, _ string) error {
+	r.mu.Lock()
+	if r.calls == nil {
+		r.calls = map[string]int{}
+	}
+	r.calls[stageName]++
+	r.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (r *countingBlockingRunner) RunPlanning(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (r *countingBlockingRunner) RunJSONQuery(context.Context, string) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *countingBlockingRunner) count(stageName string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls[stageName]
+}
+
+var _ executor.Runner = (*countingBlockingRunner)(nil)
+
+// TestRecoverReviewPause_ResumingDoesNotDoubleSpawn закрывает F1: маркер
+// state=resuming на рестарте recoverReviewPause синхронно доводит до конца
+// (runResumeTransaction выводит owner'а из paused и спавнит его раннер), а
+// СРАЗУ ПОСЛЕ Run() безусловно зовёт startPlanningForPending — тот увидел бы
+// того же owner'а уже в Running и через resumeStageAtStatus заспавнил бы
+// ВТОРОГО агента в ту же стадию. Guard reviewResumed это предотвращает.
+//
+// В отличие от TestRecoverReviewPause_ResumingFinishes (стабит testRunnerHook,
+// НЕ гоняет bootstrap — потому и не ловил этот баг) тест прогоняет реальный
+// resume-путь (testRunnerHook не задан) с настоящим считающим Runner'ом и
+// после recovery действительно вызывает startPlanningForPending, утверждая
+// РОВНО ОДИН спавн на owner'а.
+func TestRecoverReviewPause_ResumingDoesNotDoubleSpawn(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentAuto}}
+	store, err := state.Open(runDir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	runner := &countingBlockingRunner{}
+	o := New(Options{
+		RunDir: runDir, Stages: []flow.Stage{stage}, Store: store,
+		Config: config.Default(), Prompts: DefaultPrompts(), Runner: runner,
+	})
+
+	// s1 — durably paused-from-running (как его оставил бы PauseFlow до краха);
+	// маркер на диске говорит, что resume уже был в полёте (Mode=cancel).
+	setPausedFrom(t, store, "s1", state.StatusRunning)
+	m := state.PauseMarker{
+		Version: 1, OperationID: "op1", State: state.PauseStateResuming,
+		Mode:  state.PauseModeCancel,
+		Owned: []state.PauseOwner{{ID: "s1", ResumeKind: kindAutonomous}},
+	}
+	if err := state.WriteNotesPauseMarker(runDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Порядок cleanup (LIFO): cancel+WaitAgents ДО store.Close, чтобы
+	// заблокированные агентские горутины (по отмене ctx делают Trigger EvFail)
+	// успели слиться до закрытия стораджа — иначе флейк "write events.jsonl:
+	// invalid argument" из AGENTS.md (nil *os.File после Close).
+	t.Cleanup(func() {
+		cancel()
+		o.concurrency.WaitAgents()
+	})
+
+	// Recovery доводит resume-транзакцию до конца: s1 выходит из paused, его
+	// autonomous-раннер спавнится РОВНО ОДИН раз, маркер удаляется.
+	if err := o.recoverReviewPause(ctx); err != nil {
+		t.Fatalf("recoverReviewPause: %v", err)
+	}
+	waitFor(t, func() bool { return runner.count("s1") == 1 })
+
+	// Bootstrap — ровно как Run() зовёт его сразу после recovery. Без guard'а
+	// reviewResumed он увидел бы s1 в Running и resumeStageAtStatus заспавнил бы
+	// ВТОРОГО автономного агента в той же стадии.
+	o.startPlanningForPending(ctx)
+
+	// Даём возможному ошибочному второму спавну время дойти до RunAgent и
+	// утверждаем ровно один спавн на s1 за recovery+bootstrap.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if n := runner.count("s1"); n > 1 {
+			t.Fatalf("s1 spawned %d times: bootstrap double-spawned an owner already resumed by review recovery", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := runner.count("s1"); n != 1 {
+		t.Fatalf("s1 spawn count = %d, want exactly 1", n)
+	}
+}
+
 // TestRecoverReviewPause_Absent закрывает Task 15: без маркера на диске
 // recoverReviewPause не должен ничего трогать — ни activationHeld, ни
 // reviewMarker — и должен вернуть nil.
@@ -810,7 +924,6 @@ func TestRecoverReviewPause_CorruptPausedFailsOpen(t *testing.T) {
 func stubResolveFile(sha, lineText string, inRange bool) func(root, path string, line *int) (ResolvedFile, bool) {
 	return func(root, path string, line *int) (ResolvedFile, bool) {
 		return ResolvedFile{
-			Abs:         "/w/" + path,
 			DisplayPath: root + "/" + path,
 			Reference:   `[AFM file: "/w/` + path + `"]`,
 			ContentSHA:  sha,

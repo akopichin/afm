@@ -76,7 +76,7 @@ type Options struct {
 	// подключит workspace-backed резолвер отдельной задачей.
 	CurrentFileSHA func(root, path string) (string, bool)
 	// ResolveFile резолвит {root,path} (+ line, если нота построчная) в
-	// ResolvedFile для AddNote (reviewpause.go) — abs/display/reference,
+	// ResolvedFile для AddNote (reviewpause.go) — display/reference,
 	// текущий content_sha (сравнить с тем, что прислал клиент — детект
 	// stale-правки) и, для построчной ноты, текст строки + её валидность.
 	// nil (по умолчанию в хостовом режиме — там нет file browser) означает
@@ -86,16 +86,14 @@ type Options struct {
 }
 
 // ResolvedFile — то, что Options.ResolveFile возвращает про файл, к которому
-// привязывается review-нота: абсолютный путь, отображаемый путь и ссылка (те
-// же поля, что renderReviewFeedback уже кладёт в state.ReviewNote), текущий
-// content_sha (для сравнения с content_sha, который прислал клиент — детект
-// stale-правки между тем, как пользователь открыл файл в браузере, и тем,
-// как он отправил ноту) и, для построчной ноты (line != nil на входе),
-// текст этой строки (LineText) и попадает ли номер строки в текущий файл
-// (InRange). Для файловой ноты (line == nil на входе) LineText/InRange не
-// используются вызывающим кодом.
+// привязывается review-нота: отображаемый путь и ссылка (те же поля, что
+// renderReviewFeedback уже кладёт в state.ReviewNote), текущий content_sha
+// (для сравнения с content_sha, который прислал клиент — детект stale-правки
+// между тем, как пользователь открыл файл в браузере, и тем, как он отправил
+// ноту) и, для построчной ноты (line != nil на входе), текст этой строки
+// (LineText) и попадает ли номер строки в текущий файл (InRange). Для файловой
+// ноты (line == nil на входе) LineText/InRange не используются вызывающим кодом.
 type ResolvedFile struct {
-	Abs         string
 	DisplayPath string
 	Reference   string
 	ContentSHA  string
@@ -260,6 +258,17 @@ type Orchestrator struct {
 	// нет). atomic.Pointer делает reviewTxnActive() lock-free. Пишется
 	// PauseFlow (reviewpause.go) после успешной записи маркера на диск.
 	reviewMarker atomic.Pointer[state.PauseMarker]
+
+	// reviewResumed (stageID → struct{}) помечает owner'ов, которых уже
+	// возобновил recovery-путь review-паузы: recoverReviewPause синхронно
+	// прогоняет runResumeTransaction (маркер state=resuming), выводя каждого
+	// owner'а из paused и спавня раннер, ПОСЛЕ чего Run() безусловно зовёт
+	// startPlanningForPending — тот увидел бы тех же owner'ов уже в
+	// running/revising и через resumeStageAtStatus заспавнил бы ВТОРОГО агента
+	// в ту же стадию. Обе фазы (recovery, затем bootstrap) исполняются на одной
+	// горутине Run() строго последовательно, поэтому обычная sync.Map без
+	// доп. синхронизации здесь race-free.
+	reviewResumed sync.Map
 
 	// testRunnerHook — тест-сейм (nil в проде) для resumeOwner (Task 12
 	// фичи "review notes", reviewpause.go): если задан, resumeOwner вызывает
