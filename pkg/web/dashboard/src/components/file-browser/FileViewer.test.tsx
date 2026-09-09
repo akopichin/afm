@@ -161,6 +161,76 @@ describe('FileViewer', () => {
     expect(screen.getByText('Update')).toBeInTheDocument()
   })
 
+  // Review-finding P2 #5: a note already persisted for this file (passed via
+  // savedNotes) must rehydrate its marker + textarea prefill on open — without
+  // any local save this session — so switching files and back never loses the
+  // annotation. Only line notes matching this file's root+path hydrate.
+  test('hydrates saved line notes into markers and textarea prefill', () => {
+    const savedNotes = [
+      {
+        id: 'n1', root: 'project', path: 'a.go', display_path: 'project/a.go',
+        reference: '[AFM file: "/w/a.go"]', line: 2, orig_line_text: 'line two',
+        content_sha: 'sha256:x', text: 'saved on line two', created_at: '2026-09-08T00:00:00Z',
+      },
+      // A note for a DIFFERENT file must NOT bleed into this viewer.
+      {
+        id: 'n2', root: 'project', path: 'other.go', display_path: 'project/other.go',
+        reference: '[AFM file: "/w/other.go"]', line: 1, orig_line_text: 'x',
+        content_sha: 'sha256:y', text: 'elsewhere', created_at: '2026-09-08T00:00:00Z',
+      },
+    ]
+    render(
+      <FileViewer
+        content={makeContent({ content: 'line one\nline two' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPauseState="paused"
+        addNote={vi.fn()}
+        contentSha="sha256:x"
+        savedNotes={savedNotes}
+      />,
+    )
+
+    // Line 2 has the saved note's marker; line 1 does not.
+    expect(screen.getByTestId('file-line-2').className).toContain('has-comment')
+    expect(screen.getByTestId('file-line-1').className).not.toContain('has-comment')
+
+    // Reopening line 2 prefills the saved text and offers "Update".
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    expect(screen.getByRole('textbox')).toHaveValue('saved on line two')
+    expect(screen.getByText('Update')).toBeInTheDocument()
+  })
+
+  // Re-review P2: a locally-saved note must not leak across workspace roots that
+  // share a path. After saving on root A `a.go`, switching to root B `a.go`
+  // (same path, same content) must reset the local marker/prefill — otherwise
+  // Save on root B would create a note carrying root A's text.
+  test('does not leak local annotations between roots with the same path', async () => {
+    const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
+    const content = makeContent({ content: 'line one\nline two' })
+    const { rerender } = render(
+      <FileViewer content={content} loading={false} error={null} root="A" flowPauseState="paused" addNote={addNote} contentSha="sha256:x" />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'note for root A' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('file-line-1').className).toContain('has-comment')
+
+    // Switch to root B, same path/content.
+    rerender(
+      <FileViewer content={content} loading={false} error={null} root="B" flowPauseState="paused" addNote={addNote} contentSha="sha256:x" />,
+    )
+    expect(screen.getByTestId('file-line-1').className).not.toContain('has-comment')
+    // Opening line 1 on root B offers a fresh "Save" with an empty draft, not
+    // "Update" prefilled with root A's text.
+    fireEvent.click(screen.getByTestId('file-line-1'))
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(screen.getByText('Save')).toBeInTheDocument()
+  })
+
   test('clicking the same line again closes the editor without saving', () => {
     const addNote = vi.fn()
     render(

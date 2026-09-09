@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -54,6 +55,27 @@ func (o *Orchestrator) computeResumeKind(s flow.Stage, pausedFrom state.StageSta
 		return kindPlanning
 	}
 	return kindImplementation
+}
+
+// spawnKind stamps the runner kind SYNCHRONOUSLY (before SpawnAgent's goroutine
+// can markActive) and then spawns the runner. Each runner also sets its own kind
+// as its first line, but that runs INSIDE the goroutine, only after markActive —
+// leaving a window in which a concurrent PauseFlow observes the stage as active
+// while runnerKind is still empty or STALE from the previous phase. Two concrete
+// misclassifications that window causes, both fixed by stamping here:
+//   - planning → implementation: EvPlanReady does not clear runnerKind, so the
+//     implementation spawn briefly still reads kindPlanning and a pause in that
+//     window would resume the stage via the planning runner.
+//   - a restart-resumed Revising stage: the in-memory registry is empty, and
+//     computeResumeKind's status fallback maps Revising to implementation even
+//     when the live runner is planning/review.
+//
+// Stamping the kind before the active marker is ever published closes the window
+// for every kind, not just review. The runner's own first-line setRunnerKind
+// stays as a harmless idempotent backstop for any direct (non-SpawnAgent) path.
+func (o *Orchestrator) spawnKind(ctx context.Context, s flow.Stage, kind string, run func(context.Context, flow.Stage)) {
+	o.setRunnerKind(s.ID, kind)
+	o.concurrency.SpawnAgent(ctx, s, run)
 }
 
 // PauseFlow puts the flow into best-effort review mode: it holds new stage
@@ -112,6 +134,11 @@ func (o *Orchestrator) PauseFlow(ctx context.Context) ([]string, error) {
 			}
 		}
 
+		// Clear any stale "already resumed" mark left by a PRIOR review round
+		// on this same stage — this round re-pauses it, so a leftover entry
+		// would make its resume (runResumeTransaction) wrongly skip re-spawning.
+		o.reviewResumed.Delete(id)
+
 		owned = append(owned, state.PauseOwner{ID: id, ResumeKind: kind, FromRevising: fromRevising})
 		ids = append(ids, id)
 	}
@@ -152,7 +179,7 @@ func (o *Orchestrator) ReviewState() (string, []string) {
 		return "none", nil
 	}
 	if m.State == state.PauseStateResuming {
-		return "resuming", nil
+		return state.PauseStateResuming, nil
 	}
 	var paused []string
 	for _, ow := range m.Owned {
@@ -230,7 +257,18 @@ func renderReviewFeedback(notes []state.ReviewNote, current func(root, path stri
 				*n.Line, drift, jsonQuote(origTxt), n.Text)
 		}
 	}
-	return b.String()
+	out := b.String()
+	// Cap the aggregate so a large collection can't produce an unbounded agent
+	// prompt (per-note length is already bounded in AddNote/UpdateNote; this
+	// guards the total). Truncate on a line boundary and mark the cut.
+	if len(out) > maxRenderedFeedbackBytes {
+		cut := out[:maxRenderedFeedbackBytes]
+		if nl := strings.LastIndexByte(cut, '\n'); nl >= 0 {
+			cut = cut[:nl+1]
+		}
+		out = cut + "… (review notes truncated)\n"
+	}
+	return out
 }
 
 // jsonQuote returns a JSON-quoted string (the string literal as it would appear
@@ -291,43 +329,80 @@ func (o *Orchestrator) plainRunner(kind string) func(context.Context, flow.Stage
 //     PausedFrom, plainRunner) and gets armResumeContext so its non-
 //     interactive agent replays "previously completed actions" from attempt 0
 //     instead of starting over (see the resumeContextOnce field comment).
-func (o *Orchestrator) resumeOwner(ctx context.Context, ow state.PauseOwner, isTarget bool) {
+//
+// Returns whether the owner was handled: true once it has been resumed (or
+// there was genuinely nothing to spawn), false only when the drain-wait was
+// cut short by ctx cancellation or a resume transition lost its CAS — cases a
+// later retry must attempt again. runResumeTransaction records an owner in
+// reviewResumed ONLY on a true return, so a spawn that never happened is never
+// mistaken for one already done.
+func (o *Orchestrator) resumeOwner(ctx context.Context, ow state.PauseOwner, isTarget bool) bool {
 	for o.concurrency.IsActive(ow.ID) {
 		select {
 		case <-ctx.Done():
-			return
+			return false // drain interrupted: a later retry must resume this owner
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 
 	stage := o.graph.Stage(ow.ID)
 	if stage == nil {
-		return
+		return true // nothing to resume; don't retry
 	}
 	useFeedback := isTarget || ow.FromRevising
 
 	if o.testRunnerHook != nil {
 		o.testRunnerHook(ow.ResumeKind, useFeedback)
-		return
+		return true
 	}
 
 	if !isTarget {
 		o.armResumeContext(ow.ID) // A′: attempt-0 replay for non-interactive
 	}
 
+	runner := o.plainRunner(ow.ResumeKind)
 	if useFeedback {
-		if _, ok := o.Trigger(ow.ID, bus.EvRevise, bus.GuardCtx{}, "review resume"); !ok {
-			return
-		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.withFeedbackRunner(ow.ResumeKind))
-		return
+		runner = o.withFeedbackRunner(ow.ResumeKind)
 	}
 
-	pausedFrom := o.opts.Store.PausedFrom(ow.ID)
-	if _, ok := o.Trigger(ow.ID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "review resume"); !ok {
-		return
+	// Dispatch on the owner's CURRENT status, not on the assumption that it's
+	// still paused. Three situations reach here:
+	//
+	//   - paused (the live PauseFlow→resume path, and a crash that landed before
+	//     any resume transition): drive the FSM out of paused first, then spawn.
+	//   - running/planning/revising/retrying (a crash AFTER a prior resume
+	//     attempt's FSM transition committed but BEFORE its SpawnAgent ran,
+	//     replayed by recoverReviewPause): the transition already happened and no
+	//     live process exists — just re-spawn the saved runner kind, WITHOUT a
+	//     second transition (which would CAS-fail from a non-paused status and
+	//     strand the owner in an active status with no agent behind it forever).
+	//     retrying is included specifically: a stage paused FROM retrying resumes
+	//     via EvContinue back INTO retrying (its PausedFrom), so a crash in that
+	//     window leaves a passive `retrying` status with no backoff timer and no
+	//     goroutine — the exact "hangs forever" case the earlier three-status
+	//     matrix missed.
+	//   - anything else (done/failed — recovered completion, or already resumed):
+	//     nothing to do.
+	switch o.currentStatus(ow.ID) {
+	case state.StatusPaused:
+		if useFeedback {
+			if _, ok := o.Trigger(ow.ID, bus.EvRevise, bus.GuardCtx{}, "review resume"); !ok {
+				return false
+			}
+		} else {
+			pausedFrom := o.opts.Store.PausedFrom(ow.ID)
+			if _, ok := o.Trigger(ow.ID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "review resume"); !ok {
+				return false
+			}
+		}
+		o.concurrency.SpawnAgent(ctx, *stage, runner)
+		return true
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying:
+		o.concurrency.SpawnAgent(ctx, *stage, runner)
+		return true
+	default:
+		return true // terminal or already-resumed: nothing to spawn
 	}
-	o.concurrency.SpawnAgent(ctx, *stage, o.plainRunner(ow.ResumeKind))
 }
 
 // currentFileSHA resolves the current content_sha of a file (root/path — the
@@ -350,10 +425,11 @@ func (o *Orchestrator) currentFileSHA(root, path string) (string, bool) {
 // reviewpause.go above) opened by an operator either injecting collected
 // review notes into a target stage or discarding them outright.
 var (
-	ErrNoReviewPause   = errors.New("no review pause active")
-	ErrNoNotes         = errors.New("no notes to inject")
-	ErrTargetNotPaused = errors.New("target is not paused")
-	ErrNotOwned        = errors.New("stage is not owned by the review pause")
+	ErrNoReviewPause    = errors.New("no review pause active")
+	ErrNoNotes          = errors.New("no notes to inject")
+	ErrTargetNotPaused  = errors.New("target is not paused")
+	ErrNotOwned         = errors.New("stage is not owned by the review pause")
+	ErrResumeInProgress = errors.New("review resume already in progress")
 )
 
 // ownsStage reports whether id is one of the stages a pause marker claims
@@ -386,6 +462,15 @@ func (o *Orchestrator) InjectNotesAndResume(reqCtx context.Context, targetStageI
 	if m == nil {
 		o.flowPauseMu.Unlock()
 		return ErrNoReviewPause
+	}
+	// Only a round still in `paused` may be closed. Once it has flipped to
+	// `resuming`, exactly one resume worker is already running for this
+	// operation id; a repeat Inject/Cancel must NOT launch a second worker (which
+	// would see owners already out of paused and re-spawn them). Guarded under
+	// flowPauseMu, atomic with the flip below and with PauseFlow.
+	if m.State != state.PauseStatePaused {
+		o.flowPauseMu.Unlock()
+		return ErrResumeInProgress
 	}
 	if !ownsStage(m, targetStageID) {
 		o.flowPauseMu.Unlock()
@@ -425,7 +510,9 @@ func (o *Orchestrator) InjectNotesAndResume(reqCtx context.Context, targetStageI
 	o.flowPauseMu.Unlock()
 
 	o.concurrency.SpawnDetached(o.runContext(reqCtx), func(ctx context.Context) {
-		o.runResumeTransaction(ctx, updated)
+		if err := o.runResumeTransaction(ctx, updated); err != nil {
+			log.Printf("review-pause: resume transaction incomplete for op %s (marker retained, fail-closed): %v", updated.OperationID, err)
+		}
 	})
 	return nil
 }
@@ -442,6 +529,14 @@ func (o *Orchestrator) CancelNotesAndResume(reqCtx context.Context) error {
 		o.flowPauseMu.Unlock()
 		return ErrNoReviewPause
 	}
+	// See InjectNotesAndResume: reject a repeat Cancel once the round is already
+	// resuming — the second worker would re-spawn owners that are no longer
+	// paused. Cancel is the easiest way to hit this (no target-status check to
+	// otherwise catch it).
+	if m.State != state.PauseStatePaused {
+		o.flowPauseMu.Unlock()
+		return ErrResumeInProgress
+	}
 
 	updated := *m
 	updated.State = state.PauseStateResuming
@@ -455,7 +550,9 @@ func (o *Orchestrator) CancelNotesAndResume(reqCtx context.Context) error {
 	o.flowPauseMu.Unlock()
 
 	o.concurrency.SpawnDetached(o.runContext(reqCtx), func(ctx context.Context) {
-		o.runResumeTransaction(ctx, updated)
+		if err := o.runResumeTransaction(ctx, updated); err != nil {
+			log.Printf("review-pause: resume transaction incomplete for op %s (marker retained, fail-closed): %v", updated.OperationID, err)
+		}
 	})
 	return nil
 }
@@ -468,28 +565,101 @@ func (o *Orchestrator) CancelNotesAndResume(reqCtx context.Context) error {
 // is recoverable (the notes/marker are still there to retry from), whereas
 // deleting them first and crashing before resuming every owner would strand
 // paused stages with no marker left to explain why.
-func (o *Orchestrator) runResumeTransaction(ctx context.Context, m state.PauseMarker) {
+func (o *Orchestrator) runResumeTransaction(ctx context.Context, m state.PauseMarker) error {
+	// Re-deliver the review feedback idempotently BEFORE resuming any owner.
+	// InjectNotesAndResume also writes it synchronously, but recoverReviewPause
+	// (a crash between that write and here) does NOT — without this, a restart
+	// would resume the target via a *WithFeedback runner whose feedback.md never
+	// received the review block, silently dropping the operator's notes.
+	// SaveFeedbackOnce is keyed on the operation id, so the live path's earlier
+	// write makes this a no-op there.
+	if m.Mode == state.PauseModeInject && m.TargetStage != "" {
+		notes, err := state.LoadReviewNotes(o.opts.RunDir)
+		if err != nil {
+			return err // keep notes+marker; a later start retries the whole txn
+		}
+		if len(notes.Notes) > 0 {
+			rendered := renderReviewFeedback(notes.Notes, o.currentFileSHA)
+			targetDir := filepath.Join(o.opts.RunDir, m.TargetStage)
+			if _, err := state.SaveFeedbackOnce(targetDir, m.OperationID, rendered); err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, ow := range m.Owned {
-		// Record BEFORE driving the resume: when this transaction runs from
-		// recoverReviewPause (a resuming marker on restart), the very next
-		// thing Run() does is startPlanningForPending, which would otherwise
-		// see this owner already out of paused and re-spawn a second agent for
-		// it (recovery.go consults reviewResumed to skip exactly these).
-		o.reviewResumed.Store(ow.ID, struct{}{})
+		// Skip an owner a PRIOR invocation of this same transaction already
+		// resumed: an in-process retry (e.g. after a durable-cleanup failure)
+		// must repeat ONLY the cleanup, never re-spawn a still-live owner — two
+		// agents mutating one stage's files is exactly the corruption the resume
+		// lifecycle must never cause. reviewResumed also makes Run()'s bootstrap
+		// skip these owners (recovery.go). Marked only AFTER resumeOwner reports
+		// it actually handled the owner, so a ctx-cancel mid-drain (return false)
+		// leaves the owner unmarked for the next attempt rather than stranding it.
+		if _, done := o.reviewResumed.Load(ow.ID); done {
+			continue
+		}
 		isTarget := m.Mode == state.PauseModeInject && ow.ID == m.TargetStage
-		o.resumeOwner(ctx, ow, isTarget)
+		if o.resumeOwner(ctx, ow, isTarget) {
+			o.reviewResumed.Store(ow.ID, struct{}{})
+		}
 	}
 	// If the run context was cancelled mid-loop (shutdown during resume), the
 	// remaining resumeOwner calls returned early — leave notes+marker on disk
 	// so a later start can finish the resume, instead of discarding the intent
 	// for owners we never got to.
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
-	o.startReadyStages(ctx) // re-drive activation-held pending stages
-	_ = state.DeleteReviewNotes(o.opts.RunDir)
-	_ = state.ClearNotesPauseMarker(o.opts.RunDir)
+
+	// Full scheduling cascade, not just startReadyStages: while activationHeld
+	// was set, unblocked dependents were parked in `pending` by
+	// tryActivatePrePlanned / startPlanningForUnblocked (which startReadyStages
+	// alone never re-drives — it only promotes stages already in `ready`). A
+	// script stage that finished DURING the review is the canonical case: it's
+	// not an owner (PauseFlow skips scripts), so nothing else re-evaluates the
+	// planning/pre-planned stage it unblocked. Run the same cascade normal agent
+	// completion does, so those dependents actually start once the hold lifts.
+	o.failBlockedStages()
+	o.startPlanningForUnblocked(ctx)
+	o.startReadyStages(ctx)
+	o.tryActivatePrePlanned(ctx)
+
+	// Durable cleanup is part of the transaction result: only once notes AND
+	// marker are gone from disk may the in-memory marker be dropped. If either
+	// delete fails we keep reviewTxnActive() true (fail-closed): the run won't
+	// finalize, external controls stay rejected, and a restart re-runs this
+	// (now no-op) transaction to finish cleanup — far safer than declaring
+	// review done while a durable `resuming` marker or stale notes still linger.
+	if err := o.clearReviewArtifacts(); err != nil {
+		return err
+	}
 	o.reviewMarker.Store(nil)
+	// NB: reviewResumed entries are deliberately NOT cleared here. Run()'s
+	// bootstrap (startPlanningForPending) runs immediately AFTER recovery and
+	// relies on them to skip owners recovery just resumed; clearing them now
+	// would re-expose those owners to a double spawn. A LATER review round
+	// re-pauses its owners via PauseFlow, which clears any stale entry there.
+	// Nudge Run()'s select loop: a cancel round with no owners (or one whose
+	// owners all recovered already-complete) spawns no agent and thus produces
+	// no EventAgentCompleted — without this, the loop could sit blocked forever,
+	// never re-checking shouldExit() now that the marker is cleared.
+	o.concurrency.WakeEventLoop()
+	return nil
+}
+
+// clearReviewArtifacts removes the durable review-notes and pause-marker files
+// (notes first, so a partial failure never leaves stale notes with no marker to
+// gate a fresh round). Overridable in tests via testClearReviewArtifacts to
+// exercise the fail-closed cleanup path.
+func (o *Orchestrator) clearReviewArtifacts() error {
+	if o.testClearReviewArtifacts != nil {
+		return o.testClearReviewArtifacts()
+	}
+	if err := state.DeleteReviewNotes(o.opts.RunDir); err != nil {
+		return err
+	}
+	return state.ClearNotesPauseMarker(o.opts.RunDir)
 }
 
 // Sentinels for the notes CRUD methods below (AddNote/UpdateNote/DeleteNote).
@@ -504,6 +674,24 @@ var (
 	ErrStaleLine    = errors.New("line is out of range for the current file")
 	ErrEmptyText    = errors.New("note text is empty")
 	ErrNoteNotFound = errors.New("note not found")
+	ErrNoteTooLong  = errors.New("note text exceeds the maximum length")
+	ErrTooManyNotes = errors.New("too many review notes")
+)
+
+// Resource limits for the review-notes store. Even a local single-user
+// dashboard must bound these: one oversized note (or thousands of notes) turns
+// into a large review-notes.json, several in-memory copies during the atomic
+// rewrite, and — worst — an unbounded agent prompt when the notes are rendered
+// into feedback.md. Enforced in AddNote/UpdateNote (per note + count) and
+// renderReviewFeedback (the rendered aggregate).
+const (
+	// maxNoteTextBytes caps a single note's text.
+	maxNoteTextBytes = 8 << 10 // 8 KiB
+	// maxNotes caps how many notes one review round may hold.
+	maxNotes = 500
+	// maxRenderedFeedbackBytes caps the feedback block injected into the agent
+	// so a large collection can't produce an unbounded prompt.
+	maxRenderedFeedbackBytes = 256 << 10 // 256 KiB
 )
 
 // resolveFile is the nil-safe wrapper around Options.ResolveFile, mirroring
@@ -567,6 +755,9 @@ func (o *Orchestrator) AddNote(root, path string, line *int, text, clientSHA str
 	if strings.TrimSpace(text) == "" {
 		return state.ReviewNote{}, 0, ErrEmptyText
 	}
+	if len(text) > maxNoteTextBytes {
+		return state.ReviewNote{}, 0, ErrNoteTooLong
+	}
 
 	rf, ok := o.resolveFile(root, path, line)
 	if !ok || rf.ContentSHA != clientSHA {
@@ -602,6 +793,11 @@ func (o *Orchestrator) AddNote(root, path string, line *int, text, clientSHA str
 		}
 	}
 	if !replaced {
+		// The count cap applies only to genuinely new notes — replacing an
+		// existing note (same root/path/line) never grows the store.
+		if len(notes.Notes) >= maxNotes {
+			return state.ReviewNote{}, 0, ErrTooManyNotes
+		}
 		note.ID = "n" + strconv.Itoa(notes.NextID)
 		notes.NextID++
 		notes.Notes = append(notes.Notes, note)
@@ -633,6 +829,9 @@ func (o *Orchestrator) UpdateNote(id, text string, expectedRev int) (int, error)
 	}
 	if strings.TrimSpace(text) == "" {
 		return 0, ErrEmptyText
+	}
+	if len(text) > maxNoteTextBytes {
+		return 0, ErrNoteTooLong
 	}
 
 	found := false

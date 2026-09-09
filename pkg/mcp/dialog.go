@@ -381,12 +381,16 @@ func stripRecommendedMarker(opt string) (string, bool) {
 	return "", false
 }
 
-// writeAnswerFile atomically creates <stageDir>/<phase>.<id>.answer.json
+// WriteAnswerFile atomically creates <stageDir>/<phase>.<id>.answer.json
 // (O_EXCL — a question may only be answered once; returns an error
 // satisfying os.IsExist if it already was). No dialog.jsonl side effect —
 // callers decide separately whether this answer belongs in human-facing
-// history (see WriteAnswer vs WriteInternalAnswer).
-func writeAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error {
+// history (see WriteAnswer, which pairs it with AppendAnswer). The HTTP dialog
+// handler calls this directly and appends to dialog.jsonl only AFTER its
+// flow-pause guard authorizes the answer, so a rejected answer never leaves a
+// durable history entry behind (which would strand the question as
+// answered-in-history but unanswered-on-disk).
+func WriteAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error {
 	answerPath := filepath.Join(stageDir, phase+"."+id+".answer.json")
 	payload, err := json.Marshal(map[string]any{
 		"id": id, "answer": answer, "from_options": fromOptions,
@@ -429,7 +433,7 @@ func writeAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error
 // already safely on disk (the critical path for the agent's polling loop),
 // so failing the caller here would incorrectly signal the answer was lost.
 func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered bool) error {
-	if err := writeAnswerFile(stageDir, phase, id, answer, fromOptions); err != nil {
+	if err := WriteAnswerFile(stageDir, phase, id, answer, fromOptions); err != nil {
 		return err
 	}
 	dialogPath := filepath.Join(stageDir, phase+".dialog.jsonl")

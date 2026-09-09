@@ -53,8 +53,28 @@ export function highlight(language: string, source: string): string {
 // (reopened verbatim) and ends with those same tags closed (without popping
 // them — they stay "open" going into the next line); only a real </span> pops
 // the stack. Every returned line is therefore well-formed HTML on its own.
-export function splitHighlightedLines(html: string): string[] {
+export function splitHighlightedLines(html: string, source: string): string[] {
+  // Match the backend's line-count semantics (workspaceResolveFile in
+  // cmd/afm/run.go): it counts only REAL lines by trimming exactly one trailing
+  // newline (TrimSuffix(content, "\n")) and treats an empty file as 0 lines.
+  //
+  // The decision MUST be made from the SOURCE, not from the highlighted HTML.
+  // highlight() preserves every source newline, so html has one '\n' per source
+  // '\n'; when the source ends in a trailing newline it produces one extra
+  // trailing fragment. That fragment is an empty string for plain text, but it
+  // can be a token-closing tag (e.g. '</span>') when the final newline sits
+  // INSIDE a multi-line token — so html.endsWith('\n') is unreliable (Go source
+  // '/* hi\n' highlights to '<span class="hljs-comment">/* hi\n</span>', which
+  // does not end in '\n'). Drop that last fragment iff the SOURCE ended in a
+  // newline; the tag-rebalancing walk below re-closes any span it left open.
+  if (source === '') return []
+  // Mirror the backend exactly: trim one trailing newline, and if nothing
+  // remains the file has zero real lines (a source of only "\n" is 0 lines,
+  // not one empty line).
+  const trimmed = source.endsWith('\n') ? source.slice(0, -1) : source
+  if (trimmed === '') return []
   const rawLines = html.split('\n')
+  if (source.endsWith('\n')) rawLines.pop()
   const openTags: string[] = []
   const tagRe = /<span class="[^"]*">|<\/span>/g
 

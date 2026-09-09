@@ -57,6 +57,14 @@ type FileViewerProps = {
   // (an empty/never-fetched store), which is also what a fresh review round
   // starts at server-side.
   expectedRev?: number
+  // Notes already persisted for the current review round (the modal's
+  // authoritative list — see FileBrowserModal). FileViewer hydrates the ones
+  // that belong to THIS file (matching root+path, line notes only) back into
+  // its per-line markers and textarea prefill, so switching away from a file
+  // and reopening it restores the annotation instead of silently dropping the
+  // dot (review-finding P2 #5). Local optimistic edits still take precedence
+  // until the modal's list catches up.
+  savedNotes?: ReviewNote[]
   // Test-only override: lets FileViewer.test.tsx supply a fixed hash without
   // depending on jsdom's crypto.subtle. Production callers never pass this —
   // FileViewer computes it itself (see computeContentSha below) once per
@@ -84,6 +92,7 @@ export function FileViewer({
   pauseFlow,
   addNote,
   expectedRev = 0,
+  savedNotes,
   contentSha,
 }: FileViewerProps): ReactElement {
   const [comments, setComments] = useState<Record<number, string>>({})
@@ -106,6 +115,19 @@ export function FileViewer({
   const canRequestPause = flowPauseState === 'none' && canUseNotes && pauseFlow !== undefined
   const sha = contentSha ?? computedSha
 
+  // Persisted line notes for THIS file (root+path), keyed by line number, so a
+  // reopened file shows its saved markers/prefill again. Local optimistic edits
+  // (`comments`) override the persisted text until the modal's list refreshes.
+  const savedByLine = useMemo(() => {
+    const m: Record<number, string> = {}
+    if (root === undefined || content === null || savedNotes === undefined) return m
+    for (const n of savedNotes) {
+      if (n.root === root && n.path === content.path && n.line != null) m[n.line] = n.text
+    }
+    return m
+  }, [savedNotes, root, content])
+  const displayComments = useMemo(() => ({ ...savedByLine, ...comments }), [savedByLine, comments])
+
   // Открыть отложенную строку, как только флоу реально встал на паузу — тот
   // самый переход, ради которого пользователь нажал "Да" в конфирме. Статус
   // приходит через опрос /api/status снаружи (см. проп flowPauseState), так
@@ -113,23 +135,27 @@ export function FileViewer({
   useEffect(() => {
     if (flowPauseState !== 'paused' || pendingPauseLine === null) return
     setActiveCommentLine(pendingPauseLine)
-    setDraft(comments[pendingPauseLine] ?? '')
+    setDraft(displayComments[pendingPauseLine] ?? '')
     setPendingPauseLine(null)
     // `comments` deliberately excluded: it only changes after a save, and by
     // then pendingPauseLine has already been cleared above, so re-running
     // this effect on a comments change is a no-op guarded by that check.
   }, [flowPauseState, pendingPauseLine])
 
-  // Свежий файл — свежее состояние комментариев/формы. Ключ по path, а не по
-  // самому content: тот же файл, перезагруженный после Reload (см.
+  // Свежий файл — свежее состояние комментариев/формы. Ключ по (root, path), а
+  // не по самому content: тот же файл, перезагруженный после Reload (см.
   // FileBrowserModal), не должен сбрасывать уже сохранённые в этой сессии
-  // маркеры комментариев.
+  // маркеры комментариев. root ОБЯЗАТЕЛЕН в ключе — иначе при переключении между
+  // двумя workspace roots с ОДИНАКОВЫМ path (root A `/src/main.go` → root B
+  // `/src/main.go`) локальный `comments` не сбросился бы и подсунул второму
+  // файлу маркер/prefill от первого, а Save создал бы в root B заметку с чужим
+  // текстом.
   useEffect(() => {
     setComments({})
     setActiveCommentLine(null)
     setDraft('')
     setSaveError(null)
-  }, [content?.path])
+  }, [root, content?.path])
 
   // content_sha считается один раз на загруженный файл — не на каждый рендер
   // и не на каждое нажатие Save (см. бриф: "Compute content_sha once per
@@ -153,7 +179,7 @@ export function FileViewer({
 
   const lines = useMemo(() => {
     if (content === null) return []
-    return splitHighlightedLines(highlight(content.language, content.content))
+    return splitHighlightedLines(highlight(content.language, content.content), content.content)
   }, [content])
 
   if (loading) return <div className="file-viewer-hint">Loading file…</div>
@@ -170,7 +196,7 @@ export function FileViewer({
       }
 
       setActiveCommentLine(line)
-      setDraft(comments[line] ?? '')
+      setDraft(displayComments[line] ?? '')
       setSaveError(null)
       return
     }
@@ -230,7 +256,7 @@ export function FileViewer({
   }
 
   function renderLine(lineNumber: number, html: string): ReactNode {
-    const hasComment = comments[lineNumber] !== undefined
+    const hasComment = displayComments[lineNumber] !== undefined
     const editing = activeCommentLine === lineNumber
     const confirmingPause = pendingPauseLine === lineNumber
     // A line looks/behaves clickable both when it opens the editor directly

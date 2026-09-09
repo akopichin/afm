@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -21,6 +24,20 @@ const (
 	keyStageID = "stage_id"
 	keyStatus  = "status"
 )
+
+// writeActionError renders an error from a stage-control action (Approve/
+// Revise/Retry/Pause/Continue/Button/RetryHook/SkipHook/CancelDialog). A
+// review-pause rejection (ErrFlowPaused) becomes a machine-readable
+// 409 {"error":"flow_paused"} — the same shape the /api/flow/* handlers use —
+// so the dashboard can recognize "flow is held for review" instead of parsing a
+// plain-text 500. Any other error keeps the caller's plain-text fallback.
+func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fallbackStatus int) {
+	if errors.Is(err, orchestrator.ErrFlowPaused) {
+		writeFlowError(w, http.StatusConflict, "flow_paused")
+		return
+	}
+	http.Error(w, fallbackMsg+": "+err.Error(), fallbackStatus)
+}
 
 // statusResponse is GET /api/status's wire shape: run-level fields plus one
 // ordered []StageView (see stageview.go) instead of five parallel per-stage
@@ -159,7 +176,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.actions.Approve(r.Context(), stageID); err != nil {
-		http.Error(w, "approve failed: "+err.Error(), http.StatusInternalServerError)
+		writeActionError(w, err, "approve failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -197,7 +214,7 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.actions.Revise(r.Context(), stageID, req.Feedback); err != nil {
-		http.Error(w, "revise failed: "+err.Error(), http.StatusInternalServerError)
+		writeActionError(w, err, "revise failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -301,7 +318,7 @@ func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.actions.Button(r.Context(), stageID, req.Name); err != nil {
-		http.Error(w, "button failed: "+err.Error(), http.StatusInternalServerError)
+		writeActionError(w, err, "button failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -327,7 +344,7 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.actions.Retry(r.Context(), stageID); err != nil {
-		http.Error(w, "retry failed: "+err.Error(), http.StatusInternalServerError)
+		writeActionError(w, err, "retry failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -358,7 +375,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.actions.Pause(r.Context(), stageID); err != nil {
-		http.Error(w, "pause failed: "+err.Error(), http.StatusInternalServerError)
+		writeActionError(w, err, "pause failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -383,7 +400,7 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.actions.Continue(r.Context(), stageID); err != nil {
-		http.Error(w, "continue failed: "+err.Error(), http.StatusInternalServerError)
+		writeActionError(w, err, "continue failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -407,7 +424,7 @@ func (s *Server) handleRetryHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secondary.RetryHook(stageID); err != nil {
-		http.Error(w, "retry-hook failed: "+err.Error(), http.StatusBadRequest)
+		writeActionError(w, err, "retry-hook failed", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -427,7 +444,7 @@ func (s *Server) handleSkipHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secondary.SkipHook(stageID); err != nil {
-		http.Error(w, "skip-hook failed: "+err.Error(), http.StatusBadRequest)
+		writeActionError(w, err, "skip-hook failed", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -584,6 +601,18 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid question id", http.StatusBadRequest)
 		return
 	}
+	// Flow-wide review-pause guard must run BEFORE any durable mutation. If the
+	// flow is held for review, writing answer.json first (and only discovering
+	// the pause afterwards, inside NotifyAnswer) leaves the answer on disk while
+	// returning an error: the question poller then stops treating the question
+	// as unanswered, no resume event is published, and a non-owned
+	// awaiting_user_input stage hangs forever. Reject up front with a
+	// machine-readable 409 instead.
+	if s.currentReviewState() != "none" {
+		writeFlowError(w, http.StatusConflict, "flow_paused")
+		return
+	}
+
 	stageDir := filepath.Join(s.runDir, stageID)
 	questionPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".question.json")
 	answerPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".answer.json")
@@ -631,11 +660,16 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Atomically write answer.json FIRST (mcp.WriteAnswer) so the agent's bash
-	// loop can pick it up, then persist to dialog.jsonl for UI history
-	// (best-effort inside WriteAnswer). This is the critical path: dialog
-	// history must never be persisted before the agent's answer exists on disk.
-	if err := mcp.WriteAnswer(stageDir, req.Phase, req.ID, req.Answer, req.FromOptions, false); err != nil {
+	// Atomically write ONLY answer.json first (mcp.WriteAnswerFile) so the
+	// agent's bash loop can pick it up. The dialog.jsonl history entry is
+	// deliberately deferred until AFTER NotifyAnswer authorizes the answer:
+	// if a review pause started in the window past the up-front guard,
+	// NotifyAnswer rejects with ErrFlowPaused and we roll back answer.json —
+	// and because dialog.jsonl was never touched, the question does not end up
+	// recorded as answered-in-history while unanswered-on-disk (which would
+	// strand the stage in awaiting_user_input with no visible form until an afm
+	// restart).
+	if err := mcp.WriteAnswerFile(stageDir, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
 		if os.IsExist(err) {
 			http.Error(w, "question already answered", http.StatusConflict)
 			return
@@ -656,10 +690,27 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 
 	if s.secondary != nil {
 		if err := s.secondary.NotifyAnswer(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
+			// A review pause that started in the tiny window between the guard
+			// above and this call: roll back answer.json (dialog.jsonl was not
+			// yet written) so nothing durable records this answer, and report the
+			// same machine-readable 409 the up-front guard would have.
+			if errors.Is(err, orchestrator.ErrFlowPaused) {
+				_ = os.Remove(answerPath)
+				writeFlowError(w, http.StatusConflict, "flow_paused")
+				return
+			}
 			http.Error(w, "notify: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
+
+	// The answer is authorized and durable on disk — now record it in the
+	// human-facing dialog history (best-effort, same as mcp.WriteAnswer does).
+	dialogPath := filepath.Join(stageDir, req.Phase+".dialog.jsonl")
+	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: req.ID, Answer: req.Answer, FromOptions: req.FromOptions}); err != nil {
+		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, req.Phase, req.ID, err) //nolint:gosec // G706: phase/id validated safe (flow.IsValidPhase/isValidDialogID) above
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"})
 }
@@ -678,7 +729,7 @@ func (s *Server) handleDialogCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.secondary != nil {
 		if err := s.secondary.CancelDialog(stageID); err != nil {
-			http.Error(w, "cancel: "+err.Error(), http.StatusInternalServerError)
+			writeActionError(w, err, "cancel", http.StatusInternalServerError)
 			return
 		}
 	}

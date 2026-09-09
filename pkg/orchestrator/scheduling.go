@@ -143,7 +143,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 		if _, ok := o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "deps done"); !ok {
 			continue
 		}
-		o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
+		o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 	}
 }
 
@@ -188,10 +188,10 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 			if stage.IsAuto() {
 				_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 			}
-			o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
+			o.spawnKind(ctx, *stage, kindAutonomous, o.withBeforeHook(o.runAutonomousAgent))
 			continue
 		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
+		o.spawnKind(ctx, *stage, kindImplementation, o.withBeforeHook(o.runImplementationAgent))
 	}
 }
 
@@ -299,7 +299,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runAutonomousAgent))
+		o.spawnKind(ctx, *stage, kindAutonomous, o.withBeforeHook(o.runAutonomousAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -331,7 +331,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
+		o.spawnKind(ctx, *stage, kindImplementation, o.withBeforeHook(o.runImplementationAgent))
 		o.startReadyStages(ctx)
 		return
 	}
@@ -344,7 +344,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
 			return
 		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runImplementationAgent))
+		o.spawnKind(ctx, *stage, kindImplementation, o.withBeforeHook(o.runImplementationAgent))
 	} else {
 		// Deps not done — stay pending; planning starts automatically
 		// via startPlanningForUnblocked once dependencies complete.
@@ -356,7 +356,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		if _, ok := o.Trigger(stageID, bus.EvStartPlanning, bus.GuardCtx{Stage: *stage}, "manual retry"); !ok {
 			return
 		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.runPlanningAgent)
+		o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
 	}
 }
 

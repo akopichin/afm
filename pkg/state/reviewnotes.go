@@ -49,28 +49,44 @@ func LoadReviewNotes(runDir string) (ReviewNotes, error) {
 	path := reviewNotesPath(runDir)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return ReviewNotes{Version: 1, NextID: 1}, nil
+		return emptyReviewNotes(), nil
 	}
 	if err != nil {
-		return ReviewNotes{Version: 1, NextID: 1}, fmt.Errorf("read review notes: %w", err)
+		return emptyReviewNotes(), fmt.Errorf("read review notes: %w", err)
 	}
 	var n ReviewNotes
 	if err := json.Unmarshal(data, &n); err != nil || n.Version != 1 {
 		// Advisory data: quarantine the bad file and start empty.
 		_ = os.Rename(path, fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano()))
-		return ReviewNotes{Version: 1, NextID: 1}, nil
+		return emptyReviewNotes(), nil
 	}
 	if n.NextID == 0 {
 		n.NextID = 1
 	}
+	// A store that was persisted with zero notes round-trips through JSON as
+	// `"notes": null`; force a non-nil slice so the API always serializes `[]`
+	// and never `null` (a `null` breaks the dashboard's ReviewNotesModal, which
+	// iterates the array without a runtime nil-guard).
+	if n.Notes == nil {
+		n.Notes = []ReviewNote{}
+	}
 	return n, nil
+}
+
+// emptyReviewNotes is the canonical "no notes yet" value — a fresh store with a
+// non-nil (empty) Notes slice so it serializes as `[]`, never `null`.
+func emptyReviewNotes() ReviewNotes {
+	return ReviewNotes{Version: 1, NextID: 1, Notes: []ReviewNote{}}
 }
 
 func DeleteReviewNotes(runDir string) error {
 	if err := os.Remove(reviewNotesPath(runDir)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete review notes: %w", err)
 	}
-	return nil
+	// fsync the parent so the unlink is durable — otherwise a crash right after
+	// a resume "completed" could resurrect the deleted notes and leak stale
+	// review comments into the next round (see runResumeTransaction cleanup).
+	return fsyncDir(runDir)
 }
 
 const notesPauseMarkerFile = "notes-pause.json"
@@ -140,6 +156,57 @@ func ReadNotesPauseMarker(runDir string) (PauseMarker, bool, error) {
 func ClearNotesPauseMarker(runDir string) error {
 	if err := os.Remove(notesPauseMarkerPath(runDir)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("clear pause marker: %w", err)
+	}
+	return fsyncDir(runDir)
+}
+
+const notesPausePoisonFile = "notes-pause.poison"
+
+func notesPausePoisonPath(runDir string) string {
+	return filepath.Join(runDir, notesPausePoisonFile)
+}
+
+// WritePoisonMarker durably records that a review-pause resume transaction was
+// found un-recoverable (a corrupt `resuming` marker). Unlike the canonical
+// marker — which ReadNotesPauseMarker quarantines/renames on corruption, so it
+// would vanish on the next restart — this breadcrumb persists until an operator
+// removes it, so the run stays fail-closed across ANY number of restarts rather
+// than silently returning to normal scheduling after one. `detail` is a
+// human-readable note for whoever inspects it. Best-effort content; its mere
+// existence is the signal.
+func WritePoisonMarker(runDir, detail string) error {
+	return atomicWriteFile(notesPausePoisonPath(runDir), []byte(detail+"\n"), 0644)
+}
+
+// HasPoisonMarker reports whether a durable poison breadcrumb is present.
+func HasPoisonMarker(runDir string) bool {
+	_, err := os.Stat(notesPausePoisonPath(runDir))
+	return err == nil
+}
+
+// ClearPoisonMarker removes the poison breadcrumb (operator-driven manual
+// recovery — the only way back to normal scheduling).
+func ClearPoisonMarker(runDir string) error {
+	if err := os.Remove(notesPausePoisonPath(runDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear poison marker: %w", err)
+	}
+	return fsyncDir(runDir)
+}
+
+// fsyncDir flushes a directory entry change (an unlink here) to disk, the same
+// durability step atomicWriteFile already does after a rename. A non-existent
+// dir is not an error (the run dir is always present in practice).
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("open dir for fsync: %w", err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("fsync dir: %w", err)
 	}
 	return nil
 }

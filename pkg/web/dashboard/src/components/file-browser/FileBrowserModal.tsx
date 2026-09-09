@@ -22,6 +22,14 @@ import { FileViewer } from './FileViewer'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
 
+// sameLine matches the backend's note-dedup key semantics: two line pointers
+// denote the same note iff both are file-level (null) or both the same number.
+// Strict equality already covers all three cases (null/null, null/number,
+// number/number).
+function sameLine(a: number | null, b: number | null): boolean {
+  return a === b
+}
+
 // Совпадает с use-status.ts's FlowStatus['flowPauseState'] — см. её же
 // комментарий в FileViewer.tsx/ReviewBanner.tsx для семантики. Продублирован
 // намеренно тем же приёмом: эта клетка не должна тянуть весь модуль use-status
@@ -148,11 +156,18 @@ export function FileBrowserModal({
   // Каждый успешный addNote корректирует её значением из ответа сервера, без
   // отдельного повторного listNotes() на каждую заметку.
   const [notesRev, setNotesRev] = useState(0)
+  // The authoritative note list for the round, kept so FileViewer can rehydrate
+  // a reopened file's saved markers/prefill (review-finding P2 #5). Loaded once
+  // on open and kept in sync by every successful addNote below.
+  const [notes, setNotes] = useState<ReviewNote[]>([])
   useEffect(() => {
     let cancelled = false
     void listNotes()
       .then((res) => {
-        if (!cancelled) setNotesRev(res.rev)
+        if (!cancelled) {
+          setNotesRev(res.rev)
+          setNotes(res.notes)
+        }
       })
       .catch(() => {
         // Нет активного review-раунда либо бэкенд ещё не отдаёт эту ручку —
@@ -167,6 +182,18 @@ export function FileBrowserModal({
   async function handleAddNote(body: AddNoteRequest): Promise<{ note: ReviewNote; rev: number }> {
     const result = await addNote(body)
     setNotesRev(result.rev)
+    // Keep the authoritative list in sync so FileViewer's saved-note hydration
+    // survives a file switch: replace a note with the same root/path/line
+    // (the backend dedups on that key), otherwise append.
+    setNotes((prev) => {
+      const i = prev.findIndex(
+        (n) => n.root === result.note.root && n.path === result.note.path && sameLine(n.line, result.note.line),
+      )
+      if (i === -1) return [...prev, result.note]
+      const next = prev.slice()
+      next[i] = result.note
+      return next
+    })
     return result
   }
 
@@ -666,6 +693,7 @@ export function FileBrowserModal({
                   pauseFlow={pauseFlow}
                   addNote={handleAddNote}
                   expectedRev={notesRev}
+                  savedNotes={notes}
                 />
               ) : (
                 <DiffViewer diff={diff} loading={diffLoading} error={diffError} />

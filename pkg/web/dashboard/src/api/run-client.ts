@@ -159,7 +159,12 @@ export async function listNotes(): Promise<{ rev: number; notes: ReviewNote[] }>
   if (!response.ok) {
     throw new FlowApiError(url, response.status, await readErrorCode(response))
   }
-  return response.json() as Promise<{ rev: number; notes: ReviewNote[] }>
+  const body = (await response.json()) as { rev?: number; notes?: ReviewNote[] | null }
+  // Defensive normalization: a freshly created store serializes an empty note
+  // list as `"notes": null` (Go encodes a nil slice as null). Callers iterate
+  // `notes` directly (groupByFile), so coerce null/undefined to [] here — the
+  // single point where untyped JSON becomes a typed ReviewNote[].
+  return { rev: body.rev ?? 0, notes: body.notes ?? [] }
 }
 
 export type AddNoteRequest = {

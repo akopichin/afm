@@ -276,6 +276,13 @@ type Orchestrator struct {
 	// раннер (resume_kind) и в каком режиме (withFeedback) был бы выбран, без
 	// запуска настоящего процесса-агента.
 	testRunnerHook func(kind string, withFeedback bool)
+
+	// testClearReviewArtifacts — тест-сейм (nil в проде) для clearReviewArtifacts
+	// (reviewpause.go): если задан, runResumeTransaction зовёт его вместо
+	// реального удаления review-notes.json/notes-pause.json, чтобы тест мог
+	// смоделировать сбой durable-cleanup и проверить fail-closed поведение
+	// (in-memory marker НЕ сбрасывается, пока файлы не удалены).
+	testClearReviewArtifacts func() error
 }
 
 // bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле
@@ -496,10 +503,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	// the run (and its dashboard/HTTP server) alive rather than aborting
 	// Run() outright, so an operator can inspect the quarantined file and
 	// the paused stages instead of losing all visibility into the run.
+	poisoned := false
 	if err := o.recoverReviewPause(ctx); err != nil {
 		log.Printf("review-pause: recovery error, activation held pending manual intervention: %v", err)
+		// A poisoned round (corrupt, un-recoverable resuming marker) must NOT run
+		// normal bootstrap at all — activationHeld alone still lets some
+		// scheduling side effects through. Skip startPlanningForPending entirely
+		// (the poison reviewMarker keeps shouldExit() false, so the loop below
+		// still keeps the dashboard + question poller alive) so an operator can
+		// inspect and clear the durable poison breadcrumb by hand.
+		poisoned = errors.Is(err, errReviewPausePoisoned)
 	}
-	o.startPlanningForPending(ctx)
+	if !poisoned {
+		o.startPlanningForPending(ctx)
+	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
 
 	for {
@@ -636,9 +653,9 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 				return nil
 			}
 			if agentType == phaseAutonomous {
-				o.concurrency.SpawnAgent(ctx, *stage, o.runAutonomousWithFeedback)
+				o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousWithFeedback)
 			} else {
-				o.concurrency.SpawnAgent(ctx, *stage, o.runImplementationWithFeedback)
+				o.spawnKind(ctx, *stage, kindImplementation, o.runImplementationWithFeedback)
 			}
 			return nil
 		}
@@ -759,16 +776,16 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 	switch phase {
 	case phasePlanning:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "")
-		o.concurrency.SpawnAgent(ctx, *stage, o.runPlanningAgent)
+		o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
 	case phaseImplementation:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "")
-		o.concurrency.SpawnAgent(ctx, *stage, o.runImplementationAgent)
+		o.spawnKind(ctx, *stage, kindImplementation, o.runImplementationAgent)
 	case phaseReview:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseReview}, "")
-		o.concurrency.SpawnAgent(ctx, *stage, o.runReviewAgent)
+		o.spawnKind(ctx, *stage, kindReview, o.runReviewAgent)
 	case phaseAutonomous:
 		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseAutonomous}, "")
-		o.concurrency.SpawnAgent(ctx, *stage, o.runAutonomousAgent)
+		o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)
 	}

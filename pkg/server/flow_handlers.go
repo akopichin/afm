@@ -18,6 +18,12 @@ const codeNoNotes = "no_notes"
 // by both the GET/POST cases in routeFlowNotes below.
 const pathFlowNotes = "/api/flow/notes"
 
+// maxNoteBodyBytes bounds a single notes add/update request body. A note's text
+// is capped at 8 KiB server-side (orchestrator.maxNoteTextBytes); 128 KiB leaves
+// generous room for the path/reference/content_sha envelope while refusing a
+// pathological multi-megabyte body before it's ever buffered/decoded.
+const maxNoteBodyBytes = 128 << 10
+
 // writeFlowError writes the scoped JSON error shape used only by the
 // /api/flow/* handlers — {"error": "<code>"}, mirroring writeFilesError's
 // convention so both API surfaces stay consistent for the dashboard client.
@@ -37,6 +43,8 @@ func flowErrCode(err error) (int, string) {
 		return http.StatusConflict, "run_finalizing"
 	case errors.Is(err, orchestrator.ErrNoReviewPause):
 		return http.StatusConflict, "flow_not_paused"
+	case errors.Is(err, orchestrator.ErrResumeInProgress):
+		return http.StatusConflict, "resume_in_progress"
 	case errors.Is(err, orchestrator.ErrNoNotes):
 		return http.StatusBadRequest, codeNoNotes
 	case errors.Is(err, orchestrator.ErrNotOwned):
@@ -51,6 +59,10 @@ func flowErrCode(err error) (int, string) {
 		return http.StatusConflict, "stale_line"
 	case errors.Is(err, orchestrator.ErrEmptyText):
 		return http.StatusBadRequest, "empty_text"
+	case errors.Is(err, orchestrator.ErrNoteTooLong):
+		return http.StatusRequestEntityTooLarge, "note_too_long"
+	case errors.Is(err, orchestrator.ErrTooManyNotes):
+		return http.StatusConflict, "too_many_notes"
 	case errors.Is(err, orchestrator.ErrNoteNotFound):
 		return http.StatusNotFound, "note_not_found"
 	default:
@@ -141,7 +153,7 @@ func (s *Server) handleNotesAdd(w http.ResponseWriter, r *http.Request) {
 		ContentSHA  string `json:"content_sha"`
 		ExpectedRev int    `json:"expected_rev"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxNoteBodyBytes)).Decode(&req); err != nil {
 		writeFlowError(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
@@ -170,7 +182,7 @@ func (s *Server) handleNotesUpdate(w http.ResponseWriter, r *http.Request) {
 		writeFlowError(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxNoteBodyBytes)).Decode(&req); err != nil {
 		writeFlowError(w, http.StatusBadRequest, "invalid_body")
 		return
 	}

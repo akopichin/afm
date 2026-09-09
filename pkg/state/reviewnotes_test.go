@@ -1,12 +1,63 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// TestLoadReviewNotes_EmptyStoreSerializesAsArray закрывает review-finding P1
+// #6 (backend-половина): свежий store БЕЗ файла review-notes.json обязан отдать
+// НЕ nil-срез Notes, иначе encoding/json кодирует его как `null`, и дашбордный
+// ReviewNotesModal падает с TypeError на `for (const note of notes)`. Проверяем
+// не только пустой файл, но и store, который был сохранён с нулём заметок и
+// round-trip'нулся через JSON как `"notes": null`.
+func TestLoadReviewNotes_EmptyStoreSerializesAsArray(t *testing.T) {
+	dir := t.TempDir()
+
+	// (1) Файла нет вовсе.
+	fresh, err := LoadReviewNotes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Notes == nil {
+		t.Fatal("missing-file store must have a non-nil Notes slice")
+	}
+	if b, _ := json.Marshal(fresh); !wantArray(b) {
+		t.Fatalf(`missing-file store serializes notes as null, not []: %s`, b)
+	}
+
+	// (2) Файл есть, но заметок ноль — сериализуется как "notes": null на диске.
+	if err := os.WriteFile(filepath.Join(dir, reviewNotesFile),
+		[]byte(`{"version":1,"rev":0,"next_id":1,"notes":null}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadReviewNotes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Notes == nil {
+		t.Fatal("zero-notes store must be normalized to a non-nil slice")
+	}
+	if b, _ := json.Marshal(loaded); !wantArray(b) {
+		t.Fatalf(`zero-notes store serializes as null, not []: %s`, b)
+	}
+}
+
+// wantArray reports whether the marshaled ReviewNotes JSON encodes notes as a
+// (possibly empty) array rather than null.
+func wantArray(b []byte) bool {
+	var probe struct {
+		Notes json.RawMessage `json:"notes"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return false
+	}
+	return string(probe.Notes) == "[]" || (len(probe.Notes) > 0 && probe.Notes[0] == '[')
+}
 
 func TestReviewNotes_SaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()

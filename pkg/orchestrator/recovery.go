@@ -15,6 +15,23 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// errReviewPausePoisoned marks a corrupt, un-recoverable resuming review-pause
+// round (see recoverReviewPause). Run() checks for it via errors.Is to skip
+// normal bootstrap entirely — a poisoned run must not run any scheduling side
+// effects, only stay alive (dashboard + question poller) for manual operator
+// recovery.
+var errReviewPausePoisoned = errors.New("review-pause resume transaction poisoned")
+
+// enterReviewPausePoison puts the orchestrator into the in-memory fail-closed
+// poison state: hold new activations AND cache a synthetic resuming marker so
+// reviewTxnActive()/ReviewState()/shouldExit()/rejectIfReviewPaused all treat
+// the round as active. Paired with a durable state.WritePoisonMarker so the
+// state survives restarts.
+func (o *Orchestrator) enterReviewPausePoison() {
+	o.activationHeld.Store(true)
+	o.reviewMarker.Store(&state.PauseMarker{Version: 1, State: state.PauseStateResuming})
+}
+
 // recoverReviewPause re-establishes review-pause state from disk BEFORE
 // ordinary bootstrap (startPlanningForPending) runs — otherwise the normal
 // scheduler could resume a stage a review round had frozen, racing the
@@ -53,6 +70,17 @@ import (
 //     the caller can surface it prominently and leave the hold in place for
 //     an operator to resolve by hand.
 func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
+	// A durable poison breadcrumb from a PRIOR startup that found a corrupt
+	// resuming marker: re-establish the fail-closed poison state on EVERY
+	// restart until an operator clears the breadcrumb. Without this the poison
+	// was in-memory only and evaporated on the next restart (the corrupt
+	// canonical marker having already been quarantined), silently returning the
+	// run to normal scheduling.
+	if state.HasPoisonMarker(o.opts.RunDir) {
+		o.enterReviewPausePoison()
+		return fmt.Errorf("review-pause: %w (poison breadcrumb present in %q; clear it after manual recovery)", errReviewPausePoisoned, o.opts.RunDir)
+	}
+
 	m, found, err := state.ReadNotesPauseMarker(o.opts.RunDir)
 	if !found {
 		return nil // no review pause was in flight
@@ -60,8 +88,19 @@ func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
 	switch {
 	case errors.Is(err, state.ErrCorruptPauseMarker):
 		if m.State == state.PauseStateResuming {
-			o.activationHeld.Store(true)
-			return fmt.Errorf("review-pause: corrupt resuming marker quarantined in %q (manual recovery needed): owners may be partially resumed", o.opts.RunDir)
+			// Fail CLOSED with a DURABLE poison breadcrumb (survives restarts) plus
+			// a real in-memory poison marker. The in-memory marker keeps
+			// reviewTxnActive() true this process — so /api/status reports
+			// "resuming", every public control action is rejected with
+			// ErrFlowPaused, and shouldExit() refuses to finalize. The durable
+			// breadcrumb makes recovery re-enter this state on every subsequent
+			// restart (the corrupt canonical marker itself was already quarantined
+			// by ReadNotesPauseMarker and would otherwise be gone). The run stays
+			// visible to control policy and finalization until an operator resolves
+			// it by hand and clears the breadcrumb.
+			_ = state.WritePoisonMarker(o.opts.RunDir, "corrupt resuming review-pause marker; owners may be partially resumed")
+			o.enterReviewPausePoison()
+			return fmt.Errorf("review-pause: %w (corrupt resuming marker quarantined in %q; owners may be partially resumed)", errReviewPausePoisoned, o.opts.RunDir)
 		}
 		log.Printf("review-pause: corrupt paused marker quarantined in %q, continuing without review mode", o.opts.RunDir)
 		return nil
@@ -77,7 +116,14 @@ func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
 	case state.PauseStateResuming:
 		o.reviewMarker.Store(&m)
 		o.activationHeld.Store(false)
-		o.runResumeTransaction(ctx, m) // idempotent: SaveFeedbackOnce sentinel + reconcile + delete
+		// Idempotent: SaveFeedbackOnce sentinel + per-owner status dispatch +
+		// delete-if-exists. On failure keep the hold and the marker so ordinary
+		// bootstrap doesn't resume owners a second time and the run stays
+		// fail-closed until a later start retries the (now no-op) transaction.
+		if err := o.runResumeTransaction(ctx, m); err != nil {
+			o.activationHeld.Store(true)
+			return fmt.Errorf("review-pause: resume transaction incomplete (hold retained): %w", err)
+		}
 		return nil
 	default:
 		return fmt.Errorf("review-pause: unknown marker state %q", m.State)
@@ -249,7 +295,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				continue // review mode: hold new activations; the stage stays pending/ready
 			}
 			o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
-			o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
+			o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 		}
 	}
 
@@ -280,7 +326,7 @@ func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
 		return
 	}
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "")
-	o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
+	o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 }
 
 // resumeStageAtStatus (re)spawns whatever goroutine a stage recorded as
@@ -306,7 +352,7 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 				o.completeStage(ctx, s.ID, status, "recovered execution_summary.md")
 				return
 			}
-			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
+			o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousAgent)
 			return
 		}
 		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
@@ -319,17 +365,17 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 			return
 		}
 		o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "restart after retry")
-		o.concurrency.SpawnAgent(ctx, s, o.runPlanningAgent)
+		o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 	case state.StatusRevising:
 		switch o.detectInterruptedPhase(stageDir) {
 		case phaseImplementation:
-			o.concurrency.SpawnAgent(ctx, s, o.runImplementationWithFeedback)
+			o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback)
 		case phaseReview:
-			o.concurrency.SpawnAgent(ctx, s, o.runReviewWithFeedback)
+			o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback)
 		case phaseAutonomous:
-			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousWithFeedback)
+			o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback)
 		default:
-			o.concurrency.SpawnAgent(ctx, s, o.runPlanningWithFeedback)
+			o.spawnKind(ctx, s, kindPlanning, o.runPlanningWithFeedback)
 		}
 	case state.StatusRunning:
 		if s.IsScript() {
@@ -345,14 +391,14 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 				o.completeStage(ctx, s.ID, status, "recovered execution_summary.md")
 				return
 			}
-			o.concurrency.SpawnAgent(ctx, s, o.runAutonomousAgent)
+			o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousAgent)
 			return
 		}
 		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
 			o.completeStage(ctx, s.ID, status, "recovered .done")
 			return
 		}
-		o.concurrency.SpawnAgent(ctx, s, o.runImplementationAgent)
+		o.spawnKind(ctx, s, kindImplementation, o.runImplementationAgent)
 	default:
 		// Unreachable in practice: callers only ever pass a status they just
 		// observed on a stage that needs resuming (Planning/Retrying/Revising/

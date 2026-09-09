@@ -121,6 +121,20 @@ describe('run-client flow-wide review-pause + notes calls', () => {
     expect(res.notes).toEqual([note])
   })
 
+  // Review-finding P1 #6 (client half): a fresh store serializes zero notes as
+  // `"notes": null` (Go nil slice → JSON null). listNotes must coerce it to []
+  // so callers (groupByFile) never `for (const note of null)` and crash the
+  // ReviewNotesModal.
+  test('listNotes coerces a null notes field to an empty array', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ rev: 0, notes: null }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const res = await listNotes()
+
+    expect(res.rev).toBe(0)
+    expect(res.notes).toEqual([])
+  })
+
   test('addNote POSTs the note body to /api/flow/notes and returns note+rev', async () => {
     const note = {
       id: 'n1', root: 'project', path: 'a.go', display_path: 'a.go', reference: '[AFM file: "a.go"]',

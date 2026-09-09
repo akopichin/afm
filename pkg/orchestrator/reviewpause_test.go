@@ -895,6 +895,61 @@ func TestRecoverReviewPause_CorruptResumingFailsClosed(t *testing.T) {
 	if !o.activationHeld.Load() {
 		t.Fatal("corrupt resuming marker must keep activationHeld set")
 	}
+	// P2 #1: a real in-memory poison marker must be cached so control policy,
+	// /api/status, and shouldExit all keep treating the review round as active.
+	if !o.reviewTxnActive() {
+		t.Fatal("corrupt resuming marker must cache a poison reviewMarker (reviewTxnActive)")
+	}
+	if st, _ := o.ReviewState(); st != state.PauseStateResuming {
+		t.Fatalf("ReviewState = %q, want resuming (poison state visible in /api/status)", st)
+	}
+	if o.shouldExit() {
+		t.Fatal("shouldExit must stay false while the poison marker is present")
+	}
+	if err := o.Continue(context.Background(), "s1"); !errors.Is(err, ErrFlowPaused) {
+		t.Fatalf("controls must be rejected under the poison marker, got %v", err)
+	}
+	// P2 (re-review): the poison must be recorded DURABLY so it survives restarts.
+	if !state.HasPoisonMarker(o.opts.RunDir) {
+		t.Fatal("corrupt resuming marker must write a durable poison breadcrumb")
+	}
+}
+
+// TestRecoverReviewPause_PoisonSurvivesRestart закрывает re-review P2: durable
+// poison breadcrumb должен ре-устанавливать fail-closed на ЛЮБОМ последующем
+// рестарте — даже когда повреждённый canonical marker уже отправлен в quarantine
+// и его больше нет на диске. Симулируем «второй рестарт»: только breadcrumb, без
+// notes-pause.json.
+func TestRecoverReviewPause_PoisonSurvivesRestart(t *testing.T) {
+	o := newTestOrchestrator(t)
+	if err := state.WritePoisonMarker(o.opts.RunDir, "prior corrupt resuming round"); err != nil {
+		t.Fatal(err)
+	}
+	err := o.recoverReviewPause(context.Background())
+	if !errors.Is(err, errReviewPausePoisoned) {
+		t.Fatalf("poison breadcrumb must re-poison on restart, got %v", err)
+	}
+	if !o.activationHeld.Load() || !o.reviewTxnActive() {
+		t.Fatal("poison breadcrumb must re-establish hold + in-memory poison marker")
+	}
+	if st, _ := o.ReviewState(); st != state.PauseStateResuming {
+		t.Fatalf("ReviewState = %q, want resuming after restart-poison", st)
+	}
+	// Operator clears the breadcrumb → a fresh recovery on the same run dir is
+	// back to normal (no poison, no error).
+	if err := state.ClearPoisonMarker(o.opts.RunDir); err != nil {
+		t.Fatal(err)
+	}
+	if state.HasPoisonMarker(o.opts.RunDir) {
+		t.Fatal("ClearPoisonMarker must remove the breadcrumb")
+	}
+	clean := New(Options{RunDir: o.opts.RunDir, Stages: o.opts.Stages, Store: o.opts.Store, Config: config.Default()})
+	if err := clean.recoverReviewPause(context.Background()); err != nil {
+		t.Fatalf("recovery after clearing the poison must be clean, got %v", err)
+	}
+	if clean.reviewTxnActive() {
+		t.Fatal("no poison should remain after the breadcrumb is cleared")
+	}
 }
 
 // TestRecoverReviewPause_CorruptPausedFailsOpen закрывает Task 15: маркер
