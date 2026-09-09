@@ -3,6 +3,7 @@
 package progress
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -30,7 +31,10 @@ func (l *Lock) TryLock() error {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return fmt.Errorf("lock busy: %w", err)
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return ErrLockBusy
+		}
+		return fmt.Errorf("flock: %w", err)
 	}
 	l.f = f
 	return nil

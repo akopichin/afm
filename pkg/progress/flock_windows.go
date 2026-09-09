@@ -3,6 +3,7 @@
 package progress
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -34,7 +35,10 @@ func (l *Lock) TryLock() error {
 	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK | windows.LOCKFILE_FAIL_IMMEDIATELY)
 	if err := windows.LockFileEx(windows.Handle(f.Fd()), flags, 0, 1, 0, ol); err != nil {
 		f.Close()
-		return fmt.Errorf("lock busy: %w", err)
+		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+			return ErrLockBusy
+		}
+		return fmt.Errorf("LockFileEx: %w", err)
 	}
 	l.f = f
 	return nil

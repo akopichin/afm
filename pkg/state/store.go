@@ -51,9 +51,9 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		return nil, fmt.Errorf("mkdir runDir: %w", err)
 	}
 
-	lock, _ := progress.NewLock(filepath.Join(runDir, ".lock"))
-	if err := lock.TryLock(); err != nil {
-		return nil, ErrRunLocked
+	lock, err := acquireRunLock(runDir)
+	if err != nil {
+		return nil, err
 	}
 	locked := true
 	defer func() {
