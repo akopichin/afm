@@ -863,7 +863,8 @@ name: f
 memory:
   path: .goga/memory
 stages:
-  - name: build
+  - id: build
+    name: build
     agents: [planning, implementation]
     reflect:
       file: build.md
@@ -894,7 +895,8 @@ memory:
   max_rules: 100
   commit: true
 stages:
-  - name: build
+  - id: build
+    name: build
     agents: [planning, implementation]
 `
 	f, err := flow.ParseFile(writeTemp(t, yaml))
@@ -915,7 +917,8 @@ name: f
 memory:
   path: .goga/memory
 stages:
-  - name: build
+  - id: build
+    name: build
     agents: [planning, implementation]
 `
 	f, err := flow.ParseFile(writeTemp(t, yaml))
@@ -947,7 +950,8 @@ name: f
 memory:
   path: .goga/memory
 stages:
-  - name: gen
+  - id: gen
+    name: gen
     reflect:
       file: gen.md
     script: "echo hi"
@@ -963,7 +967,8 @@ name: f
 memory:
   path: .goga/memory
 stages:
-  - name: build
+  - id: build
+    name: build
     agents: [planning, implementation]
     reflect:
       file: build.md
@@ -1020,7 +1025,7 @@ func TestValidateMemoryV3(t *testing.T) {
 		t.Error("bad mode must error")
 	}
 	// script stage with reflect parses OK
-	if err := write("name: f\nmemory:\n  path: m\nstages:\n  - name: s\n    script: \"echo hi\"\n    reflect:\n      file: s.md\n"); err != nil {
+	if err := write("name: f\nmemory:\n  path: m\nstages:\n  - id: s\n    name: s\n    script: \"echo hi\"\n    reflect:\n      file: s.md\n"); err != nil {
 		t.Errorf("script+reflect must parse: %v", err)
 	}
 }

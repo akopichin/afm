@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -477,6 +478,17 @@ func (f *Flow) applyScriptTimeoutDefaults() {
 	}
 }
 
+// safePathComponent сообщает, безопасна ли строка как единственный компонент
+// пути на диске (напр. <runDir>/<stageID>): непусто, не "." и не "..", без
+// разделителей пути и без NUL. Используется и для stage.ID (см.
+// filepath.Join(o.opts.RunDir, s.ID) в pkg/orchestrator/agents.go), и как
+// первый барьер для reflect.file (см. filepath.IsLocal ниже для полной
+// проверки многосегментного относительного пути).
+func safePathComponent(s string) bool {
+	return s != "" && s != "." && s != ".." &&
+		!strings.ContainsAny(s, `/\`) && !strings.ContainsRune(s, 0)
+}
+
 func (f *Flow) validate() error {
 	ids := make(map[string]bool, len(f.Stages))
 	for _, s := range f.Stages {
@@ -484,6 +496,15 @@ func (f *Flow) validate() error {
 			return fmt.Errorf("duplicate stage id: %q", s.ID)
 		}
 		ids[s.ID] = true
+	}
+
+	// stage.ID используется как компонент пути на диске (директория стадии
+	// внутри рана) — небезопасное значение (пусто, ".", "..", разделитель,
+	// NUL) должно быть отклонено до того, как оно попадёт в filepath.Join.
+	for _, s := range f.Stages {
+		if !safePathComponent(s.ID) {
+			return fmt.Errorf("stage %q: id must be a safe path component (non-empty, not \".\"/\"..\", no \"/\" or \"\\\", no NUL)", s.ID)
+		}
 	}
 
 	for _, s := range f.Stages {
@@ -627,6 +648,17 @@ func (f *Flow) validate() error {
 		// reflect.file is required
 		if s.Reflect.File == "" {
 			return fmt.Errorf("stage %q: reflect.file is required", s.ID)
+		}
+		// reflect.file must be a local relative path — no ".." escaping the
+		// memory directory and no absolute path (it's joined onto
+		// memory.path, see memory.StageFile).
+		if !filepath.IsLocal(s.Reflect.File) {
+			return fmt.Errorf("stage %q: reflect.file %q must be a local relative path (no .. or absolute)", s.ID, s.Reflect.File)
+		}
+		// reflect.file must not collide (after Clean, catching the "./" alias)
+		// with the fixed project memory file name.
+		if filepath.Clean(s.Reflect.File) == "memory.md" {
+			return fmt.Errorf("stage %q: reflect.file must not be memory.md (collides with the project memory file)", s.ID)
 		}
 		// reflect.mode must be one of r, w, rw
 		if s.Reflect.Mode != "" && s.Reflect.Mode != ReflectModeR && s.Reflect.Mode != ReflectModeW && s.Reflect.Mode != ReflectModeRW {
