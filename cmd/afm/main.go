@@ -109,6 +109,7 @@ func newRootCmd() *cobra.Command {
 		newValidateCmd(),
 		newListCmd(),
 		newInstallSkillsCmd(),
+		newMemoryCmd(),
 	)
 	return root
 }

@@ -341,6 +341,76 @@ func FindLatestRunDir(base, flowName string) (string, error) {
 	return filepath.Join(base, names[len(names)-1]), nil
 }
 
+// ErrNoRun означает, что под base не нашлось ни одной подходящей run-директории
+// для flowName (ни одной вообще, либо ни одной завершённой — см.
+// FindLatestCompletedRunDir).
+var ErrNoRun = errors.New("no matching run found")
+
+// FindLatestCompletedRunDir возвращает самую свежую run-директорию для
+// flowName, у которой множество стадий, дошедших до терминального статуса,
+// ТОЧНО совпадает с wantStages и все они в StatusDone. events.jsonl хранит
+// переходы только тех стадий, которые реально стартовали — поэтому run, где
+// ожидаемая стадия ни разу не появилась (никогда не запускалась), ЗАВЕРШЁННЫМ
+// не считается; пустой активный run — тоже; run с лишними/другими стадиями
+// пропускается (более новый, но с другой топологией run не затеняет более
+// старый подходящий). Читает events.jsonl (авторитетный источник), без flock.
+// Битый лог у подходящего по имени run всплывает наружу как ErrCorruptLog —
+// не прячется молча за более старый run.
+func FindLatestCompletedRunDir(base, flowName string, wantStages []string) (string, error) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrNoRun
+		}
+		return "", err
+	}
+	want := make(map[string]bool, len(wantStages))
+	for _, s := range wantStages {
+		want[s] = true
+	}
+	prefix := flowName + "-"
+	var names []string
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() || len(n) <= len(prefix) || n[:len(prefix)] != prefix {
+			continue
+		}
+		if c := n[len(prefix)]; c < '0' || c > '9' {
+			continue
+		}
+		names = append(names, n)
+	}
+	slices.SortFunc(names, func(a, b string) int { return strings.Compare(b, a) }) // новые первыми
+	for _, n := range names {
+		runDir := filepath.Join(base, n)
+		rs, lerr := LoadRunState(runDir)
+		if lerr != nil {
+			if errors.Is(lerr, ErrCorruptLog) {
+				return "", fmt.Errorf("run %s: %w", n, lerr)
+			}
+			continue
+		}
+		if stageSetAllDone(rs, want) {
+			return runDir, nil
+		}
+	}
+	return "", ErrNoRun
+}
+
+// stageSetAllDone сообщает, что множество стадий rs.Stages ТОЧНО совпадает с
+// want (не больше, не меньше) и каждая из них в StatusDone.
+func stageSetAllDone(rs RunState, want map[string]bool) bool {
+	if len(rs.Stages) != len(want) {
+		return false // точное множество: ни лишних, ни недостающих
+	}
+	for id, st := range rs.Stages {
+		if !want[id] || st.Status != StatusDone {
+			return false
+		}
+	}
+	return true
+}
+
 // FindLatestRunForStage возвращает последнюю run-директорию, содержащую stageID,
 // и все её stage id. Состояние читается из events.jsonl (LoadRunState), не из
 // state.json, чтобы не доверять возможно устаревшему снапшоту.
