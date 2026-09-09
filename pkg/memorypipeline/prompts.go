@@ -15,7 +15,7 @@ func BuildPrompt(p Prompts, spec AgentSpec) string {
 		var b strings.Builder
 		b.WriteString(p.Reflect)
 		b.WriteString("\n\n# AFM FILE I/O (added by afm)\n")
-		b.WriteString("Read these sources (if a path is a directory, read every *.log file under it, plus execution_summary.md and plan.md if present, AND any direct user input in the stage dir — *.dialog.jsonl (user dialog answers), prenote.md and feedback.md (user notes) — if present):\n")
+		b.WriteString("Read exactly these source files, and nothing else (this is the full, pre-classified inventory for this stage — direct user input, such as *.dialog.jsonl user dialog answers and prenote.md/feedback.md user notes, is listed here too and takes priority over agent-session logs when both speak to the same point):\n")
 		for _, s := range spec.Sources {
 			fmt.Fprintf(&b, "  - %s\n", s)
 		}

@@ -15,22 +15,42 @@ func testPrompts() Prompts {
 }
 
 func TestBuildMemoryPrompt_Reflect(t *testing.T) {
+	// Sources — уже готовый, классифицированный SourceInventory список
+	// (agent-session сначала, затем supplemental): промпт должен назвать
+	// КАЖДЫЙ путь явно, не "прочитай директорию".
 	got := BuildPrompt(testPrompts(), AgentSpec{
-		Kind:       "reflect",
-		Sources:    []string{"/run/s1/autonomous.log", "/run/s1/execution_summary.md"},
+		Kind: "reflect",
+		Sources: []string{
+			"/run/s1/autonomous.log",
+			"/run/s1/execution_summary.md",
+			"/run/s1/planning.dialog.jsonl",
+			"/run/s1/prenote.md",
+			"/run/s1/feedback.md",
+		},
 		DatasetOut: "/run/s1/reflect_dataset.yaml",
 	})
-	for _, want := range []string{"REFLECT-BASE", "/run/s1/autonomous.log", "/run/s1/execution_summary.md", "/run/s1/reflect_dataset.yaml"} {
+	for _, want := range []string{
+		"REFLECT-BASE",
+		"/run/s1/autonomous.log",
+		"/run/s1/execution_summary.md",
+		"/run/s1/planning.dialog.jsonl",
+		"/run/s1/prenote.md",
+		"/run/s1/feedback.md",
+		"/run/s1/reflect_dataset.yaml",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("reflect prompt missing %q", want)
 		}
 	}
-	// Диалоги и заметки пользователя тоже подаются в обработку reflect-агенту —
-	// файловая инструкция должна называть их явно.
-	for _, want := range []string{"dialog.jsonl", "prenote.md", "feedback.md"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("reflect prompt must include user dialog/notes source %q", want)
-		}
+	// Промпт больше не должен инструктировать читать "каждый *.log под
+	// директорией" — источники теперь явный список файлов от SourceInventory.
+	if strings.Contains(got, "if a path is a directory") {
+		t.Errorf("reflect prompt must not fall back to directory-scanning wording:\n%s", got)
+	}
+	// Формулировка про приоритет пользовательского ввода над логами должна
+	// сохраниться.
+	if !strings.Contains(got, "user") || !strings.Contains(got, "priority") {
+		t.Errorf("reflect prompt must keep the user-input-priority wording:\n%s", got)
 	}
 }
 
