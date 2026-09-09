@@ -146,6 +146,7 @@ Inside a running Docker container the dashboard header can show a folder-icon bu
 - **Off by default — opt in.** `docker.file_browser.enabled` defaults to `false`; set it to `true` in the config to turn the browser on. The env var `AFM_FILE_BROWSER` takes **priority over the config** in both directions: `AFM_FILE_BROWSER=1` (or `true`) force-enables it even when the config disables it, `AFM_FILE_BROWSER=0` (or `false`) force-disables it even when the config enables it; empty/unset falls back to the config. The decision is made on the host before Docker re-exec, so it also controls whether the browseable-roots manifest is forwarded into the container.
 - **What it does:** a lazy-loading source tree of the project mount and any `extra_mounts` explicitly opted in with `browse: true` (see below); opens text files with syntax highlighting for Go, TypeScript/TSX, JavaScript/JSX, and Python; shows a `HEAD → working tree` diff per file; lets you select one or more files and insert `[AFM file: "<absolute container path>"]` references into a plan review comment or a pending-question comment — the agent reads the file itself with its own tools, nothing is copied into `feedback.md`/the answer.
 - **Changed-files view (All / Unstaged / vs HEAD).** A toolbar at the top of the left panel switches the panel between the full tree (**All**) and two flat lists of changed files: **Unstaged** (working tree vs the index, `git diff`) and **vs HEAD** (working tree vs the last commit, `git diff HEAD`). Untracked (new) files appear in both changed views as *added* — so files an agent just created are visible; the two modes only differ once something is staged with `git add`. Each row shows a status badge **M**/**A**/**D** and behaves like a tree row (click to open — the DIFF tab still shows `HEAD → current` — and checkbox-select to insert references); a deleted file is a non-clickable marker. A **Refresh** button re-fetches on demand (there's no background git polling), and the search box is available only in **All**. Available only when the browsed root is itself a git repository root; otherwise the view reports "Not a git repository".
+- **Review notes.** Clicking a file line while a flow is running lets you pause the whole flow and attach line-anchored comments, then inject them into a stage of your choice — see [Review Notes](#review-notes--pause-the-whole-flow-and-comment-on-files-docker-mode) under Web Dashboard.
 - **Strictly read-only.** `.git` and `.afm` are always hidden from the tree, even under an opted-in root. There's no create/edit/rename/delete from the dashboard.
 - **Limits.** File content is capped at 2 MiB (a larger file shows an inline "file too large" message but can still be selected/referenced); diffs are capped at 4 MiB (truncated with a banner). Symlinks are listed but can't be opened. On a Linux host with an old kernel (< 5.6, no `openat2`) the feature degrades off automatically instead of falling back to a less-safe path check.
 - **`extra_mounts` now accept an object form with `browse`** (the old plain-string list keeps working, unchanged):
@@ -651,7 +652,7 @@ On startup (if `server.open_browser: true`) the dashboard opens; otherwise its U
 - **Center panel** — the plan with line-by-line review and inline comments, the agent log (markdown), a "Dialog" section for interactive stages
 - **Right panel** — an event feed from all stages with source badges
 - **Progress bar** — at the bottom, showing how many stages are complete
-- **Folder icon (Docker mode only)** — opens the project file browser: browse the source tree, view files with syntax highlighting, check a per-file `HEAD → working tree` diff, and insert file references into plan/question comments. See [Project File Browser (Docker mode)](#project-file-browser-docker-mode).
+- **Folder icon (Docker mode only)** — opens the project file browser: browse the source tree, view files with syntax highlighting, check a per-file `HEAD → working tree` diff, insert file references into plan/question comments, and — by clicking a file line — pause the whole flow to attach [review notes](#review-notes--pause-the-whole-flow-and-comment-on-files-docker-mode). See [Project File Browser (Docker mode)](#project-file-browser-docker-mode).
 
 ### Themes
 
@@ -677,6 +678,18 @@ Normally you can only redirect a stage at the `awaiting_approval` checkpoint (se
 1. Click the kebab (⋮) menu on a `running` (or `awaiting_approval`) stage row and choose "Add a note for the agent".
 2. Type the note and send — the agent finishes its current step, then receives SIGINT (a graceful interrupt, not a kill).
 3. The stage moves through `revising` and restarts the same phase (planning/implementation/review/autonomous) with your note folded into its context, then continues toward `done`.
+
+### Review Notes — Pause the Whole Flow and Comment on Files (Docker mode)
+
+Where "Add a note for the agent" redirects **one running stage** with free-text, **review notes** let you pause the **entire flow**, walk the project source in the file browser, attach comments **anchored to specific file lines**, and then hand the whole batch to a stage of your choice. It's Docker-only (it builds on the [Project File Browser](#project-file-browser-docker-mode)).
+
+1. Open the file browser and click a line of any file. If the flow is still running, a small confirm appears — **"pause the flow to write notes?"**. Confirming puts the flow into **review mode**: a banner appears at the top (`⏸ Review mode — new stages held; active work pausing best-effort`), every currently-active agent stage is gracefully paused (SIGINT), and new stages are held from starting. Scripts and stages that already finished are left alone.
+2. Write a comment on the line — it's saved immediately and the line gets a marker dot. Repeat across as many lines and files as you like; the banner keeps a running **note count**. Each note is anchored to `(file, line)` together with the file's content hash, so if the file changes before the notes are delivered the agent is told the content drifted.
+3. Click **Send notes** to open the review modal: it lists every note grouped by file, lets you edit/delete individual ones, and asks which **target stage** should receive them. Then:
+   - **Inject** — the notes are rendered into that stage's `feedback.md` (exactly once, crash-safe) and the flow resumes: the target stage restarts with the notes in its context, every other paused stage continues where it left off.
+   - **Cancel** — discards the notes and resumes the flow unchanged.
+
+The pause/notes/resume cycle is durable: it survives an `afm` restart mid-review (the hold and the collected notes are on disk), a resume interrupted by a crash finishes on the next start, and while a review round is open the ordinary controls (approve/retry/continue/dialog-answer) return `409 flow_paused` so nothing races the review.
 
 ### Auto-Approving a Stage's Plan
 

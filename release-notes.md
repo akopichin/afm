@@ -2,6 +2,18 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-09-09
+
+### Feature: review notes — pause the whole flow to comment on files (Docker mode)
+
+The Docker project file browser gained a review workflow: pause the **entire flow**, annotate project source line by line, and hand the collected notes to a stage of your choice, which resumes with them in its context. It builds on the existing file browser and is Docker-only (a plain host run doesn't expose it).
+
+**The cycle.** Click a line of any file in the browser while the flow is running — a confirm asks whether to pause the flow for notes. Confirming enters **review mode**: a top banner appears, every currently-active agent stage is gracefully paused (SIGINT), and new stages are held from starting (scripts and already-finished stages are left alone). Write a comment on the line — it saves immediately, the line gets a marker dot, and the banner shows a running note count. Add as many notes as you want across lines and files; each is anchored to `(file, line)` plus the file's content hash, so drift between capture and delivery is flagged to the agent. **Send notes** opens a modal that lists every note grouped by file (edit/delete individually) and asks for a **target stage**, then either **Inject** — render the notes into that stage's `feedback.md` exactly once and resume the flow (the target restarts with the notes; every other paused stage continues) — or **Cancel** — discard the notes and resume unchanged.
+
+**Reliability is part of the feature.** The pause/notes/resume round is a durable transaction: the hold and the collected notes live on disk, so an `afm` restart mid-review re-establishes review mode, and a resume interrupted by a crash finishes on the next start (feedback is re-delivered idempotently, owners are re-spawned exactly once — including a stage caught in retry backoff). Durable cleanup is fail-closed: if deleting the notes/marker fails, the round stays "active" rather than being declared done with stale state left behind, and an un-recoverable (corrupt) resume leaves a durable poison breadcrumb that keeps the run held for manual recovery across any number of restarts. While a review round is open, every ordinary control (approve / retry / continue / dialog-answer) returns `409 flow_paused` so nothing races the review — and a dialog answer submitted in that window is rolled back cleanly (no orphaned answer, no phantom history entry). Notes are bounded (per-note length, note count, rendered-feedback size, request-body size) so even a local dashboard can't be turned into an OOM.
+
+Backend: content-anchored `review-notes.json` + a durable `notes-pause.json` marker, notes CRUD under `GET/POST/PUT/DELETE /api/flow/notes` (optimistic-concurrency `rev`, content-hash staleness checks with machine-readable error codes), and `POST /api/flow/{pause,notes/inject,notes/cancel}`; `/api/status` reports the flow-wide `flow_pause_state`. Frontend: line-anchored comments in the file viewer (with a pause-gate confirm on the first note, and saved notes re-hydrated when you reopen a file), a full-width review banner, and the review-notes modal with per-file grouping and stage picker.
+
 ## 2026-09-04
 
 ### Feature: file browser — "changed files" view (All / Unstaged / vs HEAD)
