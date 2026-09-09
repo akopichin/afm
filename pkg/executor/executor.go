@@ -553,6 +553,8 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		switch {
 		case strings.HasPrefix(kv, "CLAUDECODE="):
 			// always strip for nested sessions
+		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
+			// always strip inherited; re-added below only if cfg.StageDir != ""
 		default:
 			filtered = append(filtered, kv)
 		}

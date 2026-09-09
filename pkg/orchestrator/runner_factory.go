@@ -11,16 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
-// wrapperDirFor возвращает wrapper-dir для команды cmd: для generated-команд
-// (autoShim) — opts.WrapperDir, чтобы сгенерированный скрипт резолвился на PATH;
-// для остальных (включая claude) — пусто (используется реальный бинарник).
-func wrapperDirFor(cmd string, wrapperDir string, generated map[string]bool) string {
-	if generated[cmd] {
-		return wrapperDir
-	}
-	return ""
-}
-
 // runnerFor returns the appropriate Runner for a stage's phase.
 // For interactive stages it generates a session id and returns an executor
 // configured with --session-id / --resume and AFM_STAGE_DIR env.
@@ -45,7 +35,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 			TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 			OnAction:       uiActionPublisher(o.ui, s.ID),
-			WrapperDir:     wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+			WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 			Dir:            o.opts.RootDir,
 			Debug:          o.opts.Debug,
 			RunDir:         o.opts.RunDir,
@@ -85,7 +75,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		SessionID:      sessionID,
 		Resume:         resume,
 		StageDir:       stageDir,
-		WrapperDir:     wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Dir:            o.opts.RootDir,
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
@@ -106,7 +96,7 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
-		WrapperDir:     wrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		WrapperDir:     executor.WrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 	})

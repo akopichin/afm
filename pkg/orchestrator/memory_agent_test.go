@@ -6,6 +6,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -32,16 +33,16 @@ func newTestOrchestrator(t *testing.T) *Orchestrator {
 // helper, reuse it; otherwise construct Options minimally.
 func TestRunMemoryAgent_SeamDefaulted(t *testing.T) {
 	o := newTestOrchestrator(t) // existing test helper in this package
-	if o.runMemoryAgent == nil {
-		t.Fatal("runMemoryAgent must be defaulted by New")
+	if o.memRunner == nil {
+		t.Fatal("memRunner must be defaulted by New")
 	}
 	// Override with a stub and confirm it is invoked (no real process).
 	called := false
-	o.runMemoryAgent = func(ctx context.Context, spec memoryAgentSpec) error {
+	o.memRunner = func(ctx context.Context, spec memorypipeline.AgentSpec) error {
 		called = true
 		return nil
 	}
-	_ = o.runMemoryAgent(context.Background(), memoryAgentSpec{kind: "reflect"})
+	_ = o.memRunner(context.Background(), memorypipeline.AgentSpec{Kind: "reflect"})
 	if !called {
 		t.Fatal("stub not invoked")
 	}

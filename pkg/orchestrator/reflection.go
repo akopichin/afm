@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/memory"
+	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
@@ -35,14 +36,14 @@ func (o *Orchestrator) maybeRunReflection(ctx context.Context, stageID string) {
 		}()
 
 		dataset := filepath.Join(stageDir, "reflect_dataset.yaml")
-		if err := o.runMemoryAgent(ctx, memoryAgentSpec{
-			kind:       memoryKindReflect,
-			stageName:  stage.Name,
-			sources:    []string{stageDir},
-			datasetOut: dataset,
-			logFile:    filepath.Join(stageDir, "reflect.log"),
+		if err := o.memRunner(ctx, memorypipeline.AgentSpec{
+			Kind:       memorypipeline.KindReflect,
+			StageName:  stage.Name,
+			Sources:    []string{stageDir},
+			DatasetOut: dataset,
+			LogFile:    filepath.Join(stageDir, "reflect.log"),
 		}); err != nil {
-			o.reflectFailed(stage.Name, memoryKindReflect, err)
+			o.reflectFailed(stage.Name, memorypipeline.KindReflect, err)
 		}
 	})
 }
@@ -57,32 +58,32 @@ func (o *Orchestrator) distill(ctx context.Context, stageName string, datasets [
 	defer o.reflectMu.Unlock()
 
 	patternsPath := filepath.Join(logDir, "patterns.md")
-	if err := o.runMemoryAgent(ctx, memoryAgentSpec{
-		kind:      memoryKindAggregate,
-		stageName: stageName,
-		inPaths:   datasets,
-		out:       patternsPath,
-		logFile:   filepath.Join(logDir, "aggregate.log"),
+	if err := o.memRunner(ctx, memorypipeline.AgentSpec{
+		Kind:      memorypipeline.KindAggregate,
+		StageName: stageName,
+		InPaths:   datasets,
+		Out:       patternsPath,
+		LogFile:   filepath.Join(logDir, "aggregate.log"),
 	}); err != nil {
-		o.reflectFailed(stageName, memoryKindAggregate, err)
+		o.reflectFailed(stageName, memorypipeline.KindAggregate, err)
 		return
 	}
 
 	prioritizedPath := filepath.Join(logDir, "prioritized.md")
-	if err := o.runMemoryAgent(ctx, memoryAgentSpec{
-		kind:      memoryKindPrioritize,
-		stageName: stageName,
-		in:        patternsPath,
-		out:       prioritizedPath,
-		logFile:   filepath.Join(logDir, "prioritize.log"),
+	if err := o.memRunner(ctx, memorypipeline.AgentSpec{
+		Kind:      memorypipeline.KindPrioritize,
+		StageName: stageName,
+		In:        patternsPath,
+		Out:       prioritizedPath,
+		LogFile:   filepath.Join(logDir, "prioritize.log"),
 	}); err != nil {
-		o.reflectFailed(stageName, memoryKindPrioritize, err)
+		o.reflectFailed(stageName, memorypipeline.KindPrioritize, err)
 		return
 	}
 
 	data, err := os.ReadFile(prioritizedPath)
 	if err != nil {
-		o.reflectFailed(stageName, memoryKindPrioritize, err)
+		o.reflectFailed(stageName, memorypipeline.KindPrioritize, err)
 		return
 	}
 	high := memory.SelectHigh(string(data))
@@ -92,19 +93,19 @@ func (o *Orchestrator) distill(ctx context.Context, stageName string, datasets [
 	}
 	highPath := filepath.Join(logDir, "high.md")
 	if err := memory.AtomicWrite(highPath, []byte(high)); err != nil {
-		o.reflectFailed(stageName, memoryKindUpdate, err)
+		o.reflectFailed(stageName, memorypipeline.KindUpdate, err)
 		return
 	}
 
-	if err := o.runMemoryAgent(ctx, memoryAgentSpec{
-		kind:       memoryKindUpdate,
-		stageName:  stageName,
-		highPath:   highPath,
-		targetFile: targetFile,
-		maxRules:   o.opts.Memory.MaxRules,
-		logFile:    filepath.Join(logDir, "update.log"),
+	if err := o.memRunner(ctx, memorypipeline.AgentSpec{
+		Kind:       memorypipeline.KindUpdate,
+		StageName:  stageName,
+		HighPath:   highPath,
+		TargetFile: targetFile,
+		MaxRules:   o.opts.Memory.MaxRules,
+		LogFile:    filepath.Join(logDir, "update.log"),
 	}); err != nil {
-		o.reflectFailed(stageName, memoryKindUpdate, err)
+		o.reflectFailed(stageName, memorypipeline.KindUpdate, err)
 		return
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
@@ -145,10 +146,10 @@ type Orchestrator struct {
 	// Инъектируется в New(); тесты подменяют стабом, чинящим файл синхронно.
 	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
 
-	// runMemoryAgent запускает один агент конвейера памяти (reflect/
-	// aggregate/prioritize/update). Реальная реализация — execMemoryAgent;
-	// тесты подменяют.
-	runMemoryAgent func(ctx context.Context, spec memoryAgentSpec) error
+	// memRunner запускает один агент конвейера памяти (reflect/aggregate/
+	// prioritize/update) — memorypipeline.AgentRunner. Реальная реализация —
+	// memorypipeline.NewExecRunner, собранный в New(); тесты подменяют.
+	memRunner memorypipeline.AgentRunner
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
@@ -373,7 +374,7 @@ func New(opts Options) *Orchestrator {
 			IdleTimeout:    opts.Config.Executor.IdleTimeout,
 			TruncateOutput: opts.Config.Executor.TruncateOutput,
 			OnAction:       uiActionPublisher(ui, ""),
-			WrapperDir:     wrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
+			WrapperDir:     executor.WrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
 			Debug:          opts.Debug,
 			RunDir:         opts.RunDir,
 		})
@@ -402,7 +403,20 @@ func New(opts Options) *Orchestrator {
 		retryBackoff:   RetryBackoff,
 	}
 	o.spawnJSONFix = o.runJSONFixAgent
-	o.runMemoryAgent = o.execMemoryAgent
+	o.memRunner = memorypipeline.NewExecRunner(memorypipeline.AgentConfig{
+		Command:     opts.Config.Client.Command,
+		ExtraArgs:   opts.Config.Client.ExtraArgs,
+		WrapperDir:  executor.WrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
+		RootDir:     opts.RootDir,
+		RunDir:      opts.RunDir,
+		IdleTimeout: opts.Config.Executor.IdleTimeout,
+		Debug:       opts.Debug,
+	}, memorypipeline.Prompts{
+		Reflect:    opts.Prompts.Reflect,
+		Aggregate:  opts.Prompts.Aggregate,
+		Prioritize: opts.Prompts.Prioritize,
+		Update:     opts.Prompts.Update,
+	})
 	return o
 }
 

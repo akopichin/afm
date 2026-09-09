@@ -1,0 +1,76 @@
+// Package memorypipeline holds the reusable engine behind afm's agent-memory
+// v3 pipeline: prompt templates, per-step agent specs, and the exec-backed
+// runner that spawns a fresh-context agent for one step (reflect/aggregate/
+// prioritize/update). The orchestrator package owns scheduling (when to run
+// which step, serialization, best-effort notices); this package only knows
+// how to build a prompt and run one agent for a given spec.
+package memorypipeline
+
+import (
+	"context"
+	"time"
+)
+
+// Kind* — значения AgentSpec.Kind, общие с switch в BuildPrompt (ниже) и с
+// конвейером в pkg/orchestrator/reflection.go — единые константы, а не
+// разбросанные строковые литералы (goconst).
+const (
+	KindReflect    = "reflect"
+	KindAggregate  = "aggregate"
+	KindPrioritize = "prioritize"
+	KindUpdate     = "update"
+)
+
+// Prompts holds the compiled base templates for each memory-pipeline step.
+type Prompts struct {
+	Reflect    string
+	Aggregate  string
+	Prioritize string
+	Update     string
+}
+
+// AgentConfig — параметры запуска агента конвейера памяти, общие для всех
+// шагов (не зависят от конкретного spec): какую команду запускать по
+// умолчанию, где искать generated-враппер, рабочую директорию/директорию
+// рана, таймаут простоя и debug-логирование.
+type AgentConfig struct {
+	Command     string
+	ExtraArgs   []string
+	WrapperDir  string
+	RootDir     string
+	RunDir      string
+	IdleTimeout time.Duration
+	Debug       bool
+}
+
+// AgentSpec — единый параметр для запуска одного агента конвейера памяти.
+// Заполняются только поля, релевантные Kind. Один seam (AgentRunner)
+// принимает этот spec — так тесты подменяют реальный запуск процесса.
+type AgentSpec struct {
+	Kind      string // "reflect" | "aggregate" | "prioritize" | "update"
+	StageName string // для лога/имени
+	Command   string // разрешённая команда агента (пусто → дефолтный клиент из AgentConfig)
+	LogFile   string // абс. путь к логу этого агента
+
+	// reflect:
+	Sources    []string // абс. пути (файлы или директории) для чтения
+	DatasetOut string   // абс. путь, куда записать YAML-датасет (project_level/session_level)
+
+	// aggregate: InPaths = датасет-файлы (reflect_dataset.yaml, один или
+	// несколько за end-of-run проход), Out = абс. путь для patterns.md.
+	// prioritize: In = patterns.md, Out = абс. путь для prioritized.md.
+	// (одни и те же поля переиспользуются между aggregate и prioritize — так
+	// проще, чем заводить по паре полей на каждый шаг ради симметрии.)
+	InPaths []string
+	In      string
+	Out     string
+
+	// update:
+	HighPath   string // абс. путь к high.md (High-паттерны, отобранные кодом)
+	TargetFile string // абс. путь к файлу памяти, который нужно переписать
+	MaxRules   int    // предел количества паттернов в TargetFile
+}
+
+// AgentRunner runs one memory-pipeline agent for the given spec. The
+// production implementation is NewExecRunner; tests inject a stub.
+type AgentRunner func(ctx context.Context, spec AgentSpec) error

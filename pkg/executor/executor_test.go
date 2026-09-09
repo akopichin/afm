@@ -467,6 +467,44 @@ func TestRunSetsStageDir(t *testing.T) {
 	}
 }
 
+// TestRunStripsInheritedStageDir проверяет, что свежий (не-диалоговый) агент
+// с StageDir=="" НЕ видит AFM_STAGE_DIR, унаследованный из родительского
+// процесса (например, afm сам был запущен внутри стадии с уже выставленным
+// AFM_STAGE_DIR — так бывает для memory-конвейера, запускаемого из
+// SpawnDetached-горутины того же процесса afm). Без явного strip дочерний
+// процесс наследует переменную из os.Environ() молча.
+func TestRunStripsInheritedStageDir(t *testing.T) {
+	t.Setenv("AFM_STAGE_DIR", "/leaked")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	outFile := filepath.Join(dir, "env.txt")
+
+	script := fmt.Sprintf(`printf '%%s' "$AFM_STAGE_DIR" > %s`+"\n"+
+		`echo '{"type":"result","subtype":"success"}'`, outFile)
+
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		// StageDir intentionally empty: a fresh-context agent (e.g. memory
+		// pipeline) has nowhere to write question.json and must not see a
+		// stale/leaked AFM_STAGE_DIR from the parent afm process.
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read env output: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "" {
+		t.Errorf("AFM_STAGE_DIR leaked from parent env: got %q, want empty", got)
+	}
+}
+
 // TestRunAgentRunsInConfiguredDir проверяет фикс косяка №2: агент должен
 // выполняться в рабочей директории Config.Dir (project root из flow.root_dir),
 // а не наследовать CWD процесса afm. Иначе относительные пути проекта (docs/arch)

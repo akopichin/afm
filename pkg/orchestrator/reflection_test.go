@@ -11,6 +11,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
+	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -30,20 +31,20 @@ func newReflectionTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrato
 	return o, runDir
 }
 
-// stubMemoryAgentByKind wires runMemoryAgent to simulate the v3 chain's file
+// stubMemoryAgentByKind wires memRunner to simulate the v3 chain's file
 // effects for each step, and records the call order.
 func stubMemoryAgentByKind(o *Orchestrator, order *[]string) {
-	o.runMemoryAgent = func(_ context.Context, spec memoryAgentSpec) error {
-		*order = append(*order, spec.kind)
-		switch spec.kind {
-		case memoryKindReflect:
-			return os.WriteFile(spec.datasetOut, []byte("project_level: []\nsession_level: []\n"), 0o644)
-		case memoryKindAggregate:
-			return os.WriteFile(spec.out, []byte("1. P — desc\n"), 0o644)
-		case memoryKindPrioritize:
-			return os.WriteFile(spec.out, []byte("## High\n1. P — desc\n\n## Medium\n1. m\n\n## Low\n1. l\n"), 0o644)
-		case memoryKindUpdate:
-			return os.WriteFile(spec.targetFile, []byte("# Project rules\n\n## P\n\ndesc\n"), 0o644)
+	o.memRunner = func(_ context.Context, spec memorypipeline.AgentSpec) error {
+		*order = append(*order, spec.Kind)
+		switch spec.Kind {
+		case memorypipeline.KindReflect:
+			return os.WriteFile(spec.DatasetOut, []byte("project_level: []\nsession_level: []\n"), 0o644)
+		case memorypipeline.KindAggregate:
+			return os.WriteFile(spec.Out, []byte("1. P — desc\n"), 0o644)
+		case memorypipeline.KindPrioritize:
+			return os.WriteFile(spec.Out, []byte("## High\n1. P — desc\n\n## Medium\n1. m\n\n## Low\n1. l\n"), 0o644)
+		case memorypipeline.KindUpdate:
+			return os.WriteFile(spec.TargetFile, []byte("# Project rules\n\n## P\n\ndesc\n"), 0o644)
 		default:
 			return nil
 		}
@@ -58,7 +59,7 @@ func TestMaybeRunReflection_NoOpWhenDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+	o.memRunner = func(_ context.Context, _ memorypipeline.AgentSpec) error { called = true; return nil }
 
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
@@ -103,7 +104,7 @@ func TestMaybeRunReflection_ModeR_DoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+	o.memRunner = func(_ context.Context, _ memorypipeline.AgentSpec) error { called = true; return nil }
 
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
@@ -120,7 +121,7 @@ func TestMaybeRunReflection_ScriptSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+	o.memRunner = func(_ context.Context, _ memorypipeline.AgentSpec) error { called = true; return nil }
 
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
@@ -236,7 +237,7 @@ func TestEndOfRunMemory_NoOpWithoutDatasets(t *testing.T) {
 	o, _ := newReflectionTestOrchestrator(t, stage)
 	o.opts.MemoryDir = t.TempDir()
 	called := false
-	o.runMemoryAgent = func(_ context.Context, _ memoryAgentSpec) error { called = true; return nil }
+	o.memRunner = func(_ context.Context, _ memorypipeline.AgentSpec) error { called = true; return nil }
 
 	o.runEndOfRunMemory(context.Background())
 	if called {

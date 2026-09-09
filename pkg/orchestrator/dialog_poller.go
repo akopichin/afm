@@ -467,7 +467,7 @@ func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan st
 		Command:     cmd,
 		ExtraArgs:   executor.ResolveArgs(extra),
 		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		WrapperDir:  wrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		WrapperDir:  executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Dir:         o.opts.RootDir,
 		Debug:       o.opts.Debug,
 		RunDir:      o.opts.RunDir,
