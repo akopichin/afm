@@ -71,6 +71,10 @@ type DatasetResult struct {
 	// CanonicalPath — <RunDir>/<stageID>/reflect_dataset.yaml, публикационная
 	// цель для сгенерированного датасета.
 	CanonicalPath string `json:"canonical_path"`
+	// Changed — для сгенерированного датасета: отличаются ли байты кандидата
+	// (staging) от канонического файла (Finalize step 4). Только Changed
+	// датасеты публикуются в CanonicalPath.
+	Changed bool `json:"changed,omitempty"`
 	// Published — выставляется, когда сгенерированный датасет опубликован
 	// (переименован) в CanonicalPath.
 	Published bool `json:"published"`
