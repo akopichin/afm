@@ -134,11 +134,13 @@ func TestCaptureStage_WritesToStagingPathLeavesCanonicalUntouched(t *testing.T) 
 	staging := filepath.Join(work, "stages", "s1", "reflect_dataset.yaml")
 
 	p := New(Prompts{}, AgentConfig{}, WithRunner(reflectRunner(t)))
-	res, err := p.CaptureStage(context.Background(), rwStage("s1", "s1.md"), stageDir, staging, filepath.Dir(staging), false)
+	// force=true so reuse is skipped even though canonical is valid — proves
+	// the primitive writes to the caller's chosen staging path, canonical left
+	// untouched.
+	res, err := p.CaptureStage(context.Background(), rwStage("s1", "s1.md"), stageDir, staging, filepath.Dir(staging), true)
 	if err != nil {
 		t.Fatalf("CaptureStage: %v", err)
 	}
-	// datasetOut != canonical => reuse skipped, regenerate at staging.
 	if res.Source != "generated" {
 		t.Errorf("Source=%q want generated", res.Source)
 	}
@@ -235,6 +237,92 @@ func TestCaptureAll_WritesStagingAndAdvancesManifest(t *testing.T) {
 	}
 	if len(m.Datasets) != 2 {
 		t.Errorf("manifest datasets=%d want 2", len(m.Datasets))
+	}
+}
+
+func TestCaptureAll_ReusesValidCanonical(t *testing.T) {
+	run := t.TempDir()
+	work := t.TempDir()
+	s1 := makeStageDir(t, run, "s1")
+	canonical := filepath.Join(s1, "reflect_dataset.yaml")
+	writeFile(t, canonical, nonEmptyDatasetYAML) // valid canonical present
+
+	manifestPath := filepath.Join(work, "manifest.json")
+	writeManifestFile(t, manifestPath, StatusRunning)
+
+	// empty behavior map => any reflect call fails the test
+	var calls []string
+	p := New(Prompts{}, AgentConfig{}, WithRunner(recordingRunner(t, &calls, map[string]func(AgentSpec) error{})))
+	results, err := p.CaptureAll(context.Background(), CaptureRequest{
+		RunDir: run, WorkDir: work, Stages: []flow.Stage{rwStage("s1", "s1.md")}, ManifestPath: manifestPath,
+	})
+	if err != nil {
+		t.Fatalf("CaptureAll: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("reuse must not run reflect, got calls %v", calls)
+	}
+	if len(results) != 1 || results[0].Source != "reused" {
+		t.Fatalf("results=%+v want one reused", results)
+	}
+	if results[0].DatasetPath != canonical {
+		t.Errorf("DatasetPath=%q want canonical %q", results[0].DatasetPath, canonical)
+	}
+}
+
+func TestCaptureAll_ForceReflectRegeneratesIntoStaging(t *testing.T) {
+	run := t.TempDir()
+	work := t.TempDir()
+	s1 := makeStageDir(t, run, "s1")
+	canonical := filepath.Join(s1, "reflect_dataset.yaml")
+	writeFile(t, canonical, nonEmptyDatasetYAML) // valid canonical — but force overrides
+	orig, _ := os.ReadFile(canonical)
+
+	manifestPath := filepath.Join(work, "manifest.json")
+	writeManifestFile(t, manifestPath, StatusRunning)
+
+	p := New(Prompts{}, AgentConfig{}, WithRunner(reflectRunner(t)))
+	results, err := p.CaptureAll(context.Background(), CaptureRequest{
+		RunDir: run, WorkDir: work, Stages: []flow.Stage{rwStage("s1", "s1.md")},
+		ForceReflect: true, ManifestPath: manifestPath,
+	})
+	if err != nil {
+		t.Fatalf("CaptureAll: %v", err)
+	}
+	if results[0].Source != "generated" {
+		t.Errorf("Source=%q want generated (force)", results[0].Source)
+	}
+	wantStaging := filepath.Join(work, "stages", "s1", "reflect_dataset.yaml")
+	if results[0].DatasetPath != wantStaging {
+		t.Errorf("DatasetPath=%q want staging %q", results[0].DatasetPath, wantStaging)
+	}
+	if after, _ := os.ReadFile(canonical); string(after) != string(orig) {
+		t.Error("canonical modified during forced staging regen")
+	}
+}
+
+func TestCaptureAll_InvalidCanonicalRegenerates(t *testing.T) {
+	run := t.TempDir()
+	work := t.TempDir()
+	s1 := makeStageDir(t, run, "s1")
+	writeFile(t, filepath.Join(s1, "reflect_dataset.yaml"), "not a valid dataset\n")
+
+	manifestPath := filepath.Join(work, "manifest.json")
+	writeManifestFile(t, manifestPath, StatusRunning)
+
+	p := New(Prompts{}, AgentConfig{}, WithRunner(reflectRunner(t)))
+	results, err := p.CaptureAll(context.Background(), CaptureRequest{
+		RunDir: run, WorkDir: work, Stages: []flow.Stage{rwStage("s1", "s1.md")}, ManifestPath: manifestPath,
+	})
+	if err != nil {
+		t.Fatalf("CaptureAll: %v", err)
+	}
+	if results[0].Source != "generated" {
+		t.Errorf("Source=%q want generated (invalid canonical)", results[0].Source)
+	}
+	wantStaging := filepath.Join(work, "stages", "s1", "reflect_dataset.yaml")
+	if results[0].DatasetPath != wantStaging {
+		t.Errorf("DatasetPath=%q want staging %q", results[0].DatasetPath, wantStaging)
 	}
 }
 
@@ -554,6 +642,66 @@ func TestFinalize_SharedReflectFileChainsThroughCandidate(t *testing.T) {
 	}
 }
 
+func TestFinalize_NoHighFirstStagePreservesSeedInSharedGroup(t *testing.T) {
+	mem := t.TempDir()
+	run := t.TempDir()
+	work := t.TempDir()
+	// prior rules in the shared target ("## Old Pattern")
+	writeFile(t, memory.StageFile(mem, "shared.md"), validRulesMD)
+
+	manifestPath := filepath.Join(work, "manifest.json")
+	writeManifestFile(t, manifestPath, StatusCapturing)
+
+	dsA := stagingDataset(t, work, run, "s1")
+	dsB := stagingDataset(t, work, run, "s2")
+
+	// s1 => NoHigh (candidate stays == seed, prior rules preserved); s2 => High
+	// and its update APPENDS a block to the (chained) candidate.
+	runner := func(_ context.Context, spec AgentSpec) error {
+		switch spec.Kind {
+		case KindAggregate:
+			return os.WriteFile(spec.Out, []byte("1. P — d\n"), 0644)
+		case KindPrioritize:
+			if spec.StageName == "s1" {
+				return os.WriteFile(spec.Out, []byte("## Medium\n\n1. P — d\n\n## Low\n"), 0644)
+			}
+			return os.WriteFile(spec.Out, []byte("## High\n\n1. P — d\n\n## Medium\n\n## Low\n"), 0644)
+		case KindUpdate:
+			cur, _ := os.ReadFile(spec.TargetFile)
+			return os.WriteFile(spec.TargetFile, []byte(string(cur)+"\n## Appended "+spec.StageName+"\n\nblk\n"), 0644)
+		}
+		return errors.New("unexpected kind")
+	}
+
+	p := New(Prompts{}, AgentConfig{}, WithRunner(runner))
+	_, err := p.Finalize(context.Background(), FinalizeRequest{
+		Meta:         testMeta(),
+		RunDir:       run,
+		WorkDir:      work,
+		MemoryDir:    mem,
+		Stages:       []flow.Stage{rwStage("s1", "shared.md"), rwStage("s2", "shared.md")},
+		Memory:       flow.MemoryConfig{Mode: flow.ReflectModeR, MaxRules: 25}, // R => no project write
+		Datasets:     []DatasetResult{dsA, dsB},
+		ManifestPath: manifestPath,
+		writer:       recordingWriter(new([]writeRec)),
+	})
+	if err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	got, err := os.ReadFile(memory.StageFile(mem, "shared.md"))
+	if err != nil {
+		t.Fatalf("read shared.md: %v", err)
+	}
+	// The NoHigh first stage must NOT wipe the shared target: the seed's prior
+	// "## Old Pattern" survives, and s2's appended block is chained on top.
+	if !strings.Contains(string(got), "## Old Pattern") {
+		t.Errorf("NoHigh first stage wiped the shared seed:\n%s", got)
+	}
+	if !strings.Contains(string(got), "## Appended s2") {
+		t.Errorf("s2 did not chain onto the shared candidate:\n%s", got)
+	}
+}
+
 func TestFinalize_CtxCancelledBeforePromotionNoWrite(t *testing.T) {
 	mem := t.TempDir()
 	run := t.TempDir()
@@ -701,6 +849,21 @@ func TestValidateTargetUnderMemoryDir_SymlinkedFinalFile(t *testing.T) {
 	}
 	if err := validateTargetUnderMemoryDir(mem, target); err == nil {
 		t.Error("expected rejection of a symlinked final file")
+	}
+}
+
+func TestValidateTargetUnderMemoryDir_DanglingSymlinkParent(t *testing.T) {
+	mem := t.TempDir()
+	// mem/sub -> a path that does not exist (dangling)
+	if err := os.Symlink(filepath.Join(mem, "does-not-exist"), filepath.Join(mem, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	err := validateTargetUnderMemoryDir(mem, filepath.Join(mem, "sub", "f.md"))
+	if err == nil {
+		t.Fatal("expected rejection of a dangling-symlink parent")
+	}
+	if !strings.Contains(err.Error(), "symlink") && !strings.Contains(err.Error(), "escapes") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

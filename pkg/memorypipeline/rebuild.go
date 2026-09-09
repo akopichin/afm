@@ -66,7 +66,11 @@ const projectTargetName = "flow-memory"
 func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir, datasetOut, logDir string, force bool) (DatasetResult, error) {
 	canonical := filepath.Join(stageDir, "reflect_dataset.yaml")
 
-	if !force && datasetOut == canonical {
+	// Reuse a valid canonical dataset by default — INDEPENDENT of datasetOut
+	// (spec §7.1): the offline pass targets a staging datasetOut that can never
+	// equal canonical, yet must still avoid re-running the reflect agent when a
+	// good canonical already exists. Only --force-reflect (force) regenerates.
+	if !force {
 		if data, err := os.ReadFile(canonical); err == nil {
 			if verr := ValidateDataset(data); verr == nil {
 				return DatasetResult{
@@ -544,41 +548,66 @@ func validateTargetUnderMemoryDir(memoryDir, target string) error {
 	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("target %s is a symlink", target)
 	}
-	parent := canonicalizeExistingAncestor(filepath.Dir(target))
-	rel, err := filepath.Rel(md, parent)
+
+	// Resolve the deepest EXISTING ancestor of the target's parent. A failure
+	// to EvalSymlinks an ancestor that DOES exist means a dangling/broken
+	// symlink component (review #2) — treat it as a containment rejection with
+	// a clean diagnostic, rather than letting it fall through to a generic
+	// mkdir/ENOENT deep inside AtomicWrite.
+	existing, missing := splitAtExisting(filepath.Dir(target))
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return fmt.Errorf("target %s: ancestor %s is an unresolvable (dangling) symlink: %w", target, existing, err)
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		resolved = filepath.Join(resolved, missing[i])
+	}
+
+	rel, err := filepath.Rel(md, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return fmt.Errorf("target %s escapes memory dir %s", target, md)
 	}
 	return nil
 }
 
-// canonicalizeExistingAncestor walks up from abs until it hits an existing
-// path, resolves that with EvalSymlinks (following any symlinked ancestors),
-// then re-joins the missing trailing components. It returns abs unchanged if
-// nothing resolves. This lets containment checks see through a parent that is
-// a symlink even when the final target file does not exist yet. (Defined here;
-// Task 9 reuses it.)
-func canonicalizeExistingAncestor(abs string) string {
-	var missing []string
+// splitAtExisting walks up from abs until it hits a path that exists on disk
+// (Lstat succeeds — a symlink counts as existing, it is not followed here),
+// returning that deepest-existing ancestor plus the trailing components that
+// do NOT exist, in reverse order (base-first). The filesystem root always
+// exists, so existing is never empty in practice.
+func splitAtExisting(abs string) (existing string, missing []string) {
 	cur := abs
 	for {
 		if _, err := os.Lstat(cur); err == nil {
-			resolved, err := filepath.EvalSymlinks(cur)
-			if err != nil {
-				return abs
-			}
-			for i := len(missing) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, missing[i])
-			}
-			return resolved
+			return cur, missing
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			return abs // reached the root without finding an existing path
+			return cur, missing // reached the root
 		}
 		missing = append(missing, filepath.Base(cur))
 		cur = parent
 	}
+}
+
+// canonicalizeExistingAncestor walks up from abs until it hits an existing
+// path, resolves that with EvalSymlinks (following any symlinked ancestors),
+// then re-joins the missing trailing components. It returns abs unchanged if
+// EvalSymlinks fails (e.g. a dangling symlink ancestor) — callers that must
+// REJECT such a case use validateTargetUnderMemoryDir, which detects the
+// EvalSymlinks failure explicitly. This helper lets containment checks see
+// through a parent that is a symlink even when the final target file does not
+// exist yet. (Defined here; Task 9 reuses it.)
+func canonicalizeExistingAncestor(abs string) string {
+	existing, missing := splitAtExisting(abs)
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return abs
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		resolved = filepath.Join(resolved, missing[i])
+	}
+	return resolved
 }
 
 // sha256Hex returns the hex-encoded SHA-256 of data.
