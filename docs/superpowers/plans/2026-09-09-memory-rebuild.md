@@ -12,7 +12,9 @@
 
 ## Review incorporation (why this plan differs from a naive spec transcription)
 
-This plan was revised against a design review. The corrected ordering follows the review's recommendation: **(1)** fix completed-run semantics + full stage-set source; **(2)** fix path/stage-ID validation and move it BEFORE any new path joins; **(3)** lock-busy vs I/O distinction; **(4)** lock the whole seed→distill→publish→commit window at the CLI level; **(5)** freshness/NoHigh/empty-dataset semantics + failure-injection; **(6)** only then extraction, CLI, Docker. Finding→task map is in each task's header.
+This plan was revised against TWO rounds of design review. The corrected ordering follows the review's recommendation: **(1)** fix completed-run semantics + full stage-set source; **(2)** fix path/stage-ID validation and move it BEFORE any new path joins; **(3)** lock-busy vs I/O distinction; **(4)** lock the whole seed→distill→publish→commit window at the CLI level; **(5)** freshness/NoHigh/empty-dataset semantics + failure-injection; **(6)** only then extraction, CLI, Docker. Finding→task map is in each task's header.
+
+**Round-2 finding → fix:** R2-#1 explicit `--run` now checks `rs.AllDone()` independently (T11); R2-#2 single manifest state machine, CLI creates `running`+meta and owns the terminal `completed`/`failed`, central defer, `DatasetResult` gains source/dataset hashes (T6/T8/T11); R2-#3 explicit `CaptureStage(datasetOut, force)` primitive both live and offline use (T8/T10); R2-#4 freshness = remove-before-call + `requireFreshFile`, `update` uses Lstat-before-read, "valid candidate" not "fresh" (T7); R2-#5 `validateTargetUnderMemoryDir` under lock before seed and each rename (T8); R2-#6 after-hook→reflection via `maybeRunAfterHookThen` in `hooks.go` (T10); R2-#7 early commit preflight before capture + re-check under lock (T11); R2-#8 `AtomicWriter func(path,data)` seam + dataset promotion bookkeeping (T8); R2-#9 `NewUniqueAttemptDir` MkdirAll-parent + bounded retry (T6/T11); R2-#10 selection-semantics divergence documented + spec §5 updated (T14); R2-#11 `datasetsAllEmpty (bool,error)` + separate `maxDatasetBytes`/`maxRulesBytes` bounds (T7); R2-#12 NUL-reject, `Inventory.All` intentional ordering, `ScanUnfinishedPromotions` scope note, `CommitPaths` rev-parse error, `AtomicWrite` close/fsync errors, clock seam, concrete Windows errno (T2/T3/T5/T6/T12).
 
 ## Global Constraints
 
@@ -395,7 +397,15 @@ func (l *Lock) TryLock() error {
     return nil
 }
 ```
-Mirror in `flock_windows.go` (whatever its busy errno is). Keep `Lock()`/`Unlock()` unchanged.
+Mirror in `flock_windows.go` (review #12 — concrete, no placeholder): `TryLock` uses `LockFileEx` with `LOCKFILE_FAIL_IMMEDIATELY`, which returns `windows.ERROR_LOCK_VIOLATION` on contention. Map only that to `ErrLockBusy`:
+```go
+if err := windows.LockFileEx(h, flags, 0, 1, 0, ol); err != nil {
+    f.Close()
+    if errors.Is(err, windows.ERROR_LOCK_VIOLATION) { return ErrLockBusy }
+    return fmt.Errorf("LockFileEx: %w", err)
+}
+```
+Keep `Lock()`/`Unlock()` unchanged. Add a Windows-tagged test for the busy mapping (build-tagged `//go:build windows`, run in CI's Windows matrix if present; otherwise it at least compiles under `GOOS=windows go vet`).
 
 - [ ] **Step 3: Failing tests for RunLock**
 
@@ -475,8 +485,9 @@ Add `minimalFlowWithStageID`/`minimalFlowWithReflect` helpers (reuse the package
 
 In `validate()`: add a stage-ID/path check applied to every stage's identity used on disk (whatever field becomes `<stageID>` — confirm whether it's `Stage.ID` or `Stage.Name`; grep how run dirs/stage dirs are named, e.g. `filepath.Join(runDir, s.ID)`):
 ```go
-func safePathComponent(s string) bool {
-    return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
+func safePathComponent(s string) bool { // review #12: also reject NUL and any separator
+    return s != "" && s != "." && s != ".." &&
+        !strings.ContainsAny(s, `/\`) && !strings.ContainsRune(s, 0)
 }
 ```
 Reject when `!safePathComponent(stageID)`. In the memory block, for each stage with `Reflect != nil`:
@@ -597,6 +608,9 @@ Cover (each an assertion): agent-session files (phase logs/jsonl/stderr, autonom
 
 ```go
 type Inventory struct{ AgentSessions, Supplemental []string }
+// All returns agent-session sources FIRST, then supplemental — this grouping is
+// intentional and deterministic (each group is independently sorted), so the reflect
+// prompt sees the primary session material before hook/user notes (review #12).
 func (i Inventory) All() []string { return append(append([]string{}, i.AgentSessions...), i.Supplemental...) }
 func (i Inventory) HasAgentSession() bool { return len(i.AgentSessions) > 0 }
 
@@ -753,12 +767,21 @@ Fixes review **#5** (manifest API + metadata + report/diff), **#3.minor** (typed
       MemoryMode               string
       MaxRules                 int
       EffectiveCommit          bool
+      PromptsDir               string            // prompt source: override dir, or "" = embedded defaults (review #2)
       PromptSHA256             map[string]string // reflect/aggregate/prioritize/update
       StartedAt                string            // RFC3339, supplied by caller (deterministic in tests)
   }
   type StepError struct { StageID, Target, Step, LogPath string; Err error }
   func (e *StepError) Error() string; func (e *StepError) Unwrap() error
-  type DatasetResult struct { StageID, Source, DatasetPath string; SourceFiles []string } // Source: "reused"|"generated"
+  // review #2/#8: DatasetResult carries full provenance + promotion bookkeeping.
+  type DatasetResult struct {
+      StageID, Source, DatasetPath string // Source: "reused"|"generated"; DatasetPath = staging (generated) or canonical (reused)
+      SourceFiles  []string                // inputs the reflect agent read
+      SourceHashes []string                // SHA-256 of each SourceFile, positionally aligned
+      DatasetSHA256 string                 // SHA-256 of the dataset bytes
+      CanonicalPath string                 // <RunDir>/<stageID>/reflect_dataset.yaml (publish target for a generated dataset)
+      Published    bool                    // set when a generated dataset has been promoted to CanonicalPath
+  }
   type TargetResult struct {
       Label, FinalPath, CandidatePath string
       OldSHA256, NewSHA256            string
@@ -769,9 +792,17 @@ Fixes review **#5** (manifest API + metadata + report/diff), **#3.minor** (typed
   type Manifest struct { /* all OperationMeta fields + Status, FinishedAt, Datasets, Targets, Errors, CommitCreated bool, CommitSHA, CommitError string */ }
   func WriteManifest(path string, m *Manifest) error   // atomic + durable
   func LoadManifest(path string) (*Manifest, error)
-  // statuses: "running" | "capturing" | "distilling" | "promoting" | "completed" | "dry_run" | "failed" | "cancelled"
+  func NewUniqueAttemptDir(base string, gen func() string) (string, error) // MkdirAll(base) + os.Mkdir(child), bounded retry on EEXIST
+  func ScanUnfinishedPromotions(runDir string) []string // attempt dirs of runDir with Status=="promoting"
+  // manifest lifecycle helpers used by the CLI (Task 11):
+  func NewRunningManifest(meta OperationMeta) *Manifest                       // status "running" + full meta + StartedAt
+  func FinalizeManifestOnExit(path string, finalErr *error, ctx context.Context) // defer: non-terminal -> "cancelled" if ctx.Err(), else "failed"
+  func MarkManifestCompleted(path string) error                              // status -> "completed"
   ```
-- Modifies: `memory.AtomicWrite` — fsync file + parent, **return** parent open/sync errors (no longer best-effort).
+- **Manifest state machine (single source of truth — review #2).** Exactly one lifecycle, driven by the CLI (Task 11) + `Finalize` (Task 8):
+  `running` (CLI, right after the attempt dir is created, with full `OperationMeta`) → `capturing` (CaptureAll) → `distilling` (Finalize) → then a Finalize terminal-for-its-phase status: `dry_run` | `cancelled` | `failed` | `promoting` → `awaiting_commit` (all files published, commit pending) OR `published` (no commit requested). The CLI then sets the FINAL status: `completed` (committed or no-commit) or `failed` (commit failed, with `CommitError`). A central `defer` in the handler flips any still-non-terminal manifest to `failed`/`cancelled`. `Finalize` never writes `completed` — that belongs to the CLI after the commit decision.
+- **Clock seam:** `Pipeline` holds `clock func() time.Time` (default `time.Now`, overridable via `WithClock` in tests) used for `FinishedAt`; `StartedAt` is supplied in `OperationMeta` (both deterministic under test).
+- Modifies: `memory.AtomicWrite` — fsync file + parent, **return** parent open/sync errors AND the `d.Close()` error (review #12; no longer best-effort).
 
 - [ ] **Step 1: Durable `AtomicWrite` first**
 
@@ -789,20 +820,33 @@ func AtomicWrite(path string, data []byte) error {
     if err := os.Rename(tmpPath, path); err != nil { os.Remove(tmpPath); return err }
     d, err := os.Open(dir)
     if err != nil { return fmt.Errorf("open parent for fsync: %w", err) }
-    defer d.Close()
-    if err := d.Sync(); err != nil { return fmt.Errorf("fsync parent: %w", err) }
+    if err := d.Sync(); err != nil { d.Close(); return fmt.Errorf("fsync parent: %w", err) }
+    if err := d.Close(); err != nil { return fmt.Errorf("close parent after fsync: %w", err) }
     return nil
 }
 ```
 Run `go test ./pkg/memory -v` → PASS.
+**Caveat for the promotion protocol (review #12):** the rename already succeeded before the parent fsync; an error return here does NOT mean the bytes are absent. Task 8's promotion treats a target as `Published` on rename success and only records this fsync error, never re-attempting the rename.
 
 - [ ] **Step 2: Failing tests for manifest + StepError + attempt-dir**
 
-`operation_test.go`: `WriteManifest`→`LoadManifest` round-trip; atomic (no `tmp-*` left); `StepError.Error()` includes stage/step/log; `NewAttemptDir(base, id)` creates the dir **exclusively** (second call with same id → error, review #10) and returns the path; `ScanUnfinishedPromotions(runDir)` returns attempt dirs whose manifest is `promoting` (review #6).
+`operation_test.go`: `WriteManifest`→`LoadManifest` round-trip; atomic (no `tmp-*` left); `StepError.Error()` includes stage/step/log; `NewUniqueAttemptDir` (a) creates a missing parent `<run>/memory-rebuild` (review #9: first rebuild must not `ENOENT`), (b) `os.Mkdir`s a fresh child exclusively, (c) on `EEXIST` retries with a new `gen()` id up to a bound (e.g. 8 tries) then errors; `ScanUnfinishedPromotions(runDir)` returns attempt dirs whose manifest is `promoting` (review #6).
 
 - [ ] **Step 3: Implement `operation.go` + `manifest.go`**
 
-`WriteManifest` uses `memory.AtomicWrite(path, json.MarshalIndent(...))`. `NewAttemptDir` uses `os.Mkdir` (not `MkdirAll`) and returns an error on `EEXIST` so the caller retries with a fresh id. `ScanUnfinishedPromotions` globs `<runDir>/memory-rebuild/*/manifest.json`, loads each, collects `Status=="promoting"`.
+```go
+func NewUniqueAttemptDir(base string, gen func() string) (string, error) {
+    if err := os.MkdirAll(base, 0755); err != nil { return "", err } // stable parent (review #9)
+    for i := 0; i < 8; i++ {
+        dir := filepath.Join(base, gen())
+        err := os.Mkdir(dir, 0755) // exclusive: fails on EEXIST
+        if err == nil { return dir, nil }
+        if !errors.Is(err, fs.ErrExist) { return "", err }
+    }
+    return "", fmt.Errorf("could not allocate a unique attempt dir under %s", base)
+}
+```
+`WriteManifest` uses `memory.AtomicWrite(path, json.MarshalIndent(...))`. `ScanUnfinishedPromotions` globs `<runDir>/memory-rebuild/*/manifest.json`, loads each, collects `Status=="promoting"`. **Scope note (review #12):** this scan is deliberately per-run (the selected run's attempts) — a stale `promoting` from a *different* run writing the same `memory.path` is not surfaced here; that is acceptable because re-running rebuild rebuilds cleanly from canonical/attempt state, and the shared memory lock prevents concurrent promotion. Add the clock seam here: `Pipeline.clock`/`WithClock` for `FinishedAt`.
 
 - [ ] **Step 4: Run, verify pass** — `go test ./pkg/memorypipeline -run 'Manifest|StepError|Attempt|Promotion' -v` → PASS.
 
@@ -831,8 +875,10 @@ Fixes review **#3** (NoHigh keeps candidate), **#10** (freshness via Lstat, Vali
   type StepArtifacts struct { PatternsPath, PrioritizedPath, HighPath, CandidatePath string; NoHigh bool }
   func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArtifacts, error)
   func ValidateRules(md string, maxRules int) error
-  func requireFreshFile(path string) error // Lstat, regular, non-symlink, size>0, <= a bound
+  func requireFreshFile(path string, maxBytes int64) error // Lstat (reject symlink), regular, size in (0, maxBytes]
+  const maxRulesBytes = 1 << 20 // Markdown output bound (distinct from maxDatasetBytes = 10 MiB — review #11)
   ```
+- **Freshness contract (review #4).** `requireFreshFile` alone cannot prove an agent produced output *this* call — a stale non-empty file satisfies Lstat+regular+size. So each agent call that writes a NEW file (`aggregate`→patterns, `prioritize`→prioritized, `reflect`→dataset) is preceded by `os.Remove(path)` (idempotent; the attempt dir is exclusive so nothing else writes there), then followed by `requireFreshFile`. `update` is the exception: its output IS the seeded candidate; it may legitimately leave bytes unchanged, so after `update` we do NOT demand a change — we `Lstat` (reject a symlink swap — review #4), then `os.ReadFile` and `ValidateRules`. The concept for `update` is "valid candidate", not "fresh output".
 - Key rule: the candidate (`<StagingDir>/target.md`) is **always** seeded from `SeedFrom` FIRST. On `NoHigh` and on empty datasets, `CandidatePath` exists and equals the seed — so a downstream stage sharing the file never loses prior rules (review #3).
 
 - [ ] **Step 1: Failing tests**
@@ -846,7 +892,9 @@ func TestDistillTarget_EmptyDatasetsNoOp(t *testing.T) {
     // NoHigh true, candidate == seed
 }
 func TestDistillTarget_ChainOrderAndStaging(t *testing.T) { /* aggregate,prioritize,update; update TargetFile == CandidatePath, never SeedFrom */ }
-func TestDistillTarget_StaleOutputRejected(t *testing.T) { /* pre-place patterns.md; runner writes nothing; requireFreshFile fails */ }
+func TestDistillTarget_AggregateWritesNothingRejected(t *testing.T) { /* pre-place a stale patterns.md; runner writes nothing; DistillTarget removes it first, so requireFreshFile fails -> StepError */ }
+func TestDistillTarget_UpdateSymlinkCandidateRejected(t *testing.T) { /* update runner replaces candidate with a symlink; Lstat-before-read rejects it */ }
+func TestDistillTarget_DatasetReadErrorSurfaces(t *testing.T) { /* an unreadable dataset -> datasetsAllEmpty returns the error, DistillTarget returns it, no aggregate call (review #11) */ }
 func TestValidateRules(t *testing.T) { /* header required at top; only "## <Pattern>"; >=1 pattern; tier heading any case rejected; extra H1 rejected; cap; size */ }
 ```
 
@@ -866,17 +914,21 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
         CandidatePath:   filepath.Join(t.StagingDir, "target.md"),
     }
     if err := seedCandidate(t.SeedFrom, a.CandidatePath); err != nil { return a, err } // ALWAYS first (review #3)
-    if datasetsAllEmpty(t.Datasets) { a.NoHigh = true; return a, nil }                  // review #11
+    empty, err := datasetsAllEmpty(t.Datasets)
+    if err != nil { return a, &StepError{Target: t.Name, Step: "aggregate", Err: err} } // read/parse error surfaces (review #11)
+    if empty { a.NoHigh = true; return a, nil }                                          // review #11
+    _ = os.Remove(a.PatternsPath) // require the agent to actually produce it this call (review #4)
     if err := p.run(ctx, AgentSpec{Kind: KindAggregate, StageName: t.Name, InPaths: t.Datasets,
         Out: a.PatternsPath, LogFile: filepath.Join(t.StagingDir, "aggregate.log")}); err != nil {
         return a, &StepError{Target: t.Name, Step: "aggregate", LogPath: filepath.Join(t.StagingDir, "aggregate.log"), Err: err}
     }
-    if err := requireFreshFile(a.PatternsPath); err != nil { return a, &StepError{Target: t.Name, Step: "aggregate", Err: err} }
+    if err := requireFreshFile(a.PatternsPath, maxRulesBytes); err != nil { return a, &StepError{Target: t.Name, Step: "aggregate", Err: err} }
+    _ = os.Remove(a.PrioritizedPath)
     if err := p.run(ctx, AgentSpec{Kind: KindPrioritize, StageName: t.Name, In: a.PatternsPath,
         Out: a.PrioritizedPath, LogFile: filepath.Join(t.StagingDir, "prioritize.log")}); err != nil {
         return a, &StepError{Target: t.Name, Step: "prioritize", LogPath: filepath.Join(t.StagingDir, "prioritize.log"), Err: err}
     }
-    if err := requireFreshFile(a.PrioritizedPath); err != nil { return a, &StepError{Target: t.Name, Step: "prioritize", Err: err} }
+    if err := requireFreshFile(a.PrioritizedPath, maxRulesBytes); err != nil { return a, &StepError{Target: t.Name, Step: "prioritize", Err: err} }
     pr, err := os.ReadFile(a.PrioritizedPath); if err != nil { return a, err }
     high := memory.SelectHigh(string(pr))
     if strings.TrimSpace(high) == "" { a.NoHigh = true; return a, nil } // candidate already == seed
@@ -885,30 +937,35 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
         TargetFile: a.CandidatePath, MaxRules: t.MaxRules, LogFile: filepath.Join(t.StagingDir, "update.log")}); err != nil {
         return a, &StepError{Target: t.Name, Step: "update", LogPath: filepath.Join(t.StagingDir, "update.log"), Err: err}
     }
-    cand, err := os.ReadFile(a.CandidatePath); if err != nil { return a, &StepError{Target: t.Name, Step: "update", Err: fmt.Errorf("no output: %w", err)} }
+    // update's output IS the seeded candidate — do not remove-before; may be unchanged; reject a symlink swap (review #4).
+    info, err := os.Lstat(a.CandidatePath)
+    if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+        return a, &StepError{Target: t.Name, Step: "update", Err: fmt.Errorf("candidate missing or not a regular file: %v", err)}
+    }
+    cand, err := os.ReadFile(a.CandidatePath); if err != nil { return a, &StepError{Target: t.Name, Step: "update", Err: err} }
     if err := ValidateRules(string(cand), t.MaxRules); err != nil { return a, &StepError{Target: t.Name, Step: "update", Err: err} }
     return a, nil
 }
 
 func seedCandidate(seedFrom, candidate string) error {
-    data, err := os.ReadFile(seedFrom)
+    data, err := os.ReadFile(seedFrom) // review #5: containment of seedFrom is enforced by validateTargetUnderMemoryDir at the Finalize call site, under the memory lock
     if err != nil { if os.IsNotExist(err) { data = nil } else { return err } }
     return memory.AtomicWrite(candidate, data)
 }
-func datasetsAllEmpty(paths []string) bool {
+func datasetsAllEmpty(paths []string) (bool, error) { // review #11: surface read/parse errors, don't mask as "non-empty"
     for _, p := range paths {
-        b, err := os.ReadFile(p); if err != nil { return false }
-        ds, err := ParseDataset(b); if err != nil { return false }
-        if len(ds.ProjectLevel) > 0 || len(ds.SessionLevel) > 0 { return false }
+        b, err := os.ReadFile(p); if err != nil { return false, err }
+        ds, err := ParseDataset(b); if err != nil { return false, err }
+        if len(ds.ProjectLevel) > 0 || len(ds.SessionLevel) > 0 { return false, nil }
     }
-    return true
+    return true, nil
 }
-func requireFreshFile(path string) error {
+func requireFreshFile(path string, maxBytes int64) error {
     info, err := os.Lstat(path)
     if err != nil { return fmt.Errorf("expected output %s: %w", filepath.Base(path), err) }
     if info.Mode()&os.ModeSymlink != 0 { return fmt.Errorf("%s is a symlink", filepath.Base(path)) }
     if !info.Mode().IsRegular() || info.Size() == 0 { return fmt.Errorf("%s is empty or not a regular file", filepath.Base(path)) }
-    if info.Size() > 8<<20 { return fmt.Errorf("%s exceeds size bound", filepath.Base(path)) }
+    if info.Size() > maxBytes { return fmt.Errorf("%s exceeds size bound %d", filepath.Base(path), maxBytes) }
     return nil
 }
 ```
@@ -936,52 +993,85 @@ Fixes review **#2** (lock ownership), **#6** (staged/durable promotion, recovery
 **Interfaces:**
 - Produces:
   ```go
-  // CaptureAll captures per-stage datasets into the attempt workspace (or reuses
-  // canonical). No shared memory lock needed — it writes only inside WorkDir/stages
-  // and reads canonical read-only. Returns dataset refs for eligible stages.
+  // CaptureStage is the single low-level capture primitive (review #3): it writes
+  // (or reuses) ONE stage's dataset at the caller-chosen DatasetOut. Offline passes
+  // a staging path; the live orchestrator passes the canonical path directly. This
+  // is the explicit "output mode" the first plan lacked.
+  func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir, datasetOut, logDir string, force bool) (DatasetResult, error)
+
+  // CaptureAll iterates CaptureStage over eligible stages, always writing generated
+  // datasets into <WorkDir>/stages/<id>/reflect_dataset.yaml (canonical untouched
+  // until promotion). No shared memory lock needed. Requires a non-empty ManifestPath.
   func (p *Pipeline) CaptureAll(ctx context.Context, req CaptureRequest) ([]DatasetResult, error)
   type CaptureRequest struct { RunDir, WorkDir string; Stages []flow.Stage; ForceReflect bool; ManifestPath string }
 
   // Finalize distills + computes diffs + (unless DryRun) publishes, ASSUMING the
   // caller already holds the memory lock for MemoryDir. Writes/updates ManifestPath
-  // per step. Never commits (caller commits under the same lock).
+  // per step. Never commits, never writes "completed" (caller does, after commit).
   func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, error)
+  type AtomicWriter func(path string, data []byte) error // seam over memory.AtomicWrite (review #8)
   type FinalizeRequest struct {
       Meta OperationMeta; RunDir, WorkDir, MemoryDir string
       Stages []flow.Stage; Memory flow.MemoryConfig; Datasets []DatasetResult
       DryRun bool; ManifestPath string
-      publishHook func(path string) error // test seam for failure injection (review #6); nil in prod
+      writer AtomicWriter // test seam; nil -> memory.AtomicWrite. Receives (path, bytes) so it can fully replace the write (review #8)
   }
   ```
+- **Live path uses `CaptureStage` directly (review #3):** the orchestrator (Task 10) calls `CaptureStage(ctx, stage, stageDir, canonical, stageDir, false)` where `canonical = <RunDir>/<stageID>/reflect_dataset.yaml`, so live capture writes the canonical dataset in place BEFORE end-of-run `Finalize` reads it — no staging/promotion for the live capture, matching today's behavior.
 
-- [ ] **Step 1: Failing tests for `CaptureAll`**
+- [ ] **Step 1: Failing tests for `CaptureStage` + `CaptureAll`**
 
-Reuse-valid (no reflect call), invalid→regenerate, `ForceReflect`→regenerate, script-only stage → `StepError` (review #9: `HasAgentSession()==false`). Reuse writes nothing; generated writes into `WorkDir/stages/<id>/reflect_dataset.yaml` (canonical untouched until publish).
+`CaptureStage`: reuse-valid (no reflect call, `DatasetPath==datasetOut` untouched when reuse points at canonical); invalid canonical → regenerate at `datasetOut`; `force` → regenerate; script-only / `!HasAgentSession()` → `StepError` (review #9); `datasetOut` written to the caller's chosen path (test both a staging path and a canonical path — proves live/offline share the primitive). `CaptureAll`: writes generated into `WorkDir/stages/<id>/reflect_dataset.yaml`; canonical untouched; result carries `SourceFiles`/`SourceHashes`/`DatasetSHA256`/`CanonicalPath`; manifest advanced to `capturing`.
 
-- [ ] **Step 2: Implement `CaptureAll`**
+- [ ] **Step 2: Implement `CaptureStage` then `CaptureAll`**
 
-For each stage with `Reflect != nil && CanWrite() && !IsScript()` (declaration order): canonical `= <RunDir>/<stageID>/reflect_dataset.yaml`. If `!ForceReflect` and canonical passes `ValidateDataset` → `DatasetResult{Source:"reused", DatasetPath: canonical}`. Else `SourceInventory(stageDir)`; if `!inv.HasAgentSession()` → `&StepError{StageID, Step:"reflect", Err: fmt.Errorf("no agent-session sources")}`; run reflect (`Sources: inv.All()`) → `WorkDir/stages/<id>/reflect_dataset.yaml`; `requireFreshFile` + `ValidateDataset`; `DatasetResult{Source:"generated", DatasetPath: generated, SourceFiles: inv.All()}`. Update manifest status `capturing`. Return the slice.
+`CaptureStage(ctx, stage, stageDir, datasetOut, logDir, force)`: `canonical = <stageDir>/reflect_dataset.yaml`; if `!force && datasetOut==canonical` and canonical passes `ValidateDataset` → `DatasetResult{Source:"reused", DatasetPath: canonical, CanonicalPath: canonical, DatasetSHA256: sha}`. Else `SourceInventory(stageDir)`; if `!inv.HasAgentSession()` → `&StepError{StageID: stage.ID, Step:"reflect", Err: fmt.Errorf("no agent-session sources in %s", stageDir)}`; `os.Remove(datasetOut)` then run reflect (`Sources: inv.All()`, `DatasetOut: datasetOut`, `LogFile: <logDir>/reflect.log`); `requireFreshFile(datasetOut, maxDatasetBytes)` (review #11 bound) + `ValidateDataset`; return `DatasetResult{Source:"generated", DatasetPath: datasetOut, CanonicalPath: canonical, SourceFiles: inv.All(), SourceHashes: sha256Each(inv.All()), DatasetSHA256: sha}`.
+
+`CaptureAll`: for each stage with `Reflect != nil && CanWrite() && !IsScript()` (declaration order), call `CaptureStage(ctx, stage, <RunDir>/<stageID>, <WorkDir>/stages/<stageID>/reflect_dataset.yaml, <WorkDir>/stages/<stageID>, req.ForceReflect)` — note the reuse branch still points `DatasetPath` at canonical when valid. Update manifest `capturing`. Return the slice.
 
 - [ ] **Step 3: Failing tests for `Finalize`**
 
 ```go
 func TestFinalize_DryRunLeavesTargetsUntouched(t *testing.T) { /* candidates built, diffs in Report, NO real target/dataset written, manifest dry_run */ }
-func TestFinalize_PublishOnlyChanged(t *testing.T) { /* per-stage file + memory.md written durably; canonical datasets published; unchanged (identical bytes) not rewritten; manifest completed with per-target Published */ }
+func TestFinalize_PublishOnlyChanged(t *testing.T) { /* per-stage file + memory.md written durably; canonical datasets published; unchanged (identical bytes) not rewritten; manifest ends "published" (no commit) with per-target Published */ }
 func TestFinalize_ProjectAggregateOnlyEligibleDatasets(t *testing.T) { /* a stray <run>/ghost/reflect_dataset.yaml excluded */ }
 func TestFinalize_SharedReflectFileChainsThroughCandidate(t *testing.T) { /* stage2 SeedFrom == stage1 candidate */ }
 func TestFinalize_CtxCancelledBeforePromotionNoWrite(t *testing.T) { /* cancel after distill, before publish -> ctx err, nothing published, manifest cancelled */ }
-func TestFinalize_SecondRenameFailsLeavesPromoting(t *testing.T) { /* publishHook fails on the 2nd target; first target Published, manifest stays promoting, error returned */ }
+func TestFinalize_SecondWriteFailsLeavesPromoting(t *testing.T) { /* req.writer fails on the 2nd target; first target Published, manifest stays promoting, error returned */ }
+func TestFinalize_SymlinkedTargetParentRejected(t *testing.T) { /* validateTargetUnderMemoryDir rejects a symlinked parent before any write */ }
 ```
 
 - [ ] **Step 4: Implement `Finalize`**
 
+0. **Containment pre-check under lock (review #5):** for every final target (each `memory.StageFile(MemoryDir, file)` and `memory.ProjectFile(MemoryDir)`), call `validateTargetUnderMemoryDir(MemoryDir, final)` (below) BEFORE seeding — the memory lock only serializes AFM writers, not an external process that may have swapped a parent to a symlink after Task 3's lexical check. `SeedFrom` for the first stage in a group is the (validated) final target.
 1. Manifest → `distilling`.
 2. **Per-stage distill** (group eligible write-reflect stages by resolved `reflect.file`, declaration order): first stage in a group `SeedFrom = memory.StageFile(MemoryDir, file)`, each subsequent `SeedFrom = prior.CandidatePath`. Collect pending `TargetResult{Label, FinalPath: memory.StageFile(MemoryDir,file), CandidatePath, NoHigh}`.
 3. **Project distill** (only if `Memory.CanWriteProject()` and ≥1 non-empty eligible dataset — filter empties, review #11): `DistillTarget{Name:"flow-memory", Datasets: eligible, StagingDir: <WorkDir>/flow, SeedFrom: memory.ProjectFile(MemoryDir)}` → pending `TargetResult{FinalPath: ProjectFile, ...}`.
-4. **Compute change/diff**: for each pending target, read candidate + current final (missing = changed); `OldSHA256`/`NewSHA256`; `Changed`; `Diff = udiff.Unified("old","new",old,cand)` when changed.
-5. **`ctx.Err()` check** (review #15) — return `ctx.Err()` + manifest `cancelled` if cancelled here.
-6. If `DryRun`: manifest `dry_run`; return Report (no writes).
-7. **Promotion** (review #6): manifest `promoting` with the pending-target list + backup old bytes into `<WorkDir>/backup/<sha>.bak`; for each changed target: `publish := publishHook or memory.AtomicWrite`; `publish(final, candidate)`; mark `Published=true`; write manifest after each. Publish generated canonical datasets the same way. On a mid-promotion error: leave manifest `promoting` with accurate `Published` flags, return the error (no rollback). After all: manifest `completed`.
+4. **Compute change/diff**: for each pending target, read candidate + current final (missing = changed); `OldSHA256`/`NewSHA256`; `Changed`; `Diff = udiff.Unified("old","new",old,cand)` when changed. Also mark which generated `DatasetResult`s are `Changed` (candidate vs canonical bytes) for dataset promotion bookkeeping.
+5. **`ctx.Err()` check** (review #15) — return `ctx.Err()` + manifest `cancelled` if cancelled here. This is the last interruption point; once promotion starts it runs to a consistent state.
+6. If `DryRun`: manifest `dry_run`; return Report (no writes, no dataset publish).
+7. **Promotion** (review #6/#8): manifest `promoting` listing pending memory targets AND generated datasets. `w := req.writer; if w == nil { w = memory.AtomicWrite }`. For each changed target: re-run `validateTargetUnderMemoryDir` (a final guard immediately before write), back up old bytes into `<WorkDir>/backup/<sha>.bak`, `w(final, candidateBytes)`, set `TargetResult.Published=true`, `WriteManifest` after each. Publish generated canonical datasets the same way (`w(CanonicalPath, datasetBytes)`, set `DatasetResult.Published=true`, per-file manifest update). On a mid-promotion error: leave manifest `promoting` with accurate `Published` flags, return the error (no rollback). After all files done: set manifest `awaiting_commit` (commit pending) or `published` (no commit requested) — **NOT `completed`; the CLI writes the final status after the commit decision (review #2).**
+
+Helper (put in `operation.go` or a `paths.go` in the package):
+```go
+// validateTargetUnderMemoryDir rejects a final target whose real location escapes
+// memoryDir or whose deepest-existing path component is a symlink (review #5).
+func validateTargetUnderMemoryDir(memoryDir, target string) error {
+    md, err := filepath.EvalSymlinks(memoryDir) // memoryDir must exist by publish time; seed created it
+    if err != nil { return fmt.Errorf("resolve memory dir: %w", err) }
+    // reject a symlinked final file itself
+    if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+        return fmt.Errorf("target %s is a symlink", target)
+    }
+    parent := canonicalizeExistingAncestor(filepath.Dir(target)) // reuse the Task 9 helper
+    rel, err := filepath.Rel(md, parent)
+    if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+        return fmt.Errorf("target %s escapes memory dir %s", target, md)
+    }
+    return nil
+}
+```
+Add tests: symlinked parent dir; symlinked final file; a parent swapped to a symlink between the step-0 check and promotion (the step-7 re-check catches it).
 8. Return `Report{Targets, Datasets, WorkDir}`.
 
 Do NOT interrupt an in-progress promotion on ctx cancel (review #15: once promotion starts, drive the short rename loop to a consistent state); the ctx check is strictly BEFORE step 7.
@@ -1076,17 +1166,41 @@ git commit -m "feat(memory-rebuild): общий memory-lock (busy-aware, кан�
 Fixes review **#13** (eligible-only project datasets, unique live staging, NoHigh/invalid/ghost integration tests, after-hook ordering).
 
 **Files:**
-- Modify: `pkg/orchestrator/reflection.go`, `orchestrator.go`, `reflection_test.go`, `memory_integration_test.go`
+- Modify: `pkg/orchestrator/reflection.go`, `orchestrator.go`, `hooks.go`, `reflection_test.go`, `memory_integration_test.go`, `integration_hooks_test.go`
 
-- [ ] **Step 1: Baseline** — `go test ./pkg/orchestrator -run 'Memory|Reflect' -v` → PASS (green before rewire).
+- [ ] **Step 1: Baseline** — `go test ./pkg/orchestrator -run 'Memory|Reflect|Hook' -v` → PASS (green before rewire).
 
-- [ ] **Step 2: `maybeRunReflection` → `Pipeline.CaptureAll` (single stage)**
+- [ ] **Step 2: `maybeRunReflection` → `Pipeline.CaptureStage` (single stage)**
 
-Keep the `SpawnDetached`/`pendingReflections`/guards envelope. Capture ONE stage into its canonical `reflect_dataset.yaml` (live path keeps canonical-in-run-dir behavior). Reuse valid canonical (force=false). Error → `reflectFailed`.
+Keep the `SpawnDetached`/`pendingReflections`/guards envelope. Inside, call `o.mem.CaptureStage(ctx, stage, stageDir, canonical, stageDir, false)` where `canonical = memory.StageFile(o.opts.RunDir, filepath.Join(stage.ID, "reflect_dataset.yaml"))` — the live path writes the canonical dataset in place (review #3: `CaptureAll` always stages, so the live single-stage path uses the primitive directly). Error → `reflectFailed`.
 
-- [ ] **Step 3: After-hook/reflection ordering (review #9/#13)**
+- [ ] **Step 3: After-hook/reflection ordering — concrete callback in `hooks.go` (review #6)**
 
-Decision: `after.log` IS a supplemental source, so per-stage reflection must run AFTER `maybeRunAfterHook`. In `completeStage`, ensure `maybeRunReflection` is scheduled after the after-hook completes (not concurrently). Add a test asserting the reflect inventory for a stage with an after-hook includes `after.log`.
+`maybeRunAfterHook` currently spawns a tracked goroutine and returns nothing; a stage without `ScriptAfter` spawns nothing. Reordering the two calls in `completeStage` is therefore NOT enough — `after.log` may not exist when reflection captures. Add a continuation-carrying variant in `hooks.go`:
+
+```go
+// maybeRunAfterHookThen runs script_after (if any) and then invokes cont —
+// inside the SAME tracked goroutine, AFTER runAfterHook returns — so a
+// consumer (reflection) sees after.log. With no ScriptAfter, cont runs inline
+// (unchanged fast path). cont must be cheap/non-blocking (it only spawns a
+// detached reflection agent).
+func (o *Orchestrator) maybeRunAfterHookThen(ctx context.Context, stageID string, cont func(context.Context)) {
+    stage := o.graph.Stage(stageID)
+    if stage == nil || stage.ScriptAfter == "" { cont(ctx); return } // no hook: unchanged behavior
+    o.pendingAfterHooks.Add(1)
+    o.concurrency.SpawnAgent(ctx, *stage, func(ctx context.Context, s flow.Stage) {
+        defer func() { o.pendingAfterHooks.Add(-1); o.concurrency.WakeEventLoop() }()
+        o.runAfterHook(ctx, s)
+        if ctx.Err() == nil { cont(ctx) } // skip reflection on shutdown; retry/skip decisions already resolved in runAfterHook
+    })
+}
+```
+In `completeStage`, replace the two separate calls:
+```go
+o.maybeRunAfterHookThen(ctx, stageID, func(c context.Context) { o.maybeRunReflection(c, stageID) })
+o.failBlockedStages(); o.startPlanningForUnblocked(ctx); o.startReadyStages(ctx); o.tryActivatePrePlanned(ctx)
+```
+The unblock cascade still runs immediately (only reflection is deferred behind the hook). Keep the original `maybeRunAfterHook` if other callers use it (`approveStage`, `control_api.go:135`) — those do NOT chain reflection, so leave them on `maybeRunAfterHook`. Tests: a stage WITH an after-hook → reflect inventory includes `after.log`; a stage WITHOUT → reflection still runs (inline); shutdown during the hook → no reflection spawned; `pendingAfterHooks` bookkeeping unchanged.
 
 - [ ] **Step 4: `runEndOfRunMemory` → `Finalize` under the memory lock**
 
@@ -1153,10 +1267,17 @@ rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
     defer runLock.Close()
 
     rs, err := state.LoadRunState(runDir); if err != nil { return err }
-    if err := checkStageSetMatchesExact(rs, stageIDs); err != nil { return err } // AllDone already implied by resolver, but re-check for explicit --run
+    // review #1: explicit --run is NOT filtered by the completed-run resolver, so
+    // check completeness AND the exact stage set independently — they are orthogonal.
+    if !rs.AllDone() { return fmt.Errorf("run %s is not completed (some stages are not done)", filepath.Base(runDir)) }
+    if err := checkStageSetMatchesExact(rs, stageIDs); err != nil { return err }
 
     agentRoot, err := resolveAgentRoot(rootDir, f); if err != nil { return err }
     memDir, err := resolveMemoryDir(rootDir, agentRoot, f); if err != nil { return err }
+
+    // review #7: fail-fast commit preflight BEFORE the expensive capture, when commit is on.
+    commit := effectiveCommit(o, f)
+    if commit { if err := commitPreflight(memDir); err != nil { return err } }
 
     if warns := memorypipeline.ScanUnfinishedPromotions(runDir); len(warns) > 0 {
         fmt.Printf("warning: previous rebuild left an unfinished promotion in %v; re-running rebuilds cleanly\n", warns)
@@ -1169,7 +1290,7 @@ rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
         RootDir: agentRoot, IdleTimeout: cfg.Executor.IdleTimeout, Debug: debugEnabled,
     }
 
-    work, err := memorypipeline.NewAttemptDir(filepath.Join(runDir, "memory-rebuild"), newAttemptID())
+    work, err := memorypipeline.NewUniqueAttemptDir(filepath.Join(runDir, "memory-rebuild"), newAttemptID) // review #9
     if err != nil { return err }
     agentCfg.RunDir = work // review #4: debug.log stays inside the attempt workspace
     pipe := newRebuildPipeline(
@@ -1178,33 +1299,39 @@ rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 
     fmt.Printf("using current flow definition and current prompts for historical run %s\n", filepath.Base(runDir))
     manifestPath := filepath.Join(work, "manifest.json")
-    meta := buildOperationMeta(cfg, f, flowPath, runDir, agentRoot, memDir, prompts, effectiveCommit(o, f))
+    meta := buildOperationMeta(cfg, f, flowPath, runDir, agentRoot, memDir, prompts, commit) // review #5: computes FlowSHA256, PromptSHA256, PromptsDir
+
+    // review #2: CLI creates the manifest (status "running", full meta) and a central
+    // defer flips any still-non-terminal manifest to failed/cancelled on early return.
+    if err := memorypipeline.WriteManifest(manifestPath, memorypipeline.NewRunningManifest(meta)); err != nil { return err }
+    var finalErr error
+    defer memorypipeline.FinalizeManifestOnExit(manifestPath, &finalErr, ctx) // "running/capturing/distilling/promoting" -> failed; ctx cancelled -> cancelled
 
     // Phase 1: capture (no memory lock)
     datasets, err := pipe.CaptureAll(ctx, memorypipeline.CaptureRequest{
         RunDir: runDir, WorkDir: work, Stages: f.Stages, ForceReflect: o.ForceReflect, ManifestPath: manifestPath})
-    if err != nil { return fmt.Errorf("capture failed (see %s): %w", work, err) }
+    if err != nil { finalErr = err; return fmt.Errorf("capture failed (see %s): %w", work, err) }
 
     // Phase 2: memory lock -> re-preflight commit -> finalize -> commit (all under lock)
-    memLock, err := memorypipeline.AcquireMemoryLock(ctx, memDir); if err != nil { return err }
+    memLock, err := memorypipeline.AcquireMemoryLock(ctx, memDir); if err != nil { finalErr = err; return err }
     defer memLock.Close()
-    commit := effectiveCommit(o, f)
-    if commit { if err := commitPreflight(memDir); err != nil { return err } } // re-check under lock (Task 12)
+    if commit { if err := commitPreflight(memDir); err != nil { finalErr = err; return err } } // re-check UNDER lock (review #7)
 
     report, err := pipe.Finalize(ctx, memorypipeline.FinalizeRequest{
         Meta: meta, RunDir: runDir, WorkDir: work, MemoryDir: memDir, Stages: f.Stages, Memory: f.Memory,
         Datasets: datasets, DryRun: o.DryRun, ManifestPath: manifestPath})
-    if err != nil { return fmt.Errorf("rebuild failed (see %s): %w", work, err) }
+    if err != nil { finalErr = err; return fmt.Errorf("rebuild failed (see %s): %w", work, err) }
     printReport(report, o.DryRun)
 
-    if !o.DryRun && commit {
-        if err := maybeCommit(memDir, report, manifestPath); err != nil { return err } // Task 12; still under memLock
+    if o.DryRun { return nil } // manifest already "dry_run" from Finalize; defer sees terminal, no-op
+    if commit {
+        if err := maybeCommit(memDir, report, manifestPath); err != nil { finalErr = err; return err } // patches manifest CommitError + failed
     }
-    return nil
+    return memorypipeline.MarkManifestCompleted(manifestPath) // review #2: CLI writes the FINAL "completed"
 }
 ```
 
-Implement helpers: `hasWritableTarget`, `stageIDsOf`, `checkStageSetMatchesExact` (sorted missing/extra), `buildOperationMeta` (computes `FlowSHA256` from the flow bytes and `PromptSHA256` from the four templates — hashing lives in the CLI, feeding `OperationMeta`; review #5), `newAttemptID` (`<YYYYMMDD-HHMMSS>-<2 hex>`), `printReport` (counts + `report.Targets[].Diff` for dry-run/changed; **never echoes agent stdout/prompts/dialog** — review §9). `signal.NotifyContext` cancels before any promotion; `Finalize` checks `ctx.Err()` before publish (Task 8).
+Implement helpers: `hasWritableTarget`, `stageIDsOf`, `checkStageSetMatchesExact` (sorted missing/extra), `buildOperationMeta` (computes `FlowSHA256` from the flow bytes, `PromptSHA256` from the four templates, and `PromptsDir = cfg.PromptsDir` — hashing/provenance lives in the CLI, feeding `OperationMeta`; review #2/#5), `newAttemptID` (`func() string` → `<YYYYMMDD-HHMMSS>-<2 hex>`; the timestamp/rand come from the CLI, not the pipeline), `printReport` (counts + `report.Targets[].Diff` for dry-run/changed; **never echoes agent stdout/prompts/dialog** — review §9). Manifest helpers `NewRunningManifest`/`FinalizeManifestOnExit`/`MarkManifestCompleted` live in `pkg/memorypipeline/manifest.go` (add to Task 6's file set). `signal.NotifyContext` cancels before any promotion; `Finalize` checks `ctx.Err()` before publish (Task 8).
 
 - [ ] **Step 3: Run tests + the no-FSM-mutation assertion** — `go test ./cmd/afm -run TestRebuild -v` → PASS. Add the byte-for-byte `events.jsonl`/`state.json`/notices assertion.
 
@@ -1241,7 +1368,8 @@ func CommitPaths(dir, message string, paths []string) (bool, string, error) {
     var ee *exec.ExitError
     if !errors.As(err, &ee) || ee.ExitCode() != 1 { return false, "", fmt.Errorf("git diff: %w", err) } // 128/other -> real error
     if out, err := run("git", "-C", dir, "commit", "-m", message, "--", paths...); err != nil { return false, "", fmt.Errorf("git commit: %v: %s", err, out) }
-    sha, _ := run("git", "-C", dir, "rev-parse", "HEAD")
+    sha, err := run("git", "-C", dir, "rev-parse", "HEAD")
+    if err != nil { return true, "", fmt.Errorf("commit created but rev-parse failed: %w", err) } // review #12: strict CLI surfaces it
     return true, strings.TrimSpace(sha), nil
 }
 ```
@@ -1294,9 +1422,10 @@ git commit -m "feat(memory-rebuild): общие root/memory-хелперы, abso
 
 ## Task 14: Documentation + final verification
 
-**Files:** `README.md`, `AGENTS.md`
+**Files:** `README.md`, `AGENTS.md`, `docs/superpowers/specs/2026-09-09-memory-rebuild-design.md`
 
-- [ ] **Step 1: README** — `afm memory rebuild` section: flag examples/table, effective-commit rule, dry-run/audit-workspace, the two locks (run + shared memory) + no-FSM-mutation guarantee, dataset reuse/`--force-reflect`, "current YAML + current prompts analyze historical logs", exact-stage-set + completed-only rules, and the **breaking path-safety validation** (`afm run` now rejects unsafe stage ids / `reflect.file` / `reflect.file: memory.md`).
+- [ ] **Step 0: Reconcile the design spec with the implemented selection semantics (review #10)** — the spec §5 describes "pick the latest completed run, then hard-error on stage-set mismatch." The implemented resolver instead **skips** a newer completed run whose stage set differs and selects the newest run whose set matches exactly. Update spec §5 to state this, and note the consequence: **the command may silently analyze a substantially older run** if the newest completed run has a different topology. (This trades "select-then-mismatch-error" for "select-the-matching-one", chosen so a topology change doesn't block backfill.)
+- [ ] **Step 1: README** — `afm memory rebuild` section: flag examples/table, effective-commit rule, dry-run/audit-workspace, the two locks (run + shared memory) + no-FSM-mutation guarantee, dataset reuse/`--force-reflect`, "current YAML + current prompts analyze historical logs", exact-stage-set + completed-only rules (**including the "may pick an older matching run" note from Step 0**), and the **breaking path-safety validation** (`afm run` now rejects unsafe stage ids / `reflect.file` / `reflect.file: memory.md`).
 - [ ] **Step 2: AGENTS.md** — subsection describing `pkg/memorypipeline` (two-phase Capture/Finalize engine shared by live + offline), the attempt-workspace/manifest/staged-promotion model, the shared memory lock (all writers, `~/.afm/locks/memory-<sha256>.lock`, run→memory order, ancestor-symlink canonicalization), CLI-owned lock window (capture → lock → re-preflight → finalize → commit), and strict-vs-best-effort asymmetry.
 - [ ] **Step 3: Final verification (spec §16)**
 ```bash
@@ -1326,5 +1455,5 @@ Per spec §15: (1) small flow without memory; (2) add `memory.path`+`memory.mode
 - **Review findings → tasks:** #1→T1; #2→T8/T11; #3→T7; #4→T4/T11; #5→T6/T11/T12; #6→T6/T8/T11; #7→T1/T3; #8→T2/T9; #9→T5/T10; #10→T5/T6/T7/T12; #11→T7; #12→T1/T4/T11; #13→T10; #14→T9/T12/T13; #15→T8/T11; minor 1→T6; minor 2→T12; minor 3→T6/T7; minor 4→T6; minor 5→Global Constraints note; minor 6→whole re-ordering.
 - **Spec coverage:** §2→T1/T11; §4→T4; §5→T1/T2; §6→T5; §7→T5/T8; §8→T6/T8; §9→T8/T11; §10→T9/T10/T11; §11→T12; §12→T13; §13→T3; §14 deferred (unbuilt). All mapped.
 - **Placeholder scan:** no "TBD"/"handle errors"/"similar to"; concrete code on every changed/tricky piece; `<module>` is the deliberate module-path token.
-- **Type consistency:** `AgentSpec`/`AgentRunner`/`Prompts`/`AgentConfig`/`Pipeline`/`Inventory`/`Dataset`/`DistillTarget`/`StepArtifacts`/`OperationMeta`/`StepError`/`DatasetResult`/`TargetResult`/`Report`/`Manifest`/`CaptureRequest`/`FinalizeRequest` are defined once (T4/T5/T6/T7/T8) and used consistently; `FindLatestCompletedRunDir(base,flowName,wantStages)`, `TryLockRun`, `progress.ErrLockBusy`, `AcquireMemoryLock`, `SourceInventory→Inventory`, `ValidateDataset`, `ValidateRules`, `DistillTarget`, `CaptureAll`, `Finalize`, `CommitPaths(...)(bool,string,error)`, `executor.WrapperDirFor` match all call sites.
+- **Type consistency:** `AgentSpec`/`AgentRunner`/`Prompts`/`AgentConfig`/`Pipeline`/`Inventory`/`Dataset`/`DistillTarget`/`StepArtifacts`/`OperationMeta`/`StepError`/`DatasetResult`/`TargetResult`/`Report`/`Manifest`/`CaptureRequest`/`FinalizeRequest`/`AtomicWriter` are defined once (T4/T5/T6/T7/T8) and used consistently; `FindLatestCompletedRunDir(base,flowName,wantStages)`, `TryLockRun`, `progress.ErrLockBusy`, `AcquireMemoryLock`, `canonicalizeExistingAncestor` (shared by lock path + `validateTargetUnderMemoryDir`), `SourceInventory→Inventory`, `ValidateDataset`, `ValidateRules`, `requireFreshFile(path,maxBytes)`, `datasetsAllEmpty(...)(bool,error)`, `DistillTarget`, `CaptureStage`/`CaptureAll`, `Finalize`, `NewUniqueAttemptDir(base,gen func()string)`, `NewRunningManifest`/`FinalizeManifestOnExit`/`MarkManifestCompleted`, `CommitPaths(...)(bool,string,error)`, `executor.WrapperDirFor` match all call sites. `maxDatasetBytes = 10 MiB` (dataset) and `maxRulesBytes = 1 MiB` (Markdown) are distinct, deliberate bounds.
 ```
