@@ -14,6 +14,15 @@ import (
 // code in the test can't drift from the one the handler actually writes.
 const codeNoNotes = "no_notes"
 
+// Repeated review-pause error codes and flow-state strings, hoisted to
+// constants (goconst: min-occurrences 2 counts test-file uses too).
+const (
+	codeFlowNotPaused = "flow_not_paused"
+	codeRevConflict   = "rev_conflict"
+	reviewStateNone   = "none"
+	reviewStatePaused = "paused"
+)
+
 // pathFlowNotes is the exact (no trailing id) notes-collection path — used
 // by both the GET/POST cases in routeFlowNotes below.
 const pathFlowNotes = "/api/flow/notes"
@@ -42,7 +51,7 @@ func flowErrCode(err error) (int, string) {
 	case errors.Is(err, orchestrator.ErrRunFinalizing):
 		return http.StatusConflict, "run_finalizing"
 	case errors.Is(err, orchestrator.ErrNoReviewPause):
-		return http.StatusConflict, "flow_not_paused"
+		return http.StatusConflict, codeFlowNotPaused
 	case errors.Is(err, orchestrator.ErrResumeInProgress):
 		return http.StatusConflict, "resume_in_progress"
 	case errors.Is(err, orchestrator.ErrNoNotes):
@@ -52,7 +61,7 @@ func flowErrCode(err error) (int, string) {
 	case errors.Is(err, orchestrator.ErrTargetNotPaused):
 		return http.StatusBadRequest, "target_not_paused"
 	case errors.Is(err, orchestrator.ErrRevConflict):
-		return http.StatusConflict, "rev_conflict"
+		return http.StatusConflict, codeRevConflict
 	case errors.Is(err, orchestrator.ErrStaleContent):
 		return http.StatusConflict, "stale_content"
 	case errors.Is(err, orchestrator.ErrStaleLine):
@@ -75,7 +84,7 @@ func flowErrCode(err error) (int, string) {
 // wired (see server.go's Config.ReviewState).
 func (s *Server) currentReviewState() string {
 	if s.reviewState == nil {
-		return "none"
+		return reviewStateNone
 	}
 	st, _ := s.reviewState()
 	return st
@@ -157,8 +166,8 @@ func (s *Server) handleNotesAdd(w http.ResponseWriter, r *http.Request) {
 		writeFlowError(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	if s.currentReviewState() != "paused" {
-		writeFlowError(w, http.StatusConflict, "flow_not_paused")
+	if s.currentReviewState() != reviewStatePaused {
+		writeFlowError(w, http.StatusConflict, codeFlowNotPaused)
 		return
 	}
 	note, rev, err := s.flowActions.AddNote(req.Root, req.Path, req.Line, req.Text, req.ContentSHA, req.ExpectedRev)
@@ -186,8 +195,8 @@ func (s *Server) handleNotesUpdate(w http.ResponseWriter, r *http.Request) {
 		writeFlowError(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	if s.currentReviewState() != "paused" {
-		writeFlowError(w, http.StatusConflict, "flow_not_paused")
+	if s.currentReviewState() != reviewStatePaused {
+		writeFlowError(w, http.StatusConflict, codeFlowNotPaused)
 		return
 	}
 	rev, err := s.flowActions.UpdateNote(id, req.Text, req.ExpectedRev)
@@ -213,8 +222,8 @@ func (s *Server) handleNotesDelete(w http.ResponseWriter, r *http.Request) {
 		writeFlowError(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	if s.currentReviewState() != "paused" {
-		writeFlowError(w, http.StatusConflict, "flow_not_paused")
+	if s.currentReviewState() != reviewStatePaused {
+		writeFlowError(w, http.StatusConflict, codeFlowNotPaused)
 		return
 	}
 	rev, err := s.flowActions.DeleteNote(id, expectedRev)

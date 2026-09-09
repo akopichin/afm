@@ -88,7 +88,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.FlowPauseState = st
 		resp.FlowPausedStages = owners
 	} else {
-		resp.FlowPauseState = "none"
+		resp.FlowPauseState = reviewStateNone
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -379,7 +379,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "paused", keyStageID: stageID})
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: reviewStatePaused, keyStageID: stageID})
 }
 
 func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
@@ -608,7 +608,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 	// as unanswered, no resume event is published, and a non-owned
 	// awaiting_user_input stage hangs forever. Reject up front with a
 	// machine-readable 409 instead.
-	if s.currentReviewState() != "none" {
+	if s.currentReviewState() != reviewStateNone {
 		writeFlowError(w, http.StatusConflict, "flow_paused")
 		return
 	}

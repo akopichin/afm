@@ -378,7 +378,7 @@ func newRunCmd() *cobra.Command {
 
 			// Удерживаем дашборд после завершения флоу — см. waitForDashboardDrain.
 			if dashboardStarted {
-				fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMin)
+				fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMinimum)
 				waitForDashboardDrain(ctx, srv.ConnectedClients)
 			}
 
@@ -439,32 +439,32 @@ func launchHostBrowserOpener(port int) {
 const extYAML = ".yaml"
 const extYML = ".yml"
 
-// dashboardExitGraceMin — безусловная пауза перед завершением процесса после
+// dashboardExitGraceMinimum — безусловная пауза перед завершением процесса после
 // успеха флоу, если поднят дашборд. Фронтенд опрашивает /api/status каждые 3с
 // (POLL_INTERVAL_MS в use-status.ts) и обновляется по WS; 5с хватает, чтобы UI
 // гарантированно увидел терминальный статус (done/failed), пока вкладка
 // браузера активна.
-const dashboardExitGraceMin = 5 * time.Second
+const dashboardExitGraceMinimum = 5 * time.Second
 
-// dashboardExitGraceMax — верхняя граница суммарного ожидания, пока к
+// dashboardExitGraceMaximum — верхняя граница суммарного ожидания, пока к
 // дашборду подключён хотя бы один WS-клиент. Свёрнутая/неактивная вкладка
 // браузера троттлится браузером сильнее для setInterval-поллинга /api/status,
-// чем для уже открытого WS-соединения — dashboardExitGraceMin один в этом
+// чем для уже открытого WS-соединения — dashboardExitGraceMinimum один в этом
 // случае недостаточен, UI «залипает» на последнем статусе (см. use-status.ts).
 // Ограничена сверху, чтобы процесс (и, в Docker-режиме, контейнер) не завис
 // навсегда из-за незакрытой вкладки.
-const dashboardExitGraceMax = 2 * time.Minute
+const dashboardExitGraceMaximum = 2 * time.Minute
 
 // dashboardDrainPoll — как часто проверять число подключённых WS-клиентов
-// в течение dashboardExitGraceMax.
+// в течение dashboardExitGraceMaximum.
 const dashboardDrainPoll = 2 * time.Second
 
 // waitForDashboardDrain держит дашборд открытым после успешного завершения
-// флоу: сначала dashboardExitGraceMin безусловно, затем — пока
-// connectedClients() > 0, но не дольше dashboardExitGraceMax суммарно.
+// флоу: сначала dashboardExitGraceMinimum безусловно, затем — пока
+// connectedClients() > 0, но не дольше dashboardExitGraceMaximum суммарно.
 // Ctrl-C (ctx.Done()) прерывает ожидание немедленно.
 func waitForDashboardDrain(ctx context.Context, connectedClients func() int) {
-	waitForDashboardDrainWithTiming(ctx, connectedClients, dashboardExitGraceMin, dashboardExitGraceMax, dashboardDrainPoll)
+	waitForDashboardDrainWithTiming(ctx, connectedClients, dashboardExitGraceMinimum, dashboardExitGraceMaximum, dashboardDrainPoll)
 }
 
 // waitForDashboardDrainWithTiming — тело waitForDashboardDrain с
