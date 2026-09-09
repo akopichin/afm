@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/config"
@@ -28,21 +30,35 @@ func newTestOrchestrator(t *testing.T) *Orchestrator {
 	return New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
 }
 
-// Verifies the seam field exists and is defaulted (non-nil) by New via the
-// package's existing test constructor. If your package has a newTestOrch
-// helper, reuse it; otherwise construct Options minimally.
+// TestRunMemoryAgent_SeamDefaulted verifies the o.mem *memorypipeline.Pipeline
+// seam exists and is defaulted (non-nil) by New, and that a test can override
+// its agent runner via memorypipeline.WithRunner (the injection point tests
+// use instead of the removed o.memRunner field — see stubMemoryPipeline in
+// reflection_test.go).
 func TestRunMemoryAgent_SeamDefaulted(t *testing.T) {
 	o := newTestOrchestrator(t) // existing test helper in this package
-	if o.memRunner == nil {
-		t.Fatal("memRunner must be defaulted by New")
+	if o.mem == nil {
+		t.Fatal("mem pipeline must be defaulted by New")
 	}
-	// Override with a stub and confirm it is invoked (no real process).
+
+	// Override with a stub runner and confirm it is invoked (no real process)
+	// via an actual Pipeline call — CaptureStage on a fresh dataset always
+	// calls the reflect step of the injected runner.
 	called := false
-	o.memRunner = func(ctx context.Context, spec memorypipeline.AgentSpec) error {
-		called = true
-		return nil
+	o.mem = memorypipeline.New(memorypipeline.Prompts{}, memorypipeline.AgentConfig{},
+		memorypipeline.WithRunner(func(_ context.Context, spec memorypipeline.AgentSpec) error {
+			called = true
+			return os.WriteFile(spec.DatasetOut, []byte("project_level: []\nsession_level: []\n"), 0o644)
+		}))
+
+	stageDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("a plan\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	_ = o.memRunner(context.Background(), memorypipeline.AgentSpec{Kind: "reflect"})
+	dataset := filepath.Join(stageDir, "reflect_dataset.yaml")
+	if _, err := o.mem.CaptureStage(context.Background(), flow.Stage{ID: "s1", Name: "Stage"}, stageDir, dataset, stageDir, false); err != nil {
+		t.Fatalf("CaptureStage: %v", err)
+	}
 	if !called {
 		t.Fatal("stub not invoked")
 	}

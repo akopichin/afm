@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
@@ -610,5 +613,127 @@ func TestWriteHookPending_AtomicRoundTrip(t *testing.T) {
 	got2, _ := readHookPending(dir)
 	if got2.Hook != hookBefore || got2.Script != "echo bye" {
 		t.Errorf("overwrite not applied atomically: %+v", got2)
+	}
+}
+
+// --- maybeRunAfterHookThen (Task 10: after-hook -> reflection ordering) ---
+
+// newFullHookOrch builds a real *Orchestrator via New() (unlike
+// setupHookOrch above, which hand-builds a bare struct with o.concurrency
+// left nil) — maybeRunAfterHookThen needs a working concurrency.Manager to
+// spawn its tracked goroutine.
+func newFullHookOrch(t *testing.T, stage flow.Stage) (*Orchestrator, string) {
+	t.Helper()
+	runDir := t.TempDir()
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	o := New(Options{RunDir: runDir, RootDir: t.TempDir(), Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	return o, runDir
+}
+
+// TestMaybeRunAfterHookThen_NoScriptAfter_RunsContInline is the unchanged
+// fast path: a stage with no ScriptAfter never spawns a goroutine at all —
+// cont runs synchronously, right where maybeRunAfterHookThen was called.
+func TestMaybeRunAfterHookThen_NoScriptAfter_RunsContInline(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "S1"} // no ScriptAfter
+	o, _ := newFullHookOrch(t, stage)
+
+	called := false
+	o.maybeRunAfterHookThen(context.Background(), stage.ID, func(context.Context) { called = true })
+	if !called {
+		t.Fatal("cont must run inline when the stage has no ScriptAfter")
+	}
+	if n := o.pendingAfterHooks.Load(); n != 0 {
+		t.Errorf("pendingAfterHooks = %d, want 0 (no hook ever spawned)", n)
+	}
+}
+
+// TestMaybeRunAfterHookThen_ReflectionSeesAfterHookLog reproduces the Task
+// 10 brief's core ordering requirement: cont (here, maybeRunReflection) must
+// only run AFTER script_after has actually produced after.log on disk — not
+// merely after the two calls are sequenced in completeStage. It drives the
+// real CaptureStage primitive (via a stubbed memorypipeline runner) and
+// inspects the actual Sources list SourceInventory built, proving after.log
+// was already on disk by the time reflection captured the stage's session.
+func TestMaybeRunAfterHookThen_ReflectionSeesAfterHookLog(t *testing.T) {
+	stage := flow.Stage{
+		ID:          "s1",
+		Name:        "Stage",
+		ScriptAfter: "echo hook-ran",
+		Reflect:     &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW},
+	}
+	o, runDir := newFullHookOrch(t, stage)
+	o.opts.MemoryDir = t.TempDir()
+	o.opts.Memory = flow.MemoryConfig{MaxRules: 25, Mode: flow.ReflectModeRW}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// A real agent-session artifact so CaptureStage's HasAgentSession() is
+	// true and it actually calls the reflect step instead of StepError-ing.
+	if err := os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var sourcesAtCapture []string
+	o.mem = memorypipeline.New(memorypipeline.Prompts{}, memorypipeline.AgentConfig{}, memorypipeline.WithRunner(
+		func(_ context.Context, spec memorypipeline.AgentSpec) error {
+			if spec.Kind == memorypipeline.KindReflect {
+				sourcesAtCapture = append([]string{}, spec.Sources...)
+				return os.WriteFile(spec.DatasetOut, []byte("project_level: []\nsession_level: []\n"), 0644)
+			}
+			return nil
+		}))
+
+	var contCalled atomic.Bool
+	o.maybeRunAfterHookThen(context.Background(), stage.ID, func(c context.Context) {
+		contCalled.Store(true)
+		o.maybeRunReflection(c, stage.ID)
+	})
+	o.concurrency.WaitAgents()
+
+	if !contCalled.Load() {
+		t.Fatal("cont was never called")
+	}
+	if n := o.pendingAfterHooks.Load(); n != 0 {
+		t.Errorf("pendingAfterHooks = %d, want 0 after the hook goroutine finished", n)
+	}
+	found := false
+	for _, s := range sourcesAtCapture {
+		if strings.HasSuffix(s, "after.log") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("reflect capture ran without seeing after.log on disk; sources=%v", sourcesAtCapture)
+	}
+}
+
+// TestMaybeRunAfterHookThen_ShutdownDuringHook_SkipsCont reproduces the
+// brief's shutdown case: if ctx is cancelled while script_after is still
+// running, runAfterHook returns (it gives up waiting for a retry/skip
+// decision on a dead ctx) but cont must NOT run — a cancelled run must not
+// spawn a fresh detached reflection agent.
+func TestMaybeRunAfterHookThen_ShutdownDuringHook_SkipsCont(t *testing.T) {
+	stage := flow.Stage{ID: "s1", Name: "S1", ScriptAfter: "sleep 5"}
+	o, _ := newFullHookOrch(t, stage)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var contCalled atomic.Bool
+	o.maybeRunAfterHookThen(ctx, stage.ID, func(context.Context) { contCalled.Store(true) })
+
+	time.Sleep(300 * time.Millisecond) // let the hook actually start running
+	cancel()
+	o.concurrency.WaitAgents()
+
+	if contCalled.Load() {
+		t.Error("cont must not run when ctx is cancelled during the after-hook")
+	}
+	if n := o.pendingAfterHooks.Load(); n != 0 {
+		t.Errorf("pendingAfterHooks = %d, want 0 after shutdown", n)
 	}
 }

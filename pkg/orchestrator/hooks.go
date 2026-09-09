@@ -341,6 +341,35 @@ func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 	})
 }
 
+// maybeRunAfterHookThen runs script_after (if any) and then invokes cont —
+// inside the SAME tracked goroutine, AFTER runAfterHook returns — so a
+// consumer of cont (agent memory reflection, see completeStage) sees
+// after.log on disk. With no ScriptAfter, cont runs inline (the unchanged
+// fast path maybeRunAfterHook itself has no equivalent of — there, "no hook"
+// means "nothing at all runs"; here it means "cont runs synchronously").
+// cont must be cheap/non-blocking (it only spawns a detached reflection
+// agent, see maybeRunReflection) since it runs either inline on the caller's
+// goroutine (no hook) or on the hook's own tracked goroutine (hook present) —
+// never inline within a blocking wait.
+func (o *Orchestrator) maybeRunAfterHookThen(ctx context.Context, stageID string, cont func(context.Context)) {
+	stage := o.graph.Stage(stageID)
+	if stage == nil || stage.ScriptAfter == "" {
+		cont(ctx)
+		return
+	}
+	o.pendingAfterHooks.Add(1)
+	o.concurrency.SpawnAgent(ctx, *stage, func(ctx context.Context, s flow.Stage) {
+		defer func() {
+			o.pendingAfterHooks.Add(-1)
+			o.concurrency.WakeEventLoop()
+		}()
+		o.runAfterHook(ctx, s)
+		if ctx.Err() == nil {
+			cont(ctx) // skip reflection on shutdown; retry/skip decisions already resolved in runAfterHook
+		}
+	})
+}
+
 // withBeforeHook wraps a stage's fresh-activation run function with
 // script_before: if the stage has no ScriptBefore, mainFn runs unchanged. If
 // the hook fails and is blocked in hook_failed, ctx cancellation during the

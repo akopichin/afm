@@ -146,10 +146,13 @@ type Orchestrator struct {
 	// Инъектируется в New(); тесты подменяют стабом, чинящим файл синхронно.
 	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
 
-	// memRunner запускает один агент конвейера памяти (reflect/aggregate/
-	// prioritize/update) — memorypipeline.AgentRunner. Реальная реализация —
-	// memorypipeline.NewExecRunner, собранный в New(); тесты подменяют.
-	memRunner memorypipeline.AgentRunner
+	// mem — двухфазный движок конвейера памяти (reflect/aggregate/prioritize/
+	// update), собранный в New(): CaptureStage (per-stage каптура датасета,
+	// см. maybeRunReflection) и Finalize (сборка всех датасетов рана в
+	// project/per-stage файлы под общим memory-lock, см. runEndOfRunMemory).
+	// Реальный раннер агента внутри — memorypipeline.NewExecRunner; тесты
+	// подменяют его через memorypipeline.WithRunner при построении Pipeline.
+	mem *memorypipeline.Pipeline
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
@@ -403,7 +406,12 @@ func New(opts Options) *Orchestrator {
 		retryBackoff:   RetryBackoff,
 	}
 	o.spawnJSONFix = o.runJSONFixAgent
-	o.memRunner = memorypipeline.NewExecRunner(memorypipeline.AgentConfig{
+	o.mem = memorypipeline.New(memorypipeline.Prompts{
+		Reflect:    opts.Prompts.Reflect,
+		Aggregate:  opts.Prompts.Aggregate,
+		Prioritize: opts.Prompts.Prioritize,
+		Update:     opts.Prompts.Update,
+	}, memorypipeline.AgentConfig{
 		Command:     opts.Config.Client.Command,
 		ExtraArgs:   opts.Config.Client.ExtraArgs,
 		WrapperDir:  executor.WrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
@@ -411,11 +419,6 @@ func New(opts Options) *Orchestrator {
 		RunDir:      opts.RunDir,
 		IdleTimeout: opts.Config.Executor.IdleTimeout,
 		Debug:       opts.Debug,
-	}, memorypipeline.Prompts{
-		Reflect:    opts.Prompts.Reflect,
-		Aggregate:  opts.Prompts.Aggregate,
-		Prioritize: opts.Prompts.Prioritize,
-		Update:     opts.Prompts.Update,
 	})
 	return o
 }
@@ -750,8 +753,11 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason); !ok {
 		return
 	}
-	o.maybeRunAfterHook(ctx, stageID)
-	o.maybeRunReflection(ctx, stageID)
+	// script_after (if any) runs first, and reflection only starts once it
+	// returns — so a stage's reflect capture always sees after.log if the
+	// stage has one. The unblock cascade below still runs immediately; only
+	// reflection is deferred behind the hook (see maybeRunAfterHookThen).
+	o.maybeRunAfterHookThen(ctx, stageID, func(c context.Context) { o.maybeRunReflection(c, stageID) })
 	o.failBlockedStages()
 	o.startPlanningForUnblocked(ctx)
 	o.startReadyStages(ctx)

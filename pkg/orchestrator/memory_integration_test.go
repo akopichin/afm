@@ -52,9 +52,15 @@ func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow
 	// has already created its directory (see runAutonomousAgent/
 	// runImplementationAgent — MkdirAll happens before the first RunAgent
 	// call). Reproduce that precondition by hand since no real agent runs
-	// here — production dirs exist, tests must create them.
+	// here — production dirs exist, tests must create them. A recognizable
+	// agent-session artifact (execution_summary.md) is also required: the
+	// real memorypipeline.CaptureStage primitive (Task 10) StepErrors on a
+	// stage dir with no agent session at all (SourceInventory.HasAgentSession).
 	stageDir = filepath.Join(runDir, stage.ID)
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return o, stage, runDir, stageDir, memDir
@@ -67,9 +73,9 @@ func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow
 // land in the stage dir, and the stage's own memory file is rewritten with
 // the merged High patterns.
 func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
-	o, stage, _, stageDir, memDir := newMemoryIntegrationOrchestrator(t)
+	o, stage, runDir, stageDir, memDir := newMemoryIntegrationOrchestrator(t)
 	var order []string
-	stubMemoryAgentByKind(o, &order)
+	o.mem = stubMemoryPipeline(&order)
 
 	// Per-stage: только каптура датасета (сборка перенесена в end-of-run).
 	o.maybeRunReflection(context.Background(), stage.ID)
@@ -81,11 +87,28 @@ func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
 	// End-of-run строит файл стадии из её датасета (+ memory.md).
 	o.runEndOfRunMemory(context.Background())
 
-	for _, f := range []string{"reflect_dataset.yaml", "patterns.md", "prioritized.md", "high.md"} {
-		if data, err := os.ReadFile(filepath.Join(stageDir, f)); err != nil {
-			t.Errorf("%s not written: %v", f, err)
-		} else if len(data) == 0 {
-			t.Errorf("%s is empty", f)
+	if data, err := os.ReadFile(filepath.Join(stageDir, "reflect_dataset.yaml")); err != nil {
+		t.Errorf("reflect_dataset.yaml not written: %v", err)
+	} else if len(data) == 0 {
+		t.Error("reflect_dataset.yaml is empty")
+	}
+
+	// The distill byproducts (patterns.md/prioritized.md/high.md) now live
+	// under the run's .memory-finalize staging attempt dir, not the stage dir
+	// itself — Finalize (memorypipeline.Pipeline.Finalize, Task 10) stages
+	// every target's intermediates in a fresh, exclusive per-attempt
+	// directory so promotion can be atomic and stage dirs stay uncluttered.
+	for _, f := range []string{"patterns.md", "prioritized.md", "high.md"} {
+		matches, err := filepath.Glob(filepath.Join(runDir, ".memory-finalize", "*", "stages", stage.ID, "distill", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 1 {
+			t.Errorf("%s not found in the finalize staging dir: %v", f, matches)
+			continue
+		}
+		if data, err := os.ReadFile(matches[0]); err != nil || len(data) == 0 {
+			t.Errorf("%s empty or unreadable: %v", f, err)
 		}
 	}
 
@@ -108,7 +131,7 @@ func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
 func TestIntegration_MemoryV3_PointerReachesLaterStagePrompt(t *testing.T) {
 	o, stage, _, _, memDir := newMemoryIntegrationOrchestrator(t)
 	var order []string
-	stubMemoryAgentByKind(o, &order)
+	o.mem = stubMemoryPipeline(&order)
 
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
