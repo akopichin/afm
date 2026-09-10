@@ -6,10 +6,12 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -416,5 +418,228 @@ func TestRebuildHandler_PersistentDirResolvesRunsDir(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("expected exactly one manifest under custom --dir run, got %v", matches)
+	}
+}
+
+// --- Task 12: commit path hardening -----------------------------------
+
+// initGitRepoCLI initializes a git repo in a fresh t.TempDir() with a local
+// user.email/name configured, so commits work without touching global git
+// config. Returns the repo root.
+func initGitRepoCLI(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
+		c := exec.Command("git", args...)
+		c.Dir = repo
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	return repo
+}
+
+func TestEffectiveCommit_Matrix(t *testing.T) {
+	commitTrue := &flow.Flow{Memory: flow.MemoryConfig{Commit: true}}
+	commitFalse := &flow.Flow{Memory: flow.MemoryConfig{Commit: false}}
+
+	cases := []struct {
+		name string
+		o    rebuildOptions
+		f    *flow.Flow
+		want bool
+	}{
+		{"--commit wins over config false", rebuildOptions{CommitSet: true, Commit: true}, commitFalse, true},
+		{"--no-commit wins over config true", rebuildOptions{CommitSet: true, Commit: false}, commitTrue, false},
+		{"no flag, config true", rebuildOptions{}, commitTrue, true},
+		{"no flag, config false", rebuildOptions{}, commitFalse, false},
+		{"dry-run forces false even with --commit", rebuildOptions{DryRun: true, CommitSet: true, Commit: true}, commitTrue, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := effectiveCommit(c.o, c.f); got != c.want {
+				t.Errorf("effectiveCommit(%+v, commit=%v) = %v, want %v", c.o, c.f.Memory.Commit, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCommitPreflight_RejectsPreStagedChangesUnderMemDir(t *testing.T) {
+	repo := initGitRepoCLI(t)
+	memDir := filepath.Join(repo, "memory")
+	if err := os.MkdirAll(memDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "memory.md"), []byte("# rules\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	addCmd := exec.Command("git", "-C", repo, "add", "memory")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v %s", err, out)
+	}
+
+	if err := commitPreflight(memDir); err == nil {
+		t.Fatal("expected error for pre-staged changes under memDir")
+	}
+}
+
+func TestCommitPreflight_ClonesCleanlyWhenNothingStaged(t *testing.T) {
+	repo := initGitRepoCLI(t)
+	memDir := filepath.Join(repo, "memory")
+	if err := os.MkdirAll(memDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "memory.md"), []byte("# rules\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Not staged (no `git add`) -> preflight must pass.
+	if err := commitPreflight(memDir); err != nil {
+		t.Fatalf("commitPreflight: %v", err)
+	}
+}
+
+func TestCommitPreflight_WorksWhenMemDirDoesNotExistYet(t *testing.T) {
+	repo := initGitRepoCLI(t)
+	memDir := filepath.Join(repo, "does", "not", "exist", "memory")
+
+	if err := commitPreflight(memDir); err != nil {
+		t.Fatalf("commitPreflight on a not-yet-created memDir: %v", err)
+	}
+	if _, err := os.Stat(memDir); !os.IsNotExist(err) {
+		t.Fatal("commitPreflight must not create memDir")
+	}
+}
+
+func TestCommitPreflight_NonGitAncestorIsNoOp(t *testing.T) {
+	// Not inside any git repo at all -> preflight defers to the real commit
+	// attempt to surface the error, not itself.
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "memory")
+	if err := commitPreflight(memDir); err != nil {
+		t.Fatalf("commitPreflight outside any repo should be a no-op, got: %v", err)
+	}
+}
+
+// newAwaitingCommitManifest writes a manifest already parked at
+// StatusAwaitingCommit (Finalize's terminal, non-"nonTerminalStatuses" exit
+// point before the CLI's own commit decision) — the exact state maybeCommit
+// receives it in from rebuildHandler.
+func newAwaitingCommitManifest(t *testing.T, manifestPath, runID string) {
+	t.Helper()
+	m := memorypipeline.NewRunningManifest(memorypipeline.OperationMeta{RunID: runID})
+	m.Status = memorypipeline.StatusAwaitingCommit
+	if err := memorypipeline.WriteManifest(manifestPath, m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaybeCommit_FailureMarksManifestFailed(t *testing.T) {
+	// memDir does not exist and is not a git repo -> CommitPaths' own `git
+	// add -- <path>` fails immediately (a real error, not "no diff").
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "memory")
+	manifestPath := filepath.Join(dir, "manifest.json")
+	newAwaitingCommitManifest(t, manifestPath, "testflow-20260101-000000-aaaa")
+
+	report := memorypipeline.Report{
+		RunID: "testflow-20260101-000000-aaaa",
+		Targets: []memorypipeline.TargetResult{
+			{FinalPath: filepath.Join(memDir, "memory.md"), Changed: true, Published: true},
+		},
+	}
+
+	err := maybeCommit(memDir, report, manifestPath)
+	if err == nil || !strings.Contains(err.Error(), "memory files updated but commit failed") {
+		t.Fatalf("want 'memory files updated but commit failed' error, got %v", err)
+	}
+
+	got, lerr := memorypipeline.LoadManifest(manifestPath)
+	if lerr != nil {
+		t.Fatalf("LoadManifest: %v", lerr)
+	}
+	// Carried-forward fix (Task 11 review): a commit failure must leave the
+	// manifest terminally "failed" with the error recorded and FinishedAt
+	// set — not stuck at "awaiting_commit", which the deferred
+	// FinalizeManifestOnExit no-ops on (awaiting_commit is not in
+	// nonTerminalStatuses).
+	if got.Status != memorypipeline.StatusFailed {
+		t.Fatalf("want manifest Status=%q, got %q", memorypipeline.StatusFailed, got.Status)
+	}
+	if len(got.Errors) == 0 {
+		t.Fatal("want the commit error appended to manifest Errors")
+	}
+	if got.FinishedAt == "" {
+		t.Fatal("want manifest FinishedAt set on commit failure")
+	}
+}
+
+func TestMaybeCommit_SuccessRecordsCommitCreatedAndSHA(t *testing.T) {
+	repo := initGitRepoCLI(t)
+	memDir := filepath.Join(repo, "memory")
+	if err := os.MkdirAll(memDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(memDir, "memory.md")
+	if err := os.WriteFile(target, []byte("# rules\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
+	newAwaitingCommitManifest(t, manifestPath, "testflow-20260101-000000-aaaa")
+
+	report := memorypipeline.Report{
+		RunID: "testflow-20260101-000000-aaaa",
+		Targets: []memorypipeline.TargetResult{
+			{FinalPath: target, Changed: true, Published: true},
+			// An unpublished/unchanged target must not be swept into the
+			// commit's pathspec.
+			{FinalPath: filepath.Join(memDir, "other.md"), Changed: false, Published: false},
+		},
+	}
+
+	if err := maybeCommit(memDir, report, manifestPath); err != nil {
+		t.Fatalf("maybeCommit: %v", err)
+	}
+
+	got, err := memorypipeline.LoadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if !got.CommitCreated {
+		t.Fatal("want manifest CommitCreated=true")
+	}
+	if got.CommitSHA == "" {
+		t.Fatal("want manifest CommitSHA populated")
+	}
+	if got.CommitError != "" {
+		t.Fatalf("want no CommitError on success, got %q", got.CommitError)
+	}
+}
+
+func TestMaybeCommit_NoPublishedChangesIsNoOp(t *testing.T) {
+	repo := initGitRepoCLI(t)
+	memDir := filepath.Join(repo, "memory")
+	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
+	newAwaitingCommitManifest(t, manifestPath, "testflow-20260101-000000-aaaa")
+
+	report := memorypipeline.Report{
+		RunID: "testflow-20260101-000000-aaaa",
+		Targets: []memorypipeline.TargetResult{
+			{FinalPath: filepath.Join(memDir, "memory.md"), Changed: false, Published: false},
+		},
+	}
+
+	if err := maybeCommit(memDir, report, manifestPath); err != nil {
+		t.Fatalf("maybeCommit: %v", err)
+	}
+	got, err := memorypipeline.LoadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if got.CommitCreated {
+		t.Fatal("want CommitCreated=false when nothing was published")
+	}
+	if got.Status != memorypipeline.StatusAwaitingCommit {
+		t.Fatalf("manifest status must be untouched when there's nothing to commit, got %q", got.Status)
 	}
 }

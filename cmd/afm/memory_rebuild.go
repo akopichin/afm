@@ -345,8 +345,6 @@ func printReport(report memorypipeline.Report, dryRun bool) {
 	}
 }
 
-// --- TRANSITIONAL helpers (Task 12/13 harden/extract these) ---------------
-
 // effectiveCommit разрешает итоговое решение "коммитить ли": явный флаг
 // --commit/--no-commit важнее flow.yaml; --dry-run всегда выключает коммит
 // (нечего коммитить, ничего не опубликовано).
@@ -405,34 +403,56 @@ func nearestExistingAncestor(p string) string {
 	}
 }
 
-// maybeCommit коммитит только опубликованные изменённые цели (review: не
-// весь memDir целиком, который может содержать посторонние staged файлы —
-// Task 12 заменит на CommitPaths с явным списком путей; пока используется
-// memory.Commit(memDir, ...), best-effort патчащий манифест исходом.
+// maybeCommit коммитит ТОЛЬКО опубликованные изменённые цели — явным
+// списком путей через memory.CommitPaths, а не весь memDir целиком (который
+// может содержать посторонние staged файлы, уже поставленные в индекс
+// пользователем вне этого rebuild). Ничего опубликовано не было -> no-op,
+// манифест не трогается.
+//
+// На успехе патчит манифест CommitCreated/CommitSHA. На ОШИБКЕ (review #5) —
+// переводит манифест в терминальный failed с добавленной в Errors причиной и
+// проставленным FinishedAt ПРЯМО ЗДЕСЬ: к этому моменту манифест уже в
+// StatusAwaitingCommit/StatusPublished (Finalize сам довёл его до этого
+// терминального-для-Finalize статуса), которого нет в nonTerminalStatuses —
+// деferred FinalizeManifestOnExit в rebuildHandler такой манифест НЕ
+// трогает, так что без явного патча здесь упавший коммит навсегда читался
+// бы как "awaiting_commit", а не "failed".
 func maybeCommit(memDir string, report memorypipeline.Report, manifestPath string) error {
-	anyChanged := false
+	var paths []string
 	for _, t := range report.Targets {
 		if t.Changed && t.Published {
-			anyChanged = true
-			break
+			paths = append(paths, t.FinalPath)
 		}
 	}
-	if !anyChanged {
+	if len(paths) == 0 {
 		return nil
 	}
 
-	committed, commitErr := memory.Commit(memDir, fmt.Sprintf("chore(memory): rebuild from %s", report.RunID))
-	if m, lerr := memorypipeline.LoadManifest(manifestPath); lerr == nil {
+	committed, sha, commitErr := memory.CommitPaths(memDir, fmt.Sprintf("chore(memory): rebuild from %s", report.RunID), paths)
+
+	m, lerr := memorypipeline.LoadManifest(manifestPath)
+	if lerr != nil {
+		// Манифест нечитаем — сама попытка коммита уже произошла (или
+		// провалилась) независимо от этого; сообщаем об исходной ошибке
+		// коммита, если она есть, иначе о невозможности записать исход.
 		if commitErr != nil {
-			m.CommitError = commitErr.Error()
-		} else {
-			m.CommitCreated = committed
+			return fmt.Errorf("memory files updated but commit failed: %w", commitErr)
 		}
-		_ = memorypipeline.WriteManifest(manifestPath, m)
+		return fmt.Errorf("commit succeeded but manifest is unreadable: %w", lerr)
 	}
+
 	if commitErr != nil {
+		m.Status = memorypipeline.StatusFailed
+		m.Errors = append(m.Errors, commitErr.Error())
+		m.CommitError = commitErr.Error()
+		m.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		_ = memorypipeline.WriteManifest(manifestPath, m)
 		return fmt.Errorf("memory files updated but commit failed: %w", commitErr)
 	}
+
+	m.CommitCreated = committed
+	m.CommitSHA = sha
+	_ = memorypipeline.WriteManifest(manifestPath, m)
 	return nil
 }
 
