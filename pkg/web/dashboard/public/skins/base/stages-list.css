@@ -1,6 +1,78 @@
-/* pkg/web/dashboard/public/skins/base/stages-list.css
-   Sidebar stage list, status dots, active-stage indicator. */
+/* pkg/web/dashboard/skins/base/stages-list.css
+   Stage rail: a calm vertical timeline. The rail head carries the "Stages"
+   title + run progress; each stage row is a timeline node (status dot) linked by
+   a vertical connector, with an accent left-marker on the selected row. Status
+   is never signaled by color alone — the dot shape/fill/icon plus the status
+   text carry it too. Semantic tokens only. */
 
+/* === Rail container === */
+#stages-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 14px 12px;
+  background: var(--surface-raised);
+  border-right: 1px solid var(--separator-subtle);
+  overflow-y: auto;
+  /* explicit overflow-x:hidden — otherwise the spec forces overflow-x:auto when
+     overflow-y is non-visible, and 1px sub-pixel overflow (the active-row
+     marker) draws a spurious horizontal scrollbar. */
+  overflow-x: hidden;
+}
+
+/* === Rail head: title + progress === */
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--separator-subtle);
+}
+#stages-panel h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.rail-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rail-progress-text {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.rail-progress-bar {
+  position: relative;
+  width: 56px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(var(--accent-primary-rgb), 0.14);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.rail-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  transition: width 0.4s ease;
+}
+
+/* === Stage list === */
 #stages-list {
   list-style: none;
   display: flex;
@@ -13,53 +85,51 @@
   grid-template-columns: 18px 1fr auto;
   align-items: center;
   gap: 10px;
-  padding: 8px 4px;
-  border-bottom: 1px solid rgba(111, 212, 204, 0.06);
+  padding: 9px 8px 9px 10px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   position: relative;
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  color: var(--ink);
-  text-transform: uppercase;
-  transition: background 0.15s;
+  font-family: var(--font-ui);
+  color: var(--text-secondary);
+  transition: background 0.15s ease;
 }
-
 .stage-item:hover {
-  background: rgba(111, 212, 204, 0.06);
+  background: var(--surface-hover);
 }
 
-/* Средняя ячейка сетки .stage-item: id крупно + name мелко под ним.
-   .stage-id наследует font-size/text-transform/letter-spacing от .stage-item. */
+/* Middle cell: id on top, name muted below. */
 .stage-label {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
-
 .stage-id {
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
 .stage-name {
-  font-size: 9px;
-  text-transform: none;
-  letter-spacing: 0;
-  opacity: 0.6;
+  font-size: 10px;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* status-dot стилизуется как кольцо */
+/* === Status dot — a timeline node (ring / filled / icon) === */
 .status-dot {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 1px solid var(--c-pending);
+  border: 1.5px solid var(--c-pending);
   position: relative;
   flex-shrink: 0;
-  background: transparent;
+  background: var(--surface-raised);
+  z-index: 1; /* sit above the connector line */
 }
 .status-dot::after {
   content: "";
@@ -83,125 +153,107 @@
 .status-dot[data-status="hook_failed"]          { color: var(--c-hook-failed);   border-color: var(--c-hook-failed); }
 .status-dot[data-status="paused"]               { color: var(--c-paused);        border-color: var(--c-paused); }
 
-/* "running" rings — pulse */
+/* Active statuses breathe gently (low amplitude); frozen under reduced-motion by
+   the global gate. */
 .status-dot[data-status="running"],
 .status-dot[data-status="planning"],
 .status-dot[data-status="revising"],
 .status-dot[data-status="retrying"] {
-  animation: runRing 1.6s ease-in-out infinite;
+  animation: runRing 1.8s ease-in-out infinite;
 }
 .status-dot[data-status="awaiting_user_input"] {
-  animation: askPulse 1.8s ease-in-out infinite;
+  animation: askPulse 2s ease-in-out infinite;
 }
-
 @keyframes runRing {
-  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
-  50%      { box-shadow: 0 0 0 4px transparent; }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0.35); }
+  50%      { box-shadow: 0 0 0 3px rgba(var(--attention-rgb), 0); }
 }
 @keyframes askPulse {
-  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
-  50%      { box-shadow: 0 0 0 5px transparent; }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0.45); }
+  50%      { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0); }
 }
 
-/* Dialog badge на стадии с awaiting_user_input */
-/* Трейлинг-слот строки стадии: занимает 3-ю (auto) колонку грида .stage-item и
-   держит бейджи (💬/📋/📝) вместе с кебабом (⋮) в один ряд, прижатыми вправо.
-   Группировка обязательна: два отдельных трейлинг-элемента не влезают в одну
-   auto-колонку и переносят кебаб на новую строку (кебаб «съезжал вниз-влево»). */
+/* === Trailing slot: badges + kebab === */
 .stage-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   justify-self: end;
 }
-
 .dialog-badge {
   font-size: 11px;
-  margin-left: 4px;
   color: var(--c-awaiting-user);
 }
-
-/* Badge на стадии, ожидающей апрува плана (awaiting_approval) — тот же слот, что
-   у .dialog-badge, но янтарный (--c-awaiting) во всех темах. Пульс всей строки
-   даёт data-attention (ATTENTION_STATUSES включает awaiting_approval). */
 .approval-badge {
   font-size: 11px;
-  margin-left: 4px;
   color: var(--c-awaiting);
 }
-
-/* Badge на стадии, к которой прикреплена pre-note (заметка до старта). Тот же
-   слот, что у .dialog-badge/.approval-badge; приглушённый цвет — это не
-   attention-статус, а просто напоминание «заметка есть». */
 .prenote-badge {
   font-size: 11px;
-  margin-left: 4px;
   opacity: 0.75;
 }
 
-/* === Active stage === */
+/* === Active (selected) stage === */
 .stage-item.active {
-  background: linear-gradient(90deg, rgba(229, 212, 66, 0.06), transparent);
+  background: var(--surface-hover);
 }
 .stage-item.active::before {
   content: "";
   position: absolute;
-  left: -14px;
-  top: 0;
-  bottom: 0;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
   width: 2px;
-  background: var(--amber);
-  box-shadow: 0 0 8px var(--amber);
-  animation: activeBar 2.4s ease-in-out infinite;
+  border-radius: 999px;
+  background: var(--accent-primary);
 }
-.stage-item.active::after {
+/* One-shot entrance when a stage becomes selected. */
+.stage-item.active { animation: stageActivate 0.35s ease; }
+@keyframes stageActivate {
+  from { opacity: 0.4; transform: translateX(-3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* === Timeline connector between dots ===
+   A real child element (.stage-connector) — not ::before/::after (those carry
+   the active marker). Positioned under the status dot, bridging to the next row.
+   left is tuned to the dot center; a small nudge is acceptable. */
+.stage-connector {
+  position: absolute;
+  left: 16px;
+  top: 27px;
+  width: 1.5px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--separator-subtle);
+  pointer-events: none;
+}
+.stage-connector::after {
   content: "";
   position: absolute;
   left: 0;
-  right: 0;
   top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(229, 212, 66, 0.7), transparent);
-  animation: scanlineX 3s linear infinite;
-  pointer-events: none;
+  width: 1.5px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--success);
+  opacity: 0;
+}
+/* One-shot pulse travelling down the connector when the stage completes. */
+.stage-item.just-done .stage-connector::after { animation: connTravel 0.6s ease-in; }
+@keyframes connTravel {
+  0%   { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(16px); opacity: 0; }
 }
 
-/* У завершённой/провальной выбранной стадии индикатор выбора статичен: убираем
-   бесконечную пульсацию полосы и бегущую сканлайн-строку — иначе завершённый
-   флоу вечно выглядит «в процессе» на последней (выбранной) стадии. Сам факт
-   выбора (амбер-полоса + подложка) сохраняется, просто без анимации активности. */
-.stage-item.active[data-status="done"]::before,
-.stage-item.active[data-status="failed"]::before {
-  animation: none;
-  box-shadow: 0 0 4px var(--amber);
-  opacity: 0.7;
-}
-.stage-item.active[data-status="done"]::after,
-.stage-item.active[data-status="failed"]::after {
-  display: none;
-}
-
-@keyframes activeBar {
-  0%, 100% { box-shadow: 0 0 4px var(--amber); opacity: 0.85; }
-  50%      { box-shadow: 0 0 12px var(--amber); opacity: 1; }
-}
-@keyframes scanlineX {
-  0%   { transform: translateY(0); opacity: 0; }
-  10%  { opacity: 1; }
-  90%  { opacity: 1; }
-  100% { transform: translateY(34px); opacity: 0; }
-}
-
-/* === Motion (A1/A4/D) — one-shot переходы, токены/currentColor === */
-
-/* A1 — статус-точка при переходе стадии в done: заливка + галочка + вспышка */
+/* === One-shot completion: dot fill + check flash === */
 .status-dot .dot-check {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
   font-size: 9px;
-  color: var(--bg);
+  color: var(--surface-raised);
   opacity: 0;
   transform: scale(0.4);
   pointer-events: none;
@@ -210,50 +262,11 @@
 .stage-item.just-done .status-dot::after { transform: scale(1); }
 .stage-item.just-done .status-dot .dot-check { animation: dotCheck 0.6s ease forwards; }
 @keyframes dotComplete {
-  0%   { box-shadow: 0 0 0 0 currentColor; }
-  40%  { box-shadow: 0 0 0 5px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+  0%   { box-shadow: 0 0 0 0 rgba(var(--success-rgb), 0.5); }
+  100% { box-shadow: 0 0 0 6px rgba(var(--success-rgb), 0); }
 }
 @keyframes dotCheck {
   0%   { opacity: 0; transform: scale(0.4); }
   55%  { opacity: 1; transform: scale(1.2); }
   100% { opacity: 1; transform: scale(1); }
-}
-
-/* A4 — вход активной стадии */
-.stage-item.active { animation: stageActivate 0.4s ease; }
-@keyframes stageActivate {
-  from { opacity: 0.35; transform: translateX(-4px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* D — коннектор между стадиями + одноразовое «пробегание» импульса при done.
-   Явный дочерний элемент (не ::before/::after — те заняты .active-декором).
-   left подобран под центр status-dot; при визуальной проверке допускается нудж. */
-.stage-connector {
-  position: absolute;
-  left: 10px;
-  top: 26px;
-  width: 2px;
-  height: 16px;
-  border-radius: 2px;
-  background: var(--mint-soft);
-  pointer-events: none;
-}
-.stage-connector::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 2px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--amber);
-  box-shadow: 0 0 6px var(--amber);
-  opacity: 0;
-}
-.stage-item.just-done .stage-connector::after { animation: connTravel 0.6s ease-in; }
-@keyframes connTravel {
-  0%   { transform: translateY(0); opacity: 1; }
-  100% { transform: translateY(14px); opacity: 0; }
 }

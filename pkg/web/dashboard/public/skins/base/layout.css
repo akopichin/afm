@@ -1,181 +1,291 @@
-/* pkg/web/dashboard/public/skins/base/layout.css
-   #main grid/panels, footer, resizable panel layout, attention signal. */
+/* pkg/web/dashboard/skins/base/layout.css
+   Dashboard body shell: a non-resizable two-column grid — stage rail (left) and
+   a single tabbed workspace (right). Replaces the old three-column resizable
+   layout (dashboard-cols / detail-column / detail-rows / resize-handle) and the
+   removed footer. The panel-frame / maximizable-frame family is kept: the feed
+   and the plan/dialog detail panels still render inside those wrappers, just
+   hosted by the workspace instead of resizable panes. Semantic tokens only. */
 
+/* #main fills the viewport under the header; the body scrolls inside its
+   columns, never the page. Calm flat canvas (graphite drops any grid image). */
 #main {
-  display: grid;
-  grid-template-columns: 240px 1fr 280px;
-  gap: 20px;
-  padding: 18px 20px;
-  height: calc(100vh - 56px - 50px);
-  overflow: hidden;
   position: relative;
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 24px 24px;
+  height: calc(100vh - 61px);
+  overflow: hidden;
+  background-color: var(--surface-canvas);
 }
 
-/* Panel base */
-#stages-panel,
-#detail-panel,
-#feed-panel {
-  position: relative;
-  z-index: 1;
-  background: var(--panel-bg);
-  border: 1px solid var(--mint-soft);
-  padding: 14px;
-  overflow-y: auto;
-  /* Явный overflow-x:hidden обязателен: если overflow-x не задан, а overflow-y
-     не 'visible', спека CSS Overflow принуждает overflow-x тоже стать 'auto'
-     (не 'visible') — сабпиксельное переполнение на 1px (border/rounding/
-     декоративные ::before у активной стадии) тогда рисует горизонтальный
-     скроллбар во всю ширину панели без реального горизонтального контента.
-     Раньше не было заметно на overlay-скролле, всплыло после того как скролл
-     сделали тонким-но-видимым классическим. */
-  overflow-x: hidden;
+/* === Dashboard body: rail + workspace === */
+.dashboard-body {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100%;
   min-height: 0;
 }
 
-/* Лента событий занимает всю высоту панели и скроллится сама:
-   без display:flex у #feed-panel flex:1 на .event-feed-scroll игнорируется,
-   контейнер не ограничивается по высоте, не переполняется — и автоскролл
-   с кнопкой «↓ к последнему» остаются инертными. */
+.rail-slot {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* === Workspace (right column) === */
+.workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-canvas);
+}
+
+/* Tab strip: a bottom-border track the active tab underlines. */
+.workspace-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+}
+
+.workspace-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px; /* overlap the track border */
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.workspace-tab:hover {
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+}
+.workspace-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-primary);
+}
+.workspace-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.workspace-tab-label {
+  white-space: nowrap;
+}
+.attn-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Attention tab glyph — a small dot colored by the attention kind. */
+.attn-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+.workspace-tab-attention[data-kind="approval"] .attn-glyph,
+.workspace-tab-attention[data-kind="question"] .attn-glyph { background: var(--attention); }
+.workspace-tab-attention[data-kind="failed"] .attn-glyph,
+.workspace-tab-attention[data-kind="hook_failed"] .attn-glyph { background: var(--danger); }
+.workspace-tab-attention[data-kind="paused"] .attn-glyph { background: var(--text-secondary); }
+
+/* .glow — the most prominent motion in the app: a low-frequency halo pulse on
+   the attention tab, themed by kind. A base (static) halo is always present so
+   that under prefers-reduced-motion (global gate freezes the animation) it
+   still reads as a highlighted tab. The concentric halo is a pseudo-element. */
+.workspace-tab.glow {
+  --glow-rgb: var(--attention-rgb);
+}
+.workspace-tab.glow[data-kind="failed"],
+.workspace-tab.glow[data-kind="hook_failed"] {
+  --glow-rgb: var(--danger-rgb);
+}
+.workspace-tab.glow .attn-glyph {
+  box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18);
+  animation: tabGlyphGlow 2.2s ease-in-out infinite;
+}
+.workspace-tab.glow::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: rgba(var(--glow-rgb), 0.9);
+  box-shadow: 0 0 10px 1px rgba(var(--glow-rgb), 0.5);
+  animation: tabHaloGlow 2.2s ease-in-out infinite;
+}
+@keyframes tabGlyphGlow {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--glow-rgb), 0.15); }
+  50%      { box-shadow: 0 0 0 5px rgba(var(--glow-rgb), 0.30); }
+}
+@keyframes tabHaloGlow {
+  0%, 100% { box-shadow: 0 0 6px 0 rgba(var(--glow-rgb), 0.35); opacity: 0.8; }
+  50%      { box-shadow: 0 0 16px 2px rgba(var(--glow-rgb), 0.65); opacity: 1; }
+}
+
+/* === Workspace body: the active workspace fills and scrolls === */
+.workspace-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+}
+
+/* Stage context bar above the feed / detail panels. */
+.workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--separator-subtle);
+}
+.workspace-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.status-badge-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Column of stacked detail panels (plan / dialog). */
+.detail-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Autonomous stage with neither plan nor dialog — center the hint. */
+.detail-empty {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+/* === Panel frame (feed + plan/dialog) — kept from the old layout ===
+   Header on top, body scrolls. */
+.panel-frame {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.panel-frame-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--separator-subtle);
+}
+.panel-frame-header h3 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.panel-frame-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.panel-frame-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  /* flex column: an inner scroll container (dialog / event-feed) fills the
+     height; panels without one (plan / log) scroll the body itself. */
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+/* Direct child of the body (the panel's outer wrapper — #feed-panel,
+   #dialog-section, …) fills the height and becomes a flex column, so the inner
+   scroll container gets a height instead of collapsing. */
+.panel-frame-body > * {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Maximizable wrapper — always mounted in place; maximized swaps to a fixed
+   overlay (.maximize-overlay). Non-maximized it just forwards 100% height down
+   to .panel-frame so inner scroll containers don't collapse. */
+.maximizable-frame {
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.maximize-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--surface-canvas);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* The feed panel outer element fills its frame and scrolls itself. */
 #feed-panel {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow: visible;
 }
 
-/* Notched corner accents */
-#stages-panel::before,
-#detail-panel::before,
-#feed-panel::before,
-#stages-panel::after,
-#detail-panel::after,
-#feed-panel::after {
-  content: "";
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  border: 1px solid var(--mint);
-  pointer-events: none;
-}
-#stages-panel::before,
-#detail-panel::before,
-#feed-panel::before {
-  top: -1px; left: -1px;
-  border-right: 0;
-  border-bottom: 0;
-}
-#stages-panel::after,
-#detail-panel::after,
-#feed-panel::after {
-  bottom: -1px; right: -1px;
-  border-left: 0;
-  border-top: 0;
-}
-
-/* Pane titles */
-#stages-panel h2,
-#feed-panel h2 {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.22em;
-  color: var(--ink-hi);
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--mint-soft);
-}
-
-/* === Footer === */
-#footer {
-  display: grid;
-  grid-template-columns: 1fr auto auto auto auto;
-  align-items: center;
-  gap: 22px;
-  padding: 10px 20px;
-  background: var(--bg);
-  border-top: 1px solid var(--mint-soft);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-}
-
-.footer-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.footer-label { color: var(--ink-dim); }
-
-/* === Footer progress bar with shimmer === */
-.progress-bar {
-  width: 180px;
-  height: 4px;
-  background: rgba(111, 212, 204, 0.12);
-  position: relative;
-  overflow: hidden;
-}
-.progress-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 0%;
-  background: linear-gradient(90deg, rgba(229, 212, 66, 0.15), var(--amber));
-  transition: width 0.4s ease;
-}
-.progress-fill::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 30%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
-  animation: shimmer 2.2s linear infinite;
-}
-@keyframes shimmer {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(330%); }
-}
-.progress-fill::after {
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  background: var(--amber);
-  box-shadow: 0 0 10px var(--amber);
-  animation: tipPulse 1.2s ease-in-out infinite;
-}
-@keyframes tipPulse {
-  0%, 100% { box-shadow: 0 0 6px var(--amber); }
-  50%      { box-shadow: 0 0 16px var(--amber); }
-}
-
-#progress-text,
-#started-at,
-#elapsed {
-  color: var(--ink-hi);
-  letter-spacing: 0.1em;
-}
-
-/* === Auto-scroll: диалог и фид (useStickToBottom) === */
+/* === Auto-scroll containers: dialog + feed (useStickToBottom) === */
 .dialog-scroll,
 .event-feed-scroll {
   overflow-y: auto;
   position: relative;
 }
-
-/* Диалог заполняет всю высоту panel-frame-body (и весь оверлей при maximize) —
-   без фиксированного потолка. Прокрутка — внутри .dialog-scroll. */
 .dialog-scroll {
   flex: 1;
   min-height: 0;
 }
-
-/* Лента занимает всё доступное место панели, но не выталкивает заголовок */
 .event-feed-scroll {
   flex: 1;
   min-height: 0;
@@ -186,179 +296,74 @@
   bottom: 6px;
   margin-left: auto;
   display: block;
-  background: rgba(111, 212, 204, 0.15);
-  border: 1px solid var(--mint);
-  color: var(--ink);
+  background: rgba(var(--accent-primary-rgb), 0.15);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   padding: 3px 8px;
   font-size: 10px;
   cursor: pointer;
 }
 
-/* === Resizable dashboard layout (react-resizable-panels) ===
-   #main становится flex-контейнером для горизонтального PanelGroup.
-   Внутри центральной колонки — .detail-column (flex-col): detail-header сверху,
-   под ним вертикальный PanelGroup (.detail-rows) из plan/dialog/log.
-   Переопределяет grid выше (равная специфичность #main, более поздний порядок
-   в этом же файле — побеждает); размеры панелей сохраняются в localStorage
-   (afm-cols / afm-rows). */
-#main {
-  display: flex;
-  min-height: 0;
-}
-
-.detail-column {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-  /* Внутренние отступы центральной колонки, чтобы панели не «прилипали» к краям. */
-  padding: 8px;
-  box-sizing: border-box;
-}
-
-/* Вертикальный PanelGroup занимает остаток высоты под detail-header.
-   Важно flex:1 1 0 + min-height:0, иначе внутренние панели не скроллятся. */
-.detail-rows {
-  flex: 1 1 0;
-  min-height: 0;
-}
-
-/* Стадия без plan и без dialog-истории (автономная, ничего не спрашивала) —
-   вместо пустой resizable-группы просто центрируем подсказку. */
-.detail-empty {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
+/* === Icon buttons (theme toggle, files, maximize, mode-toggle) === */
+.icon-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-/* resize-хендлы: тонкая полоса, подсвечивается при hover/active. */
-.resize-handle {
-  flex: 0 0 4px;
-  background: rgba(183, 135, 255, 0.2);
-  transition: background 0.15s;
-}
-.resize-handle:hover,
-.resize-handle[data-resize-handle-active] {
-  background: var(--violet);
-}
-.resize-handle-v {
-  cursor: col-resize;
-  width: 4px;
-}
-.resize-handle-h {
-  cursor: row-resize;
-  height: 4px;
-}
-
-/* Каркас панели: заголовок сверху, тело скроллится. */
-.panel-frame {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-}
-.panel-frame-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.panel-frame-body {
-  flex: 1;
-  min-height: 0;
-  /* flex-колонка: внутренний scroll-контейнер (dialog/event-feed) заполняет высоту;
-     для панелей без такого контейнера (plan/log) содержимое скроллится самим body. */
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-}
-/* Прямой ребёнок body (внешний враппер панели — #dialog-section, #feed-panel и т.п.)
-   заполняет высоту и сам становится flex-колонкой, иначе внутренний scroll-контейнер
-   (.dialog-scroll/.event-feed-scroll) не получит высоту и схлопнется. */
-.panel-frame-body > * {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Maximizable больше не портал: .maximizable-frame — единственная обёртка,
-   всегда на своей исходной позиции в дереве. Не-maximized — обычный
-   flex-контейнер, пробрасывающий высоту 100% дальше вниз к .panel-frame
-   (иначе scroll-контейнеры внутри, напр. event-feed-scroll, схлопнутся).
-   maximized добавляет .maximize-overlay (см. ниже) — тот же элемент, тот же
-   DOM-узел, просто position:fixed вместо обычного потока. */
-.maximizable-frame {
-  height: 100%;
-  min-height: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Иконочные кнопки (maximize, mode-toggle) — аскетичный контурный стиль. */
-.icon-btn {
   background: transparent;
-  border: 1px solid rgba(111, 212, 204, 0.4);
-  color: var(--ink);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
-  padding: 2px 6px;
+  padding: 5px 7px;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 .icon-btn:hover {
-  border-color: var(--mint);
+  color: var(--text-primary);
+  border-color: rgba(var(--accent-primary-rgb), 0.5);
+  background: var(--surface-hover);
+}
+.icon-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .icon-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 .icon-btn-on {
-  border-color: var(--mint);
-  color: var(--mint);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
-/* Оверлей максимизированной панели: position: fixed вместо обычного потока. */
-.maximize-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-  padding: 16px;
-}
-
-/* === Attention-сигнал ===
-   Когда стадия ждёт действия пользователя (awaiting_user_input / awaiting_approval),
-   подсвечиваем её в трёх местах: элемент списка стадий (сайдбар), точка в шапке и
-   рамка соответствующей панели (plan/dialog). */
+/* === Attention signal ===
+   When a stage needs the user (awaiting_user_input / awaiting_approval) we
+   highlight it in the rail row, the header dot, and the relevant panel frame. */
 @keyframes attentionPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 212, 66, 0); }
-  50%      { box-shadow: 0 0 12px 2px rgba(229, 212, 66, 0.65); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0); }
+  50%      { box-shadow: 0 0 12px 2px rgba(var(--attention-rgb), 0.55); }
 }
 
 .panel-frame.attention {
-  border: 1px solid var(--amber);
-  animation: attentionPulse 1.6s ease-in-out infinite;
+  border-color: var(--attention);
+  animation: attentionPulse 1.8s ease-in-out infinite;
 }
-
 .stages-list [data-attention='true'] {
-  animation: attentionPulse 1.6s ease-in-out infinite;
+  animation: attentionPulse 1.8s ease-in-out infinite;
 }
-
 .attention-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--amber);
-  animation: attentionPulse 1.2s ease-in-out infinite;
+  background: var(--attention);
+  animation: attentionPulse 1.4s ease-in-out infinite;
 }
 
-/* C1 — плавный кроссфейд при смене темы (data-theme) на крупных поверхностях */
-#main, #header, #footer, #stages-panel, #plan-section, #dialog-section, #feed-panel, .markdown-body {
+/* C1 — smooth cross-fade on theme change over the large surfaces. */
+#main, #header, #stages-panel, .workspace, .workspace-tabs, .panel-frame,
+#plan-section, #dialog-section, #feed-panel, .markdown-body {
   transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease;
 }

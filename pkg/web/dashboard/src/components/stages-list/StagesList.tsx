@@ -18,6 +18,11 @@ type StagesListProps = {
   // только метку (= имя кнопки), сервер сам резолвит промпт и доставляет его
   // живому агенту через Revise (тот же путь, что и «Add note for agent»).
   onButton?: (stageId: string, name: string) => void
+  // Прогресс прогона (доля done) — компактно в шапке рейла. Пришёл сюда из
+  // удалённого футера (план §5.2). Оба undefined — прогресс не рендерится
+  // (совместимость со старыми тестами StagesList без этих пропсов).
+  progressDone?: number
+  progressTotal?: number
 }
 
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
@@ -61,7 +66,7 @@ function hasKebab(stage: Stage): boolean {
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause, onButton }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause, onButton, progressDone, progressTotal }: StagesListProps): ReactElement {
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -155,7 +160,21 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
 
   return (
     <aside id="stages-panel">
-      <h2>Stages</h2>
+      <div className="rail-head">
+        <h2>Stages</h2>
+        {progressTotal !== undefined && progressTotal > 0 && (
+          <div className="rail-progress" title={`${progressDone ?? 0} of ${progressTotal} stages done`}>
+            <span id="progress-text" className="rail-progress-text">{progressDone ?? 0} / {progressTotal}</span>
+            <span className="rail-progress-bar" aria-hidden="true">
+              <span
+                id="progress-fill"
+                className="rail-progress-fill"
+                style={{ width: `${Math.round(((progressDone ?? 0) / progressTotal) * 100)}%` }}
+              />
+            </span>
+          </div>
+        )}
+      </div>
       <ul id="stages-list" className="stages-list">
         {stages.map((stage, index) => (
           <li

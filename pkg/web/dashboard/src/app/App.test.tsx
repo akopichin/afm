@@ -73,6 +73,15 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
   })
 }
 
+// Переключает воркспейс на вкладку деталей выбранной стадии (Feed — дефолтная
+// вкладка; план/диалог живут на второй, контекстной вкладке). Нужна там, где
+// тест проверяет наличие/отсутствие самой панели плана/диалога.
+function openDetail(): void {
+  const tabs = screen.getAllByRole('tab')
+  const detail = tabs.find((t) => t.textContent !== 'Feed')
+  if (detail) fireEvent.click(detail)
+}
+
 describe('App', () => {
   beforeEach(() => {
     StubWebSocket.instances = []
@@ -102,7 +111,7 @@ describe('App', () => {
       expect(document.getElementById('detail-title')).toHaveTextContent('Propose')
     })
 
-    expect(screen.getByText('OFFLINE')).toBeInTheDocument()
+    expect(screen.getByText('Offline')).toBeInTheDocument()
   })
 
   test('a significant WS event triggers a re-fetch of /api/status', async () => {
@@ -224,6 +233,7 @@ describe('App', () => {
       expect(document.getElementById('detail-title')).toHaveTextContent('Silent stage')
     })
 
+    openDetail()
     expect(document.getElementById('dialog-section')).toBeNull()
     expect(document.getElementById('plan-section')).not.toBeNull()
   })
@@ -242,6 +252,7 @@ describe('App', () => {
       expect(document.getElementById('detail-title')).toHaveTextContent('Auto-answered stage')
     })
 
+    openDetail()
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
@@ -257,6 +268,7 @@ describe('App', () => {
       expect(document.getElementById('detail-title')).toHaveTextContent('Autonomous stage')
     })
 
+    openDetail()
     expect(document.getElementById('btn-retry')).not.toBeNull()
   })
 
@@ -474,7 +486,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
     // WS никогда не открывался в этом тесте — connected остаётся false.
-    expect(screen.getByText('OFFLINE')).toBeInTheDocument()
+    expect(screen.getByText('Offline')).toBeInTheDocument()
     expect(screen.queryByText('thinking')).not.toBeInTheDocument()
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
@@ -482,7 +494,7 @@ describe('App', () => {
       ws?.onopen?.()
     })
 
-    await waitFor(() => expect(screen.getByText('LINK')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Agent online')).toBeInTheDocument())
     expect(screen.getByText('thinking')).toBeInTheDocument()
   })
 

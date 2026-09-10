@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, listNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
-import { FlowHeader } from '../components/flow-header'
+import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { EventFeedPanel } from '../components/event-feed'
-import { Footer } from '../components/footer'
 import { MaximizeProvider } from '../components/layout/Maximizable'
-import { DashboardLayout } from '../components/layout/DashboardLayout'
+import { DashboardShell } from '../components/layout/DashboardShell'
+import { WorkspaceTabs, WorkspaceHeader, type WorkspaceTabDescriptor } from '../components/workspace'
 import { FileBrowserProvider } from '../components/file-browser'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
@@ -19,10 +19,27 @@ import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
+import { attentionKindForStatus, type AttentionKind } from '../hooks/use-workspace-view'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
-import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES, STAGE_STATUS_LABELS } from '../types'
+import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES } from '../types'
+
+// Подписи контекстной вкладки воркспейса по виду attention (Approval/Question/…).
+const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
+  approval: 'Approval',
+  question: 'Question',
+  failed: 'Failed',
+  hook_failed: 'Hook failed',
+  paused: 'Paused',
+}
+
+// Активная вкладка воркспейса: постоянная лента событий либо детали выбранной
+// стадии (план/диалог/восстановление). Полноценная attention-навигация с
+// очередью на нескольких стадиях (workspace-view-редьюсер) — в M3; здесь простое
+// локальное состояние с авто-переключением на detail при появлении требующего
+// действия статуса у выбранной стадии.
+type WorkspaceTab = 'feed' | 'detail'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
@@ -155,6 +172,20 @@ export function App(): ReactElement {
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null)
   const selectedStage = stages.find((stage) => stage.id === selectedStageId) ?? null
 
+  // Активная вкладка воркспейса. 'feed' по умолчанию; авто-переключение на
+  // 'detail' — только при появлении требующего действия статуса у выбранной
+  // стадии (см. эффект ниже), НЕ на каждую смену выбора: авто-продвижение
+  // wasLive не должно вырывать пользователя из ленты.
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('feed')
+
+  // Ручной выбор стадии (клик в рейле, клик по desktop-уведомлению) — показываем
+  // её детали. Отличается от авто-продвижения (setSelectedStageId напрямую в
+  // эффекте ниже), которое вкладку НЕ трогает.
+  function handleSelectStage(stageId: string): void {
+    setSelectedStageId(stageId)
+    setActiveTab('detail')
+  }
+
   // Attention-сигнал выбранной стадии: kind='dialog' (awaiting_user_input) или
   // 'plan' (awaiting_approval). needsAttention кормит title-flash для фоновой
   // вкладки, anyAttention — точку в шапке И пульс favicon (хотя бы одна
@@ -168,7 +199,7 @@ export function App(): ReactElement {
     permission: notificationsPermission,
     requestEnable: onRequestEnableNotifications,
     disable: onDisableNotifications,
-  } = useDesktopNotifications(stages, setSelectedStageId)
+  } = useDesktopNotifications(stages, handleSelectStage)
 
   // Заголовок вкладки берём из description флоу (из flow.yaml), иначе имя флоу,
   // иначе дефолт. useTitleFlash мигает вокруг текущего title и восстанавливает
@@ -177,17 +208,23 @@ export function App(): ReactElement {
     document.title = (description ?? '').trim() || flowName || 'afm Dashboard'
   }, [description, flowName])
 
-  // Единожды прокрутить центральную колонку к панели, которой нужно действие,
-  // в момент перехода kind null→'plan'/'dialog' (или смены самой панели).
-  // PanelFrame ставит data-panel={maximizeId} на <section> — по нему и ищем.
-  const lastKind = useRef<typeof attention.kind>(null)
+  // Авто-переключение на вкладку деталей при ПОЯВЛЕНИИ требующего действия
+  // статуса у выбранной стадии (attention-arrival: null→approval/question/…).
+  // Пришло на смену прежней прокрутке к панели действия (data-panel) — в
+  // единой воркспейс-модели панель не «одна из нескольких», а сам воркспейс.
+  // Ключ — id+kind: перезагорается и когда та же стадия входит в attention
+  // повторно (например, после retry). Полноценная политика авто-открытия (один
+  // раз, с suppression при печати/просмотре файла) появится в M3 вместе с
+  // workspace-view-редьюсером; здесь — минимальное «показать действие».
+  const lastAttentionKey = useRef<string | null>(null)
   useEffect(() => {
-    if (attention.kind !== null && lastKind.current !== attention.kind) {
-      const sel = `[data-panel="${attention.kind}"]`
-      document.querySelector(sel)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    const kind = selectedStage === null ? null : attentionKindForStatus(selectedStage.status)
+    const key = kind === null || selectedStage === null ? null : `${selectedStage.id}:${kind}`
+    if (key !== null && key !== lastAttentionKey.current) {
+      setActiveTab('detail')
     }
-    lastKind.current = attention.kind
-  }, [attention.kind])
+    lastAttentionKey.current = key
+  }, [selectedStage])
 
   // showPlan/showDialog capabilities are computed server-side per stage (see
   // pkg/server/stageview.go's StageView.ShowPlan/ShowDialog) — the client only
@@ -283,13 +320,42 @@ export function App(): ReactElement {
     }
   }, [events, refresh])
 
+  // Вкладки воркспейса: постоянная Feed + контекстная вкладка выбранной стадии.
+  const detailKind = selectedStage === null ? null : attentionKindForStatus(selectedStage.status)
+  // Счётчик «· N» — сколько стадий прогона сейчас в том же виде attention.
+  const attentionCount = detailKind === null ? 0 : stages.filter((s) => attentionKindForStatus(s.status) === detailKind).length
+  const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
+  if (selectedStage !== null) {
+    tabs.push({
+      id: 'detail',
+      label: detailKind !== null ? ATTENTION_TAB_LABEL[detailKind] : (selectedStage.name !== '' ? selectedStage.name : selectedStage.id),
+      kind: detailKind ?? undefined,
+      count: detailKind !== null ? attentionCount : undefined,
+      glow: detailKind !== null,
+    })
+  }
+  // 'detail' валидна только при выбранной стадии; иначе всегда 'feed'.
+  const effectiveTab: WorkspaceTab = selectedStage === null ? 'feed' : activeTab
+
+  const detailPanels: ReactElement[] = []
+  if (selectedStage !== null && showPlan) {
+    detailPanels.push(<PlanPanel key="plan" stage={selectedStage} attention={detailKind === 'approval'} />)
+  }
+  if (selectedStage !== null && showDialog) {
+    detailPanels.push(<DialogChannel key="dialog" stage={selectedStage} attention={detailKind === 'question'} />)
+  }
+
   return (
     <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState}>
-      <FlowHeader
+      <GlobalHeader
         flowName={flowName}
+        description={description}
         connected={connected}
         attention={anyAttention}
-        description={description}
+        startedAt={startedAt}
+        elapsedMs={elapsedMs}
+        idleMs={idleMs}
+        backoffMs={backoffMs}
         notificationsPermission={notificationsPermission}
         notificationsEnabled={notificationsEnabled}
         onRequestEnableNotifications={onRequestEnableNotifications}
@@ -305,58 +371,40 @@ export function App(): ReactElement {
       />
 
       <main id="main">
-        <div className="ray" aria-hidden="true" />
-
         <MaximizeProvider>
-          <DashboardLayout
-            stages={
+          <DashboardShell
+            rail={
               <StagesList
                 stages={stages}
                 selectedStageId={selectedStageId}
-                onSelect={setSelectedStageId}
+                onSelect={handleSelectStage}
                 onAddNote={setNoteModalStageId}
                 onEditPreNote={setPreNoteModalStageId}
                 onPause={handlePause}
                 onButton={handleButton}
+                progressDone={stages.filter((s) => s.status === 'done').length}
+                progressTotal={stages.length}
               />
             }
-            stageHeader={
-              selectedStage === null ? null : (
-                <>
-                  <h2 id="detail-title">{selectedStage.name !== '' ? selectedStage.name : selectedStage.id}</h2>
-                  <span className="status-badge-wrap">
-                    <span id="detail-status" className="status-badge" data-status={selectedStage.status}>
-                      {STAGE_STATUS_LABELS[selectedStage.status]}
-                    </span>
-                    {selectedStage.status === 'running' && connected && (
-                      <span className="thinking" aria-hidden="true">
-                        <span className="td" />
-                        <span className="td" />
-                        <span className="td" />
-                        thinking
-                      </span>
-                    )}
-                  </span>
-                  <span className="ornament" aria-hidden="true">
-                    <svg viewBox="0 0 100 100" fill="none" stroke="#6fd4cc" strokeWidth="1">
-                      <circle cx="50" cy="50" r="46" />
-                      <circle cx="50" cy="50" r="32" />
-                      <path d="M50 6 L52 50 L50 94 L48 50 Z" fill="#6fd4cc" stroke="none" />
-                      <path d="M6 50 L50 48 L94 50 L50 52 Z" fill="#6fd4cc" stroke="none" />
-                      <circle cx="50" cy="50" r="3" fill="#e5d442" stroke="none" />
-                    </svg>
-                  </span>
-                </>
-              )
+            tabs={<WorkspaceTabs tabs={tabs} activeId={effectiveTab} onSelect={(id) => setActiveTab(id as WorkspaceTab)} />}
+            workspace={
+              <>
+                {/* Контекст выбранной стадии (имя + статус) — общая шапка
+                    воркспейса и для Feed, и для деталей (мокап показывает
+                    контекст стадии над лентой). */}
+                {selectedStage !== null && <WorkspaceHeader stage={selectedStage} connected={connected} />}
+                {effectiveTab === 'feed' || selectedStage === null ? (
+                  <EventFeedPanel events={events} logEntries={logEntries} />
+                ) : detailPanels.length === 0 ? (
+                  <div className="detail-empty empty-hint">Nothing to show for this stage</div>
+                ) : (
+                  <div className="detail-panels">{detailPanels}</div>
+                )}
+              </>
             }
-            plan={showPlan ? <PlanPanel stage={selectedStage} attention={attention.kind === 'plan'} /> : null}
-            dialog={showDialog ? <DialogChannel stage={selectedStage} attention={attention.kind === 'dialog'} /> : null}
-            feed={<EventFeedPanel events={events} logEntries={logEntries} />}
           />
         </MaximizeProvider>
       </main>
-
-      <Footer stages={stages} startedAt={startedAt} elapsedMs={elapsedMs} idleMs={idleMs} backoffMs={backoffMs} />
 
       {noteModalStageId !== null && (
         <AgentNoteModal

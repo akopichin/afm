@@ -198,8 +198,8 @@ func TestServer_ServesBaseSkinPartial(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /skins/base/header.css: got %d, want 200", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), ".logo") {
-		t.Error("skins/base/header.css должен содержать структурные правила .logo")
+	if !strings.Contains(w.Body.String(), ".global-header") {
+		t.Error("skins/base/header.css должен содержать структурные правила .global-header")
 	}
 }
 

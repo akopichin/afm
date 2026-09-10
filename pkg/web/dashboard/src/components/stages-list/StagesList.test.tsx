@@ -4,6 +4,21 @@ import type { Stage } from '../../types'
 import { StagesList } from './StagesList'
 
 describe('StagesList', () => {
+  test('renders rail progress (done / total) when progress props are given', () => {
+    const stages: Stage[] = [
+      { id: 's1', name: 'A', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+      { id: 's2', name: 'B', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} />)
+    expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
+    expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
+  })
+
+  test('omits rail progress when props are absent (0/0 stays safe)', () => {
+    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} />)
+    expect(document.getElementById('progress-text')).toBeNull()
+  })
+
   test('marks the selected stage active and calls onSelect on click', () => {
     const stages: Stage[] = [
       { id: 's1', name: 'Propose', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
