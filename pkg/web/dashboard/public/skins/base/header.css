@@ -148,7 +148,12 @@
   height: 34px;
   padding: 0;
 }
-.header-actions .icon-btn.gh-files-btn { width: auto; }
+.header-actions .icon-btn.gh-files-btn {
+  width: auto;
+  height: 34px;
+  padding: 0 14px;
+  gap: 7px;
+}
 .header-actions .icon-btn.icon-btn-on { color: var(--accent-primary); }
 
 /* === Connection indicator (was .ws-status boxy pill → calm dot + text) === */

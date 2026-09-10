@@ -17,19 +17,25 @@
 }
 
 .stage-kebab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   background: transparent;
   border: none;
-  color: var(--ink-dim);
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
-  padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s ease, background 0.12s ease;
 }
 .stage-kebab:hover {
-  color: var(--ink);
-  background: var(--mint-soft);
+  color: var(--text-primary);
+  background: var(--surface-hover);
 }
+.stage-kebab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 /* position: fixed + top/left вычисляются в JS (StagesList.tsx, от getBoundingClientRect
    кнопки) и рендерятся порталом в document.body — #stages-panel скроллится
@@ -37,12 +43,12 @@
 .stage-kebab-menu {
   list-style: none;
   min-width: 200px;
-  background: var(--panel-bg);
-  border: 1px solid var(--mint-soft);
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(var(--overlay-scrim-rgb), 0.35);
+  background: var(--surface-overlay);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
   z-index: 10;
-  padding: 4px;
+  padding: 6px;
 }
 
 .stage-kebab-menu button {
@@ -51,23 +57,26 @@
   text-align: left;
   background: transparent;
   border: none;
-  color: var(--ink);
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  padding: 8px 10px;
-  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  letter-spacing: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  transition: color 0.12s ease, background 0.12s ease;
 }
 .stage-kebab-menu button:hover {
-  background: var(--mint-soft);
+  color: var(--text-primary);
+  background: var(--surface-hover);
 }
 
 /* Разделитель между «Add note for agent» и сабблоком кастомных кнопок стадии
    (flow.yaml). Показывается только когда у стадии реально объявлены кнопки. */
 .stage-kebab-divider {
   height: 1px;
-  margin: 4px 6px;
-  background: var(--mint-soft);
+  margin: 6px 8px;
+  background: var(--separator-subtle);
 }
 
 /* === Модалка «Добавить поправку агенту» === */
@@ -78,43 +87,45 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(var(--overlay-scrim-rgb), 0.5);
+  background: var(--overlay-scrim);
   padding: 16px;
 }
 
 .modal-content {
-  background: var(--panel-bg);
-  border: 1px solid var(--mint-soft);
-  border-radius: 6px;
-  padding: 20px;
-  max-width: 480px;
+  background: var(--surface-overlay);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  padding: 22px;
+  max-width: 520px;
   width: 100%;
 }
 
 .agent-note-warning {
-  color: var(--amber);
-  font-size: 12px;
-  line-height: 1.5;
-  margin-bottom: 12px;
+  color: var(--attention);
+  font-size: 13px;
+  line-height: 1.55;
+  margin-bottom: 14px;
 }
 
 .agent-note-textarea {
   width: 100%;
-  background: var(--bg);
-  color: var(--ink);
-  border: 1px solid var(--mint-soft);
-  border-radius: 4px;
-  padding: 10px;
-  font-family: inherit;
-  font-size: 12px;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
   resize: vertical;
-  margin-bottom: 14px;
-  min-height: 60px;
+  margin-bottom: 16px;
+  min-height: 72px;
   overflow-y: auto;
 }
 .agent-note-textarea:focus {
   outline: none;
-  border-color: var(--mint);
+  border-color: var(--accent-primary);
 }
 
 .modal-actions {

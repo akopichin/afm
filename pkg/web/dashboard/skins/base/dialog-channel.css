@@ -306,6 +306,29 @@
   overflow: visible;
 }
 
+/* Вопрос — чистая проза (sans), а не код с номерами строк: макет показывает
+   текст вопроса обычным шрифтом. Убираем колонку номеров и маркер, ставим
+   UI-шрифт и крупнее; блоки кода внутри остаются mono. Клик по строке для
+   комментария сохраняется (сам .plan-line остаётся кликабельным). */
+.workspace-body .dialog-question .plan-line {
+  grid-template-columns: 1fr;
+  gap: 0;
+  padding: 2px 0;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.65;
+}
+.workspace-body .dialog-question .line-num,
+.workspace-body .dialog-question .line-comment-marker { display: none; }
+.workspace-body .dialog-question .line-content {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+.workspace-body .dialog-question .line-content code,
+.workspace-body .dialog-question .line-content pre { font-family: var(--font-mono); }
+
 /* Options → full-width rows; long labels wrap, letter/selected/hover kept. */
 .workspace-body .dialog-pending .dialog-options {
   flex-direction: column;
@@ -317,11 +340,17 @@
   align-items: flex-start;
   text-align: left;
   white-space: normal;
-  /* Полноширинные опции — обычный регистр и спейсинг: длинные предложения
-     ("Blue / Green — deploy alongside…") читаются как проза, а не как капслок. */
+  /* Полноширинные опции обычной прозой (sans), не капслок-моно. */
+  font-family: var(--font-ui);
+  font-size: 14px;
   text-transform: none;
   letter-spacing: normal;
   line-height: 1.5;
+}
+/* Кастомный ответ — тоже UI-шрифт. */
+.workspace-body .dialog-pending .dialog-custom {
+  font-family: var(--font-ui);
+  font-size: 14px;
 }
 
 /* Custom answer textarea → full width, roomier auto-growing look. */
