@@ -55,12 +55,21 @@ func (e *StepError) Error() string {
 
 func (e *StepError) Unwrap() error { return e.Err }
 
+// Значения поля DatasetResult.Source.
+const (
+	// SourceReused — переиспользован уже существующий канонический
+	// reflect_dataset.yaml стадии.
+	SourceReused = "reused"
+	// SourceGenerated — датасет сгенерирован заново и ждёт публикации.
+	SourceGenerated = "generated"
+)
+
 // DatasetResult — итог обработки reflect_dataset.yaml одной стадии: либо
-// переиспользован уже существующий канонический файл ("reused"), либо
-// сгенерирован заново и ждёт публикации ("generated") — см. review #2/#8.
+// переиспользован уже существующий канонический файл (SourceReused), либо
+// сгенерирован заново и ждёт публикации (SourceGenerated) — см. review #2/#8.
 type DatasetResult struct {
 	StageID     string `json:"stage_id"`
-	Source      string `json:"source"` // "reused" | "generated"
+	Source      string `json:"source"` // SourceReused | SourceGenerated
 	DatasetPath string `json:"dataset_path"`
 	// SourceFiles/SourceHashes — входные файлы, которые читал reflect-агент,
 	// и их SHA-256, позиционно выровненные (SourceHashes[i] — хэш

@@ -75,7 +75,7 @@ func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir,
 			if verr := ValidateDataset(data); verr == nil {
 				return DatasetResult{
 					StageID:       stage.ID,
-					Source:        "reused",
+					Source:        SourceReused,
 					DatasetPath:   canonical,
 					CanonicalPath: canonical,
 					DatasetSHA256: sha256Hex(data),
@@ -134,7 +134,7 @@ func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir,
 	}
 	return DatasetResult{
 		StageID:       stage.ID,
-		Source:        "generated",
+		Source:        SourceGenerated,
 		DatasetPath:   datasetOut,
 		CanonicalPath: canonical,
 		SourceFiles:   sources,
@@ -419,7 +419,7 @@ func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, e
 
 	for i := range datasets {
 		d := &datasets[i]
-		if d.Source != "generated" || !d.Changed {
+		if d.Source != SourceGenerated || !d.Changed {
 			continue
 		}
 		cand, err := os.ReadFile(d.DatasetPath)
@@ -485,7 +485,7 @@ func computeTargetDiff(tr *TargetResult) error {
 // (staging) bytes differ from the canonical file (a missing canonical counts
 // as changed). Reused datasets already point at canonical — nothing to do.
 func computeDatasetChanged(d *DatasetResult) error {
-	if d.Source != "generated" {
+	if d.Source != SourceGenerated {
 		return nil
 	}
 	cand, err := os.ReadFile(d.DatasetPath)
