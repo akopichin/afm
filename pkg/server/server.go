@@ -235,7 +235,8 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/flow/", s.routeFlow)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {
-		mux.Handle(customSkinRoute, http.StripPrefix(customSkinRoute, s.customSkinServer))
+		// custom skin CSS — тоже фиксированное имя, не кэшируем (см. serveStatic).
+		mux.Handle(customSkinRoute, http.StripPrefix(customSkinRoute, noStore(s.customSkinServer)))
 	}
 	mux.HandleFunc("/", s.serveStatic)
 
@@ -272,10 +273,31 @@ func (s *Server) embeddedFavicon(skinName string) (href, mime string, found bool
 
 // serveStatic отдаёт index.html (с подставленным скином) для "/" и "/index.html",
 // остальную статику делегирует на FileServer.
+// noStore оборачивает handler, добавляя Cache-Control: no-store — для статики с
+// фиксированными именами (custom skin CSS), которую нельзя кэшировать между
+// пересборками/сменами skin_dir.
+func noStore(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		h.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 		s.serveIndex(w, r)
 		return
+	}
+	// Скины (/skins/*) отдаются с ФИКСИРОВАННЫМИ именами (skins/base/layout.css,
+	// skins/graphite/index.css …), в отличие от контент-хэшированного JS-бандла
+	// (/assets/index-<hash>.js). Файлы embed.FS имеют нулевой modtime, поэтому
+	// http.FileServer не ставит Last-Modified/ETag — и браузер эвристически
+	// кэширует старый CSS между пересборками образа (симптом: «дизайн не
+	// обновился после rebuild»). no-store заставляет браузер всегда брать
+	// свежий CSS; для локального дашборда это дёшево. Хэшированный /assets/*
+	// не трогаем — он безопасно кэшируется навсегда.
+	if strings.HasPrefix(r.URL.Path, "/skins/") {
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	}
 	s.fileServer.ServeHTTP(w, r)
 }
@@ -283,6 +305,10 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 // serveIndex отдаёт предподготовленный index.html. Если embed-чтение не удалось
 // (indexBytes пуст), fallback на FileServer — защита от регрессии embed.
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
+	// index.html тоже с фиксированным именем и подменяется на лету (скин/
+	// favicon) — не должен кэшироваться, иначе браузер отдаст старую ссылку на
+	// assets/skins после пересборки.
+	w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	if len(s.indexBytes) == 0 {
 		s.fileServer.ServeHTTP(w, r)
 		return

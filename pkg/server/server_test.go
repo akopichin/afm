@@ -203,6 +203,23 @@ func TestServer_ServesBaseSkinPartial(t *testing.T) {
 	}
 }
 
+// Скины отдаются с фиксированными именами и меняются между пересборками —
+// браузер не должен кэшировать старый CSS (иначе «дизайн не обновился после
+// rebuild»). Проверяем no-store и на CSS скина, и на index.html.
+func TestServer_SkinsAndIndexAreNotCached(t *testing.T) {
+	srv := New(Config{})
+	handler := srv.Handler()
+
+	for _, path := range []string{"/skins/base/header.css", "/skins/graphite/index.css", "/", "/index.html"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+			t.Errorf("GET %s: Cache-Control=%q, ожидался no-store", path, cc)
+		}
+	}
+}
+
 func TestServer_SkinDirOverridesTheme(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root[data-theme="dark"]{--mint:#123456;}`), 0644); err != nil {
