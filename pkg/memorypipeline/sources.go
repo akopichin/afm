@@ -79,7 +79,7 @@ func isDialog(n string) bool {
 // stage-директорию (reflect_dataset.yaml и промежуточные *.md шагов
 // aggregate/prioritize/update). Их нельзя скармливать reflect-агенту как
 // исходник — иначе конвейер читал бы собственный вывод предыдущих прогонов.
-var artifactPrefixes = []string{"reflect", "aggregate", "prioritize", "update", "patterns", "prioritized", "high"}
+var artifactPrefixes = []string{"reflect", "aggregate", "prioritize", "update", "patterns", "high"}
 
 func isArtifact(n string) bool {
 	if n == "reflect_dataset.yaml" {

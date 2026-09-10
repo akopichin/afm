@@ -136,7 +136,7 @@ func (o *Orchestrator) runEndOfRunMemory(ctx context.Context) {
 	// attempt's real output.
 	workDir, err := memorypipeline.NewUniqueAttemptDir(filepath.Join(o.opts.RunDir, ".memory-finalize"), newOperationID)
 	if err != nil {
-		o.reflectFailed(flowMemoryLabel, "memory-lock", err)
+		o.reflectFailed(flowMemoryLabel, "workdir", err)
 		return
 	}
 

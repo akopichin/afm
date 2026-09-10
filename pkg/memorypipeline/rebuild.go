@@ -233,12 +233,6 @@ func buildStageGroups(stages []flow.Stage, memoryDir string) []stageGroup {
 // (review #2). The step ORDER is load-bearing (containment pre-check ->
 // distill -> diff -> ctx check -> promote); see the inline step comments.
 func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, error) {
-	// The memory dir must exist so EvalSymlinks (containment) resolves and the
-	// promotion writes land — create it up front (idempotent).
-	if err := os.MkdirAll(req.MemoryDir, 0755); err != nil {
-		return Report{}, err
-	}
-
 	man, err := loadManifestIfSet(req.ManifestPath)
 	if err != nil {
 		return Report{}, err
@@ -374,6 +368,15 @@ func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, e
 	// is no longer consulted. On a mid-promotion error we leave the manifest
 	// "promoting" with accurate Published flags (no rollback) so recovery can
 	// resume from disk.
+	//
+	// Only the real publish path needs MemoryDir to exist on disk — dry run
+	// (handled above) distills into WorkDir and only READS real targets (a
+	// missing target is treated as empty), so it must never create an empty
+	// memory dir as a side effect (final-review Fix 1: "writes nothing" must
+	// hold literally, including "creates nothing").
+	if err := os.MkdirAll(req.MemoryDir, 0755); err != nil {
+		return report(), err
+	}
 	if err := writeManifest(StatusPromoting); err != nil {
 		return report(), err
 	}
@@ -539,11 +542,20 @@ func datasetPathForStage(datasets []DatasetResult, stageID string) (string, bool
 
 // validateTargetUnderMemoryDir rejects a final target whose real location
 // escapes memoryDir or whose deepest-existing path component is a symlink
-// (review #5). memoryDir must exist by call time (Finalize MkdirAll's it).
+// (review #5). memoryDir itself need NOT exist (Fix 1, final review: dry run
+// no longer MkdirAll's it) — its deepest-existing ancestor is resolved with
+// the same splitAtExisting technique used below for the target's ancestor,
+// so a fresh memory.path still containment-checks correctly, and a dangling
+// symlink ancestor of memoryDir is still rejected rather than silently
+// swallowed.
 func validateTargetUnderMemoryDir(memoryDir, target string) error {
-	md, err := filepath.EvalSymlinks(memoryDir)
+	mdExisting, mdMissing := splitAtExisting(memoryDir)
+	md, err := filepath.EvalSymlinks(mdExisting)
 	if err != nil {
 		return fmt.Errorf("resolve memory dir: %w", err)
+	}
+	for i := len(mdMissing) - 1; i >= 0; i-- {
+		md = filepath.Join(md, mdMissing[i])
 	}
 	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("target %s is a symlink", target)

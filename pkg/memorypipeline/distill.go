@@ -137,9 +137,8 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
 
 	// update's output IS the seeded candidate — do not remove-before; it may
 	// legitimately be unchanged. Reject a symlink swap (Lstat, not Stat).
-	info, err := os.Lstat(a.CandidatePath)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return a, &StepError{Target: t.Name, Step: KindUpdate, Err: fmt.Errorf("candidate missing or not a regular file: %v", err)}
+	if err := requireRegularCandidate(a.CandidatePath); err != nil {
+		return a, &StepError{Target: t.Name, Step: KindUpdate, Err: err}
 	}
 	cand, err := os.ReadFile(a.CandidatePath)
 	if err != nil {
@@ -149,6 +148,27 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
 		return a, &StepError{Target: t.Name, Step: KindUpdate, Err: err}
 	}
 	return a, nil
+}
+
+// requireRegularCandidate proves the "update" step left the candidate file in
+// a safe state: present, not a symlink (Lstat, not Stat — a symlink swap must
+// not be followed), and a regular file. Unlike requireFreshFile it tolerates
+// the bytes being unchanged (update's output IS the seeded candidate). Each
+// failure mode gets its own message — a bare Lstat error (missing/unreadable)
+// never had a non-nil err to report when the cause was actually a symlink or
+// an irregular file, which used to render as "...: <nil>".
+func requireRegularCandidate(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("candidate %s missing: %w", filepath.Base(path), err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("candidate %s is a symlink", filepath.Base(path))
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("candidate %s is not a regular file", filepath.Base(path))
+	}
+	return nil
 }
 
 // seedCandidate copies seedFrom's bytes to candidate (atomically). A

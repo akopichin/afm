@@ -459,6 +459,65 @@ func TestFinalize_DryRunLeavesTargetsUntouched(t *testing.T) {
 	}
 }
 
+// TestFinalize_DryRunDoesNotCreateMemoryDir is the regression guard for the
+// final-review Fix 1: a dry run against a FRESH (non-existent) memory.path
+// must leave no trace on disk at all — not even an empty directory. Before
+// the fix, Finalize unconditionally MkdirAll'd req.MemoryDir near the top,
+// so a dry run on a brand-new project silently created memory.path even
+// though the documented contract is "dry run writes nothing".
+func TestFinalize_DryRunDoesNotCreateMemoryDir(t *testing.T) {
+	base := t.TempDir()
+	mem := filepath.Join(base, "memory") // deliberately never created
+	run := t.TempDir()
+	work := t.TempDir()
+
+	manifestPath := filepath.Join(work, "manifest.json")
+	writeManifestFile(t, manifestPath, StatusCapturing)
+
+	ds := stagingDataset(t, work, run, "s1")
+	var writes []writeRec
+
+	p := New(Prompts{}, AgentConfig{}, WithRunner(distillRunner(nil)))
+	rep, err := p.Finalize(context.Background(), FinalizeRequest{
+		Meta:         testMeta(),
+		RunDir:       run,
+		WorkDir:      work,
+		MemoryDir:    mem,
+		Stages:       []flow.Stage{rwStage("s1", "s1.md")},
+		Memory:       flow.MemoryConfig{Mode: flow.ReflectModeRW, MaxRules: 25},
+		Datasets:     []DatasetResult{ds},
+		DryRun:       true,
+		ManifestPath: manifestPath,
+		writer:       recordingWriter(&writes),
+	})
+	if err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if len(writes) != 0 {
+		t.Errorf("dry run wrote %d files: %+v", len(writes), writes)
+	}
+	if _, err := os.Stat(mem); !os.IsNotExist(err) {
+		t.Errorf("dry run must not create memory dir %s, stat err=%v", mem, err)
+	}
+	if len(rep.Targets) != 2 {
+		t.Fatalf("report targets=%d want 2", len(rep.Targets))
+	}
+	for _, tr := range rep.Targets {
+		// A missing final target is treated as empty, so a fresh target
+		// candidate still counts as "changed" against it.
+		if !tr.Changed || tr.Diff == "" {
+			t.Errorf("target %q expected changed with diff", tr.Label)
+		}
+		if tr.Published {
+			t.Errorf("target %q must not be published in dry run", tr.Label)
+		}
+	}
+	m, _ := LoadManifest(manifestPath)
+	if m.Status != StatusDryRun {
+		t.Errorf("manifest status=%q want dry_run", m.Status)
+	}
+}
+
 func TestFinalize_PublishOnlyChanged(t *testing.T) {
 	mem := t.TempDir()
 	run := t.TempDir()
