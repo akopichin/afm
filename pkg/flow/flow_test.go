@@ -934,13 +934,23 @@ func TestValidateMemory_ReflectRequiresPath(t *testing.T) {
 	yaml := `
 name: f
 stages:
-  - name: build
+  - id: build
+    name: build
     reflect:
       file: build.md
     agents: [planning, implementation]
 `
-	if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
+	// The stage needs a valid id: here — without one, validate()'s mandatory
+	// safePathComponent(s.ID) check (which runs BEFORE the reflect checks)
+	// fires first and masks the assertion this test claims to verify (it
+	// used to pass for the wrong reason: any parse error satisfied err==nil
+	// check, including "id must be a safe path component").
+	_, err := flow.ParseFile(writeTemp(t, yaml))
+	if err == nil {
 		t.Fatal("expected error: reflect without memory.path")
+	}
+	if !strings.Contains(err.Error(), "reflect requires memory.path") {
+		t.Fatalf("expected the reflect-requires-memory.path error, got: %v", err)
 	}
 }
 

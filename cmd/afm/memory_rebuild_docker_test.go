@@ -191,6 +191,58 @@ func TestRebuildDockerPreflight_EmptyPathsSkipped(t *testing.T) {
 	}
 }
 
+// TestRebuildDockerPreflight_RelativePathUnderRootPasses reproduces the
+// critical bug: on the default invocation rootDir defaults to "." and
+// runDir = runsDir() = "<rootDir>/.afm/runs/<id>" is therefore RELATIVE,
+// while the reachable roots (projectDir/extra_mounts) are always absolute —
+// a raw string comparison between a relative and an absolute path always
+// fails containment, breaking `afm memory rebuild` under Docker for the
+// default case. rebuildDockerPreflight must normalize named paths to
+// absolute (relative to the same cwd absRoot was resolved from) before the
+// containment check.
+func TestRebuildDockerPreflight_RelativePathUnderRootPasses(t *testing.T) {
+	chdirTemp(t)
+	// os.Getwd() (not the raw t.TempDir() string) is the correct baseline
+	// here: filepath.Abs resolves a relative path against os.Getwd()
+	// internally, and on macOS t.TempDir() returns a "/var/folders/..."
+	// path that is itself a symlink to "/private/var/folders/..." — so
+	// filepath.Abs(dir) and filepath.Abs(relRunDir) would disagree unless
+	// both go through os.Getwd().
+	absRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relRunDir := filepath.Join(".afm", "runs", "flow-20260101-000000-aaaa")
+
+	err = rebuildDockerPreflight(absRoot, nil, map[string]string{
+		"run dir": relRunDir,
+	})
+	if err != nil {
+		t.Fatalf("expected a relative path under the cwd-resolved root to pass, got %v", err)
+	}
+}
+
+// TestRebuildDockerPreflight_RelativePathOutsideRootFails proves the Abs
+// normalization does not just always pass: a relative path that resolves
+// (against cwd) to somewhere outside the project root must still fail.
+func TestRebuildDockerPreflight_RelativePathOutsideRootFails(t *testing.T) {
+	chdirTemp(t)
+	absRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = rebuildDockerPreflight(absRoot, nil, map[string]string{
+		"run dir": "../outside/.afm/runs/r1",
+	})
+	if err == nil {
+		t.Fatal("expected an error for a relative path resolving outside the project root")
+	}
+	if !strings.Contains(err.Error(), "run dir") {
+		t.Errorf("expected error to name the label, got: %v", err)
+	}
+}
+
 func TestRebuildDockerPreflight_UnreachablePathFails(t *testing.T) {
 	err := rebuildDockerPreflight("/abs/root", nil, map[string]string{
 		"agent root": "/somewhere/else",

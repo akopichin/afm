@@ -201,9 +201,14 @@ type stageGroup struct {
 	stages    []flow.Stage
 }
 
-// buildStageGroups groups eligible write-reflect stages by their resolved
-// reflect.File, preserving first-declaration order both across groups and
-// within a group.
+// buildStageGroups groups eligible write-reflect stages by their RESOLVED
+// final path (memory.StageFile(memoryDir, s.Reflect.File)), not the raw
+// reflect.File string — two stages declaring "a.md" and "./a.md" both pass
+// flow validation but are different raw strings that resolve to the SAME
+// file; keying by the raw string would put them in separate groups whose
+// finalPath collides, and the second group's promotion would silently
+// clobber the first's memory instead of chaining onto it. Preserves
+// first-declaration order both across groups and within a group.
 func buildStageGroups(stages []flow.Stage, memoryDir string) []stageGroup {
 	idx := map[string]int{}
 	var groups []stageGroup
@@ -211,14 +216,15 @@ func buildStageGroups(stages []flow.Stage, memoryDir string) []stageGroup {
 		if !isWriteReflect(s) {
 			continue
 		}
-		if i, ok := idx[s.Reflect.File]; ok {
+		finalPath := memory.StageFile(memoryDir, s.Reflect.File)
+		if i, ok := idx[finalPath]; ok {
 			groups[i].stages = append(groups[i].stages, s)
 			continue
 		}
-		idx[s.Reflect.File] = len(groups)
+		idx[finalPath] = len(groups)
 		groups = append(groups, stageGroup{
 			file:      s.Reflect.File,
-			finalPath: memory.StageFile(memoryDir, s.Reflect.File),
+			finalPath: finalPath,
 			stages:    []flow.Stage{s},
 		})
 	}

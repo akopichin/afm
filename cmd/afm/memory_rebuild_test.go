@@ -33,6 +33,62 @@ func TestMemoryRebuildCmd_CommitFlagsMutuallyExclusive(t *testing.T) {
 	}
 }
 
+// TestParseCommitFlags_NoCommitFalseDoesNotForceNoCommit covers the
+// symmetry fix: --commit already only forces a commit when its value is
+// true (GetBool("commit")); --no-commit used to force Commit=false on bare
+// Changed() alone, so an explicit "--no-commit=false" wrongly behaved like
+// "--no-commit". It must now be a no-op, exactly like "--commit=false" is.
+func TestParseCommitFlags_NoCommitFalseDoesNotForceNoCommit(t *testing.T) {
+	cmd := newMemoryRebuildCmd()
+	if err := cmd.Flags().Parse([]string{"--no-commit=false"}); err != nil {
+		t.Fatal(err)
+	}
+	commitSet, commit, err := parseCommitFlags(cmd)
+	if err != nil {
+		t.Fatalf("parseCommitFlags: %v", err)
+	}
+	if commitSet {
+		t.Error("commitSet = true, want false (--no-commit=false must be a no-op)")
+	}
+	if commit {
+		t.Error("commit = true, want false")
+	}
+}
+
+// TestParseCommitFlags_NoCommitTrueForcesNoCommit is the positive control:
+// a bare --no-commit (value true) still forces no-commit as before.
+func TestParseCommitFlags_NoCommitTrueForcesNoCommit(t *testing.T) {
+	cmd := newMemoryRebuildCmd()
+	if err := cmd.Flags().Parse([]string{"--no-commit"}); err != nil {
+		t.Fatal(err)
+	}
+	commitSet, commit, err := parseCommitFlags(cmd)
+	if err != nil {
+		t.Fatalf("parseCommitFlags: %v", err)
+	}
+	if !commitSet {
+		t.Error("commitSet = false, want true")
+	}
+	if commit {
+		t.Error("commit = true, want false (no-commit forced)")
+	}
+}
+
+// TestParseCommitFlags_MutualExclusionStillFires re-proves the mutual
+// exclusion at the parseCommitFlags level (not just through the full
+// command in TestMemoryRebuildCmd_CommitFlagsMutuallyExclusive above), for
+// the bare "--commit --no-commit" combination.
+func TestParseCommitFlags_MutualExclusionStillFires(t *testing.T) {
+	cmd := newMemoryRebuildCmd()
+	if err := cmd.Flags().Parse([]string{"--commit", "--no-commit"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := parseCommitFlags(cmd)
+	if err == nil || !strings.Contains(err.Error(), "exclusive") {
+		t.Fatalf("want mutual-exclusion error, got %v", err)
+	}
+}
+
 func TestResolveExplicitRunDir(t *testing.T) {
 	base := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(base, "flow-20260101-000000-aaaa"), 0755); err != nil {

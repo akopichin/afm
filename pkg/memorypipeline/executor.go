@@ -12,17 +12,14 @@ import (
 // Зеркалит runJSONFixAgent, но синхронный: конвейер уже крутится в отдельной
 // (SpawnDetached) горутине и вызывает шаги последовательно.
 //
-// spec.Command пусто → используется дефолтная команда клиента (cfg.Command/
-// cfg.ExtraArgs) — сохраняет прежнюю семантику resolveMemoryCommand.
+// Всегда использует дефолтную команду клиента (cfg.Command/cfg.ExtraArgs) —
+// каждый шаг конвейера памяти запускается одним и тем же настроенным
+// агентом, per-spec переопределения команды нет.
 func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 	return func(ctx context.Context, spec AgentSpec) error {
-		cmd, extra := spec.Command, []string(nil)
-		if cmd == "" {
-			cmd, extra = cfg.Command, cfg.ExtraArgs
-		}
 		ex := executor.New(executor.Config{
-			Command:     cmd,
-			ExtraArgs:   executor.ResolveArgs(extra),
+			Command:     cfg.Command,
+			ExtraArgs:   executor.ResolveArgs(cfg.ExtraArgs),
 			IdleTimeout: cfg.IdleTimeout,
 			WrapperDir:  cfg.WrapperDir,
 			Dir:         cfg.RootDir,

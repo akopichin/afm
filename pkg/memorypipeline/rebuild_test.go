@@ -946,3 +946,47 @@ func TestCanonicalizeExistingAncestor_RejoinsMissingComponents(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// --- buildStageGroups --------------------------------------------------
+
+// TestBuildStageGroups_EquivalentSpellingsCollapseIntoOneGroup reproduces
+// the clobbering bug: two stages whose reflect.File spellings differ
+// ("a.md" vs "./a.md") but resolve to the SAME final path must land in ONE
+// group (chained), not two groups that both target the same finalPath and
+// silently clobber each other on promotion. Keying buildStageGroups' idx by
+// the raw reflect.File string (instead of the resolved finalPath) produced
+// two groups here.
+func TestBuildStageGroups_EquivalentSpellingsCollapseIntoOneGroup(t *testing.T) {
+	mem := t.TempDir()
+	stages := []flow.Stage{rwStage("s1", "a.md"), rwStage("s2", "./a.md")}
+
+	groups := buildStageGroups(stages, mem)
+
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1 (equivalent spellings must collapse): %+v", len(groups), groups)
+	}
+	g := groups[0]
+	if len(g.stages) != 2 {
+		t.Fatalf("group has %d stages, want 2 (both s1 and s2 chained): %+v", len(g.stages), g.stages)
+	}
+	if g.stages[0].ID != "s1" || g.stages[1].ID != "s2" {
+		t.Errorf("stage order not preserved: got [%s, %s], want [s1, s2]", g.stages[0].ID, g.stages[1].ID)
+	}
+	wantFinal := memory.StageFile(mem, "a.md")
+	if g.finalPath != wantFinal {
+		t.Errorf("finalPath = %q, want %q", g.finalPath, wantFinal)
+	}
+}
+
+// TestBuildStageGroups_DistinctFilesStayInSeparateGroups is the negative
+// control: two genuinely distinct reflect.File targets must NOT be merged.
+func TestBuildStageGroups_DistinctFilesStayInSeparateGroups(t *testing.T) {
+	mem := t.TempDir()
+	stages := []flow.Stage{rwStage("s1", "a.md"), rwStage("s2", "b.md")}
+
+	groups := buildStageGroups(stages, mem)
+
+	if len(groups) != 2 {
+		t.Fatalf("got %d groups, want 2: %+v", len(groups), groups)
+	}
+}

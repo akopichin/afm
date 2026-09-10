@@ -503,25 +503,48 @@ func maybeCommit(memDir string, report memorypipeline.Report, manifestPath strin
 	return nil
 }
 
+// parseCommitFlags resolves --commit/--no-commit symmetrically: EACH flag
+// only actually forces its side when it was both passed (Changed()) AND its
+// value is true — mirroring how --commit already behaved (it reads
+// GetBool("commit"), so "--commit=false" does not force a commit).
+// Previously --no-commit forced Commit=false on bare Changed() alone,
+// making "--no-commit=false" (explicitly passed but false) wrongly force
+// no-commit instead of being a no-op. commitSet is true iff either flag
+// actually forces its side; --commit and --no-commit both forcing is a
+// mutual-exclusion error (review #12's original contract, preserved).
+func parseCommitFlags(cmd *cobra.Command) (commitSet, commit bool, err error) {
+	var commitForced, noCommitForced bool
+	if cmd.Flags().Changed("commit") {
+		v, _ := cmd.Flags().GetBool("commit")
+		commitForced = v
+	}
+	if cmd.Flags().Changed("no-commit") {
+		v, _ := cmd.Flags().GetBool("no-commit")
+		noCommitForced = v
+	}
+	if commitForced && noCommitForced {
+		return false, false, errors.New("--commit and --no-commit are mutually exclusive")
+	}
+	if commitForced {
+		return true, true, nil
+	}
+	if noCommitForced {
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
 func newMemoryRebuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rebuild [flow.yaml]",
 		Short: "Rebuild agent memory from a completed run's session logs",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			commit := cmd.Flags().Changed("commit") // review #12: Changed(), не значение
-			noCommit := cmd.Flags().Changed("no-commit")
-			if commit && noCommit {
-				return errors.New("--commit and --no-commit are mutually exclusive")
+			commitSet, commitVal, err := parseCommitFlags(cmd)
+			if err != nil {
+				return err
 			}
-			o := rebuildOptions{CommitSet: commit || noCommit}
-			if commit {
-				v, _ := cmd.Flags().GetBool("commit")
-				o.Commit = v
-			}
-			if noCommit {
-				o.Commit = false
-			}
+			o := rebuildOptions{CommitSet: commitSet, Commit: commitVal}
 			o.DryRun, _ = cmd.Flags().GetBool("dry-run")
 			o.ForceReflect, _ = cmd.Flags().GetBool("force-reflect")
 			o.RunID, _ = cmd.Flags().GetString("run")

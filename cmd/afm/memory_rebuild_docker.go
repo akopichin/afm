@@ -148,7 +148,19 @@ func rebuildDockerPreflight(projectDir string, mounts config.ExtraMounts, named 
 		if p == "" {
 			continue
 		}
-		if !isUnderAnyDir(p, reachable) {
+		// named-пути (в частности runDir = runsDir() = "<rootDir>/.afm/runs")
+		// могут быть ОТНОСИТЕЛЬНЫМИ на обычном вызове (rootDir по умолчанию
+		// "."), тогда как reachable (projectDir/extra_mounts) — всегда
+		// абсолютные (absRoot). Сравнение относительного с абсолютным всегда
+		// проваливалось бы — нормализуем через filepath.Abs (относительно
+		// того же os.Getwd(), от которого resolve'ился absRoot) перед
+		// containment-проверкой; в сообщении об ошибке остаётся исходная
+		// строка p, чтобы не путать пользователя абсолютизированным путём.
+		absP, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("docker: resolve %s %q: %w", label, p, err)
+		}
+		if !isUnderAnyDir(absP, reachable) {
 			return fmt.Errorf("docker: %s %q is not reachable inside the container; add its directory to docker.extra_mounts or move it under %s", label, p, projectDir)
 		}
 	}
@@ -164,7 +176,15 @@ func rebuildDockerPreflight(projectDir string, mounts config.ExtraMounts, named 
 // вместо непонятного сбоя где-то в середине Finalize после дорогого
 // capture.
 func rebuildDockerMemoryWritable(projectDir, memDir string) error {
-	if isUnderDir(memDir, projectDir) {
+	// Defensive: normalize memDir to absolute too (same relative-vs-absolute
+	// hazard as rebuildDockerPreflight above) — in production memDir is
+	// already absolute (resolved in cmd/afm/run.go before this is called),
+	// but a relative memDir must not silently misclassify as "outside".
+	absMemDir, err := filepath.Abs(memDir)
+	if err != nil {
+		return fmt.Errorf("docker: resolve memory dir %q: %w", memDir, err)
+	}
+	if isUnderDir(absMemDir, projectDir) {
 		return nil
 	}
 	return fmt.Errorf(

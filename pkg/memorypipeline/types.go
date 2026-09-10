@@ -49,7 +49,6 @@ type AgentConfig struct {
 type AgentSpec struct {
 	Kind      string // "reflect" | "aggregate" | "prioritize" | "update"
 	StageName string // для лога/имени
-	Command   string // разрешённая команда агента (пусто → дефолтный клиент из AgentConfig)
 	LogFile   string // абс. путь к логу этого агента
 
 	// reflect:
