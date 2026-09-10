@@ -358,9 +358,12 @@ describe('DialogChannel', () => {
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
+    // M3: поле кастомного ответа тоже имеет пикер, поэтому до открытия
+    // line-комментария он уже один.
+    expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(1)
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
-
-    expect(screen.getByRole('button', { name: /attach project file/i })).toBeInTheDocument()
+    // Форма line-комментария добавляет свой пикер → теперь два.
+    expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(2)
   })
 
   // Finding 5: capabilities.file_browser=false must hide the comment picker
@@ -390,7 +393,7 @@ describe('DialogChannel', () => {
     expect(filesCalls).toHaveLength(0)
   })
 
-  test('the custom-answer textarea has no attach button (only the per-line comment does)', async () => {
+  test('M3: the custom-answer textarea now offers the file-browser picker', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -404,19 +407,13 @@ describe('DialogChannel', () => {
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelector('textarea.dialog-custom')).not.toBeNull())
 
-    // No picker anywhere yet — the custom-answer box is visible and alone.
-    expect(screen.queryByRole('button', { name: /attach project file/i })).toBeNull()
-
-    // Even once the per-line comment form (which DOES get the picker) is
-    // open alongside it, the custom-answer box itself still has none —
-    // exactly one "Attach project file" button exists, not two.
-    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    // Поле кастомного ответа теперь имеет свою скрепку (M3) — до открытия
+    // line-комментария он один и принадлежит именно этому полю.
     expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(1)
-
     const customAnswerWrap = (container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement).closest(
       '.pasteable-textarea-wrap',
     ) as HTMLElement
-    expect(customAnswerWrap.querySelector('.pasteable-attach-btn')).toBeNull()
+    expect(customAnswerWrap.querySelector('.pasteable-attach-btn')).not.toBeNull()
   })
 
   test('the question-line comment textarea grows to fit its content', async () => {

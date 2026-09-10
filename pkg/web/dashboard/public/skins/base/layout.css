@@ -367,3 +367,87 @@
 #plan-section, #dialog-section, #feed-panel, .markdown-body {
   transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease;
 }
+
+/* === Workspace document mode: hide redundant panel chrome ===
+   Inside the workspace the panel-frame becomes a transparent flex column.
+   The WorkspaceHeader above already shows the stage name + status, so the
+   frame's own header (title + maximize icon) is redundant here. The strong
+   attention glow lives on the tab; inside the workspace we keep only a soft
+   top accent hairline as the attention affordance (no big border/glow). */
+.workspace-body .panel-frame {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.workspace-body .panel-frame.attention {
+  border-top: 1px solid var(--attention);
+  animation: none;
+}
+.workspace-body .panel-frame-header {
+  display: none;
+}
+.workspace-body .panel-frame-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+/* Plan/dialog read as full-bleed documents: drop the body's inner padding so
+   the bottom action bar / sticky answer bar span the whole width (gutters come
+   from the document measure + the bar's own padding). The feed panel keeps its
+   padding — only the document workspaces are made edge-to-edge. */
+.workspace-body .panel-frame-body:has(#plan-section),
+.workspace-body .panel-frame-body:has(#dialog-section) {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* === Attention navigation (prev / position / next), right side of header === */
+.attention-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.attention-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.attention-nav-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+.attention-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.attention-nav-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.attention-nav-pos {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5em;
+  text-align: center;
+}

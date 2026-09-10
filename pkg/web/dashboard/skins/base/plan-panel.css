@@ -563,6 +563,56 @@
   to { transform: translate(-50%, -50%) scale(30); opacity: 0; }
 }
 
+/* === Workspace document mode: Approval = wide document + bottom action bar ===
+   Scoped under .workspace-body so the boxed detail-panel styling above is left
+   untouched in every other context (e.g. the maximize overlay). The document
+   (#plan-section) scrolls; the action block is a fixed bottom bar. */
+.workspace-body #plan-section {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 0;
+}
+/* A comfortable readable measure, centered, with horizontal gutters. Drop the
+   boxed border/background/inner scroll — the section itself scrolls now. Long
+   code/tables keep their own overflow-x (see .line-content pre/table above). */
+.workspace-body #plan-section .markdown-body,
+.workspace-body #plan-section #plan-content {
+  max-width: 820px;
+  margin-inline: auto;
+  padding: 8px clamp(16px, 4vw, 48px) 24px;
+  max-height: none;
+  overflow-y: visible;
+  border: 0;
+  background: transparent;
+}
+
+/* Action blocks → fixed bottom bar. Always visible because the document above
+   scrolls, so no position:sticky needed. Buttons grouped to the right. */
+.workspace-body #actions-section,
+.workspace-body #retry-section,
+.workspace-body #paused-section,
+.workspace-body #hook-failed-section,
+.workspace-body #auto-approved-section {
+  flex: none;
+  margin-bottom: 0;
+  border-top: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  padding: 14px clamp(16px, 4vw, 48px);
+}
+.workspace-body #actions-section .actions-row,
+.workspace-body #retry-section .actions-row,
+.workspace-body #paused-section .actions-row,
+.workspace-body #hook-failed-section .actions-row,
+.workspace-body #auto-approved-section .actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
 /* C2 — индикатор «агент думает» (в шапке детали при running) */
 .thinking {
   display: inline-flex;

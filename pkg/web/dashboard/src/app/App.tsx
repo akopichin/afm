@@ -19,7 +19,7 @@ import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
-import { attentionKindForStatus, type AttentionKind } from '../hooks/use-workspace-view'
+import { attentionKindForStatus, deriveAttentionItems, type AttentionKind } from '../hooks/use-workspace-view'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
@@ -220,7 +220,10 @@ export function App(): ReactElement {
   useEffect(() => {
     const kind = selectedStage === null ? null : attentionKindForStatus(selectedStage.status)
     const key = kind === null || selectedStage === null ? null : `${selectedStage.id}:${kind}`
-    if (key !== null && key !== lastAttentionKey.current) {
+    // Авто-открытие ровно один раз на прибытие (ключ id+kind меняется), и НЕ
+    // крадём фокус, если пользователь сейчас печатает (suppression, rule 9):
+    // новый вопрос/аппрув только подсветит вкладку, но не выдернет из ввода.
+    if (key !== null && key !== lastAttentionKey.current && !isEditableFocused()) {
       setActiveTab('detail')
     }
     lastAttentionKey.current = key
@@ -320,6 +323,17 @@ export function App(): ReactElement {
     }
   }, [events, refresh])
 
+  // Очередь attention (топологический порядок сервера) — для навигации
+  // prev/next между несколькими стадиями, ждущими действия (rule 6).
+  const attentionQueue = deriveAttentionItems(stages)
+  const attentionIndex = selectedStage === null ? -1 : attentionQueue.findIndex((it) => it.stageId === selectedStage.id)
+  function goAttention(delta: number): void {
+    if (attentionQueue.length === 0) return
+    const base = attentionIndex >= 0 ? attentionIndex : 0
+    const next = attentionQueue[(base + delta + attentionQueue.length) % attentionQueue.length]
+    if (next) handleSelectStage(next.stageId)
+  }
+
   // Вкладки воркспейса: постоянная Feed + контекстная вкладка выбранной стадии.
   const detailKind = selectedStage === null ? null : attentionKindForStatus(selectedStage.status)
   // Счётчик «· N» — сколько стадий прогона сейчас в том же виде attention.
@@ -392,7 +406,17 @@ export function App(): ReactElement {
                 {/* Контекст выбранной стадии (имя + статус) — общая шапка
                     воркспейса и для Feed, и для деталей (мокап показывает
                     контекст стадии над лентой). */}
-                {selectedStage !== null && <WorkspaceHeader stage={selectedStage} connected={connected} />}
+                {selectedStage !== null && (
+                  <WorkspaceHeader
+                    stage={selectedStage}
+                    connected={connected}
+                    attentionNav={
+                      detailKind !== null && attentionIndex >= 0 && attentionQueue.length > 1
+                        ? { pos: attentionIndex + 1, total: attentionQueue.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }
+                        : undefined
+                    }
+                  />
+                )}
                 {effectiveTab === 'feed' || selectedStage === null ? (
                   <FeedWorkspace events={events} logEntries={logEntries} />
                 ) : detailPanels.length === 0 ? (
@@ -429,6 +453,16 @@ export function App(): ReactElement {
       )}
     </FileBrowserProvider>
   )
+}
+
+// isEditableFocused — сейчас в фокусе редактируемый элемент (textarea/input/
+// contenteditable)? Используется для suppression авто-открытия attention, чтобы
+// не выдёргивать пользователя из набора текста (rule 9).
+function isEditableFocused(): boolean {
+  const el = document.activeElement
+  if (el === null) return false
+  const tag = el.tagName
+  return tag === 'TEXTAREA' || tag === 'INPUT' || (el as HTMLElement).isContentEditable === true
 }
 
 function buildWebSocketUrl(): string {

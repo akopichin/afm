@@ -271,3 +271,77 @@
 
 /* Override dialog-pending hidden */
 .dialog-pending.hidden { display: none !important; }
+
+/* === Workspace document mode: Question = wide document + sticky answer bar ===
+   Scoped under .workspace-body so the boxed dialog styling above stays intact
+   in every other context. The section becomes a flex column; #dialog-scroll is
+   the scroll area on a comfortable measure; the answer bar sticks to the bottom
+   of that scroll so SEND/CANCEL stay visible while the question scrolls. */
+.workspace-body #dialog-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  padding: 0;
+  background: none;
+}
+.workspace-body #dialog-section::before,
+.workspace-body #dialog-section::after {
+  display: none;
+}
+.workspace-body #dialog-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 860px;
+  margin-inline: auto;
+  padding: 8px clamp(16px, 4vw, 48px) 0;
+}
+/* Not an overflow container in document mode, so the sticky answer bar sticks
+   to #dialog-scroll (its scrolling ancestor) rather than to this box. */
+.workspace-body .dialog-pending {
+  overflow: visible;
+}
+
+/* Options → full-width rows; long labels wrap, letter/selected/hover kept. */
+.workspace-body .dialog-pending .dialog-options {
+  flex-direction: column;
+  flex-wrap: nowrap;
+}
+.workspace-body .dialog-pending .dialog-options button {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  text-align: left;
+  white-space: normal;
+  /* Полноширинные опции — обычный регистр и спейсинг: длинные предложения
+     ("Blue / Green — deploy alongside…") читаются как проза, а не как капслок. */
+  text-transform: none;
+  letter-spacing: normal;
+  line-height: 1.5;
+}
+
+/* Custom answer textarea → full width, roomier auto-growing look. */
+.workspace-body .dialog-pending .dialog-custom {
+  width: 100%;
+  min-height: 64px;
+  background: var(--surface-canvas);
+}
+
+/* Answer actions → sticky bottom bar within the scroll. */
+.workspace-body .dialog-pending .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: 12px;
+  padding: 12px clamp(16px, 4vw, 48px);
+  background: var(--surface-raised);
+  border-top: 1px solid var(--separator-subtle);
+}
+
+/* History-collapse toggle stays legible and doesn't get flex-stretched. */
+.workspace-body .dialog-toggle {
+  flex: none;
+  align-self: center;
+}

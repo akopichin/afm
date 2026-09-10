@@ -398,6 +398,12 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                       value={customText}
                       disabled={pending.allow_custom !== true}
                       onChange={onCustomInput}
+                      // M3: скрепка на основном поле ответа — прикрепить ссылку на
+                      // файл проекта (Docker file browser) + вставленные скриншоты
+                      // уже работают через use-image-paste. Гейтится capability
+                      // внутри PasteableTextarea (showAttachButton), так что на
+                      // host-прогоне без file browser кнопка не рендерится.
+                      allowFileReferences
                       onKeyDown={(e) => {
                         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                           e.preventDefault()
