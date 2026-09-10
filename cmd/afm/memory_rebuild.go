@@ -2,13 +2,29 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/memory"
+	"github.com/akopichin/afm/pkg/memorypipeline"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // rebuildOptions — параметры `afm memory rebuild`, собранные из флагов
@@ -21,11 +37,431 @@ type rebuildOptions struct {
 	CommitSet, Commit    bool
 }
 
-// rebuildHandler — единственная точка входа в реализацию команды; заглушка
-// на Task 1, реализуется в последующих задачах плана. Var, а не func —
-// тесты подменяют её (seam).
+// newRebuildPipeline — seam over memorypipeline.New: тесты подменяют её на
+// memorypipeline.New(p, a, memorypipeline.WithRunner(stub)), чтобы не
+// запускать реального агента.
+var newRebuildPipeline = func(p memorypipeline.Prompts, a memorypipeline.AgentConfig) *memorypipeline.Pipeline {
+	return memorypipeline.New(p, a)
+}
+
+// rebuildHandler — единственная точка входа в реализацию `afm memory
+// rebuild`: preflight (конфиг флоу, доступность цели, целостность
+// завершённого рана), последовательность локов (run-лок сначала, лок памяти
+// только на время Finalize), двухфазный запуск (CaptureAll без лока памяти,
+// затем AcquireMemoryLock + Finalize), и жизненный цикл манифеста попытки
+// (running -> ... -> completed/failed/cancelled). Var, а не func — тесты
+// подменяют её целиком в самых верхнеуровневых тестах (напр. проверке
+// регистрации команды); сама реализация использует seam newRebuildPipeline.
 var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
-	return errors.New("memory rebuild: not implemented")
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	home, _ := os.UserHomeDir()
+	cfg, err := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
+	if err != nil {
+		return err
+	}
+
+	var flowArgs []string
+	if o.FlowArg != "" {
+		flowArgs = []string{o.FlowArg}
+	} // nil -> resolveFlowPath сканирует flowsDir()
+	flowPath, err := resolveFlowPath(flowArgs)
+	if err != nil {
+		return err
+	}
+	f, err := flow.ParseFile(flowPath)
+	if err != nil {
+		return err
+	}
+	if !f.MemoryEnabled() {
+		return fmt.Errorf("flow %q has no memory.path — nothing to build", f.Name)
+	}
+	if !hasWritableTarget(f) {
+		return errors.New("no writable memory target (need a stage with reflect.mode w|rw)")
+	}
+
+	stageIDs := stageIDsOf(f)
+	var runDir string
+	if o.RunID != "" {
+		runDir, err = resolveExplicitRunDir(runsDir(), f.Name, o.RunID)
+	} else {
+		runDir, err = state.FindLatestCompletedRunDir(runsDir(), f.Name, stageIDs)
+	}
+	if err != nil {
+		return err
+	}
+
+	runLock, err := state.TryLockRun(runDir)
+	if err != nil {
+		if errors.Is(err, state.ErrRunLocked) {
+			return fmt.Errorf("run %s is active; stop `afm run` or wait", filepath.Base(runDir))
+		}
+		return err
+	}
+	defer runLock.Close() //nolint:errcheck
+
+	rs, err := state.LoadRunState(runDir)
+	if err != nil {
+		return err
+	}
+	// Явный --run не фильтруется резолвером завершённых ранов, поэтому
+	// полнота (AllDone) и точное множество стадий (checkStageSetMatchesExact)
+	// проверяются НЕЗАВИСИМО — это ортогональные условия.
+	if !rs.AllDone() {
+		return fmt.Errorf("run %s is not completed (some stages are not done)", filepath.Base(runDir))
+	}
+	if err := checkStageSetMatchesExact(rs, stageIDs); err != nil {
+		return err
+	}
+
+	agentRoot, err := resolveAgentRoot(rootDir, f)
+	if err != nil {
+		return err
+	}
+	memDir, err := resolveMemoryDir(rootDir, agentRoot, f)
+	if err != nil {
+		return err
+	}
+
+	// Fail-fast commit preflight ДО дорогостоящего capture, когда коммит
+	// включён — не тратить время конвейера, если коммит заведомо невозможен.
+	commit := effectiveCommit(o, f)
+	if commit {
+		if err := commitPreflight(memDir); err != nil {
+			return err
+		}
+	}
+
+	if warns := memorypipeline.ScanUnfinishedPromotions(runDir); len(warns) > 0 {
+		fmt.Printf("warning: previous rebuild left an unfinished promotion in %v; re-running rebuilds cleanly\n", warns)
+	}
+
+	prompts, err := loadPrompts(cfg.PromptsDir)
+	if err != nil {
+		return err
+	}
+	agentCfg := memorypipeline.AgentConfig{
+		Command:     cfg.Client.Command,
+		ExtraArgs:   cfg.Client.ExtraArgs,
+		WrapperDir:  executor.WrapperDirFor(cfg.Client.Command, "", nil), // generated-wrapper dir wired in Task 13
+		RootDir:     agentRoot,
+		IdleTimeout: cfg.Executor.IdleTimeout,
+		Debug:       debugEnabled,
+	}
+
+	work, err := memorypipeline.NewUniqueAttemptDir(filepath.Join(runDir, "memory-rebuild"), newAttemptID)
+	if err != nil {
+		return err
+	}
+	agentCfg.RunDir = work // debug.log остаётся внутри рабочей директории попытки
+	pipe := newRebuildPipeline(
+		memorypipeline.Prompts{Reflect: prompts.Reflect, Aggregate: prompts.Aggregate, Prioritize: prompts.Prioritize, Update: prompts.Update},
+		agentCfg)
+
+	fmt.Printf("using current flow definition and current prompts for historical run %s\n", filepath.Base(runDir))
+	manifestPath := filepath.Join(work, "manifest.json")
+	meta := buildOperationMeta(cfg, f, flowPath, runDir, agentRoot, memDir, prompts, commit)
+
+	// CLI создаёт манифест (статус "running", полные метаданные) и
+	// центральным defer'ом переводит любой ещё нетерминальный манифест в
+	// failed/cancelled при любом раннем возврате.
+	if err := memorypipeline.WriteManifest(manifestPath, memorypipeline.NewRunningManifest(meta)); err != nil {
+		return err
+	}
+	var finalErr error
+	defer memorypipeline.FinalizeManifestOnExit(manifestPath, &finalErr, ctx)
+
+	// Фаза 1: capture (без лока памяти).
+	datasets, err := pipe.CaptureAll(ctx, memorypipeline.CaptureRequest{
+		RunDir: runDir, WorkDir: work, Stages: f.Stages, ForceReflect: o.ForceReflect, ManifestPath: manifestPath})
+	if err != nil {
+		finalErr = err
+		return fmt.Errorf("capture failed (see %s): %w", work, err)
+	}
+
+	// Фаза 2: лок памяти -> повторный commit-preflight -> finalize -> коммит
+	// (всё под локом).
+	memLock, err := memorypipeline.AcquireMemoryLock(ctx, memDir)
+	if err != nil {
+		finalErr = err
+		return err
+	}
+	defer memLock.Close() //nolint:errcheck
+	if commit {
+		if err := commitPreflight(memDir); err != nil { // повторная проверка ПОД локом
+			finalErr = err
+			return err
+		}
+	}
+
+	report, err := pipe.Finalize(ctx, memorypipeline.FinalizeRequest{
+		Meta: meta, RunDir: runDir, WorkDir: work, MemoryDir: memDir, Stages: f.Stages, Memory: f.Memory,
+		Datasets: datasets, DryRun: o.DryRun, ManifestPath: manifestPath})
+	if err != nil {
+		finalErr = err
+		return fmt.Errorf("rebuild failed (see %s): %w", work, err)
+	}
+	printReport(report, o.DryRun)
+
+	if o.DryRun {
+		return nil // манифест уже "dry_run" из Finalize; defer увидит терминальный статус, no-op
+	}
+	if commit {
+		if err := maybeCommit(memDir, report, manifestPath); err != nil {
+			finalErr = err
+			return err
+		}
+	}
+	return memorypipeline.MarkManifestCompleted(manifestPath) // CLI пишет ФИНАЛЬНЫЙ "completed"
+}
+
+// hasWritableTarget сообщает, есть ли у флоу хотя бы одна стадия с
+// reflect.mode w|rw (не script) — единственный способ, которым что-либо
+// реально публикуется. Голый memory.mode:w без единой такой стадии НЕ
+// делает флоу "writable": end-of-run проход пишет project-wide memory.md
+// только из датасетов write-reflect стадий (review #12) — без них писать
+// нечего.
+func hasWritableTarget(f *flow.Flow) bool {
+	for _, s := range f.Stages {
+		if s.Reflect != nil && s.Reflect.CanWrite() && !s.IsScript() {
+			return true
+		}
+	}
+	return false
+}
+
+// stageIDsOf возвращает id всех стадий флоу в порядке объявления.
+func stageIDsOf(f *flow.Flow) []string {
+	ids := make([]string, len(f.Stages))
+	for i, s := range f.Stages {
+		ids[i] = s.ID
+	}
+	return ids
+}
+
+// checkStageSetMatchesExact сообщает ошибку с отсортированными списками
+// missing/extra, если множество стадий в rs (реально запускавшихся в этом
+// ране) не совпадает ТОЧНО с stageIDs (текущий флоу) — независимая от
+// AllDone проверка (review #1): явный --run не проходит фильтр
+// FindLatestCompletedRunDir, который делает то же самое неявно.
+func checkStageSetMatchesExact(rs state.RunState, stageIDs []string) error {
+	want := make(map[string]bool, len(stageIDs))
+	for _, id := range stageIDs {
+		want[id] = true
+	}
+	var missing, extra []string
+	for id := range want {
+		if _, ok := rs.Stages[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	for id := range rs.Stages {
+		if !want[id] {
+			extra = append(extra, id)
+		}
+	}
+	if len(missing) == 0 && len(extra) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	slices.Sort(extra)
+	return fmt.Errorf("run stage set does not match current flow: missing %v, extra %v", missing, extra)
+}
+
+// newAttemptID строит id попытки memory-rebuild: <YYYYMMDD-HHMMSS>-<2 hex>.
+// Таймстемп и случайность берутся здесь, в CLI, а не в пакете конвейера.
+func newAttemptID() string {
+	ts := time.Now().UTC().Format("20060102-150405")
+	b := make([]byte, 1)
+	_, _ = rand.Read(b)
+	return ts + "-" + hex.EncodeToString(b)
+}
+
+// sha256Hex — hex-encoded SHA-256 data, общий хелпер для FlowSHA256/
+// PromptSHA256 в buildOperationMeta.
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// buildOperationMeta собирает OperationMeta для манифеста этой попытки:
+// хэширование содержимого флоу и промптов (провенанс — что конкретно
+// сгенерировало этот результат) — забота CLI, не пакета конвейера.
+func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agentRoot, memDir string, prompts orchestrator.Prompts, effectiveCommit bool) memorypipeline.OperationMeta {
+	flowSHA := ""
+	if data, err := os.ReadFile(flowPath); err == nil {
+		flowSHA = sha256Hex(data)
+	}
+	return memorypipeline.OperationMeta{
+		RunID:           filepath.Base(runDir),
+		RunPath:         runDir,
+		FlowPath:        flowPath,
+		FlowSHA256:      flowSHA,
+		RootDir:         agentRoot,
+		MemoryDir:       memDir,
+		MemoryMode:      f.Memory.Mode,
+		MaxRules:        f.Memory.MaxRules,
+		EffectiveCommit: effectiveCommit,
+		PromptsDir:      cfg.PromptsDir,
+		PromptSHA256: map[string]string{
+			memorypipeline.KindReflect:    sha256Hex([]byte(prompts.Reflect)),
+			memorypipeline.KindAggregate:  sha256Hex([]byte(prompts.Aggregate)),
+			memorypipeline.KindPrioritize: sha256Hex([]byte(prompts.Prioritize)),
+			memorypipeline.KindUpdate:     sha256Hex([]byte(prompts.Update)),
+		},
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// printReport печатает сводку прогона: счётчики плюс unified diff для
+// изменённых (или потенциально изменённых, в dry-run) целей. НИКОГДА не
+// печатает stdout агента/промпты/диалог — Report их и не содержит, только
+// пути/хэши/diff.
+func printReport(report memorypipeline.Report, dryRun bool) {
+	changed := 0
+	for _, t := range report.Targets {
+		if t.Changed {
+			changed++
+		}
+	}
+	fmt.Printf("memory rebuild: %d dataset(s), %d target(s), %d changed\n",
+		len(report.Datasets), len(report.Targets), changed)
+	for _, t := range report.Targets {
+		if !t.Changed {
+			continue
+		}
+		verb := "changed"
+		if dryRun {
+			verb = "would change"
+		}
+		fmt.Printf("  %s %s (%s)\n", verb, t.FinalPath, t.Label)
+		if t.Diff != "" {
+			fmt.Print(t.Diff)
+		}
+	}
+	if changed == 0 {
+		fmt.Println("memory rebuild: no changes")
+	}
+}
+
+// --- TRANSITIONAL helpers (Task 12/13 harden/extract these) ---------------
+
+// effectiveCommit разрешает итоговое решение "коммитить ли": явный флаг
+// --commit/--no-commit важнее flow.yaml; --dry-run всегда выключает коммит
+// (нечего коммитить, ничего не опубликовано).
+func effectiveCommit(o rebuildOptions, f *flow.Flow) bool {
+	if o.DryRun {
+		return false
+	}
+	if o.CommitSet {
+		return o.Commit
+	}
+	return f.Memory.Commit
+}
+
+// commitPreflight проверяет, что коммит в memDir возможен ДО дорогостоящей
+// работы конвейера: memDir может ещё не существовать на диске (memory.path
+// на первом ране), поэтому git-worktree ищется от ближайшего СУЩЕСТВУЮЩЕГО
+// предка. Если предок не внутри git-репозитория — коммит просто не
+// проверяется здесь (реальная git-ошибка всплывёт позже, при самом
+// коммите); если внутри — staged-изменения под memDir должны отсутствовать,
+// иначе rebuild рискует закоммитить что-то постороннее, уже поставленное в
+// индекс пользователем.
+func commitPreflight(memDir string) error {
+	ancestor := nearestExistingAncestor(memDir)
+	if err := exec.Command("git", "-C", ancestor, "rev-parse", "--show-toplevel").Run(); err != nil {
+		return nil // не git-репозиторий — коммит позже даст свою явную ошибку
+	}
+	diffCmd := exec.Command("git", "-C", ancestor, "diff", "--cached", "--quiet", "--", memDir)
+	if err := diffCmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return fmt.Errorf("memory dir %s already has staged changes; commit or unstage them first, or pass --no-commit", memDir)
+		}
+		return fmt.Errorf("git diff --cached preflight failed: %w", err)
+	}
+	return nil
+}
+
+// nearestExistingAncestor walks up from p until it finds a path that exists
+// on disk (p itself, if it exists) — memDir may not have been created yet
+// (a fresh memory.path).
+func nearestExistingAncestor(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	cur := abs
+	for {
+		if _, err := os.Stat(cur); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return cur
+		}
+		cur = parent
+	}
+}
+
+// maybeCommit коммитит только опубликованные изменённые цели (review: не
+// весь memDir целиком, который может содержать посторонние staged файлы —
+// Task 12 заменит на CommitPaths с явным списком путей; пока используется
+// memory.Commit(memDir, ...), best-effort патчащий манифест исходом.
+func maybeCommit(memDir string, report memorypipeline.Report, manifestPath string) error {
+	anyChanged := false
+	for _, t := range report.Targets {
+		if t.Changed && t.Published {
+			anyChanged = true
+			break
+		}
+	}
+	if !anyChanged {
+		return nil
+	}
+
+	committed, commitErr := memory.Commit(memDir, fmt.Sprintf("chore(memory): rebuild from %s", report.RunID))
+	if m, lerr := memorypipeline.LoadManifest(manifestPath); lerr == nil {
+		if commitErr != nil {
+			m.CommitError = commitErr.Error()
+		} else {
+			m.CommitCreated = committed
+		}
+		_ = memorypipeline.WriteManifest(manifestPath, m)
+	}
+	if commitErr != nil {
+		return fmt.Errorf("memory files updated but commit failed: %w", commitErr)
+	}
+	return nil
+}
+
+// resolveAgentRoot возвращает корень проекта для агентов (их CWD) —
+// зеркалит инлайн-логику cmd/afm/run.go:~207-213 (Task 13 вынесет в общий
+// хелпер + добавит нормализацию в абсолютный путь).
+func resolveAgentRoot(afmRoot string, f *flow.Flow) (string, error) {
+	agentRootDir := f.RootDir
+	if agentRootDir != "" && !filepath.IsAbs(agentRootDir) {
+		agentRootDir = filepath.Join(afmRoot, agentRootDir)
+	}
+	return agentRootDir, nil
+}
+
+// resolveMemoryDir возвращает директорию памяти флоу — зеркалит инлайн-логику
+// cmd/afm/run.go:~215-225.
+func resolveMemoryDir(afmRoot, agentRoot string, f *flow.Flow) (string, error) {
+	if !f.MemoryEnabled() {
+		return "", nil
+	}
+	base := agentRoot
+	if base == "" {
+		base = afmRoot
+	}
+	memDir := f.Memory.Path
+	if !filepath.IsAbs(memDir) {
+		memDir = filepath.Join(base, memDir)
+	}
+	return memDir, nil
 }
 
 func newMemoryRebuildCmd() *cobra.Command {
