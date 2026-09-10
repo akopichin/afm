@@ -2,6 +2,36 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-09-10
+
+### Feature: `afm memory rebuild` — backfill agent memory from a run that already finished
+
+The agent-memory write chain used to run only live, right after each stage during `afm run`. The new `afm memory rebuild [flow.yaml]` command runs the **same** distill pipeline **offline** against the session logs of a run that already completed — so you can turn `memory`/`reflect` on for a flow you'd already been running and distill everything it taught you, regenerate memory after editing the prompt templates, or recover from a failed/aborted live reflection. It uses your **current** `flow.yaml` and **current** prompts against the **historical** logs — the whole point of backfill.
+
+```bash
+afm memory rebuild                     # latest completed run of the flow in .afm/flows
+afm memory rebuild flow.yaml           # explicit flow file
+afm memory rebuild --run my-flow-20260910-153000-ab12   # a specific historical run
+afm memory rebuild --dry-run           # show the diff for every target, write nothing, never commit
+afm memory rebuild --force-reflect     # regenerate every reflect_dataset.yaml from raw logs
+afm memory rebuild --commit            # force a git commit of changed memory files (overrides flow.yaml)
+afm memory rebuild --no-commit         # force NO commit (overrides memory.commit: true)
+```
+
+**Run selection is completed-only and exact-stage-set: newest wins, which can mean an older run.** Without `--run`, afm scans the flow's runs newest-first and picks the first that is fully `done` **and** whose stage set exactly matches the current flow's stage IDs. A newer completed run whose topology has since drifted (a stage renamed/added/removed) is **silently skipped**, not an error — the resolver keeps looking at older runs, so the command may analyze a substantially older run than your most recent one (the chosen run id is printed to stdout and recorded in the attempt manifest). This is deliberate: erroring on every flow edit would block the exact backfill the command exists for. An explicit `--run` bypasses the filter and is checked independently — a stage-set mismatch there is a hard error (sorted missing/extra lists) and a not-fully-`done` run is rejected. A run currently held by a live `afm run` (its `.lock` is taken) is refused immediately — rebuild never analyzes changing logs.
+
+**Dataset reuse keeps it cheap.** Each write-reflect stage's `reflect_dataset.yaml` under `<runDir>/<stageID>/` is the reusable, expensive artifact of the reflect step. If a valid one already exists (from a prior live run or a prior rebuild), rebuild reuses it and skips re-running the reflect agent for that stage; `--force-reflect` discards it and regenerates from the stage's raw source inventory (agent logs, `plan.md`/`execution_summary.md`, dialog/prenote/feedback files).
+
+**The historical run is never mutated — this is the load-bearing guarantee.** Rebuild reads the run's `events.jsonl` and stage directories **read-only**: it never appends an event, never touches `state.json`, never changes that run's FSM status or notices. Only files under the memory directory (and the rebuild's own audit workspace) are ever written. It takes two locks, in order: the run's own lock first (the same lock `afm run` holds while live — a busy lock means "still active", so rebuild refuses), then, only for the short finalize/promote/commit window, the shared memory-directory lock (`~/.afm/locks/memory-<sha256>.lock`) — the same lock a live `afm run` writing memory takes, so an offline rebuild and a concurrent live run can never clobber each other's `memory.md`.
+
+**Reliability & audit.** The write is transactional: agents write to a **staging** copy, the pipeline computes a real diff, and only changed targets are durably promoted (fsync + rename) — a failure or Ctrl-C before promotion leaves the real memory files untouched. `--dry-run` runs the full capture+distill so the printed diff is accurate but never writes a target, never creates the memory directory, and never commits. Every invocation (dry-run included) leaves a fresh, never-reused attempt directory `<runDir>/memory-rebuild/<attempt-id>/` with the staged datasets, per-target distill artifacts, and a `manifest.json` recording full provenance (run/flow/prompt SHA-256, per-target/per-dataset results) and a lifecycle status (`running` → `capturing` → `distilling` → `promoting` → `awaiting_commit`/`published` → `completed`, or `dry_run`/`failed`/`cancelled`); an interrupted attempt is closed out to `failed`/`cancelled` on the next read and stale in-progress attempts are cleaned up automatically. Unlike the best-effort live path, the explicit command is **strict** — any failure returns a non-zero exit. `--commit` scopes the commit to the changed memory files only (never a broad `git add .`) and refuses if the memory directory already has unrelated staged changes; it never pushes.
+
+**Works in Docker mode** exactly like `afm run`: if Docker is enabled, rebuild re-execs into the container (mounting only the memory-agent command — no dashboard, browser, or file-browser), and an external absolute `memory.path` reachable only through a read-only mount is rejected up front with a clear message.
+
+**Breaking change — path-safety validation in `flow.yaml`.** `ParseFile` (so both `afm run` and `afm memory rebuild`) now rejects flows with unsafe path components, since stage IDs and `reflect.file` become on-disk paths: a stage `id` containing `/`, `\`, `.`/`..`, or NUL is a parse error; a `reflect.file` that isn't a local relative path (escapes via `..` or is absolute) is a parse error; and a `reflect.file` resolving to exactly `memory.md` (colliding with the project-wide file) is a parse error. Rename any offending id/file.
+
+Internals: the memory engine moved into a new reusable `pkg/memorypipeline` (a two-phase Capture/Finalize pipeline shared by the live orchestrator and the offline command), with read-only run selection/locking in `pkg/state`, durable atomic writes and path-scoped commits in `pkg/memory`, and the CLI/Docker/root-dir plumbing in `cmd/afm`. See AGENTS.md for the architecture.
+
 ## 2026-09-09
 
 ### Feature: review notes — pause the whole flow to comment on files (Docker mode)
