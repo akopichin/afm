@@ -102,11 +102,11 @@ func TestServer_IndexDefaultTheme(t *testing.T) {
 		t.Fatalf("GET /: got %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `href="./skins/coffee/index.css"`) {
-		t.Error("default скин должен ссылаться на ./skins/coffee/index.css")
+	if !strings.Contains(body, `href="./skins/graphite/index.css"`) {
+		t.Error("default скин должен ссылаться на ./skins/graphite/index.css")
 	}
-	if !strings.Contains(body, `class="theme-coffee"`) {
-		t.Error("default скин должен ставить class theme-coffee")
+	if !strings.Contains(body, `class="theme-graphite"`) {
+		t.Error("default скин должен ставить class theme-graphite")
 	}
 	if !strings.Contains(body, `href="./favicon.svg"`) {
 		t.Error("default скин должен использовать общий favicon.svg")
@@ -134,14 +134,14 @@ func TestServer_IndexGogaTheme(t *testing.T) {
 	if !strings.Contains(body, `class="theme-goga"`) {
 		t.Error("goga скин должен ставить class theme-goga")
 	}
-	if strings.Contains(body, "theme-coffee") {
-		t.Error("goga скин не должен содержать theme-coffee")
+	if strings.Contains(body, "theme-graphite") {
+		t.Error("goga скин не должен содержать theme-graphite")
 	}
 	if !strings.Contains(body, `href="./skins/goga/index.css"`) {
 		t.Error("goga скин должен ссылаться на ./skins/goga/index.css")
 	}
-	if strings.Contains(body, `href="./skins/coffee/index.css"`) {
-		t.Error("goga скин не должен ссылаться на дефолтный coffee")
+	if strings.Contains(body, `href="./skins/graphite/index.css"`) {
+		t.Error("goga скин не должен ссылаться на дефолтный graphite")
 	}
 }
 
@@ -160,14 +160,14 @@ func TestServer_IndexNovacorpsTheme(t *testing.T) {
 	if !strings.Contains(body, `class="theme-novacorps"`) {
 		t.Error("novacorps скин должен ставить class theme-novacorps")
 	}
-	if strings.Contains(body, "theme-coffee") {
-		t.Error("novacorps скин не должен содержать theme-coffee")
+	if strings.Contains(body, "theme-graphite") {
+		t.Error("novacorps скин не должен содержать theme-graphite")
 	}
 	if !strings.Contains(body, `href="./skins/novacorps/index.css"`) {
 		t.Error("novacorps скин должен ссылаться на ./skins/novacorps/index.css")
 	}
-	if strings.Contains(body, `href="./skins/coffee/index.css"`) {
-		t.Error("novacorps скин не должен ссылаться на дефолтный coffee")
+	if strings.Contains(body, `href="./skins/graphite/index.css"`) {
+		t.Error("novacorps скин не должен ссылаться на дефолтный graphite")
 	}
 }
 

@@ -526,14 +526,15 @@ func TestEffectiveTheme(t *testing.T) {
 		theme string
 		want  string
 	}{
-		{"empty", "", "coffee"},
+		{"empty", "", "graphite"},
 		{"goga", "goga", "goga"},
 		{"goga-upper", "GOGA", "goga"},
 		{"goga-spaced", "  goga  ", "goga"},
 		{"novacorps", "novacorps", "novacorps"},
 		{"novacorps-upper", "Novacorps", "novacorps"},
-		{"coffee", "coffee", "coffee"},
-		{"unknown", "dark", "coffee"},
+		{"graphite", "graphite", "graphite"},
+		{"coffee-legacy-alias", "coffee", "graphite"},
+		{"unknown", "dark", "graphite"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

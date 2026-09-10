@@ -6,6 +6,7 @@
    Правила после @import при равной специфичности с base побеждают за счёт более
    позднего порядка в каскаде (как в goga) — .theme-скоупинг не нужен. */
 
+@import url("../base/tokens.css");
 @import url("../base/reset.css");
 @import url("../base/header.css");
 @import url("../base/layout.css");

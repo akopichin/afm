@@ -1,0 +1,59 @@
+/* pkg/web/dashboard/skins/base/tokens.css — shared semantic-token fallback layer.
+
+   The redesign introduces a semantic token vocabulary (--surface-*, --text-*,
+   --accent-primary, --success, --danger, --attention, --radius-*, --font-*, …).
+   The graphite skin authors these NATIVELY per theme. The older skins
+   (coffee / goga / novacorps) only define the LEGACY vars (--bg, --ink-hi,
+   --amber, --mint, --coral, …). This file bridges them: every semantic token
+   is derived from the legacy var it corresponds to, so a component written
+   against the new vocabulary renders correctly under the old skins too.
+
+   Defined at plain :root (NOT theme-scoped) on purpose — each token resolves
+   from whichever legacy var the active [data-theme] block set, so it inherits
+   dark/light automatically. graphite's own :root[data-theme="…"] blocks have
+   higher specificity and override every one of these natively.
+
+   The *-rgb triplets can't be derived from a hex var in CSS, so they carry a
+   neutral fallback that only needs to be approximately right for non-graphite
+   skins in this milestone; graphite supplies exact triplets itself. */
+
+:root {
+  /* surfaces */
+  --surface-canvas:        var(--bg);
+  --surface-raised:        var(--bg-elev);
+  --surface-overlay:       var(--bg-elev);
+  --surface-agent-message: var(--bg-elev);
+  --surface-user-message:  var(--panel-bg);
+  --surface-tool:          var(--bg-elev);
+  --surface-hover:         rgba(127, 127, 127, 0.06);
+  --separator-subtle:      rgba(127, 127, 127, 0.12);
+
+  /* text */
+  --text-primary:   var(--ink-hi);
+  --text-secondary: var(--ink);
+  --text-muted:     var(--ink-dim);
+
+  /* accents (semantic) */
+  --accent-primary:     var(--amber);
+  --accent-primary-rgb: 95, 120, 255;
+  --attention:          var(--amber);
+  --attention-rgb:      242, 184, 75;
+  --success:            var(--mint);
+  --success-rgb:        73, 201, 145;
+  --danger:             var(--coral);
+  --danger-rgb:         240, 107, 120;
+
+  /* chrome */
+  --focus-ring:     rgba(95, 120, 255, 0.5);
+  --overlay-scrim:  rgba(0, 0, 0, 0.55);
+  --shadow-overlay: 0 24px 60px rgba(0, 0, 0, 0.45);
+
+  /* radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* typography */
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}

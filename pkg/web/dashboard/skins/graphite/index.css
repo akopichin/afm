@@ -1,0 +1,272 @@
+/* pkg/web/dashboard/skins/graphite/index.css — Graphite skin.
+
+   The default product skin: a calm, material dark/light theme. Identity comes
+   from surface hierarchy (canvas → raised → overlay), NOT from decorative glow
+   or a background image. Indigo (#5f78ff) is the single interaction/selection
+   accent; mint = success, amber = attention, coral = danger.
+
+   Structure mirrors the other skins: import base/tokens.css first (semantic
+   fallbacks), then all base/*.css partials, then the theme token blocks, then a
+   small override section that re-tints the hardcoded neon fills baked into the
+   base partials (novacorps sources: teal rgba(111,212,204,X), yellow
+   rgba(229,212,66,X), violet rgba(183,135,255,X)) into graphite indigo/mint/
+   amber. Those overrides use the --*-rgb triplet tokens, so they follow the
+   active theme automatically. Rules after @import win over base at equal
+   specificity by cascade order (same convention as coffee/goga). */
+
+@import url("../base/tokens.css");
+@import url("../base/reset.css");
+@import url("../base/header.css");
+@import url("../base/layout.css");
+@import url("../base/stages-list.css");
+@import url("../base/plan-panel.css");
+@import url("../base/log-panel.css");
+@import url("../base/dialog-channel.css");
+@import url("../base/event-feed.css");
+@import url("../base/markdown.css");
+@import url("../base/agent-note-modal.css");
+@import url("../base/pasteable-textarea.css");
+@import url("../base/file-browser.css");
+@import url("../base/review-banner.css");
+@import url("../base/review-notes-modal.css");
+
+:root[data-theme="dark"] {
+  /* === semantic tokens — graphite dark (authored natively) === */
+  --surface-canvas:        #0b111b;
+  --surface-raised:        #111a27;
+  --surface-overlay:       #141f2e;
+  --surface-agent-message: #1a2431;
+  --surface-user-message:  #27396f;
+  --surface-tool:          #0e1622;   /* slightly recessed vs raised — tool/script rows */
+  --surface-hover:         rgba(95, 120, 255, 0.06);
+  --separator-subtle:      rgba(170, 180, 196, 0.10);
+
+  --text-primary:   #f5f7fb;
+  --text-secondary: #aab4c4;
+  --text-muted:     #758196;
+
+  --accent-primary:     #5f78ff;
+  --accent-primary-rgb: 95, 120, 255;
+  --attention:          #f2b84b;
+  --attention-rgb:      242, 184, 75;
+  --success:            #49c991;
+  --success-rgb:        73, 201, 145;
+  --danger:             #f06b78;
+  --danger-rgb:         240, 107, 120;
+
+  --focus-ring:     rgba(95, 120, 255, 0.55);
+  --overlay-scrim:  rgba(0, 0, 0, 0.60);
+  --shadow-overlay: 0 24px 60px rgba(0, 0, 0, 0.55);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --font-ui:   "Geist Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* === legacy vars consumed by base/*.css — mapped onto the graphite palette,
+     as var() references to keep one source of truth where 1:1 === */
+  --bg:       var(--surface-canvas);
+  --bg-elev:  var(--surface-raised);
+  --panel-bg: rgba(17, 26, 39, 0.92);   /* raised @ ~0.92 */
+
+  --ink:     #dbe2ec;                    /* softer body tone than pure primary */
+  --ink-hi:  var(--text-primary);
+  --ink-dim: var(--text-muted);
+
+  --mint:      var(--success);
+  --mint-soft: rgba(73, 201, 145, 0.18);
+  --grid:      rgba(95, 120, 255, 0.05);
+  --amber:     var(--attention);
+  --violet:    #8194ff;                  /* readable indigo for the dialog accent */
+  --coral:     var(--danger);
+
+  --qa-answer:              #cdd6e4;
+  --dialog-option-text:     #b9c4ff;
+  --btn-cancel-dialog-text: #f4838d;
+
+  /* black scrim veil, same across themes/skins (not tinted, like coffee) */
+  --overlay-scrim-rgb: 0, 0, 0;
+
+  /* status map */
+  --c-pending:       var(--ink-dim);
+  --c-planning:      var(--mint);
+  --c-awaiting:      var(--amber);
+  --c-revising:      var(--amber);
+  --c-ready:         var(--mint);
+  --c-running:       var(--amber);
+  --c-done:          var(--mint);
+  --c-failed:        var(--coral);
+  --c-retrying:      var(--amber);
+  --c-awaiting-user: var(--violet);
+  --c-hook-failed:   var(--c-failed);
+  --c-paused:        var(--amber);
+
+  /* legacy aliases */
+  --text:     var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+:root[data-theme="light"] {
+  /* === semantic tokens — graphite light: cool paper + soft slate, white
+     elevated surfaces (NOT an inverted dark theme) === */
+  --surface-canvas:        #f3f5f9;
+  --surface-raised:        #ffffff;
+  --surface-overlay:       #ffffff;
+  --surface-agent-message: #e9edf4;
+  --surface-user-message:  #e5eaff;
+  --surface-tool:          #eef1f6;   /* slightly recessed vs raised */
+  --surface-hover:         rgba(77, 99, 215, 0.05);
+  --separator-subtle:      rgba(22, 27, 37, 0.08);
+
+  --text-primary:   #161b25;
+  --text-secondary: #596579;
+  --text-muted:     #7b879a;
+
+  --accent-primary:     #4d63d7;
+  --accent-primary-rgb: 77, 99, 215;
+  --attention:          #b96b08;       /* darker amber for legibility on light */
+  --attention-rgb:      185, 107, 8;
+  --success:            #187d59;
+  --success-rgb:        24, 125, 89;
+  --danger:             #c44150;
+  --danger-rgb:         196, 65, 80;
+
+  --focus-ring:     rgba(77, 99, 215, 0.5);
+  --overlay-scrim:  rgba(15, 20, 30, 0.45);
+  --shadow-overlay: 0 24px 60px rgba(22, 27, 37, 0.18);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --font-ui:   "Geist Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* === legacy vars === */
+  --bg:       var(--surface-canvas);
+  --bg-elev:  var(--surface-raised);
+  --panel-bg: rgba(255, 255, 255, 0.92);
+
+  --ink:     #2b3340;                    /* softer body tone than pure primary */
+  --ink-hi:  var(--text-primary);
+  --ink-dim: var(--text-muted);
+
+  --mint:      var(--success);
+  --mint-soft: rgba(24, 125, 89, 0.14);
+  --grid:      rgba(77, 99, 215, 0.03);
+  --amber:     var(--attention);
+  --violet:    #4d63d7;                  /* readable indigo for the dialog accent */
+  --coral:     var(--danger);
+
+  --qa-answer:              #3a4457;
+  --dialog-option-text:     #4759c9;
+  --btn-cancel-dialog-text: #c44150;
+
+  /* same black scrim veil as dark (deliberately unchanged on light) */
+  --overlay-scrim-rgb: 0, 0, 0;
+
+  /* status map */
+  --c-pending:       var(--ink-dim);
+  --c-planning:      var(--mint);
+  --c-awaiting:      var(--amber);
+  --c-revising:      var(--amber);
+  --c-ready:         var(--mint);
+  --c-running:       var(--amber);
+  --c-done:          var(--mint);
+  --c-failed:        var(--coral);
+  --c-retrying:      var(--amber);
+  --c-awaiting-user: var(--violet);
+  --c-hook-failed:   var(--c-failed);
+  --c-paused:        var(--amber);
+
+  /* legacy aliases */
+  --text:     var(--ink);
+  --text-dim: var(--ink-dim);
+}
+
+/* === graphite overrides over base ===
+   Re-tint every hardcoded neon fill baked into base/*.css into graphite tones,
+   using the --*-rgb triplet tokens so each fill follows the active theme
+   automatically (indigo → interaction/selection, mint → success/criteria,
+   amber → attention/annotation). Graphite stays CALM: moderate alpha, no glow
+   maximalism, no background image. Rules after @import win over base by cascade
+   order. This set mirrors coffee's override set selector-for-selector. */
+
+::selection { background: rgba(var(--accent-primary-rgb), 0.28); }
+
+/* No lamp/radial decor: flat canvas in BOTH themes (identity from material,
+   not glow). */
+:root[data-theme="dark"] #main,
+:root[data-theme="light"] #main {
+  background-image: none;
+  background-color: var(--bg);
+}
+
+/* base/layout.css: progress bar, jump-latest, icon-btn, attention pulse */
+.progress-bar { background: rgba(var(--accent-primary-rgb), 0.12); }
+.progress-fill {
+  background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.30), var(--accent-primary));
+  box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.35);
+}
+.jump-latest { background: rgba(var(--accent-primary-rgb), 0.15); }
+.icon-btn { border-color: rgba(var(--accent-primary-rgb), 0.4); }
+@keyframes attentionPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0); }
+  50%      { box-shadow: 0 0 10px 2px rgba(var(--attention-rgb), 0.50); }
+}
+
+/* base/stages-list.css */
+.stage-item { border-bottom-color: var(--separator-subtle); }
+.stage-item:hover { background: rgba(var(--accent-primary-rgb), 0.06); }
+.stage-item.active { background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.10), transparent); }
+.stage-item.active::after { background: linear-gradient(90deg, transparent, rgba(var(--accent-primary-rgb), 0.7), transparent); }
+
+/* base/plan-panel.css (only hardcoded bg fills; border-left already on tokens) */
+.plan-line:hover { background: rgba(var(--accent-primary-rgb), 0.05); }
+.plan-line.has-comment { background: rgba(var(--attention-rgb), 0.09); }
+.plan-line.has-comment:hover { background: rgba(var(--attention-rgb), 0.14); }
+.plan-section-wrapper { background: rgba(var(--accent-primary-rgb), 0.04); }
+.plan-section-wrapper.plan-section-assumptions { background: rgba(var(--accent-primary-rgb), 0.06); }
+.plan-section-wrapper.plan-section-criteria { background: rgba(var(--success-rgb), 0.06); }
+
+/* base/dialog-channel.css — teal/violet accents → indigo */
+#dialog-section {
+  border-color: rgba(var(--accent-primary-rgb), 0.35);
+  background: radial-gradient(circle at top right, rgba(var(--accent-primary-rgb), 0.08), transparent 60%);
+}
+#dialog-section h3 { border-bottom-color: rgba(var(--accent-primary-rgb), 0.25); }
+.dialog-history .qa { border-left-color: rgba(var(--accent-primary-rgb), 0.2); }
+.dialog-history .agent-msg { border-left-color: rgba(var(--accent-primary-rgb), 0.25); }
+.phase-divider { border-bottom-color: rgba(var(--accent-primary-rgb), 0.12); }
+.dialog-pending .dialog-custom { border-color: rgba(var(--accent-primary-rgb), 0.2); }
+.dialog-pending .dialog-options button { border-color: rgba(var(--accent-primary-rgb), 0.55); }
+@keyframes pendingBreathe {
+  0%, 100% { box-shadow: inset 0 0 18px rgba(var(--accent-primary-rgb), 0.08), 0 0 12px rgba(var(--accent-primary-rgb), 0.10); }
+  50%      { box-shadow: inset 0 0 26px rgba(var(--accent-primary-rgb), 0.14), 0 0 18px rgba(var(--accent-primary-rgb), 0.18); }
+}
+@keyframes dialogFlash {
+  0%   { box-shadow: 0 0 0 2px var(--violet), 0 0 40px rgba(var(--accent-primary-rgb), 0.7), inset 0 0 24px rgba(var(--accent-primary-rgb), 0.25); }
+  40%  { box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.55), 0 0 24px rgba(var(--accent-primary-rgb), 0.4), inset 0 0 16px rgba(var(--accent-primary-rgb), 0.12); }
+  100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent, inset 0 0 0 transparent; }
+}
+/* base/dialog-channel.css — additional hardcoded fills not in the brief's grep
+   list (matched by coffee's audit): .dialog-pending bg + option hover/selected
+   were pure rgba(183,135,255,X), no var(). */
+.dialog-pending { background: linear-gradient(180deg, rgba(var(--accent-primary-rgb), 0.10), rgba(var(--accent-primary-rgb), 0.02)); }
+.dialog-pending .dialog-options button:hover { box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.40); }
+.dialog-pending .dialog-options button.selected {
+  background: rgba(var(--accent-primary-rgb), 0.18);
+  box-shadow: 0 0 12px rgba(var(--accent-primary-rgb), 0.45);
+}
+
+/* base/event-feed.css */
+.feed-entry { border-bottom-color: rgba(var(--accent-primary-rgb), 0.05); }
+.feed-entry:hover { background: rgba(var(--accent-primary-rgb), 0.05); }
+
+/* base/layout.css — .resize-handle (pure rgba(183,135,255,X), not var). */
+.resize-handle { background: rgba(var(--accent-primary-rgb), 0.2); }
+
+/* base/plan-panel.css — .comment-remove (pure rgba(111,212,204,X), not var). */
+.comment-remove { border-color: rgba(var(--accent-primary-rgb), 0.4); }

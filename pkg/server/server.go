@@ -21,7 +21,7 @@ import (
 )
 
 // themeCustom — активный skin_dir (не значение EffectiveTheme, поэтому не в
-// pkg/config; goga/novacorps/coffee берутся из config.Theme*).
+// pkg/config; goga/novacorps/graphite берутся из config.Theme*).
 const themeCustom = "custom"
 
 // Имена файлов внутри директории скина (встроенной или skin_dir).
@@ -84,7 +84,7 @@ type Server struct {
 	flowActions      FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
 	reviewState      func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
 	workspace        workspace.FS              // Docker project file browser backend; nil = capability off
-	theme            string                    // "goga" или "" (default coffee)
+	theme            string                    // "goga" или "" (default graphite)
 	indexBytes       []byte                    // предподготовленный index.html (с заменами скина/favicon)
 	fileServer       http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
 	customSkinServer http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
@@ -181,7 +181,7 @@ func New(cfg Config) *Server {
 
 	// skin_dir полностью подменяет активный скин (аналогично prompts_dir):
 	// нужен index.css внутри директории, иначе — предупреждение и fallback на
-	// встроенный скин (theme/coffee). Дашборд не критичен для работы флоу
+	// встроенный скин (theme/graphite). Дашборд не критичен для работы флоу
 	// (в отличие от промптов), поэтому сервер не падает при плохом skin_dir.
 	if cfg.SkinDir != "" {
 		if _, err := os.Stat(filepath.Join(cfg.SkinDir, skinIndexFile)); err != nil {
@@ -214,9 +214,9 @@ func New(cfg Config) *Server {
 		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
 	} else {
 		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`href="`+skinHrefFor(config.ThemeCoffee)+`"`), []byte(`href="`+skinHref+`"`))
+			[]byte(`href="`+skinHrefFor(config.ThemeGraphite)+`"`), []byte(`href="`+skinHref+`"`))
 		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`class="theme-`+config.ThemeCoffee+`"`), []byte(`class="theme-`+skinName+`"`))
+			[]byte(`class="theme-`+config.ThemeGraphite+`"`), []byte(`class="theme-`+skinName+`"`))
 		indexBytes = bytes.ReplaceAll(indexBytes,
 			[]byte(`type="`+mimeSVG+`" href="`+defaultFaviconHref+`"`),
 			[]byte(`type="`+faviconMimeType+`" href="`+faviconHref+`"`))
@@ -248,7 +248,8 @@ func New(cfg Config) *Server {
 }
 
 // builtinSkinName нормализует Theme до имени встроенного скина: "goga",
-// "novacorps" или дефолт "coffee".
+// "novacorps" или дефолт "graphite" (сюда же попадает устаревший алиас
+// "coffee", пустое и неизвестные значения).
 func (s *Server) builtinSkinName() string {
 	switch s.theme {
 	case config.ThemeGoga:
@@ -256,7 +257,7 @@ func (s *Server) builtinSkinName() string {
 	case config.ThemeNovacorps:
 		return config.ThemeNovacorps
 	default:
-		return config.ThemeCoffee
+		return config.ThemeGraphite
 	}
 }
 

@@ -344,23 +344,31 @@ func (c Config) IsAutoRecover() bool {
 const (
 	ThemeGoga      = "goga"
 	ThemeNovacorps = "novacorps"
-	ThemeCoffee    = "coffee"
+	ThemeGraphite  = "graphite"
+	// ThemeCoffee — устаревший алиас: нормализуется в graphite (совместимость
+	// со старыми конфигами `theme: coffee`, встроенного coffee-скина больше нет).
+	ThemeCoffee = "coffee"
 )
 
 // EffectiveTheme returns the normalized dashboard theme name.
 // "goga"/"novacorps" activate those built-in skins; empty or unknown values
-// fall back to the default "coffee" (unknown logs a warning to stderr).
+// fall back to the default "graphite". The legacy "coffee" value is accepted as
+// a compatibility alias that normalizes to "graphite" (with a one-line
+// deprecation warning) — an old flow with `theme: coffee` must not fail to start.
 func (c Config) EffectiveTheme() string {
 	switch strings.ToLower(strings.TrimSpace(c.Theme)) {
 	case ThemeGoga:
 		return ThemeGoga
 	case ThemeNovacorps:
 		return ThemeNovacorps
-	case ThemeCoffee, "":
-		return ThemeCoffee
+	case ThemeCoffee:
+		fmt.Fprintf(os.Stderr, "warning: theme %q is deprecated, using %s\n", ThemeCoffee, ThemeGraphite)
+		return ThemeGraphite
+	case ThemeGraphite, "":
+		return ThemeGraphite
 	default:
-		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, ThemeCoffee)
-		return ThemeCoffee
+		fmt.Fprintf(os.Stderr, "warning: unknown theme %q, using %s\n", c.Theme, ThemeGraphite)
+		return ThemeGraphite
 	}
 }
 

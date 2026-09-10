@@ -664,7 +664,7 @@ server:
   port: 9876                # web dashboard port
   open_browser: false       # open the browser on startup (default: false)
 
-# theme: coffee             # dashboard theme: coffee | goga | novacorps (default: coffee)
+# theme: graphite           # dashboard theme: graphite | goga | novacorps (default: graphite; legacy "coffee" → graphite)
 # prompts_dir: .afm/prompts/  # custom prompt templates
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
@@ -702,11 +702,11 @@ On startup (if `server.open_browser: true`) the dashboard opens; otherwise its U
 
 The dashboard ships with three built-in themes; choose one with `theme:` in `.afm/config.yaml`:
 
-- **`coffee`** (default) — warm coffee palette: a "valve-glow" amber dark mode and a cream "latte" light mode, with a matcha accent for user-dialog states.
+- **`graphite`** (default) — the product skin: material hierarchy on a cool graphite canvas, indigo interaction accent, mint success and amber attention, in both dark and light modes.
 - **`goga`** — flat dark tech theme (teal accent, sans-serif, Goga wordmark).
 - **`novacorps`** — the previous hi-tech theme (mint accent, monospace, scanline/neon decor).
 
-Empty or unknown values fall back to `coffee` (an unknown value logs a warning to stderr). Light vs. dark mode is toggled inside the dashboard itself and is independent of the theme choice. A fully custom skin can be supplied via the top-level `skin_dir:` config option (a directory containing `index.css`), which overrides the built-in theme.
+Empty or unknown values fall back to `graphite` (an unknown value logs a warning to stderr). The legacy `theme: coffee` value is still accepted as a compatibility alias that normalizes to `graphite` (with a one-line deprecation warning), so existing configs keep working. Light vs. dark mode is toggled inside the dashboard itself and is independent of the theme choice. A fully custom skin can be supplied via the top-level `skin_dir:` config option (a directory containing `index.css`), which overrides the built-in theme.
 
 ### Inline Plan Comments
 
