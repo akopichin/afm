@@ -7,6 +7,27 @@ import { ATTENTION_STATUSES } from '../../hooks/use-attention'
 // иначе right-выравнивание относительно кнопки съедет.
 const KEBAB_MENU_WIDTH = 200
 
+// stageStatusText — человекочитаемый статус для строки рейла (макет: "Completed",
+// "Waiting for your answer", "Not started"). Отличается от STAGE_STATUS_LABELS
+// более «разговорной» формулировкой ожиданий; неизвестный статус — как есть.
+function stageStatusText(status: Stage['status']): string {
+  switch (status) {
+    case 'pending': return 'Not started'
+    case 'planning': return 'Planning…'
+    case 'awaiting_approval': return 'Waiting for your approval'
+    case 'revising': return 'Revising…'
+    case 'ready': return 'Ready'
+    case 'running': return 'In progress'
+    case 'retrying': return 'Retrying…'
+    case 'paused': return 'Paused'
+    case 'awaiting_user_input': return 'Waiting for your answer'
+    case 'done': return 'Completed'
+    case 'failed': return 'Failed'
+    case 'hook_failed': return 'Hook failed'
+    default: return status
+  }
+}
+
 type StagesListProps = {
   stages: Stage[]
   selectedStageId: string | null
@@ -187,10 +208,12 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
           >
             <span className="status-dot" data-status={stage.status}>
               <span className="dot-check" aria-hidden="true">✓</span>
+              <span className="dot-num" aria-hidden="true">{index + 1}</span>
             </span>
             <span className="stage-label">
-              <span className="stage-id">{stage.id}</span>
-              {stage.name !== '' && <span className="stage-name">{stage.name}</span>}
+              <span className="stage-ordinal">Stage {index + 1}</span>
+              <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
+              <span className="stage-status-text" data-status={stage.status}>{stageStatusText(stage.status)}</span>
             </span>
             {/* Единый трейлinг-слот: бейджи + кебаб. Это ОДИН in-flow ребёнок
                 грида .stage-item (18px 1fr auto) — иначе второй трейлинг-элемент

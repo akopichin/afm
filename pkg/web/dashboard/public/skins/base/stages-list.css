@@ -82,11 +82,11 @@
 
 .stage-item {
   display: grid;
-  grid-template-columns: 18px 1fr auto;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 8px 9px 10px;
-  border-radius: var(--radius-sm);
+  grid-template-columns: 28px 1fr auto;
+  align-items: start;
+  gap: 12px;
+  padding: 10px 8px 10px 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   position: relative;
   font-family: var(--font-ui);
@@ -97,50 +97,66 @@
   background: var(--surface-hover);
 }
 
-/* Middle cell: id on top, name muted below. */
+/* Middle cell: ordinal (muted) → name (bold) → status text (colored). */
 .stage-label {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
+  padding-top: 1px;
 }
-.stage-id {
-  font-size: 12px;
+.stage-ordinal {
+  font-size: 10.5px;
   font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
 }
 .stage-name {
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.stage-status-text {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Status text takes the status colour for states that need attention/emphasis. */
+.stage-status-text[data-status="done"]                { color: var(--success); }
+.stage-status-text[data-status="failed"],
+.stage-status-text[data-status="hook_failed"]         { color: var(--danger); }
+.stage-status-text[data-status="awaiting_approval"],
+.stage-status-text[data-status="awaiting_user_input"],
+.stage-status-text[data-status="paused"],
+.stage-status-text[data-status="retrying"]            { color: var(--attention); }
 
-/* === Status dot — a timeline node (ring / filled / icon) === */
+/* === Status dot — a bigger numbered timeline node === */
 .status-dot {
-  width: 14px;
-  height: 14px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   border: 1.5px solid var(--c-pending);
   position: relative;
   flex-shrink: 0;
+  display: grid;
+  place-items: center;
   background: var(--surface-raised);
+  color: var(--c-pending);
   z-index: 1; /* sit above the connector line */
 }
-.status-dot::after {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: currentColor;
+/* The number is the default node content; the check replaces it once done. */
+.dot-num {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: currentColor;
 }
 
 .status-dot[data-status="pending"]              { color: var(--c-pending);       border-color: var(--c-pending); }
-.status-dot[data-status="pending"]::after       { background: transparent; }
 .status-dot[data-status="planning"]             { color: var(--c-planning);      border-color: var(--c-planning); }
 .status-dot[data-status="awaiting_approval"]    { color: var(--c-awaiting);      border-color: var(--c-awaiting); }
 .status-dot[data-status="revising"]             { color: var(--c-revising);      border-color: var(--c-revising); }
@@ -152,6 +168,28 @@
 .status-dot[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); border-color: var(--c-awaiting-user); }
 .status-dot[data-status="hook_failed"]          { color: var(--c-hook-failed);   border-color: var(--c-hook-failed); }
 .status-dot[data-status="paused"]               { color: var(--c-paused);        border-color: var(--c-paused); }
+
+/* Filled node for every active/attention/terminal status; the number is punched
+   out in the canvas colour so it reads on the bright fill. Pending/ready stay
+   as hollow rings with a muted number. */
+.status-dot:not([data-status="pending"]):not([data-status="ready"]) {
+  background: currentColor;
+  border-color: currentColor;
+}
+.status-dot:not([data-status="pending"]):not([data-status="ready"]) .dot-num {
+  color: var(--surface-canvas);
+}
+
+/* Done → green fill + white check, no number. */
+.status-dot[data-status="done"] .dot-num { display: none; }
+.status-dot[data-status="done"] .dot-check {
+  opacity: 1;
+  transform: none;
+  color: var(--surface-canvas);
+}
+
+/* Connector below a done stage is success-coloured (that segment is complete). */
+.stage-item[data-status="done"] .stage-connector { background: var(--success); }
 
 /* Active statuses breathe gently (low amplitude); frozen under reduced-motion by
    the global gate. */
@@ -220,10 +258,10 @@
    left is tuned to the dot center; a small nudge is acceptable. */
 .stage-connector {
   position: absolute;
-  left: 16px;
-  top: 27px;
-  width: 1.5px;
-  height: 18px;
+  left: 22.5px; /* центр 26px-ноды: 10px padding + 13px радиус */
+  top: 40px;    /* сразу под нодой */
+  bottom: -8px; /* тянется до ноды следующей строки (stretch по высоте строки) */
+  width: 2px;
   border-radius: 2px;
   background: var(--separator-subtle);
   pointer-events: none;
@@ -252,7 +290,8 @@
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: 9px;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--surface-raised);
   opacity: 0;
   transform: scale(0.4);

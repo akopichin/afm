@@ -104,11 +104,52 @@
   font-weight: 500;
 }
 
-.gh-theme-toggle .gh-theme-icon {
+/* Сегментированный переключатель темы (солнце | луна) — пилюля с двумя
+   сегментами, активный подсвечен приподнятой поверхностью + акцентом. */
+.gh-theme-seg {
   display: inline-flex;
-  font-size: 14px;
-  line-height: 1;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: 999px;
 }
+.gh-theme-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color var(--motion-fast, 120ms) ease, background var(--motion-fast, 120ms) ease;
+}
+.gh-theme-seg-btn:hover { color: var(--text-secondary); }
+.gh-theme-seg-btn.active {
+  color: var(--accent-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+/* Активное солнце — тёплым attention-акцентом, как в макете. */
+.gh-theme-seg-btn[aria-label="Light mode"].active { color: var(--attention); }
+.gh-theme-seg-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* Иконки-кнопки шапки (уведомления и т.п.) держат SVG по центру. */
+.header-actions .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+.header-actions .icon-btn.gh-files-btn { width: auto; }
+.header-actions .icon-btn.icon-btn-on { color: var(--accent-primary); }
 
 /* === Connection indicator (was .ws-status boxy pill → calm dot + text) === */
 .gh-connection {

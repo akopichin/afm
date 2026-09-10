@@ -219,10 +219,10 @@
 }
 
 /* base/stages-list.css */
-.stage-item { border-bottom-color: var(--separator-subtle); }
 .stage-item:hover { background: rgba(var(--accent-primary-rgb), 0.06); }
-.stage-item.active { background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.10), transparent); }
-.stage-item.active::after { background: linear-gradient(90deg, transparent, rgba(var(--accent-primary-rgb), 0.7), transparent); }
+/* Спокойное выделение: равномерный тонкий тинт + левый акцент-маркер из base
+   (без градиента-«карточки» и без sweep). */
+.stage-item.active { background: rgba(var(--accent-primary-rgb), 0.08); }
 
 /* base/plan-panel.css (only hardcoded bg fills; border-left already on tokens) */
 .plan-line:hover { background: rgba(var(--accent-primary-rgb), 0.05); }

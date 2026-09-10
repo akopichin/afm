@@ -13,14 +13,14 @@
 .metric {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 .metric-icon {
   display: inline-flex;
   align-items: center;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 .metric-icon svg {
@@ -30,21 +30,21 @@
 .metric-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.15;
+  line-height: 1.25;
   min-width: 0;
 }
 
+/* Смешанный регистр как в макете (Started/Elapsed/…), не капслок. */
 .metric-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   color: var(--text-muted);
 }
 
 .metric-value {
-  font-size: 13px;
-  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }

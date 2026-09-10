@@ -66,7 +66,7 @@ function pad(value: number): string {
 // stroke-based, 16×16, чтобы совпадать с остальным набором в шапке.
 function svg(children: ReactElement): ReactElement {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       {children}
     </svg>
   )

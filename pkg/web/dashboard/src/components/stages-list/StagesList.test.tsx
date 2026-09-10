@@ -93,14 +93,16 @@ describe('StagesList', () => {
     expect(item).not.toHaveAttribute('data-attention', 'true')
   })
 
-  test('does not render stage-name element when name is empty', () => {
+  test('falls back to the stage id as the name when name is empty', () => {
     const stages: Stage[] = [
       { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
 
-    expect(screen.getByRole('listitem').querySelector('.stage-name')).not.toBeInTheDocument()
+    // Заголовок стадии всегда есть (макет показывает имя жирным); при пустом
+    // name показываем id.
+    expect(screen.getByRole('listitem').querySelector('.stage-name')).toHaveTextContent('s1')
   })
 
   test('shows the kebab menu for running/awaiting_approval/planning/revising/retrying only', () => {

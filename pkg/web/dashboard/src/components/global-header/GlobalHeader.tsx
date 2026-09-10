@@ -67,14 +67,27 @@ export function GlobalHeader({
 
       <div className="gh-right header-actions">
         {capabilities.fileBrowser && <OpenFileBrowserButton />}
-        <button
-          type="button"
-          className="icon-btn gh-theme-toggle"
-          onClick={toggle}
-          aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          <span className="gh-theme-icon" aria-hidden="true">{mode === 'dark' ? '☾' : '☀'}</span>
-        </button>
+        {/* Сегментированный переключатель темы (солнце | луна), как в макете. */}
+        <div className="gh-theme-seg" role="group" aria-label="Theme mode">
+          <button
+            type="button"
+            className={`gh-theme-seg-btn${mode === 'light' ? ' active' : ''}`}
+            aria-pressed={mode === 'light'}
+            aria-label="Light mode"
+            onClick={() => { if (mode !== 'light') toggle() }}
+          >
+            {sunIcon()}
+          </button>
+          <button
+            type="button"
+            className={`gh-theme-seg-btn${mode === 'dark' ? ' active' : ''}`}
+            aria-pressed={mode === 'dark'}
+            aria-label="Dark mode"
+            onClick={() => { if (mode !== 'dark') toggle() }}
+          >
+            {moonIcon()}
+          </button>
+        </div>
         {notificationsPermission !== 'unsupported' && (
           <button
             type="button"
@@ -84,7 +97,7 @@ export function GlobalHeader({
             aria-label={notificationsEnabled ? 'Disable desktop notifications' : 'Enable desktop notifications'}
             title={notificationsPermission === 'denied' ? 'Notifications blocked in browser settings' : undefined}
           >
-            {notificationsEnabled ? '🔔' : '🔕'}
+            {bellIcon(notificationsEnabled)}
           </button>
         )}
         <div
@@ -98,6 +111,30 @@ export function GlobalHeader({
         {attention && <span className="attention-dot" aria-label="Action needed" />}
       </div>
     </header>
+  )
+}
+
+// Иконки шапки — инлайновый SVG на currentColor, 16px, единый набор.
+function iconSvg(children: ReactElement): ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  )
+}
+function sunIcon(): ReactElement {
+  return iconSvg(<><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6" /></>)
+}
+function moonIcon(): ReactElement {
+  return iconSvg(<path d="M20 14.5A8 8 0 1 1 9.5 4 6.2 6.2 0 0 0 20 14.5Z" />)
+}
+function bellIcon(enabled: boolean): ReactElement {
+  return iconSvg(
+    <>
+      <path d="M6 9a6 6 0 0 1 12 0c0 5 1.8 6.2 2.4 7.2a.6.6 0 0 1-.5.9H4.1a.6.6 0 0 1-.5-.9C4.2 15.2 6 14 6 9Z" fill={enabled ? 'currentColor' : 'none'} />
+      <path d="M9.8 20.5a2.4 2.4 0 0 0 4.4 0" />
+      {!enabled && <path d="M4 3.5l16 16" />}
+    </>,
   )
 }
 

@@ -37,11 +37,13 @@ describe('GlobalHeader', () => {
     expect(screen.getByText('Agent online')).toBeInTheDocument()
   })
 
-  it('toggles dark/light mode', () => {
+  it('switches theme via the segmented sun/moon control', () => {
+    document.documentElement.dataset.theme = 'dark'
     render(<GlobalHeader {...baseProps} />)
-    const toggle = screen.getByRole('button', { name: /switch to (light|dark) mode/i })
-    fireEvent.click(toggle)
-    expect(['dark', 'light']).toContain(document.documentElement.dataset.theme)
+    fireEvent.click(screen.getByRole('button', { name: 'Light mode' }))
+    expect(document.documentElement.dataset.theme).toBe('light')
+    fireEvent.click(screen.getByRole('button', { name: 'Dark mode' }))
+    expect(document.documentElement.dataset.theme).toBe('dark')
   })
 
   it('renders the notifications control only when supported', () => {
