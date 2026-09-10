@@ -19,7 +19,7 @@ import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting, useAttention } from '../hooks/use-attention'
-import { attentionKindForStatus, deriveAttentionItems, type AttentionKind } from '../hooks/use-workspace-view'
+import { attentionKindForStatus, countByKind, useWorkspaceView, type AttentionKind } from '../hooks/use-workspace-view'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
@@ -33,13 +33,6 @@ const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
   hook_failed: 'Hook failed',
   paused: 'Paused',
 }
-
-// Активная вкладка воркспейса: постоянная лента событий либо детали выбранной
-// стадии (план/диалог/восстановление). Полноценная attention-навигация с
-// очередью на нескольких стадиях (workspace-view-редьюсер) — в M3; здесь простое
-// локальное состояние с авто-переключением на detail при появлении требующего
-// действия статуса у выбранной стадии.
-type WorkspaceTab = 'feed' | 'detail'
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
@@ -170,27 +163,53 @@ export function App(): ReactElement {
   const { events, connected } = useEventFeed(wsUrl)
 
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null)
-  const selectedStage = stages.find((stage) => stage.id === selectedStageId) ?? null
 
-  // Активная вкладка воркспейса. 'feed' по умолчанию; авто-переключение на
-  // 'detail' — только при появлении требующего действия статуса у выбранной
-  // стадии (см. эффект ниже), НЕ на каждую смену выбора: авто-продвижение
-  // wasLive не должно вырывать пользователя из ленты.
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('feed')
+  // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано
+  // справа от рейла: Feed, контекстный attention (approval/question/failed/
+  // hook_failed/paused) или read-only просмотр истории плана/диалога. Он же
+  // держит очередь attention (топологический порядок сервера), авто-открывает
+  // новое ожидание ровно один раз (rule 9, с suppression при наборе текста),
+  // продвигается к следующему при разрешении и возвращается в Feed, когда
+  // очередь пуста (rule 10). Раньше это подменялось локальными
+  // selectedStageId+activeTab, из-за чего ожидание на НЕ выбранной стадии не
+  // всплывало — action могло «потеряться».
+  const editing = useIsEditing()
+  const { state: wsState, activeItem: attnItem, openFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
 
-  // Ручной выбор стадии (клик в рейле, клик по desktop-уведомлению) — показываем
-  // её детали. Отличается от авто-продвижения (setSelectedStageId напрямую в
-  // эффекте ниже), которое вкладку НЕ трогает.
+  // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный
+  // элемент очереди (он может отличаться от того, что вручную выбрано в рейле —
+  // именно «отделить active attention stage от обычной выбранной стадии»);
+  // иначе — выбранная в рейле стадия.
+  const workspaceStageId = wsState.view === 'attention' && attnItem !== null ? attnItem.stageId : selectedStageId
+  const workspaceStage = stages.find((stage) => stage.id === workspaceStageId) ?? null
+
+  // Держим selectedStageId в согласии с авто-фокусом attention: когда редьюсер
+  // сам открыл/продвинул ожидание, рейл-выбор следует за ним, чтобы после
+  // разрешения (возврат в Feed) контекст остался на той стадии, что смотрели.
+  useEffect(() => {
+    if (wsState.view === 'attention' && attnItem !== null) {
+      setSelectedStageId(attnItem.stageId)
+    }
+  }, [wsState.view, attnItem?.stageId])
+
+  // Клик по стадии в рейле (или по desktop-уведомлению): выбираем её и открываем
+  // подходящий вид — attention, если стадия ждёт действия; иначе read-only
+  // историю плана/диалога, если есть; иначе Feed. openAttention/openHistory/
+  // openFeed — действия того же редьюсера, поэтому ручной выбор и авто-очередь
+  // не расходятся (единая state machine, без параллельной вкладочной).
   function handleSelectStage(stageId: string): void {
     setSelectedStageId(stageId)
-    setActiveTab('detail')
+    const stage = stages.find((s) => s.id === stageId) ?? null
+    const kind = stage === null ? null : attentionKindForStatus(stage.status)
+    if (kind !== null) openAttention(stageId)
+    else if (stage?.showDialog === true) openHistory('dialog-history')
+    else if (stage?.showPlan === true) openHistory('plan-history')
+    else openFeed()
   }
 
-  // Attention-сигнал выбранной стадии: kind='dialog' (awaiting_user_input) или
-  // 'plan' (awaiting_approval). needsAttention кормит title-flash для фоновой
-  // вкладки, anyAttention — точку в шапке И пульс favicon (хотя бы одна
-  // стадия прогона ждёт юзера, а не только выбранная).
-  const attention = useAttention(selectedStage)
+  // Attention-сигнал стадии воркспейса — для title-flash фоновой вкладки;
+  // anyAttention (любая стадия прогона ждёт) — точка в шапке И пульс favicon.
+  const attention = useAttention(workspaceStage)
   const anyAttention = anyAwaiting(stages)
   useTitleFlash(attention.needsAttention)
   useFaviconPulse(anyAttention)
@@ -208,34 +227,13 @@ export function App(): ReactElement {
     document.title = (description ?? '').trim() || flowName || 'afm Dashboard'
   }, [description, flowName])
 
-  // Авто-переключение на вкладку деталей при ПОЯВЛЕНИИ требующего действия
-  // статуса у выбранной стадии (attention-arrival: null→approval/question/…).
-  // Пришло на смену прежней прокрутке к панели действия (data-panel) — в
-  // единой воркспейс-модели панель не «одна из нескольких», а сам воркспейс.
-  // Ключ — id+kind: перезагорается и когда та же стадия входит в attention
-  // повторно (например, после retry). Полноценная политика авто-открытия (один
-  // раз, с suppression при печати/просмотре файла) появится в M3 вместе с
-  // workspace-view-редьюсером; здесь — минимальное «показать действие».
-  const lastAttentionKey = useRef<string | null>(null)
-  useEffect(() => {
-    const kind = selectedStage === null ? null : attentionKindForStatus(selectedStage.status)
-    const key = kind === null || selectedStage === null ? null : `${selectedStage.id}:${kind}`
-    // Авто-открытие ровно один раз на прибытие (ключ id+kind меняется), и НЕ
-    // крадём фокус, если пользователь сейчас печатает (suppression, rule 9):
-    // новый вопрос/аппрув только подсветит вкладку, но не выдернет из ввода.
-    if (key !== null && key !== lastAttentionKey.current && !isEditableFocused()) {
-      setActiveTab('detail')
-    }
-    lastAttentionKey.current = key
-  }, [selectedStage])
-
   // showPlan/showDialog capabilities are computed server-side per stage (see
   // pkg/server/stageview.go's StageView.ShowPlan/ShowDialog) — the client only
   // adds the "nothing selected → show both, neutral state" rule on top.
-  const showPlan = selectedStage === null || selectedStage.showPlan
-  const showDialog = selectedStage === null || selectedStage.showDialog
+  const showPlan = workspaceStage === null || workspaceStage.showPlan
+  const showDialog = workspaceStage === null || workspaceStage.showDialog
 
-  const logEntries = useStageLog(selectedStageId)
+  const logEntries = useStageLog(workspaceStageId)
   const elapsedMs = useElapsed(startedAt)
   const idleMs = useIdleMs(idleAccumulatedMs, idleSince, connected)
   const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, connected)
@@ -323,40 +321,68 @@ export function App(): ReactElement {
     }
   }, [events, refresh])
 
-  // Очередь attention (топологический порядок сервера) — для навигации
-  // prev/next между несколькими стадиями, ждущими действия (rule 6).
-  const attentionQueue = deriveAttentionItems(stages)
-  const attentionIndex = selectedStage === null ? -1 : attentionQueue.findIndex((it) => it.stageId === selectedStage.id)
+  // Очередь attention (топологический порядок сервера) и позиция активного
+  // элемента — для навигации prev/next между несколькими стадиями, ждущими
+  // действия (rule 6). Очередь ведёт сам редьюсер (wsState.items).
+  const attnItems = wsState.items
+  const attnIndex = attnItem === null ? -1 : attnItems.findIndex((it) => it.stageId === attnItem.stageId)
   function goAttention(delta: number): void {
-    if (attentionQueue.length === 0) return
-    const base = attentionIndex >= 0 ? attentionIndex : 0
-    const next = attentionQueue[(base + delta + attentionQueue.length) % attentionQueue.length]
-    if (next) handleSelectStage(next.stageId)
+    if (attnItems.length === 0) return
+    const base = attnIndex >= 0 ? attnIndex : 0
+    const next = attnItems[(base + delta + attnItems.length) % attnItems.length]
+    if (next) {
+      setSelectedStageId(next.stageId)
+      openAttention(next.stageId)
+    }
   }
 
-  // Вкладки воркспейса: постоянная Feed + контекстная вкладка выбранной стадии.
-  const detailKind = selectedStage === null ? null : attentionKindForStatus(selectedStage.status)
-  // Счётчик «· N» — сколько стадий прогона сейчас в том же виде attention.
-  const attentionCount = detailKind === null ? 0 : stages.filter((s) => attentionKindForStatus(s.status) === detailKind).length
+  // Вкладки воркспейса: постоянная Feed + контекстная вкладка стадии воркспейса.
+  // Вид attention текущей стадии даёт подпись (Approval/Question/…), счётчик
+  // «· N» одноимённых стадий и glow — но glow только когда мы реально в
+  // attention-режиме (в истории/ленте гасим, rule 13).
+  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage.status)
+  const inAttention = wsState.view === 'attention'
   const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
-  if (selectedStage !== null) {
+  if (workspaceStage !== null) {
     tabs.push({
       id: 'detail',
-      label: detailKind !== null ? ATTENTION_TAB_LABEL[detailKind] : (selectedStage.name !== '' ? selectedStage.name : selectedStage.id),
-      kind: detailKind ?? undefined,
-      count: detailKind !== null ? attentionCount : undefined,
-      glow: detailKind !== null,
+      label: contextKind !== null ? ATTENTION_TAB_LABEL[contextKind] : (workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id),
+      kind: contextKind ?? undefined,
+      count: contextKind !== null ? countByKind(attnItems, contextKind) : undefined,
+      glow: inAttention && contextKind !== null,
     })
   }
-  // 'detail' валидна только при выбранной стадии; иначе всегда 'feed'.
-  const effectiveTab: WorkspaceTab = selectedStage === null ? 'feed' : activeTab
-
-  const detailPanels: ReactElement[] = []
-  if (selectedStage !== null && showPlan) {
-    detailPanels.push(<PlanPanel key="plan" stage={selectedStage} attention={detailKind === 'approval'} />)
+  const activeTabId = wsState.view === 'feed' ? 'feed' : 'detail'
+  function onSelectTab(id: string): void {
+    if (id === 'feed') { openFeed(); return }
+    if (workspaceStage === null) return
+    if (contextKind !== null) openAttention(workspaceStage.id)
+    else if (workspaceStage.showDialog) openHistory('dialog-history')
+    else if (workspaceStage.showPlan) openHistory('plan-history')
+    else openFeed()
   }
-  if (selectedStage !== null && showDialog) {
-    detailPanels.push(<DialogChannel key="dialog" stage={selectedStage} attention={detailKind === 'question'} />)
+
+  // Единственная панель детали — по одной за раз (Question ИЛИ Approval ИЛИ
+  // история), на всю доступную высоту. Раньше и PlanPanel, и DialogChannel
+  // добавлялись вместе (оба flex:1) → вопрос получал полэкрана, а над/под ним
+  // висела историческая панель плана. Теперь показываем ровно то, что относится
+  // к текущему виду: attention-вопрос → диалог; attention-approval/failed/paused
+  // → план (в нём же кнопки retry/Continue); история → соответствующая панель.
+  let detailPanel: ReactElement | null = null
+  if (workspaceStage !== null) {
+    if (wsState.view === 'attention') {
+      detailPanel = contextKind === 'question'
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention />
+        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} />
+    } else if (wsState.view === 'plan-history') {
+      detailPanel = showPlan
+        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} />
+        : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} /> : null
+    } else if (wsState.view === 'dialog-history') {
+      detailPanel = showDialog
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} />
+        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} /> : null
+    }
   }
 
   return (
@@ -390,7 +416,7 @@ export function App(): ReactElement {
             rail={
               <StagesList
                 stages={stages}
-                selectedStageId={selectedStageId}
+                selectedStageId={workspaceStageId}
                 onSelect={handleSelectStage}
                 onAddNote={setNoteModalStageId}
                 onEditPreNote={setPreNoteModalStageId}
@@ -400,34 +426,34 @@ export function App(): ReactElement {
                 progressTotal={stages.length}
               />
             }
-            tabs={<WorkspaceTabs tabs={tabs} activeId={effectiveTab} onSelect={(id) => setActiveTab(id as WorkspaceTab)} />}
+            tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}
             workspace={
               <>
-                {/* Контекст выбранной стадии (имя + статус) — общая шапка
-                    воркспейса и для Feed, и для деталей (мокап показывает
-                    контекст стадии над лентой). */}
-                {selectedStage !== null && (
+                {/* Контекст стадии воркспейса (имя + статус) — общая шапка и для
+                    Feed, и для деталей (мокап показывает контекст стадии над
+                    лентой). */}
+                {workspaceStage !== null && (
                   <WorkspaceHeader
-                    stage={selectedStage}
+                    stage={workspaceStage}
                     connected={connected}
                     attentionNav={
-                      detailKind !== null && attentionIndex >= 0 && attentionQueue.length > 1
-                        ? { pos: attentionIndex + 1, total: attentionQueue.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }
+                      inAttention && attnIndex >= 0 && attnItems.length > 1
+                        ? { pos: attnIndex + 1, total: attnItems.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }
                         : undefined
                     }
                   />
                 )}
-                {effectiveTab === 'feed' || selectedStage === null ? (
+                {wsState.view === 'feed' || workspaceStage === null ? (
                   <FeedWorkspace events={events} logEntries={logEntries} />
-                ) : detailPanels.length === 0 ? (
+                ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (
                   <div className="detail-panels">
                     {/* Шапка-баннер контекстной вкладки: сияющая иконка + «что
                         происходит» (Plan needs your approval / Agent needs your
                         input / …). Показывается только для attention-статусов. */}
-                    {detailKind !== null && <AttentionBanner kind={detailKind} />}
-                    {detailPanels}
+                    {inAttention && contextKind !== null && <AttentionBanner kind={contextKind} />}
+                    {detailPanel}
                   </div>
                 )}
               </>
@@ -469,6 +495,25 @@ function isEditableFocused(): boolean {
   if (el === null) return false
   const tag = el.tagName
   return tag === 'TEXTAREA' || tag === 'INPUT' || (el as HTMLElement).isContentEditable === true
+}
+
+// useIsEditing — реактивный сигнал «сейчас в фокусе редактируемый элемент».
+// В отличие от разовой проверки isEditableFocused(), пригоден как зависимость
+// (обновляется по focusin/focusout), поэтому его можно передать в workspace-
+// редьюсер как suppressed: пока пользователь печатает, прибывшее ожидание лишь
+// светится на вкладке, но фокус из ввода не крадётся (rule 9).
+function useIsEditing(): boolean {
+  const [editing, setEditing] = useState(false)
+  useEffect(() => {
+    const update = (): void => setEditing(isEditableFocused())
+    document.addEventListener('focusin', update)
+    document.addEventListener('focusout', update)
+    return () => {
+      document.removeEventListener('focusin', update)
+      document.removeEventListener('focusout', update)
+    }
+  }, [])
+  return editing
 }
 
 function buildWebSocketUrl(): string {

@@ -301,6 +301,56 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Plan'))
   })
 
+  test('CRITICAL: a pending action on a NON-selected stage surfaces itself (Finding #1)', async () => {
+    // Стадия B входит в awaiting_approval, пока выбрана и работает стадия A.
+    // Воркспейс обязан сам открыть ожидание B (его нельзя «потерять»), а не
+    // остаться на A. До подключения workspace-редьюсера auto-open считался
+    // только из выбранной стадии, поэтому ожидание на невыбранной B не всплывало.
+    let awaiting = false
+    mockFetchForStatus(() =>
+      awaiting
+        ? {
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'awaiting_approval')],
+          }
+        : {
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'running')],
+          },
+    )
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+
+    awaiting = true
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'awaiting_approval' }, stage_id: 's2' }) })
+    })
+
+    // Воркспейс переключился на ожидание B и показал баннер аппрува.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    expect(screen.getByText('Plan needs your approval')).not.toBeNull()
+  })
+
+  test('CRITICAL: an interactive question fills the workspace alone — no plan panel beside it (Finding #2)', async () => {
+    // interactive-стадия в awaiting_user_input: сервер отдаёт и show_plan, и
+    // show_dialog=true. Раньше рендерились ОБЕ панели (обе flex:1), и вопрос
+    // получал ~полэкрана, а над ним висел исторический план. Теперь показываем
+    // ровно одну панель — диалог — на всю высоту, без плана рядом.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Ask', 'awaiting_user_input', { interactive: true, hasDialog: true, showPlan: true, showDialog: true })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
+    await waitFor(() => expect(document.getElementById('dialog-section')).not.toBeNull())
+    // Исторической панели плана рядом с вопросом быть НЕ должно.
+    expect(document.getElementById('plan-section')).toBeNull()
+    expect(screen.getByText('Agent needs your input')).not.toBeNull()
+  })
+
   test('manually selecting a completed stage keeps it selected instead of bouncing to the active one', async () => {
     // Ядро фикса #3a: клик по завершённой стадии во время работы флоу должен
     // оставить её выбранной (иначе нельзя посмотреть её логи/план/диалог).
@@ -538,7 +588,11 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Upstream'))
+    // Воркспейс авто-открывает стадию, ждущую действия: 'Downstream' (failed)
+    // — это attention-элемент и всплывает сам (Finding #1), а не 'Upstream'
+    // (running). Здесь это лишь гейт «приложение отрендерилось»; суть теста —
+    // что idle не тикает при idle_since=null.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Downstream'))
     await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
   })
 

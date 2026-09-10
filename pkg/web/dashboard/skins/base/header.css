@@ -211,8 +211,14 @@
   }
 }
 
-/* Narrow viewports: drop the flow description and tighten gaps. */
+/* Narrow viewports: drop the flow description, tighten gaps, and collapse the
+   right-hand actions to icons only so they never crowd out the center metrics. */
 @media (max-width: 900px) {
   .gh-flow-desc { display: none; }
   .global-header { gap: 12px; }
+  /* Files → icon-only square (the label is redundant once space is tight). */
+  .gh-files-label { display: none; }
+  .gh-files-btn { width: 38px; padding: 0; justify-content: center; }
+  /* Connection → dot only; the word online/offline drops. */
+  .gh-connection-text { display: none; }
 }

@@ -39,6 +39,52 @@
   background: var(--surface-canvas);
 }
 
+/* Topbar: rail-toggle (mobile only) + the tab strip on one row. On desktop the
+   toggle is hidden and the tab strip spans the row exactly as before. */
+.workspace-topbar {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.workspace-topbar .workspace-tabs {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* Rail drawer toggle — hidden on desktop; revealed only under the drawer
+   breakpoint (see the max-width:900px block below). */
+.rail-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 46px;
+  border: 0;
+  border-bottom: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.rail-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
+.rail-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+/* Scrim behind the drawer — inert on desktop (the rail sits in-grid). */
+.rail-scrim {
+  display: none;
+  position: fixed;
+  top: 61px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  border: 0;
+  padding: 0;
+  background: var(--overlay-scrim);
+  cursor: pointer;
+}
+
 /* Tab strip: a bottom-border track the active tab underlines. */
 .workspace-tabs {
   display: flex;
@@ -527,4 +573,34 @@
   font-variant-numeric: tabular-nums;
   min-width: 2.5em;
   text-align: center;
+}
+
+/* === Narrow viewports: the stage rail becomes a slide-over drawer ===
+   Below 900px the two-column grid collapses to one; the rail leaves the flow and
+   slides over the workspace on demand (toggle ☰ / scrim / Escape / stage-pick).
+   The workspace then gets the full width instead of ~150px. */
+@media (max-width: 900px) {
+  .dashboard-body { grid-template-columns: 1fr; }
+
+  .rail-toggle { display: inline-flex; }
+
+  .rail-slot {
+    position: fixed;
+    top: 61px;
+    left: 0;
+    bottom: 0;
+    height: auto;
+    width: min(300px, 86vw);
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: var(--shadow-overlay);
+    background: var(--surface-raised);
+  }
+  .dashboard-body.rail-open .rail-slot { transform: none; }
+  .dashboard-body.rail-open .rail-scrim { display: block; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-slot { transition: none; }
 }

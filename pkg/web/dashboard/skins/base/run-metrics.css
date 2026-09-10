@@ -4,6 +4,7 @@
    make the row jitter. Semantic tokens only → adapts to every skin × theme. */
 
 .run-metrics {
+  position: relative; /* anchor for the overflow popover */
   display: flex;
   align-items: center;
   gap: 22px;
@@ -49,14 +50,60 @@
   color: var(--text-primary);
 }
 
-/* Progressive collapse as the header narrows: first the metric labels, then the
-   two secondary metrics (Idle/Backoff), so the essential Started/Elapsed and
-   the right-hand actions always stay on one row. */
+/* Overflow control: a "⋯" button that pops the full four-metric list. Hidden on
+   desktop; revealed only once the two secondary metrics collapse (<1000px), so
+   Idle/Backoff stay reachable instead of silently vanishing. */
+.metrics-more {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.metrics-more:hover { background: var(--surface-hover); color: var(--text-primary); }
+.metrics-more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.metrics-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+}
+/* Labels always show inside the popover — it exists precisely to name the values. */
+.metrics-popover .metric-label { display: block; }
+
+/* Progressive collapse as the header narrows: first the inline metric labels,
+   then the two secondary metrics (Idle/Backoff) fold behind the "⋯" popover, so
+   the essential Started/Elapsed and the right-hand actions always stay on one
+   row. The label/hide rules are scoped to DIRECT metrics so the popover copies
+   (grandchildren) keep their labels and stay visible. */
 @media (max-width: 1180px) {
   .run-metrics { gap: 16px; }
-  .metric-label { display: none; }
+  .run-metrics > .metric .metric-label { display: none; }
 }
 @media (max-width: 1000px) {
-  .metric:nth-child(3),
-  .metric:nth-child(4) { display: none; }
+  .run-metrics > .metric[data-metric="idle"],
+  .run-metrics > .metric[data-metric="backoff"] { display: none; }
+  .metrics-more { display: inline-flex; }
+}
+/* Phone widths: fold ALL inline metrics behind the "⋯" popover so the center
+   never collides with the brand (left) or the actions (right). */
+@media (max-width: 680px) {
+  .run-metrics > .metric { display: none; }
 }

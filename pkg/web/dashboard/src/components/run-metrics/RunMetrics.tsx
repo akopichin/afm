@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 type RunMetricsProps = {
   startedAt: string
@@ -27,17 +27,59 @@ export function RunMetrics({ startedAt, elapsedMs, idleMs, backoffMs }: RunMetri
     { key: 'backoff', label: 'Backoff', value: hasStarted ? formatDuration(backoffMs) : '--', icon: iconPulse() },
   ]
 
+  // Поповер «⋯» — на узкой шапке (<1000px, CSS прячет Idle/Backoff инлайн)
+  // раскрывает все четыре метрики с подписями, чтобы вторичные не пропадали
+  // молча. На десктопе кнопка скрыта CSS-ом. Закрытие — клик вне / Escape.
+  const [moreOpen, setMoreOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!moreOpen) return
+    function onDocDown(e: MouseEvent): void {
+      if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) setMoreOpen(false)
+    }
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === 'Escape') setMoreOpen(false)
+    }
+    document.addEventListener('mousedown', onDocDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [moreOpen])
+
+  // withId=true только для инлайновых метрик (id started-at/elapsed/idle/backoff
+  // — на них завязаны существующие проверки); копии в поповере id НЕ несут,
+  // иначе в DOM оказалось бы два элемента с одним id.
+  function renderMetric(m: Metric, withId: boolean): ReactElement {
+    return (
+      <div className="metric" data-metric={m.key} key={m.key}>
+        <span className="metric-icon" aria-hidden="true">{m.icon}</span>
+        <span className="metric-text">
+          <span className="metric-label">{m.label}</span>
+          <span id={withId ? (m.key === 'started' ? 'started-at' : m.key) : undefined} className="metric-value">{m.value}</span>
+        </span>
+      </div>
+    )
+  }
+
   return (
-    <div className="run-metrics" role="group" aria-label="Run metrics">
-      {metrics.map((m) => (
-        <div className="metric" key={m.key}>
-          <span className="metric-icon" aria-hidden="true">{m.icon}</span>
-          <span className="metric-text">
-            <span className="metric-label">{m.label}</span>
-            <span id={m.key === 'started' ? 'started-at' : m.key} className="metric-value">{m.value}</span>
-          </span>
+    <div className="run-metrics" role="group" aria-label="Run metrics" ref={rootRef}>
+      {metrics.map((m) => renderMetric(m, true))}
+      <button
+        type="button"
+        className="metrics-more"
+        aria-label="Show all run metrics"
+        aria-expanded={moreOpen}
+        onClick={() => setMoreOpen((open) => !open)}
+      >
+        ⋯
+      </button>
+      {moreOpen && (
+        <div className="metrics-popover" role="group" aria-label="All run metrics">
+          {metrics.map((m) => renderMetric(m, false))}
         </div>
-      ))}
+      )}
     </div>
   )
 }
