@@ -126,34 +126,35 @@
 
 /* Логотип-слово: goga показывает двухцветный wordmark «QArium» (как на
    qarium.ru) — «QA» цветом --mint (teal), «rium» цветом --ink (белый),
-   системным sans-serif. Текст h1 («afm») скрыт (font-size:0); слово
+   системным sans-serif. Текст .gh-wordmark («afm») скрыт (font-size:0); слово
    собирается из ::before/::after, чтобы не делать React-компонент
-   тема-зависимым. */
-#header h1 {
+   тема-зависимым. (Редизайн: класс .gh-wordmark пришёл на смену #header h1.) */
+.gh-wordmark {
   font-size: 0;
   letter-spacing: 0;
   text-transform: none;
 }
-#header h1::before {
+.gh-wordmark::before {
   content: 'QA';
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--mint);
 }
-#header h1::after {
+.gh-wordmark::after {
   content: 'rium';
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
 }
 
-/* Логотип: заменяем анимированный SVG-шестигранник на quarium-картинку. */
-.logo > span {
-  display: none;
-}
-.logo {
+/* Логотип: заменяем SVG-марку на quarium-картинку. (Редизайн: класс .gh-mark
+   пришёл на смену .logo.) */
+.gh-mark > svg { display: none; }
+.gh-mark {
+  width: 26px;
+  height: 26px;
   background-image: url('./quarium-logo.png');
   background-size: contain;
   background-repeat: no-repeat;

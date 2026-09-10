@@ -9,7 +9,7 @@ import { DialogChannel } from '../components/dialog-channel'
 import { FeedWorkspace } from '../components/feed-workspace'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
-import { WorkspaceTabs, WorkspaceHeader, type WorkspaceTabDescriptor } from '../components/workspace'
+import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
 import { FileBrowserProvider } from '../components/file-browser'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
@@ -422,7 +422,13 @@ export function App(): ReactElement {
                 ) : detailPanels.length === 0 ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (
-                  <div className="detail-panels">{detailPanels}</div>
+                  <div className="detail-panels">
+                    {/* Шапка-баннер контекстной вкладки: сияющая иконка + «что
+                        происходит» (Plan needs your approval / Agent needs your
+                        input / …). Показывается только для attention-статусов. */}
+                    {detailKind !== null && <AttentionBanner kind={detailKind} />}
+                    {detailPanels}
+                  </div>
                 )}
               </>
             }

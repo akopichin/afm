@@ -220,18 +220,22 @@
 }
 .dialog-pending .btn-cancel-dialog {
   background: transparent;
-  border: 1px solid rgba(255, 107, 90, 0.55);
-  color: var(--btn-cancel-dialog-text);
-  padding: 7px 18px;
-  font-family: inherit;
-  font-size: 10px;
+  border: 1px solid rgba(var(--danger-rgb), 0.5);
+  color: var(--danger);
+  padding: 10px 20px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  border-radius: var(--radius-md);
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 .dialog-pending .btn-cancel-dialog:hover {
-  box-shadow: 0 0 8px var(--coral);
+  border-color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.08);
+  box-shadow: none;
 }
 
 /* === "Agent is waiting" indicator === */

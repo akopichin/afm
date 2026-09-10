@@ -326,7 +326,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
   function renderCommentHeader(label: string, ariaLabel: string, title: string, onClick: () => void): ReactNode {
     return (
       <div className="comment-display-header">
-        <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>{label}</span>
+        <span className="comment-title">{label}</span>
         <button type="button" className="comment-remove" aria-label={ariaLabel} title={title} onClick={onClick}>
           ✕
         </button>

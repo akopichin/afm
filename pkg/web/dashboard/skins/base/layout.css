@@ -54,16 +54,16 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 15px 18px;
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px; /* overlap the track border */
   color: var(--text-muted);
   font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 14.5px;
+  font-weight: 600;
   letter-spacing: 0.01em;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
@@ -90,14 +90,27 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Attention tab glyph — a small dot colored by the attention kind. */
+/* Attention tab glyph — a filled badge (circle) with a kind glyph (?, ✎, …),
+   colored by kind. Larger than a plain dot to read as the "beacon" in the mock. */
 .attn-glyph {
-  width: 8px;
-  height: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--text-secondary);
+  color: var(--surface-canvas);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
   flex-shrink: 0;
 }
+.workspace-tab-attention[data-kind="question"] .attn-glyph::before,
+.workspace-tab-attention[data-kind="approval"] .attn-glyph::before { content: "?"; }
+.workspace-tab-attention[data-kind="paused"] .attn-glyph::before { content: "❙❙"; font-size: 8px; letter-spacing: -1px; }
+.workspace-tab-attention[data-kind="failed"] .attn-glyph::before,
+.workspace-tab-attention[data-kind="hook_failed"] .attn-glyph::before { content: "!"; }
 .workspace-tab-attention[data-kind="approval"] .attn-glyph,
 .workspace-tab-attention[data-kind="question"] .attn-glyph { background: var(--attention); }
 .workspace-tab-attention[data-kind="failed"] .attn-glyph,
@@ -116,28 +129,88 @@
   --glow-rgb: var(--danger-rgb);
 }
 .workspace-tab.glow .attn-glyph {
-  box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18);
+  box-shadow: 0 0 0 4px rgba(var(--glow-rgb), 0.20), 0 0 0 9px rgba(var(--glow-rgb), 0.08);
   animation: tabGlyphGlow 2.2s ease-in-out infinite;
+}
+/* Активный attention-таб: жёлтый glow-бар вместо синего .active-underline
+   (иначе синий просвечивает по краям — «двойная граница»). */
+.workspace-tab.glow.active {
+  border-bottom-color: transparent;
 }
 .workspace-tab.glow::after {
   content: "";
   position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 0;
+  left: 0;
+  right: 0;
+  bottom: -1px;
   height: 3px;
   border-radius: 3px 3px 0 0;
-  background: rgba(var(--glow-rgb), 0.9);
+  background: rgba(var(--glow-rgb), 0.95);
   box-shadow: 0 0 10px 1px rgba(var(--glow-rgb), 0.5);
   animation: tabHaloGlow 2.2s ease-in-out infinite;
 }
 @keyframes tabGlyphGlow {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--glow-rgb), 0.15); }
-  50%      { box-shadow: 0 0 0 5px rgba(var(--glow-rgb), 0.30); }
+  0%, 100% { box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18), 0 0 0 7px rgba(var(--glow-rgb), 0.08); }
+  50%      { box-shadow: 0 0 0 5px rgba(var(--glow-rgb), 0.34), 0 0 0 11px rgba(var(--glow-rgb), 0.14); }
 }
 @keyframes tabHaloGlow {
   0%, 100% { box-shadow: 0 0 6px 0 rgba(var(--glow-rgb), 0.35); opacity: 0.8; }
   50%      { box-shadow: 0 0 16px 2px rgba(var(--glow-rgb), 0.65); opacity: 1; }
+}
+
+/* === Attention banner — шапка внутри контекстной вкладки === */
+.attention-banner {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex: none;
+  padding: 18px 22px;
+  margin: 0 clamp(16px, 3vw, 40px) 8px;
+  border-radius: var(--radius-lg);
+  background: rgba(var(--attention-rgb), 0.06);
+  border: 1px solid rgba(var(--attention-rgb), 0.18);
+}
+.attention-banner[data-tone="danger"] {
+  background: rgba(var(--danger-rgb), 0.06);
+  border-color: rgba(var(--danger-rgb), 0.18);
+}
+.attention-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--attention);
+  color: var(--attention);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 5px rgba(var(--attention-rgb), 0.10), 0 0 0 11px rgba(var(--attention-rgb), 0.05);
+  animation: bannerIconGlow 2.4s ease-in-out infinite;
+}
+.attention-banner[data-tone="danger"] .attention-banner-icon {
+  border-color: var(--danger);
+  color: var(--danger);
+  box-shadow: 0 0 0 5px rgba(var(--danger-rgb), 0.10), 0 0 0 11px rgba(var(--danger-rgb), 0.05);
+}
+@keyframes bannerIconGlow {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0.12), 0 0 0 9px rgba(var(--attention-rgb), 0.05); }
+  50%      { box-shadow: 0 0 0 6px rgba(var(--attention-rgb), 0.20), 0 0 0 13px rgba(var(--attention-rgb), 0.09); }
+}
+.attention-banner-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.attention-banner-title {
+  font-family: var(--font-ui);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--attention);
+}
+.attention-banner[data-tone="danger"] .attention-banner-title { color: var(--danger); }
+.attention-banner-subtitle {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 
 /* === Workspace body: the active workspace fills and scrolls === */
@@ -150,6 +223,10 @@
   padding: 12px;
   gap: 12px;
 }
+/* Баннер живёт внутри .detail-panels (первый ребёнок) — панель плана/диалога
+   идёт под ним и скроллится сама. */
+.detail-panels { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.detail-panels > .attention-banner { margin-top: 4px; }
 
 /* Stage context bar above the feed / detail panels. */
 .workspace-header {

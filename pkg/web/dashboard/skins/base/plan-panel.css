@@ -376,28 +376,31 @@
 .line-comment-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   grid-column: 1 / -1;
-  margin: 6px 0 8px 36px;
-  padding: 10px 12px;
-  background: var(--bg);
-  border: 1px solid var(--amber);
+  margin: 8px 0 10px 0;
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-lg);
 }
 
 .line-comment-form textarea {
-  background: var(--bg-elev);
-  border: 1px solid var(--mint-soft);
-  color: var(--ink);
-  padding: 8px 10px;
-  font-family: inherit;
-  font-size: 11px;
+  background: var(--surface-canvas);
+  border: 1px solid var(--separator-subtle);
+  color: var(--text-primary);
+  padding: 11px 13px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: var(--radius-md);
   resize: vertical;
-  min-height: 56px;
+  min-height: 72px;
   overflow-y: auto;
 }
 .line-comment-form textarea:focus {
-  outline: 1px solid var(--mint);
-  border-color: var(--mint);
+  outline: none;
+  border-color: var(--accent-primary);
 }
 
 .line-comment-form .comment-actions {
@@ -417,23 +420,36 @@
   gap: 8px;
   margin-bottom: 4px;
 }
+.comment-title {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
 
 /* Крестик для быстрого удаления комментария прямо из его отображения,
    без открытия формы редактирования. Контурный стиль как у .icon-btn;
    coral на hover сигнализирует деструктивное действие (ср. .feed-msg.error). */
 .comment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   background: transparent;
-  border: 1px solid rgba(111, 212, 204, 0.4);
-  color: var(--ink-dim);
+  border: 1px solid var(--separator-subtle);
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 13px;
   line-height: 1;
-  padding: 1px 5px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
 .comment-remove:hover {
-  border-color: var(--coral);
-  color: var(--coral);
+  border-color: var(--danger);
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.08);
 }
 
 .comment-hint {
@@ -445,60 +461,73 @@
   font-style: normal;
 }
 
-/* === Action buttons === */
+/* === Action buttons — скруглённые, воздушные, sans; общий стиль === */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   background: transparent;
-  border: 1px solid var(--mint);
-  color: var(--mint);
-  padding: 7px 18px;
-  font-family: inherit;
-  font-size: 10px;
+  border: 1px solid var(--separator-subtle);
+  color: var(--text-secondary);
+  padding: 10px 20px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  border-radius: var(--radius-md);
   cursor: pointer;
   position: relative;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .btn:hover:not(:disabled) {
-  box-shadow: 0 0 10px currentColor;
+  border-color: var(--text-muted);
+  background: var(--surface-hover);
+  box-shadow: none;
 }
+.btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .btn:disabled {
-  opacity: 0.3;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
+/* Заливные (primary) кнопки — акцент/успех с читаемым текстом. */
 .btn-approve {
-  background: var(--mint);
-  color: var(--bg);
-  border-color: var(--mint);
+  background: var(--success);
+  color: var(--surface-canvas);
+  border-color: var(--success);
 }
 .btn-approve:hover:not(:disabled) {
-  background: var(--ink-hi);
-  border-color: var(--ink-hi);
-  color: var(--bg);
-}
-
-.btn-revise {
-  border-color: var(--amber);
-  color: var(--amber);
-}
-
-.btn-retry {
-  border-color: var(--coral);
-  color: var(--coral);
+  filter: brightness(1.08);
+  background: var(--success);
+  border-color: var(--success);
+  color: var(--surface-canvas);
 }
 
 .btn-send {
-  background: var(--violet);
-  color: var(--bg);
-  border-color: var(--violet);
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+.btn-send:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
 }
 
-.btn-cancel {
-  border-color: var(--ink-dim);
-  color: var(--ink-dim);
-}
+/* Контурные (secondary) кнопки — тонированные под смысл действия. */
+.btn-revise { border-color: rgba(var(--attention-rgb), 0.5); color: var(--attention); }
+.btn-revise:hover:not(:disabled) { border-color: var(--attention); background: rgba(var(--attention-rgb), 0.08); }
+
+.btn-retry { border-color: rgba(var(--danger-rgb), 0.5); color: var(--danger); }
+.btn-retry:hover:not(:disabled) { border-color: var(--danger); background: rgba(var(--danger-rgb), 0.08); }
+
+.btn-cancel,
+.btn-cancel-dialog { border-color: rgba(var(--danger-rgb), 0.5); color: var(--danger); }
+.btn-cancel:hover:not(:disabled),
+.btn-cancel-dialog:hover:not(:disabled) { border-color: var(--danger); background: rgba(var(--danger-rgb), 0.08); }
 
 .actions-row {
   display: flex;
