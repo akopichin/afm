@@ -453,6 +453,48 @@ The pipeline is **background and best-effort**: it never blocks downstream stage
 - **Commit it (or ignore it).** `memory.md` is meant to live in your repo and grow over time. If you'd rather not track it, add `<memory.path>/` to `.gitignore`; if you want afm to commit it automatically after each run, set `commit: true`.
 - **Script stages** may declare `reflect:` for reading, but their write chain is always skipped — there is no agent session to reflect on.
 
+#### `afm memory rebuild` — backfilling memory from a past run
+
+The normal write chain only runs live, right after each stage finishes during `afm run`. `afm memory rebuild [flow.yaml]` runs the same distill pipeline **offline**, against the session logs of a run that already finished — for turning on `memory`/`reflect` on a flow you'd already been running, for regenerating memory after editing the prompts, or for recovering from a failed/aborted live reflection.
+
+```bash
+afm memory rebuild                       # rebuild for the flow in .afm/flows (or the only one present)
+afm memory rebuild flow.yaml             # explicit flow file
+afm memory rebuild --run my-flow-20260910-153000-ab12   # a specific historical run, not just the latest
+afm memory rebuild --dry-run             # show what would change, write nothing
+afm memory rebuild --force-reflect       # regenerate every reflect_dataset.yaml from raw logs
+afm memory rebuild --commit              # force a git commit of changed files, overriding flow.yaml
+afm memory rebuild --no-commit           # force NO commit, overriding memory.commit: true in flow.yaml
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--run <id>` | latest completed run | Explicit run directory name (bare basename, no path separators) to rebuild from, instead of auto-selecting the latest completed one. |
+| `--dry-run` | `false` | Compute and print the diff for every target that would change; write nothing to the memory directory and never commit. |
+| `--force-reflect` | `false` | Ignore any existing `reflect_dataset.yaml` and regenerate it from the stage's raw session logs for every write-reflect stage. |
+| `--commit` | — | Commit changed memory files at the end, regardless of `memory.commit` in the flow. Mutually exclusive with `--no-commit`. |
+| `--no-commit` | — | Never commit, even if `memory.commit: true` in the flow. Mutually exclusive with `--commit`. |
+
+The persistent `--dir`/`AFM_DIR` and `--debug`/`AFM_DEBUG` flags work the same as for `afm run`.
+
+**Effective commit decision:** an explicit `--commit`/`--no-commit` always wins; otherwise it falls back to the flow's `memory.commit` (default `false`); `--dry-run` always disables committing regardless of any of the above (there's nothing published to commit).
+
+**Run selection: completed-only, exact stage-set match, newest wins — which can mean an older run.** Without `--run`, afm scans runs of the flow newest-first and picks the first one that is **fully done** (`AllDone`) AND whose stage set **exactly matches** the current flow's stage IDs (no missing, no extra). A newer completed run whose topology has since drifted (a stage renamed/added/removed in `flow.yaml`) is **silently skipped**, not treated as an error — the resolver keeps looking at older runs until it finds one that matches exactly. Consequence: **the command may end up analyzing a substantially older run** than the most recent one you actually completed, with no warning that a newer-but-mismatched run was passed over — check the run id printed to stdout (`using current flow definition and current prompts for historical run <id>`) and in the attempt manifest if this matters to you. This is deliberate: erroring out on every flow-topology change would block the exact backfill scenario the command exists for (adding `memory`/`reflect` to stages of an already-evolving flow). An explicit `--run <id>` bypasses this filter entirely and is checked independently — a stage-set mismatch there IS a hard error (two sorted lists: missing/extra), and a run that isn't fully done is also rejected. A run currently held by a live `afm run` (its `.lock` is taken) is rejected immediately with a clear error — rebuild never waits for a run to finish, since a run in progress has changing logs.
+
+**"Current YAML + current prompts, historical logs."** Rebuild always uses your CURRENT `flow.yaml` (stage definitions, `memory:`/`reflect:` config) and CURRENT prompt templates (`reflect.md`/`aggregate.md`/`prioritize.md`/`update.md`, including any project overrides under `prompts_dir`) — only the session logs being distilled come from the past. This is exactly what makes backfill useful: you can turn memory on today and distill everything a run already taught you, using today's rules.
+
+**Dataset reuse.** Each write-reflect stage's `reflect_dataset.yaml` under `<runDir>/<stageID>/` is the canonical, reusable artifact of the reflect step — the expensive part. If a valid one already exists on disk (from a prior live run or a prior `memory rebuild` attempt), rebuild reuses it as-is and skips re-running the reflect agent for that stage. Pass `--force-reflect` to discard it and regenerate from the stage's raw source inventory (agent logs, `plan.md`/`execution_summary.md`, dialog/prenote/feedback files) instead.
+
+**`--dry-run`: diffs only, nothing written, never committed.** In dry-run mode the full pipeline runs (capture + distill) so the printed diff is accurate, but the promotion step that would overwrite `memory.md`/per-stage files never executes, and commit is unconditionally skipped.
+
+**Audit workspace.** Every invocation (dry-run or not) creates a fresh attempt directory `<runDir>/memory-rebuild/<attempt-id>/` (timestamped, never reused) holding the staged datasets, per-target distill artifacts (`patterns.md`/`prioritized.md`/`high.md`), and a `manifest.json` recording the full provenance of the attempt: which run/flow/prompt content (by SHA-256) produced it, per-target/per-dataset results, and a lifecycle status (`running` → `capturing` → `distilling` → `promoting` → `awaiting_commit`/`published` → `completed`/`failed`/`cancelled`, or `dry_run`). If the process is interrupted mid-attempt, the manifest is left in its last non-terminal status and gets closed out to `failed`/`cancelled` on the next relevant read — nothing is silently lost, and stale in-progress attempts from a previous crash are cleaned up automatically on the next rebuild.
+
+**Two locks, in order — and the historical run is never mutated.** Rebuild takes the run's own lock first (the same lock `afm run` holds while live — a busy lock means "this run is still active", and rebuild refuses to analyze changing logs) and, only for the short finalize/promote/commit window, the shared memory-directory lock (see AGENTS.md for its exact scope — it's the same lock a live `afm run` writing memory would take, so the two never race). Rebuild reads `events.jsonl`/stage directories from the historical run **read-only** — it never appends events, never touches `state.json`, and never changes that run's FSM status. Only files under the memory directory (and the rebuild attempt's own audit workspace) are written.
+
+**Breaking change: path-safety validation in `flow.yaml`.** `afm run` (and `ParseFile` in general) now rejects flows with unsafe path components, closing a class of bugs a rebuild's more careful path handling surfaced: a stage `id` containing `/`, `\`, `.`/`..`, or a NUL byte is a parse error (stage IDs become directory-name components on disk); a `reflect.file` that isn't a "local" relative path (escapes via `..` or is absolute) is a parse error; and `reflect.file` resolving (after `filepath.Clean`) to exactly `memory.md` is also a parse error (it would collide with the project-wide file). If you have an existing flow with such a stage id or `reflect.file`, `afm run`/`afm memory rebuild` will now refuse to parse it — rename the offending id/file.
+
+**`memory.path` resolution can diverge between `afm run` and `afm memory rebuild` when `root_dir` is empty.** With no `root_dir` set in the flow, `afm run` lets agents inherit the process's CWD and resolves a relative `memory.path` against `--dir`/`AFM_DIR` (the `.afm` parent). `afm memory rebuild`, needing a stable absolute root for its manifest/lock/agent working directory, instead resolves the same empty-`root_dir` case against the rebuild process's **own current working directory** — which is only the same as `--dir` if you happen to invoke both commands from that directory. Concretely: `afm --dir /project run flow.yaml` run from `/elsewhere` resolves `memory.path: docs/memory` to `/project/docs/memory`, but `afm --dir /project memory rebuild flow.yaml` run from `/elsewhere` resolves it to `/elsewhere/docs/memory` — two different directories, two different locks, no shared memory between them. To guarantee both commands target the same memory directory, do one of: set an explicit `root_dir` in the flow; make `memory.path` absolute; or always run `afm memory rebuild` from the same directory as `afm run` (typically the project root).
+
 ### Passing Context Between Stages
 
 Plans (and the `execution_summary.md` of autonomous stages) of dependent stages are automatically added to the prompt via `depends_on`. To pass file artifacts, use `artifacts` + `inputs`:
