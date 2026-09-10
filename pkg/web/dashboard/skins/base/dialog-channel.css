@@ -329,24 +329,81 @@
 .workspace-body .dialog-question .line-content code,
 .workspace-body .dialog-question .line-content pre { font-family: var(--font-mono); }
 
-/* Options → full-width rows; long labels wrap, letter/selected/hover kept. */
+/* Убираем «коробку» вокруг вопроса — он живёт на канвасе воркспейса (макет):
+   ни рамки, ни градиента, ни свечения. */
+.workspace-body .dialog-pending {
+  border: 0;
+  background: none;
+  box-shadow: none;
+  animation: none;
+  padding: 0;
+}
+.workspace-body .dialog-pending::before,
+.workspace-body .dialog-pending::after { display: none; }
+
+/* Вопрос — крупная проза; первый абзац читается как заголовок. */
+.workspace-body .dialog-question { margin-bottom: 20px; }
+.workspace-body .dialog-question .line-content { font-size: 15px; }
+
+/* Options → карточки с радиокнопкой (○ + заголовок + описание), как в макете. */
 .workspace-body .dialog-pending .dialog-options {
   flex-direction: column;
   flex-wrap: nowrap;
+  gap: 10px;
 }
 .workspace-body .dialog-pending .dialog-options button {
   display: flex;
+  gap: 14px;
   width: 100%;
   align-items: flex-start;
   text-align: left;
   white-space: normal;
-  /* Полноширинные опции обычной прозой (sans), не капслок-моно. */
   font-family: var(--font-ui);
-  font-size: 14px;
   text-transform: none;
   letter-spacing: normal;
   line-height: 1.5;
+  padding: 14px 18px;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
+/* Прячем старую букву-счётчик (A/B/C ::before) — теперь радиокнопка. */
+.workspace-body .dialog-pending .dialog-options button::before { content: none; display: none; }
+.workspace-body .dialog-pending .dialog-options button:hover {
+  border-color: rgba(var(--accent-primary-rgb), 0.5);
+  background: var(--surface-hover);
+  box-shadow: none;
+}
+.workspace-body .dialog-pending .dialog-options button.selected {
+  border-color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.10);
+  box-shadow: none;
+}
+/* Радиокнопка слева. */
+.dialog-option-radio {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 2px solid var(--text-muted);
+  position: relative;
+  transition: border-color 0.12s ease;
+}
+.dialog-options button:hover .dialog-option-radio { border-color: var(--accent-primary); }
+.dialog-options button.selected .dialog-option-radio { border-color: var(--accent-primary); }
+.dialog-options button.selected .dialog-option-radio::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+}
+.dialog-option-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.dialog-option-title { font-size: 14.5px; font-weight: 600; color: var(--text-primary); }
+.dialog-option-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
 /* Кастомный ответ — тоже UI-шрифт. */
 .workspace-body .dialog-pending .dialog-custom {
   font-family: var(--font-ui);

@@ -376,19 +376,32 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                 {commentCount === 0 && (
                   <>
                     <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
-                      {(pending.options ?? []).map((option, index) => (
-                        <button
-                          key={option}
-                          type="button"
-                          className={selectedOption === option ? 'selected' : ''}
-                          aria-pressed={selectedOption === option}
-                          disabled={submitting}
-                          style={{ animationDelay: `${index * 40}ms` }}
-                          onClick={() => selectOption(option)}
-                        >
-                          {option}
-                        </button>
-                      ))}
+                      {(pending.options ?? []).map((option, index) => {
+                        const selected = selectedOption === option
+                        // Опция вида "Заголовок — описание" разбивается на жирный
+                        // заголовок + описание (как в макете-карточке). Без
+                        // разделителя — вся строка как заголовок.
+                        const sep = option.indexOf(' — ')
+                        const title = sep >= 0 ? option.slice(0, sep) : option
+                        const desc = sep >= 0 ? option.slice(sep + 3) : ''
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            className={selected ? 'selected' : ''}
+                            aria-pressed={selected}
+                            disabled={submitting}
+                            style={{ animationDelay: `${index * 40}ms` }}
+                            onClick={() => selectOption(option)}
+                          >
+                            <span className="dialog-option-radio" aria-hidden="true" />
+                            <span className="dialog-option-body">
+                              <span className="dialog-option-title">{title}</span>
+                              {desc !== '' && <span className="dialog-option-desc">{desc}</span>}
+                            </span>
+                          </button>
+                        )
+                      })}
                     </div>
 
                     <PasteableTextarea
