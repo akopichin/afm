@@ -6,7 +6,7 @@ import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { EventFeedPanel } from '../components/event-feed'
+import { FeedWorkspace } from '../components/feed-workspace'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, type WorkspaceTabDescriptor } from '../components/workspace'
@@ -394,7 +394,7 @@ export function App(): ReactElement {
                     контекст стадии над лентой). */}
                 {selectedStage !== null && <WorkspaceHeader stage={selectedStage} connected={connected} />}
                 {effectiveTab === 'feed' || selectedStage === null ? (
-                  <EventFeedPanel events={events} logEntries={logEntries} />
+                  <FeedWorkspace events={events} logEntries={logEntries} />
                 ) : detailPanels.length === 0 ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

@@ -1,0 +1,179 @@
+/* skins/base/feed-workspace.css — Feed workspace (мессенджер-лента + Feed/Log)
+   Структурные правила; палитра — из семантических токенов (tokens.css), поэтому
+   тема-аварно во всех скинах. Пришёл на смену event-feed.css. */
+
+.feed-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+/* --- Сегмент-переключатель Feed/Log --- */
+.feed-switch {
+  display: inline-flex;
+  gap: 2px;
+  align-self: flex-start;
+  margin: 0 0 12px;
+  padding: 3px;
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+}
+.feed-switch-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--motion-fast, 120ms) ease, background var(--motion-fast, 120ms) ease;
+}
+.feed-switch-btn:hover { color: var(--text-secondary); }
+.feed-switch-btn.active {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.feed-switch-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* --- Скролл-контейнер --- */
+.feed-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 4px 8px 24px 2px;
+  scroll-behavior: auto;
+}
+
+.feed-empty {
+  margin: auto;
+  color: var(--text-muted);
+}
+
+/* --- Группа сообщений (пузырь) --- */
+.feed-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: min(760px, 82%);
+}
+.feed-group.feed-left { align-self: flex-start; align-items: flex-start; }
+.feed-group.feed-right { align-self: flex-end; align-items: flex-end; }
+
+.feed-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 0 4px;
+}
+.feed-right .feed-group-head { flex-direction: row-reverse; }
+
+.feed-stage-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+.feed-actor { color: var(--text-muted); }
+
+.feed-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-agent-message);
+  border: 1px solid var(--separator-subtle);
+}
+.feed-left .feed-bubble { border-top-left-radius: var(--radius-sm); }
+.feed-right .feed-bubble {
+  background: var(--surface-user-message);
+  border-top-right-radius: var(--radius-sm);
+  border-color: transparent;
+}
+
+/* --- Отдельная строка события --- */
+.feed-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+}
+.feed-item-text { min-width: 0; overflow-wrap: anywhere; }
+.feed-item-gap {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.feed-right .feed-item { flex-direction: row-reverse; text-align: right; }
+
+/* mono (tool/script/auto-answer) — компактная подчинённая строка */
+.feed-item.mono .feed-item-text {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.feed-item.mono {
+  background: var(--surface-tool);
+  padding: 4px 8px;
+}
+
+/* Семантические тона: тонкая цветная метка слева + тинт текста.
+   Нейтральный тон метки не рисует. */
+.feed-item.tone-success { color: var(--success); }
+.feed-item.tone-danger { color: var(--danger); }
+.feed-item.tone-warning { color: var(--attention); }
+.feed-item.tone-accent .feed-item-text { color: var(--accent-primary); }
+
+/* Статусные переходы (→ running и т.п.) — приглушённее основного текста. */
+.feed-item.feed-kind-status:not(.tone-danger):not(.tone-warning) .feed-item-text {
+  color: var(--text-secondary);
+}
+/* Успешное завершение — заметная success-поверхность с галочкой. */
+.feed-item.feed-kind-success {
+  background: rgba(var(--success-rgb), 0.12);
+  color: var(--success);
+  padding: 6px 10px;
+}
+.feed-item.feed-kind-success .feed-item-text::before {
+  content: "✓ ";
+  font-weight: 700;
+}
+/* Ошибка/провал — danger-поверхность. */
+.feed-item.tone-danger { background: rgba(var(--danger-rgb), 0.10); padding: 6px 10px; }
+
+/* --- Log-режим --- */
+.log-scroll { padding-right: 0; }
+.log-content {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre;
+  overflow-x: auto;
+}
+.log-content.hidden,
+.empty-hint.hidden { display: none; }
