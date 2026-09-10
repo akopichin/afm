@@ -295,9 +295,10 @@
   min-height: 0;
   overflow-y: auto;
   width: 100%;
-  max-width: 860px;
-  margin-inline: auto;
-  padding: 8px clamp(16px, 4vw, 48px) 0;
+  /* На всю ширину воркспейса (симметрично плану) — без центрирующей меры. */
+  max-width: none;
+  margin-inline: 0;
+  padding: 8px clamp(16px, 3vw, 40px) 0;
 }
 /* Not an overflow container in document mode, so the sticky answer bar sticks
    to #dialog-scroll (its scrolling ancestor) rather than to this box. */

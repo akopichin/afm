@@ -578,9 +578,12 @@
    code/tables keep their own overflow-x (see .line-content pre/table above). */
 .workspace-body #plan-section .markdown-body,
 .workspace-body #plan-section #plan-content {
-  max-width: 820px;
-  margin-inline: auto;
-  padding: 8px clamp(16px, 4vw, 48px) 24px;
+  /* На всю ширину воркспейса (было max-width:820px по центру — слева
+     оставался большой пустой блок). Читаемость держат горизонтальные
+     gutters, а не узкая мера. */
+  max-width: none;
+  margin-inline: 0;
+  padding: 8px clamp(16px, 3vw, 40px) 24px;
   max-height: none;
   overflow-y: visible;
   border: 0;
