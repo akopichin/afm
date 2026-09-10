@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
@@ -81,6 +82,20 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		return errors.New("no writable memory target (need a stage with reflect.mode w|rw)")
 	}
 
+	// rebuild нужен стабильный АБСОЛЮТНЫЙ корень (манифест, Executor.Dir "с
+	// нуля", лок памяти) — в отличие от `afm run`, который может отдать
+	// агентам унаследованный CWD процесса при пустом root_dir. Вычисляется
+	// ДО резолва runDir — обе величины зависят только от f/rootDir, а Docker
+	// re-exec ниже нужны все три (agentRoot/memDir/runDir) ДО захвата лока.
+	agentRoot, err := absoluteAgentRoot(rootDir, f)
+	if err != nil {
+		return err
+	}
+	memDir, err := resolveMemoryDir(rootDir, agentRoot, f)
+	if err != nil {
+		return err
+	}
+
 	stageIDs := stageIDsOf(f)
 	var runDir string
 	if o.RunID != "" {
@@ -89,6 +104,20 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		runDir, err = state.FindLatestCompletedRunDir(runsDir(), f.Name, stageIDs)
 	}
 	if err != nil {
+		return err
+	}
+
+	// Docker self-re-exec: если включён Docker-режим и мы не внутри
+	// контейнера — перезапускаем себя в Docker ДО захвата любого лока (лок
+	// должен быть взят внутри контейнера, тем же процессом, что его
+	// реально держит). На успехе ReExec либо не возвращает управление вовсе,
+	// либо возвращает *docker.SubprocessExitError — пробрасываем как есть,
+	// main.go уже умеет превращать её в правильный os.Exit.
+	absFlowPath, err := filepath.Abs(flowPath)
+	if err != nil {
+		return fmt.Errorf("resolve flow path: %w", err)
+	}
+	if err := rebuildDockerReExec(cfg, o, absFlowPath, agentRoot, memDir, runDir); err != nil {
 		return err
 	}
 
@@ -115,15 +144,6 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		return err
 	}
 
-	agentRoot, err := resolveAgentRoot(rootDir, f)
-	if err != nil {
-		return err
-	}
-	memDir, err := resolveMemoryDir(rootDir, agentRoot, f)
-	if err != nil {
-		return err
-	}
-
 	// Fail-fast commit preflight ДО дорогостоящего capture, когда коммит
 	// включён — не тратить время конвейера, если коммит заведомо невозможен.
 	commit := effectiveCommit(o, f)
@@ -141,10 +161,37 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	if err != nil {
 		return err
 	}
+
+	// Единый wrapper-dir: generated-врапперы (autoShim) существуют только
+	// ВНУТРИ контейнера — зеркалит блок run.go (cmd/afm/run.go). rebuild не
+	// выполняет стадий флоу, поэтому единственная релевантная команда —
+	// глобальный cfg.Client.Command (UsedRecipeCommands(nil, ...) — Task 13).
+	var wrapperSpecs []docker.WrapperSpec
+	generatedAgents := map[string]bool{}
+	if os.Getenv("AFM_IN_DOCKER") == "1" && cfg.Docker.IsAutoShim() {
+		if err := cfg.Docker.ValidateAgents(); err != nil {
+			return err
+		}
+		used := docker.UsedRecipeCommands(nil, cfg.Client.Command, cfg.Docker.Agents)
+		for cmd := range used {
+			generatedAgents[cmd] = true
+			wrapperSpecs = append(wrapperSpecs, buildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
+		}
+	}
+	var wrapperDir string
+	if len(wrapperSpecs) > 0 {
+		wd, err := docker.CreateWrappers(wrapperSpecs)
+		if err != nil {
+			return fmt.Errorf("create wrappers: %w", err)
+		}
+		wrapperDir = wd
+		defer os.RemoveAll(wd) //nolint:errcheck
+	}
+
 	agentCfg := memorypipeline.AgentConfig{
 		Command:     cfg.Client.Command,
 		ExtraArgs:   cfg.Client.ExtraArgs,
-		WrapperDir:  executor.WrapperDirFor(cfg.Client.Command, "", nil), // generated-wrapper dir wired in Task 13
+		WrapperDir:  executor.WrapperDirFor(cfg.Client.Command, wrapperDir, generatedAgents),
 		RootDir:     agentRoot,
 		IdleTimeout: cfg.Executor.IdleTimeout,
 		Debug:       debugEnabled,
@@ -454,34 +501,6 @@ func maybeCommit(memDir string, report memorypipeline.Report, manifestPath strin
 	m.CommitSHA = sha
 	_ = memorypipeline.WriteManifest(manifestPath, m)
 	return nil
-}
-
-// resolveAgentRoot возвращает корень проекта для агентов (их CWD) —
-// зеркалит инлайн-логику cmd/afm/run.go:~207-213 (Task 13 вынесет в общий
-// хелпер + добавит нормализацию в абсолютный путь).
-func resolveAgentRoot(afmRoot string, f *flow.Flow) (string, error) {
-	agentRootDir := f.RootDir
-	if agentRootDir != "" && !filepath.IsAbs(agentRootDir) {
-		agentRootDir = filepath.Join(afmRoot, agentRootDir)
-	}
-	return agentRootDir, nil
-}
-
-// resolveMemoryDir возвращает директорию памяти флоу — зеркалит инлайн-логику
-// cmd/afm/run.go:~215-225.
-func resolveMemoryDir(afmRoot, agentRoot string, f *flow.Flow) (string, error) {
-	if !f.MemoryEnabled() {
-		return "", nil
-	}
-	base := agentRoot
-	if base == "" {
-		base = afmRoot
-	}
-	memDir := f.Memory.Path
-	if !filepath.IsAbs(memDir) {
-		memDir = filepath.Join(base, memDir)
-	}
-	return memDir, nil
 }
 
 func newMemoryRebuildCmd() *cobra.Command {

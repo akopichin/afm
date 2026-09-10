@@ -136,6 +136,51 @@ func TestScanCommands_SkipsMissingBinary(t *testing.T) {
 	}
 }
 
+// TestScanCommands_NilFlow — Task 13 (rebuild не выполняет стадии флоу и
+// знает только глобальную команду агента памяти, флоу для этой операции
+// может быть nil): nil f не должен паниковать, глобальная команда
+// монтируется как обычно, а generated пропускается так же.
+func TestScanCommands_NilFlow(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "glm51")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	mounts := docker.ScanCommands(nil, "glm51", nil)
+	if len(mounts) != 1 {
+		t.Fatalf("expected 1 mount for global cmd with nil flow, got %d: %v", len(mounts), mounts)
+	}
+	if mounts[0].ContainerName != "glm51" {
+		t.Errorf("ContainerName: got %q, want %q", mounts[0].ContainerName, "glm51")
+	}
+
+	// claude как globalCmd с nil flow — по-прежнему не монтируется.
+	if got := docker.ScanCommands(nil, "claude", nil); len(got) != 0 {
+		t.Errorf("expected 0 mounts for claude global cmd with nil flow, got %d: %v", len(got), got)
+	}
+}
+
+// TestUsedRecipes_NilFlow — nil f + [globalCmd] должен спроецировать ТОЛЬКО
+// рецепт глобальной команды, без паники на f.Stages.
+func TestUsedRecipes_NilFlow(t *testing.T) {
+	all := map[string]config.AgentRecipe{
+		"glm51": {Model: "glm-5.1"},
+		"glm52": {Model: "glm-5.2"},
+	}
+	got := docker.UsedRecipes(nil, "glm51", all)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 recipe for nil flow, got %d: %v", len(got), got)
+	}
+	if _, ok := got["glm51"]; !ok {
+		t.Errorf("expected glm51 recipe present, got %v", got)
+	}
+	if _, ok := got["glm52"]; ok {
+		t.Errorf("glm52 must not be included (not the global command), got %v", got)
+	}
+}
+
 func TestReExec_BuildsDockerArgs(t *testing.T) {
 	// Перехватываем execFunc чтобы не запускать реальный docker.
 	var capturedArgv0 string

@@ -204,24 +204,17 @@ func newRunCmd() *cobra.Command {
 				defer os.RemoveAll(wd) //nolint:errcheck
 			}
 
-			// Корень проекта для агентов (их CWD). Относительный root_dir
-			// резолвится относительно afm-корня (--dir); пустой — агенты
-			// наследуют CWD процесса afm (прежнее поведение).
-			agentRootDir := f.RootDir
-			if agentRootDir != "" && !filepath.IsAbs(agentRootDir) {
-				agentRootDir = filepath.Join(rootDir, agentRootDir)
+			// Корень проекта для агентов (их CWD) и директория памяти —
+			// общие хелперы cmd/afm/agent_environment.go (Task 13), поведение
+			// не изменилось: относительный root_dir резолвится относительно
+			// afm-корня (--dir); пустой — агенты наследуют CWD процесса afm.
+			agentRootDir, err := resolveAgentRoot(rootDir, f)
+			if err != nil {
+				return err
 			}
-
-			var memDir string
-			if f.MemoryEnabled() {
-				base := agentRootDir
-				if base == "" {
-					base = rootDir
-				}
-				memDir = f.Memory.Path
-				if !filepath.IsAbs(memDir) {
-					memDir = filepath.Join(base, memDir)
-				}
+			memDir, err := resolveMemoryDir(rootDir, agentRootDir, f)
+			if err != nil {
+				return err
 			}
 
 			// Docker project file browser: только внутри контейнера, где

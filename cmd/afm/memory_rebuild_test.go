@@ -95,6 +95,20 @@ func fakeMemoryRunner() memorypipeline.AgentRunner {
 	}
 }
 
+// isolateHome points $HOME at an empty temp dir for the duration of the
+// test, so config.LoadFrom's global layer (~/.afm/config.yaml) can never
+// leak the developer's real, possibly Docker-enabled, machine config into a
+// rebuildHandler test (Task 13: rebuildHandler now actually reads
+// cfg.Docker to decide whether to re-exec — before that it was loaded but
+// never consulted, so a Docker-enabled global config was harmless here;
+// now, on a dev machine with `docker.enabled: true` in ~/.afm/config.yaml,
+// every test below would try to auth-check/re-exec into Docker instead of
+// exercising the behavior under test).
+func isolateHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+}
+
 // withFakeMemoryPipeline overrides newRebuildPipeline for the duration of the
 // test so rebuildHandler never spawns a real agent process; restores the
 // original seam on cleanup (same pattern as TestFmDir's rootDir save/restore).
@@ -179,6 +193,7 @@ stages:
 // --- Step 1: preflight gates, before any pipeline/agent is touched ---------
 
 func TestRebuildHandler_MissingMemoryConfig(t *testing.T) {
+	isolateHome(t)
 	dir := chdirTemp(t)
 	flowPath := writeFlowFile(t, dir, "flow.yaml", `name: testflow
 stages:
@@ -193,6 +208,7 @@ stages:
 }
 
 func TestRebuildHandler_NoWritableTarget(t *testing.T) {
+	isolateHome(t)
 	dir := chdirTemp(t)
 	// memory.mode:w set, but no stage declares reflect at all — review #12:
 	// a bare mode:w is not "writable" without an actual write-reflect stage.
@@ -230,6 +246,7 @@ func TestCheckStageSetMatchesExact_SortedMissingAndExtra(t *testing.T) {
 }
 
 func TestRebuildHandler_StageSetMismatch(t *testing.T) {
+	isolateHome(t)
 	dir := chdirTemp(t)
 	// current flow declares TWO stages (s1, s2); the historical run only
 	// ever ran s1 — checkStageSetMatchesExact must catch this even though
@@ -267,6 +284,7 @@ stages:
 // --- explicit --run on an incomplete run (AllDone check) --------------------
 
 func TestRebuildHandler_ExplicitRunIncomplete(t *testing.T) {
+	isolateHome(t)
 	dir := chdirTemp(t)
 	flowPath := writeFlowFile(t, dir, "flow.yaml", singleStageFlowYAML)
 	runDir := mkRunCLI(t, filepath.Join(dir, ".afm", "runs"), "testflow-20260101-000000-aaaa",
@@ -284,6 +302,7 @@ func TestRebuildHandler_ExplicitRunIncomplete(t *testing.T) {
 // --- an active run (live afm process holding the flock) ---------------------
 
 func TestRebuildHandler_ActiveRunLocked(t *testing.T) {
+	isolateHome(t)
 	dir := chdirTemp(t)
 	flowPath := writeFlowFile(t, dir, "flow.yaml", singleStageFlowYAML)
 	runDir := mkRunCLI(t, filepath.Join(dir, ".afm", "runs"), "testflow-20260101-000000-aaaa",
@@ -309,6 +328,7 @@ func TestRebuildHandler_ActiveRunLocked(t *testing.T) {
 // --- stale "promoting" manifest from a prior attempt: warning, not error ----
 
 func TestRebuildHandler_StalePromotingManifestWarns(t *testing.T) {
+	isolateHome(t)
 	withFakeMemoryPipeline(t)
 	dir := chdirTemp(t)
 	flowPath := writeFlowFile(t, dir, "flow.yaml", singleStageFlowYAML)
@@ -340,6 +360,7 @@ func TestRebuildHandler_StalePromotingManifestWarns(t *testing.T) {
 // --- headline guarantee: dry-run touches neither the FSM nor any target ----
 
 func TestRebuildHandler_DryRun_NoFSMMutation(t *testing.T) {
+	isolateHome(t)
 	withFakeMemoryPipeline(t)
 	dir := chdirTemp(t)
 	flowPath := writeFlowFile(t, dir, "flow.yaml", singleStageFlowYAML)
@@ -392,6 +413,7 @@ func TestRebuildHandler_DryRun_NoFSMMutation(t *testing.T) {
 // --- persistent --dir resolves runsDir/memory under it ----------------------
 
 func TestRebuildHandler_PersistentDirResolvesRunsDir(t *testing.T) {
+	isolateHome(t)
 	withFakeMemoryPipeline(t)
 	chdirTemp(t) // an unrelated cwd — the handler must NOT fall back to it
 	custom := t.TempDir()

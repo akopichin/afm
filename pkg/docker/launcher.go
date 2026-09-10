@@ -161,7 +161,10 @@ func ResetExecFunc() {
 // ScanCommands возвращает список нестандартных (не claude, не generated) агентов
 // из flow, которые нужно смонтировать в Docker-контейнер. generated — команды с
 // recipe (autoShim): они генерируются в контейнере, бинарник не монтируется.
-// Бинарники, не найденные в PATH, молча пропускаются.
+// Бинарники, не найденные в PATH, молча пропускаются. f может быть nil
+// (например, `afm memory rebuild`, который не выполняет стадии флоу и знает
+// только глобальную команду агента памяти) — тогда сканируется только
+// globalCmd, без паники на разыменовании f.Stages.
 func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []CommandMount {
 	seen := make(map[string]bool)
 	var mounts []CommandMount
@@ -182,8 +185,10 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 	}
 
 	addCmd(globalCmd)
-	for _, s := range f.Stages {
-		addCmd(s.Command)
+	if f != nil {
+		for _, s := range f.Stages {
+			addCmd(s.Command)
+		}
 	}
 	return mounts
 }
@@ -438,6 +443,19 @@ func expandHome(p, home string) string {
 		return home + p[1:] // p[1:] == "/…"
 	}
 	return p
+}
+
+// ExtraMountContainerPaths возвращает container-side путь для каждой записи
+// mounts — ту же резолюцию, что ReExec использует для `-v host:container`
+// (containerHome вместо host home). Нужен вызывающим (например,
+// `afm memory rebuild`'s Docker preflight, Task 13), которым нужно заранее,
+// ДО re-exec, знать, какие хостовые пути будут видны внутри контейнера.
+func ExtraMountContainerPaths(projectContainerPath string, mounts config.ExtraMounts) []string {
+	paths := make([]string, 0, len(mounts))
+	for _, m := range mounts {
+		paths = append(paths, resolveMountPath(projectContainerPath, m.Path, containerHome))
+	}
+	return paths
 }
 
 // resolveMountPath резолвит путь extra_mounts (или другого маунта проекта) в
