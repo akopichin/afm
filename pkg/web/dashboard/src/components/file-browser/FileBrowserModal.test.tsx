@@ -527,4 +527,32 @@ describe('FileBrowserModal', () => {
     await screen.findByRole('button', { name: 'afm' })
     expect(screen.queryByRole('button', { name: /waiting/i })).toBeNull()
   })
+
+  test('narrow viewport: the tree is a slide-over toggled from the header (R2 #3)', async () => {
+    const prevMM = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: true, media: query, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+    try {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+      const { container } = renderModal()
+      await screen.findByRole('button', { name: 'afm' })
+
+      const body = container.querySelector('.file-browser-body') as HTMLElement
+      expect(body.classList.contains('narrow')).toBe(true)
+      // Дерево закрыто по умолчанию; тумблер открывает шторку.
+      expect(body.classList.contains('tree-open')).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle file tree' }))
+      expect(body.classList.contains('tree-open')).toBe(true)
+      // На мобиле inline flex-basis у колонки не задаётся (шторка на CSS-ширине).
+      const roots = container.querySelector('.file-browser-roots') as HTMLElement
+      expect(roots.style.flexBasis).toBe('')
+    } finally {
+      window.matchMedia = prevMM
+    }
+  })
 })

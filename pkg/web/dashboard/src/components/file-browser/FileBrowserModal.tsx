@@ -126,6 +126,19 @@ export function FileBrowserModal({
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const draggingRef = useRef(false)
 
+  // Мобильный режим модалки (Finding #3 второго раунда): узкий вьюпорт → дерево
+  // становится слайд-овером над превью (иначе на 390px превью сжато почти в
+  // ноль). treeOpen управляет шторкой; на десктопе дерево всегда в колонке.
+  const [isNarrowModal, setIsNarrowModal] = useState(false)
+  const [treeOpen, setTreeOpen] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 720px)')
+    const update = (): void => setIsNarrowModal(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
   // Переключатель вида левой панели: 'all' — дерево + поиск (как раньше),
   // 'index'/'head' — плоский список изменённых файлов (git-статус относительно
   // индекса/HEAD). changesRevision — ручной инкремент кнопкой Refresh, не
@@ -467,6 +480,8 @@ export function FileBrowserModal({
   function openFile(root: string, entry: TreeEntry): void {
     setActiveFile({ root, entry })
     setActiveTab('FILE')
+    // На мобиле выбор файла = дерево своё отработало → закрываем шторку, показываем превью.
+    if (isNarrowModal) setTreeOpen(false)
   }
 
   // Reload — повторный запрос ТОГО ЖЕ файла с If-None-Match: currentEtag
@@ -517,6 +532,19 @@ export function FileBrowserModal({
         <header className="file-browser-header">
           <h2>{mode === 'picker' ? 'Insert file references' : 'Browse project files'}</h2>
           <div className="file-browser-header-actions">
+            {/* Тумблер дерева (Finding #3): только на узком вьюпорте — открывает
+                слайд-овер со списком файлов поверх превью. */}
+            <button
+              type="button"
+              className="file-browser-tree-toggle"
+              aria-label="Toggle file tree"
+              aria-expanded={treeOpen}
+              onClick={() => setTreeOpen((v) => !v)}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <path d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
             {/* Шорткат к ждущему действию (Finding #4): не даём ожиданию
                 потеряться за непрозрачным оверлеем — закрывает Files и открывает
                 нужный attention-воркспейс. */}
@@ -539,8 +567,16 @@ export function FileBrowserModal({
           </div>
         </header>
 
-        <div className="file-browser-body" ref={bodyRef}>
-          <aside className="file-browser-roots" style={{ flexBasis: leftWidth }}>
+        <div className={`file-browser-body${isNarrowModal ? ' narrow' : ''}${treeOpen ? ' tree-open' : ''}`} ref={bodyRef}>
+          {/* Скрим под шторкой дерева (только на мобиле при открытой шторке). */}
+          <button
+            type="button"
+            className="file-browser-tree-scrim"
+            aria-label="Close file tree"
+            tabIndex={isNarrowModal && treeOpen ? 0 : -1}
+            onClick={() => setTreeOpen(false)}
+          />
+          <aside className="file-browser-roots" style={isNarrowModal ? undefined : { flexBasis: leftWidth }}>
             <div className="file-browser-toolbar">
               <div className="file-browser-viewswitch" role="group" aria-label="File panel view">
                 <button

@@ -59,6 +59,10 @@
   align-items: center;
   gap: 12px;
 }
+/* Tree toggle + scrim exist only on the narrow (mobile) modal — hidden by
+   default, revealed by the max-width:720px block below (Finding #3). */
+.file-browser-tree-toggle { display: none; }
+.file-browser-tree-scrim { display: none; }
 /* Attention shortcut (Finding #4): a glowing pill that jumps from Files to the
    waiting action so a pending question/approval is never lost behind the overlay. */
 .file-browser-attention-shortcut {
@@ -847,4 +851,69 @@
   .file-browser-footer .btn-approve {
     transition: none;
   }
+}
+
+/* === Narrow (mobile) modal: the file tree becomes a slide-over over the preview
+   (Finding #3, second review round). On a 390px viewport a two-column tree +
+   preview left the preview near-zero; here the preview gets the full width and
+   the tree slides in on demand via the header ☰ toggle. === */
+@media (max-width: 720px) {
+  .file-browser-modal {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 40px);
+  }
+  .file-browser-tree-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--separator-subtle);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .file-browser-tree-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .file-browser-tree-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+  .file-browser-body { position: relative; }
+
+  /* Tree off-canvas: slides from the left over the preview; the preview column
+     takes the full width. The inline flex-basis is dropped in JS on narrow. */
+  .file-browser-body.narrow .file-browser-roots {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(320px, 85%);
+    flex: none;
+    background: var(--surface-overlay);
+    border-right: 1px solid var(--separator-subtle);
+    box-shadow: var(--shadow-overlay);
+    transform: translateX(-102%);
+    transition: transform 0.2s ease;
+  }
+  .file-browser-body.narrow.tree-open .file-browser-roots { transform: none; }
+
+  /* The drag resizer is meaningless in slide-over mode. */
+  .file-browser-body.narrow .file-browser-resizer { display: none; }
+
+  .file-browser-body.narrow .file-browser-content { flex: 1; min-width: 0; }
+
+  .file-browser-body.narrow.tree-open .file-browser-tree-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    border: 0;
+    padding: 0;
+    background: var(--overlay-scrim);
+    cursor: pointer;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-browser-body.narrow .file-browser-roots { transition: none; }
 }
