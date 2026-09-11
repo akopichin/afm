@@ -1,8 +1,31 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AgentNoteModal } from './AgentNoteModal'
+import { FileBrowserProvider } from '../file-browser'
+import { FilesApiMock } from '../file-browser/test-support'
 
 describe('AgentNoteModal', () => {
+  it('offers the file-attach affordance when the file browser is enabled (Attach → menu)', () => {
+    new FilesApiMock().install()
+    render(
+      <FileBrowserProvider flowName="f" startedAt="t" enabled>
+        <AgentNoteModal stageId="s1" onSubmit={vi.fn()} onCancel={vi.fn()} />
+      </FileBrowserProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(screen.getByRole('menuitem', { name: /choose project file/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
+  })
+
+  it('hides the attach affordance when the file browser is disabled (host mode)', () => {
+    render(
+      <FileBrowserProvider flowName="f" startedAt="t" enabled={false}>
+        <AgentNoteModal stageId="s1" onSubmit={vi.fn()} onCancel={vi.fn()} />
+      </FileBrowserProvider>,
+    )
+    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
+  })
+
   it('renders warning text and textarea, calls onSubmit with the typed note', () => {
     const onSubmit = vi.fn()
     const onCancel = vi.fn()

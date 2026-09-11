@@ -41,6 +41,10 @@ export function AgentNoteModal({
           onChange={setNote}
           placeholder="What should the agent take into account?"
           autoFocus
+          // Заметка агенту тоже может ссылаться на файлы проекта и прикладывать
+          // изображение — скрепка появляется только при включённом файловом
+          // браузере (Docker), на хосте её нет (как и у остальных полей).
+          allowFileReferences
         />
         <div className="modal-actions">
           <button type="button" className="btn btn-cancel" onClick={onCancel}>
