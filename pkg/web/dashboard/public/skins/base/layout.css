@@ -56,21 +56,22 @@
   outline-offset: -2px;
   border-radius: var(--radius-sm);
 }
-/* Видимая ручка — маленькая вертикальная полоска ПО ЦЕНТРУ (не на всю высоту),
-   почти прозрачная в покое и подсвечивается при наведении/перетаскивании. */
+/* Видимая ручка — маленькая вертикальная полоска ПО ЦЕНТРУ (не на всю высоту).
+   Едва заметна в покое (чтобы её можно было найти), подсвечивается акцентом и
+   вырастает при наведении/перетаскивании. */
 .rail-resizer-grip {
-  width: 3px;
-  height: 44px;
+  width: 4px;
+  height: 40px;
   border-radius: 999px;
-  background: var(--separator-subtle);
-  opacity: 0;
+  background: var(--text-muted);
+  opacity: 0.35;
   transition: opacity 0.15s ease, background 0.15s ease, height 0.15s ease;
 }
 .rail-resizer:hover .rail-resizer-grip,
 .rail-resizer:focus-visible .rail-resizer-grip {
   opacity: 1;
   background: var(--accent-primary);
-  height: 56px;
+  height: 60px;
 }
 @media (prefers-reduced-motion: reduce) {
   .rail-resizer-grip { transition: none; }
