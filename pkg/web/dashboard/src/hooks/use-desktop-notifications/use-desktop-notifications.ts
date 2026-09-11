@@ -62,7 +62,16 @@ export function useDesktopNotifications(
 } {
   const [permission, setPermission] = useState<NotificationPermissionState>(readInitialPermission)
   const [enabled, setEnabled] = useState<boolean>(readInitialEnabled)
-  const notifiedStageIds = useRef<Set<string>>(new Set())
+  // stageId → updatedAt того attention-эпизода, о котором уже уведомили. Ключ по
+  // updatedAt, а НЕ по одному stage.id: одна и та же стадия может входить в
+  // attention несколько раз подряд (напр. интерактивный диалог — q1, ответ, q2:
+  // awaiting → running → awaiting, две FSM-транзакции с разными UpdatedAt).
+  // Опрос /api/status (раз в 3с) может НЕ застать промежуточный `running`, и
+  // фронт увидит awaiting(q1) → awaiting(q2) без наблюдаемого выхода из
+  // attention. Прежний Set<stageId> в этом случае глушил q2 как «уже
+  // уведомляли». Сравнение по updatedAt различает эпизоды даже без наблюдения
+  // промежуточного снимка: сменился updatedAt → новый эпизод → уведомляем снова.
+  const notifiedStages = useRef<Map<string, string>>(new Map())
   const stagesRef = useRef<Stage[]>(stages)
   const enabledRef = useRef<boolean>(enabled)
   const onFocusStageRef = useRef(onFocusStage)
@@ -81,14 +90,19 @@ export function useDesktopNotifications(
     const current = stagesNeedingAttention(currentStages)
     const currentIds = new Set(current.map((e) => e.stage.id))
 
-    for (const id of notifiedStageIds.current) {
-      if (!currentIds.has(id)) notifiedStageIds.current.delete(id)
+    // Забываем стадии, вышедшие из attention (наблюдаемый выход) — тогда повторный
+    // заход уведомит заново. Дополнительно к сравнению по updatedAt ниже это
+    // покрывает случай, когда снимок с не-attention статусом реально наблюдался.
+    for (const id of notifiedStages.current.keys()) {
+      if (!currentIds.has(id)) notifiedStages.current.delete(id)
     }
 
     if (!enabledRef.current || !document.hidden) return
     for (const entry of current) {
-      if (notifiedStageIds.current.has(entry.stage.id)) continue
-      notifiedStageIds.current.add(entry.stage.id)
+      // Уже уведомляли об ЭТОМ же эпизоде (тот же updatedAt)? — пропускаем.
+      // Другой updatedAt у той же стадии = новый attention-эпизод → уведомляем.
+      if (notifiedStages.current.get(entry.stage.id) === entry.stage.updatedAt) continue
+      notifiedStages.current.set(entry.stage.id, entry.stage.updatedAt)
       fireNotification(entry, onFocusStageRef.current)
     }
   }, [])

@@ -3,8 +3,8 @@ import { act, renderHook } from '@testing-library/react'
 import { useDesktopNotifications } from './use-desktop-notifications'
 import type { Stage } from '../../types'
 
-const stage = (status: Stage['status'], id = 's'): Stage =>
-  ({ id, name: `Stage ${id}`, status, updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] })
+const stage = (status: Stage['status'], id = 's', updatedAt = ''): Stage =>
+  ({ id, name: `Stage ${id}`, status, updatedAt, interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] })
 
 class MockNotification {
   static permission: NotificationPermission = 'granted'
@@ -75,6 +75,26 @@ describe('useDesktopNotifications', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     expect(MockNotification.instances).toHaveLength(1)
     expect(MockNotification.instances[0]?.title).toBe('You have a question')
+  })
+
+  it('повторный вопрос ТОЙ ЖЕ стадии уведомляет заново, даже если промежуточный не-attention снимок не наблюдался (баг: полёшка пропустила running между q1 и q2)', () => {
+    // Реальный сценарий из репорта: агент интерактивной стадии задаёт вопрос
+    // (q1), пользователь отвечает (awaiting_user_input → running), агент тут же
+    // задаёт следующий (q2, running → awaiting_user_input). Обе транзакции
+    // меняют updatedAt, но опрос /api/status (раз в 3с) может НЕ застать
+    // промежуточный `running` — фронт видит awaiting(q1) → awaiting(q2). Раньше
+    // notifiedStageIds ключился только по stage.id и очищался лишь когда фронт
+    // НАБЛЮДАЛ выход из attention, поэтому q2 глушился как «уже уведомляли».
+    const onFocusStage = vi.fn()
+    const { rerender } = renderHook(({ stages }) => useDesktopNotifications(stages, onFocusStage), {
+      initialProps: { stages: [stage('awaiting_user_input', 's', 't1')] },
+    })
+    expect(MockNotification.instances).toHaveLength(1)
+
+    // q2 у той же стадии — статус тот же, но updatedAt новый; промежуточного
+    // running-снимка фронт не увидел.
+    rerender({ stages: [stage('awaiting_user_input', 's', 't2')] })
+    expect(MockNotification.instances).toHaveLength(2)
   })
 
   it('уведомляет заново, если стадия вышла из attention и зашла снова', () => {
