@@ -26,7 +26,7 @@ const MOBILE_QUERY = '(max-width: 900px)'
 const RAIL_WIDTH_KEY = 'afm.railWidth'
 const RAIL_MIN = 190
 const RAIL_MAX = 560
-const RAIL_DEFAULT = 240
+const RAIL_DEFAULT = 300
 const RAIL_STEP = 16 // шаг клавиатурного ресайза (стрелки)
 
 function clampRail(w: number): number {

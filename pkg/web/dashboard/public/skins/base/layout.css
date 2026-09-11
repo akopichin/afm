@@ -36,7 +36,7 @@
 .dashboard-body {
   position: relative;
   display: grid;
-  grid-template-columns: var(--rail-width, 240px) 1fr;
+  grid-template-columns: var(--rail-width, 300px) 1fr;
   height: 100%;
   min-height: 0;
 }
@@ -53,7 +53,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: var(--rail-width, 240px);
+  left: var(--rail-width, 300px);
   width: 11px;
   transform: translateX(-50%);
   z-index: 6;

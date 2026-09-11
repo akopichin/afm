@@ -75,9 +75,9 @@ describe('DashboardShell rail resizer', () => {
     fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
     expect(body.style.getPropertyValue('--rail-width')).toBe('544px')
 
-    // Двойной клик сбрасывает к дефолту (240).
+    // Двойной клик сбрасывает к дефолту (300).
     fireEvent.doubleClick(resizer)
-    expect(body.style.getPropertyValue('--rail-width')).toBe('240px')
+    expect(body.style.getPropertyValue('--rail-width')).toBe('300px')
   })
 })
 
