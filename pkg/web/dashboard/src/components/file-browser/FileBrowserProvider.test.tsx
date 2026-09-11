@@ -104,6 +104,55 @@ describe('FileBrowserProvider', () => {
     expect(screen.getByRole('button', { name: /copy references/i })).toBeDisabled()
   })
 
+  test('closing the overlay restores focus to the button that opened it (#5)', async () => {
+    new FilesApiMock().install()
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <BrowseHarness />
+      </FileBrowserProvider>,
+    )
+
+    const opener = screen.getByRole('button', { name: 'Open browser' })
+    opener.focus()
+    expect(document.activeElement).toBe(opener)
+
+    fireEvent.click(opener)
+    expect(await screen.findByRole('dialog', { name: /browse project files/i })).toBeInTheDocument()
+
+    // Закрываем крестиком — фокус обязан вернуться на кнопку-открыватель, а не
+    // «упасть» на body (иначе клавиатурный пользователь теряет место).
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(document.activeElement).toBe(opener)
+  })
+
+  test('picker: submitting Insert restores focus to the opener (#5)', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.setReference('project', 'a.go', '[AFM file: "/w/afm/a.go"]')
+    api.setContent('project', 'a.go', { language: 'go', content: 'package a' })
+    api.install()
+
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <PickHarness onInsert={() => {}} />
+      </FileBrowserProvider>,
+    )
+
+    const opener = screen.getByRole('button', { name: 'Pick files' })
+    opener.focus()
+    fireEvent.click(opener)
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
+    const insertButton = await screen.findByRole('button', { name: /insert references/i })
+    await waitFor(() => expect(insertButton).not.toBeDisabled())
+    fireEvent.click(insertButton)
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(document.activeElement).toBe(opener)
+  })
+
   test('removing a chip via onRemoveSelect drops it from the selection without refetching', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])

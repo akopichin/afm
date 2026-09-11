@@ -81,13 +81,9 @@
 }
 
 .stage-item {
-  display: grid;
-  grid-template-columns: 28px 1fr auto;
-  align-items: start;
-  gap: 12px;
-  padding: 10px 8px 10px 10px;
+  display: flex;
+  align-items: stretch;
   border-radius: var(--radius-md);
-  cursor: pointer;
   position: relative;
   font-family: var(--font-ui);
   color: var(--text-secondary);
@@ -95,6 +91,30 @@
 }
 .stage-item:hover {
   background: var(--surface-hover);
+}
+
+/* The row content is a real <button> (keyboard-accessible); it carries the grid
+   + padding so its focus ring wraps the interactive area. The kebab lives in the
+   sibling .stage-actions, never nested inside this button. */
+.stage-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: start;
+  gap: 12px;
+  padding: 10px 4px 10px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stage-row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
 }
 
 /* Middle cell: ordinal (muted) → name (bold) → status text (colored). */
@@ -216,7 +236,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  justify-self: end;
+  flex: none;
+  padding: 10px 8px 0 0;
 }
 .dialog-badge {
   font-size: 11px;

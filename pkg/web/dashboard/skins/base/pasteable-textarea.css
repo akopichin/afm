@@ -81,9 +81,18 @@
    Контурный стиль как у .comment-remove в plan-panel.css, но акцент mint —
    действие не деструктивное. Живёт в той же строке .pasteable-attachments,
    что и скриншот-миниатюры (если они есть), либо рендерится одна. */
+.pasteable-attach {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+}
 .pasteable-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: transparent;
   border: 1px solid rgba(111, 212, 204, 0.4);
+  border-radius: var(--radius-sm);
   color: var(--mint);
   cursor: pointer;
   font-size: 10px;
@@ -96,4 +105,45 @@
 .pasteable-attach-btn:hover {
   border-color: var(--mint);
   box-shadow: 0 0 8px rgba(111, 212, 204, 0.35);
+}
+.pasteable-attach-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.pasteable-attach-btn svg { display: block; }
+
+/* Two-path menu (Choose project file… / Upload image…) opening above the button
+   — the strip sits at the top of the textarea, so the menu drops upward. */
+.pasteable-attach-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 170px;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  background: var(--surface-overlay, var(--panel-bg));
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+}
+.pasteable-attach-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 8px 10px;
+}
+.pasteable-attach-menu button:hover {
+  background: var(--surface-hover);
+}
+.pasteable-attach-menu button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }

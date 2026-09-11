@@ -36,6 +36,27 @@ describe('StagesList', () => {
     expect(onSelect).toHaveBeenCalledWith('s1')
   })
 
+  test('stage row is keyboard-accessible: a real button, focusable, selects on Enter/Space', () => {
+    const stages: Stage[] = [
+      { id: 's1', name: 'Propose', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+      { id: 's2', name: 'Plan', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    const onSelect = vi.fn()
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={onSelect} />)
+
+    // Строка — настоящая <button> с доступным именем из содержимого (имя+статус).
+    const row = screen.getByRole('button', { name: /Propose/i })
+    expect(row.tagName).toBe('BUTTON')
+
+    // Клавиатура: фокус ставится, Enter/Space активируют кнопку нативно.
+    row.focus()
+    expect(document.activeElement).toBe(row)
+    // jsdom не синтезирует click из keydown, поэтому проверяем сам клик (то, что
+    // браузер вызывает по Enter/Space на <button>), плюс что фокус реально лёг.
+    fireEvent.click(row)
+    expect(onSelect).toHaveBeenCalledWith('s1')
+  })
+
   test('marks awaiting_user_input stage with attention and a dialog badge', () => {
     const stages: Stage[] = [
       { id: 's1', name: 'Propose', status: 'awaiting_user_input', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },

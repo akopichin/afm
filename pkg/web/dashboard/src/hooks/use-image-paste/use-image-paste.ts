@@ -12,6 +12,11 @@ export type UseImagePasteResult = {
   attachments: PasteAttachment[]
   uploadError: string | null
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
+  // uploadFiles — тот же путь загрузки, что и вставка из буфера, но для файлов,
+  // выбранных явно (native <input type=file> — пункт «Upload image…»). Стартует
+  // с текущей позиции каретки (или конца значения), загружает последовательно и
+  // вставляет «[Screenshot: <path>]» — реюз, а не второй механизм.
+  uploadFiles: (files: File[]) => Promise<void>
   removeAttachment: (id: string) => void
 }
 
@@ -103,6 +108,18 @@ export function useImagePaste(
     }
   }
 
+  // Общий последовательный проход загрузки — используется и вставкой из буфера,
+  // и явным выбором файлов (uploadFiles). Каретка продвигается между вставками.
+  async function runUploads(files: File[], startCaret: number): Promise<void> {
+    let caret = startCaret
+    for (const file of files) {
+      const result = await uploadOne(file, caret)
+      if (result !== null) {
+        caret = result.caret
+      }
+    }
+  }
+
   function onPaste(event: ClipboardEvent<HTMLTextAreaElement>): Promise<void> | undefined {
     const items = event.clipboardData?.items
     if (items === undefined || items === null) return undefined
@@ -119,16 +136,18 @@ export function useImagePaste(
 
     event.preventDefault()
     const startCaret = event.currentTarget.selectionStart ?? valueRef.current.length
+    return runUploads(files, startCaret)
+  }
 
-    return (async () => {
-      let caret = startCaret
-      for (const file of files) {
-        const result = await uploadOne(file, caret)
-        if (result !== null) {
-          caret = result.caret
-        }
-      }
-    })()
+  // uploadFiles — путь для явно выбранных изображений (пункт «Upload image…»).
+  // Отфильтровываем не-изображения (input accept — подсказка, не гарантия) и
+  // стартуем с текущей каретки/конца значения. Возвращаем промис, чтобы вызывающий
+  // мог сбросить value input'а после завершения.
+  async function uploadFiles(files: File[]): Promise<void> {
+    const images = files.filter((f) => f.type.startsWith('image/'))
+    if (images.length === 0) return
+    const caret = nodeRef.current?.selectionStart ?? valueRef.current.length
+    await runUploads(images, caret)
   }
 
   function removeAttachment(id: string): void {
@@ -147,5 +166,5 @@ export function useImagePaste(
     setAttachments((prev) => prev.filter((a) => a.id !== id))
   }
 
-  return { nodeRef, attachments, uploadError, onPaste: onPaste as (event: ClipboardEvent<HTMLTextAreaElement>) => void, removeAttachment }
+  return { nodeRef, attachments, uploadError, onPaste: onPaste as (event: ClipboardEvent<HTMLTextAreaElement>) => void, uploadFiles, removeAttachment }
 }

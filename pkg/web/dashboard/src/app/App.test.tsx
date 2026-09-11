@@ -364,7 +364,8 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Plan'))
 
     // Клик по завершённой s1 — выбор должен «прилипнуть», а не отскочить обратно на s2.
-    fireEvent.click(document.querySelector('[data-stage-id="s1"]') as HTMLElement)
+    // Кликаем по строке-кнопке (её текст), а не по <li>: интерактивен теперь .stage-row.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
     // Даём эффектам/поллингу шанс (ошибочно) перекинуть выбор — он обязан остаться на s1.

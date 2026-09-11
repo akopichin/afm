@@ -358,12 +358,12 @@ describe('DialogChannel', () => {
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
 
-    // M3: поле кастомного ответа тоже имеет пикер, поэтому до открытия
-    // line-комментария он уже один.
-    expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(1)
+    // M3: поле кастомного ответа тоже имеет скрепку, поэтому до открытия
+    // line-комментария она уже одна.
+    expect(screen.getAllByRole('button', { name: 'Attach' })).toHaveLength(1)
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
-    // Форма line-комментария добавляет свой пикер → теперь два.
-    expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(2)
+    // Форма line-комментария добавляет свою скрепку → теперь две.
+    expect(screen.getAllByRole('button', { name: 'Attach' })).toHaveLength(2)
   })
 
   // Finding 5: capabilities.file_browser=false must hide the comment picker
@@ -385,7 +385,7 @@ describe('DialogChannel', () => {
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
-    expect(screen.queryByRole('button', { name: /attach project file/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument()
     const filesCalls = fetchSpy.mock.calls.filter(([input]) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       return url.includes('/api/files/')
@@ -408,8 +408,8 @@ describe('DialogChannel', () => {
     await waitFor(() => expect(container.querySelector('textarea.dialog-custom')).not.toBeNull())
 
     // Поле кастомного ответа теперь имеет свою скрепку (M3) — до открытия
-    // line-комментария он один и принадлежит именно этому полю.
-    expect(screen.getAllByRole('button', { name: /attach project file/i })).toHaveLength(1)
+    // line-комментария она одна и принадлежит именно этому полю.
+    expect(screen.getAllByRole('button', { name: 'Attach' })).toHaveLength(1)
     const customAnswerWrap = (container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement).closest(
       '.pasteable-textarea-wrap',
     ) as HTMLElement

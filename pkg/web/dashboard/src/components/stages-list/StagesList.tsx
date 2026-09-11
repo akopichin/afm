@@ -204,20 +204,29 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
             data-stage-id={stage.id}
             data-status={stage.status}
             data-attention={ATTENTION_STATUSES.has(stage.status) ? 'true' : undefined}
-            onClick={() => onSelect(stage.id)}
           >
-            <span className="status-dot" data-status={stage.status}>
-              <span className="dot-check" aria-hidden="true">✓</span>
-              <span className="dot-num" aria-hidden="true">{index + 1}</span>
-            </span>
-            <span className="stage-label">
-              <span className="stage-ordinal">Stage {index + 1}</span>
-              <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
-              <span className="stage-status-text" data-status={stage.status}>{stageStatusText(stage.status)}</span>
-            </span>
-            {/* Единый трейлinг-слот: бейджи + кебаб. Это ОДИН in-flow ребёнок
-                грида .stage-item (18px 1fr auto) — иначе второй трейлинг-элемент
-                переносится на новую строку в 1-ю колонку (кебаб «съезжает вниз»). */}
+            {/* Сама строка — настоящая <button> (Enter/Space/focus-visible из
+                коробки): рейл стал основным способом открыть стадию, поэтому он
+                обязан быть доступен с клавиатуры. Кебаб — ОТДЕЛЬНАЯ соседняя
+                кнопка (вложенные интерактивные элементы недопустимы), поэтому
+                живёт в .stage-actions рядом, а не внутри .stage-row. */}
+            <button
+              type="button"
+              className="stage-row"
+              onClick={() => onSelect(stage.id)}
+            >
+              <span className="status-dot" data-status={stage.status}>
+                <span className="dot-check" aria-hidden="true">✓</span>
+                <span className="dot-num" aria-hidden="true">{index + 1}</span>
+              </span>
+              <span className="stage-label">
+                <span className="stage-ordinal">Stage {index + 1}</span>
+                <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
+                <span className="stage-status-text" data-status={stage.status}>{stageStatusText(stage.status)}</span>
+              </span>
+            </button>
+            {/* Единый трейлинг-слот: бейджи + кебаб. Отдельная от .stage-row
+                ячейка строки, чтобы кебаб не оказался вложен в кнопку строки. */}
             <span className="stage-actions">
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}

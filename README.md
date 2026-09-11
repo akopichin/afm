@@ -692,10 +692,11 @@ Settings priority (highest to lowest):
 
 On startup (if `server.open_browser: true`) the dashboard opens; otherwise its URL is printed to the log.
 
-- **Left panel** — list of stages with colored status indicators; the stage's `name` is shown under `id` (if set). The center panel's header also shows `name`, otherwise `id`
-- **Center panel** — the plan with line-by-line review and inline comments, the agent log (markdown), a "Dialog" section for interactive stages
-- **Right panel** — an event feed from all stages with source badges
-- **Progress bar** — at the bottom, showing how many stages are complete
+The layout is a **stage rail** on the left plus one **tabbed workspace** on the right (there is no three-column layout or bottom progress bar).
+
+- **Stage rail** — a vertical timeline of the run: numbered status nodes, each stage's `name` (or `id`), a human-readable status line, and, in the rail head, the run progress (`done / total`). On narrow viewports the rail collapses into a slide-over drawer (open with the ☰ toggle next to the tabs). Run metrics (Started / Elapsed / Idle / Backoff) live in the header, center.
+- **Workspace** — a permanent **Feed** tab (a messenger-style view of the real event log across all stages) plus one contextual tab for the selected stage. When a stage needs action the contextual tab is labelled by kind (**Approval / Question / Paused / Failed / Hook failed**) with a count and a glow, and the workspace auto-opens it — one active view at a time, filling the whole area (a Question or Approval is never squeezed beside a history panel). When several stages await action, prev/next navigation steps through the queue.
+- **Approval / Question views** — the plan with line-by-line review and inline comments, or the agent's question with answer options and a free-text reply, each with a fixed bottom action bar.
 - **Folder icon (Docker mode only)** — opens the project file browser: browse the source tree, view files with syntax highlighting, check a per-file `HEAD → working tree` diff, insert file references into plan/question comments, and — by clicking a file line — pause the whole flow to attach [review notes](#review-notes--pause-the-whole-flow-and-comment-on-files-docker-mode). See [Project File Browser (Docker mode)](#project-file-browser-docker-mode).
 
 ### Themes

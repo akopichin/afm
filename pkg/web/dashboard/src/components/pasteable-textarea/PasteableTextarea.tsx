@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useImagePaste } from '../../hooks/use-image-paste'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
@@ -51,7 +51,8 @@ export function PasteableTextarea({
   allowFileReferences = false,
 }: PasteableTextareaProps): ReactElement {
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
-  const { nodeRef, attachments, uploadError, onPaste, removeAttachment } = useImagePaste(stageId, value, onChange)
+  const { nodeRef, attachments, uploadError, onPaste, uploadFiles, removeAttachment } = useImagePaste(stageId, value, onChange)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const { nodeRef: caretNodeRef, insertAtCaret } = useCaretInsert(value, onChange)
   // useFileBrowserEnabled() (не useFileBrowser()) — читается безусловно, для
   // ЛЮБОГО рендера, а не только когда allowFileReferences=true: useContext
@@ -96,7 +97,28 @@ export function PasteableTextarea({
             </div>
           ))}
           {uploadError !== null && <span className="pasteable-attachment-error">{uploadError}</span>}
-          {showAttachButton && <AttachFileButton onInsert={insertAtCaret} />}
+          {showAttachButton && (
+            <>
+              <AttachMenu
+                onInsertFileReference={insertAtCaret}
+                onUploadImage={() => imageInputRef.current?.click()}
+              />
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? [])
+                  // Сброс value ДО await — иначе повторный выбор того же файла
+                  // не вызовет onChange (браузер сравнивает значения).
+                  e.target.value = ''
+                  if (files.length > 0) void uploadFiles(files)
+                }}
+              />
+            </>
+          )}
         </div>
       )}
       <textarea
@@ -121,13 +143,27 @@ export function PasteableTextarea({
 // ТОЛЬКО когда allowFileReferences=true, мы просто не вызываем useFileBrowser(),
 // когда он не нужен — вместо того чтобы пытаться вызвать хук условно внутри одного
 // компонента (что нарушило бы Rules of Hooks).
-function AttachFileButton({ onInsert }: { onInsert: (text: string) => void }): ReactElement | null {
+//
+// Скрепка-меню (Finding #6): раньше здесь была одна кнопка «Attach project file»,
+// ведущая только в pickFiles — изображение с компьютера можно было добавить лишь
+// неочевидной вставкой из буфера. Теперь скрепка раскрывает два явных пути:
+// «Choose project file…» (тот же pickFiles) и «Upload image…» (нативный выбор
+// файла → uploadFiles, реюз пути загрузки вставки из буфера).
+function AttachMenu({
+  onInsertFileReference,
+  onUploadImage,
+}: {
+  onInsertFileReference: (text: string) => void
+  onUploadImage: () => void
+}): ReactElement | null {
   const { pickFiles, enabled } = useFileBrowser()
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
 
   // Гвард от вставки в уже неактуальную цель (бриф Task 14, п.6 — "stale-picker
   // guard"): пока модалка пикера открыта, пользователь может уйти с этой конкретной
   // строки-комментария (сменить стадию/вопрос, закрыть форму комментария) —
-  // PasteableTextarea (и эта кнопка) тогда размонтируется, но callback, сохранённый в
+  // PasteableTextarea (и это меню) тогда размонтируется, но callback, сохранённый в
   // FileBrowserProvider (onInsertRef), всё равно будет вызван по клику "Insert
   // references" — это обычная функция, не привязанная к рендер-циклу React.
   // mountedRef отличает "цель всё ещё та же" от "цель уже пропала".
@@ -139,25 +175,69 @@ function AttachFileButton({ onInsert }: { onInsert: (text: string) => void }): R
     [],
   )
 
+  // Закрытие меню кликом вне / по Escape (тот же приём, что и у кебаба стадии).
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (wrapRef.current !== null && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
   // Защита в глубину (Finding 5): вызывающий (PasteableTextarea) уже не
-  // монтирует эту кнопку при выключенном enabled — этот return null тут на
-  // случай, если сама кнопка когда-нибудь начнёт монтироваться из другого
-  // места без внешнего гейта.
+  // монтирует это меню при выключенном enabled — return null тут на случай, если
+  // меню когда-нибудь начнёт монтироваться из другого места без внешнего гейта.
   if (!enabled) return null
 
-  function handleClick(): void {
+  function chooseProjectFile(): void {
+    setOpen(false)
     pickFiles((refs) => {
       if (!mountedRef.current) {
         window.alert('Target comment is no longer available')
         return
       }
-      onInsert(refs.join('\n'))
+      onInsertFileReference(refs.join('\n'))
     })
   }
 
+  function uploadImage(): void {
+    setOpen(false)
+    onUploadImage()
+  }
+
   return (
-    <button type="button" className="pasteable-attach-btn" onClick={handleClick}>
-      Attach project file
-    </button>
+    <div className="pasteable-attach" ref={wrapRef}>
+      <button
+        type="button"
+        className="pasteable-attach-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Attach"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8-8a3.2 3.2 0 0 1 4.5 4.5l-8 8a1.5 1.5 0 0 1-2-2l7.5-7.5" />
+        </svg>
+        <span className="pasteable-attach-label">Attach</span>
+      </button>
+      {open && (
+        <ul className="pasteable-attach-menu" role="menu">
+          <li role="none">
+            <button type="button" role="menuitem" onClick={chooseProjectFile}>Choose project file…</button>
+          </li>
+          <li role="none">
+            <button type="button" role="menuitem" onClick={uploadImage}>Upload image…</button>
+          </li>
+        </ul>
+      )}
+    </div>
   )
 }

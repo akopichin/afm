@@ -109,6 +109,22 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
   const generationRef = useRef(0)
   const pendingRef = useRef<Set<string>>(new Set())
 
+  // Элемент, из которого открыли оверлей (кнопка Files / скрепка Attach). Модалка
+  // — focus trap, поэтому при закрытии фокус должен вернуться туда, откуда пришёл
+  // (иначе он «падает» на <body>, и клавиатурный пользователь теряет место). Ловим
+  // на открытии, восстанавливаем на закрытии/сабмите.
+  const openerRef = useRef<HTMLElement | null>(null)
+  function captureOpener(): void {
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }
+  function restoreOpener(): void {
+    const el = openerRef.current
+    openerRef.current = null
+    // Кнопка ещё в DOM и видима? Вернём фокус. Если её больше нет (напр. сменился
+    // прогон и шапка перерисовалась) — тихо ничего не делаем.
+    if (el !== null && el.isConnected) el.focus()
+  }
+
   function bumpGeneration(): void {
     generationRef.current += 1
     pendingRef.current.clear()
@@ -120,10 +136,12 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     setSelection(new Map())
     setSelectionError(null)
     onInsertRef.current = null
+    restoreOpener() // no-op на маунте (opener пуст) и когда кнопка уже исчезла
   }, [flowName, startedAt])
 
   const openBrowser = useCallback(() => {
     if (!enabled) return
+    captureOpener()
     setMode('browse')
     onInsertRef.current = null
     setOpen(true)
@@ -132,6 +150,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
   const pickFiles = useCallback(
     (onInsert: (references: string[]) => void) => {
       if (!enabled) return
+      captureOpener()
       setMode('picker')
       onInsertRef.current = onInsert
       setOpen(true)
@@ -146,6 +165,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     // тот же принцип, что и submit() ниже).
     if (mode === 'picker') bumpGeneration()
     setOpen(false)
+    restoreOpener()
   }, [mode])
 
   const toggleSelect = useCallback(
@@ -199,6 +219,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
       onInsertRef.current?.(references)
       setSelection(new Map())
       setOpen(false)
+      restoreOpener()
       return
     }
     void copyToClipboard(references.join('\n'))

@@ -95,7 +95,7 @@ describe('PasteableTextarea', () => {
     const onChange = vi.fn()
     render(<PasteableTextarea stageId="s1" value="hi" onChange={onChange} />)
 
-    expect(screen.queryByRole('button', { name: /attach project file/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
   })
 
   it('allowFileReferences: renders an Attach project file button and inserts picked references at the caret without clobbering existing text', async () => {
@@ -110,7 +110,8 @@ describe('PasteableTextarea', () => {
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     textarea.setSelectionRange(4, 4)
 
-    fireEvent.click(screen.getByRole('button', { name: /attach project file/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /choose project file/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
 
@@ -119,6 +120,36 @@ describe('PasteableTextarea', () => {
     fireEvent.click(insertButton)
 
     expect(onChange).toHaveBeenCalledWith('see [AFM file: "/w/a.go"] end')
+  })
+
+  it('Attach → Upload image… uploads the chosen file via the same path and inserts a Screenshot reference (#6)', async () => {
+    installFileBrowserApi()
+    // Загрузка изображения идёт через тот же fetch, что и вставка из буфера.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/attachments')) return jsonResponse({ path: '/afm/run/s1/attachments/up-1.png' })
+      // файловый браузер (roots/tree/...) — пусть отвечает пусто/дефолтно
+      return jsonResponse([])
+    })
+    const onChange = vi.fn()
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences />
+      </FileBrowserProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    // «Upload image…» кликает по скрытому <input type=file>; эмулируем выбор
+    // файла, задав files и стрельнув change.
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const img = new File([new Uint8Array([1, 2, 3])], 'shot.png', { type: 'image/png' })
+    fireEvent.click(screen.getByRole('menuitem', { name: /upload image/i }))
+    Object.defineProperty(fileInput, 'files', { value: [img], configurable: true })
+    fireEvent.change(fileInput)
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith('[Screenshot: /afm/run/s1/attachments/up-1.png]\n'),
+    )
   })
 
   it('allowFileReferences with a disabled provider (capabilities.file_browser=false): renders no Attach button and never calls the files API', () => {
@@ -130,7 +161,7 @@ describe('PasteableTextarea', () => {
       </FileBrowserProvider>,
     )
 
-    expect(screen.queryByRole('button', { name: /attach project file/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
@@ -149,7 +180,8 @@ describe('PasteableTextarea', () => {
 
     const { rerender } = render(<Harness show={true} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /attach project file/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /choose project file/i }))
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
 

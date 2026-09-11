@@ -44,7 +44,9 @@
 
   --text-primary:   #f5f7fb;
   --text-secondary: #aab4c4;
-  --text-muted:     #758196;
+  /* muted lifted from #758196 (4.44:1 on raised) to clear AA 4.5:1 for the
+     10.5–13px secondary text that uses it (stage ordinal/status, metric labels). */
+  --text-muted:     #828da1;
 
   --accent-primary:     #5f78ff;
   --accent-primary-rgb: 95, 120, 255;
@@ -123,12 +125,16 @@
 
   --text-primary:   #161b25;
   --text-secondary: #596579;
-  --text-muted:     #7b879a;
+  /* muted darkened from #7b879a (3.33:1 on canvas) to clear AA 4.5:1 for the
+     small secondary text (stage ordinal/status, metric labels, actor/gap). */
+  --text-muted:     #616c7e;
 
   --accent-primary:     #4d63d7;
   --accent-primary-rgb: 77, 99, 215;
-  --attention:          #b96b08;       /* darker amber for legibility on light */
-  --attention-rgb:      185, 107, 8;
+  /* attention darkened from #b96b08 (3.72:1 on canvas) to clear AA 4.5:1 where
+     it colors small status labels; still an unmistakable amber. */
+  --attention:          #9c5a06;
+  --attention-rgb:      156, 90, 6;
   --success:            #187d59;
   --success-rgb:        24, 125, 89;
   --danger:             #c44150;

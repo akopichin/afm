@@ -354,7 +354,7 @@ describe('PlanPanel', () => {
     expect(container.querySelector('.auto-approved-badge')).toBeNull()
   })
 
-  test('the line-comment textarea offers the file-browser picker (Attach project file)', async () => {
+  test('the line-comment textarea offers the file-browser picker (Attach → Choose project file…)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
@@ -362,7 +362,11 @@ describe('PlanPanel', () => {
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
-    expect(screen.getByRole('button', { name: /attach project file/i })).toBeInTheDocument()
+    // Скрепка-меню (Finding #6): кнопка «Attach» раскрывает два пути, среди
+    // которых «Choose project file…».
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(screen.getByRole('menuitem', { name: /choose project file/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
   })
 
   // Finding 5: capabilities.file_browser=false must hide the comment picker
@@ -376,7 +380,7 @@ describe('PlanPanel', () => {
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
-    expect(screen.queryByRole('button', { name: /attach project file/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument()
     const filesCalls = fetchSpy.mock.calls.filter(([input]) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       return url.includes('/api/files/')
