@@ -176,7 +176,7 @@ describe('PasteableTextarea', () => {
     )
   })
 
-  it('allowFileReferences with a disabled provider (capabilities.file_browser=false): renders no Attach button and never calls the files API', () => {
+  it('allowFileReferences with a disabled provider (host mode): Attach offers Upload image but no project picker; no files API call (R2 #6a)', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const onChange = vi.fn()
     render(
@@ -185,8 +185,20 @@ describe('PasteableTextarea', () => {
       </FileBrowserProvider>,
     )
 
-    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
+    // Скрепка есть, но проект-пикер (и вызовы /api/files) отсутствуют — только загрузка.
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /choose project file/i })).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('disabled field shows no Attach affordance (R2 #6b — no reference into a disabled input)', () => {
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences disabled />
+      </FileBrowserProvider>,
+    )
+    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
   })
 
   it('stale-picker guard: does not insert into a textarea that unmounted while the picker was still open, and warns instead', async () => {

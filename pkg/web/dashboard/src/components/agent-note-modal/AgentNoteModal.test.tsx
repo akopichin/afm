@@ -17,13 +17,16 @@ describe('AgentNoteModal', () => {
     expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
   })
 
-  it('hides the attach affordance when the file browser is disabled (host mode)', () => {
+  it('in host mode (file browser off) still offers Upload image but not the project picker', () => {
     render(
       <FileBrowserProvider flowName="f" startedAt="t" enabled={false}>
         <AgentNoteModal stageId="s1" onSubmit={vi.fn()} onCancel={vi.fn()} />
       </FileBrowserProvider>,
     )
-    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
+    // Скрепка есть (Upload image работает и без Docker), но проект-пикера нет.
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /choose project file/i })).toBeNull()
   })
 
   it('renders warning text and textarea, calls onSubmit with the typed note', () => {

@@ -63,7 +63,7 @@ describe('useImagePaste', () => {
     expect(onChange).toHaveBeenCalledWith('hello[Screenshot: /afm/run/s1/attachments/paste-1.png]\n')
   })
 
-  it('shows a size-specific error and does not call onChange when the upload is too large', async () => {
+  it('keeps a failed (too large) attachment as a retryable chip, does not call onChange', async () => {
     mockUpload.mockRejectedValue(new AttachmentUploadError(413))
     const onChange = vi.fn()
     const { result } = renderHook(() => useImagePaste('s1', '', onChange))
@@ -74,11 +74,13 @@ describe('useImagePaste', () => {
     })
 
     expect(onChange).not.toHaveBeenCalled()
-    expect(result.current.uploadError).toBe('Image too large (max 10 MB)')
-    expect(result.current.attachments).toHaveLength(0)
+    // Чип НЕ исчезает — остаётся с failed + причиной (Finding #6c).
+    expect(result.current.attachments).toHaveLength(1)
+    expect(result.current.attachments[0]?.failed).toBe(true)
+    expect(result.current.attachments[0]?.errorMsg).toBe('Image too large (max 10 MB)')
   })
 
-  it('shows an unsupported-type error for a 415 response', async () => {
+  it('reports an unsupported-type reason on the failed chip for a 415 response', async () => {
     mockUpload.mockRejectedValue(new AttachmentUploadError(415))
     const onChange = vi.fn()
     const { result } = renderHook(() => useImagePaste('s1', '', onChange))
@@ -88,7 +90,29 @@ describe('useImagePaste', () => {
       await result.current.onPaste(event)
     })
 
-    expect(result.current.uploadError).toBe('Unsupported image type')
+    expect(result.current.attachments[0]?.errorMsg).toBe('Unsupported image type')
+  })
+
+  it('retryAttachment re-uploads the same file and inserts the reference on success', async () => {
+    mockUpload.mockRejectedValueOnce(new AttachmentUploadError(0))
+    const onChange = vi.fn()
+    const { result } = renderHook(() => useImagePaste('s1', '', onChange))
+    const event = makePasteEvent([makeImageItem()], 0)
+
+    await act(async () => {
+      await result.current.onPaste(event)
+    })
+    expect(result.current.attachments[0]?.failed).toBe(true)
+
+    // Второй раз загрузка удаётся.
+    mockUpload.mockResolvedValueOnce({ path: '/x/retry-1.png' })
+    await act(async () => {
+      result.current.retryAttachment(result.current.attachments[0]!.id)
+      await Promise.resolve()
+    })
+
+    expect(onChange).toHaveBeenCalledWith('[Screenshot: /x/retry-1.png]\n')
+    expect(result.current.attachments[0]?.failed).toBe(false)
   })
 
   it('removeAttachment strips exactly the inserted substring for a resolved attachment', async () => {

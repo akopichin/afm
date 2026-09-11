@@ -1,1 +1,1 @@
-export { FileBrowserProvider, useFileBrowser, useFileBrowserEnabled } from './FileBrowserProvider'
+export { FileBrowserProvider, useFileBrowser, useFileBrowserEnabled, useFileBrowserOptional } from './FileBrowserProvider'

@@ -46,6 +46,15 @@ export function useFileBrowserEnabled(): boolean {
   return ctx?.enabled ?? false
 }
 
+// useFileBrowserOptional() — как useFileBrowser(), но НЕ бросает вне провайдера
+// (возвращает null). Нужен скрепке-меню: «Upload image…» работает без файлового
+// браузера (и без провайдера), а «Choose project file…» гейтится наличием ctx +
+// enabled. Так PasteableTextarea с allowFileReferences остаётся пригодным к
+// рендеру без FileBrowserProvider (например, AgentNoteModal в юнит-тестах).
+export function useFileBrowserOptional(): FileBrowserContextValue | null {
+  return useContext(FileBrowserContext)
+}
+
 type FileBrowserProviderProps = {
   children: ReactNode
   // Смена flowName/startedAt = новый прогон флоу — выбор файлов от

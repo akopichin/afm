@@ -372,7 +372,7 @@ describe('PlanPanel', () => {
   // Finding 5: capabilities.file_browser=false must hide the comment picker
   // too, not just the header button — otherwise host mode still shows
   // "Attach project file" and clicking it hits the disabled /api/files/*.
-  test('capabilities.file_browser=false: the line-comment textarea has no Attach project file button and never calls the files API', async () => {
+  test('capabilities.file_browser=false: the line-comment textarea offers Upload image but no project picker and never calls the files API (R2 #6a)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />, false)
@@ -380,7 +380,9 @@ describe('PlanPanel', () => {
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
-    expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /choose project file/i })).toBeNull()
     const filesCalls = fetchSpy.mock.calls.filter(([input]) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       return url.includes('/api/files/')

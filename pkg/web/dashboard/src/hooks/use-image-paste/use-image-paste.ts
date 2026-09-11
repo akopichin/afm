@@ -5,24 +5,33 @@ export type PasteAttachment = {
   id: string
   previewUrl: string
   uploading: boolean
+  // failed=true — загрузка не удалась; чип НЕ исчезает, а остаётся с Retry/Remove
+  // (Finding #6c второго раунда). errorMsg — причина (слишком большой / неверный
+  // тип / сеть), показывается на чипе.
+  failed: boolean
+  errorMsg: string | null
 }
 
 export type UseImagePasteResult = {
   nodeRef: MutableRefObject<HTMLTextAreaElement | null>
   attachments: PasteAttachment[]
-  uploadError: string | null
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
   // uploadFiles — тот же путь загрузки, что и вставка из буфера, но для файлов,
   // выбранных явно (native <input type=file> — пункт «Upload image…»). Стартует
   // с текущей позиции каретки (или конца значения), загружает последовательно и
   // вставляет «[Screenshot: <path>]» — реюз, а не второй механизм.
   uploadFiles: (files: File[]) => Promise<void>
+  // retryAttachment — повторная загрузка ранее упавшего вложения (тот же File).
+  retryAttachment: (id: string) => void
   removeAttachment: (id: string) => void
 }
 
-type AttachmentRecord = PasteAttachment & { insertedText: string | null }
+type AttachmentRecord = PasteAttachment & { insertedText: string | null; file: File }
 
-const ERROR_DISPLAY_MS = 4000
+function errorMessageFor(err: unknown): string {
+  const status = err instanceof AttachmentUploadError ? err.status : 0
+  return status === 413 ? 'Image too large (max 10 MB)' : status === 415 ? 'Unsupported image type' : 'Upload failed'
+}
 
 // Backs PasteableTextarea's paste handling: uploads a pasted clipboard image
 // via uploadAttachment and splices "[Screenshot: <path>]\n" into the
@@ -43,11 +52,9 @@ export function useImagePaste(
   onChangeRef.current = onChange
   const removedIds = useRef<Set<string>>(new Set())
   const nextId = useRef(0)
-  const errorTimer = useRef<number | undefined>(undefined)
   const pendingCaret = useRef<number | null>(null)
 
   const [attachments, setAttachments] = useState<AttachmentRecord[]>([])
-  const [uploadError, setUploadError] = useState<string | null>(null)
 
   useLayoutEffect(() => {
     if (pendingCaret.current === null) return
@@ -59,53 +66,46 @@ export function useImagePaste(
     pendingCaret.current = null
   }, [value])
 
-  function showError(message: string): void {
-    setUploadError(message)
-    if (errorTimer.current !== undefined) window.clearTimeout(errorTimer.current)
-    errorTimer.current = window.setTimeout(() => setUploadError(null), ERROR_DISPLAY_MS)
+  // performUpload — сама загрузка для УЖЕ созданной записи (id). Используется и
+  // первичной загрузкой (uploadOne), и повтором (retryAttachment). На успехе
+  // вставляет «[Screenshot: <path>]» и снимает uploading; на ошибке НЕ удаляет
+  // запись, а помечает failed + errorMsg (чип с Retry/Remove), если её не убрали
+  // из очереди пока летел запрос.
+  async function performUpload(id: string, file: File, previewUrl: string, caret: number): Promise<{ caret: number } | null> {
+    setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, uploading: true, failed: false, errorMsg: null } : a)))
+    try {
+      const { path } = await uploadAttachment(stageId, file)
+      if (removedIds.current.has(id)) {
+        URL.revokeObjectURL(previewUrl)
+        return null
+      }
+      const baseValue = valueRef.current
+      const clampedCaret = Math.min(caret, baseValue.length)
+      const inserted = `[Screenshot: ${path}]\n`
+      const before = baseValue.slice(0, clampedCaret)
+      const after = baseValue.slice(clampedCaret)
+      pendingCaret.current = before.length + inserted.length
+      onChangeRef.current(before + inserted + after)
+      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, uploading: false, insertedText: inserted } : a)))
+      return { caret: before.length + inserted.length }
+    } catch (err) {
+      if (removedIds.current.has(id)) {
+        URL.revokeObjectURL(previewUrl)
+        setAttachments((prev) => prev.filter((a) => a.id !== id))
+        return null
+      }
+      // Оставляем запись как failed (превью не отзываем — нужно для Retry-чипа).
+      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, uploading: false, failed: true, errorMsg: errorMessageFor(err) } : a)))
+      return null
+    }
   }
 
   async function uploadOne(file: File, caret: number): Promise<{ caret: number } | null> {
     const id = String(nextId.current)
     nextId.current += 1
     const previewUrl = URL.createObjectURL(file)
-    setAttachments((prev) => [...prev, { id, previewUrl, uploading: true, insertedText: null }])
-
-    try {
-      const { path } = await uploadAttachment(stageId, file)
-
-      if (removedIds.current.has(id)) {
-        URL.revokeObjectURL(previewUrl)
-        return null
-      }
-
-      const baseValue = valueRef.current
-      const clampedCaret = Math.min(caret, baseValue.length)
-      const inserted = `[Screenshot: ${path}]\n`
-      const before = baseValue.slice(0, clampedCaret)
-      const after = baseValue.slice(clampedCaret)
-      const next = before + inserted + after
-      pendingCaret.current = before.length + inserted.length
-      onChangeRef.current(next)
-      setAttachments((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, uploading: false, insertedText: inserted } : a)),
-      )
-      return { caret: before.length + inserted.length }
-    } catch (err) {
-      URL.revokeObjectURL(previewUrl)
-      setAttachments((prev) => prev.filter((a) => a.id !== id))
-      if (!removedIds.current.has(id)) {
-        const status = err instanceof AttachmentUploadError ? err.status : 0
-        showError(
-          status === 413
-            ? 'Image too large (max 10 MB)'
-            : status === 415
-              ? 'Unsupported image type'
-              : 'Upload failed',
-        )
-      }
-      return null
-    }
+    setAttachments((prev) => [...prev, { id, previewUrl, uploading: true, failed: false, errorMsg: null, insertedText: null, file }])
+    return performUpload(id, file, previewUrl, caret)
   }
 
   // Общий последовательный проход загрузки — используется и вставкой из буфера,
@@ -150,6 +150,16 @@ export function useImagePaste(
     await runUploads(images, caret)
   }
 
+  // retryAttachment — повтор упавшей загрузки тем же файлом (Finding #6c).
+  // Стартует с текущей каретки/конца значения; сам performUpload переведёт чип
+  // обратно в uploading и на успехе вставит ссылку.
+  function retryAttachment(id: string): void {
+    const target = attachments.find((a) => a.id === id)
+    if (target === undefined || !target.failed) return
+    const caret = nodeRef.current?.selectionStart ?? valueRef.current.length
+    void performUpload(id, target.file, target.previewUrl, caret)
+  }
+
   function removeAttachment(id: string): void {
     const target = attachments.find((a) => a.id === id)
     if (target === undefined) return
@@ -166,5 +176,5 @@ export function useImagePaste(
     setAttachments((prev) => prev.filter((a) => a.id !== id))
   }
 
-  return { nodeRef, attachments, uploadError, onPaste: onPaste as (event: ClipboardEvent<HTMLTextAreaElement>) => void, uploadFiles, removeAttachment }
+  return { nodeRef, attachments, onPaste: onPaste as (event: ClipboardEvent<HTMLTextAreaElement>) => void, uploadFiles, retryAttachment, removeAttachment }
 }

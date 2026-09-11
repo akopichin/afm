@@ -46,10 +46,20 @@
   opacity: 0.5;
 }
 
-.pasteable-attachment-remove {
+/* Failed upload (Finding #6c): red frame + dimmed preview; the chip stays with
+   Retry + Remove instead of vanishing. */
+.pasteable-attachment.failed {
+  border-color: var(--coral);
+}
+.pasteable-attachment.failed img {
+  opacity: 0.4;
+  filter: grayscale(0.4);
+}
+
+.pasteable-attachment-remove,
+.pasteable-attachment-retry {
   position: absolute;
   top: 2px;
-  right: 2px;
   width: 16px;
   height: 16px;
   display: flex;
@@ -63,18 +73,24 @@
   font-size: 9px;
   line-height: 1;
   padding: 0;
-  opacity: 0.55;
+  opacity: 0.6;
   transition: opacity 0.15s ease;
 }
-.pasteable-attachment-remove:hover {
-  opacity: 1;
-  color: var(--coral);
-}
-
-.pasteable-attachment-error {
-  color: var(--coral);
+.pasteable-attachment-remove { right: 2px; }
+/* Retry sits bottom-center on a failed chip so it doesn't overlap Remove. */
+.pasteable-attachment-retry {
+  top: auto;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: auto;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
   font-size: 11px;
 }
+.pasteable-attachment-remove:hover { opacity: 1; color: var(--coral); }
+.pasteable-attachment-retry:hover { opacity: 1; color: var(--mint); }
 
 /* «Attach project file» — кнопка пикера файлов проекта (Task 14, поверх
    файлового браузера Task 13; PasteableTextarea's allowFileReferences).

@@ -88,22 +88,21 @@
 /* Labels always show inside the popover — it exists precisely to name the values. */
 .metrics-popover .metric-label { display: block; }
 
-/* Progressive collapse as the header narrows: first the inline metric labels,
-   then the two secondary metrics (Idle/Backoff) fold behind the "⋯" popover, so
-   the essential Started/Elapsed and the right-hand actions always stay on one
-   row. The label/hide rules are scoped to DIRECT metrics so the popover copies
-   (grandchildren) keep their labels and stay visible. */
-@media (max-width: 1180px) {
+/* Responsive contract (plan §5.1): the collapse order keeps the two LIVE metrics
+   (Elapsed + Idle) inline longest and folds the rest behind the "⋯" popover; the
+   popover copies (grandchildren) always keep labels + stay visible.
+   - 900–1279px: inline Elapsed + Idle only; Started + Backoff → popover.
+   - <900px: all four fold into the single "⋯" popover.
+   Rationale: a static Started must never outrank live Idle (the previous
+   breakpoints hid Idle first and kept Started, and left two metrics inline down
+   to 680px — denser than the agreed design). */
+@media (max-width: 1279px) {
   .run-metrics { gap: 16px; }
   .run-metrics > .metric .metric-label { display: none; }
-}
-@media (max-width: 1000px) {
-  .run-metrics > .metric[data-metric="idle"],
+  .run-metrics > .metric[data-metric="started"],
   .run-metrics > .metric[data-metric="backoff"] { display: none; }
   .metrics-more { display: inline-flex; }
 }
-/* Phone widths: fold ALL inline metrics behind the "⋯" popover so the center
-   never collides with the brand (left) or the actions (right). */
-@media (max-width: 680px) {
+@media (max-width: 899px) {
   .run-metrics > .metric { display: none; }
 }

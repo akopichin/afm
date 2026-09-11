@@ -366,10 +366,10 @@ describe('DialogChannel', () => {
     expect(screen.getAllByRole('button', { name: 'Attach' })).toHaveLength(2)
   })
 
-  // Finding 5: capabilities.file_browser=false must hide the comment picker
-  // too, not just the header button — otherwise host mode still shows
-  // "Attach project file" and clicking it hits the disabled /api/files/*.
-  test('capabilities.file_browser=false: the question-line comment textarea has no Attach project file button and never calls the files API', async () => {
+  // Finding 5 + R2 #6a: capabilities.file_browser=false must hide the PROJECT
+  // picker (no /api/files call), но НЕ саму скрепку — «Upload image…» работает и
+  // в host mode. Раньше отсутствие capability прятало весь Attach.
+  test('capabilities.file_browser=false: the comment textarea offers Upload image but no project picker and never calls the files API', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -385,7 +385,12 @@ describe('DialogChannel', () => {
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
-    expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument()
+    // Скрепка есть (upload-only), но проект-пикера нет.
+    const attachButtons = screen.getAllByRole('button', { name: 'Attach' })
+    expect(attachButtons.length).toBeGreaterThan(0)
+    fireEvent.click(attachButtons[0]!)
+    expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /choose project file/i })).toBeNull()
     const filesCalls = fetchSpy.mock.calls.filter(([input]) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       return url.includes('/api/files/')

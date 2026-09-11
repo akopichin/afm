@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type Keyboa
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useImagePaste } from '../../hooks/use-image-paste'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
-import { useFileBrowser, useFileBrowserEnabled } from '../file-browser'
+import { useFileBrowserOptional } from '../file-browser'
 
 type PasteableTextareaProps = {
   stageId: string
@@ -51,17 +51,19 @@ export function PasteableTextarea({
   allowFileReferences = false,
 }: PasteableTextareaProps): ReactElement {
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
-  const { nodeRef, attachments, uploadError, onPaste, uploadFiles, removeAttachment } = useImagePaste(stageId, value, onChange)
+  const { nodeRef, attachments, onPaste, uploadFiles, retryAttachment, removeAttachment } = useImagePaste(stageId, value, onChange)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const { nodeRef: caretNodeRef, insertAtCaret } = useCaretInsert(value, onChange)
-  // useFileBrowserEnabled() (не useFileBrowser()) — читается безусловно, для
-  // ЛЮБОГО рендера, а не только когда allowFileReferences=true: useContext
-  // никогда не бросает исключение вне провайдера, поэтому это не нарушает
-  // инвариант "компонент работает без FileBrowserProvider". Нужен здесь (а не
-  // только внутри AttachFileButton), чтобы showStrip ниже не рисовал пустую
-  // полосу с отступом, когда кнопки в ней всё равно не будет (см. Finding 5).
-  const fileBrowserEnabled = useFileBrowserEnabled()
-  const showAttachButton = allowFileReferences && fileBrowserEnabled
+  // Скрепка (Finding #6a второго раунда): поле, включившее allowFileReferences,
+  // всегда получает загрузку изображения — attachment endpoint работает и в
+  // host-режиме, не только в Docker. Проект-пикер («Choose project file…»)
+  // дополнительно требует включённого файлового браузера (capability), но его
+  // отсутствие БОЛЬШЕ не прячет весь Attach вместе с «Upload image…».
+  // Скрепка не показывается, когда поле disabled (Finding #6b) — иначе можно
+  // было вставить ссылку в задизейбленное поле (напр. allow_custom:false), и
+  // сервер отвечал 400. allowFileReferences уже подразумевает FileBrowserProvider
+  // (см. инвариант ниже), поэтому AttachMenu безопасно зовёт useFileBrowser().
+  const showAttachButton = allowFileReferences && disabled !== true
 
   const setRefs = useCallback(
     (node: HTMLTextAreaElement | null) => {
@@ -77,26 +79,41 @@ export function PasteableTextarea({
     onChange(event.target.value)
   }
 
-  const showStrip = attachments.length > 0 || uploadError !== null || showAttachButton
+  const showStrip = attachments.length > 0 || showAttachButton
 
   return (
     <div className="pasteable-textarea-wrap">
       {showStrip && (
         <div className="pasteable-attachments">
           {attachments.map((attachment) => (
-            <div key={attachment.id} className={`pasteable-attachment${attachment.uploading ? ' uploading' : ''}`}>
-              <img src={attachment.previewUrl} alt="Pasted screenshot" />
+            <div
+              key={attachment.id}
+              className={`pasteable-attachment${attachment.uploading ? ' uploading' : ''}${attachment.failed ? ' failed' : ''}`}
+              title={attachment.failed ? (attachment.errorMsg ?? 'Upload failed') : undefined}
+            >
+              <img src={attachment.previewUrl} alt={attachment.failed ? 'Failed upload' : 'Pasted screenshot'} />
+              {/* Упавшая загрузка НЕ исчезает — остаётся чипом с Retry + Remove
+                  (Finding #6c), вместо авто-исчезновения через 4с. */}
+              {attachment.failed && (
+                <button
+                  type="button"
+                  className="pasteable-attachment-retry"
+                  aria-label="Retry upload"
+                  onClick={() => retryAttachment(attachment.id)}
+                >
+                  ↻
+                </button>
+              )}
               <button
                 type="button"
                 className="pasteable-attachment-remove"
-                aria-label="Remove pasted image"
+                aria-label={attachment.failed ? 'Remove failed upload' : 'Remove pasted image'}
                 onClick={() => removeAttachment(attachment.id)}
               >
                 ✕
               </button>
             </div>
           ))}
-          {uploadError !== null && <span className="pasteable-attachment-error">{uploadError}</span>}
           {showAttachButton && (
             <>
               <AttachMenu
@@ -156,7 +173,10 @@ function AttachMenu({
   onInsertFileReference: (text: string) => void
   onUploadImage: () => void
 }): ReactElement | null {
-  const { pickFiles, enabled } = useFileBrowser()
+  // Не throwing-версия: «Upload image…» доступен и без FileBrowserProvider;
+  // «Choose project file…» — только когда провайдер есть и enabled (Docker).
+  const fb = useFileBrowserOptional()
+  const enabled = fb?.enabled ?? false
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const attachBtnRef = useRef<HTMLButtonElement | null>(null)
@@ -193,11 +213,10 @@ function AttachMenu({
     }
   }, [open])
 
-  // Защита в глубину (Finding 5): вызывающий (PasteableTextarea) уже не
-  // монтирует это меню при выключенном enabled — return null тут на случай, если
-  // меню когда-нибудь начнёт монтироваться из другого места без внешнего гейта.
-  if (!enabled) return null
-
+  // enabled (fileBrowserEnabled) гейтит ТОЛЬКО проект-пикер; «Upload image…»
+  // доступен всегда (Finding #6a). Само меню монтируется вызывающим при
+  // allowFileReferences (внутри FileBrowserProvider), поэтому useFileBrowser()
+  // выше безопасен.
   function chooseProjectFile(): void {
     // Finding #7 (второй раунд): FileBrowserProvider запоминает opener как
     // document.activeElement на момент pickFiles(). Если бы мы просто закрыли
@@ -208,7 +227,8 @@ function AttachMenu({
     // именно её, и фокус корректно вернётся на неё после закрытия оверлея.
     attachBtnRef.current?.focus()
     setOpen(false)
-    pickFiles((refs) => {
+    // Пункт рендерится только при enabled → fb гарантированно не null.
+    fb?.pickFiles((refs) => {
       if (!mountedRef.current) {
         window.alert('Target comment is no longer available')
         return
@@ -240,9 +260,11 @@ function AttachMenu({
       </button>
       {open && (
         <ul className="pasteable-attach-menu" role="menu">
-          <li role="none">
-            <button type="button" role="menuitem" onClick={chooseProjectFile}>Choose project file…</button>
-          </li>
+          {enabled && (
+            <li role="none">
+              <button type="button" role="menuitem" onClick={chooseProjectFile}>Choose project file…</button>
+            </li>
+          )}
           <li role="none">
             <button type="button" role="menuitem" onClick={uploadImage}>Upload image…</button>
           </li>
