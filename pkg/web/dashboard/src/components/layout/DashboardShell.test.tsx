@@ -42,6 +42,45 @@ function renderShell(): HTMLElement {
   return container.querySelector('.dashboard-body') as HTMLElement
 }
 
+describe('DashboardShell rail resizer', () => {
+  afterEach(() => localStorage.clear())
+
+  test('dragging the resizer changes the rail width (--rail-width) and persists it', () => {
+    const body = renderShell()
+    const resizer = screen.getByRole('separator', { name: /resize stages panel/i })
+
+    // Мокаем левый край тела в 0, чтобы clientX == ширина.
+    body.getBoundingClientRect = () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} })
+
+    fireEvent.mouseDown(resizer, { clientX: 240 })
+    fireEvent.mouseMove(document, { clientX: 320 })
+    fireEvent.mouseUp(document)
+
+    expect(body.style.getPropertyValue('--rail-width')).toBe('320px')
+    expect(localStorage.getItem('afm.railWidth')).toBe('320')
+  })
+
+  test('width is clamped and Arrow keys resize; double-click resets to default', () => {
+    const body = renderShell()
+    const resizer = screen.getByRole('separator', { name: /resize stages panel/i })
+    body.getBoundingClientRect = () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} })
+
+    // Тянем далеко за максимум — клампится до 560.
+    fireEvent.mouseDown(resizer, { clientX: 240 })
+    fireEvent.mouseMove(document, { clientX: 9999 })
+    fireEvent.mouseUp(document)
+    expect(body.style.getPropertyValue('--rail-width')).toBe('560px')
+
+    // Стрелка влево сужает на шаг.
+    fireEvent.keyDown(resizer, { key: 'ArrowLeft' })
+    expect(body.style.getPropertyValue('--rail-width')).toBe('544px')
+
+    // Двойной клик сбрасывает к дефолту (240).
+    fireEvent.doubleClick(resizer)
+    expect(body.style.getPropertyValue('--rail-width')).toBe('240px')
+  })
+})
+
 describe('DashboardShell rail drawer', () => {
   test('toggle button opens and closes the drawer', () => {
     const body = renderShell()

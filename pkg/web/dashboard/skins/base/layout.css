@@ -15,10 +15,14 @@
   background-color: var(--surface-canvas);
 }
 
-/* === Dashboard body: rail + workspace === */
+/* === Dashboard body: rail + resizer + workspace ===
+   Ширина рейла — переменная --rail-width (задаётся из DashboardShell, персист в
+   localStorage). Делитель .rail-resizer абсолютно спозиционирован на границе
+   колонок, поэтому сетка остаётся двухколоночной. */
 .dashboard-body {
+  position: relative;
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: var(--rail-width, 240px) 1fr;
   height: 100%;
   min-height: 0;
 }
@@ -28,6 +32,48 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
+}
+
+/* Делитель: тонкая полоса-хит-эриа на всю высоту, центрирована на границе. */
+.rail-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--rail-width, 240px);
+  width: 11px;
+  transform: translateX(-50%);
+  z-index: 6;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.rail-resizer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+/* Видимая ручка — маленькая вертикальная полоска ПО ЦЕНТРУ (не на всю высоту),
+   почти прозрачная в покое и подсвечивается при наведении/перетаскивании. */
+.rail-resizer-grip {
+  width: 3px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--separator-subtle);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, height 0.15s ease;
+}
+.rail-resizer:hover .rail-resizer-grip,
+.rail-resizer:focus-visible .rail-resizer-grip {
+  opacity: 1;
+  background: var(--accent-primary);
+  height: 56px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-resizer-grip { transition: none; }
 }
 
 /* === Workspace (right column) === */
@@ -612,6 +658,9 @@
    The workspace then gets the full width instead of ~150px. */
 @media (max-width: 900px) {
   .dashboard-body { grid-template-columns: 1fr; }
+
+  /* Делитель не нужен, пока рейл — слайд-овер фиксированной ширины. */
+  .rail-resizer { display: none; }
 
   .rail-toggle { display: inline-flex; }
 

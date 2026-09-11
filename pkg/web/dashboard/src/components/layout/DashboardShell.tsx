@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type ReactElement } from 'react'
 
 type DashboardShellProps = {
   rail: ReactNode
@@ -20,8 +20,37 @@ type DashboardShellProps = {
 // стадии — закрывают. Так на телефоне воркспейс получает всю ширину, а не ~150px.
 const MOBILE_QUERY = '(max-width: 900px)'
 
+// Ширина рейла стадий — растягивается делителем между рейлом и воркспейсом.
+// Персистится, чтобы пережить перезагрузку. Клампится, чтобы рейл нельзя было
+// сузить в ноль или растянуть на пол-экрана.
+const RAIL_WIDTH_KEY = 'afm.railWidth'
+const RAIL_MIN = 190
+const RAIL_MAX = 560
+const RAIL_DEFAULT = 240
+const RAIL_STEP = 16 // шаг клавиатурного ресайза (стрелки)
+
+function clampRail(w: number): number {
+  return Math.max(RAIL_MIN, Math.min(w, RAIL_MAX))
+}
+
+function loadRailWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(RAIL_WIDTH_KEY)
+    if (raw !== null) {
+      const n = Number(raw)
+      if (Number.isFinite(n)) return clampRail(n)
+    }
+  } catch {
+    // localStorage недоступен — просто дефолт
+  }
+  return RAIL_DEFAULT
+}
+
 export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): ReactElement {
   const [railOpen, setRailOpen] = useState(false)
+  const [railWidth, setRailWidth] = useState<number>(loadRailWidth)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const draggingRef = useRef(false)
   // Мобильный режим (шторка) — по тому же брейкпоинту, что и CSS. Нужен в JS,
   // чтобы делать закрытый рейл `inert` ТОЛЬКО на мобиле; на десктопе рейл всегда
   // виден и интерактивен.
@@ -64,12 +93,50 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
   // шторка открыта — на десктопе (рейл всегда виден) он не навешивается.
   useEffect(() => {
     if (!railOpen) return
-    function onKey(e: KeyboardEvent): void {
+    function onKey(e: globalThis.KeyboardEvent): void {
       if (e.key === 'Escape') setRailOpen(false)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [railOpen])
+
+  // Персист ширины рейла (переживает reload/перезапуск).
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RAIL_WIDTH_KEY, String(railWidth))
+    } catch {
+      // localStorage недоступен — ширина просто не сохранится
+    }
+  }, [railWidth])
+
+  // Перетаскивание делителя: считаем ширину как (clientX - левый край тела).
+  // Слушатели вешаем на document, чтобы тянуть можно было и вне узкой полоски.
+  function onResizeStart(e: MouseEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    draggingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    function onMove(ev: globalThis.MouseEvent): void {
+      if (!draggingRef.current || bodyRef.current === null) return
+      const left = bodyRef.current.getBoundingClientRect().left
+      setRailWidth(clampRail(ev.clientX - left))
+    }
+    function onUp(): void {
+      draggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // Клавиатурный ресайз (a11y): стрелки влево/вправо двигают делитель.
+  function onResizeKey(e: KeyboardEvent<HTMLDivElement>): void {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); setRailWidth((w) => clampRail(w - RAIL_STEP)) }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); setRailWidth((w) => clampRail(w + RAIL_STEP)) }
+  }
 
   // Клик по строке стадии внутри шторки = выбор сделан → закрываем её. Клик по
   // кебабу (и его меню) НЕ закрывает — иначе меню действий стадии схлопнулось бы
@@ -83,7 +150,11 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
   }
 
   return (
-    <div className={`dashboard-body${railOpen ? ' rail-open' : ''}`}>
+    <div
+      className={`dashboard-body${railOpen ? ' rail-open' : ''}`}
+      ref={bodyRef}
+      style={{ '--rail-width': `${railWidth}px` } as CSSProperties}
+    >
       {/* Скрим под шторкой (только <900px, виден лишь при .rail-open). */}
       <button
         type="button"
@@ -95,6 +166,24 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
       <aside className="rail-slot" id="rail-slot" ref={railRef} onClickCapture={onRailClickCapture}>
         {rail}
       </aside>
+      {/* Делитель между рейлом и воркспейсом: тонкая полоса-хит-эриа на всю
+          высоту, а видимая ручка-грип — маленькая по центру, появляется при
+          наведении. Скрыт на мобиле (рейл там — слайд-овер). */}
+      <div
+        className="rail-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize stages panel"
+        aria-valuenow={railWidth}
+        aria-valuemin={RAIL_MIN}
+        aria-valuemax={RAIL_MAX}
+        tabIndex={0}
+        onMouseDown={onResizeStart}
+        onKeyDown={onResizeKey}
+        onDoubleClick={() => setRailWidth(RAIL_DEFAULT)}
+      >
+        <span className="rail-resizer-grip" aria-hidden="true" />
+      </div>
       <section className="workspace" aria-label="Workspace">
         <div className="workspace-topbar">
           <button
