@@ -13,7 +13,13 @@ export type WorkspaceView = 'feed' | 'attention' | 'plan-history' | 'dialog-hist
 // вкладок с собственными подписями (Approval/Question/Paused/Failed/Hook failed).
 export type AttentionKind = 'approval' | 'question' | 'failed' | 'hook_failed' | 'paused'
 
-export type AttentionItem = { stageId: string; kind: AttentionKind }
+// episode — идентификатор attention-эпизода (stage.updatedAt). Одна стадия за
+// свою жизнь может входить в один и тот же вид attention несколько раз подряд
+// (интерактивный диалог: q1 → ответ → q2, обе awaiting_user_input, но с разными
+// updatedAt). Без episode в подписи reducer считал бы q2 тем же элементом, что и
+// q1, и не авто-открывал бы его после возврата в Feed (Finding #1, раунд 3) —
+// симметрично тому, как desktop-уведомления различают эпизоды по updatedAt.
+export type AttentionItem = { stageId: string; kind: AttentionKind; episode: string }
 
 // attentionKindForStatus — статус стадии → вид attention, либо null, если статус
 // не требует действия. Единственная точка соответствия статус→вид.
@@ -43,16 +49,18 @@ export function deriveAttentionItems(stages: Stage[]): AttentionItem[] {
   const items: AttentionItem[] = []
   for (const s of stages) {
     const kind = attentionKindForStatus(s.status)
-    if (kind !== null) items.push({ stageId: s.id, kind })
+    if (kind !== null) items.push({ stageId: s.id, kind, episode: s.updatedAt })
   }
   return items
 }
 
-// sig — стабильная подпись элемента attention (stageId+kind). Одна стадия за
-// свою жизнь может пройти несколько разных видов (paused → running → failed),
-// поэтому в подпись входит и вид: смена вида той же стадии — это новый элемент.
+// sig — стабильная подпись элемента attention (stageId+kind+episode). Одна стадия
+// за свою жизнь может пройти несколько разных видов (paused → running → failed) —
+// поэтому в подпись входит вид; и может ВОЙТИ В ТОТ ЖЕ вид повторно (диалог из
+// нескольких вопросов) — поэтому в подпись входит episode (updatedAt): смена вида
+// ИЛИ нового эпизода той же стадии = новый элемент (новое «прибытие»).
 export function sig(item: AttentionItem): string {
-  return `${item.stageId}:${item.kind}`
+  return `${item.stageId}:${item.kind}:${item.episode}`
 }
 
 export interface WorkspaceState {

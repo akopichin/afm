@@ -65,6 +65,16 @@ type Tab = 'FILE' | 'DIFF'
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
+// Видимо-фокусируемые элементы модалки: FOCUSABLE_SELECTOR ловит и элементы,
+// скрытые CSS-ом (напр. mobile-only «Toggle file tree» с display:none на
+// desktop) — реальный .focus() по ним не срабатывает, и фокус остаётся снаружи
+// (Finding #3, раунд 3). checkVisibility() (Chrome 105+) отсеивает display:none/
+// visibility:hidden; в jsdom его нет — там оставляем всё (layout не считается).
+function visibleFocusables(modal: HTMLElement): HTMLElement[] {
+  const all = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+  return all.filter((el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true))
+}
+
 // Resizable left panel: the file list/tree column can be dragged wider/narrower
 // via the divider between it and the preview pane. LEFT_MIN keeps it usable,
 // RIGHT_MIN reserves room for the preview so the drag can't collapse it, and
@@ -138,6 +148,29 @@ export function FileBrowserModal({
     mq.addEventListener('change', update)
     return () => mq.removeEventListener('change', update)
   }, [])
+
+  // Finding #4: закрытое mobile-дерево — inert (его root-кнопки/поиск/treeitem'ы
+  // не должны оставаться в tab-order за экраном). На desktop / при открытой
+  // шторке — интерактивно.
+  useEffect(() => {
+    const el = asideRef.current
+    if (el === null) return
+    el.inert = isNarrowModal && !treeOpen
+  }, [isNarrowModal, treeOpen])
+
+  // Управление фокусом шторки дерева (Finding #4): открытие → фокус на первый
+  // фокусируемый элемент дерева; закрытие → возврат на тумблер. Только на мобиле.
+  const prevTreeOpen = useRef(false)
+  useEffect(() => {
+    if (!isNarrowModal) { prevTreeOpen.current = treeOpen; return }
+    if (treeOpen && !prevTreeOpen.current) {
+      const el = asideRef.current
+      if (el !== null) visibleFocusables(el)[0]?.focus()
+    } else if (!treeOpen && prevTreeOpen.current) {
+      treeToggleRef.current?.focus()
+    }
+    prevTreeOpen.current = treeOpen
+  }, [treeOpen, isNarrowModal])
 
   // Переключатель вида левой панели: 'all' — дерево + поиск (как раньше),
   // 'index'/'head' — плоский список изменённых файлов (git-статус относительно
@@ -227,6 +260,9 @@ export function FileBrowserModal({
   const searchGenRef = useRef(0)
 
   const modalRef = useRef<HTMLDivElement | null>(null)
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null)
+  const asideRef = useRef<HTMLElement | null>(null)
+  const treeToggleRef = useRef<HTMLButtonElement | null>(null)
   // handleReload — обработчик клика, а не эффект: у него нет своего cleanup,
   // чтобы пометить "cancelled" в замыкании, как это делают эффекты загрузки
   // выше/ниже. Вместо этого держим "текущий activeFile" в ref, обновляемом на
@@ -395,16 +431,26 @@ export function FileBrowserModal({
   // на каждый Tab, т.к. состав кнопок меняется вместе с selection/activeFile).
   useEffect(() => {
     const modal = modalRef.current
-    modal?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus()
+    // Стартовый фокус — на гарантированно ВИДИМУЮ кнопку Close (Finding #3),
+    // а не на первый попавшийся FOCUSABLE (им могла быть скрытая на desktop
+    // mobile-кнопка дерева — .focus() по display:none не срабатывает, и фокус
+    // оставался на кнопке Files под оверлеем).
+    ;(closeBtnRef.current ?? (modal !== null ? visibleFocusables(modal)[0] : undefined))?.focus()
 
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
         e.preventDefault()
+        // Finding #4: если открыт mobile-слайдовер дерева — Escape закрывает
+        // СНАЧАЛА его, а не весь оверлей Files.
+        if (isNarrowModal && treeOpen) {
+          setTreeOpen(false)
+          return
+        }
         onClose()
         return
       }
       if (e.key !== 'Tab' || modal === null) return
-      const items = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+      const items = visibleFocusables(modal)
       const first = items[0]
       const last = items[items.length - 1]
       if (first === undefined || last === undefined) return
@@ -420,7 +466,7 @@ export function FileBrowserModal({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose])
+  }, [onClose, isNarrowModal, treeOpen])
 
   // Persist the panel width so it survives close/reopen and reload.
   useEffect(() => {
@@ -535,6 +581,7 @@ export function FileBrowserModal({
             {/* Тумблер дерева (Finding #3): только на узком вьюпорте — открывает
                 слайд-овер со списком файлов поверх превью. */}
             <button
+              ref={treeToggleRef}
               type="button"
               className="file-browser-tree-toggle"
               aria-label="Toggle file tree"
@@ -561,7 +608,7 @@ export function FileBrowserModal({
                 {attentionShortcut.label}
               </button>
             )}
-            <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <button ref={closeBtnRef} type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
               ✕
             </button>
           </div>
@@ -576,7 +623,7 @@ export function FileBrowserModal({
             tabIndex={isNarrowModal && treeOpen ? 0 : -1}
             onClick={() => setTreeOpen(false)}
           />
-          <aside className="file-browser-roots" style={isNarrowModal ? undefined : { flexBasis: leftWidth }}>
+          <aside ref={asideRef} className="file-browser-roots" style={isNarrowModal ? undefined : { flexBasis: leftWidth }}>
             <div className="file-browser-toolbar">
               <div className="file-browser-viewswitch" role="group" aria-label="File panel view">
                 <button

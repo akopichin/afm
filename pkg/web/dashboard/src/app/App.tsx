@@ -182,11 +182,14 @@ export function App(): ReactElement {
   // очередь пуста (rule 10). Раньше это подменялось локальными
   // selectedStageId+activeTab, из-за чего ожидание на НЕ выбранной стадии не
   // всплывало — action могло «потеряться».
-  // suppression авто-открытия: пользователь печатает ИЛИ открыт файловый оверлей
-  // (Finding #4 второго раунда) — новое ожидание не должно авто-открываться за
-  // непрозрачной модалкой Files; оно только светится (маяк-вкладка/шорткат).
+  // suppression авто-открытия: пользователь печатает ИЛИ открыт ЛЮБОЙ оверлей
+  // поверх воркспейса — файловый браузер (Finding #4 р2), заметка агенту/pre-note
+  // или модалка ревью (Finding #5 р3). Новое ожидание не должно авто-открываться
+  // за непрозрачной модалкой; оно только светится (маяк-вкладка/шорткат в шапке
+  // модалки). Сами модальные состояния объявлены выше по файлу.
   const [filesOpen, setFilesOpen] = useState(false)
-  const editing = useIsEditing() || filesOpen
+  const anyModalOpen = filesOpen || noteModalStageId !== null || preNoteModalStageId !== null || reviewModalOpen
+  const editing = useIsEditing() || anyModalOpen
   const { state: wsState, activeItem: attnItem, openFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
 
   // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный
@@ -355,14 +358,9 @@ export function App(): ReactElement {
   const inAttention = wsState.view === 'attention'
   const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage.status)
 
-  // Элемент attention для контекстной вкладки (Finding #1 второго раунда):
-  // активный (если мы в attention-виде) ИЛИ первый нерешённый в очереди — чтобы
-  // ожидание светилось на вкладке маяком даже когда воркспейс показывает
-  // Feed/историю (suppression при печати, ручной возврат в Feed). Так pending
-  // action не теряется вне выбранной стадии: он всегда виден как glow-вкладка со
-  // счётчиком и открывается кликом (rule 9 — светится, не крадя фокус).
+  // Первый нерешённый элемент очереди (для маяка/шортката). В attention-виде это
+  // активный элемент; иначе — голова очереди.
   const attentionTabItem = attnItem ?? attnItems[0] ?? null
-  const attentionTabStage = attentionTabItem === null ? null : stages.find((s) => s.id === attentionTabItem.stageId) ?? null
 
   // Шорткат к ждущему действию для шапки файлового оверлея (Finding #4): первый
   // нерешённый элемент очереди; клик закрывает Files и открывает его attention.
@@ -376,35 +374,61 @@ export function App(): ReactElement {
       }
     : null
 
+  // Вкладки: Feed + контекстная detail-вкладка (тело воркспейса) + отдельный
+  // маяк ожидания. Finding #7 (раунд 3): раньше единственная detail-вкладка
+  // ПЕРЕИМЕНОВЫВАЛАСЬ в Approval/Question и становилась active, хотя тело всё ещё
+  // показывало историю выбранной стадии — history «маскировалась» под attention,
+  // а клик по «active» вкладке внезапно переключал тело на другую стадию. Теперь:
+  //   • detail-вкладка отражает РЕАЛЬНОЕ тело (attention самой стадии ИЛИ история/
+  //     имя выбранной стадии) и совпадает с содержимым;
+  //   • ожидание, которое НЕ показано в теле, выносится в ОТДЕЛЬНУЮ glow-вкладку
+  //     «beacon» — она никогда не active, клик по ней явно открывает attention.
   const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
-  if (attentionTabItem !== null && attentionTabStage !== null) {
-    // Контекстная вкладка = маяк ожидания (kind/count/glow всегда), даже если тело
-    // сейчас показывает Feed/историю другой стадии.
+  if (workspaceStage !== null) {
+    if (inAttention && contextKind !== null) {
+      // Тело показывает attention самой стадии → detail = attention (active, glow).
+      tabs.push({
+        id: 'detail',
+        label: ATTENTION_TAB_LABEL[contextKind],
+        kind: contextKind,
+        count: countByKind(attnItems, contextKind),
+        glow: true,
+      })
+    } else {
+      // Тело показывает историю/детали выбранной стадии — вкладка это и отражает.
+      tabs.push({
+        id: 'detail',
+        label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,
+      })
+    }
+  }
+  // Отдельный маяк ожидания — когда очередь непуста и мы НЕ в attention-виде
+  // (в attention-виде ожидание уже показано detail-вкладкой). Никогда не active.
+  const showBeacon = !inAttention && attentionTabItem !== null
+  if (showBeacon && attentionTabItem !== null) {
     tabs.push({
-      id: 'detail',
+      id: 'beacon',
       label: ATTENTION_TAB_LABEL[attentionTabItem.kind],
       kind: attentionTabItem.kind,
       count: countByKind(attnItems, attentionTabItem.kind),
       glow: true,
     })
-  } else if (workspaceStage !== null) {
-    // Очередь пуста — вкладка представляет выбранную стадию (история/детали).
-    tabs.push({
-      id: 'detail',
-      label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,
-    })
   }
   const activeTabId = wsState.view === 'feed' ? 'feed' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
-    // Есть нерешённое ожидание → клик по контекстной вкладке ведёт к нему (маяк).
-    if (attentionTabItem !== null) {
-      setSelectedStageId(attentionTabItem.stageId)
-      openAttention(attentionTabItem.stageId)
+    if (id === 'beacon') {
+      // Явный переход к ждущему действию.
+      if (attentionTabItem !== null) {
+        setSelectedStageId(attentionTabItem.stageId)
+        openAttention(attentionTabItem.stageId)
+      }
       return
     }
+    // detail — контекст выбранной стадии.
     if (workspaceStage === null) return
-    if (workspaceStage.showDialog) openHistory('dialog-history')
+    if (contextKind !== null) openAttention(workspaceStage.id)
+    else if (workspaceStage.showDialog) openHistory('dialog-history')
     else if (workspaceStage.showPlan) openHistory('plan-history')
     else openFeed()
   }
@@ -539,6 +563,7 @@ export function App(): ReactElement {
           stageId={noteModalStageId}
           onCancel={() => setNoteModalStageId(null)}
           onSubmit={handleSubmitNote}
+          attentionShortcut={attentionShortcut}
         />
       )}
 
@@ -549,11 +574,12 @@ export function App(): ReactElement {
           initialNote={stages.find((s) => s.id === preNoteModalStageId)?.preNote ?? ''}
           onCancel={() => setPreNoteModalStageId(null)}
           onSubmit={handleSubmitPreNote}
+          attentionShortcut={attentionShortcut}
         />
       )}
 
       {reviewModalOpen && (
-        <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} />
+        <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} attentionShortcut={attentionShortcut} />
       )}
     </FileBrowserProvider>
   )

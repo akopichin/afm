@@ -256,11 +256,11 @@ describe('App', () => {
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
-  test('R2 #1: a pending attention beacon stays on the contextual tab after returning to Feed', async () => {
+  test('R2 #1 / R3 #7: a pending attention stays as a separate glowing beacon tab after returning to Feed', async () => {
     // B ждёт аппрув. Воркспейс авто-открывает его (вкладка Approval). Пользователь
-    // уходит в Feed — но ожидание не должно «потеряться»: контекстная вкладка
-    // обязана остаться маяком Approval со свечением, а не исчезнуть/стать именем
-    // стадии. Клик по ней возвращает к ожиданию.
+    // уходит в Feed — ожидание не должно «потеряться»: оно остаётся ОТДЕЛЬНОЙ
+    // glow-вкладкой-маяком Approval (не подменяя history, R3 #7). Клик по маяку
+    // возвращает к плану ожидающей стадии.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'awaiting_approval')],
@@ -269,16 +269,41 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
 
-    const tabs = screen.getAllByRole('tab')
-    const feedTab = tabs.find((t) => t.textContent === 'Feed')!
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
     fireEvent.click(feedTab)
 
-    // Контекстная вкладка всё ещё Approval (маяк), а не имя стадии.
-    const detailTab = screen.getAllByRole('tab').find((t) => t.textContent !== 'Feed')!
-    expect(detailTab.textContent).toMatch(/Approval/)
+    // Маяк Approval присутствует как отдельная вкладка (не Feed, не имя стадии).
+    const beaconTab = screen.getAllByRole('tab').find((t) => /Approval/.test(t.textContent ?? ''))!
+    expect(beaconTab).toBeDefined()
     // Клик по маяку возвращает к плану ожидающей стадии.
-    fireEvent.click(detailTab)
+    fireEvent.click(beaconTab)
     await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
+  })
+
+  test('R3 #7: viewing history while another stage awaits keeps the history tab distinct from the attention beacon', async () => {
+    // s1 done с планом (история), s2 ждёт аппрув. Смотрим историю s1 → detail-
+    // вкладка = имя s1 (active, БЕЗ glow), а ожидание s2 — отдельная glow-вкладка
+    // Approval. History не маскируется под attention (R3 #7).
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Done stage', 'done', { showPlan: true, showDialog: false }),
+        stageView('s2', 'Waiter', 'awaiting_approval'),
+      ],
+    }))
+
+    render(<App />)
+    // Воркспейс авто-открывает ожидание s2.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Waiter'))
+
+    // Открываем историю s1 кликом по его строке.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Done stage'))
+
+    const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+    // Есть и вкладка истории (имя стадии), и отдельный маяк Approval.
+    expect(labels.some((l) => /Done stage/.test(l))).toBe(true)
+    expect(labels.some((l) => /Approval/.test(l))).toBe(true)
   })
 
   test('R2 #2: a finished stage with both plan and dialog exposes a Plan/Dialog switch', async () => {

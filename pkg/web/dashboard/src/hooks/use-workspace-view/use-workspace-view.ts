@@ -5,6 +5,7 @@ import {
   initialWorkspaceState,
   deriveAttentionItems,
   activeItem,
+  sig,
   type WorkspaceState,
   type WorkspaceView,
 } from './workspace-view'
@@ -31,7 +32,7 @@ export function useWorkspaceView(stages: Stage[], suppressed: boolean): UseWorks
   // Синхронизируем на каждое изменение состава/порядка очереди или сигнала
   // suppression. Сериализованный ключ items держит эффект идемпотентным: тот же
   // снимок не диспатчит sync повторно каждый рендер.
-  const itemsKey = items.map((it) => `${it.stageId}:${it.kind}`).join('|')
+  const itemsKey = items.map(sig).join('|')
   useEffect(() => {
     dispatch({ type: 'sync', items, suppressed })
     // eslint-disable-next-line react-hooks/exhaustive-deps

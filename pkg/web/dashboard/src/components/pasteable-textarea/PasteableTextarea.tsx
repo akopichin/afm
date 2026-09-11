@@ -85,35 +85,41 @@ export function PasteableTextarea({
     <div className="pasteable-textarea-wrap">
       {showStrip && (
         <div className="pasteable-attachments">
-          {attachments.map((attachment) => (
-            <div
-              key={attachment.id}
-              className={`pasteable-attachment${attachment.uploading ? ' uploading' : ''}${attachment.failed ? ' failed' : ''}`}
-              title={attachment.failed ? (attachment.errorMsg ?? 'Upload failed') : undefined}
-            >
-              <img src={attachment.previewUrl} alt={attachment.failed ? 'Failed upload' : 'Pasted screenshot'} />
-              {/* Упавшая загрузка НЕ исчезает — остаётся чипом с Retry + Remove
-                  (Finding #6c), вместо авто-исчезновения через 4с. */}
-              {attachment.failed && (
-                <button
-                  type="button"
-                  className="pasteable-attachment-retry"
-                  aria-label="Retry upload"
-                  onClick={() => retryAttachment(attachment.id)}
-                >
-                  ↻
-                </button>
-              )}
-              <button
-                type="button"
-                className="pasteable-attachment-remove"
-                aria-label={attachment.failed ? 'Remove failed upload' : 'Remove pasted image'}
-                onClick={() => removeAttachment(attachment.id)}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
+          {attachments.map((attachment) => {
+            const reason = attachment.errorMsg ?? 'Upload failed'
+            return (
+              <div key={attachment.id} className="pasteable-attachment-item">
+                <div className={`pasteable-attachment${attachment.uploading ? ' uploading' : ''}${attachment.failed ? ' failed' : ''}`}>
+                  <img src={attachment.previewUrl} alt={attachment.failed ? `Failed upload: ${reason}` : 'Pasted screenshot'} />
+                  {/* Упавшая загрузка НЕ исчезает — остаётся чипом с Retry + Remove
+                      (Finding #6c), вместо авто-исчезновения через 4с. */}
+                  {attachment.failed && (
+                    <button
+                      type="button"
+                      className="pasteable-attachment-retry"
+                      aria-label={`Retry upload (${reason})`}
+                      onClick={() => retryAttachment(attachment.id)}
+                    >
+                      ↻
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="pasteable-attachment-remove"
+                    aria-label={attachment.failed ? 'Remove failed upload' : 'Remove pasted image'}
+                    onClick={() => removeAttachment(attachment.id)}
+                  >
+                    ✕
+                  </button>
+                </div>
+                {/* Причина видна текстом (Finding #6, раунд 3): на touch title
+                    не показывается, поэтому дублируем видимой подписью + role=alert. */}
+                {attachment.failed && (
+                  <span className="pasteable-attachment-reason" role="alert">{reason}</span>
+                )}
+              </div>
+            )
+          })}
           {showAttachButton && (
             <>
               <AttachMenu

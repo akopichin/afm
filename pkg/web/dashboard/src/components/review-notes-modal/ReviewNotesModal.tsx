@@ -9,6 +9,10 @@ type ReviewNotesModalProps = {
   // Inject недоступен, доставлять некуда (см. дизейбл ниже).
   pausedStages: string[]
   onClose: () => void
+  // Шорткат к ждущему действию (Finding #5, раунд 3) — начальный экран модалки
+  // ревью может не иметь input'а, поэтому новое ожидание могло бы авто-открыться
+  // за непрозрачной модалкой; кнопка в шапке закрывает её и открывает attention.
+  attentionShortcut?: { label: string; onActivate: () => void } | null
 }
 
 // Тексты машиночитаемых кодов ошибок бэкенда (см. FlowApiError.code в
@@ -48,7 +52,7 @@ function groupByFile(notes: ReviewNote[]): Array<[string, ReviewNote[]]> {
 // файлу, с редактированием/удалением на месте, плюс выбор целевой стадии и
 // финальное решение — Inject (доставить в стадию и возобновить флоу) или
 // Cancel (отменить раунд, заметки остаются в сторе на следующий раз).
-export function ReviewNotesModal({ pausedStages, onClose }: ReviewNotesModalProps): ReactElement {
+export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = null }: ReviewNotesModalProps): ReactElement {
   const [notes, setNotes] = useState<ReviewNote[]>([])
   const [rev, setRev] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -144,6 +148,18 @@ export function ReviewNotesModal({ pausedStages, onClose }: ReviewNotesModalProp
   return (
     <div className="modal-overlay review-notes-overlay" role="dialog" aria-modal="true" aria-label="Review notes">
       <div className="modal-content review-notes-modal">
+        {attentionShortcut !== null && (
+          <div className="modal-attention-row">
+            <button
+              type="button"
+              className="modal-attention-shortcut"
+              onClick={() => { onClose(); attentionShortcut.onActivate() }}
+            >
+              <span className="attn-dot" aria-hidden="true" />
+              {attentionShortcut.label}
+            </button>
+          </div>
+        )}
         <h2 className="review-notes-title">Review notes</h2>
 
         {loadError !== null && <p className="review-notes-error" role="alert">{loadError}</p>}

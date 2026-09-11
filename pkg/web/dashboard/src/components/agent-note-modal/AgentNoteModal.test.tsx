@@ -17,6 +17,22 @@ describe('AgentNoteModal', () => {
     expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
   })
 
+  it('R3 #5: the attention shortcut closes the modal and activates the pending action', () => {
+    const onCancel = vi.fn()
+    const onActivate = vi.fn()
+    render(
+      <AgentNoteModal
+        stageId="s1"
+        onSubmit={vi.fn()}
+        onCancel={onCancel}
+        attentionShortcut={{ label: 'Question waiting', onActivate }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /question waiting/i }))
+    expect(onCancel).toHaveBeenCalled()
+    expect(onActivate).toHaveBeenCalled()
+  })
+
   it('in host mode (file browser off) still offers Upload image but not the project picker', () => {
     render(
       <FileBrowserProvider flowName="f" startedAt="t" enabled={false}>

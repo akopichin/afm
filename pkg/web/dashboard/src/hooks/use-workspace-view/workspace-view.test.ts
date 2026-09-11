@@ -31,7 +31,7 @@ function stage(id: string, status: StageStatus): Stage {
   }
 }
 
-const item = (stageId: string, kind: AttentionItem['kind']): AttentionItem => ({ stageId, kind })
+const item = (stageId: string, kind: AttentionItem['kind'], episode = ''): AttentionItem => ({ stageId, kind, episode })
 
 // sync — короткий помощник: применить снимок очереди (по умолчанию не suppressed).
 function sync(state: WorkspaceState, items: AttentionItem[], suppressed = false): WorkspaceState {
@@ -191,7 +191,23 @@ describe('selectors', () => {
     expect(countByKind(items, 'paused')).toBe(0)
   })
 
-  it('sig encodes stage and kind', () => {
-    expect(sig(item('a', 'approval'))).toBe('a:approval')
+  it('sig encodes stage, kind and episode', () => {
+    expect(sig(item('a', 'approval'))).toBe('a:approval:')
+    expect(sig(item('a', 'approval', 't2'))).toBe('a:approval:t2')
+    // Разный эпизод той же стадии/вида = разная подпись (повторный вопрос).
+    expect(sig(item('a', 'question', 't1'))).not.toBe(sig(item('a', 'question', 't2')))
+  })
+
+  it('a repeat attention episode (same stage/kind, new updatedAt) is a fresh arrival that auto-opens', () => {
+    // q1: awaiting_user_input, updatedAt=t1 → авто-открытие attention на 'a'.
+    let s = sync(initialWorkspaceState, [item('a', 'question', 't1')])
+    expect(s.view).toBe('attention')
+    // Пользователь вернулся в Feed.
+    s = workspaceReducer(s, { type: 'openFeed' })
+    expect(s.view).toBe('feed')
+    // q2: та же стадия/вид, но новый updatedAt=t2 — новое прибытие → авто-открытие.
+    s = sync(s, [item('a', 'question', 't2')])
+    expect(s.view).toBe('attention')
+    expect(s.activeStageId).toBe('a')
   })
 })

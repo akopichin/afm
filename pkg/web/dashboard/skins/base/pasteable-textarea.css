@@ -25,6 +25,14 @@
   margin-bottom: 6px;
 }
 
+/* One attachment = thumbnail + (when failed) a visible reason caption below it. */
+.pasteable-attachment-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
 .pasteable-attachment {
   position: relative;
   width: 48px;
@@ -33,6 +41,14 @@
   border-radius: 4px;
   overflow: hidden;
   flex-shrink: 0;
+}
+/* Visible failure reason (touch has no title tooltip; screen readers get role=alert). */
+.pasteable-attachment-reason {
+  max-width: 96px;
+  color: var(--coral);
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .pasteable-attachment img {

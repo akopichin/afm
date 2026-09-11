@@ -377,7 +377,7 @@ describe('FileBrowserModal', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  test('focus starts inside the modal and Tab wraps from the last to the first focusable element', async () => {
+  test('focus starts on the visible Close button and Tab wraps from the last to the first VISIBLE focusable (R3 #3)', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])
     api.install()
@@ -385,14 +385,21 @@ describe('FileBrowserModal', () => {
     const { container } = renderModal()
     await screen.findByRole('button', { name: 'afm' })
 
-    const focusable = container.querySelectorAll<HTMLElement>('button, [tabindex]:not([tabindex="-1"])')
-    expect(focusable.length).toBeGreaterThan(0)
-    expect(container.contains(document.activeElement)).toBe(true)
+    // Стартовый фокус — на видимой кнопке Close, а не на скрытом mobile-тумблере
+    // (Finding #3): раньше .focus() по display:none-элементу оставлял фокус вне модалки.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }))
 
-    const last = focusable[focusable.length - 1] as HTMLElement
+    // Trap считает фокусируемые тем же фильтром видимости, что и компонент.
+    const SEL = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
+    const vis = Array.from(container.querySelectorAll<HTMLElement>(SEL)).filter(
+      (el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true),
+    )
+    expect(vis.length).toBeGreaterThan(0)
+
+    const last = vis[vis.length - 1]!
     last.focus()
     fireEvent.keyDown(last, { key: 'Tab' })
-    expect(document.activeElement).toBe(focusable[0])
+    expect(document.activeElement).toBe(vis[0])
   })
 
   test('search replaces the tree with results, keeps the tree mounted, and clearing restores it', async () => {
@@ -543,14 +550,51 @@ describe('FileBrowserModal', () => {
       await screen.findByRole('button', { name: 'afm' })
 
       const body = container.querySelector('.file-browser-body') as HTMLElement
+      const roots = container.querySelector('.file-browser-roots') as HTMLElement & { inert: boolean }
       expect(body.classList.contains('narrow')).toBe(true)
-      // Дерево закрыто по умолчанию; тумблер открывает шторку.
+
+      // Дерево закрыто по умолчанию → inert (Finding #4), шторка не открыта.
       expect(body.classList.contains('tree-open')).toBe(false)
+      expect(roots.inert).toBe(true)
+
+      // Тумблер открывает шторку; на мобиле inline flex-basis не задаётся.
       fireEvent.click(screen.getByRole('button', { name: 'Toggle file tree' }))
       expect(body.classList.contains('tree-open')).toBe(true)
-      // На мобиле inline flex-basis у колонки не задаётся (шторка на CSS-ширине).
-      const roots = container.querySelector('.file-browser-roots') as HTMLElement
+      expect(roots.inert).toBe(false)
       expect(roots.style.flexBasis).toBe('')
+    } finally {
+      window.matchMedia = prevMM
+    }
+  })
+
+  test('narrow viewport: Escape closes the tree slide-over first, not the whole Files overlay (R3 #4)', async () => {
+    const prevMM = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: true, media: query, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+    try {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+      const onClose = vi.fn()
+      const { container } = renderModal({ onClose })
+      await screen.findByRole('button', { name: 'afm' })
+
+      const body = container.querySelector('.file-browser-body') as HTMLElement
+      // Открываем шторку дерева.
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle file tree' }))
+      expect(body.classList.contains('tree-open')).toBe(true)
+
+      // Escape закрывает СНАЧАЛА шторку, не весь оверлей.
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(body.classList.contains('tree-open')).toBe(false)
+      expect(onClose).not.toHaveBeenCalled()
+
+      // Второй Escape (шторка закрыта) закрывает весь оверлей.
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalled()
     } finally {
       window.matchMedia = prevMM
     }

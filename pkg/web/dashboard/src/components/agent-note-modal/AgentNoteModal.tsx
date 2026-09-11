@@ -11,6 +11,10 @@ type AgentNoteModalProps = {
   // текстом, пустой текст разрешён (= удалить заметку), кнопка «Save».
   variant?: 'revise' | 'prenote'
   initialNote?: string
+  // Шорткат к ждущему действию (Finding #5, раунд 3): если во время открытой
+  // заметки появляется/висит ожидание, в шапке показывается кнопка, которая
+  // закрывает модалку и открывает нужный attention-воркспейс. null — нет ожидания.
+  attentionShortcut?: { label: string; onActivate: () => void } | null
 }
 
 // Модалка заметки агенту: открывается из кебаб-меню StagesList. Для 'revise'
@@ -22,6 +26,7 @@ export function AgentNoteModal({
   onCancel,
   variant = 'revise',
   initialNote = '',
+  attentionShortcut = null,
 }: AgentNoteModalProps): ReactElement {
   const [note, setNote] = useState(initialNote)
   const isPreNote = variant === 'prenote'
@@ -29,6 +34,18 @@ export function AgentNoteModal({
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={`Add a note for stage ${stageId}`}>
       <div className="modal-content agent-note-modal">
+        {attentionShortcut !== null && (
+          <div className="modal-attention-row">
+            <button
+              type="button"
+              className="modal-attention-shortcut"
+              onClick={() => { onCancel(); attentionShortcut.onActivate() }}
+            >
+              <span className="attn-dot" aria-hidden="true" />
+              {attentionShortcut.label}
+            </button>
+          </div>
+        )}
         <p className="agent-note-warning">
           {isPreNote
             ? 'This note will be added to the agent’s context when the stage starts. Clear it and save to remove.'

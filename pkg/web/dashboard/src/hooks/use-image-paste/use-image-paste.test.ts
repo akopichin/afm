@@ -208,6 +208,35 @@ describe('useImagePaste', () => {
     expect(value).toBe('[Screenshot: /x/paste-1.png]\n[Screenshot: /x/paste-2.png]\n')
   })
 
+  it('R3 #2: an upload started for stage A is NOT inserted after switching to stage B', async () => {
+    let resolveUpload: (value: { path: string }) => void = () => {}
+    mockUpload.mockImplementation(() => new Promise((resolve) => { resolveUpload = resolve }))
+    const onChange = vi.fn()
+    const { result, rerender } = renderHook(({ stageId }) => useImagePaste(stageId, '', onChange), {
+      initialProps: { stageId: 's1' },
+    })
+
+    // Начинаем медленную загрузку на стадии s1.
+    let pastePromise: Promise<void> | undefined
+    act(() => {
+      pastePromise = result.current.onPaste(makePasteEvent([makeImageItem()], 0)) as unknown as Promise<void>
+    })
+    expect(result.current.attachments).toHaveLength(1)
+
+    // Пользователь переключился на стадию s2 (тот же key="dialog" в DialogChannel).
+    rerender({ stageId: 's2' })
+    // Вложения прежней стадии очищены.
+    expect(result.current.attachments).toHaveLength(0)
+
+    // Запоздалый ответ загрузки s1 приходит — он НЕ должен вставить ссылку в
+    // композер s2 (иначе [Screenshot: …] уехал бы не тому агенту).
+    await act(async () => {
+      resolveUpload({ path: '/afm/run/s1/attachments/leak.png' })
+      await pastePromise
+    })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('preserves concurrent edits made while upload is pending', async () => {
     let resolveUpload: (value: { path: string }) => void = () => {}
     mockUpload.mockImplementation(

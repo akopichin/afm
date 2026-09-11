@@ -56,6 +56,28 @@ export function useImagePaste(
 
   const [attachments, setAttachments] = useState<AttachmentRecord[]>([])
 
+  // Поколение композера, привязанное к stageId (Finding #2, раунд 3). Панель
+  // DialogChannel рендерится с постоянным key="dialog", поэтому при переходе
+  // A → B ЭТОТ хук остаётся тем же. Медленный upload, начатый для стадии A,
+  // резолвится уже когда onChangeRef указывает на композер B — и вставил бы
+  // «[Screenshot: …A…]» в ответ стадии B (не тому агенту!). Смена stageId
+  // инкрементит genRef; каждый upload запоминает своё поколение и на резолве
+  // сверяет — устаревший ответ игнорируется (preview URL освобождается).
+  const genRef = useRef(0)
+  const stageIdRef = useRef(stageId)
+  useLayoutEffect(() => {
+    if (stageIdRef.current === stageId) return
+    stageIdRef.current = stageId
+    genRef.current += 1
+    // Вложения принадлежали композеру прежней стадии — чистим (и освобождаем
+    // превью ещё не завершённых/упавших).
+    setAttachments((prev) => {
+      prev.forEach((a) => URL.revokeObjectURL(a.previewUrl))
+      return []
+    })
+    removedIds.current.clear()
+  }, [stageId])
+
   useLayoutEffect(() => {
     if (pendingCaret.current === null) return
     const el = nodeRef.current
@@ -72,9 +94,16 @@ export function useImagePaste(
   // запись, а помечает failed + errorMsg (чип с Retry/Remove), если её не убрали
   // из очереди пока летел запрос.
   async function performUpload(id: string, file: File, previewUrl: string, caret: number): Promise<{ caret: number } | null> {
+    const gen = genRef.current
     setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, uploading: true, failed: false, errorMsg: null } : a)))
     try {
       const { path } = await uploadAttachment(stageId, file)
+      // Стадия сменилась, пока летел запрос → это чужой (устаревший) upload:
+      // не вставляем ссылку в композер новой стадии (Finding #2).
+      if (gen !== genRef.current) {
+        URL.revokeObjectURL(previewUrl)
+        return null
+      }
       if (removedIds.current.has(id)) {
         URL.revokeObjectURL(previewUrl)
         return null
@@ -89,6 +118,11 @@ export function useImagePaste(
       setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, uploading: false, insertedText: inserted } : a)))
       return { caret: before.length + inserted.length }
     } catch (err) {
+      // Устаревший (чужая стадия) ответ — тихо игнорируем.
+      if (gen !== genRef.current) {
+        URL.revokeObjectURL(previewUrl)
+        return null
+      }
       if (removedIds.current.has(id)) {
         URL.revokeObjectURL(previewUrl)
         setAttachments((prev) => prev.filter((a) => a.id !== id))

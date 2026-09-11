@@ -78,6 +78,17 @@ describe('PasteableTextarea', () => {
     expect(value).toBe('')
   })
 
+  it('R3 #6: a failed upload shows the reason as visible text and in the retry accessible name', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 413 } as Response)
+    render(<PasteableTextarea stageId="s1" value="" onChange={vi.fn()} />)
+
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [makeImageItem()] } })
+
+    // Причина видна текстом (не только в title), и попадает в имя кнопки Retry.
+    await waitFor(() => expect(screen.getByText('Image too large (max 10 MB)')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /retry upload \(image too large/i })).toBeInTheDocument()
+  })
+
   it('pasting plain text does not upload or alter the value', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const onChange = vi.fn()
