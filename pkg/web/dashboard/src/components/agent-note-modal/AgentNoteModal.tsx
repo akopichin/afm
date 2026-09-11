@@ -62,6 +62,8 @@ export function AgentNoteModal({
           // изображение — скрепка появляется только при включённом файловом
           // браузере (Docker), на хосте её нет (как и у остальных полей).
           allowFileReferences
+          // Cmd/Ctrl+Enter отправляет заметку — тот же гейт, что и у кнопки Send/Save.
+          onSubmit={() => { if (isPreNote || note.trim() !== '') onSubmit(note.trim()) }}
         />
         <div className="modal-actions">
           <button type="button" className="btn btn-cancel" onClick={onCancel}>

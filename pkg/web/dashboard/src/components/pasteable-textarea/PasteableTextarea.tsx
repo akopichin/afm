@@ -14,6 +14,11 @@ type PasteableTextareaProps = {
   disabled?: boolean
   maxHeight?: number
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void
+  // onSubmit — отправка по Cmd/Ctrl+Enter (единообразно для ВСЕХ полей ввода:
+  // комментарий плана/вопроса, ответ, заметка агенту). Встроено в
+  // PasteableTextarea, чтобы каждый потребитель не дублировал обработчик и это
+  // не «отваливалось» при рефакторингах. Не вызывается, когда поле disabled.
+  onSubmit?: () => void
   // Показывает кнопку "Attach project file" (Task 14, файловый браузер —
   // Task 13): открывает пикер файлов проекта и вставляет собранные референсы
   // в текущую позицию каретки. По умолчанию выключено — большинство мест, где
@@ -48,6 +53,7 @@ export function PasteableTextarea({
   disabled,
   maxHeight = 400,
   onKeyDown,
+  onSubmit,
   allowFileReferences = false,
 }: PasteableTextareaProps): ReactElement {
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
@@ -77,6 +83,17 @@ export function PasteableTextarea({
 
   function handleChange(event: ChangeEvent<HTMLTextAreaElement>): void {
     onChange(event.target.value)
+  }
+
+  // Cmd/Ctrl+Enter → onSubmit (единый путь отправки во всех полях). Компонуется с
+  // переданным onKeyDown: сначала обрабатываем submit, иначе делегируем дальше.
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (onSubmit !== undefined && !disabled && (event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault()
+      onSubmit()
+      return
+    }
+    onKeyDown?.(event)
   }
 
   const showStrip = attachments.length > 0 || showAttachButton
@@ -153,7 +170,7 @@ export function PasteableTextarea({
         disabled={disabled}
         onChange={handleChange}
         onPaste={onPaste}
-        onKeyDown={onKeyDown}
+        onKeyDown={handleKeyDown}
       />
     </div>
   )

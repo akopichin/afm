@@ -310,6 +310,13 @@ export function FileViewer({
               onChange={(event) => setDraft(event.target.value)}
               placeholder={`Comment on line ${lineNumber}...`}
               autoFocus
+              onKeyDown={(event) => {
+                // Cmd/Ctrl+Enter сохраняет комментарий (как кнопка Save/Update).
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !saving && draft.trim() !== '' && sha !== null) {
+                  event.preventDefault()
+                  void saveComment(lineNumber)
+                }
+              }}
             />
             {saveError !== null && (
               <p className="line-comment-error" role="alert">

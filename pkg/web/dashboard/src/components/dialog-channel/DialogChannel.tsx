@@ -335,12 +335,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
               onChange={setDraft}
               autoFocus
               allowFileReferences
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                  e.preventDefault()
-                  saveComment(item.line)
-                }
-              }}
+              onSubmit={() => saveComment(item.line)}
             />
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
@@ -417,12 +412,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
                       // внутри PasteableTextarea (showAttachButton), так что на
                       // host-прогоне без file browser кнопка не рендерится.
                       allowFileReferences
-                      onKeyDown={(e) => {
-                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                          e.preventDefault()
-                          void sendAnswer()
-                        }
-                      }}
+                      onSubmit={() => void sendAnswer()}
                     />
                   </>
                 )}

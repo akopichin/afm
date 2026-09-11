@@ -184,6 +184,13 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
                             value={editDraft}
                             onChange={(e) => setEditDraft(e.target.value)}
                             autoFocus
+                            onKeyDown={(e) => {
+                              // Cmd/Ctrl+Enter сохраняет правку (как кнопка Save).
+                              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editDraft.trim() !== '') {
+                                e.preventDefault()
+                                void saveEdit(note.id)
+                              }
+                            }}
                           />
                           <div className="review-note-actions">
                             <button type="button" className="btn btn-send" disabled={editDraft.trim() === ''} onClick={() => void saveEdit(note.id)}>
