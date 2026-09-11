@@ -2,6 +2,24 @@
 
 Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
 
+## 2026-09-11 — v1.0.0
+
+### The dashboard, redesigned
+
+afm 1.0.0 ships a from-the-ground-up redesign of the web dashboard. The old three-column resizable layout (plan / dialog / event-feed all competing for space) and the bottom progress footer are gone. In their place: a calm **stage rail** on the left and a single **tabbed workspace** on the right. Everything below is presentation — the orchestrator, flow format, FSM, and every HTTP/WS API are unchanged, so existing flows and integrations keep working as-is.
+
+**A single workspace instead of three panels.** The right side is one workspace with a permanent **Feed** tab plus one **contextual** tab. Feed is a messenger-style view of the *real* event log across all stages (agent messages on the left, your input on the right, tool actions as compact rows) with a Feed/Log toggle and independent stick-to-bottom. When a stage needs you, the contextual tab becomes an **Approval / Question / Paused / Failed / Hook-failed** tab that fills the whole area — a plan to review or a question to answer is never squeezed next to a history panel again. A per-stage **Plan | Dialog** switch reaches both artifacts of a finished stage.
+
+**Attention that can't get lost.** A queue (in server topological order) drives the workspace: a new pending action auto-opens **once** (suppressed while you're typing or have an overlay open — it only glows, never steals focus), advances to the next item when you resolve one, and returns to Feed when the queue empties. Pending work that isn't on screen shows as a separate **glowing beacon tab** with a count and prev/next navigation, so it stays discoverable from Feed or while browsing history — without disguising history as attention. Desktop notifications, the header dot, favicon pulse, and title flash all track global unresolved attention (including repeat questions from the same stage).
+
+**graphite is the new default theme** — material hierarchy on a cool graphite canvas, indigo interaction accent, mint success, amber attention, in light and dark. `theme: coffee` still works as a deprecation alias that normalizes to graphite. `goga` (QArium teal/blue) and `novacorps` are unchanged. A semantic token layer means every theme × light/dark adapts for free.
+
+**The stage rail is a resizable vertical timeline.** Numbered status nodes, human-readable status lines, run progress in the rail head, and a **draggable divider** to make the rail wider/narrower (small centered grip on hover, default 300px, remembered across reloads, double-click to reset). Run metrics (Started / Elapsed / Idle / Backoff) moved into the header.
+
+**Responsive & accessible.** Below 900px the rail becomes a slide-over drawer (☰ toggle, scrim, Escape, focus management, `inert` when closed so it's out of the tab order); the header actions collapse to icons and the run metrics fold into a "⋯" popover. Stage rows are real keyboard-focusable buttons, the Files overlay traps focus on a visible control and restores it on close, and the graphite palette meets AA contrast for small secondary text. `Cmd/Ctrl+Enter` submits from every input (answer, plan/question comment, agent note, review note).
+
+**Attachments & the Docker file browser.** The paperclip on comment/answer/note fields is now a menu with two explicit paths — *Choose project file…* (Docker file browser) and *Upload image…* (works in host mode too); a failed upload stays as a retryable chip with a visible reason. In Docker, the project file browser gets a mobile tree slide-over, focus management, and a shortcut in the overlay header back to a waiting question/approval so an action is never hidden behind Files.
+
 ## 2026-09-10
 
 ### Feature: `afm memory rebuild` — backfill agent memory from a run that already finished
