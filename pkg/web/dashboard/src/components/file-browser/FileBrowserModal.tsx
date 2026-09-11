@@ -426,23 +426,33 @@ export function FileBrowserModal({
     return () => controller.abort()
   }, [viewMode, selectedRoot, changesRevision])
 
-  // Esc закрывает, Tab крутит фокус по кругу внутри модалки (простая ловушка
-  // фокуса — без сторонней библиотеки, весь фокусируемый набор пересчитывается
-  // на каждый Tab, т.к. состав кнопок меняется вместе с selection/activeFile).
+  // Стартовый фокус — на гарантированно ВИДИМУЮ кнопку Close (Finding #3), но
+  // ТОЛЬКО при монтировании (deps []). Finding #1 раунда 4: раньше этот initial
+  // focus жил в том же эффекте, что и keydown-ловушка (с зависимостью от
+  // treeOpen), поэтому при открытии/закрытии mobile-дерева эффект перезапускался
+  // и переносил фокус обратно на Close, перебивая фокус-эффект шторки. Теперь
+  // начальный фокус отделён и не реагирует на смену состояния шторки.
   useEffect(() => {
     const modal = modalRef.current
-    // Стартовый фокус — на гарантированно ВИДИМУЮ кнопку Close (Finding #3),
-    // а не на первый попавшийся FOCUSABLE (им могла быть скрытая на desktop
-    // mobile-кнопка дерева — .focus() по display:none не срабатывает, и фокус
-    // оставался на кнопке Files под оверлеем).
     ;(closeBtnRef.current ?? (modal !== null ? visibleFocusables(modal)[0] : undefined))?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
+  // Esc закрывает, Tab крутит фокус по кругу внутри модалки. Актуальные
+  // isNarrowModal/treeOpen читаем через ref, чтобы слушатель не переподписывался
+  // на их смену (и не тянул за собой повторный initial focus, см. выше).
+  const isNarrowModalRef = useRef(isNarrowModal)
+  isNarrowModalRef.current = isNarrowModal
+  const treeOpenRef = useRef(treeOpen)
+  treeOpenRef.current = treeOpen
+  useEffect(() => {
+    const modal = modalRef.current
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
         e.preventDefault()
-        // Finding #4: если открыт mobile-слайдовер дерева — Escape закрывает
+        // Finding #4 (раунд 3): открытый mobile-слайдовер дерева Escape закрывает
         // СНАЧАЛА его, а не весь оверлей Files.
-        if (isNarrowModal && treeOpen) {
+        if (isNarrowModalRef.current && treeOpenRef.current) {
           setTreeOpen(false)
           return
         }
@@ -465,8 +475,7 @@ export function FileBrowserModal({
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose, isNarrowModal, treeOpen])
+  }, [onClose])
 
   // Persist the panel width so it survives close/reopen and reload.
   useEffect(() => {

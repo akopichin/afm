@@ -32,6 +32,20 @@ export function RunMetrics({ startedAt, elapsedMs, idleMs, backoffMs }: RunMetri
   // молча. На десктопе кнопка скрыта CSS-ом. Закрытие — клик вне / Escape.
   const [moreOpen, setMoreOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+
+  // Finding #3 раунда 4: на desktop-брейкпоинте (>=1280px) все метрики видны
+  // инлайн, а кнопка «⋯» скрыта CSS-ом. Если поповер был открыт на узкой шапке
+  // и окно расширили, moreOpen оставался true и поповер продолжал висеть без
+  // видимой управляющей кнопки. Закрываем состояние по matchMedia при переходе
+  // на desktop (тот же порог, что и в run-metrics.css).
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1280px)')
+    const update = (): void => { if (mq.matches) setMoreOpen(false) }
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
   useEffect(() => {
     if (!moreOpen) return
     function onDocDown(e: MouseEvent): void {

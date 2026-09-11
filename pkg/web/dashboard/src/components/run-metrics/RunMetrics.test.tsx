@@ -1,6 +1,31 @@
-import { render } from '@testing-library/react'
-import { describe, it, expect } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, it, expect } from 'vitest'
 import { RunMetrics } from './RunMetrics'
+
+// Управляемая заглушка matchMedia: запоминает listener'ы, чтобы тест мог
+// сымитировать переход через breakpoint (resize) вручную.
+function installControllableMatchMedia(initialMatches: boolean): {
+  set: (matches: boolean) => void
+  restore: () => void
+} {
+  const prev = window.matchMedia
+  let matches = initialMatches
+  const listeners = new Set<() => void>()
+  window.matchMedia = ((query: string) => ({
+    get matches() { return matches },
+    media: query,
+    onchange: null,
+    addEventListener: (_: string, cb: () => void) => listeners.add(cb),
+    removeEventListener: (_: string, cb: () => void) => listeners.delete(cb),
+    addListener: (cb: () => void) => listeners.add(cb),
+    removeListener: (cb: () => void) => listeners.delete(cb),
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+  return {
+    set: (m: boolean) => { matches = m; listeners.forEach((cb) => cb()) },
+    restore: () => { window.matchMedia = prev },
+  }
+}
 
 describe('RunMetrics', () => {
   it('formats started clock and mm:ss durations', () => {
@@ -23,5 +48,24 @@ describe('RunMetrics', () => {
     expect(document.getElementById('elapsed')).toHaveTextContent('--')
     expect(document.getElementById('idle')).toHaveTextContent('--')
     expect(document.getElementById('backoff')).toHaveTextContent('--')
+  })
+
+  describe('R4 #3: the "…" popover closes when the viewport crosses to desktop', () => {
+    let mm: ReturnType<typeof installControllableMatchMedia>
+    afterEach(() => mm?.restore())
+
+    it('opening the popover on a narrow header, then widening to desktop, closes it', () => {
+      // Стартуем НЕ на desktop (matches=false для min-width:1280).
+      mm = installControllableMatchMedia(false)
+      render(<RunMetrics startedAt="2026-07-29T10:00:00.000Z" elapsedMs={0} idleMs={0} backoffMs={0} />)
+
+      // Открываем поповер «⋯».
+      fireEvent.click(screen.getByRole('button', { name: /show all run metrics/i }))
+      expect(screen.getByRole('group', { name: /all run metrics/i })).toBeInTheDocument()
+
+      // Расширяем окно до desktop (>=1280) — поповер должен закрыться сам.
+      act(() => mm.set(true))
+      expect(screen.queryByRole('group', { name: /all run metrics/i })).toBeNull()
+    })
   })
 })

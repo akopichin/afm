@@ -599,4 +599,34 @@ describe('FileBrowserModal', () => {
       window.matchMedia = prevMM
     }
   })
+
+  test('R4 #1: opening the mobile tree moves focus INTO it; closing returns focus to the toggle (focus not hijacked by Close)', async () => {
+    const prevMM = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: true, media: query, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+    try {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+      const { container } = renderModal()
+      await screen.findByRole('button', { name: 'afm' })
+
+      const toggle = screen.getByRole('button', { name: 'Toggle file tree' })
+      const aside = container.querySelector('.file-browser-roots') as HTMLElement
+
+      // Открытие шторки: фокус ВНУТРИ дерева, а не перехвачен кнопкой Close.
+      fireEvent.click(toggle)
+      expect(aside.contains(document.activeElement)).toBe(true)
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Close' }))
+
+      // Закрытие: фокус возвращается на тумблер (а не снова на Close).
+      fireEvent.click(toggle)
+      expect(document.activeElement).toBe(toggle)
+    } finally {
+      window.matchMedia = prevMM
+    }
+  })
 })

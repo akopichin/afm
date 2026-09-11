@@ -6,11 +6,25 @@
    and the plan/dialog detail panels still render inside those wrappers, just
    hosted by the workspace instead of resizable panes. Semantic tokens only. */
 
-/* #main fills the viewport under the header; the body scrolls inside its
-   columns, never the page. Calm flat canvas (graphite drops any grid image). */
+/* Верхний уровень — flex-колонка на всю высоту вьюпорта: шапка и (когда видна)
+   review-баннер занимают натуральную высоту, #main забирает остаток. Finding #2
+   раунда 4: раньше #main жёстко брал calc(100vh - 61px) (только высота шапки),
+   поэтому при видимом ReviewBanner суммарная высота становилась 100vh + баннер и
+   возвращался page-scroll вопреки контракту «скроллим внутри колонок, не
+   страницу». Теперь высота баннера не считается вручную — layout сам раздаёт. */
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* #main fills the remaining space under header (+ banner); the body scrolls
+   inside its columns, never the page. Calm flat canvas (graphite drops any grid image). */
 #main {
   position: relative;
-  height: calc(100vh - 61px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   background-color: var(--surface-canvas);
 }
@@ -117,14 +131,14 @@
 .rail-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
 .rail-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
-/* Scrim behind the drawer — inert on desktop (the rail sits in-grid). */
+/* Scrim behind the drawer — inert on desktop (the rail sits in-grid). Абсолютно
+   спозиционирован относительно .dashboard-body (внутри корректно посчитанного
+   #main), поэтому естественно начинается ПОД шапкой и review-баннером, без
+   хардкода top:61px (Finding #2 раунда 4). */
 .rail-scrim {
   display: none;
-  position: fixed;
-  top: 61px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: absolute;
+  inset: 0;
   z-index: 40;
   border: 0;
   padding: 0;
@@ -665,9 +679,11 @@
 
   .rail-toggle { display: inline-flex; }
 
+  /* Слайд-овер спозиционирован относительно .dashboard-body (position:relative),
+     поэтому сам встаёт под шапку + review-баннер, без хардкода top:61px. */
   .rail-slot {
-    position: fixed;
-    top: 61px;
+    position: absolute;
+    top: 0;
     left: 0;
     bottom: 0;
     height: auto;
