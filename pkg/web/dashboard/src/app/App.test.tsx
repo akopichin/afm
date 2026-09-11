@@ -256,6 +256,55 @@ describe('App', () => {
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
+  test('R2 #1: a pending attention beacon stays on the contextual tab after returning to Feed', async () => {
+    // B ждёт аппрув. Воркспейс авто-открывает его (вкладка Approval). Пользователь
+    // уходит в Feed — но ожидание не должно «потеряться»: контекстная вкладка
+    // обязана остаться маяком Approval со свечением, а не исчезнуть/стать именем
+    // стадии. Клик по ней возвращает к ожиданию.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'awaiting_approval')],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+
+    const tabs = screen.getAllByRole('tab')
+    const feedTab = tabs.find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
+
+    // Контекстная вкладка всё ещё Approval (маяк), а не имя стадии.
+    const detailTab = screen.getAllByRole('tab').find((t) => t.textContent !== 'Feed')!
+    expect(detailTab.textContent).toMatch(/Approval/)
+    // Клик по маяку возвращает к плану ожидающей стадии.
+    fireEvent.click(detailTab)
+    await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
+  })
+
+  test('R2 #2: a finished stage with both plan and dialog exposes a Plan/Dialog switch', async () => {
+    // Стадия завершена и имеет и план, и диалог. Клик по строке открывает историю
+    // (по умолчанию диалог). Переключатель Plan|Dialog должен дать доступ к плану,
+    // иначе он терялся навсегда (клик всегда открывал dialog-history).
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Both', 'done', { hasDialog: true, showPlan: true, showDialog: true })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Both')).toBeInTheDocument())
+
+    // Выбираем завершённую стадию кликом по её строке.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    // Переключатель истории присутствует; по умолчанию — диалог.
+    await waitFor(() => expect(screen.getByRole('group', { name: /history view/i })).toBeInTheDocument())
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+
+    // Переключаемся на план — он доступен.
+    fireEvent.click(screen.getByRole('button', { name: 'Plan' }))
+    await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
+  })
+
   test('CRITICAL: a failed autonomous stage still shows the retry button', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

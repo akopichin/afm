@@ -122,6 +122,30 @@ describe('PasteableTextarea', () => {
     expect(onChange).toHaveBeenCalledWith('see [AFM file: "/w/a.go"] end')
   })
 
+  it('Attach → Choose project file… → close: focus returns to the Attach button, not the vanished menu item (R2 #7)', async () => {
+    installFileBrowserApi()
+    const onChange = vi.fn()
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences />
+      </FileBrowserProvider>,
+    )
+
+    const attach = screen.getByRole('button', { name: 'Attach' })
+    attach.focus()
+    fireEvent.click(attach)
+    fireEvent.click(screen.getByRole('menuitem', { name: /choose project file/i }))
+
+    // Модалка пикера открыта.
+    expect(await screen.findByRole('dialog', { name: /browse project files/i })).toBeInTheDocument()
+
+    // Закрываем — фокус должен вернуться на стабильную кнопку Attach, а НЕ
+    // потеряться (пункт меню «Choose project file…» уже размонтирован).
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(document.activeElement).toBe(attach)
+  })
+
   it('Attach → Upload image… uploads the chosen file via the same path and inserts a Screenshot reference (#6)', async () => {
     installFileBrowserApi()
     // Загрузка изображения идёт через тот же fetch, что и вставка из буфера.

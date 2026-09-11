@@ -159,6 +159,7 @@ function AttachMenu({
   const { pickFiles, enabled } = useFileBrowser()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const attachBtnRef = useRef<HTMLButtonElement | null>(null)
 
   // Гвард от вставки в уже неактуальную цель (бриф Task 14, п.6 — "stale-picker
   // guard"): пока модалка пикера открыта, пользователь может уйти с этой конкретной
@@ -198,6 +199,14 @@ function AttachMenu({
   if (!enabled) return null
 
   function chooseProjectFile(): void {
+    // Finding #7 (второй раунд): FileBrowserProvider запоминает opener как
+    // document.activeElement на момент pickFiles(). Если бы мы просто закрыли
+    // меню, активным был бы ПУНКТ меню «Choose project file…», который тут же
+    // размонтируется → provider на закрытии увидит isConnected===false и не
+    // вернёт фокус. Поэтому СНАЧАЛА возвращаем фокус на стабильную кнопку Attach
+    // (она остаётся в DOM), и только потом открываем пикер — provider захватит
+    // именно её, и фокус корректно вернётся на неё после закрытия оверлея.
+    attachBtnRef.current?.focus()
     setOpen(false)
     pickFiles((refs) => {
       if (!mountedRef.current) {
@@ -216,6 +225,7 @@ function AttachMenu({
   return (
     <div className="pasteable-attach" ref={wrapRef}>
       <button
+        ref={attachBtnRef}
         type="button"
         className="pasteable-attach-btn"
         aria-haspopup="menu"

@@ -18,7 +18,7 @@ import { useStageLog } from '../hooks/use-stage-log'
 import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
-import { anyAwaiting, useAttention } from '../hooks/use-attention'
+import { anyAwaiting } from '../hooks/use-attention'
 import { attentionKindForStatus, countByKind, useWorkspaceView, type AttentionKind } from '../hooks/use-workspace-view'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
@@ -207,11 +207,14 @@ export function App(): ReactElement {
     else openFeed()
   }
 
-  // Attention-сигнал стадии воркспейса — для title-flash фоновой вкладки;
   // anyAttention (любая стадия прогона ждёт) — точка в шапке И пульс favicon.
-  const attention = useAttention(workspaceStage)
   const anyAttention = anyAwaiting(stages)
-  useTitleFlash(attention.needsAttention)
+  // Title flash завязан на ГЛОБАЛЬНОЕ непросмотренное ожидание, а не только на
+  // текущую workspace-стадию (Finding #1 второго раунда): мигаем, когда в
+  // очереди есть ожидание, но воркспейс сейчас НЕ в attention-виде (пользователь
+  // в Feed/истории/печатает — ожидание не должно потеряться). Когда он реально
+  // смотрит attention — не мигаем (он уже занят действием).
+  useTitleFlash(wsState.items.length > 0 && wsState.view !== 'attention')
   useFaviconPulse(anyAttention)
   const {
     enabled: notificationsEnabled,
@@ -336,28 +339,47 @@ export function App(): ReactElement {
     }
   }
 
-  // Вкладки воркспейса: постоянная Feed + контекстная вкладка стадии воркспейса.
-  // Вид attention текущей стадии даёт подпись (Approval/Question/…), счётчик
-  // «· N» одноимённых стадий и glow — но glow только когда мы реально в
-  // attention-режиме (в истории/ленте гасим, rule 13).
-  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage.status)
   const inAttention = wsState.view === 'attention'
+  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage.status)
+
+  // Элемент attention для контекстной вкладки (Finding #1 второго раунда):
+  // активный (если мы в attention-виде) ИЛИ первый нерешённый в очереди — чтобы
+  // ожидание светилось на вкладке маяком даже когда воркспейс показывает
+  // Feed/историю (suppression при печати, ручной возврат в Feed). Так pending
+  // action не теряется вне выбранной стадии: он всегда виден как glow-вкладка со
+  // счётчиком и открывается кликом (rule 9 — светится, не крадя фокус).
+  const attentionTabItem = attnItem ?? attnItems[0] ?? null
+  const attentionTabStage = attentionTabItem === null ? null : stages.find((s) => s.id === attentionTabItem.stageId) ?? null
+
   const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
-  if (workspaceStage !== null) {
+  if (attentionTabItem !== null && attentionTabStage !== null) {
+    // Контекстная вкладка = маяк ожидания (kind/count/glow всегда), даже если тело
+    // сейчас показывает Feed/историю другой стадии.
     tabs.push({
       id: 'detail',
-      label: contextKind !== null ? ATTENTION_TAB_LABEL[contextKind] : (workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id),
-      kind: contextKind ?? undefined,
-      count: contextKind !== null ? countByKind(attnItems, contextKind) : undefined,
-      glow: inAttention && contextKind !== null,
+      label: ATTENTION_TAB_LABEL[attentionTabItem.kind],
+      kind: attentionTabItem.kind,
+      count: countByKind(attnItems, attentionTabItem.kind),
+      glow: true,
+    })
+  } else if (workspaceStage !== null) {
+    // Очередь пуста — вкладка представляет выбранную стадию (история/детали).
+    tabs.push({
+      id: 'detail',
+      label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,
     })
   }
   const activeTabId = wsState.view === 'feed' ? 'feed' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
+    // Есть нерешённое ожидание → клик по контекстной вкладке ведёт к нему (маяк).
+    if (attentionTabItem !== null) {
+      setSelectedStageId(attentionTabItem.stageId)
+      openAttention(attentionTabItem.stageId)
+      return
+    }
     if (workspaceStage === null) return
-    if (contextKind !== null) openAttention(workspaceStage.id)
-    else if (workspaceStage.showDialog) openHistory('dialog-history')
+    if (workspaceStage.showDialog) openHistory('dialog-history')
     else if (workspaceStage.showPlan) openHistory('plan-history')
     else openFeed()
   }
@@ -453,6 +475,31 @@ export function App(): ReactElement {
                         происходит» (Plan needs your approval / Agent needs your
                         input / …). Показывается только для attention-статусов. */}
                     {inAttention && contextKind !== null && <AttentionBanner kind={contextKind} />}
+                    {/* Переключатель истории (Finding #2 второго раунда): у стадии,
+                        задававшей вопрос во время planning/implementation, есть и
+                        план, и диалог — иначе план стал бы недоступен навсегда
+                        (клик всегда открывал dialog-history). Показываем сегмент
+                        Plan | Dialog только в history-виде, когда доступны оба. */}
+                    {!inAttention && showPlan && showDialog && (
+                      <div className="history-switch" role="group" aria-label="History view">
+                        <button
+                          type="button"
+                          className={`history-switch-btn${wsState.view === 'plan-history' ? ' active' : ''}`}
+                          aria-pressed={wsState.view === 'plan-history'}
+                          onClick={() => openHistory('plan-history')}
+                        >
+                          Plan
+                        </button>
+                        <button
+                          type="button"
+                          className={`history-switch-btn${wsState.view === 'dialog-history' ? ' active' : ''}`}
+                          aria-pressed={wsState.view === 'dialog-history'}
+                          onClick={() => openHistory('dialog-history')}
+                        >
+                          Dialog
+                        </button>
+                      </div>
+                    )}
                     {detailPanel}
                   </div>
                 )}
