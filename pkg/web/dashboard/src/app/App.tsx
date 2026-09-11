@@ -34,6 +34,15 @@ const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
   paused: 'Paused',
 }
 
+// Подпись шортката к ждущему действию в шапке файлового оверлея (Finding #4).
+const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
+  approval: 'Approval waiting',
+  question: 'Question waiting',
+  failed: 'Stage failed',
+  hook_failed: 'Hook failed',
+  paused: 'Stage paused',
+}
+
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
@@ -173,7 +182,11 @@ export function App(): ReactElement {
   // очередь пуста (rule 10). Раньше это подменялось локальными
   // selectedStageId+activeTab, из-за чего ожидание на НЕ выбранной стадии не
   // всплывало — action могло «потеряться».
-  const editing = useIsEditing()
+  // suppression авто-открытия: пользователь печатает ИЛИ открыт файловый оверлей
+  // (Finding #4 второго раунда) — новое ожидание не должно авто-открываться за
+  // непрозрачной модалкой Files; оно только светится (маяк-вкладка/шорткат).
+  const [filesOpen, setFilesOpen] = useState(false)
+  const editing = useIsEditing() || filesOpen
   const { state: wsState, activeItem: attnItem, openFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
 
   // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный
@@ -351,6 +364,18 @@ export function App(): ReactElement {
   const attentionTabItem = attnItem ?? attnItems[0] ?? null
   const attentionTabStage = attentionTabItem === null ? null : stages.find((s) => s.id === attentionTabItem.stageId) ?? null
 
+  // Шорткат к ждущему действию для шапки файлового оверлея (Finding #4): первый
+  // нерешённый элемент очереди; клик закрывает Files и открывает его attention.
+  const attentionShortcut = attentionTabItem !== null
+    ? {
+        label: ATTENTION_SHORTCUT_LABEL[attentionTabItem.kind],
+        onActivate: (): void => {
+          setSelectedStageId(attentionTabItem.stageId)
+          openAttention(attentionTabItem.stageId)
+        },
+      }
+    : null
+
   const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
   if (attentionTabItem !== null && attentionTabStage !== null) {
     // Контекстная вкладка = маяк ожидания (kind/count/glow всегда), даже если тело
@@ -408,7 +433,7 @@ export function App(): ReactElement {
   }
 
   return (
-    <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState}>
+    <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
       <GlobalHeader
         flowName={flowName}
         description={description}

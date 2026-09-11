@@ -502,4 +502,29 @@ describe('FileBrowserModal', () => {
       vi.useRealTimers()
     }
   })
+
+  test('attention shortcut in the header closes Files and activates the pending action (R2 #4)', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
+    const onClose = vi.fn()
+    const onActivate = vi.fn()
+    renderModal({ onClose, attentionShortcut: { label: 'Question waiting', onActivate } })
+
+    // Ждём завершения async-загрузки roots, чтобы кнопка не переехала re-render'ом.
+    await screen.findByRole('button', { name: 'afm' })
+    fireEvent.click(screen.getByRole('button', { name: /question waiting/i }))
+
+    expect(onClose).toHaveBeenCalled()
+    expect(onActivate).toHaveBeenCalled()
+  })
+
+  test('no attention shortcut is rendered when none is pending', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.install()
+    renderModal({ attentionShortcut: null })
+    await screen.findByRole('button', { name: 'afm' })
+    expect(screen.queryByRole('button', { name: /waiting/i })).toBeNull()
+  })
 })

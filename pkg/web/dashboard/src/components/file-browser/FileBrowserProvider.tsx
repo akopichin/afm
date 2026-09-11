@@ -76,6 +76,13 @@ type FileBrowserProviderProps = {
   // умолчанию 'none' — существующие вызывающие (тесты, места без review-pause
   // фичи) не обязаны его передавать.
   flowPauseState?: FlowPauseState
+  // Finding #4 второго раунда. onOpenChange — сообщает наверх (App), открыт ли
+  // оверлей: App использует это как suppression, чтобы новое ожидание не
+  // авто-открывалось ЗА непрозрачной модалкой. attentionShortcut — ждущее
+  // действие, к которому модалка покажет кнопку-шорткат в шапке (закрывает Files
+  // и открывает его). null — ожидания нет.
+  onOpenChange?: (open: boolean) => void
+  attentionShortcut?: { label: string; onActivate: () => void } | null
 }
 
 // JSON.stringify — не разделитель-символ, а безопасная сериализация пары:
@@ -100,7 +107,7 @@ function selectionKey(root: string, path: string): string {
 // open") — сама модалка полностью размонтируется на закрытии, поэтому вся
 // её "долгоживущая" часть состояния (что выбрано) обязана жить здесь, а не в
 // самой модалке.
-export function FileBrowserProvider({ children, flowName, startedAt, enabled = true, flowPauseState = 'none' }: FileBrowserProviderProps): ReactElement {
+export function FileBrowserProvider({ children, flowName, startedAt, enabled = true, flowPauseState = 'none', onOpenChange, attentionShortcut = null }: FileBrowserProviderProps): ReactElement {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<FileBrowserMode>('browse')
   const [selection, setSelection] = useState<Map<string, SelectedFile>>(new Map())
@@ -147,6 +154,14 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     onInsertRef.current = null
     restoreOpener() // no-op на маунте (opener пуст) и когда кнопка уже исчезла
   }, [flowName, startedAt])
+
+  // Сообщаем наверх факт открытия/закрытия (suppression в App, Finding #4).
+  // Через ref, чтобы смена идентичности колбэка не дёргала эффект лишний раз.
+  const onOpenChangeRef = useRef(onOpenChange)
+  onOpenChangeRef.current = onOpenChange
+  useEffect(() => {
+    onOpenChangeRef.current?.(open)
+  }, [open])
 
   const openBrowser = useCallback(() => {
     if (!enabled) return
@@ -245,6 +260,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
           onRemoveSelect={removeSelect}
           onClose={close}
           onSubmit={submit}
+          attentionShortcut={attentionShortcut}
           flowPauseState={flowPauseState}
         />
       )}

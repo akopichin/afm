@@ -39,3 +39,20 @@ if (typeof URL.revokeObjectURL !== 'function') {
     /* no-op */
   }
 }
+
+// jsdom не реализует window.matchMedia (DashboardShell использует его для
+// определения мобильного брейкпоинта шторки) — no-op заглушка: всегда desktop
+// (matches=false), с полным набором методов, чтобы addEventListener не падал.
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: (): void => {},
+      removeEventListener: (): void => {},
+      addListener: (): void => {},
+      removeListener: (): void => {},
+      dispatchEvent: (): boolean => false,
+    }) as unknown as MediaQueryList
+}

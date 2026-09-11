@@ -46,6 +46,11 @@ export type FileBrowserModalProps = {
   onRemoveSelect: (root: string, path: string) => void
   onClose: () => void
   onSubmit: () => void
+  // Шорткат к ждущему действию (Finding #4 второго раунда): когда во время
+  // открытого оверлея появляется/висит ожидание, в шапке показывается кнопка
+  // «Question waiting»/«Approval waiting», закрывающая Files и открывающая его.
+  // null/undefined — ожидания нет, кнопка не рендерится.
+  attentionShortcut?: { label: string; onActivate: () => void } | null
   // Флоу-wide review-pause состояние (см. use-status.ts) — проброшено сюда из
   // App.tsx через FileBrowserProvider, чтобы FileViewer мог показывать
   // кликабельные строки/маркер комментария только пока флоу реально на паузе
@@ -106,6 +111,7 @@ export function FileBrowserModal({
   onRemoveSelect,
   onClose,
   onSubmit,
+  attentionShortcut = null,
   flowPauseState = 'none',
 }: FileBrowserModalProps): ReactElement {
   const [roots, setRoots] = useState<RootView[]>([])
@@ -510,9 +516,27 @@ export function FileBrowserModal({
       <div className="modal-content file-browser-modal" ref={modalRef}>
         <header className="file-browser-header">
           <h2>{mode === 'picker' ? 'Insert file references' : 'Browse project files'}</h2>
-          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
-            ✕
-          </button>
+          <div className="file-browser-header-actions">
+            {/* Шорткат к ждущему действию (Finding #4): не даём ожиданию
+                потеряться за непрозрачным оверлеем — закрывает Files и открывает
+                нужный attention-воркспейс. */}
+            {attentionShortcut !== null && (
+              <button
+                type="button"
+                className="file-browser-attention-shortcut"
+                onClick={() => {
+                  onClose()
+                  attentionShortcut.onActivate()
+                }}
+              >
+                <span className="attn-dot" aria-hidden="true" />
+                {attentionShortcut.label}
+              </button>
+            )}
+            <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+              ✕
+            </button>
+          </div>
         </header>
 
         <div className="file-browser-body" ref={bodyRef}>

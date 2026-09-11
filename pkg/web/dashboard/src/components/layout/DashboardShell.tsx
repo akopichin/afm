@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent, type ReactNode, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type ReactElement } from 'react'
 
 type DashboardShellProps = {
   rail: ReactNode
@@ -18,8 +18,47 @@ type DashboardShellProps = {
 // перестаёт занимать колонку и превращается в слайд-овер (шторку) поверх
 // воркспейса: тумблер ☰ слева от вкладок открывает его, скрим/Escape/выбор
 // стадии — закрывают. Так на телефоне воркспейс получает всю ширину, а не ~150px.
+const MOBILE_QUERY = '(max-width: 900px)'
+
 export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): ReactElement {
   const [railOpen, setRailOpen] = useState(false)
+  // Мобильный режим (шторка) — по тому же брейкпоинту, что и CSS. Нужен в JS,
+  // чтобы делать закрытый рейл `inert` ТОЛЬКО на мобиле; на десктопе рейл всегда
+  // виден и интерактивен.
+  const [isMobile, setIsMobile] = useState(false)
+  const railRef = useRef<HTMLElement | null>(null)
+  const toggleRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY)
+    const update = (): void => setIsMobile(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
+  // Закрытая шторка на мобиле — `inert`: её кнопки (строки стадий, кебабы) не
+  // должны оставаться в tab-order за экраном (Finding #5 второго раунда). На
+  // десктопе или при открытой шторке — интерактивна.
+  useEffect(() => {
+    const el = railRef.current
+    if (el === null) return
+    el.inert = isMobile && !railOpen
+  }, [isMobile, railOpen])
+
+  // Управление фокусом (Finding #5): открытие шторки переносит фокус на первую
+  // строку стадии; закрытие возвращает фокус на тумблер, чтобы фокус не остался
+  // на кнопке, уехавшей за экран.
+  const prevOpen = useRef(false)
+  useEffect(() => {
+    if (!isMobile) { prevOpen.current = railOpen; return }
+    if (railOpen && !prevOpen.current) {
+      railRef.current?.querySelector<HTMLElement>('.stage-row')?.focus()
+    } else if (!railOpen && prevOpen.current) {
+      toggleRef.current?.focus()
+    }
+    prevOpen.current = railOpen
+  }, [railOpen, isMobile])
 
   // Escape закрывает шторку (симметрично скриму). Слушатель живёт только пока
   // шторка открыта — на десктопе (рейл всегда виден) он не навешивается.
@@ -53,12 +92,13 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
         tabIndex={railOpen ? 0 : -1}
         onClick={() => setRailOpen(false)}
       />
-      <aside className="rail-slot" id="rail-slot" onClickCapture={onRailClickCapture}>
+      <aside className="rail-slot" id="rail-slot" ref={railRef} onClickCapture={onRailClickCapture}>
         {rail}
       </aside>
       <section className="workspace" aria-label="Workspace">
         <div className="workspace-topbar">
           <button
+            ref={toggleRef}
             type="button"
             className="rail-toggle"
             aria-label="Toggle stages"

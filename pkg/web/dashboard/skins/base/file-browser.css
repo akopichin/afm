@@ -54,6 +54,41 @@
   text-transform: none;
   color: var(--text-primary);
 }
+.file-browser-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+/* Attention shortcut (Finding #4): a glowing pill that jumps from Files to the
+   waiting action so a pending question/approval is never lost behind the overlay. */
+.file-browser-attention-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--attention-rgb), 0.5);
+  background: rgba(var(--attention-rgb), 0.10);
+  color: var(--attention);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  animation: fbAttnPulse 2s ease-in-out infinite;
+}
+.file-browser-attention-shortcut:hover { background: rgba(var(--attention-rgb), 0.18); }
+.file-browser-attention-shortcut:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.file-browser-attention-shortcut .attn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+  flex-shrink: 0;
+}
+@keyframes fbAttnPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0.35); }
+  50%      { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0); }
+}
 
 .file-browser-body {
   display: flex;

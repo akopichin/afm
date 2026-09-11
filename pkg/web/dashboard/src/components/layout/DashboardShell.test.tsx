@@ -1,6 +1,20 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
 import { DashboardShell } from './DashboardShell'
+
+// Переводит matchMedia в «мобильный» режим (matches=true) для теста шторки.
+function mockMobile(matches: boolean): void {
+  window.matchMedia = ((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+}
 
 // Рейл-шторка (<900px) — чистое клиентское состояние DashboardShell: тумблер ☰
 // открывает/закрывает, скрим/Escape закрывают, клик по строке стадии закрывает
@@ -71,5 +85,54 @@ describe('DashboardShell rail drawer', () => {
     // Клик по самой строке стадии — выбор сделан → шторка закрывается.
     fireEvent.click(screen.getByText('Stage one'))
     expect(body.classList.contains('rail-open')).toBe(false)
+  })
+})
+
+describe('DashboardShell rail drawer — mobile a11y (R2 #5)', () => {
+  afterEach(() => {
+    // Возвращаем desktop-заглушку из setup.ts.
+    mockMobile(false)
+  })
+
+  function renderMobileShell(): { rail: HTMLElement; toggle: HTMLButtonElement } {
+    const { container } = render(
+      <DashboardShell
+        rail={
+          <div>
+            <button type="button" className="stage-row" data-stage-id="s1">Stage one</button>
+          </div>
+        }
+        tabs={<div>tabs</div>}
+        workspace={<div>workspace</div>}
+      />,
+    )
+    return {
+      rail: container.querySelector('#rail-slot') as HTMLElement,
+      toggle: screen.getByLabelText('Toggle stages') as HTMLButtonElement,
+    }
+  }
+
+  test('closed drawer is inert on mobile; opening clears inert and focuses the first stage; closing returns focus to the toggle', () => {
+    mockMobile(true)
+    const { rail, toggle } = renderMobileShell()
+
+    // Закрытая шторка на мобиле — inert (её кнопки вне tab-order).
+    expect(rail.inert).toBe(true)
+
+    // Открытие: inert снят, фокус на первой строке стадии.
+    fireEvent.click(toggle)
+    expect(rail.inert).toBe(false)
+    expect(document.activeElement).toBe(rail.querySelector('.stage-row'))
+
+    // Закрытие: inert снова, фокус вернулся на тумблер.
+    fireEvent.click(toggle)
+    expect(rail.inert).toBe(true)
+    expect(document.activeElement).toBe(toggle)
+  })
+
+  test('on desktop the rail is never inert', () => {
+    mockMobile(false)
+    const { rail } = renderMobileShell()
+    expect(rail.inert).toBe(false)
   })
 })
