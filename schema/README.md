@@ -24,16 +24,19 @@ custom `UnmarshalYAML` whose YAML shape diverges from the Go type — `inputs`
 (string or object), `buttons` (a `label: prompt` map), and `extra_mounts`
 (string or object). A generator would describe those incorrectly.
 
-Drift is guarded by a test: `pkg/schemacheck` reflects over `flow.Flow` and
-`config.Config` and fails if any struct field is missing from its schema. Run it
+Drift is guarded by tests in `pkg/schemacheck`. They compile both schemas as
+draft-07, reflect over `flow.Flow` and `config.Config` (checking each field at
+its exact structural path), compare important flow edge cases with
+`flow.ParseFile`, and validate the repository's example YAML files. Run them
 with:
 
 ```bash
 make schema-check      # or: go test ./pkg/schemacheck/
 ```
 
-It also runs as part of `make test` (and therefore CI). When you add a field to
-`flow.yaml`/`config.yaml`, update the matching schema here or the test goes red.
+They also run as part of `make test` (and therefore CI). When you add a field or
+validation rule to `flow.yaml`/`config.yaml`, update the matching schema and its
+behavioral cases here or the tests go red.
 
 > Follow-up: these schemas can be submitted to [SchemaStore](https://www.schemastore.org/)
 > so editors pick them up for `.afm/flows/*.yaml` without the modeline.

@@ -29,15 +29,35 @@
       "description": "Project root = agents' working directory. A relative path is resolved from the afm root (--dir); empty inherits the afm process CWD."
     },
     "memory": {
-      "$ref": "#/$defs/memory"
+      "$ref": "#/definitions/memory"
     },
     "stages": {
       "type": "array",
       "description": "The stages of the flow.",
-      "items": { "$ref": "#/$defs/stage" }
+      "items": { "$ref": "#/definitions/stage" }
     }
   },
-  "$defs": {
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stages": {
+            "contains": { "required": ["reflect"] }
+          }
+        }
+      },
+      "then": {
+        "required": ["memory"],
+        "properties": {
+          "memory": {
+            "required": ["path"],
+            "properties": { "path": { "minLength": 1 } }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
     "duration": {
       "type": "string",
       "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
@@ -63,7 +83,7 @@
         },
         "max_rules": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 0,
           "description": "Maximum number of patterns kept per file. Default 25."
         },
         "commit": {
@@ -81,7 +101,8 @@
         "id": {
           "type": "string",
           "description": "Unique identifier. Must be a safe path component (no '/', '\\', '.', '..', or NUL).",
-          "pattern": "^[^/\\\\\\x00]+$"
+          "pattern": "^[^/\\\\\\x00]+$",
+          "not": { "enum": [".", ".."] }
         },
         "name": {
           "type": "string",
@@ -94,6 +115,16 @@
         "agents": {
           "type": "array",
           "description": "Agent phases: any combination of planning/implementation/review (plus custom command names), OR exactly [auto] for the autonomous track.",
+          "oneOf": [
+            {
+              "minItems": 1,
+              "maxItems": 1,
+              "items": { "const": "auto" }
+            },
+            {
+              "not": { "contains": { "const": "auto" } }
+            }
+          ],
           "items": {
             "anyOf": [
               {
@@ -137,12 +168,12 @@
         "artifacts": {
           "type": "array",
           "description": "Files this stage produces for other stages.",
-          "items": { "$ref": "#/$defs/artifact" }
+          "items": { "$ref": "#/definitions/artifact" }
         },
         "inputs": {
           "type": "array",
           "description": "Artifacts consumed from dependency stages.",
-          "items": { "$ref": "#/$defs/input" }
+          "items": { "$ref": "#/definitions/input" }
         },
         "interactive": {
           "type": "boolean",
@@ -160,17 +191,17 @@
           "type": "string",
           "description": "Run this shell script instead of an AI agent. Mutually exclusive with agents/command/interactive/plan/verify."
         },
-        "script_timeout": { "$ref": "#/$defs/duration", "description": "Hard timeout for `script` (default 5m)." },
+        "script_timeout": { "$ref": "#/definitions/duration", "description": "Hard timeout for `script` (default 5m)." },
         "script_before": {
           "type": "string",
           "description": "Shell script run immediately before the stage's own content."
         },
-        "script_before_timeout": { "$ref": "#/$defs/duration", "description": "Hard timeout for `script_before` (default 5m)." },
+        "script_before_timeout": { "$ref": "#/definitions/duration", "description": "Hard timeout for `script_before` (default 5m)." },
         "script_after": {
           "type": "string",
           "description": "Shell script run right after the stage completes."
         },
-        "script_after_timeout": { "$ref": "#/$defs/duration", "description": "Hard timeout for `script_after` (default 5m)." },
+        "script_after_timeout": { "$ref": "#/definitions/duration", "description": "Hard timeout for `script_after` (default 5m)." },
         "auto_approve": {
           "type": "boolean",
           "description": "Approve this stage's plan automatically the instant it's ready (for CI)."
@@ -182,14 +213,57 @@
         "buttons": {
           "type": "object",
           "description": "Predefined kebab-menu actions: label -> canned prompt delivered to the live agent.",
-          "additionalProperties": { "type": "string" }
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "type": "string", "minLength": 1 }
         },
-        "reflect": { "$ref": "#/$defs/reflect" },
+        "reflect": { "$ref": "#/definitions/reflect" },
         "memory_use": {
           "type": "boolean",
           "description": "Override the flow-level memory.memory_use for this stage (controls reading only)."
         }
-      }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": ["agents"],
+              "properties": { "agents": { "contains": { "const": "planning" } } }
+            },
+            {
+              "required": ["agents"],
+              "properties": { "agents": { "contains": { "const": "auto" } } }
+            },
+            {
+              "required": ["plan"],
+              "properties": { "plan": { "minLength": 1 } }
+            },
+            {
+              "required": ["interactive"],
+              "properties": { "interactive": { "const": true } }
+            },
+            {
+              "required": ["script"],
+              "properties": { "script": { "minLength": 1 } }
+            }
+          ]
+        },
+        {
+          "if": {
+            "required": ["script"],
+            "properties": { "script": { "minLength": 1 } }
+          },
+          "then": {
+            "properties": {
+              "agents": { "maxItems": 0 },
+              "command": { "maxLength": 0 },
+              "interactive": { "const": false },
+              "plan": { "maxLength": 0 },
+              "verify": { "maxLength": 0 },
+              "buttons": { "maxProperties": 0 }
+            }
+          }
+        }
+      ]
     },
     "artifact": {
       "type": "object",
@@ -231,7 +305,13 @@
       "properties": {
         "file": {
           "type": "string",
-          "description": "The stage's own memory file, relative to memory.path."
+          "minLength": 1,
+          "description": "The stage's own memory file, relative to memory.path. Absolute paths, '..' segments, and the reserved project file memory.md are not allowed.",
+          "allOf": [
+            { "not": { "pattern": "^(?:[/\\\\]|[A-Za-z]:[/\\\\])" } },
+            { "not": { "pattern": "(^|[/\\\\])\\.\\.([/\\\\]|$)" } },
+            { "not": { "pattern": "^(\\./)*memory\\.md$" } }
+          ]
         },
         "mode": {
           "type": "string",

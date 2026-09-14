@@ -1,104 +1,289 @@
 package schemacheck_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"gopkg.in/yaml.v3"
 )
 
-// collectYAMLFields walks a struct type and records every yaml field name
-// (the token before the first comma). It recurses through pointers, slices and
-// maps into nested structs. Fields without a yaml tag are decoded via a custom
-// UnmarshalYAML and are intentionally skipped.
-func collectYAMLFields(t reflect.Type, seen map[reflect.Type]bool, out map[string]bool) {
-	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct || seen[t] {
-		return
-	}
-	seen[t] = true
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if f.PkgPath != "" { // unexported
-			continue
-		}
-		name := strings.Split(f.Tag.Get("yaml"), ",")[0]
-		if name == "" || name == "-" {
-			continue
-		}
-		out[name] = true
-		collectYAMLFields(f.Type, seen, out)
-	}
-}
+const (
+	flowSchemaPath   = "../../schema/flow.schema.json"
+	configSchemaPath = "../../schema/config.schema.json"
+)
 
-// collectSchemaProps gathers every property name defined anywhere in a parsed
-// JSON Schema (under any "properties" object, including $defs).
-func collectSchemaProps(v any, out map[string]bool) {
-	switch x := v.(type) {
-	case map[string]any:
-		if props, ok := x["properties"].(map[string]any); ok {
-			for k := range props {
-				out[k] = true
-			}
-		}
-		for _, val := range x {
-			collectSchemaProps(val, out)
-		}
-	case []any:
-		for _, val := range x {
-			collectSchemaProps(val, out)
-		}
-	default:
-		// scalars (strings, numbers, bools) carry no properties
-	}
-}
+type schemaDocument map[string]any
 
-func schemaProps(t *testing.T, path string) map[string]bool {
+func loadSchemaDocument(t *testing.T, path string) schemaDocument {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read schema %s: %v", path, err)
 	}
-	var doc any
+	var doc schemaDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("parse schema %s: %v", path, err)
 	}
-	out := map[string]bool{}
-	collectSchemaProps(doc, out)
-	return out
+	return doc
+}
+
+func compileSchema(t *testing.T, path string) *jsonschema.Schema {
+	t.Helper()
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("absolute schema path %s: %v", path, err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft7)
+	sch, err := compiler.Compile(abs)
+	if err != nil {
+		t.Fatalf("compile schema %s: %v", path, err)
+	}
+	return sch
+}
+
+func jsonInstance(t *testing.T, yamlData []byte) any {
+	t.Helper()
+	var value any
+	if err := yaml.Unmarshal(yamlData, &value); err != nil {
+		t.Fatalf("parse YAML instance: %v", err)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("normalize YAML instance as JSON: %v", err)
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode JSON instance: %v", err)
+	}
+	return instance
+}
+
+func schemaAcceptsYAML(t *testing.T, sch *jsonschema.Schema, body string) bool {
+	t.Helper()
+	return sch.Validate(jsonInstance(t, []byte(body))) == nil
+}
+
+// resolveLocalRef follows the local references used by these schemas. Keeping
+// the walk structural is important: a stage.path field must be found under the
+// stage definition, not accidentally satisfied by memory.path elsewhere.
+func resolveLocalRef(t *testing.T, doc schemaDocument, node map[string]any, at string) map[string]any {
+	t.Helper()
+	ref, _ := node["$ref"].(string)
+	if ref == "" {
+		return node
+	}
+	if !strings.HasPrefix(ref, "#/") {
+		t.Fatalf("%s: unsupported non-local schema reference %q", at, ref)
+	}
+	var current any = map[string]any(doc)
+	for _, token := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		obj, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("%s: %q does not resolve to an object", at, ref)
+		}
+		current, ok = obj[token]
+		if !ok {
+			t.Fatalf("%s: unresolved schema reference %q", at, ref)
+		}
+	}
+	resolved, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: %q does not resolve to a schema object", at, ref)
+	}
+	return resolveLocalRef(t, doc, resolved, at)
+}
+
+func schemaForType(t *testing.T, doc schemaDocument, node map[string]any, want, at string) map[string]any {
+	t.Helper()
+	node = resolveLocalRef(t, doc, node, at)
+	if got, _ := node["type"].(string); got == want {
+		return node
+	}
+	for _, keyword := range []string{"anyOf", "oneOf", "allOf"} {
+		alternatives, _ := node[keyword].([]any)
+		for _, alternative := range alternatives {
+			candidate, ok := alternative.(map[string]any)
+			if !ok {
+				continue
+			}
+			candidate = resolveLocalRef(t, doc, candidate, at)
+			if got, _ := candidate["type"].(string); got == want {
+				return candidate
+			}
+		}
+	}
+	t.Fatalf("%s: schema does not contain a %s shape", at, want)
+	return nil
+}
+
+var buttonsType = reflect.TypeOf(flow.Buttons{})
+
+func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, typ reflect.Type, at string) {
+	t.Helper()
+	for typ.Kind() == reflect.Ptr {
+		typ = typ.Elem()
+	}
+
+	// Buttons has a deliberately different YAML shape from its Go slice:
+	// YAML is an ordered label:prompt mapping. Its field-level shape is covered
+	// by the behavioral tests below.
+	if typ == buttonsType {
+		schemaForType(t, doc, node, "object", at)
+		return
+	}
+
+	switch typ.Kind() {
+	case reflect.Struct:
+		obj := schemaForType(t, doc, node, "object", at)
+		props, ok := obj["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: object schema has no properties", at)
+		}
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			name := strings.Split(field.Tag.Get("yaml"), ",")[0]
+			if name == "" || name == "-" {
+				continue
+			}
+			child, ok := props[name].(map[string]any)
+			if !ok {
+				t.Errorf("%s: missing yaml field %q from %s", at, name, typ)
+				continue
+			}
+			assertTypeCovered(t, doc, child, field.Type, at+"."+name)
+		}
+	case reflect.Slice, reflect.Array:
+		array := schemaForType(t, doc, node, "array", at)
+		items, ok := array["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: array schema has no object-valued items", at)
+		}
+		assertTypeCovered(t, doc, items, typ.Elem(), at+"[]")
+	case reflect.Map:
+		obj := schemaForType(t, doc, node, "object", at)
+		additional, ok := obj["additionalProperties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: map schema has no object-valued additionalProperties", at)
+		}
+		assertTypeCovered(t, doc, additional, typ.Elem(), at+".*")
+	default:
+		// Scalar fields need no deeper structural walk: their presence in the
+		// containing object's properties map was already checked by the caller.
+	}
 }
 
 func assertCovered(t *testing.T, schemaPath string, structType reflect.Type) {
 	t.Helper()
-	props := schemaProps(t, schemaPath)
-	fields := map[string]bool{}
-	collectYAMLFields(structType, map[reflect.Type]bool{}, fields)
+	doc := loadSchemaDocument(t, schemaPath)
+	assertTypeCovered(t, doc, map[string]any(doc), structType, structType.Name())
+}
 
-	var missing []string
-	for name := range fields {
-		if !props[name] {
-			missing = append(missing, name)
-		}
+func TestFlowSchemaCoversStructAtCorrectPaths(t *testing.T) {
+	assertCovered(t, flowSchemaPath, reflect.TypeOf(flow.Flow{}))
+}
+
+func TestConfigSchemaCoversStructAtCorrectPaths(t *testing.T) {
+	assertCovered(t, configSchemaPath, reflect.TypeOf(config.Config{}))
+}
+
+func TestSchemasCompileAsDraft7(t *testing.T) {
+	compileSchema(t, flowSchemaPath)
+	compileSchema(t, configSchemaPath)
+}
+
+func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
+	sch := compileSchema(t, flowSchemaPath)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"planning stage", "name: f\nstages:\n  - id: s\n    agents: [planning]\n", true},
+		{"autonomous stage", "name: f\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"script stage", "name: f\nstages:\n  - id: s\n    script: echo ok\n", true},
+		{"interactive stage", "name: f\nstages:\n  - id: s\n    interactive: true\n", true},
+		{"ready plan stage", "name: f\nstages:\n  - id: s\n    plan: docs/plan.md\n", true},
+		{"zero max rules uses default", "name: f\nmemory:\n  path: memory\n  max_rules: 0\nstages:\n  - id: s\n    agents: [planning]\n", true},
+		{"buttons", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      Lint: Run the linter\n", true},
+		{"dot id", "name: f\nstages:\n  - id: .\n    agents: [planning]\n", false},
+		{"dot-dot id", "name: f\nstages:\n  - id: ..\n    agents: [planning]\n", false},
+		{"no runnable mode", "name: f\nstages:\n  - id: s\n", false},
+		{"auto mixed with review", "name: f\nstages:\n  - id: s\n    agents: [auto, review]\n", false},
+		{"script mixed with agents", "name: f\nstages:\n  - id: s\n    script: echo ok\n    agents: [planning]\n", false},
+		{"script mixed with command", "name: f\nstages:\n  - id: s\n    script: echo ok\n    command: claude\n", false},
+		{"script mixed with interactive", "name: f\nstages:\n  - id: s\n    script: echo ok\n    interactive: true\n", false},
+		{"script mixed with plan", "name: f\nstages:\n  - id: s\n    script: echo ok\n    plan: plan.md\n", false},
+		{"script mixed with verify", "name: f\nstages:\n  - id: s\n    script: echo ok\n    verify: go test ./...\n", false},
+		{"script mixed with buttons", "name: f\nstages:\n  - id: s\n    script: echo ok\n    buttons:\n      Retry: Try again\n", false},
+		{"empty button label", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      \"\": Try again\n", false},
+		{"empty button prompt", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      Retry: \"\"\n", false},
+		{"reflect without memory path", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: stage.md\n", false},
+		{"parent reflect path", "name: f\nmemory:\n  path: memory\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: ../escape.md\n", false},
+		{"absolute reflect path", "name: f\nmemory:\n  path: memory\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: /tmp/escape.md\n", false},
+		{"reserved reflect path", "name: f\nmemory:\n  path: memory\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: ./memory.md\n", false},
 	}
-	if len(missing) > 0 {
-		slices.Sort(missing)
-		t.Fatalf("%s is missing these yaml fields present in %s: %v\n"+
-			"add them to the schema (this guards against schema drift)",
-			schemaPath, structType.String(), missing)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := schemaAcceptsYAML(t, sch, tt.body)
+			if got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+
+			path := filepath.Join(t.TempDir(), "flow.yaml")
+			if err := os.WriteFile(path, []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := flow.ParseFile(path)
+			runtimeAccepts := err == nil
+			if runtimeAccepts != tt.want {
+				t.Errorf("flow.ParseFile accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
 	}
 }
 
-func TestFlowSchemaCoversStruct(t *testing.T) {
-	assertCovered(t, "../../schema/flow.schema.json", reflect.TypeOf(flow.Flow{}))
-}
+func TestRepositoryYAMLExamplesMatchSchemas(t *testing.T) {
+	flowSchema := compileSchema(t, flowSchemaPath)
+	flowExamples, err := filepath.Glob("../../examples/*/flow.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flowExamples) == 0 {
+		t.Fatal("no flow examples found")
+	}
+	for _, path := range flowExamples {
+		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := flowSchema.Validate(jsonInstance(t, data)); err != nil {
+				t.Errorf("%s does not match flow schema: %v", path, err)
+			}
+		})
+	}
 
-func TestConfigSchemaCoversStruct(t *testing.T) {
-	assertCovered(t, "../../schema/config.schema.json", reflect.TypeOf(config.Config{}))
+	configSchema := compileSchema(t, configSchemaPath)
+	configExample := "../../config.example.yaml"
+	data, err := os.ReadFile(configExample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configSchema.Validate(jsonInstance(t, data)); err != nil {
+		t.Errorf("%s does not match config schema: %v", configExample, err)
+	}
 }

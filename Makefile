@@ -38,9 +38,9 @@ build: web
 test:
 	$(GOENV) go test ./... -v -race
 
-# schema-check — verifies the hand-written JSON Schemas (schema/*.json) still
-# cover every yaml field of flow.Flow/config.Config. Part of `make test` too;
-# this target is a focused shortcut. Fails if a struct field lacks a schema entry.
+# schema-check — compiles the hand-written JSON Schemas (schema/*.json), checks
+# exact field paths and parser edge cases, and validates repository examples.
+# Part of `make test` too; this target is a focused shortcut.
 .PHONY: schema-check
 schema-check:
 	$(GOENV) go test ./pkg/schemacheck/

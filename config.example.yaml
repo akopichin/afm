@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/config.schema.json
 # afm Configuration
 # Place in: .afm/config.yaml (project-level) or ~/.afm/config.yaml (global)
 # Project-level config overrides global. Missing fields keep defaults.
@@ -52,7 +53,7 @@ client:
   # claude_bare: false
 
 # Execution parameters
-executor:
+# executor:
   # Maximum idle time with no output from the agent before killing the process.
   # Default: 30m
   # idle_timeout: 30m

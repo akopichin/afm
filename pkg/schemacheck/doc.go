@@ -1,7 +1,7 @@
-// Package schemacheck holds a guard test that keeps the hand-written JSON
+// Package schemacheck holds guard tests that keep the hand-written JSON
 // Schemas (schema/flow.schema.json, schema/config.schema.json) in sync with the
-// Go structs they describe (flow.Flow, config.Config). It has no runtime code —
-// the schemas are hand-written for accuracy (several fields use a custom
-// UnmarshalYAML whose YAML shape diverges from the Go type), and this test only
-// verifies that no struct field is missing from its schema.
+// Go structs and validation that yaml.v3 decodes into. It contains no production
+// code: tests compile both schemas as draft-07, verify struct fields at their
+// exact schema paths, compare important edge cases with flow.ParseFile, and
+// validate the repository's example YAML files.
 package schemacheck

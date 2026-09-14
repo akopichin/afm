@@ -6,10 +6,10 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "client": { "$ref": "#/$defs/client" },
-    "executor": { "$ref": "#/$defs/executor" },
-    "server": { "$ref": "#/$defs/server" },
-    "docker": { "$ref": "#/$defs/docker" },
+    "client": { "$ref": "#/definitions/client" },
+    "executor": { "$ref": "#/definitions/executor" },
+    "server": { "$ref": "#/definitions/server" },
+    "docker": { "$ref": "#/definitions/docker" },
     "prompts_dir": {
       "type": "string",
       "description": "Directory with custom prompt templates; missing files fall back to the embedded defaults."
@@ -28,7 +28,7 @@
       "description": "Auto-reset failed stages to pending on run start/resume. Default true."
     }
   },
-  "$defs": {
+  "definitions": {
     "duration": {
       "type": "string",
       "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
@@ -59,7 +59,7 @@
       "additionalProperties": false,
       "description": "Agent execution parameters.",
       "properties": {
-        "idle_timeout": { "$ref": "#/$defs/duration", "description": "Max idle time with no agent output before the process is killed. Default 30m." },
+        "idle_timeout": { "$ref": "#/definitions/duration", "description": "Max idle time with no agent output before the process is killed. Default 30m." },
         "max_parallel": {
           "type": "integer",
           "minimum": 0,
@@ -109,7 +109,7 @@
         "agents": {
           "type": "object",
           "description": "autoShim recipes: command name -> recipe.",
-          "additionalProperties": { "$ref": "#/$defs/agentRecipe" }
+          "additionalProperties": { "$ref": "#/definitions/agentRecipe" }
         },
         "secrets_file": {
           "type": "string",
@@ -118,7 +118,7 @@
         "extra_mounts": {
           "type": "array",
           "description": "Extra host paths mounted into the container (:ro). Each item is a string or an object.",
-          "items": { "$ref": "#/$defs/extraMount" }
+          "items": { "$ref": "#/definitions/extraMount" }
         },
         "file_browser": {
           "type": "object",
@@ -155,7 +155,7 @@
           "type": "string",
           "description": "Optional \"file:<path>\" whose content is appended as the system prompt."
         },
-        "auth": { "$ref": "#/$defs/recipeAuth" },
+        "auth": { "$ref": "#/definitions/recipeAuth" },
         "max_turns": {
           "type": "integer",
           "minimum": 0,
