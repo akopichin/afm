@@ -11,6 +11,14 @@
 #   OPENAI_BASE_URL        — базовый URL API (дефолт: https://api.openai.com/v1)
 #   OPENAI_MODEL           — модель (дефолт: gpt-4o)
 #   OPENAI_AGENT_MAX_TURNS — макс. число tool-вызовов за стадию (дефолт: 40)
+#
+# usage accounting: каждый внутренний turn запрашивается со
+# stream_options:{include_usage:true}. Числа токенов каждого turn'а (никогда
+# не текст промпта/ответа) собираются БЕЗ суммирования в массив
+# upstream_usages — суммирование делает исключительно pkg/accounting, не эта
+# оболочка (никакого `jq add` здесь). Форма synthetic terminal result — та же,
+# что понимает Collector: usage_contract_version:1, usage_schema:"openai_chat",
+# channel:"openai-api".
 
 set -euo pipefail
 
@@ -101,6 +109,54 @@ build_user_content() {
     jq -nc --arg t "$cleaned" --argjson imgs "$blocks" '[{type:"text", text:$t}] + $imgs'
 }
 
+# extract_turn_usage <sse-body> -> compact flattened usage JSON object for the
+# LAST chunk in this turn carrying a non-null .usage, or empty if none. Same
+# flattening as openai-as-claude.sh: prompt_tokens_details.cached_tokens ->
+# flat prompt_cached_tokens (the field name pkg/accounting/normalize.go reads).
+# Numbers only, never prompt/response text.
+extract_turn_usage() {
+    local sse="$1"
+    printf '%s' "$sse" | jq -Rrc '
+        sub("^data: ";"")
+        | select(test("^\\{"))
+        | fromjson?
+        | select(.usage != null)
+        | {prompt_tokens: (.usage.prompt_tokens // 0), completion_tokens: (.usage.completion_tokens // 0)}
+            + (if .usage.prompt_tokens_details.cached_tokens != null
+               then {prompt_cached_tokens: .usage.prompt_tokens_details.cached_tokens}
+               else {} end)
+    ' 2>/dev/null | tail -n1 || true
+}
+
+# extract_turn_model <sse-body> -> the LAST non-empty .model seen across this
+# turn's chunks (independent of whether that particular chunk also had usage —
+# most providers echo .model on every chunk).
+extract_turn_model() {
+    local sse="$1"
+    printf '%s' "$sse" | jq -Rr '
+        sub("^data: ";"")
+        | select(test("^\\{"))
+        | fromjson?
+        | (.model // empty)
+    ' 2>/dev/null | grep -v '^$' | tail -n1 || true
+}
+
+# build_result_line <subtype> — emits the terminal result line. upstream_usages
+# is a plain JSON array of raw per-turn usage objects — accounting normalizes
+# and sums each one itself (no `jq add` here, per the module-level comment).
+# With no usage gathered at all, omits the envelope so Collector.Finish reports
+# an honest "unmetered" observation instead of a fabricated $0.
+build_result_line() {
+    local subtype="$1"
+    if [[ "$upstream_usages" == "[]" ]]; then
+        jq -nc --arg st "$subtype" '{type:"result", subtype:$st}'
+        return
+    fi
+    jq -nc --arg st "$subtype" --arg model "$resolved_model" --argjson usages "$upstream_usages" \
+        '{type:"result", subtype:$st, usage_contract_version:1, usage_schema:"openai_chat", channel:"openai-api", upstream_usages:$usages}
+         + (if $model != "" then {model:$model} else {} end)'
+}
+
 messages_file=$(mktemp)
 trap 'rm -f "$messages_file" "${messages_file}.tmp"' EXIT
 
@@ -111,6 +167,8 @@ jq -nc --arg sys "$system_prompt" --argjson user "$user_content" \
 final_text=""
 turn=0
 max_turns_reached=0
+upstream_usages='[]'
+resolved_model="$OPENAI_MODEL"
 
 while :; do
     turn=$((turn + 1))
@@ -120,7 +178,7 @@ while :; do
     fi
 
     request_body=$(jq -nc --slurpfile msgs "$messages_file" --arg model "$OPENAI_MODEL" --argjson tools "$tools_json" \
-        '{model: $model, stream: true, tool_choice: "auto", tools: $tools, messages: $msgs[0]}')
+        '{model: $model, stream: true, stream_options: {include_usage: true}, tool_choice: "auto", tools: $tools, messages: $msgs[0]}')
 
     set +e
     response=$(curl -sS -w '\n%{http_code}' \
@@ -134,8 +192,20 @@ while :; do
     http_code=$(printf '%s' "$response" | tail -n1)
     body=$(printf '%s' "$response" | sed '$d')
 
+    turn_model=$(extract_turn_model "$body")
+    [[ -n "$turn_model" ]] && resolved_model="$turn_model"
+    turn_usage=$(extract_turn_usage "$body")
+    if [[ -n "$turn_usage" ]]; then
+        upstream_usages=$(jq -nc --argjson arr "$upstream_usages" --argjson item "$turn_usage" '$arr + [$item]')
+    fi
+
     if [[ "$curl_exit" -ne 0 || "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
         echo "error: request to $OPENAI_BASE_URL failed (curl exit $curl_exit, http $http_code): $body" >&2
+        # still emit whatever text/usage were gathered across earlier turns before
+        # this failure — afm fails the stage via the non-zero exit below regardless
+        # of what's printed here (pkg/executor doesn't look at subtype for that).
+        jq -nc --arg t "$final_text" '{type:"assistant", message:{content:[{type:"text", text:$t}]}}'
+        build_result_line "error_during_execution"
         exit 1
     fi
 
@@ -217,4 +287,4 @@ if [[ "$max_turns_reached" -eq 1 ]]; then
 fi
 
 jq -nc --arg t "$final_text" '{type:"assistant", message:{content:[{type:"text", text:$t}]}}'
-echo '{"type":"result","subtype":"success"}'
+build_result_line "success"

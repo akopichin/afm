@@ -8,6 +8,14 @@
 #   OPENAI_API_KEY   — токен авторизации (обязателен)
 #   OPENAI_BASE_URL  — базовый URL API (дефолт: https://api.openai.com/v1)
 #   OPENAI_MODEL     — модель (дефолт: gpt-4o)
+#
+# usage accounting: запрос идёт со stream_options:{include_usage:true}, поэтому
+# провайдер шлёт финальный SSE-чанк с .usage (и обычно .model). Числа токенов
+# из этого чанка (никогда не текст промпта/ответа) пробрасываются в synthetic
+# terminal result в форме, которую уже понимает Collector в pkg/accounting
+# (usage_contract_version:1, usage_schema:"openai_chat", channel:"openai-api"),
+# с вложенным prompt_tokens_details.cached_tokens, сплющенным в плоское поле
+# prompt_cached_tokens.
 
 set -euo pipefail
 
@@ -93,12 +101,25 @@ build_user_content() {
     jq -nc --arg t "$cleaned" --argjson imgs "$blocks" '[{type:"text", text:$t}] + $imgs'
 }
 
-# формируем тело запроса
+# формируем тело запроса. stream_options.include_usage:true просит финальный
+# SSE-чанк с .usage (см. заголовок файла — нужен для accounting).
 content=$(build_user_content "$prompt")
 body=$(jq -nc --arg model "$OPENAI_MODEL" --argjson content "$content" \
-    '{model: $model, stream: true, messages: [{role: "user", content: $content}]}')
+    '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: $content}]}')
 
-# вызываем API и накапливаем SSE-чанки, затем эмитим ОДИН assistant-конверт.
+# вызываем API один раз, оставляем полный SSE-ответ в переменной — нужен для ДВУХ
+# независимых проходов: накопление текста (существующая логика ниже) и извлечение
+# .usage/.model из финального чанка (accounting, см. заголовок файла).
+#
+# || true — не падать при ошибке curl (документированное ограничение); даже при
+# сбое $response будет частичным/пустым, конверт всё равно эмитится.
+response=$(curl -sS --no-buffer \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    -d "$body" \
+    "${OPENAI_BASE_URL}/chat/completions" 2>/dev/null || true)
+
+# накапливаем SSE-чанки, затем эмитим ОДИН assistant-конверт.
 # Важно: pkg/executor/parseStreamEvent парсит ТОЛЬКО {type:"assistant", message:{...}},
 # стриминговые content_block_delta им игнорируются — поэтому накапливаем текст целиком
 # и отдаём агрегированную форму, как делает claude в stream-json режиме.
@@ -106,15 +127,10 @@ body=$(jq -nc --arg model "$OPENAI_MODEL" --argjson content "$content" \
 # SSE формат ответа: "data: {...}" или "data: [DONE]".
 # Накопление делаем одним jq-конвейером: читаем строки как raw, отбрасываем всё
 # до "data: ", парсим JSON, конкатенируем delta.content. [DONE] не парсится (jq
-# выдаст null → пропустим). Весь accumulate — одна команда, без подоболочек bash.
-#
-# || true — не падать при ошибке curl (документированное ограничение);
-# даже при сбое $text будет пустым (jq вернёт пустую строку), конверт всё равно эмитится.
-text=$(curl -sS --no-buffer \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $OPENAI_API_KEY" \
-    -d "$body" \
-    "${OPENAI_BASE_URL}/chat/completions" 2>/dev/null | \
+# выдаст null → пропустим). Финальный usage-чанк (stream_options.include_usage)
+# обычно приходит с пустым choices:[] — .choices[0] там null, delta.content
+# корректно сворачивается в "" и ничего не портит.
+text=$(printf '%s' "$response" | \
     jq -jRr '
         sub("^data: ";"")                  # убрать префикс "data: " (если есть)
         | select(test("^\\{"))             # оставить только строки, начинающиеся с "{" (JSON; [DONE]/пустые отбрасываются)
@@ -124,9 +140,44 @@ text=$(curl -sS --no-buffer \
 # подстраховка: если что-то пошло не так и text не задан — пустая строка
 text="${text:-}"
 
+# usage/model: последний чанк с ненулевым .usage (stream_options.include_usage).
+# prompt_tokens_details.cached_tokens сплющивается в плоское prompt_cached_tokens —
+# это то имя поля, которое ждёт rawUsage в pkg/accounting/normalize.go.
+usage_chunk=$(printf '%s' "$response" | jq -Rrc '
+        sub("^data: ";"")
+        | select(test("^\\{"))
+        | fromjson?
+        | select(.usage != null)
+        | {
+            model: (.model // null),
+            usage: (
+                {prompt_tokens: (.usage.prompt_tokens // 0), completion_tokens: (.usage.completion_tokens // 0)}
+                + (if .usage.prompt_tokens_details.cached_tokens != null
+                   then {prompt_cached_tokens: .usage.prompt_tokens_details.cached_tokens}
+                   else {} end)
+              )
+          }
+    ' 2>/dev/null | tail -n1 || true)
+
+usage_json=""
+resolved_model="$OPENAI_MODEL"
+if [[ -n "$usage_chunk" ]]; then
+    usage_json=$(printf '%s' "$usage_chunk" | jq -c '.usage')
+    m=$(printf '%s' "$usage_chunk" | jq -r '.model // empty')
+    [[ -n "$m" ]] && resolved_model="$m"
+fi
+
 # assistant-конверт: агрегированный текст всего ответа.
 # jq -nc --arg t — корректно JSON-экранирует текст (кавычки/переводы строк).
 jq -nc --arg t "$text" '{type:"assistant", message:{content:[{type:"text", text:$t}]}}'
 
-# финальный result-ивент (claude executor ждёт его для завершения).
-echo '{"type":"result","subtype":"success"}'
+# финальный result-ивент (claude executor ждёт его для завершения). Без
+# перехваченного usage эмитим голую строку, как раньше — Collector.Finish тогда
+# честно репортит "unmetered", а не выдуманный $0.
+if [[ -z "$usage_json" ]]; then
+    echo '{"type":"result","subtype":"success"}'
+else
+    jq -nc --arg model "$resolved_model" --argjson usage "$usage_json" \
+        '{type:"result", subtype:"success", usage_contract_version:1, usage_schema:"openai_chat", channel:"openai-api", usage:$usage}
+         + (if $model != "" then {model:$model} else {} end)'
+fi
