@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -69,20 +70,48 @@ func newCheckCmd() *cobra.Command {
 				return fmt.Errorf("load state: %w", err)
 			}
 
-			fmt.Printf("Run: %s\n\n", filepath.Base(latest))
-			fmt.Printf("%-20s  %-22s  %-10s  %s\n", "STAGE", "STATUS", "UPDATED", "LAST ACTION")
-			fmt.Printf("%-20s  %-22s  %-10s  %s\n", "-----", "------", "-------", "-----------")
+			// Read-only, best-effort: a run with no usage.jsonl (accounting
+			// disabled, or a run predating this feature) must never fail
+			// `check` — Load already returns an empty ledger, nil error for
+			// that case, and we ignore any other error the same way.
+			led, _ := accounting.Load(latest)
+			var byStage map[string]accounting.Summary
+			var runSummary accounting.Summary
+			hasUsage := false
+			if led != nil {
+				byStage = led.SummaryByStage()
+				runSummary = led.RunSummary()
+				hasUsage = runSummary.Metered+runSummary.Unmetered > 0
+			}
 
-			type row struct{ id, status, updated, lastAction string }
+			fmt.Printf("Run: %s\n\n", filepath.Base(latest))
+			if hasUsage {
+				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %-10s  %s\n",
+					"STAGE", "STATUS", "UPDATED", "TOKENS", "CACHE", "EST. COST", "LAST ACTION")
+				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %-10s  %s\n",
+					"-----", "------", "-------", "------", "-----", "---------", "-----------")
+			} else {
+				fmt.Printf("%-20s  %-22s  %-10s  %s\n", "STAGE", "STATUS", "UPDATED", "LAST ACTION")
+				fmt.Printf("%-20s  %-22s  %-10s  %s\n", "-----", "------", "-------", "-----------")
+			}
+
+			type row struct{ id, status, updated, lastAction, tokens, cache, cost string }
 			var rows []row
 			for id, s := range rs.Stages {
 				action := lastLogAction(filepath.Join(latest, id))
-				rows = append(rows, row{
+				r := row{
 					id:         id,
 					status:     string(s.Status),
 					updated:    s.UpdatedAt.Format("15:04:05"),
 					lastAction: action,
-				})
+				}
+				if hasUsage {
+					sum := byStage[id]
+					r.tokens = humanizeTokens(sum.Tokens.Total())
+					r.cache = formatCache(sum.Tokens)
+					r.cost = accounting.FormatUSD(sum.CostUSD, sum.Priced)
+				}
+				rows = append(rows, r)
 			}
 			slices.SortFunc(rows, func(a, b row) int {
 				if a.id < b.id {
@@ -95,12 +124,63 @@ func newCheckCmd() *cobra.Command {
 			})
 			for _, r := range rows {
 				color := statusColor(state.StageStatus(r.status))
-				fmt.Printf("%-20s  %s%-22s%s  %-10s  %s\n",
-					r.id, color, r.status, colorReset, r.updated, r.lastAction)
+				if hasUsage {
+					fmt.Printf("%-20s  %s%-22s%s  %-10s  %-8s  %-20s  %-10s  %s\n",
+						r.id, color, r.status, colorReset, r.updated, r.tokens, r.cache, r.cost, r.lastAction)
+				} else {
+					fmt.Printf("%-20s  %s%-22s%s  %-10s  %s\n",
+						r.id, color, r.status, colorReset, r.updated, r.lastAction)
+				}
+			}
+
+			fmt.Println()
+			if !hasUsage {
+				fmt.Println("No usage data")
+				return nil
+			}
+			fmt.Printf("TOTAL: %s tokens, %s (incl. run overhead)\n",
+				humanizeTokens(runSummary.Tokens.Total()), accounting.FormatUSD(runSummary.CostUSD, runSummary.Priced))
+			if note := coverageNote(runSummary); note != "" {
+				fmt.Printf("  %s\n", note)
 			}
 			return nil
 		},
 	}
+}
+
+// humanizeTokens renders a token count compactly for the fixed-width table,
+// e.g. 84900 -> "84.9k". Values under 1000 are shown as an exact integer; all
+// arithmetic (sums, ratios) stays in pkg/accounting — this only formats.
+func humanizeTokens(n uint64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
+}
+
+// formatCache renders the cache read/write split, e.g. "R 47.6k / W 18.6k".
+// "—" when the stage recorded no cache activity at all, rather than a noisy
+// "R 0 / W 0" for every non-caching stage.
+func formatCache(t accounting.Tokens) string {
+	read, write := t.CacheRead, t.CacheWriteTotal()
+	if read == 0 && write == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("R %s / W %s", humanizeTokens(read), humanizeTokens(write))
+}
+
+// coverageNote reports partial pricing coverage (e.g. "2 unmetered, 1
+// unpriced") so a reader knows the TOTAL may understate the real cost. Empty
+// when every metered record in the run was priced.
+func coverageNote(s accounting.Summary) string {
+	var parts []string
+	if s.Unmetered > 0 {
+		parts = append(parts, fmt.Sprintf("%d unmetered", s.Unmetered))
+	}
+	if s.Unpriced > 0 {
+		parts = append(parts, fmt.Sprintf("%d unpriced", s.Unpriced))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func lastLogAction(stageDir string) string {

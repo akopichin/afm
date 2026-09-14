@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -186,6 +187,109 @@ func TestLastLogAction_ReviewOnly(t *testing.T) {
 	got := lastLogAction(dir)
 	if got != "review last line" {
 		t.Errorf("got %q, want %q — review.log was not covered before this fix", got, "review last line")
+	}
+}
+
+// writeUsageLog writes the given accounting.UsageRecords as usage.jsonl in
+// runDir, mirroring what accounting.Store.Append persists during a real run
+// — `afm check` reads this file read-only via accounting.Load.
+func writeUsageLog(t *testing.T, runDir string, recs []accounting.UsageRecord) {
+	t.Helper()
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	for _, rec := range recs {
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf.Write(data)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "usage.jsonl"), buf.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCheckShowsCostColumnsAndTotal verifies that when a run has recorded
+// usage (usage.jsonl present with priced records), `afm check` renders the
+// TOKENS/CACHE/EST. COST columns for the stage and a TOTAL summary line
+// derived from accounting.Ledger.RunSummary — never computed by hand in cmd.
+func TestCheckShowsCostColumnsAndTotal(t *testing.T) {
+	chdirTemp(t)
+
+	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	writeUsageLog(t, runDir, []accounting.UsageRecord{
+		{
+			RecordVersion: 1,
+			StageID:       cmdInit,
+			Phase:         "implementation",
+			Model:         "claude-sonnet-4-5",
+			Metered:       true,
+			Priced:        true,
+			Tokens: accounting.Tokens{
+				UncachedInput: 10_000,
+				CacheRead:     47_600,
+				CacheWrite5m:  18_600,
+				Output:        9_300,
+			},
+			EstimatedCostUSD: 1.2345,
+		},
+	})
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "EST. COST") {
+		t.Errorf("expected an EST. COST column header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "$1.2345") {
+		t.Errorf("expected the stage row to show the priced cost $1.2345, got:\n%s", out)
+	}
+	if !strings.Contains(out, "TOTAL") {
+		t.Errorf("expected a TOTAL summary line, got:\n%s", out)
+	}
+	if strings.Contains(out, "$0.00") {
+		t.Errorf("must never render a bogus $0.00, got:\n%s", out)
+	}
+}
+
+// TestCheckWithoutUsageDataRendersCleanly verifies the backward-compat path:
+// a run with no usage.jsonl at all (accounting.Load returns an empty ledger,
+// nil error) must render without the cost columns and without a misleading
+// $0.00 anywhere — just a plain "No usage data" note.
+func TestCheckWithoutUsageDataRendersCleanly(t *testing.T) {
+	chdirTemp(t)
+
+	makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "EST. COST") {
+		t.Errorf("no usage.jsonl: cost columns should be omitted entirely, got:\n%s", out)
+	}
+	if strings.Contains(out, "$0.00") {
+		t.Errorf("no usage.jsonl: must never render a bogus $0.00, got:\n%s", out)
+	}
+	if !strings.Contains(out, "No usage data") {
+		t.Errorf("no usage.jsonl: expected a clean \"No usage data\" note, got:\n%s", out)
+	}
+	if !strings.Contains(out, cmdInit) {
+		t.Errorf("the stage table itself must still render, got:\n%s", out)
 	}
 }
 
