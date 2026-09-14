@@ -67,6 +67,39 @@ client:
   # Default: 0
   # truncate_output: 100
 
+# Cost accounting: overrides/extends the built-in list-price rate table used to
+# estimate stage/run token cost in the dashboard. All rates are decimal USD PER
+# 1,000,000 TOKENS. This is a LIST-PRICE ESTIMATE for visibility only — NOT a
+# bank charge, invoice, or a guarantee of what the provider actually billed you
+# (no discounts/credits/rounding/currency conversion are modeled).
+#
+# Two lookup scopes, matched in this precedence order: pricing.channels.<channel>.<model>
+# (most specific) > pricing.models.<model> > built-in channel table > built-in
+# model table. "channel" is a rough per-provider bucket (e.g. "codex", derived
+# from AFM_USAGE_CHANNEL — see docker.autoShim wrapper hints above); "model" is
+# the model id actually observed in the agent's stream (or the AFM_USAGE_MODEL
+# hint, when the stream itself doesn't expose one).
+#
+# Each rate card is partial: any category you omit falls back to the built-in
+# table (or renders unpriced, if neither has it) — an explicit 0 is different
+# from omitting the field: 0 DISABLES that category's cost (e.g. a provider
+# that doesn't bill cache writes at all), while omitting it just means "unknown,
+# use the default".
+# pricing:
+#   models:
+#     glm-5.3:
+#       input: 1.40           # uncached input tokens
+#       cache_read: 0.26      # cache-hit read tokens
+#       cache_write_5m: 0     # explicit 0 → this provider doesn't bill 5m cache writes
+#       cache_write_1h: 0
+#       output: 4.40          # generated output tokens
+#   channels:
+#     codex:
+#       gpt-5.6-sol:
+#         input: 4.00
+#         output: 20.00
+#         # cache_read/cache_write_* omitted → falls back to the built-in table
+
 # Directory with custom prompt templates (overrides embedded defaults).
 # Recognized files: planning.md, implementation.md, review.md, summary.md,
 # autonomous.md, reflect.md, aggregate.md, prioritize.md, update.md.

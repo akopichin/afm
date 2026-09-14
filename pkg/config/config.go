@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/akopichin/afm/pkg/accounting"
 )
 
 // envFlag reports whether an environment variable is truthy ("1" or "true").
@@ -319,6 +321,9 @@ type Config struct {
 	// pending when a run starts/resumes (e.g. after a killed process/container
 	// left stages in failed). nil/true = enabled (default); explicit false disables.
 	AutoRecover *bool `yaml:"auto_recover"`
+	// Pricing overrides/extends the built-in accounting rate table (list-price
+	// USD per 1M tokens, an estimate — not a bank charge). Empty = builtins only.
+	Pricing accounting.PricingConfig `yaml:"pricing"`
 }
 
 // Default returns the built-in default configuration.
@@ -386,7 +391,51 @@ func LoadFrom(globalDir, projectDir string) (Config, error) {
 	if err := cfg.Docker.ExtraMounts.Validate(); err != nil {
 		return cfg, fmt.Errorf("docker.extra_mounts: %w", err)
 	}
+	if err := validatePricing(cfg.Pricing); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// validatePricing rejects a PricingConfig containing any negative rate.
+// An unparseable rate (e.g. a non-numeric YAML scalar) never reaches here —
+// yaml.Unmarshal already fails earlier in mergeFile, since Rate is a plain
+// float64 alias. Explicit 0 is a valid rate (disables that category).
+func validatePricing(p accounting.PricingConfig) error {
+	for model, rc := range p.Models {
+		if err := validateRateCard(fmt.Sprintf("pricing.models.%s", model), rc); err != nil {
+			return err
+		}
+	}
+	for channel, models := range p.Channels {
+		for model, rc := range models {
+			if err := validateRateCard(fmt.Sprintf("pricing.channels.%s.%s", channel, model), rc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateRateCard rejects a RateCard with any negative category rate.
+func validateRateCard(label string, rc accounting.RateCard) error {
+	fields := []struct {
+		name string
+		v    *accounting.Rate
+	}{
+		{"input", rc.Input},
+		{"cache_read", rc.CacheRead},
+		{"cache_write", rc.CacheWrite},
+		{"cache_write_5m", rc.CacheWrite5m},
+		{"cache_write_1h", rc.CacheWrite1h},
+		{"output", rc.Output},
+	}
+	for _, f := range fields {
+		if f.v != nil && *f.v < 0 {
+			return fmt.Errorf("%s.%s: rate must not be negative, got %v", label, f.name, *f.v)
+		}
+	}
+	return nil
 }
 
 func mergeFile(dst *Config, path string) error {
@@ -462,6 +511,27 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.AutoRecover != nil {
 		dst.AutoRecover = overlay.AutoRecover
+	}
+	if overlay.Pricing.Models != nil {
+		if dst.Pricing.Models == nil {
+			dst.Pricing.Models = map[string]accounting.RateCard{}
+		}
+		for model, rc := range overlay.Pricing.Models {
+			dst.Pricing.Models[model] = rc // per-model overlay: проектный слой переопределяет глобальный целиком для этой модели
+		}
+	}
+	if overlay.Pricing.Channels != nil {
+		if dst.Pricing.Channels == nil {
+			dst.Pricing.Channels = map[string]map[string]accounting.RateCard{}
+		}
+		for channel, models := range overlay.Pricing.Channels {
+			if dst.Pricing.Channels[channel] == nil {
+				dst.Pricing.Channels[channel] = map[string]accounting.RateCard{}
+			}
+			for model, rc := range models {
+				dst.Pricing.Channels[channel][model] = rc
+			}
+		}
 	}
 	return nil
 }

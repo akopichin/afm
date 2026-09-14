@@ -26,7 +26,8 @@
     "auto_recover": {
       "type": "boolean",
       "description": "Auto-reset failed stages to pending on run start/resume. Default true."
-    }
+    },
+    "pricing": { "$ref": "#/definitions/pricing" }
   },
   "definitions": {
     "duration": {
@@ -176,6 +177,39 @@
           "type": "string",
           "description": "\"env:<VAR>\" — the env var the generated wrapper exports."
         }
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Overrides/extends the built-in accounting rate table (list-price USD per 1M tokens — an estimate, not a bank charge).",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "model id -> rate card.",
+          "additionalProperties": { "$ref": "#/definitions/rateCard" }
+        },
+        "channels": {
+          "type": "object",
+          "description": "channel (e.g. \"codex\") -> model id -> rate card.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/definitions/rateCard" }
+          }
+        }
+      }
+    },
+    "rateCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A (possibly partial) set of category rates, decimal USD per 1,000,000 tokens. Omitted = fall back to the built-in default; explicit 0 disables that category's cost.",
+      "properties": {
+        "input": { "type": "number", "description": "Uncached input tokens." },
+        "cache_read": { "type": "number", "description": "Cache-hit read tokens." },
+        "cache_write": { "type": "number", "description": "Cache-write fallback for a TTL with no specific rate." },
+        "cache_write_5m": { "type": "number", "description": "5-minute TTL cache-write tokens." },
+        "cache_write_1h": { "type": "number", "description": "1-hour TTL cache-write tokens." },
+        "output": { "type": "number", "description": "Generated output tokens." }
       }
     },
     "extraMount": {

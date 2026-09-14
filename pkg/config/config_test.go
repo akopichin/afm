@@ -978,6 +978,168 @@ docker:
 	}
 }
 
+func TestPricingConfig_ParseModelsAndChannels(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+pricing:
+  models:
+    glm-5.3:
+      input: 1.40
+      cache_read: 0.26
+      cache_write_5m: 0
+      output: 4.40
+  channels:
+    codex:
+      gpt-5.6-sol:
+        input: 4.00
+        output: 20.00
+`)
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	rc, ok := cfg.Pricing.Models["glm-5.3"]
+	if !ok {
+		t.Fatal("pricing.models.glm-5.3 missing")
+	}
+	if rc.Input == nil || *rc.Input != 1.40 {
+		t.Errorf("Input: got %v", rc.Input)
+	}
+	if rc.CacheWrite5m == nil || *rc.CacheWrite5m != 0 {
+		t.Errorf("CacheWrite5m: explicit 0 should survive as a non-nil pointer, got %v", rc.CacheWrite5m)
+	}
+	if rc.CacheWrite1h != nil {
+		t.Errorf("CacheWrite1h: absent field should stay nil, got %v", *rc.CacheWrite1h)
+	}
+	if rc.CacheWrite != nil {
+		t.Errorf("CacheWrite: absent field should stay nil, got %v", *rc.CacheWrite)
+	}
+
+	crc, ok := cfg.Pricing.Channels["codex"]["gpt-5.6-sol"]
+	if !ok {
+		t.Fatal("pricing.channels.codex.gpt-5.6-sol missing")
+	}
+	if crc.Input == nil || *crc.Input != 4.00 {
+		t.Errorf("channel Input: got %v", crc.Input)
+	}
+	if crc.Output == nil || *crc.Output != 20.00 {
+		t.Errorf("channel Output: got %v", crc.Output)
+	}
+	if crc.CacheRead != nil {
+		t.Errorf("channel CacheRead: absent should stay nil, got %v", *crc.CacheRead)
+	}
+}
+
+func TestPricingConfig_NegativeRateRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+pricing:
+  models:
+    bad-model:
+      input: -1.0
+`)
+	_, err := config.LoadFrom("", dir)
+	if err == nil {
+		t.Fatal("expected error for negative rate")
+	}
+	if !strings.Contains(err.Error(), "must not be negative") {
+		t.Errorf("error should mention negative rate: %v", err)
+	}
+}
+
+func TestPricingConfig_NegativeChannelRateRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+pricing:
+  channels:
+    codex:
+      bad-model:
+        output: -5.0
+`)
+	_, err := config.LoadFrom("", dir)
+	if err == nil {
+		t.Fatal("expected error for negative channel rate")
+	}
+	if !strings.Contains(err.Error(), "must not be negative") {
+		t.Errorf("error should mention negative rate: %v", err)
+	}
+}
+
+func TestPricingConfig_ExplicitZeroAllowed(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+pricing:
+  models:
+    free-model:
+      input: 0
+      output: 0
+`)
+	cfg, err := config.LoadFrom("", dir)
+	if err != nil {
+		t.Fatalf("explicit 0 rate should be valid: %v", err)
+	}
+	rc := cfg.Pricing.Models["free-model"]
+	if rc.Input == nil || *rc.Input != 0 {
+		t.Errorf("Input: got %v, want explicit 0", rc.Input)
+	}
+}
+
+func TestPricingConfig_UnparseableRateRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", `
+pricing:
+  models:
+    bad-model:
+      input: "not-a-number"
+`)
+	_, err := config.LoadFrom("", dir)
+	if err == nil {
+		t.Fatal("expected error for unparseable rate")
+	}
+}
+
+func TestPricingConfig_MergeProjectOverridesGlobal(t *testing.T) {
+	globalDir := t.TempDir()
+	projectDir := t.TempDir()
+	writeYAML(t, globalDir, "config.yaml", `
+pricing:
+  models:
+    glm-5.3:
+      input: 1.00
+      output: 2.00
+    shared-model:
+      input: 9.00
+  channels:
+    codex:
+      gpt-5.6-sol:
+        input: 4.00
+`)
+	writeYAML(t, projectDir, "config.yaml", `
+pricing:
+  models:
+    glm-5.3:
+      input: 5.00
+      output: 6.00
+`)
+	cfg, err := config.LoadFrom(globalDir, projectDir)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	rc := cfg.Pricing.Models["glm-5.3"]
+	if rc.Input == nil || *rc.Input != 5.00 {
+		t.Errorf("project should override glm-5.3 input: got %v", rc.Input)
+	}
+	if rc.Output == nil || *rc.Output != 6.00 {
+		t.Errorf("project should override glm-5.3 output: got %v", rc.Output)
+	}
+	if _, ok := cfg.Pricing.Models["shared-model"]; !ok {
+		t.Error("global-only model should survive merge")
+	}
+	if _, ok := cfg.Pricing.Channels["codex"]["gpt-5.6-sol"]; !ok {
+		t.Error("global-only channel entry should survive merge when project doesn't touch channels")
+	}
+}
+
 func TestDockerAutoShim_MergeLayers(t *testing.T) {
 	global := t.TempDir()
 	project := t.TempDir()
