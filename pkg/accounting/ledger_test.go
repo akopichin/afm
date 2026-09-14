@@ -93,6 +93,40 @@ func TestBuildRecordPartialOverrideUnknownModelMissingCategoryUnpriced(t *testin
 	}
 }
 
+// TestBuildRecordBuiltinCacheWriteOtherIsPriced is a regression test for a
+// bug introduced by the FINDING-1 fix: the builtin card() constructor never
+// set the generic CacheWrite rate, only CacheWrite5m/CacheWrite1h. When an
+// Anthropic usage line has no 5m/1h breakdown, normalize.go puts ALL
+// cache-creation tokens into CacheWriteOther, which is priced ONLY by the
+// generic CacheWrite rate (no TTL-specific fallback of its own, see
+// ResolvedRate.missingCategory/cost). With CacheWrite left nil, a fully
+// mainstream builtin model observation using only CacheWriteOther got
+// silently flipped to unpriced. card() now sets CacheWrite = the 1h rate, so
+// this must resolve priced with the CacheWriteOther bucket costed at that
+// fallback rate.
+func TestBuildRecordBuiltinCacheWriteOtherIsPriced(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	obs := Observation{
+		Metered: true,
+		Schema:  SchemaAnthropic,
+		Model:   "claude-opus-4-8",
+		Tokens: Tokens{
+			UncachedInput:   100,
+			CacheWriteOther: 1000, // no 5m/1h breakdown at all
+			Output:          50,
+		},
+	}
+	rec := BuildRecord(r, obs, "s", "implementation", "")
+	if !rec.Priced {
+		t.Fatal("expected priced record: CacheWriteOther must fall back to the builtin's generic CacheWrite rate")
+	}
+	// opus: input 5.00, cache_write (fallback for Other) 10.00, output 25.00.
+	want := 100.0/1_000_000*5.00 + 1000.0/1_000_000*10.00 + 50.0/1_000_000*25.00
+	if diff := rec.EstimatedCostUSD - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("cost = %.9f want %.9f", rec.EstimatedCostUSD, want)
+	}
+}
+
 func TestBuildRecordReportedCostDiffersBeyondTolerance(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	obs := obsGLM()

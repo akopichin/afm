@@ -33,8 +33,17 @@ var builtins = map[string]RateCard{
 }
 var builtinAsOf = map[string]string{"claude-opus-4-8": "2026-09-14", "glm-5.3": "2026-09-14", "codex/gpt-5.6-sol": "2026-09-14"}
 
+// card builds a builtin RateCard. The generic CacheWrite is set to the same
+// value as the 1h write rate: it's the fallback used both for a TTL bucket
+// with no rate of its own (see cacheWriteRate) AND for CacheWriteOther — the
+// bucket normalize.go fills with ALL cache-creation tokens when an Anthropic
+// usage line doesn't break them down by TTL at all. Without this, a
+// fully-priced builtin model with only CacheWriteOther tokens (no explicit
+// 5m/1h split) would fail ResolvedRate.missingCategory and get flipped to
+// unpriced — the opposite of what a "complete builtin card" should do.
 func card(input, cacheRead, write5m, write1h, output Rate) RateCard {
-	return RateCard{Input: &input, CacheRead: &cacheRead, CacheWrite5m: &write5m, CacheWrite1h: &write1h, Output: &output}
+	cacheWrite := write1h
+	return RateCard{Input: &input, CacheRead: &cacheRead, CacheWrite: &cacheWrite, CacheWrite5m: &write5m, CacheWrite1h: &write1h, Output: &output}
 }
 
 type Resolver struct{ cfg PricingConfig }
