@@ -9,6 +9,11 @@ import { isHeading2, isSpecialSection, nextLineBlock, renderMarkdown, type Speci
 type PlanPanelProps = {
   stage: Stage | null
   attention?: boolean
+  // banner — attention-шапка («Plan needs your approval»), рендерится ПЕРВЫМ
+  // ребёнком внутри скролл-области #plan-section, а не над панелью. Так она
+  // уезжает вместе с контентом при скролле и не съедает высоту у больших планов;
+  // фиксированная нижняя панель действий остаётся на месте.
+  banner?: ReactNode
 }
 
 type LineItem = { kind: 'line'; line: number; html: string }
@@ -18,7 +23,7 @@ type ReviewItem = LineItem | SectionItem
 // Панель плана стадии: загрузка markdown, рендер (обычный или review с номерами строк
 // и комментариями), действия Approve/Send revision/Retry. Поведение перенесено из
 // loadPlan / renderPlanReview / onPlanLineClick в текущем app.js.
-export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactElement {
+export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [planMarkdown, setPlanMarkdown] = useState('')
   const [comments, setComments] = useState<Record<number, string>>({})
@@ -208,6 +213,7 @@ export function PlanPanel({ stage, attention = false }: PlanPanelProps): ReactEl
     <Maximizable id="plan">
       <PanelFrame title="Plan" maximizeId="plan" attention={attention}>
         <div id="plan-section" className="section">
+          {banner}
           <div id="plan-content" className="markdown-body">
             {renderPlanBody()}
           </div>

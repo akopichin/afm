@@ -1,32 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
-import type { Stage } from '../../types'
+import { STAGE_STATUS_LABELS, type Stage } from '../../types'
 import { ATTENTION_STATUSES } from '../../hooks/use-attention'
 
 // Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
 // иначе right-выравнивание относительно кнопки съедет.
 const KEBAB_MENU_WIDTH = 200
-
-// stageStatusText — человекочитаемый статус для строки рейла (макет: "Completed",
-// "Waiting for your answer", "Not started"). Отличается от STAGE_STATUS_LABELS
-// более «разговорной» формулировкой ожиданий; неизвестный статус — как есть.
-function stageStatusText(status: Stage['status']): string {
-  switch (status) {
-    case 'pending': return 'Not started'
-    case 'planning': return 'Planning…'
-    case 'awaiting_approval': return 'Waiting for your approval'
-    case 'revising': return 'Revising…'
-    case 'ready': return 'Ready'
-    case 'running': return 'In progress'
-    case 'retrying': return 'Retrying…'
-    case 'paused': return 'Paused'
-    case 'awaiting_user_input': return 'Waiting for your answer'
-    case 'done': return 'Completed'
-    case 'failed': return 'Failed'
-    case 'hook_failed': return 'Hook failed'
-    default: return status
-  }
-}
 
 type StagesListProps = {
   stages: Stage[]
@@ -210,19 +189,30 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                 обязан быть доступен с клавиатуры. Кебаб — ОТДЕЛЬНАЯ соседняя
                 кнопка (вложенные интерактивные элементы недопустимы), поэтому
                 живёт в .stage-actions рядом, а не внутри .stage-row. */}
+            {/* title — статус во всплывающей подсказке: текстовой строки статуса
+                больше нет, а по цвету точки running/revising/retrying не различить
+                (все амбер) — так статус доступен наведением, не занимая места. */}
             <button
               type="button"
               className="stage-row"
+              title={STAGE_STATUS_LABELS[stage.status]}
               onClick={() => onSelect(stage.id)}
             >
               <span className="status-dot" data-status={stage.status}>
                 <span className="dot-check" aria-hidden="true">✓</span>
                 <span className="dot-num" aria-hidden="true">{index + 1}</span>
               </span>
+              {/* Две строки: id из flow.yaml жирным (основная), длинный name —
+                  приглушённой второй строкой. «Stage N» и текстовый статус убраны
+                  (статус несёт сама нода-точка: цвет/анимация/галочка + бейджи).
+                  Статус для скринридеров — visually-hidden строкой в accessible
+                  name кнопки (сама точка помечена aria-hidden). */}
               <span className="stage-label">
-                <span className="stage-ordinal">Stage {index + 1}</span>
-                <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
-                <span className="stage-status-text" data-status={stage.status}>{stageStatusText(stage.status)}</span>
+                <span className="stage-name">{stage.id}</span>
+                {stage.name !== '' && stage.name !== stage.id && (
+                  <span className="stage-subname">{stage.name}</span>
+                )}
+                <span className="stage-status-sr">{STAGE_STATUS_LABELS[stage.status]}</span>
               </span>
             </button>
             {/* Единый трейлинг-слот: бейджи + кебаб. Отдельная от .stage-row

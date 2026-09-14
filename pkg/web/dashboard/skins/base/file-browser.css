@@ -170,6 +170,23 @@
   font-size: 12.5px;
 }
 
+/* Обёртка дерева (.file-browser-tree-wrap, FileBrowserModal.tsx) держит FileTree
+   смонтированным при переключении на поиск/changed-view (hidden вместо
+   размонтирования — раскрытые каталоги не теряются). Но по умолчанию это обычный
+   блок — он рвал flex-цепочку: .file-tree рассчитан на flex-родителя с
+   ограниченной высотой (flex:1; min-height:0; overflow-y:auto), а получал блок
+   без высоты и переполнял колонку — дерево уезжало за пределы модалки, без
+   скролла (реальный баг с большим числом файлов). Делаем обёртку flex-колонкой
+   на всю оставшуюся высоту — но ТОЛЬКО когда она НЕ hidden: иначе display:flex у
+   класса победил бы display:none из [hidden] (UA-стиль), и скрытие при поиске
+   сломалось бы. */
+.file-browser-tree-wrap:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .file-tree-row {
   display: flex;
   align-items: center;

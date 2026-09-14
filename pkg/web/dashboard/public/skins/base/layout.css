@@ -330,10 +330,17 @@
   padding: 12px;
   gap: 12px;
 }
-/* Баннер живёт внутри .detail-panels (первый ребёнок) — панель плана/диалога
-   идёт под ним и скроллится сама. */
 .detail-panels { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.detail-panels > .attention-banner { margin-top: 4px; }
+/* Attention-баннер теперь рендерится ПЕРВЫМ ребёнком внутри скролл-области панели
+   (#plan-section / #dialog-scroll), а не как sibling над ней — поэтому уезжает
+   вместе с контентом и не занимает высоту постоянно (запрос: большие вопросы/
+   планы не должны терять место под шапкой). flex:none — чтобы в flex-колонке
+   скролл-контейнера баннер не сжимался; небольшой верхний отступ для воздуха. */
+#plan-section > .attention-banner,
+#dialog-scroll > .attention-banner {
+  flex: none;
+  margin-top: 8px;
+}
 
 /* History view switch (Plan | Dialog) — shown for a finished stage that has both
    a plan and a dialog, so the plan stays reachable. A compact segmented control. */

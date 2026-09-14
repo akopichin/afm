@@ -439,12 +439,16 @@ export function App(): ReactElement {
   // висела историческая панель плана. Теперь показываем ровно то, что относится
   // к текущему виду: attention-вопрос → диалог; attention-approval/failed/paused
   // → план (в нём же кнопки retry/Continue); история → соответствующая панель.
+  // attention-шапка передаётся ВНУТРЬ панели (скролл-область), а не рендерится
+  // над ней — так она уезжает вместе с контентом и не съедает высоту у больших
+  // планов/вопросов (фиксированные кнопки/ответ остаются на месте).
+  const attentionBanner = inAttention && contextKind !== null ? <AttentionBanner kind={contextKind} /> : undefined
   let detailPanel: ReactElement | null = null
   if (workspaceStage !== null) {
     if (wsState.view === 'attention') {
       detailPanel = contextKind === 'question'
-        ? <DialogChannel key="dialog" stage={workspaceStage} attention />
-        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} />
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} />
+        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} />
     } else if (wsState.view === 'plan-history') {
       detailPanel = showPlan
         ? <PlanPanel key="plan" stage={workspaceStage} attention={false} />
@@ -520,10 +524,11 @@ export function App(): ReactElement {
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (
                   <div className="detail-panels">
-                    {/* Шапка-баннер контекстной вкладки: сияющая иконка + «что
-                        происходит» (Plan needs your approval / Agent needs your
-                        input / …). Показывается только для attention-статусов. */}
-                    {inAttention && contextKind !== null && <AttentionBanner kind={contextKind} />}
+                    {/* Шапка-баннер контекстной вкладки («Plan needs your
+                        approval» / «Agent needs your input») теперь рендерится
+                        ВНУТРИ скролл-области панели (см. проп banner у
+                        PlanPanel/DialogChannel), а не здесь над ней — чтобы она
+                        уезжала со скроллом и не занимала высоту постоянно. */}
                     {/* Переключатель истории (Finding #2 второго раунда): у стадии,
                         задававшей вопрос во время planning/implementation, есть и
                         план, и диалог — иначе план стал бы недоступен навсегда

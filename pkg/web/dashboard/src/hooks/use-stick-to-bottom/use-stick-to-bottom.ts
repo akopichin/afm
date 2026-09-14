@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 const STICK_THRESHOLD_PX = 40
 
@@ -26,7 +26,12 @@ export function useStickToBottom<T extends HTMLElement>(): {
     setStick(true)
   }, [node])
 
-  useEffect(() => {
+  // useLayoutEffect (не useEffect): начальную позицию скролла выставляем ДО
+  // отрисовки кадра. Иначе список/диалог сначала рисуется прижатым к верху
+  // (scrollTop=0) и только следующим кадром прыгает вниз — заметное мигание;
+  // особенно с attention-баннером первым ребёнком #dialog-scroll (баннер
+  // мелькал сверху и тут же уезжал). Наблюдатели ниже — тоже здесь, разницы нет.
+  useLayoutEffect(() => {
     if (node === null) return
 
     // Узел мог примонтироваться уже с готовым контентом (та самая задержка

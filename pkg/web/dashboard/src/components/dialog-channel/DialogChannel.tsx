@@ -11,6 +11,11 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 type DialogChannelProps = {
   stage: Stage | null
   attention?: boolean
+  // banner — attention-шапка («Agent needs your input»), рендерится ПЕРВЫМ
+  // ребёнком внутри скролл-области #dialog-scroll, а не над панелью: уезжает
+  // вместе с контентом при скролле и не съедает высоту у больших вопросов;
+  // sticky-панель ответа остаётся на месте.
+  banner?: ReactNode
 }
 
 type DialogEntry = {
@@ -28,7 +33,7 @@ type DialogEntry = {
 // Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос
 // (опции и/или свободный ответ), отмена. Поведение перенесено из loadDialog /
 // renderDialog / renderPendingQuestion в текущем app.js.
-export function DialogChannel({ stage, attention = false }: DialogChannelProps): ReactElement {
+export function DialogChannel({ stage, attention = false, banner }: DialogChannelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [entries, setEntries] = useState<DialogEntry[]>([])
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
@@ -358,6 +363,7 @@ export function DialogChannel({ stage, attention = false }: DialogChannelProps):
       <PanelFrame title="Communication channel" maximizeId="dialog" attention={attention}>
         <div id="dialog-section" className="section">
           <div id="dialog-scroll" className="dialog-scroll" ref={feed.ref}>
+            {banner}
             <div id="dialog-history" className={`dialog-history${historyCollapsed ? ' collapsed' : ''}`}>
               {renderHistory(entries)}
             </div>

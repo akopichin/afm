@@ -121,19 +121,15 @@
   border-radius: var(--radius-md);
 }
 
-/* Middle cell: ordinal (muted) → name (bold) → status text (colored). */
+/* Middle cell: stage id (bold, primary) → long name (muted, secondary).
+   Статус здесь текстом не дублируется — его несёт нода-точка (цвет/анимация/
+   галочка) плюс бейджи 💬/📋 в трейлинг-слоте. */
 .stage-label {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
   padding-top: 1px;
-}
-.stage-ordinal {
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--text-muted);
 }
 .stage-name {
   font-size: 14px;
@@ -143,20 +139,27 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.stage-status-text {
+.stage-subname {
   font-size: 11.5px;
   color: var(--text-muted);
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Status text takes the status colour for states that need attention/emphasis. */
-.stage-status-text[data-status="done"]                { color: var(--success); }
-.stage-status-text[data-status="failed"],
-.stage-status-text[data-status="hook_failed"]         { color: var(--danger); }
-.stage-status-text[data-status="awaiting_approval"],
-.stage-status-text[data-status="awaiting_user_input"],
-.stage-status-text[data-status="paused"],
-.stage-status-text[data-status="retrying"]            { color: var(--attention); }
+/* Статус только для скринридеров (visually-hidden): попадает в accessible name
+   кнопки строки, но не рисуется — визуально статус несёт точка-нода, а видимую
+   строку статуса убрали по запросу. */
+.stage-status-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* === Status dot — a bigger numbered timeline node === */
 .status-dot {
