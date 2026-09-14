@@ -1,0 +1,201 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/config.schema.json",
+  "title": "afm config",
+  "description": "Schema for an afm config.yaml (.afm/config.yaml or ~/.afm/config.yaml). See https://akopichin.github.io/afm/config-reference/",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "client": { "$ref": "#/$defs/client" },
+    "executor": { "$ref": "#/$defs/executor" },
+    "server": { "$ref": "#/$defs/server" },
+    "docker": { "$ref": "#/$defs/docker" },
+    "prompts_dir": {
+      "type": "string",
+      "description": "Directory with custom prompt templates; missing files fall back to the embedded defaults."
+    },
+    "theme": {
+      "type": "string",
+      "enum": ["graphite", "goga", "novacorps", "coffee"],
+      "description": "Dashboard theme. Default graphite. \"coffee\" is a legacy alias for graphite."
+    },
+    "skin_dir": {
+      "type": "string",
+      "description": "A fully custom dashboard skin directory (containing index.css). Overrides `theme`."
+    },
+    "auto_recover": {
+      "type": "boolean",
+      "description": "Auto-reset failed stages to pending on run start/resume. Default true."
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "AI client command settings.",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The AI command to run as the agent. Default \"claude\"."
+        },
+        "extra_args": {
+          "type": "array",
+          "description": "Extra arguments appended to the command.",
+          "items": { "type": "string" }
+        },
+        "claude_bare": {
+          "type": "boolean",
+          "description": "Add --bare to generated claude wrappers (lighter, but disables skill auto-discovery). Default false."
+        }
+      }
+    },
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Agent execution parameters.",
+      "properties": {
+        "idle_timeout": { "$ref": "#/$defs/duration", "description": "Max idle time with no agent output before the process is killed. Default 30m." },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max stages running in parallel (0 = unlimited)."
+        },
+        "truncate_output": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max chars of agent text/Bash detail logged (0 = no limit)."
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Web dashboard server settings.",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Dashboard port. Default 9876."
+        },
+        "open_browser": {
+          "type": "boolean",
+          "description": "Open the dashboard in a browser on startup. Default false."
+        }
+      }
+    },
+    "docker": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Docker-mode self-re-exec settings.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable Docker mode. Unset falls back to $AFM_USE_DOCKER."
+        },
+        "image": {
+          "type": "string",
+          "description": "Docker image to run. Default akopichin/afm:latest."
+        },
+        "autoShim": {
+          "type": "boolean",
+          "description": "Generate claude-compatible wrappers for docker.agents inside the container."
+        },
+        "agents": {
+          "type": "object",
+          "description": "autoShim recipes: command name -> recipe.",
+          "additionalProperties": { "$ref": "#/$defs/agentRecipe" }
+        },
+        "secrets_file": {
+          "type": "string",
+          "description": "Optional path to a file with secrets for autoShim auth.from lookups."
+        },
+        "extra_mounts": {
+          "type": "array",
+          "description": "Extra host paths mounted into the container (:ro). Each item is a string or an object.",
+          "items": { "$ref": "#/$defs/extraMount" }
+        },
+        "file_browser": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The dashboard project file browser (Docker mode only).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the file browser. ON by default; env AFM_FILE_BROWSER overrides."
+            }
+          }
+        }
+      }
+    },
+    "agentRecipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An autoShim wrapper recipe for a custom agent command.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["", "claude", "openai", "openai-agent", "cursor", "codex"],
+          "description": "Provider type. Empty or \"claude\" = Anthropic-compatible (default)."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model id (required except for codex)."
+        },
+        "url": {
+          "type": "string",
+          "description": "Agent gateway URL (required for openai/openai-agent/cursor)."
+        },
+        "system_prompt": {
+          "type": "string",
+          "description": "Optional \"file:<path>\" whose content is appended as the system prompt."
+        },
+        "auth": { "$ref": "#/$defs/recipeAuth" },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "openai-agent only: max tool-call iterations per invocation (0 = default 40)."
+        }
+      }
+    },
+    "recipeAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where afm reads the secret on the host (from) and which env var the wrapper exports (to).",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "\"env:VAR\" or \"file:<path>\" — the secret source on the host."
+        },
+        "to": {
+          "type": "string",
+          "description": "\"env:<VAR>\" — the env var the generated wrapper exports."
+        }
+      }
+    },
+    "extraMount": {
+      "description": "Either a bare host path string (browse:false), or an object.",
+      "anyOf": [
+        {
+          "type": "string",
+          "description": "Legacy scalar form: a host path (browse:false)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "type": "string", "description": "Host path (may start with ~)." },
+            "name": { "type": "string", "description": "Optional UI label for the file browser." },
+            "browse": { "type": "boolean", "description": "Expose this mount in the file browser. Default false." }
+          }
+        }
+      ]
+    }
+  }
+}

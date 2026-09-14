@@ -1,5 +1,16 @@
 # The flow.yaml file
 
+!!! tip "Editor autocomplete & validation"
+    afm ships a JSON Schema for `flow.yaml`. Add this line at the top of your flow
+    and VS Code / JetBrains (via the YAML language server) will autocomplete fields
+    and flag typos:
+
+    ```yaml
+    # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+    ```
+
+    `afm init` adds it automatically, and every file under `examples/` already has it.
+
 ```yaml
 name: my-feature
 description: "Short task description"

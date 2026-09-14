@@ -1,5 +1,13 @@
 # Configuration
 
+!!! tip "Editor autocomplete & validation"
+    afm ships a JSON Schema for `config.yaml`. Add this line at the top of your config
+    for autocomplete and validation in VS Code / JetBrains:
+
+    ```yaml
+    # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/config.schema.json
+    ```
+
 Create `.afm/config.yaml` in the project or `~/.afm/config.yaml` globally. The full
 annotated example is [`config.example.yaml`](https://github.com/akopichin/afm/blob/main/config.example.yaml).
 

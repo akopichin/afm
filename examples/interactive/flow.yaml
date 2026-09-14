@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
 # Interactive demo flow — exercises the file-based dialog protocol
 #
 # Usage:

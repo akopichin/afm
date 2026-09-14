@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
 # Demo flow — predefined stage buttons in the kebab menu.
 #
 # A stage can declare named one-click actions under `buttons:` (label → prompt).

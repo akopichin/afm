@@ -1,0 +1,244 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json",
+  "title": "afm flow",
+  "description": "Schema for an afm flow.yaml — a multi-stage AI task description. See https://akopichin.github.io/afm/flow-reference/",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "stages"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Flow name."
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of the flow."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Shared instruction added to the system prompt of every stage and phase."
+    },
+    "max_parallel": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum number of stages running in parallel (0 = unlimited)."
+    },
+    "root_dir": {
+      "type": "string",
+      "description": "Project root = agents' working directory. A relative path is resolved from the afm root (--dir); empty inherits the afm process CWD."
+    },
+    "memory": {
+      "$ref": "#/$defs/memory"
+    },
+    "stages": {
+      "type": "array",
+      "description": "The stages of the flow.",
+      "items": { "$ref": "#/$defs/stage" }
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Agent-memory configuration. A non-empty `path` enables the feature.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory (relative to root_dir) where memory files live. A non-empty value enables agent memory."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["r", "w", "rw"],
+          "description": "Lifecycle of the shared memory.md: r (read-only), w (write-only), rw (both). Default rw."
+        },
+        "memory_use": {
+          "type": "boolean",
+          "description": "Master switch for READING memory into stage prompts. Default false."
+        },
+        "max_rules": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of patterns kept per file. Default 25."
+        },
+        "commit": {
+          "type": "boolean",
+          "description": "Git-commit the memory directory at the end of the run (never pushes). Default false."
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "description": "A single stage. Must have at least one of: a planning agent, `plan`, `interactive: true`, `agents: [auto]`, or `script`.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier. Must be a safe path component (no '/', '\\', '.', '..', or NUL).",
+          "pattern": "^[^/\\\\\\x00]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name for logs and the dashboard."
+        },
+        "description": {
+          "type": "string",
+          "description": "Task description for the AI (background/context)."
+        },
+        "agents": {
+          "type": "array",
+          "description": "Agent phases: any combination of planning/implementation/review (plus custom command names), OR exactly [auto] for the autonomous track.",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["planning", "implementation", "review", "auto"]
+              },
+              {
+                "type": "string",
+                "description": "A custom agent command name (counts as the implementation phase)."
+              }
+            ]
+          }
+        },
+        "skills": {
+          "type": "array",
+          "description": "Claude skills made available to the agent.",
+          "items": { "type": "string" }
+        },
+        "depends_on": {
+          "type": "array",
+          "description": "IDs of stages that must complete first.",
+          "items": { "type": "string" }
+        },
+        "eager_planning": {
+          "type": "boolean",
+          "description": "Start planning immediately when the flow runs, without waiting for depends_on."
+        },
+        "plan": {
+          "type": "string",
+          "description": "Path to a ready-made plan file (skips the planning agent)."
+        },
+        "command": {
+          "type": "string",
+          "description": "AI command for this stage (overrides client.command)."
+        },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Limit on parallel stages using this command."
+        },
+        "artifacts": {
+          "type": "array",
+          "description": "Files this stage produces for other stages.",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "inputs": {
+          "type": "array",
+          "description": "Artifacts consumed from dependency stages.",
+          "items": { "$ref": "#/$defs/input" }
+        },
+        "interactive": {
+          "type": "boolean",
+          "description": "Enable the file-based dialog protocol with the user via the dashboard."
+        },
+        "verify": {
+          "type": "string",
+          "description": "Shell command run after .done; a non-zero exit means the stage is not complete."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Explicit instruction delivered to the agent after the stage context block."
+        },
+        "script": {
+          "type": "string",
+          "description": "Run this shell script instead of an AI agent. Mutually exclusive with agents/command/interactive/plan/verify."
+        },
+        "script_timeout": { "$ref": "#/$defs/duration", "description": "Hard timeout for `script` (default 5m)." },
+        "script_before": {
+          "type": "string",
+          "description": "Shell script run immediately before the stage's own content."
+        },
+        "script_before_timeout": { "$ref": "#/$defs/duration", "description": "Hard timeout for `script_before` (default 5m)." },
+        "script_after": {
+          "type": "string",
+          "description": "Shell script run right after the stage completes."
+        },
+        "script_after_timeout": { "$ref": "#/$defs/duration", "description": "Hard timeout for `script_after` (default 5m)." },
+        "auto_approve": {
+          "type": "boolean",
+          "description": "Approve this stage's plan automatically the instant it's ready (for CI)."
+        },
+        "auto_run": {
+          "type": "boolean",
+          "description": "false pauses the stage at its first activation until you click Continue. Default true."
+        },
+        "buttons": {
+          "type": "object",
+          "description": "Predefined kebab-menu actions: label -> canned prompt delivered to the live agent.",
+          "additionalProperties": { "type": "string" }
+        },
+        "reflect": { "$ref": "#/$defs/reflect" },
+        "memory_use": {
+          "type": "boolean",
+          "description": "Override the flow-level memory.memory_use for this stage (controls reading only)."
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "properties": {
+        "name": { "type": "string", "description": "Artifact name (referenced by inputs as <stage>.<name>)." },
+        "path": { "type": "string", "description": "File path; './' is relative to the stage directory in the run." },
+        "description": { "type": "string", "description": "Human-readable description." },
+        "inline": {
+          "type": "boolean",
+          "description": "true (default) inlines the file contents into the prompt; false passes the path instead."
+        }
+      }
+    },
+    "input": {
+      "description": "An artifact consumed from a dependency: either the string \"stage.artifact\" or an object.",
+      "anyOf": [
+        {
+          "type": "string",
+          "description": "\"<stage>.<artifact>\" reference."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref": { "type": "string", "description": "\"<stage>.<artifact>\" reference." },
+            "optional": { "type": "boolean", "description": "If true, the stage runs even if the file is missing." }
+          }
+        }
+      ]
+    },
+    "reflect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file"],
+      "description": "Opts the stage into agent memory. Requires the flow-level memory: block.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The stage's own memory file, relative to memory.path."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["r", "w", "rw"],
+          "description": "Access mode for this stage's file: r/w/rw. Default rw."
+        }
+      }
+    }
+  }
+}

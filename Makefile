@@ -38,6 +38,13 @@ build: web
 test:
 	$(GOENV) go test ./... -v -race
 
+# schema-check — verifies the hand-written JSON Schemas (schema/*.json) still
+# cover every yaml field of flow.Flow/config.Config. Part of `make test` too;
+# this target is a focused shortcut. Fails if a struct field lacks a schema entry.
+.PHONY: schema-check
+schema-check:
+	$(GOENV) go test ./pkg/schemacheck/
+
 # web-test/web-typecheck — Vitest и tsc для дашборда (finding #13): vite build
 # их НЕ гоняет, поэтому UI-регрессии могли попасть в main при зелёном CI.
 # node_modules ставит `web`/`build`, но гейтим и здесь на случай прямого вызова.

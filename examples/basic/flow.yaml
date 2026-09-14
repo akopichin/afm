@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
 # Example flow.yaml — adding JWT authentication as a feature
 #
 # Usage:

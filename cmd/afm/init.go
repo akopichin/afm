@@ -20,11 +20,16 @@ const cmdInit = "init"
 // a validation error (if any) — the file is written regardless of
 // validity, so the user (or the wizard's own repair loop) can inspect
 // or edit it.
+// flowSchemaLine points editors (VS Code / JetBrains via the YAML language
+// server) at the flow.yaml JSON Schema for autocomplete and validation.
+const flowSchemaLine = "# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json\n"
+
 func generateAndValidateFlow(f *flow.Flow, outPath string) (string, error) {
-	data, err := yaml.Marshal(f)
+	body, err := yaml.Marshal(f)
 	if err != nil {
 		return "", fmt.Errorf("render flow.yaml: %w", err)
 	}
+	data := append([]byte(flowSchemaLine), body...)
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return "", fmt.Errorf("create flows dir: %w", err)
 	}

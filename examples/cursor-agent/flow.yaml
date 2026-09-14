@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
 # Demo flow for cursor — using Cursor as an agent via type: cursor.
 #
 # The Cursor Cloud API (api.cursor.com) has no synchronous /chat/completions — it's
