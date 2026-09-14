@@ -102,6 +102,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newRunCmd(),
 		newCheckCmd(),
+		newReportCmd(),
 		newApproveCmd(),
 		newReviseCmd(),
 		newRetryCmd(),

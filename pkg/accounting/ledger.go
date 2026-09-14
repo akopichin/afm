@@ -182,8 +182,11 @@ func (l *Ledger) Add(rec UsageRecord) {
 	l.recs = append(l.recs, rec)
 }
 
-// records returns every record added so far, in insertion order.
-func (l *Ledger) records() []UsageRecord {
+// Records returns every record added so far, in insertion order. Exported
+// so callers outside the package (e.g. `afm report`'s coverage/pricing
+// appendix) can inspect per-record detail — model, rate provenance,
+// warnings — that SummaryByStage/RunSummary intentionally aggregate away.
+func (l *Ledger) Records() []UsageRecord {
 	return l.recs
 }
 
@@ -192,7 +195,7 @@ func (l *Ledger) records() []UsageRecord {
 // no stage to attribute to).
 func (l *Ledger) SummaryByStage() map[string]Summary {
 	byStage := make(map[string][]UsageRecord)
-	for _, rec := range l.records() {
+	for _, rec := range l.Records() {
 		if rec.Scope == ScopeRunOverhead || rec.StageID == "" {
 			continue
 		}
@@ -209,5 +212,5 @@ func (l *Ledger) SummaryByStage() map[string]Summary {
 // RunSummary folds every record in the ledger, stage-attributed and
 // run_overhead alike.
 func (l *Ledger) RunSummary() Summary {
-	return summarize(l.records())
+	return summarize(l.Records())
 }
