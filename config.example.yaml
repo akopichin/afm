@@ -75,10 +75,11 @@ client:
 #
 # Two lookup scopes, matched in this precedence order: pricing.channels.<channel>.<model>
 # (most specific) > pricing.models.<model> > built-in channel table > built-in
-# model table. "channel" is a rough per-provider bucket (e.g. "codex", derived
-# from AFM_USAGE_CHANNEL — see docker.autoShim wrapper hints above); "model" is
-# the model id actually observed in the agent's stream (or the AFM_USAGE_MODEL
-# hint, when the stream itself doesn't expose one).
+# model table. "channel" is a rough per-provider bucket (e.g. "codex", taken
+# from the docker.agents recipe type when the agent was launched via
+# docker.autoShim); "model" is the model id actually observed in the agent's
+# stream (falling back to the recipe's configured model when the stream
+# itself doesn't expose one).
 #
 # Each rate card is partial: any category you omit falls back to the built-in
 # table (or renders unpriced, if neither has it) — an explicit 0 is different

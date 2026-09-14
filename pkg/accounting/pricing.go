@@ -42,17 +42,22 @@ type Resolver struct{ cfg PricingConfig }
 func NewResolver(cfg PricingConfig) *Resolver { return &Resolver{cfg: cfg} }
 
 // Resolve applies precedence: config channel/model → config model → builtin
-// channel/model → builtin model. Returns ok=false (unpriced) when nothing
-// matches, or when the merged card lacks a category the caller will need.
+// channel/model → builtin model. A config card is MERGED onto the builtin
+// card for the same key (per-category: config wins, builtin fills any gap)
+// when a builtin exists for that key — a partial override no longer silently
+// zeroes the categories the user didn't mention. Returns ok=false (unpriced)
+// only when nothing matches at all; a resolved-but-incomplete card (no
+// builtin to fall back to, and still missing a category the caller needs) is
+// caught later by ResolvedRate.missingCategory, not here.
 func (r *Resolver) Resolve(channel, model string) (ResolvedRate, bool) {
 	chKey := channel + "/" + model
 	if channel != "" {
 		if c, ok := r.cfg.Channels[channel][model]; ok {
-			return ResolvedRate{key: chKey, source: "config", card: c}, true
+			return mergeWithBuiltin(chKey, c), true
 		}
 	}
 	if c, ok := r.cfg.Models[model]; ok {
-		return ResolvedRate{key: model, source: "config", card: c}, true
+		return mergeWithBuiltin(model, c), true
 	}
 	if channel != "" {
 		if c, ok := builtins[chKey]; ok {
@@ -63,6 +68,39 @@ func (r *Resolver) Resolve(channel, model string) (ResolvedRate, bool) {
 		return ResolvedRate{key: model, source: "builtin", asOf: builtinAsOf[model], card: c}, true
 	}
 	return ResolvedRate{}, false
+}
+
+// mergeWithBuiltin merges a config-supplied card onto the builtin card for
+// the same key: per category, the config's *Rate wins if set, else the
+// builtin's is used. If there is no builtin for this key (a user-defined /
+// unknown model), the config card is returned verbatim — there's nothing to
+// merge onto. Source stays "config" either way (a merged card is still
+// config-sourced, just filled out); asOf is taken from the builtin when one
+// was used to fill gaps, since that's the provenance of any builtin value
+// the resulting cost figure might rely on.
+func mergeWithBuiltin(key string, cfgCard RateCard) ResolvedRate {
+	b, ok := builtins[key]
+	if !ok {
+		return ResolvedRate{key: key, source: "config", card: cfgCard}
+	}
+	merged := RateCard{
+		Input:        firstNonNil(cfgCard.Input, b.Input),
+		CacheRead:    firstNonNil(cfgCard.CacheRead, b.CacheRead),
+		CacheWrite:   firstNonNil(cfgCard.CacheWrite, b.CacheWrite),
+		CacheWrite5m: firstNonNil(cfgCard.CacheWrite5m, b.CacheWrite5m),
+		CacheWrite1h: firstNonNil(cfgCard.CacheWrite1h, b.CacheWrite1h),
+		Output:       firstNonNil(cfgCard.Output, b.Output),
+	}
+	return ResolvedRate{key: key, source: "config", asOf: builtinAsOf[key], card: merged}
+}
+
+// firstNonNil returns a if set, else b — used to let a config-supplied rate
+// win over the builtin's for the same category.
+func firstNonNil(a, b *Rate) *Rate {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 func rate(p *Rate) Rate {
@@ -78,6 +116,35 @@ func (rr ResolvedRate) cacheWriteRate(specific *Rate) Rate {
 		return *specific
 	}
 	return rate(rr.card.CacheWrite)
+}
+
+// missingCategory reports whether any token category actually present in t
+// (count > 0) has no rate to price it with, respecting the same fallbacks
+// cost() uses: CacheWrite5m/1h fall back to the generic CacheWrite rate, and
+// CacheWriteOther is priced ONLY by the generic CacheWrite rate (it has no
+// TTL-specific fallback of its own). A card missing a category the
+// observation never actually used is fine — only ENCOUNTERED categories must
+// be covered for the record to be considered fully priced.
+func (rr ResolvedRate) missingCategory(t Tokens) bool {
+	if t.UncachedInput > 0 && rr.card.Input == nil {
+		return true
+	}
+	if t.CacheRead > 0 && rr.card.CacheRead == nil {
+		return true
+	}
+	if t.CacheWrite5m > 0 && rr.card.CacheWrite5m == nil && rr.card.CacheWrite == nil {
+		return true
+	}
+	if t.CacheWrite1h > 0 && rr.card.CacheWrite1h == nil && rr.card.CacheWrite == nil {
+		return true
+	}
+	if t.CacheWriteOther > 0 && rr.card.CacheWrite == nil {
+		return true
+	}
+	if t.Output > 0 && rr.card.Output == nil {
+		return true
+	}
+	return false
 }
 
 func (rr ResolvedRate) cost(t Tokens) float64 {

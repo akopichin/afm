@@ -62,6 +62,37 @@ func TestBuildRecordUnknownModelUnpriced(t *testing.T) {
 	}
 }
 
+// TestBuildRecordPartialOverrideUnknownModelMissingCategoryUnpriced verifies
+// FINDING 1's completeness rule end-to-end: a user config overrides a
+// category on an UNKNOWN model (no builtin to fill the gap), but the
+// observation actually uses a category with no configured rate. BuildRecord
+// must mark the record unpriced (Priced=false, cost 0) rather than compute a
+// misleadingly partial total that silently treats the uncovered category as
+// free.
+func TestBuildRecordPartialOverrideUnknownModelMissingCategoryUnpriced(t *testing.T) {
+	four := Rate(4.0)
+	twenty := Rate(20.0)
+	// Only input/output configured — cache_read left unset, and there is no
+	// builtin for "my-custom-model" to fall back to.
+	cfg := PricingConfig{Models: map[string]RateCard{
+		"my-custom-model": {Input: &four, Output: &twenty},
+	}}
+	r := NewResolver(cfg)
+	obs := Observation{
+		Metered: true,
+		Schema:  SchemaAnthropic,
+		Model:   "my-custom-model",
+		Tokens:  Tokens{UncachedInput: 1000, CacheRead: 500, Output: 200},
+	}
+	rec := BuildRecord(r, obs, "s", "implementation", "")
+	if rec.Priced {
+		t.Fatal("expected unpriced record: cache_read tokens present but no cache_read rate and no builtin to fall back to")
+	}
+	if rec.EstimatedCostUSD != 0 {
+		t.Fatalf("expected zero estimated cost for unpriced record, got %v", rec.EstimatedCostUSD)
+	}
+}
+
 func TestBuildRecordReportedCostDiffersBeyondTolerance(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	obs := obsGLM()

@@ -87,6 +87,12 @@ func BuildRecord(r *Resolver, obs Observation, stageID, phase, scope string) Usa
 		// Metered but we don't know a rate for it: unpriced, not $0.
 		return rec
 	}
+	if rr.missingCategory(obs.Tokens) {
+		// Resolved (config-only, no builtin to fill the gap) but a category
+		// the tokens actually use has no rate: unpriced entirely, not a
+		// misleadingly partial total that silently prices the rest at $0.
+		return rec
+	}
 
 	rec.Priced = true
 	rec.EstimatedCostUSD = rr.cost(obs.Tokens)
