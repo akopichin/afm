@@ -30,12 +30,12 @@ stages:
     reflect: { file: build.md, mode: rw }   # this stage's own file: writes AND reads it
   - id: test
     name: test
-    agents: [implementation]
+    agents: [planning, implementation]
     depends_on: [build]
     reflect: { file: build.md, mode: r }    # reads build's file, writes nothing of its own
   - id: docs
     name: docs
-    agents: [implementation]
+    agents: [planning, implementation]
     depends_on: [build]
     memory_use: false                        # opt THIS stage out of reading memory entirely
 ```

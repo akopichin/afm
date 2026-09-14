@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./install-linux.sh                       # latest version
-#   AFM_VERSION=v0.5.70 ./install-linux.sh   # specific version
+#   AFM_VERSION=vX.Y.Z ./install-linux.sh    # specific version (see GitHub Releases)
 #
 set -euo pipefail
 

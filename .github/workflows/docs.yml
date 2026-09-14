@@ -41,8 +41,9 @@ jobs:
 
   deploy:
     needs: build
-    # Build runs on every PR (catches broken docs early); deploy only from main.
-    if: github.event_name != 'pull_request'
+    # Build runs on every PR (catches broken docs early); deploy only from main
+    # (covers push-to-main and a manual workflow_dispatch on main, never a feature branch).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

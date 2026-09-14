@@ -26,8 +26,8 @@ claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
   line-by-line *before* any code is written, like a merge request.
 - **An explicit dependency graph and artifacts** between stages, instead of implicit
   shared context.
-- **Everything on disk** — logs, prompts, events. You can see exactly what each agent
-  received and did.
+- **Everything on disk** — logs, events, and (with `--debug`) the exact prompt each
+  agent received. You can see what happened after the fact.
 
 ## Quick start
 
@@ -39,9 +39,11 @@ afm run                                 # run the flow from .afm/flows (or: afm 
 
 A live dashboard comes up at `http://localhost:9876` (its URL is printed to the log).
 
-After the planning phase each stage waits at `awaiting_approval` — review the plan in
-the dashboard (or `afm approve <stage>`), and afm implements it. Follow along with
-`afm check` or the dashboard.
+After the planning phase each stage waits at `awaiting_approval` — review and approve
+the plan in the dashboard, and afm implements it. Follow along with `afm check` or the
+dashboard. (The CLI `afm approve`/`revise`/`retry` commands are for headless use — a
+live `afm run` holds an exclusive lock, so approve through the dashboard while it's
+running.)
 
 ## A minimal flow.yaml
 

@@ -1,9 +1,11 @@
 # Example flow.yaml — adding JWT authentication as a feature
 #
 # Usage:
-#   afm run examples/basic/flow.yaml
-#   afm approve backend-auth   # after reviewing the plan
-#   afm check                  # run status
+#   afm run examples/basic/flow.yaml   # then approve each plan in the dashboard
+#   afm check                          # run status
+#
+# While `afm run` is active it holds an exclusive lock — approve via the dashboard.
+# The CLI `afm approve <stage>` is for headless use, after the run process stops.
 #
 # Or drop it in .afm/flows/ — then `afm run` (no argument) finds it.
 
@@ -38,6 +40,11 @@ stages:
     # skills — extra instructions for the agent (optional)
     skills:
       - superpowers:test-driven-development
+    # artifacts — files this stage produces for downstream stages
+    artifacts:
+      - name: api-contract
+        path: docs/api-contract.yaml
+        description: "OpenAPI specification for the auth endpoints"
 
   # ──────────────────────────────────────────────────
   # Stage 2: frontend — login form
@@ -54,6 +61,9 @@ stages:
       5. Unit tests for the component (vitest + testing-library).
     agents: [planning, implementation, review]
     depends_on: [backend-auth]
+    # inputs — artifacts from dependency stages, spliced into the prompt
+    inputs:
+      - backend-auth.api-contract
     # This stage's planning starts after backend-auth completes;
     # eager_planning: true — plan immediately, without waiting.
 
@@ -71,7 +81,7 @@ stages:
       4. Request with an expired token → 401.
       5. Logout → reuse the token → 401.
       Use testcontainers-go if you need a database.
-    agents: [planning, implementation]
+    agents: [planning, implementation, review]
     depends_on: [backend-auth, frontend-login]
 
 

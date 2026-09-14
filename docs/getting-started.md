@@ -44,8 +44,8 @@ appeared.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/akopichin/afm/main/install-linux.sh | bash
-# or a specific version:
-AFM_VERSION=v0.5.70 bash -c "$(curl -fsSL https://raw.githubusercontent.com/akopichin/afm/main/install-linux.sh)"
+# or pin a specific version (see the Releases page for available tags):
+AFM_VERSION=vX.Y.Z bash -c "$(curl -fsSL https://raw.githubusercontent.com/akopichin/afm/main/install-linux.sh)"
 ```
 
 The script detects the architecture (amd64/arm64), downloads the matching

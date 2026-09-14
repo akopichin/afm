@@ -12,16 +12,25 @@ docker run --rm -it \
   -v ~/.claude:/home/afm/.claude \
   -v ~/.afm:/home/afm/.afm \
   -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
+  -e AFM_IN_DOCKER=1 \
   -e ANTHROPIC_API_KEY \
   akopichin/afm:latest \
   run flow.yaml
 ```
 
-The `-p 127.0.0.1:9876:9876` maps the dashboard port so `http://localhost:9876`
-works from the host (use the same port as `server.port`). For a Claude Pro/Max
-subscription, replace `-e ANTHROPIC_API_KEY` with `-e CLAUDE_CODE_OAUTH_TOKEN` (see
-[Authentication](#authentication-in-docker-mode) below). Automatic Docker mode
-(`docker.enabled: true`) sets the port mapping and forwards the token for you.
+Notes on the flags:
+
+- `-p 127.0.0.1:9876:9876` maps the dashboard port so `http://localhost:9876` works
+  from the host (use the same port as `server.port`).
+- `-e AFM_IN_DOCKER=1` tells afm it is already inside a container, so it configures
+  in-container behavior and does **not** try to launch another container — important
+  if a mounted `~/.afm/config.yaml` has `docker.enabled: true`.
+- For a Claude Pro/Max subscription, replace `-e ANTHROPIC_API_KEY` with
+  `-e CLAUDE_CODE_OAUTH_TOKEN` (see [Authentication](#authentication-in-docker-mode)
+  below).
+
+Automatic Docker mode (`docker.enabled: true`) sets all of this — the port mapping,
+`AFM_IN_DOCKER`, and the forwarded token — for you.
 
 Or enable automatic Docker mode in the config — then the plain `afm run` command
 restarts itself inside the container:

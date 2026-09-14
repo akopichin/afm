@@ -15,5 +15,6 @@ afm run examples/basic/flow.yaml
 ```
 
 Each stage stops at `awaiting_approval` after planning — approve or revise the
-plan in the dashboard (or with `afm approve <stage>`), and afm carries out the
-implementation.
+plan in the dashboard, and afm carries out the implementation. (While `afm run` is
+active it holds an exclusive lock; the CLI `afm approve <stage>` is for headless use,
+after the run process stops.)

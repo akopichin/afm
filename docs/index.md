@@ -20,8 +20,8 @@ and any claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
   line-by-line *before* any code is written, like a merge request.
 - **An explicit dependency graph and artifacts** between stages, instead of implicit
   shared context.
-- **Everything on disk** — logs, prompts, events. You can see exactly what each
-  agent received and did.
+- **Everything on disk** — logs, events, and (with `--debug`) the exact prompt each
+  agent received. You can see what happened after the fact.
 
 ## Quick start
 

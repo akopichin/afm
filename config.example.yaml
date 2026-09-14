@@ -13,6 +13,10 @@
 # Default: "graphite"
 # theme: graphite
 
+# Fully custom dashboard skin: a directory containing index.css. Overrides `theme`.
+# Default: "" (use the built-in theme)
+# skin_dir: .afm/skin/
+
 # Automatically reset failed stages back to pending on run start/resume (e.g. if the
 # afm process/container was killed mid-run) — no manual `afm retry <id>` per failed
 # stage. All failed stages are reset regardless of the failure cause; dependency
@@ -63,7 +67,10 @@ executor:
   # truncate_output: 100
 
 # Directory with custom prompt templates (overrides embedded defaults).
-# Files needed: planning.md, implementation.md, review.md, summary.md
+# Recognized files: planning.md, implementation.md, review.md, summary.md,
+# autonomous.md, reflect.md, aggregate.md, prioritize.md, update.md.
+# The directory may be partial — any file that's absent falls back to the embedded
+# default, so you can override just the prompts you care about.
 # Default: "" (use embedded prompts)
 # prompts_dir: .afm/prompts/
 
@@ -77,6 +84,10 @@ executor:
 #   # Docker image to run.
 #   # Default: "akopichin/afm:latest" (or $AFM_DOCKER_IMAGE)
 #   # image: akopichin/afm:latest
+#
+#   # Optional path to a file with secrets for autoShim auth.from lookups.
+#   # Default: "" (secrets are read from the global ~/.afm and the recipe's own paths)
+#   # secrets_file: ~/.afm/secrets.env
 #
 #   # autoShim: when set, afm generates claude wrappers for agents.<cmd> right inside
 #   # the container — without mounting the binary and without extra_mounts for tokens.
@@ -117,9 +128,10 @@ executor:
 #   #     # auth: omitted for codex (the only type where auth is optional)
 #   #   # For providers with a real OpenAI /v1/chat/completions (deepseek, ollama, …) — type: openai:
 #   #   # openai-agent:
-#   #   #   type: openai
+#   #   #   type: openai-agent          # real tool-loop (autonomous/interactive stages)
 #   #   #   model: deepseek-chat
 #   #   #   url: https://api.deepseek.com/v1
+#   #   #   max_turns: 40               # openai-agent only: max tool-call iterations per invocation (default 40)
 #   #   #   auth: { from: "env:DEEPSEEK_KEY", to: "env:OPENAI_API_KEY" }
 #
 #   # Extra host directories for custom agents (tokens/configs outside ~/.claude,

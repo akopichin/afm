@@ -47,11 +47,11 @@ stages:
 
 | Field | Required | Description |
 |------|-------------|----------|
-| `id` | yes | Unique identifier (letters/digits/`_`/`-`) |
+| `id` | yes | Unique identifier. Must be a safe path component — non-empty, not `.`/`..`, and no `/`, `\`, or NUL (it becomes a directory name on disk) |
 | `name` | no | Human-readable name for logs and the dashboard (if empty — `id` is shown) |
-| `description` | yes | Task description for the AI (background/context) |
+| `description` | no | Task description for the AI (background/context). Not enforced by the validator, but strongly recommended — it's the main guidance the agent gets |
 | `prompt` | no | Explicit instruction for the agent — a separate `<prompt>` block after the context. Unlike `description`, this is a direct instruction on what to do. It's escaped and cannot inject XML tags |
-| `agents` | yes | Combination of `planning`, `implementation`, `review` — or `[auto]` for the [autonomous track](autonomous-track.md) |
+| `agents` | conditional | Combination of `planning`, `implementation`, `review` — or `[auto]` for the [autonomous track](autonomous-track.md). A stage must have **one of**: an agent list, a `plan`, `interactive: true`, `agents: [auto]`, or `script:` (see the note below the table) |
 | `depends_on` | no | IDs of stages that must complete first |
 | `eager_planning` | no | `true` — planning starts immediately when the flow runs, without waiting for `depends_on` |
 | `skills` | no | Claude skills for the agent |
@@ -73,6 +73,13 @@ stages:
 | `buttons` | no | Named one-click prompts for the stage's live agent, shown in the dashboard kebab menu (see [Dashboard](dashboard.md)) |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into [agent memory](agent-memory.md): `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (default `rw`). Requires the flow-level `memory:` block |
 | `memory_use` | no | Overrides the flow-level `memory.memory_use` for this stage (`true`/`false`; unset = inherit). Controls whether the stage **reads** [memory](agent-memory.md) |
+
+!!! note "What makes a stage valid"
+    Every stage needs *something to do*. The validator requires at least one of:
+    a `planning` agent, a `plan` path, `interactive: true`, `agents: [auto]`, or
+    `script:`. A `script:` stage must **not** also set `agents`/`command`/
+    `interactive`/`plan`/`verify` (they're mutually exclusive), and `agents: [auto]`
+    must be the stage's only agent.
 
 ## Flow fields (top level)
 
