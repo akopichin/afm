@@ -106,44 +106,6 @@ func CreateWrappers(specs []WrapperSpec) (string, error) {
 // decide", same value ParseFile/config.AgentRecipe.Validate accept as a no-op.
 const codexDefaultModel = "default"
 
-// usageChannelOpenAIAPI/usageChannelClaudeCLI — AFM_USAGE_CHANNEL values for
-// recipe types that don't equal their own channel key verbatim (unlike codex/
-// cursor, see usageChannel below).
-const (
-	usageChannelOpenAIAPI = "openai-api"
-	usageChannelClaudeCLI = "claude-cli"
-)
-
-// usageChannel maps a wrapper/recipe Type to the accounting.PricingConfig
-// channel key (see pkg/config.Config.Pricing, pkg/accounting.RateCard) used
-// to look up a per-provider rate card. These are HINTS only: the wrapper
-// exports them as AFM_USAGE_CHANNEL/AFM_USAGE_MODEL so downstream accounting
-// has a channel/model guess even before the stream reveals the real one — the
-// stream-observed model always wins once available.
-func usageChannel(recipeType string) string {
-	switch recipeType {
-	case config.RecipeTypeCodex, config.RecipeTypeCursor:
-		// The channel key matches the recipe type verbatim for these two.
-		return recipeType
-	case config.RecipeTypeOpenAI, config.RecipeTypeOpenAIAgent:
-		return usageChannelOpenAIAPI
-	default: // "" or config.ClaudeCommand
-		return usageChannelClaudeCLI
-	}
-}
-
-// emitUsageHints writes the AFM_USAGE_CHANNEL/AFM_USAGE_MODEL exports shared
-// by every wrapper template that has a concrete model (skipped by the claude
-// proxy-shim, which has no model at all — see generateWrapper). The channel
-// is always known from the recipe type; the model hint is omitted when empty
-// (nothing useful to hint at).
-func emitUsageHints(b *strings.Builder, s WrapperSpec) {
-	fmt.Fprintf(b, "export AFM_USAGE_CHANNEL=%q\n", usageChannel(s.Type))
-	if s.Model != "" {
-		fmt.Fprintf(b, "export AFM_USAGE_MODEL=%q\n", s.Model)
-	}
-}
-
 func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, error) {
 	if s.Command == "" {
 		return "", errors.New("empty command")
@@ -159,7 +121,6 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
 		}
-		emitUsageHints(&b, s)
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export OPENAI_BASE_URL=%q\n", s.BaseURL)
 		}
@@ -177,7 +138,6 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
 		}
-		emitUsageHints(&b, s)
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export OPENAI_BASE_URL=%q\n", s.BaseURL)
 		}
@@ -198,7 +158,6 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
 		}
-		emitUsageHints(&b, s)
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export CURSOR_BASE_URL=%q\n", s.BaseURL)
 		}
@@ -219,12 +178,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
 		}
 		// hasModel — ""/"default" означает "решает сам codex/~/.codex/config.toml",
-		// поэтому ни CODEX_MODEL, ни AFM_USAGE_MODEL для них не выставляются.
+		// поэтому CODEX_MODEL для них не выставляется.
 		hasModel := s.Model != "" && s.Model != codexDefaultModel
-		fmt.Fprintf(&b, "export AFM_USAGE_CHANNEL=%q\n", usageChannel(s.Type))
-		if hasModel {
-			fmt.Fprintf(&b, "export AFM_USAGE_MODEL=%q\n", s.Model)
-		}
 		// CODEX_BIN — abs-путь к реальному codex CLI, резолвлен ДО того как
 		// wrapper-dir (где лежит ЭТОТ же файл с именем "codex") попал в PATH —
 		// иначе codex-as-claude (внутри себя вызывающий голый `codex`) поймал бы
@@ -250,7 +205,6 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 		fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
 	}
-	emitUsageHints(&b, s)
 	if s.BaseURL != "" {
 		fmt.Fprintf(&b, "export ANTHROPIC_BASE_URL=%q\n", s.BaseURL)
 	}

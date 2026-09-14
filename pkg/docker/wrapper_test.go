@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -453,108 +452,6 @@ func TestCreateWrappers_CodexNoBinaryHardError(t *testing.T) {
 	_, err := CreateWrappers([]WrapperSpec{{Type: config.RecipeTypeCodex, Command: "codex"}})
 	if err == nil {
 		t.Fatal("expected error when codex not in PATH")
-	}
-}
-
-// TestCreateWrappers_UsageHints checks that every wrapper type exports the
-// non-secret AFM_USAGE_CHANNEL/AFM_USAGE_MODEL hints, derived from the recipe
-// type/model — these are HINTS ONLY (the stream-observed model wins downstream
-// in pkg/accounting), so it's fine if a provider's real channel differs; afm
-// just needs a reasonable guess when the stream doesn't expose one clearly.
-func TestCreateWrappers_UsageHints(t *testing.T) {
-	cases := []struct {
-		name        string
-		spec        WrapperSpec
-		wantChannel string
-		wantModel   string
-		needsClaude bool
-		needsCodex  bool
-	}{
-		{
-			name:        "claude agent template",
-			spec:        WrapperSpec{Command: "glm51", AuthTo: "ANTHROPIC_AUTH_TOKEN", BaseURL: "https://x", Model: "glm-5.3"},
-			wantChannel: usageChannelClaudeCLI,
-			wantModel:   "glm-5.3",
-			needsClaude: true,
-		},
-		{
-			name:        "explicit claude type",
-			spec:        WrapperSpec{Type: config.ClaudeCommand, Command: "glm54", AuthTo: "ANTHROPIC_AUTH_TOKEN", BaseURL: "https://x", Model: "glm-5.4"},
-			wantChannel: usageChannelClaudeCLI,
-			wantModel:   "glm-5.4",
-			needsClaude: true,
-		},
-		{
-			name:        "openai",
-			spec:        WrapperSpec{Type: config.RecipeTypeOpenAI, Command: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1", AuthTo: "OPENAI_API_KEY"},
-			wantChannel: usageChannelOpenAIAPI,
-			wantModel:   "deepseek-chat",
-		},
-		{
-			name:        "openai-agent",
-			spec:        WrapperSpec{Type: config.RecipeTypeOpenAIAgent, Command: "idealab", Model: "qwen3-max", BaseURL: "https://idealab.alibaba-inc.com/api/openai/v1", AuthTo: "OPENAI_API_KEY"},
-			wantChannel: usageChannelOpenAIAPI,
-			wantModel:   "qwen3-max",
-		},
-		{
-			name:        "cursor",
-			spec:        WrapperSpec{Type: config.RecipeTypeCursor, Command: "cursor", Model: "auto", BaseURL: "https://api.cursor.com/v1", AuthTo: "CURSOR_API_KEY"},
-			wantChannel: "cursor",
-			wantModel:   "auto",
-		},
-		{
-			name:        "codex",
-			spec:        WrapperSpec{Type: config.RecipeTypeCodex, Command: "codex", Model: "gpt-5.6-sol"},
-			wantChannel: "codex",
-			wantModel:   "gpt-5.6-sol",
-			needsCodex:  true,
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if c.needsClaude {
-				stubClaudeOnPATH(t)
-			}
-			if c.needsCodex {
-				stubCodexOnPATH(t)
-			}
-			dir, err := CreateWrappers([]WrapperSpec{c.spec})
-			if err != nil {
-				t.Fatalf("CreateWrappers: %v", err)
-			}
-			defer cleanup(dir)
-			s := string(mustRead(t, filepath.Join(dir, c.spec.Command)))
-			wantChannelLine := fmt.Sprintf("export AFM_USAGE_CHANNEL=%q", c.wantChannel)
-			wantModelLine := fmt.Sprintf("export AFM_USAGE_MODEL=%q", c.wantModel)
-			if !strings.Contains(s, wantChannelLine) {
-				t.Errorf("missing %q\n--- script ---\n%s", wantChannelLine, s)
-			}
-			if !strings.Contains(s, wantModelLine) {
-				t.Errorf("missing %q\n--- script ---\n%s", wantModelLine, s)
-			}
-		})
-	}
-}
-
-// TestCreateWrappers_UsageHints_CodexModelOmittedSkipsUsageModel checks that
-// when codex's model is unset/"default" (CODEX_MODEL itself omitted, see
-// TestCreateWrappers_CodexModelOptional), AFM_USAGE_MODEL is also omitted
-// rather than exported as a meaningless empty/"default" hint.
-func TestCreateWrappers_UsageHints_CodexModelOmittedSkipsUsageModel(t *testing.T) {
-	stubCodexOnPATH(t)
-	for _, model := range []string{"", "default"} {
-		dir, err := CreateWrappers([]WrapperSpec{{Type: config.RecipeTypeCodex, Command: "codex", Model: model}})
-		if err != nil {
-			t.Fatalf("CreateWrappers (codex, model=%q): %v", model, err)
-		}
-		s := string(mustRead(t, filepath.Join(dir, "codex")))
-		cleanup(dir)
-		if strings.Contains(s, "AFM_USAGE_MODEL") {
-			t.Errorf("model=%q should omit AFM_USAGE_MODEL:\n%s", model, s)
-		}
-		if !strings.Contains(s, `export AFM_USAGE_CHANNEL="codex"`) {
-			t.Errorf("model=%q should still export AFM_USAGE_CHANNEL:\n%s", model, s)
-		}
 	}
 }
 
