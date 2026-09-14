@@ -519,7 +519,7 @@ export function App(): ReactElement {
                   />
                 )}
                 {wsState.view === 'feed' || workspaceStage === null ? (
-                  <FeedWorkspace events={events} logEntries={logEntries} />
+                  <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

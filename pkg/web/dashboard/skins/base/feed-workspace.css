@@ -9,12 +9,17 @@
   height: 100%;
 }
 
-/* --- Сегмент-переключатель Feed/Log --- */
+/* --- Сегмент-переключатели: Feed/Log + (This stage/All) в одну строку --- */
+.feed-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-self: flex-start;
+  margin: 0 0 12px;
+}
 .feed-switch {
   display: inline-flex;
   gap: 2px;
-  align-self: flex-start;
-  margin: 0 0 12px;
   padding: 3px;
   background: var(--surface-tool);
   border: 1px solid var(--separator-subtle);

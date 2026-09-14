@@ -2,6 +2,7 @@ import { useMemo, type ReactElement } from 'react'
 import type { AfmEvent, LogEntry } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useFeedMode } from '../../hooks/use-feed-mode'
+import { useFeedScope } from '../../hooks/use-feed-scope'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
 
 type FeedWorkspaceProps = {
@@ -9,6 +10,9 @@ type FeedWorkspaceProps = {
   // Лог выбранной стадии — второй режим той же панели (Feed/Log). Приходит из
   // useStageLog (App.tsx), очищается при смене стадии.
   logEntries: LogEntry[]
+  // Разрешённый id стадии воркспейса (уже сверен со списком stages в App), либо
+  // null, если стадия не выбрана / устарела. Основа фильтра «This stage».
+  stageId: string | null
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -23,27 +27,59 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
 // сегмент-переключатель Feed/Log. Пришёл на смену EventFeedPanel: без PanelFrame/
 // Maximizable (воркспейс и так на всю ширину). Сохранены useFeedMode
 // (`afm-feed-mode`), независимый stick-to-bottom для ленты и лога, Jump to latest.
-export function FeedWorkspace({ events, logEntries }: FeedWorkspaceProps): ReactElement {
+// Плюс scope-фильтр This stage | All (useFeedScope, `afm-feed-scope`): по
+// умолчанию лента показывает события выбранной стадии, All — весь флоу.
+export function FeedWorkspace({ events, logEntries, stageId }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   const log = useStickToBottom<HTMLPreElement>()
   const { mode, toggle } = useFeedMode()
-  const groups = useMemo(() => groupFeedItems(toFeedItems(events)), [events])
+  const { scope, toggle: toggleScope } = useFeedScope()
+
+  // Эффективный scope: «только эта стадия» работает лишь когда стадия реально
+  // выбрана (stageId !== null). Без выбранной стадии фильтровать нечего — лента
+  // глобальная, а тумблер скрыт.
+  const stageScopeActive = scope === 'stage' && stageId !== null
+
+  // Фильтр ДО toFeedItems, в одном useMemo: gap между событиями считается уже в
+  // пределах отфильтрованного списка (осмысленнее per-stage). Flow-level события
+  // (stageId === '') видны всегда — это события всего флоу, не конкретной стадии.
+  const groups = useMemo(() => {
+    const visible = stageScopeActive
+      ? events.filter((e) => e.stageId === stageId || e.stageId === '')
+      : events
+    return groupFeedItems(toFeedItems(visible))
+  }, [events, scope, stageId])
+
   const hasLogEntries = logEntries.length > 0
 
   const showFeed = () => { if (mode !== 'feed') toggle() }
   const showLog = () => { if (mode !== 'log') toggle() }
+  const showStageScope = () => { if (scope !== 'stage') toggleScope() }
+  const showAllScope = () => { if (scope !== 'all') toggleScope() }
+
+  // Тумблер scope имеет смысл только в ленте (Feed) и только при выбранной
+  // стадии: в Log-режиме своя per-stage логика (/api/stages/<id>/log).
+  const showScopeSwitch = mode === 'feed' && stageId !== null
 
   return (
     <section className="feed-workspace" aria-label="Feed">
-      <div className="feed-switch" role="group" aria-label="Feed or log">
-        <button type="button" className={`feed-switch-btn${mode === 'feed' ? ' active' : ''}`} aria-pressed={mode === 'feed'} onClick={showFeed}>Feed</button>
-        <button type="button" className={`feed-switch-btn${mode === 'log' ? ' active' : ''}`} aria-pressed={mode === 'log'} onClick={showLog}>Log</button>
+      <div className="feed-controls">
+        <div className="feed-switch" role="group" aria-label="Feed or log">
+          <button type="button" className={`feed-switch-btn${mode === 'feed' ? ' active' : ''}`} aria-pressed={mode === 'feed'} onClick={showFeed}>Feed</button>
+          <button type="button" className={`feed-switch-btn${mode === 'log' ? ' active' : ''}`} aria-pressed={mode === 'log'} onClick={showLog}>Log</button>
+        </div>
+        {showScopeSwitch && (
+          <div className="feed-switch" role="group" aria-label="Feed scope">
+            <button type="button" className={`feed-switch-btn${scope === 'stage' ? ' active' : ''}`} aria-pressed={scope === 'stage'} onClick={showStageScope}>This stage</button>
+            <button type="button" className={`feed-switch-btn${scope === 'all' ? ' active' : ''}`} aria-pressed={scope === 'all'} onClick={showAllScope}>All</button>
+          </div>
+        )}
       </div>
 
       {mode === 'feed' ? (
         <div id="feed-content" className="feed-scroll" ref={feed.ref}>
           {groups.length === 0 ? (
-            <div className="empty-hint feed-empty">No events yet</div>
+            <div className="empty-hint feed-empty">{stageScopeActive ? 'No events for this stage yet' : 'No events yet'}</div>
           ) : (
             groups.map((g) => <FeedGroupView key={g.key} group={g} />)
           )}

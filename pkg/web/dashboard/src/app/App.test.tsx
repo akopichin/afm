@@ -721,4 +721,56 @@ describe('App', () => {
       expect(document.getElementById('detail-title')).toHaveTextContent('Failed stage')
     })
   })
+
+  test('Feed scope: FeedWorkspace получает stageId выбранной стадии и фильтрует ленту', async () => {
+    // Интеграция проброса stageId: выбрана s1, лента по умолчанию (This stage)
+    // показывает события только s1; flow-level и прочие стадии — по кнопке All.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'pending')],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+
+    // agent_action не значим (не триггерит рефетч и смену выбора) — набиваем ленту.
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { tool: 'read_file', detail: 'a.ts' }, stage_id: 's1' }) })
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { tool: 'read_file', detail: 'b.ts' }, stage_id: 's2' }) })
+    })
+
+    // Тумблер scope виден (стадия выбрана); по умолчанию видно только s1.
+    expect(screen.getByRole('button', { name: 'This stage' })).toBeInTheDocument()
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file: a.ts'))
+    expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file: b.ts')
+
+    // All → показываются события всех стадий.
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(document.getElementById('feed-content')?.textContent).toContain('read_file: b.ts')
+  })
+
+  test('Feed scope: устаревший выбор вне stages → тумблер scope скрыт (глобальная лента)', async () => {
+    // После смены набора стадий выбранная s1 исчезает, а активных/failed стадий
+    // нет → selectedStageId устаревает, workspaceStage=null → FeedWorkspace
+    // получает stageId=null, тумблер This stage|All скрыт, лента глобальная.
+    let swapped = false
+    mockFetchForStatus(() =>
+      swapped
+        ? { flow_name: 'demo', stages: [stageView('s9', 'Later', 'pending')] }
+        : { flow_name: 'demo', stages: [stageView('s1', 'Alpha', 'running')] },
+    )
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    expect(screen.getByRole('button', { name: 'This stage' })).toBeInTheDocument()
+
+    swapped = true
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
+    })
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument())
+  })
 })
