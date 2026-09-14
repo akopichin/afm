@@ -189,8 +189,15 @@
   box-shadow: 0 0 0 3px rgba(var(--success-rgb), 0.16);
   animation: ghConnPulse 2.4s ease-in-out infinite;
 }
+/* Offline — красный во всех темах (семантический --danger доступен во всех
+   скинах через base/tokens.css): и текст, и точка, чтобы разрыв связи был
+   заметен, а не сливался с приглушённым нейтральным. */
+.gh-connection.disconnected {
+  color: var(--danger);
+}
 .gh-connection.disconnected .gh-connection-dot {
-  background: var(--text-muted);
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(var(--danger-rgb), 0.16);
 }
 /* Soft breathing of the connection dot while online. */
 @keyframes ghConnPulse {
