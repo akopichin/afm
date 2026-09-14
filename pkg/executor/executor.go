@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/progress"
 )
@@ -24,16 +25,19 @@ type Config struct {
 	Command        string
 	ExtraArgs      []string
 	IdleTimeout    time.Duration
-	TruncateOutput int                       // 0 = no truncation; max chars for logged agent text/Bash-command detail
-	OnAction       func(tool, detail string) // called for each parsed agent action (may be nil)
-	SessionID      string                    // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume         bool                      // if true, --resume <SessionID> is used instead of --session-id
-	StageDir       string                    // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	WrapperDir     string                    // if set, prepended to PATH in agent env so generated wrapper scripts resolve
-	Dir            string                    // if set, agent runs with this working directory (project root from flow.root_dir)
-	Debug          bool                      // if true, log the exact agent input (prompt) to debug logs
-	RunDir         string                    // run directory root; with Debug, <RunDir>/debug.log gets every agent input
-	StageID        string                    // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	TruncateOutput int                          // 0 = no truncation; max chars for logged agent text/Bash-command detail
+	OnAction       func(tool, detail string)    // called for each parsed agent action (may be nil)
+	SessionID      string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume         bool                         // if true, --resume <SessionID> is used instead of --session-id
+	StageDir       string                       // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	WrapperDir     string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir            string                       // if set, agent runs with this working directory (project root from flow.root_dir)
+	Debug          bool                         // if true, log the exact agent input (prompt) to debug logs
+	RunDir         string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
+	StageID        string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	Phase          string                       // phase label for the accounting Observation this invocation produces
+	UsageHint      accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
+	OnUsage        func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
 	// InterruptCh, if set, is watched during RunAgent: a signal on this channel
 	// sends SIGINT to the subprocess (not SIGKILL, not ctx cancellation) —
 	// graceful, user-requested interrupt (agent_suggest), distinct from idle
@@ -275,7 +279,9 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	var firstErr string
 	var agentWroteOutFile bool
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	collector := accounting.NewCollector(e.cfg.UsageHint)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
+		collector.Observe([]byte(line))
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -308,6 +314,9 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	})
 
 	lg.LogEnd(runErr)
+	if e.cfg.OnUsage != nil {
+		e.cfg.OnUsage(collector.Finish(runErr))
+	}
 	if runErr != nil {
 		if firstErr != "" {
 			return fmt.Errorf("%s: %w", firstErr, runErr)
@@ -383,7 +392,9 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	collector := accounting.NewCollector(e.cfg.UsageHint)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
+		collector.Observe([]byte(line))
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -406,6 +417,9 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	})
 
 	lg.LogEnd(runErr)
+	if e.cfg.OnUsage != nil {
+		e.cfg.OnUsage(collector.Finish(runErr))
+	}
 	if runErr != nil && firstErr != "" {
 		return fmt.Errorf("%s: %w", firstErr, runErr)
 	}

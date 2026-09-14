@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/executor"
 )
 
@@ -867,6 +868,168 @@ func TestRunScript_HardTimeout(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("RunScript took too long to time out: %v", elapsed)
+	}
+}
+
+// TestRunAgentUsage_OnUsageFiresOnceWithMeteredTokens verifies that a
+// claude-style terminal `result` line carrying usage produces exactly one
+// OnUsage call with Metered==true and the correct normalized tokens.
+func TestRunAgentUsage_OnUsageFiresOnceWithMeteredTokens(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+
+	script := `echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"pkg/foo.go"}}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.05,"usage":{"input_tokens":100,"cache_read_input_tokens":20,"cache_creation_input_tokens":0,"output_tokens":50}}'`
+
+	var observations []accounting.Observation
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		OnUsage: func(o accounting.Observation) {
+			observations = append(observations, o)
+		},
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	if len(observations) != 1 {
+		t.Fatalf("OnUsage called %d times, want 1: %+v", len(observations), observations)
+	}
+	obs := observations[0]
+	if !obs.Metered {
+		t.Fatalf("expected Metered=true, got %+v", obs)
+	}
+	if obs.Tokens.UncachedInput != 100 || obs.Tokens.CacheRead != 20 || obs.Tokens.Output != 50 {
+		t.Errorf("tokens = %+v, want uncached=100 cache_read=20 output=50", obs.Tokens)
+	}
+}
+
+// TestRunAgentUsage_SequentialCallsAreIndependent verifies that two
+// sequential agent invocations each produce their own Observation — the
+// second one is not polluted by tokens collected during the first.
+func TestRunAgentUsage_SequentialCallsAreIndependent(t *testing.T) {
+	dir := t.TempDir()
+
+	var observations []accounting.Observation
+	onUsage := func(o accounting.Observation) { observations = append(observations, o) }
+
+	script1 := `echo '{"type":"result","subtype":"success","usage":{"input_tokens":10,"output_tokens":5}}'`
+	ex1 := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script1},
+		IdleTimeout: 5 * time.Second,
+		OnUsage:     onUsage,
+	})
+	if err := ex1.RunAgent(context.Background(), "implementation", "s1", "do work", filepath.Join(dir, "impl1.log")); err != nil {
+		t.Fatalf("RunAgent 1: %v", err)
+	}
+
+	script2 := `echo '{"type":"result","subtype":"success","usage":{"input_tokens":200,"output_tokens":99}}'`
+	ex2 := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script2},
+		IdleTimeout: 5 * time.Second,
+		OnUsage:     onUsage,
+	})
+	if err := ex2.RunAgent(context.Background(), "implementation", "s1", "do work", filepath.Join(dir, "impl2.log")); err != nil {
+		t.Fatalf("RunAgent 2: %v", err)
+	}
+
+	if len(observations) != 2 {
+		t.Fatalf("got %d observations, want 2: %+v", len(observations), observations)
+	}
+	if observations[0].Tokens.UncachedInput != 10 || observations[0].Tokens.Output != 5 {
+		t.Errorf("first observation wrong/polluted: %+v", observations[0])
+	}
+	if observations[1].Tokens.UncachedInput != 200 || observations[1].Tokens.Output != 99 {
+		t.Errorf("second observation wrong/polluted by first: %+v", observations[1])
+	}
+}
+
+// TestRunAgentUsage_ErrorWithNoTerminalResultIsUnmetered verifies that a run
+// that ends in an error without ever emitting a terminal result line still
+// fires OnUsage exactly once, with Metered==false.
+func TestRunAgentUsage_ErrorWithNoTerminalResultIsUnmetered(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+
+	// No stdout at all (no result line), stderr diagnostic, non-zero exit —
+	// mirrors an agent process that dies before ever streaming a result.
+	script := `echo 'boom' >&2; exit 1`
+
+	var observations []accounting.Observation
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		OnUsage: func(o accounting.Observation) {
+			observations = append(observations, o)
+		},
+	})
+
+	err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile)
+	if err == nil {
+		t.Fatal("expected error from exit 1, got nil")
+	}
+
+	if len(observations) != 1 {
+		t.Fatalf("OnUsage called %d times, want 1: %+v", len(observations), observations)
+	}
+	if observations[0].Metered {
+		t.Fatalf("expected Metered=false (no terminal result observed), got %+v", observations[0])
+	}
+}
+
+// TestRunAgentUsage_NotCorruptedByTruncateOutput verifies that
+// Config.TruncateOutput (which limits logged text/Bash-command detail) does
+// NOT affect the raw line fed to the accounting collector: the collector
+// must see the full, untruncated stream-json line, or a large usage line
+// would parse as broken JSON and silently come back unmetered.
+func TestRunAgentUsage_NotCorruptedByTruncateOutput(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+
+	// Pad the result line well past any plausible truncation limit so that if
+	// the raw line were ever clipped before reaching the collector, the JSON
+	// would break and the observation would come back unmetered.
+	padding := strings.Repeat("x", 5000)
+	resultLine := fmt.Sprintf(
+		`{"type":"result","subtype":"success","padding":"%s","usage":{"input_tokens":12345,"cache_read_input_tokens":678,"output_tokens":910}}`,
+		padding,
+	)
+	resultFile := filepath.Join(dir, "result.jsonl")
+	if err := os.WriteFile(resultFile, []byte(resultLine+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf("cat %q", resultFile)
+
+	var observations []accounting.Observation
+	ex := executor.New(executor.Config{
+		Command:        testCmdShell,
+		ExtraArgs:      []string{testFlagC, script},
+		IdleTimeout:    5 * time.Second,
+		TruncateOutput: 10, // deliberately tiny — must not touch the raw usage line
+		OnUsage: func(o accounting.Observation) {
+			observations = append(observations, o)
+		},
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	if len(observations) != 1 {
+		t.Fatalf("OnUsage called %d times, want 1: %+v", len(observations), observations)
+	}
+	obs := observations[0]
+	if !obs.Metered {
+		t.Fatalf("expected Metered=true (raw line must reach collector unmodified), got %+v", obs)
+	}
+	if obs.Tokens.UncachedInput != 12345 || obs.Tokens.CacheRead != 678 || obs.Tokens.Output != 910 {
+		t.Errorf("tokens corrupted by truncation: %+v", obs.Tokens)
 	}
 }
 
