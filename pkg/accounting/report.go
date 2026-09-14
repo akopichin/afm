@@ -91,7 +91,7 @@ func renderStagesTable(b *strings.Builder, recs []UsageRecord, byStage map[strin
 func statusAndDuration(info StageInfo) string {
 	status := info.Status
 	if status == "" {
-		status = "—"
+		status = dashUnknown
 	}
 	if info.Duration == "" {
 		return status
@@ -118,7 +118,7 @@ func phaseCounts(recs []UsageRecord, stageID string) string {
 		counts[r.Phase]++
 	}
 	if len(counts) == 0 {
-		return "—"
+		return dashUnknown
 	}
 	phases := make([]string, 0, len(counts))
 	for p := range counts {
@@ -136,7 +136,7 @@ func phaseCounts(recs []UsageRecord, stageID string) string {
 // "—" when none were recorded (e.g. a group of entirely unmetered records).
 func joinModels(models []string) string {
 	if len(models) == 0 {
-		return "—"
+		return dashUnknown
 	}
 	sorted := append([]string(nil), models...)
 	slices.Sort(sorted)
@@ -217,7 +217,7 @@ func renderCoverage(b *strings.Builder, recs []UsageRecord) {
 			rs := rates[k]
 			asOf := rs.AsOf
 			if asOf == "" {
-				asOf = "—"
+				asOf = dashUnknown
 			}
 			fmt.Fprintf(b, "- `%s` (source: %s, as of: %s)\n", k, rs.Source, asOf)
 		}
@@ -251,7 +251,7 @@ func renderCoverage(b *strings.Builder, recs []UsageRecord) {
 	if len(mismatched) > 0 {
 		b.WriteString("Reported vs. estimated cost mismatches:\n\n")
 		for _, r := range sortedByStagePhase(mismatched) {
-			reported := "—"
+			reported := dashUnknown
 			if r.ReportedCostUSD != nil {
 				reported = FormatUSD(*r.ReportedCostUSD, true)
 			}
@@ -280,7 +280,7 @@ func recordLabel(r UsageRecord) string {
 		return "run_overhead"
 	}
 	if r.StageID == "" {
-		return "—"
+		return dashUnknown
 	}
 	return r.StageID
 }
