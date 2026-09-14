@@ -1,21 +1,22 @@
-# AFM Prompts
+# Prompts
 
-Все промпты собираются в `pkg/prompts/builder.go` функцией `Build()`. Ниже — каждый тип промпта со структурой и содержимым шаблонов.
+All prompts are assembled in `pkg/prompts/builder.go` by the `Build()` function. The
+templates themselves live under `assets/prompts/` and can be overridden per project
+via the `prompts_dir` config option. This page documents each prompt type — its
+structure and the default template content.
 
----
-
-## Структура сборки (Build)
+## Assembly structure (`Build`)
 
 ```
 <system_rules>
   {Template}                    ← planning.md / implementation.md / review.md
-  {OutputContractMD}            ← только для planning: "## Output Contract (mandatory)..."
-  [<interactive_rules>]         ← только если stage.Interactive = true
+  {OutputContractMD}            ← planning only: "## Output Contract (mandatory)..."
+  [<interactive_rules>]         ← only if stage.Interactive = true
 </system_rules>
 
 [<context>
-  [<dependency_plans>]          ← планы стейджей из depends_on
-  [<artifacts>]                 ← файлы артефактов из зависимостей
+  [<dependency_plans>]          ← plans of stages from depends_on
+  [<artifacts>]                 ← artifact files from dependencies
 </context>]
 
 <stage id="..." name="...">
@@ -23,23 +24,23 @@
   [<skills>...</skills>]
 </stage>
 
-[<prompt>...]                   ← stage.Prompt из flow.yaml
+[<prompt>...]                   ← stage.Prompt from flow.yaml
 [<plan>...]                     ← plan.md (implementation/review)
 [<previous_plan>...]            ← plan.vN.md (planning with feedback)
 [<feedback>...]                 ← feedback.md (planning with feedback)
-[{RetryContext}]                ← контекст при повторе
-[<example_output>...]           ← (не используется в те��ущих вызовах)
+[{RetryContext}]                ← context on retry
 ```
 
-Содержимое `<description>`, `<prompt>`, `<plan>`, `<previous_plan>`, `<feedback>` и `<example_output>` проходит через `escapeTags()` — XML-теги экранируются нулевым символом `​` во избежание prompt injection.
+The contents of `<description>`, `<prompt>`, `<plan>`, `<previous_plan>`,
+`<feedback>` and `<example_output>` pass through `escapeTags()` — XML tags are
+neutralized to prevent prompt injection.
 
----
+## 1. Planning agent
 
-## 1. Planning Agent
+**When:** the first run of a stage → creates `plan.md`.
 
-**Когда**: первый запуск стейджа → создание `plan.md`
+Template (`assets/prompts/planning.md`):
 
-**Шаблон** (`assets/prompts/planning.md`):
 ```
 # Planning Agent
 
@@ -62,58 +63,27 @@ Any missing section will cause the stage to be re-prompted once, then failed.
 - Output ONLY the plan markdown — no preamble, no explanation.
 ```
 
-**Дополнительный contract** (`planningContract`, добавляется после шаблона):
-```
-## Output Contract (mandatory)
-The plan MUST contain sections: "## Tasks", "## Assumptions", "## Acceptance Criteria".
-```
+An additional `planningContract` block is appended after the template, restating the
+required sections.
 
-**Поля Inputs**:
-| Поле | Значение |
-|------|---------|
-| Template | planning.md |
-| OutputContractMD | planningContract |
-| DependencyPlans | планы из depends_on стейджей |
-| Artifacts | файлы артефактов |
-| StageDir | путь к директории стейджа |
-| Interactive | из flow.yaml |
-| RetryContext | при retry |
+## 2. Planning with feedback (Revise)
 
----
+**When:** the user clicked Revise → `plan.md` is recreated taking the notes into
+account. Same as Planning, plus the previous plan (`plan.vN.md`) and the feedback
+(`feedback.md`) are added to the context.
 
-## 2. Planning with Feedback (Revise)
+## 3. Planning re-prompt (missing sections)
 
-**Когда**: пользователь нажал Revise → пересоздание `plan.md` с учётом замечаний
+**When:** a plan is missing a required section → a single re-prompt. This is **not**
+built through `Build()` — it's a plain string that asks the agent to add only the
+missing sections to the existing plan, without rewriting the rest.
 
-То же что Planning, плюс:
-| Поле | Значение |
-|------|---------|
-| PreviousPlan | содержимое последнего `plan.vN.md` |
-| Feedback | содержимое `feedback.md` |
+## 4. Implementation agent
 
----
+**When:** after the plan is approved → executes the tasks.
 
-## 3. Planning Re-prompt (missing sections)
+Template (`assets/prompts/implementation.md`):
 
-**Когда**: план не содержит обязательных секций → однократный re-prompt
-
-**Это НЕ через `Build()`** — plain string:
-```
-Your previous plan was missing required sections: {Tasks, Assumptions, ...}.
-Add ONLY the missing sections to the existing plan below. Do not rewrite the rest.
-
-<previous_plan>
-{предыдущий план}
-</previous_plan>
-```
-
----
-
-## 4. Implementation Agent
-
-**Когда**: после approve плана → выполнение задач
-
-**Шаблон** (`assets/prompts/implementation.md`):
 ```
 # Implementation Agent
 
@@ -149,32 +119,16 @@ Work task by task. Run tests after each. Commit after each completed task.
 Follow TDD: write tests first.
 ```
 
-**Поля Inputs**:
-| Поле | Значение |
-|------|---------|
-| Template | implementation.md |
-| DependencyPlans | планы из depends_on |
-| Artifacts | артефакты + Required Artifacts из stage.Artifacts |
-| Plan | содержимое `plan.md` |
-| StageDir | путь к директории стейджа |
-| Interactive | из flow.yaml |
-| RetryContext | `{retryContext}\n\nStage directory for .done file: {stageDir}` + verify command если задан |
+If the stage declares `artifacts:` in flow.yaml, a "Required output artifacts" list
+(name — description → path) is appended to the artifacts context.
 
-**Дополнение к Artifacts**: если у стейджа есть `artifacts:` в flow.yaml, в конец Artifacts добавляется:
-```
-Required output artifacts (MUST exist at these paths when stage finishes):
+## 5. Review agent
 
-- {name} — {description} → {path}
-...
-```
+**When:** after implementation (if the stage has `review` in `agents`) or as a
+standalone stage.
 
----
+Template (`assets/prompts/review.md`):
 
-## 5. Review Agent
-
-**Когда**: после implementation (если в stage `agents: [..., review]`) или как самостоятельный стейдж
-
-**Шаблон** (`assets/prompts/review.md`):
 ```
 # Review Agent
 
@@ -195,23 +149,12 @@ Output MUST contain these sections (exact names):
 - Edge cases: error conditions handled?
 ```
 
-**Поля Inputs**:
-| Поле | Значение |
-|------|---------|
-| Template | review.md |
-| DependencyPlans | планы из depends_on |
-| Artifacts | артефакты |
-| StageDir | путь к директории стейджа |
-| Interactive | из flow.yaml |
-| RetryContext | при retry |
+## 6. Summary agent
 
----
+**When:** the final stage of a flow.
 
-## 6. Summary Agent
+Template (`assets/prompts/summary.md`):
 
-**Когда**: финальный стейдж флоу
-
-**Шаблон** (`assets/prompts/summary.md`):
 ```
 # Summary Agent
 
@@ -227,9 +170,9 @@ Output MUST contain these sections:
 Read implementation and review logs from each stage in the run directory.
 ```
 
----
+## 7. Interactive rules
 
-## 7. Interactive Rules (добавляются в system_rules если stage.Interactive = true)
+Added to `system_rules` when `stage.Interactive = true`:
 
 ```xml
 <interactive_rules>
@@ -253,18 +196,3 @@ For each question:
 Ask ONE question at a time.
 </interactive_rules>
 ```
-
----
-
-## Итог: что идёт в модель по стейджам goga.yaml
-
-| Стейдж | Агент | Шаблон | Extras |
-|--------|-------|--------|--------|
-| propose (planning) | planning | planning.md + contract | interactive_rules |
-| propose (implementation) | implementation | implementation.md | interactive_rules, plan |
-| propose (review) | review | review.md | interactive_rules |
-| propose-review (planning) | planning | planning.md + contract | interactive_rules, dep_plans |
-| propose-review (implementation) | implementation | implementation.md | interactive_rules, plan, dep_plans |
-| brainstorm | planning → impl → review | все три | interactive_rules, dep_plans |
-| ... | ... | ... | + нарастающий dep_plans от предыдущих стейджей |
-| accept | planning → impl → review | все три | interactive_rules, все dep_plans |

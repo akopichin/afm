@@ -1,0 +1,83 @@
+site_name: afm
+site_description: Orchestrate multi-stage AI tasks — plan, approve, and run AI agents from a YAML flow.
+site_url: https://akopichin.github.io/afm/
+repo_url: https://github.com/akopichin/afm
+repo_name: akopichin/afm
+edit_uri: edit/main/docs/
+copyright: MIT-licensed. Built with Material for MkDocs.
+
+# Internal SDD specs/plans/notes live under docs/ for the agents (see AGENTS.md)
+# but are not part of the public site.
+exclude_docs: |
+  superpowers/
+  requirements.txt
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.instant
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guides:
+      - flow.yaml reference: flow-reference.md
+      - Configuration: config-reference.md
+      - Stage lifecycle: stage-lifecycle.md
+      - Autonomous track: autonomous-track.md
+      - Script stages & hooks: script-stages.md
+      - Interactive stages: interactive-stages.md
+      - Artifacts & inputs: artifacts.md
+      - Agent memory: agent-memory.md
+      - Dashboard: dashboard.md
+      - Docker mode: docker.md
+      - Go SDK: sdk.md
+  - Internals:
+      - Directory layout: internals/directory-layout.md
+      - Event log: internals/event-log.md
+      - Prompts: internals/prompts.md
+  - Changelog: https://github.com/akopichin/afm/blob/main/CHANGELOG.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+
+plugins:
+  - search
