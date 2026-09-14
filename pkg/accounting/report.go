@@ -99,14 +99,20 @@ func statusAndDuration(info StageInfo) string {
 	return fmt.Sprintf("%s (%s)", status, info.Duration)
 }
 
-// phaseCounts renders a stage's invocation count per phase, e.g.
-// "implementation×2, review×1", sorted by phase name for determinism. "—"
-// when the stage has no stage-attributed records (shouldn't happen for an
-// id present in byStage, but kept honest rather than assumed).
+// phaseCounts renders the invocation count per phase for the records in
+// recs matching stageID, e.g. "implementation×2, review×1", sorted by phase
+// name for determinism. "—" when nothing matches. It does NOT filter by
+// Scope itself — callers control which records are in scope: renderStagesTable
+// passes the full record set with a real (non-empty) stageID, which
+// naturally excludes run_overhead records (their StageID is always ""), and
+// renderOverhead passes an already-scope-filtered overhead slice with
+// stageID="" to match them. Re-excluding ScopeRunOverhead here as well
+// previously made the Run overhead section always render "—", since its own
+// records ARE the run_overhead ones (found in review).
 func phaseCounts(recs []UsageRecord, stageID string) string {
 	counts := map[string]int{}
 	for _, r := range recs {
-		if r.StageID != stageID || r.Scope == ScopeRunOverhead {
+		if r.StageID != stageID {
 			continue
 		}
 		counts[r.Phase]++

@@ -65,6 +65,7 @@ func TestRenderMarkdown_Golden(t *testing.T) {
 		"glm-5.3",
 		"done (12m34s)",
 		"## Run overhead",
+		"memory_update×1",
 		"## Total",
 		"## Coverage and pricing",
 	} {
@@ -78,6 +79,37 @@ func TestRenderMarkdown_Golden(t *testing.T) {
 	wantUncached := reportObsA().Tokens.UncachedInput * 2
 	if !strings.Contains(got, "20000") {
 		t.Errorf("expected doubled uncached-input tokens (%d) in report; got:\n%s", wantUncached, got)
+	}
+}
+
+// TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts is a targeted
+// regression for a bug found in review: renderOverhead called
+// phaseCounts(overhead, "") on a slice ALREADY filtered to
+// Scope==ScopeRunOverhead, but phaseCounts itself ALSO unconditionally
+// skipped any record with that scope (a guard meant to keep overhead out of
+// the per-stage table) — so the Run overhead section's phase/invocation
+// breakdown always rendered "—" instead of the real counts. This test would
+// have failed against the buggy code (which printed "—" here) and must pass
+// against the fix (phaseCounts no longer re-excludes what the caller
+// already scoped).
+func TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	led := &Ledger{}
+	led.Add(BuildRecord(r, reportObsOverhead(), "", "memory_update", ScopeRunOverhead))
+
+	got := RenderMarkdown("myflow-20260914-100000", nil, led)
+
+	idx := strings.Index(got, "## Run overhead")
+	if idx == -1 {
+		t.Fatalf("report missing \"## Run overhead\" section; got:\n%s", got)
+	}
+	overheadSection := got[idx:]
+
+	if !strings.Contains(overheadSection, "memory_update×1") {
+		t.Errorf("expected the overhead section to show the real phase/invocation count \"memory_update×1\"; got:\n%s", overheadSection)
+	}
+	if strings.Contains(overheadSection, "(—)") {
+		t.Errorf("overhead section must not fall back to \"(—)\" when it has real records; got:\n%s", overheadSection)
 	}
 }
 
