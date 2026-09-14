@@ -61,3 +61,52 @@ func TestBuildRecordUnknownModelUnpriced(t *testing.T) {
 		t.Fatal("unknown model must be unpriced")
 	}
 }
+
+func TestBuildRecordReportedCostDiffersBeyondTolerance(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	obs := obsGLM()
+	rr, ok := r.Resolve(obs.Channel, obs.Model)
+	if !ok {
+		t.Fatal("expected glm-5.3 to resolve")
+	}
+	estimate := rr.cost(obs.Tokens)
+	reported := estimate + costToleranceUSD + 0.01 // well beyond tolerance
+	obs.ReportedCostUSD = &reported
+
+	rec := BuildRecord(r, obs, "backend", "implementation", "")
+	if !rec.Priced {
+		t.Fatal("expected priced record")
+	}
+	if !hasWarning(rec.Warnings, "reported_cost_differs_from_estimate") {
+		t.Fatalf("expected reported_cost_differs_from_estimate warning, got %v", rec.Warnings)
+	}
+}
+
+func TestBuildRecordReportedCostWithinTolerance(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	obs := obsGLM()
+	rr, ok := r.Resolve(obs.Channel, obs.Model)
+	if !ok {
+		t.Fatal("expected glm-5.3 to resolve")
+	}
+	estimate := rr.cost(obs.Tokens)
+	reported := estimate + costToleranceUSD/2 // well within tolerance
+	obs.ReportedCostUSD = &reported
+
+	rec := BuildRecord(r, obs, "backend", "implementation", "")
+	if !rec.Priced {
+		t.Fatal("expected priced record")
+	}
+	if hasWarning(rec.Warnings, "reported_cost_differs_from_estimate") {
+		t.Fatalf("did not expect reported_cost_differs_from_estimate warning, got %v", rec.Warnings)
+	}
+}
+
+func hasWarning(warnings []string, target string) bool {
+	for _, w := range warnings {
+		if w == target {
+			return true
+		}
+	}
+	return false
+}
