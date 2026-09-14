@@ -1,35 +1,35 @@
-# Интерактивный demo-flow — проверка диалогового стейджа
+# Interactive demo flow — exercises the file-based dialog protocol
 #
-# Использование:
-#   afm run example-flow-interactive.yaml
-#   # открыть dashboard, ответить на вопросы в секции «Диалог»
+# Usage:
+#   afm run examples/interactive/flow.yaml
+#   # open the dashboard and answer the questions in the "Dialog" panel
 
 name: interactive-demo
-description: "Demo интерактивного стейджа"
+description: "Demo of an interactive stage"
 
 stages:
   - id: discovery
-    name: "Сбор требований"
+    name: "Gather Requirements"
     description: |
-      Спроси у пользователя:
-      1. Какой язык программирования предпочитает (предложи Go, Python, TypeScript).
-      2. Какой стиль архитектуры (предложи monolith, microservices, "не знаю").
+      Ask the user:
+      1. Which programming language they prefer (offer Go, Python, TypeScript).
+      2. Which architecture style (offer monolith, microservices, "not sure").
 
-      Для каждого вопроса используй файловый протокол диалога:
-      - запиши $AFM_STAGE_DIR/implementation.q1.question.json
-        (формат: {"id":"q1","question":"...","options":["Go","Python","TypeScript"],"allow_custom":true})
-      - дождись ответа: while [ ! -f "$AFM_STAGE_DIR/implementation.q1.answer.json" ]; do sleep 30; done
-      - повтори для q2 (архитектура)
+      For each question use the file-based dialog protocol:
+      - write $AFM_STAGE_DIR/implementation.q1.question.json
+        (format: {"id":"q1","question":"...","options":["Go","Python","TypeScript"],"allow_custom":true})
+      - wait for the answer: while [ ! -f "$AFM_STAGE_DIR/implementation.q1.answer.json" ]; do sleep 30; done
+      - repeat for q2 (architecture)
 
-      После двух ответов запиши итог в ./summary.md в формате:
-        # Сводка
-        - Язык: <ответ>
-        - Архитектура: <ответ>
+      After both answers, write the result to ./summary.md in this format:
+        # Summary
+        - Language: <answer>
+        - Architecture: <answer>
 
-      Когда summary.md записан — заверши работу (создай .done).
+      Once summary.md is written — finish (create .done).
     agents: [implementation]
     interactive: true
     artifacts:
       - name: summary
         path: ./summary.md
-        description: "Сводка ответов"
+        description: "Summary of the answers"

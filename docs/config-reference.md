@@ -28,7 +28,7 @@ docker:
   # image: akopichin/afm:latest
   # autoShim: true          # generate claude wrappers for agents.<cmd> inside the container
   # file_browser:
-  #   enabled: true          # dashboard file browser; OFF by default, env AFM_FILE_BROWSER overrides
+  #   enabled: false         # dashboard file browser; ON by default, env AFM_FILE_BROWSER overrides
   # extra_mounts: [~/.ai-free]  # extra host paths into the container (:ro); each entry can
   #   # also be {path, name, browse} — browse:true exposes it in the file browser
   # agents:                 # recipes for autoShim (see config.example.yaml)

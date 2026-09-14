@@ -1,104 +1,103 @@
-# Пример flow.yaml — добавление фичи авторизации через JWT
+# Example flow.yaml — adding JWT authentication as a feature
 #
-# Использование:
-#   afm run example-flow.yaml
-#   afm approve backend-auth   # после просмотра плана
-#   afm check                  # статус выполнения
+# Usage:
+#   afm run examples/basic/flow.yaml
+#   afm approve backend-auth   # after reviewing the plan
+#   afm check                  # run status
 #
-# Или положить в .afm/flows/ — тогда run без аргументов сам найдёт.
+# Or drop it in .afm/flows/ — then `afm run` (no argument) finds it.
 
 name: jwt-auth
-description: "Реализация JWT-авторизации: middleware, эндпоинты логина/логаута, тесты"
+description: "JWT authentication: middleware, login/logout endpoints, tests"
 
-# prompt — необязательная глобальная инструкция. Добавляется в системный промпт
-# КАЖДОЙ стадии и каждой фазы (planning/implementation/review) как блок
-# <global_prompt> сразу после </system_rules>. Пустое/отсутствующее поле —
-# поведение не меняет. Можно задать однострочно (prompt: "...") или блоком (|).
+# prompt — an optional global instruction. It's added to the system prompt of EVERY
+# stage and every phase (planning/implementation/review) as a <global_prompt> block
+# right after </system_rules>. An empty/absent field changes nothing. It can be a
+# single line (prompt: "...") or a block (|).
 prompt: |
-  Общие правила для всего flow:
-  - Код на Go в стиле проекта: gofmt + golangci-lint без замечаний.
-  - Каждая публичная функция и тип — с godoc-комментарием.
-  - Не меняй версию Go в go.mod без явного требования.
-  - Коммиты — на русском языке.
+  Rules for the whole flow:
+  - Go code in the project's style: gofmt + golangci-lint clean.
+  - Every exported function and type has a godoc comment.
+  - Do not change the Go version in go.mod without an explicit requirement.
 
 stages:
 
   # ──────────────────────────────────────────────────
-  # Стадия 1: бэкенд — JWT middleware и эндпоинты
+  # Stage 1: backend — JWT middleware and endpoints
   # ──────────────────────────────────────────────────
   - id: backend-auth
     name: "JWT Middleware & Auth Endpoints"
     description: |
-      Реализуй JWT-авторизацию:
-      1. Пакет internal/auth — генерация и валидация токенов (библиотека golang-jwt/jwt).
-      2. HTTP middleware CheckJWT: проверяет заголовок Authorization: Bearer <token>.
-      3. POST /auth/login  — принимает {username, password}, возвращает {token}.
-      4. POST /auth/logout — инвалидация токена (blacklist in-memory или Redis).
-      5. Все эндпоинты покрыть unit-тестами (coverage ≥ 80%).
+      Implement JWT authentication:
+      1. Package internal/auth — token generation and validation (golang-jwt/jwt).
+      2. HTTP middleware CheckJWT: validates the Authorization: Bearer <token> header.
+      3. POST /auth/login  — accepts {username, password}, returns {token}.
+      4. POST /auth/logout — token invalidation (in-memory blacklist or Redis).
+      5. Cover all endpoints with unit tests (coverage ≥ 80%).
     agents: [planning, implementation, review]
-    # skills — дополнительные инструкции для агента (опционально)
+    # skills — extra instructions for the agent (optional)
     skills:
       - superpowers:test-driven-development
 
   # ──────────────────────────────────────────────────
-  # Стадия 2: фронтенд — форма входа
-  # Запускается только после завершения backend-auth
+  # Stage 2: frontend — login form
+  # Starts only after backend-auth completes
   # ──────────────────────────────────────────────────
   - id: frontend-login
     name: "Login Form UI"
     description: |
-      Реализуй форму входа:
-      1. Компонент LoginPage (React + TypeScript).
-      2. Поля email и password с валидацией (react-hook-form + zod).
-      3. При успехе — сохранить JWT в httpOnly cookie через API-прокси.
-      4. При ошибке — показать понятное сообщение.
-      5. Юнит-тесты компонента (vitest + testing-library).
+      Implement the login form:
+      1. A LoginPage component (React + TypeScript).
+      2. Email and password fields with validation (react-hook-form + zod).
+      3. On success — store the JWT in an httpOnly cookie via an API proxy.
+      4. On error — show a clear message.
+      5. Unit tests for the component (vitest + testing-library).
     agents: [planning, implementation, review]
     depends_on: [backend-auth]
-    # planning этой стадии стартует после завершения backend-auth;
-    # eager_planning: true — планировать сразу, не дожидаясь
+    # This stage's planning starts after backend-auth completes;
+    # eager_planning: true — plan immediately, without waiting.
 
   # ──────────────────────────────────────────────────
-  # Стадия 3: интеграционные тесты
-  # Запускается после обеих предыдущих стадий
+  # Stage 3: integration tests
+  # Starts after both previous stages
   # ──────────────────────────────────────────────────
   - id: integration-tests
     name: "E2E Integration Tests"
     description: |
-      Напиши интеграционные тесты полного цикла авторизации:
-      1. Успешный логин → получение токена → запрос к защищённому эндпоинту.
-      2. Логин с неверным паролем → 401.
-      3. Запрос без токена → 401.
-      4. Запрос с истёкшим токеном → 401.
-      5. Логаут → повторное использование токена → 401.
-      Используй testcontainers-go если нужна БД.
+      Write integration tests for the full auth cycle:
+      1. Successful login → obtain token → request a protected endpoint.
+      2. Login with a wrong password → 401.
+      3. Request without a token → 401.
+      4. Request with an expired token → 401.
+      5. Logout → reuse the token → 401.
+      Use testcontainers-go if you need a database.
     agents: [planning, implementation]
     depends_on: [backend-auth, frontend-login]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Пример стадии с готовым планом (пропускает planning agent):
+# Example of a stage with a ready-made plan (skips the planning agent):
 #
 #   - id: db-migration
 #     name: "Database Migration"
-#     description: "Применить миграцию схемы для таблицы users"
+#     description: "Apply the schema migration for the users table"
 #     agents: [implementation]
-#     plan: docs/plans/db-migration.md   # агент планирования не запускается
+#     plan: docs/plans/db-migration.md   # the planning agent does not run
 #
-# Пример параллельных независимых стадий (без depends_on):
+# Example of parallel independent stages (no depends_on):
 #
 #   - id: update-docs
 #     name: "Update Docs"
-#     description: "Обновить README и OpenAPI-спецификацию"
+#     description: "Update the README and OpenAPI spec"
 #     agents: [planning, implementation]
 #
-# Пример стадии с verify-командой (гейт против ложного «done»):
-# команда выполняется в директории проекта после того, как агент записал .done;
-# exit-код != 0 — один ретрай агента с выводом команды, затем стадия failed.
+# Example of a stage with a verify command (a gate against a false "done"):
+# the command runs in the project directory after the agent writes .done;
+# a non-zero exit → one agent retry with the command output, then the stage fails.
 #
 #   - id: fix-tests
 #     name: "Fix Tests"
-#     description: "Починить падающие тесты"
+#     description: "Fix the failing tests"
 #     agents: [planning, implementation]
 #     verify: ".venv/bin/python -m pytest tests/ -q"
 #

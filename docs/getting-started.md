@@ -57,17 +57,12 @@ optionally run `afm install-skills`.
 
 ```bash
 make build        # build into bin/afm
-make install      # install via go install
+make install      # install via `go install` (into your Go bin)
 ```
 
-**Prebuilt binary + Claude skills:**
-
-```bash
-./install.sh
-```
-
-The script copies the binary to `/usr/local/bin` and installs skills for Claude
-Code (`/afm`, `/afm-check`, `/afm-init`, `/afm-retry`, `/afm-review`).
+To also install the Claude Code skills, run `./install.sh` after `make build` — it
+copies the freshly built `bin/afm` into `$HOME/homebrew/bin` and installs the skills
+(`/afm`, `/afm-check`, `/afm-init`, `/afm-retry`, `/afm-review`).
 
 To run afm without a local install, see [Docker mode](docker.md).
 
@@ -84,8 +79,9 @@ implementation → review), a build + verify loop, parallel tracks merging into 
 integration stage, or fully custom stage-by-stage — then asks per-stage questions
 (agent mode, plan vs. planning agent, which phases to run, and optional
 artifacts/inputs/verify/interactive/custom-command settings). The result is
-validated before the wizard reports success. Or write `flow.yaml` by hand — see
-the [flow.yaml reference](flow-reference.md).
+validated before the wizard reports success and written to `.afm/flows/<name>.yaml`
+(the wizard prints the exact path). Or write `flow.yaml` by hand — see the
+[flow.yaml reference](flow-reference.md).
 
 ```bash
 afm validate flow.yaml
@@ -99,10 +95,11 @@ flow.
 ### 2. Run
 
 ```bash
-afm run flow.yaml
-
-# If the flow lives in .afm/flows/ — you can omit the argument:
+# A flow created by `afm init` lives in .afm/flows/ — just run:
 afm run
+
+# Or point at a flow file explicitly (e.g. one written by hand):
+afm run path/to/flow.yaml
 ```
 
 By default a web dashboard comes up (`http://localhost:9876`); its URL is printed

@@ -33,9 +33,11 @@ claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
 
 ```bash
 brew install --cask akopichin/afm/afm   # or see the install guide for Linux/Docker/source
-afm init                                # scaffold a flow.yaml interactively
-afm run flow.yaml                       # run it; a live dashboard comes up at http://localhost:9876
+afm init                                # scaffold a flow into .afm/flows/ interactively
+afm run                                 # run the flow from .afm/flows (or: afm run path/to/flow.yaml)
 ```
+
+A live dashboard comes up at `http://localhost:9876` (its URL is printed to the log).
 
 After the planning phase each stage waits at `awaiting_approval` — review the plan in
 the dashboard (or `afm approve <stage>`), and afm implements it. Follow along with

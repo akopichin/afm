@@ -2,30 +2,27 @@
 # Place in: .afm/config.yaml (project-level) or ~/.afm/config.yaml (global)
 # Project-level config overrides global. Missing fields keep defaults.
 
-# Тема веб-дашборда.
-# "coffee"      — дефолтная кофейно-ламповая тема: тёплый тёмный фон и янтарное
-#                 «свечение радиолампы» (dark) / кремовое латте (light), матча-акцент.
-# "goga"        — тёмная tech-тема по мотивам qarium.ru/goga (teal-акцент #20D4BF,
-#                 sans-serif шрифт, скруглённые углы, лого Goga, английский UI).
-# "novacorps"   — прежняя hi-tech тема (мятный акцент, моноширинный шрифт,
-#                 scanline/неон-декор).
-# Светлый/тёмный режим внутри темы переключается тумблером в самом дашборде.
-# Любое иное или пустое значение → дефолтная "coffee" (неизвестное — warning в stderr).
-# Default: "coffee"
-# theme: coffee
+# Web dashboard theme.
+# "graphite"    — default product skin: material hierarchy on a cool graphite canvas,
+#                 indigo interaction accent, mint success and amber attention (dark & light).
+# "goga"        — flat dark tech theme (teal accent #20D4BF, sans-serif, Goga wordmark).
+# "novacorps"   — hi-tech theme (mint accent, monospace font, scanline/neon decor).
+# Light/dark mode is toggled inside the dashboard itself, independent of the theme.
+# Any other or empty value → "graphite" (an unknown value logs a warning to stderr).
+# The legacy "coffee" value is accepted as an alias that normalizes to "graphite".
+# Default: "graphite"
+# theme: graphite
 
-# Автоматически возвращать failed-стейджи в pending при старте/резюме рана
-# (напр. если процесс/контейнер afm был прибит во время выполнения) — без
-# ручного `afm retry <id>` на каждый упавший стейдж. Ретраятся все failed-
-# стейджи без разбора причины падения; порядок соблюдается штатным
-# depends_on-планировщиком (зависимый стейдж не стартует, пока его depends_on
-# не в done).
+# Automatically reset failed stages back to pending on run start/resume (e.g. if the
+# afm process/container was killed mid-run) — no manual `afm retry <id>` per failed
+# stage. All failed stages are reset regardless of the failure cause; dependency
+# order is preserved by the normal depends_on scheduler.
 # Default: true
 # auto_recover: true
 
 # server:
-#   # Открывать браузер с дашбордом автоматически при запуске.
-#   # Default: false — URL печатается в лог, откройте вручную.
+#   # Open the dashboard in a browser automatically on startup.
+#   # Default: false — the URL is printed to the log, open it manually.
 #   # open_browser: true
 #   # port: 9876
 
@@ -41,13 +38,13 @@ client:
   # extra_args:
   #   - --my-custom-flag
 
-  # claude_bare: добавлять ли --bare в генерируемые claude-обёртки (autoShim).
-  # --bare = minimal mode claude Code: пропускает CLAUDE.md auto-discovery,
-  # SessionStart-хуки, skills-listing, auto-memory (~120 KB автоконтекста) — body
-  # запроса ~4 KB вместо ~127 KB (меньше токенов и нагрузки на шлюз/z.ai, ниже шанс
-  # 529). НО --bare ломает Skill-tool: goga-* skills перестают резолвиться (агент
-  # имитирует их сам). Default: false (skills важнее). Включайте claude_bare: true
-  # только для flows БЕЗ skills.
+  # claude_bare: whether to add --bare to generated claude wrappers (autoShim).
+  # --bare = claude Code minimal mode: skips CLAUDE.md auto-discovery, SessionStart
+  # hooks, skills listing, auto-memory (~120 KB of auto-context) — the request body
+  # is ~4 KB instead of ~127 KB (fewer tokens, less gateway load, lower 529 risk).
+  # BUT --bare breaks the Skill tool: skills stop resolving (the agent imitates them
+  # itself). Default: false (skills matter more). Enable claude_bare: true only for
+  # flows WITHOUT skills.
   # claude_bare: false
 
 # Execution parameters
@@ -70,97 +67,101 @@ executor:
 # Default: "" (use embedded prompts)
 # prompts_dir: .afm/prompts/
 
-# Docker mode — запускать afm и агентов внутри Docker-контейнера.
-# Включается через конфиг или переменную окружения AFM_USE_DOCKER=1.
+# Docker mode — run afm and the agents inside a Docker container.
+# Enabled via this config or the AFM_USE_DOCKER=1 environment variable.
 # docker:
-#   # Включить Docker mode. nil/absent → смотрим $AFM_USE_DOCKER.
+#   # Enable Docker mode. nil/absent → falls back to $AFM_USE_DOCKER.
 #   # Default: false
 #   # enabled: true
 #
-#   # Docker-образ для запуска.
-#   # Default: "akopichin/afm:latest" (или $AFM_DOCKER_IMAGE)
+#   # Docker image to run.
+#   # Default: "akopichin/afm:latest" (or $AFM_DOCKER_IMAGE)
 #   # image: akopichin/afm:latest
 #
-#   # autoShim: по флагу afm генерирует claude-врапперы для agents.<cmd> прямо в
-#   # контейнере — без монтирования бинарника и без extra_mounts для токенов.
-#   # Нужен образ, собранный из кода с autoShim. recipe = model + url +
-#   # system_prompt(file:) + auth{from,to}. auth.from — путь к файлу или env:VAR,
-#   # где afm читает секрет НА ХОСТЕ (само значение токена в конфиге НЕ хранится —
-#   # попадает в контейнер как transient env). auth.to ∈ {env:CLAUDE_CODE_OAUTH_TOKEN,
-#   # env:ANTHROPIC_API_KEY, env:ANTHROPIC_AUTH_TOKEN}. model ставится во все 3 тира.
-#   # url bake'ится в враппер как ANTHROPIC_BASE_URL (z.ai, deepseek — напрямую).
+#   # autoShim: when set, afm generates claude wrappers for agents.<cmd> right inside
+#   # the container — without mounting the binary and without extra_mounts for tokens.
+#   # Requires an image built with autoShim support. A recipe = model + url +
+#   # system_prompt(file:) + auth{from,to}. auth.from is a file path or env:VAR that
+#   # afm reads the secret from ON THE HOST (the token value is never stored in the
+#   # config — it enters the container as a transient env var). auth.to ∈
+#   # {env:CLAUDE_CODE_OAUTH_TOKEN, env:ANTHROPIC_API_KEY, env:ANTHROPIC_AUTH_TOKEN}.
+#   # model is set for all three tiers. url is baked into the wrapper as
+#   # ANTHROPIC_BASE_URL (z.ai, deepseek — directly).
 #   # autoShim: true
 #   # agents:
-#   #   glm52:                                  # пример (пути реальные, токенов в конфиге нет)
+#   #   glm52:                                  # example (paths are real; no token in the config)
 #   #     model: glm-5.2
 #   #     url: https://api.z.ai/api/anthropic
 #   #     system_prompt: "file:~/.ai-free/claude-glm/system-prompt.md"
 #   #     auth:
 #   #       from: "file:~/.ai-free/claude-glm/token"
 #   #       to: "env:ANTHROPIC_AUTH_TOKEN"
-#   #   deepseek-v4:                            # docker-only (бинарника на хосте нет) + cross-gateway
+#   #   deepseek-v4:                            # docker-only (no host binary) + cross-gateway
 #   #     model: deepseek-v4-pro
 #   #     url: https://api.deepseek.com/anthropic
 #   #     auth:
 #   #       from: "file:~/.ai-free/claude-glm/token-deepseek"
 #   #       to: "env:ANTHROPIC_AUTH_TOKEN"
-#   #   cursor:                                # type:cursor → Cursor Cloud Agents API (НЕ openai chat!)
-#   #     type: cursor                          # api.cursor.com не имеет /chat/completions — это
-#   #     model: auto                           # асинхронный run-based API: cursor-as-claude создаёт
-#   #     url: https://api.cursor.com/v1        # no-repo Cloud Agent, опрашивает run, эмитит claude stream-json.
-#   #     auth:                                 # auth.to — любой env:VAR; CURSOR_API_KEY по конвенции
+#   #   cursor:                                # type:cursor → Cursor Cloud Agents API (NOT openai chat!)
+#   #     type: cursor                          # api.cursor.com has no /chat/completions — it's an
+#   #     model: auto                           # async run-based API: cursor-as-claude creates a
+#   #     url: https://api.cursor.com/v1        # no-repo Cloud Agent, polls the run, emits claude stream-json.
+#   #     auth:                                 # auth.to — any env:VAR; CURSOR_API_KEY by convention
 #   #       from: "file:~/.ai-free/claude-glm/token-cursor"
 #   #       to: "env:CURSOR_API_KEY"
-#   #   codex:                                 # type:codex → OpenAI Codex CLI, БЕЗ секрета в конфиге:
-#   #     type: codex                           # авторизация через смонтированное ~/.codex (ChatGPT-plan
-#   #     model: gpt-5-codex                    # OAuth), afm монтирует его :ro только если флоу реально
-#   #                                            # использует codex. model опционален ("" / "default" →
-#   #                                            # решает сам codex/~/.codex/config.toml).
-#   #     # auth: не указывается для codex (единственный тип, где auth необязателен)
-#   #   # Для провайдеров с настоящим OpenAI /v1/chat/completions (deepseek, ollama, …) — type: openai:
+#   #   codex:                                 # type:codex → OpenAI Codex CLI, NO secret in the config:
+#   #     type: codex                           # auth via a mounted ~/.codex (ChatGPT-plan OAuth); afm
+#   #     model: gpt-5-codex                    # mounts it :ro only if the flow actually uses codex.
+#   #                                            # model is optional ("" / "default" → codex /
+#   #                                            # ~/.codex/config.toml decides).
+#   #     # auth: omitted for codex (the only type where auth is optional)
+#   #   # For providers with a real OpenAI /v1/chat/completions (deepseek, ollama, …) — type: openai:
 #   #   # openai-agent:
 #   #   #   type: openai
 #   #   #   model: deepseek-chat
 #   #   #   url: https://api.deepseek.com/v1
 #   #   #   auth: { from: "env:DEEPSEEK_KEY", to: "env:OPENAI_API_KEY" }
 #
-#   # Доп. хост-директории для кастомных агентов (токены/конфиги вне ~/.claude,
-#   # напр. ~/.ai-free для GLM-обёрток glm51/glm52). Пути с ~ → /home/afm/…, абсолютные —
-#   # тот же путь; монтируются только для чтения. При autoShim:on для recipe-агентов
-#   # токены идут через transient env — этот маунт им не нужен.
+#   # Extra host directories for custom agents (tokens/configs outside ~/.claude,
+#   # e.g. ~/.ai-free for the GLM wrappers glm51/glm52). ~-paths → /home/afm/…,
+#   # absolute paths → the same path; all mounted read-only. With autoShim on, recipe
+#   # agents get their tokens via transient env — this mount isn't needed for them.
 #   #
-#   # extra_mounts поддерживает и старую scalar-форму (просто путь = browse:false,
-#   # приватный mount), и объектную форму с явным browse — какие mount-ы видны в
-#   # dashboard file browser (см. ниже), а какие остаются скрытыми (credentials/токены).
+#   # extra_mounts accepts both the legacy scalar form (a bare path = browse:false, a
+#   # private mount) and the object form with an explicit browse — controlling which
+#   # mounts are visible in the dashboard file browser (see below) and which stay
+#   # hidden (credentials/tokens).
 #   # extra_mounts:
-#   #   - path: ../shared-contracts   # соседний code-репозиторий
+#   #   - path: ../shared-contracts   # a neighboring code repository
 #   #     name: contracts             # optional UI label; default = basename(path)
-#   #     browse: true                # source mount — ВИДЕН в file browser (read-only)
+#   #     browse: true                # source mount — VISIBLE in the file browser (read-only)
 #   #   - path: ~/.ai-free             # credential mount
-#   #     browse: false                # смонтирован агенту, но НЕ виден в file browser (default)
-#   #   - ~/.legacy-agent              # старый scalar-синтаксис — тоже означает browse:false
+#   #     browse: false                # mounted to the agent, but NOT visible in the file browser (default)
+#   #   - ~/.legacy-agent              # legacy scalar syntax — also means browse:false
 #
-#   # File browser: только внутри Docker mode (нужен манифест от host launcher-а;
-#   # на обычном host-запуске без Docker эта возможность отсутствует полностью —
-#   # /api/files/* отдаёт 404, кнопки в dashboard нет).
-#   # Показывает: lazy source tree project mount-а + extra_mounts с browse:true,
-#   # текстовые файлы с подсветкой (Go/TypeScript/JavaScript/Python),
-#   # HEAD → working tree diff, вставку [AFM file: "<container-path>"] ссылок
-#   # в комментарии к плану/вопросу (агент читает файл сам, содержимое не копируется).
-#   # Всегда read-only: .git и .afm скрыты из дерева, ни создать, ни изменить,
-#   # ни удалить файл через dashboard нельзя. Лимиты: контент файла ≤ 2 MiB
-#   # (крупнее — "file too large", но сослаться всё равно можно), diff ≤ 4 MiB
-#   # (обрезается с баннером). Symlink виден в дереве, но не открывается.
-#   # На Linux-host со старым kernel (< 5.6, без openat2) фича мягко выключается.
+#   # File browser: Docker mode only (it needs the manifest from the host launcher;
+#   # a plain host run without Docker doesn't have this feature at all —
+#   # /api/files/* returns 404 and there's no button in the dashboard).
+#   # Shows: a lazy source tree of the project mount + extra_mounts with browse:true,
+#   # text files with syntax highlighting (Go/TypeScript/JavaScript/Python),
+#   # a HEAD → working tree diff, and inserting [AFM file: "<container-path>"] refs
+#   # into plan/question comments (the agent reads the file itself; nothing is copied).
+#   # Always read-only: .git and .afm are hidden from the tree; no create/edit/delete
+#   # through the dashboard. Limits: file content ≤ 2 MiB (larger — "file too large",
+#   # but still referenceable), diff ≤ 4 MiB (truncated with a banner). Symlinks are
+#   # listed but not opened. On a Linux host with an old kernel (< 5.6, no openat2)
+#   # the feature degrades off automatically.
 #   #
-#   # По умолчанию ВЫКЛЮЧЕН — включается явно (enabled: true ниже) или env-переменной
-#   # AFM_FILE_BROWSER. Приоритет: env AFM_FILE_BROWSER > config > default false.
-#   # AFM_FILE_BROWSER=1/true форсирует включение поверх конфига, =0/false — выключение;
-#   # пусто/не задано — решает config. Решение принимается на хосте до Docker re-exec.
+#   # ON by default — turn it off explicitly (enabled: false below) or via the
+#   # AFM_FILE_BROWSER env var. Priority: env AFM_FILE_BROWSER > config > default true.
+#   # AFM_FILE_BROWSER=1/true force-enables over the config, =0/false force-disables;
+#   # empty/unset → the config decides (enabled by default). The decision is made on
+#   # the host before Docker re-exec.
 #   #
-#   # ВАЖНО: пока file browser включён, Docker публикует dashboard-порт только на
-#   # loopback (-p 127.0.0.1:<port>:<port>) вместо 0.0.0.0 — dashboard перестаёт быть
-#   # доступен из LAN. Запуски без file browser (по умолчанию) сохраняют прежнее
-#   # поведение (0.0.0.0). Если фичу включили, но нужен LAN-доступ — SSH-туннель на loopback.
+#   # IMPORTANT: while the file browser is on (the default), Docker publishes the
+#   # dashboard port on loopback only (-p 127.0.0.1:<port>:<port>) instead of 0.0.0.0 —
+#   # the dashboard stops being reachable from the LAN. To restore 0.0.0.0, disable the
+#   # browser (enabled: false or AFM_FILE_BROWSER=0). If you keep it on but need LAN
+#   # access, use an SSH tunnel to loopback.
 #   # file_browser:
-#   #   enabled: true   # opt-in; по умолчанию OFF (env AFM_FILE_BROWSER перебивает)
+#   #   enabled: false   # opt-out; ON by default (env AFM_FILE_BROWSER overrides)

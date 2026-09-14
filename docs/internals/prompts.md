@@ -149,9 +149,12 @@ Output MUST contain these sections (exact names):
 - Edge cases: error conditions handled?
 ```
 
-## 6. Summary agent
+## 6. Summary agent (reserved — not currently invoked)
 
-**When:** the final stage of a flow.
+The `summary.md` template ships and is loaded into `Prompts.Summary`, but the field
+is **not wired into any run today** — no flow phase invokes a summary agent. It's kept
+as a reserved slot; treat this section as documentation of the template, not of a
+lifecycle step that runs.
 
 Template (`assets/prompts/summary.md`):
 

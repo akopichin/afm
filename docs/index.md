@@ -27,9 +27,11 @@ and any claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
 
 ```bash
 brew install --cask akopichin/afm/afm
-afm init            # scaffold a flow.yaml interactively
-afm run flow.yaml   # run it; a live dashboard comes up at http://localhost:9876
+afm init   # scaffold a flow into .afm/flows/ interactively
+afm run    # run the flow from .afm/flows (or: afm run path/to/flow.yaml)
 ```
+
+A live dashboard comes up at `http://localhost:9876` (its URL is printed to the log).
 
 Then head to **[Getting started](getting-started.md)** for the full walkthrough,
 or the **[flow.yaml reference](flow-reference.md)** for every field.

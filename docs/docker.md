@@ -7,6 +7,7 @@ environment with all their tooling preinstalled.
 
 ```bash
 docker run --rm -it \
+  -p 127.0.0.1:9876:9876 \
   -v $(pwd):/project \
   -v ~/.claude:/home/afm/.claude \
   -v ~/.afm:/home/afm/.afm \
@@ -15,6 +16,12 @@ docker run --rm -it \
   akopichin/afm:latest \
   run flow.yaml
 ```
+
+The `-p 127.0.0.1:9876:9876` maps the dashboard port so `http://localhost:9876`
+works from the host (use the same port as `server.port`). For a Claude Pro/Max
+subscription, replace `-e ANTHROPIC_API_KEY` with `-e CLAUDE_CODE_OAUTH_TOKEN` (see
+[Authentication](#authentication-in-docker-mode) below). Automatic Docker mode
+(`docker.enabled: true`) sets the port mapping and forwards the token for you.
 
 Or enable automatic Docker mode in the config — then the plain `afm run` command
 restarts itself inside the container:
@@ -99,9 +106,10 @@ Inside a running Docker container the dashboard header can show a folder-icon bu
 that opens a **read-only** project file browser. It is Docker-only: a plain host run
 doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 
-- **Off by default — opt in.** `docker.file_browser.enabled` defaults to `false`; set
-  it to `true` in the config. The env var `AFM_FILE_BROWSER` takes priority over the
-  config in both directions (`AFM_FILE_BROWSER=1` force-enables, `=0` force-disables).
+- **On by default; opt out to disable.** `docker.file_browser.enabled` defaults to
+  `true` (an unset value means enabled). Set it to `false` in the config to turn the
+  browser off. The env var `AFM_FILE_BROWSER` takes priority over the config in both
+  directions (`AFM_FILE_BROWSER=1` force-enables, `AFM_FILE_BROWSER=0` force-disables).
 - **What it does:** a lazy-loading source tree of the project mount and any
   `extra_mounts` explicitly opted in with `browse: true`; opens text files with syntax
   highlighting (Go, TypeScript/TSX, JavaScript/JSX, Python); shows a
@@ -139,6 +147,8 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
   This is a deliberate safe default: after upgrading afm, every existing
   `extra_mounts` entry stays private. Only add `browse: true` for a code root you're
   comfortable showing.
-- **Security: loopback-only port when the browser is on.** With the browser enabled,
-  the dashboard port is published as `-p 127.0.0.1:<port>:<port>` — not reachable from
-  other hosts on your LAN. If you opt in but still need LAN access, use an SSH tunnel.
+- **Security: loopback-only port when the browser is on.** With the browser enabled
+  (the default), the dashboard port is published as `-p 127.0.0.1:<port>:<port>` — not
+  reachable from other hosts on your LAN. Disable the browser
+  (`file_browser: {enabled: false}` or `AFM_FILE_BROWSER=0`) to restore the LAN-reachable
+  `0.0.0.0` publish, or keep it on and use an SSH tunnel for remote access.
