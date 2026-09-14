@@ -336,6 +336,12 @@ func TestLoadFrom_FileBrowserEnabledMergesAcrossLayers(t *testing.T) {
 		want        bool
 	}{
 		{
+			name:        "both unset -> enabled (default on)",
+			globalYAML:  ``,
+			projectYAML: ``,
+			want:        true,
+		},
+		{
 			name: "global false, project unset -> disabled",
 			globalYAML: `
 docker:
@@ -416,9 +422,13 @@ extra_mounts:
 	}
 }
 
-func TestFileBrowser_DefaultsDisabled(t *testing.T) {
-	if (config.DockerFileBrowserConfig{}).IsEnabled() {
-		t.Fatal("nil Enabled should default to disabled")
+func TestFileBrowser_DefaultsEnabled(t *testing.T) {
+	if !(config.DockerFileBrowserConfig{}).IsEnabled() {
+		t.Fatal("nil Enabled should default to enabled")
+	}
+	f := false
+	if (config.DockerFileBrowserConfig{Enabled: &f}).IsEnabled() {
+		t.Fatal("explicit false must disable")
 	}
 	tr := true
 	if !(config.DockerFileBrowserConfig{Enabled: &tr}).IsEnabled() {

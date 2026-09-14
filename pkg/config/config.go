@@ -200,16 +200,17 @@ type DockerConfig struct {
 
 // DockerFileBrowserConfig настраивает встроенный файловый браузер проекта.
 type DockerFileBrowserConfig struct {
-	Enabled *bool `yaml:"enabled"` // nil = выключено; env AFM_FILE_BROWSER имеет приоритет
+	Enabled *bool `yaml:"enabled"` // nil = включено по умолчанию; env AFM_FILE_BROWSER имеет приоритет
 }
 
 // IsEnabled сообщает, включён ли файловый браузер.
-// Приоритет: env AFM_FILE_BROWSER > config > по умолчанию выключено.
+// Приоритет: env AFM_FILE_BROWSER > config > по умолчанию ВКЛЮЧЕНО.
+// Только явный enabled: false (или AFM_FILE_BROWSER=0) выключает его.
 func (c DockerFileBrowserConfig) IsEnabled() bool {
 	if v, set := envBool("AFM_FILE_BROWSER"); set {
 		return v
 	}
-	return c.Enabled != nil && *c.Enabled
+	return c.Enabled == nil || *c.Enabled
 }
 
 // ExtraMount — один дополнительный хост-путь, монтируемый в контейнер.
