@@ -1,6 +1,7 @@
 package accounting
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,6 +93,55 @@ func TestLoadCorruptInteriorLineErrors(t *testing.T) {
 	}
 	if string(after) != original {
 		t.Fatal("Load must never modify the original file")
+	}
+}
+
+// TestOpenPreExistingCorruptFileReturnsUsableUnavailableStore is a
+// regression test for the "never block FSM resume" contract: Open must
+// return a USABLE, non-nil *Store together with a non-nil error when the
+// pre-existing usage.jsonl has a corrupt interior line — a caller that did
+// `if err != nil { return err }` and discarded the store would silently
+// reintroduce a resume-blocking bug.
+func TestOpenPreExistingCorruptFileReturnsUsableUnavailableStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage.jsonl")
+	good := `{"record_version":1,"stage_id":"backend","phase":"implementation","metered":true,"priced":false,"tokens":{"output":1130}}` + "\n"
+	bad := `{not valid json at all}` + "\n"
+	original := good + bad
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewResolver(PricingConfig{})
+	s, err := Open(dir, r)
+	if err == nil {
+		t.Fatal("expected Open to return a non-nil error for a pre-existing corrupt file")
+	}
+	if !errors.Is(err, ErrCorruptUsage) {
+		t.Fatalf("expected err to be/wrap ErrCorruptUsage, got %v", err)
+	}
+	if s == nil {
+		t.Fatal("Open must still return a usable *Store — discarding it on error would block FSM resume")
+	}
+	if !s.Unavailable() {
+		t.Fatal("store opened over a corrupt file must start Unavailable")
+	}
+
+	// A subsequent Append must be a safe no-op: it must not panic, must
+	// return an error, and must not touch the already-corrupt file further.
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err == nil {
+		t.Fatal("expected Append to fail on an unavailable store")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	after, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(after) != original {
+		t.Fatal("Append on an unavailable store must never modify the file further")
 	}
 }
 
