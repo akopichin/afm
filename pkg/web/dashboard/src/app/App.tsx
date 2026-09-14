@@ -383,6 +383,16 @@ export function App(): ReactElement {
   //     имя выбранной стадии) и совпадает с содержимым;
   //   • ожидание, которое НЕ показано в теле, выносится в ОТДЕЛЬНУЮ glow-вкладку
   //     «beacon» — она никогда не active, клик по ней явно открывает attention.
+  // В feed-виде detail-таб выбранной стадии дублирует glow-маяк, если оба ведут в
+  // ОДНО и то же ожидание — т.е. у стадии есть своё ожидание (contextKind) и маяк
+  // указывает на неё же. Тогда detail-таб скрываем (см. else-ветку ниже), маяк
+  // остаётся. Если ждут несколько стадий и маяк показывает ДРУГУЮ — не дубликат,
+  // detail-таб оставляем как прямой доступ к ожиданию выбранной стадии.
+  const duplicatesBeacon =
+    wsState.view === 'feed' &&
+    contextKind !== null &&
+    workspaceStage !== null &&
+    attentionTabItem?.stageId === workspaceStage.id
   const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
   if (workspaceStage !== null) {
     if (inAttention && contextKind !== null) {
@@ -394,8 +404,15 @@ export function App(): ReactElement {
         count: countByKind(attnItems, contextKind),
         glow: true,
       })
-    } else {
+    } else if (!duplicatesBeacon && (wsState.view !== 'feed' || workspaceStage.showPlan || workspaceStage.showDialog)) {
       // Тело показывает историю/детали выбранной стадии — вкладка это и отражает.
+      // Не рисуем detail-таб в двух случаях:
+      //   • duplicatesBeacon — он вёл бы в то же ожидание, что и glow-маяк
+      //     (в feed-виде у стадии с собственным ожиданием), т.е. дубль маяка;
+      //   • в feed-виде у стадии нет ни плана, ни диалога (напр. завершённая
+      //     автономная стадия) — таб вёл бы в ту же ленту (Feed), пустышка, клик
+      //     по которой ничего не менял. В history-виде (view !== 'feed') таб
+      //     нужен всегда — он и есть активная вкладка истории.
       tabs.push({
         id: 'detail',
         label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,

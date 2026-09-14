@@ -280,6 +280,77 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
   })
 
+  test('own attention in Feed: the plain detail tab is hidden, only the glow beacon remains (no duplicate)', async () => {
+    // Одна стадия ждёт (её же ожидание = маяк). В feed-виде средний блёклый
+    // detail-таб (имя стадии) вёл бы в ТО ЖЕ ожидание, что и маяк — дубликат.
+    // Скрываем detail-таб, красивый glow-маяк остаётся.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Gamma', 'awaiting_approval')],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Gamma'))
+
+    // Уходим в Feed.
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
+
+    await waitFor(() => {
+      const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+      expect(labels.some((l) => /Approval/.test(l))).toBe(true) // маяк остался
+      expect(labels.some((l) => l === 'Gamma')).toBe(false) // блёклый дубль скрыт
+      expect(labels.length).toBe(2) // только Feed + маяк
+    })
+  })
+
+  test('done stage without plan/dialog: no dud detail tab in Feed (nothing to open)', async () => {
+    // Завершённая автономная стадия без плана и диалога. В feed-виде detail-таб
+    // вёл бы в ту же ленту — пустышка. Показываем только Feed.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'done', { showPlan: false, showDialog: false })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => t.textContent === 'Feed')).toBe(true))
+    // Выбираем завершённую стадию.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    await waitFor(() => {
+      const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+      expect(labels).toEqual(['Feed']) // ни detail-таба, ни маяка
+    })
+  })
+
+  test('another stage awaits in Feed: the selected stage detail tab stays distinct from the beacon', async () => {
+    // Ждёт s2, а выбрана и открыта в Feed s1 (со своей историей). Маяк указывает
+    // на ЧУЖОЕ ожидание (s2) — это не дубль, detail-таб s1 остаётся.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'done', { showPlan: true, showDialog: false }),
+        stageView('s2', 'Beta', 'awaiting_approval'),
+      ],
+    }))
+
+    render(<App />)
+    // Воркспейс авто-открывает ожидание s2.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+
+    // Выбираем s1 (его история) и уходим в Feed.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
+
+    await waitFor(() => {
+      const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+      expect(labels.some((l) => l === 'Alpha')).toBe(true) // detail выбранной стадии остался
+      expect(labels.some((l) => /Approval/.test(l))).toBe(true) // и маяк чужого ожидания
+    })
+  })
+
   test('R3 #7: viewing history while another stage awaits keeps the history tab distinct from the attention beacon', async () => {
     // s1 done с планом (история), s2 ждёт аппрув. Смотрим историю s1 → detail-
     // вкладка = имя s1 (active, БЕЗ glow), а ожидание s2 — отдельная glow-вкладка
