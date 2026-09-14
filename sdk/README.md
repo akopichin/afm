@@ -2,7 +2,7 @@
 
 A dependency-free Go module that lets a Go service launch an [afm](../README.md) flow as a subprocess, poll its progress, and drive approve/retry/revise while it's running — so services can build their own web endpoints ("watch progress in the browser") on top of afm without shelling out by hand.
 
-See the project's [release notes](../release-notes.md) for the announcement, and this package's own [release-notes.md](./release-notes.md) for the SDK's own history.
+See the project's [release notes](../CHANGELOG.md) for the announcement, and this package's own [release-notes.md](./release-notes.md) for the SDK's own history.
 
 ## Why a subprocess, not an embedded orchestrator
 

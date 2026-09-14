@@ -1,6 +1,8 @@
-# Release Notes
+# Changelog
 
-Newest features at the top, older ones further down. Dates follow commits to `fix`/`master`.
+All notable changes to afm are documented here. The format is loosely based on
+[Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
+older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-11 — v1.0.0
 
