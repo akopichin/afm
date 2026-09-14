@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -84,6 +85,12 @@ type Options struct {
 	// "файл не резолвится вообще": AddNote возвращает ErrStaleContent. Реальный
 	// workspace-backed резолвер подключается отдельной задачей (см. cmd/afm).
 	ResolveFile func(root, path string, line *int) (ResolvedFile, bool)
+	// Accounting — durable usage.jsonl store for this run (nil = accounting
+	// disabled, e.g. Open failed hard on the host — see cmd/afm/run.go). Every
+	// LLM invocation's OnUsage callback (runnerFor, memory pipeline) resolves
+	// through recordUsage, which no-ops safely when this is nil. Observability
+	// only: never gates the FSM, never fails the run.
+	Accounting *accounting.Store
 }
 
 // ResolvedFile — то, что Options.ResolveFile возвращает про файл, к которому
@@ -364,6 +371,25 @@ func (o *Orchestrator) loadFatal() error {
 	return o.fatalErr
 }
 
+// recordUsage returns an executor.Config.OnUsage callback bound to one
+// (stageID, phase, scope) attribution: every runnerFor call site and the
+// memory pipeline (via memorypipeline.AgentConfig.OnUsage) build their
+// closure through this single seam. A nil Options.Accounting (accounting
+// disabled, or Open failed hard on the host) makes the closure a no-op.
+// A write failure is logged and otherwise ignored — accounting.Store.Append
+// already self-marks the store Unavailable on its own; this must NEVER
+// setFatal, touch the FSM, or trigger a retry. Usage is observability only.
+func (o *Orchestrator) recordUsage(stageID, phase, scope string) func(accounting.Observation) {
+	return func(obs accounting.Observation) {
+		if o.opts.Accounting == nil {
+			return
+		}
+		if err := o.opts.Accounting.Append(obs, stageID, phase, scope); err != nil {
+			log.Printf("WARN: accounting: append usage (stage=%s phase=%s scope=%s): %v", stageID, phase, scope, err)
+		}
+	}
+}
+
 // New creates an Orchestrator.
 func New(opts Options) *Orchestrator {
 	critical := bus.NewCriticalBus(16)
@@ -419,6 +445,7 @@ func New(opts Options) *Orchestrator {
 		RunDir:      opts.RunDir,
 		IdleTimeout: opts.Config.Executor.IdleTimeout,
 		Debug:       opts.Debug,
+		OnUsage:     o.recordUsage,
 	})
 	return o
 }

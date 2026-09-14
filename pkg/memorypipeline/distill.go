@@ -95,8 +95,8 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
 
 	_ = os.Remove(a.PatternsPath)
 	if err := p.run(ctx, AgentSpec{
-		Kind: KindAggregate, StageName: t.Name, InPaths: t.Datasets,
-		Out: a.PatternsPath, LogFile: filepath.Join(t.StagingDir, "aggregate.log"),
+		Kind: KindAggregate, StageName: t.Name, Phase: PhaseAggregate, Scope: ScopeRunOverhead,
+		InPaths: t.Datasets, Out: a.PatternsPath, LogFile: filepath.Join(t.StagingDir, "aggregate.log"),
 	}); err != nil {
 		return a, &StepError{Target: t.Name, Step: KindAggregate, LogPath: filepath.Join(t.StagingDir, "aggregate.log"), Err: err}
 	}
@@ -106,8 +106,8 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
 
 	_ = os.Remove(a.PrioritizedPath)
 	if err := p.run(ctx, AgentSpec{
-		Kind: KindPrioritize, StageName: t.Name, In: a.PatternsPath,
-		Out: a.PrioritizedPath, LogFile: filepath.Join(t.StagingDir, "prioritize.log"),
+		Kind: KindPrioritize, StageName: t.Name, Phase: PhasePrioritize, Scope: ScopeRunOverhead,
+		In: a.PatternsPath, Out: a.PrioritizedPath, LogFile: filepath.Join(t.StagingDir, "prioritize.log"),
 	}); err != nil {
 		return a, &StepError{Target: t.Name, Step: KindPrioritize, LogPath: filepath.Join(t.StagingDir, "prioritize.log"), Err: err}
 	}
@@ -129,8 +129,9 @@ func (p *Pipeline) DistillTarget(ctx context.Context, t DistillTarget) (StepArti
 	}
 
 	if err := p.run(ctx, AgentSpec{
-		Kind: KindUpdate, StageName: t.Name, HighPath: a.HighPath,
-		TargetFile: a.CandidatePath, MaxRules: t.MaxRules, LogFile: filepath.Join(t.StagingDir, "update.log"),
+		Kind: KindUpdate, StageName: t.Name, Phase: PhaseUpdate, Scope: ScopeRunOverhead,
+		HighPath: a.HighPath, TargetFile: a.CandidatePath, MaxRules: t.MaxRules,
+		LogFile: filepath.Join(t.StagingDir, "update.log"),
 	}); err != nil {
 		return a, &StepError{Target: t.Name, Step: KindUpdate, LogPath: filepath.Join(t.StagingDir, "update.log"), Err: err}
 	}

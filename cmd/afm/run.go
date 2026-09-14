@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm/assets"
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
@@ -161,6 +162,22 @@ func newRunCmd() *cobra.Command {
 			}
 			defer store.Close()
 
+			// Accounting (usage.jsonl): observability only — a hard failure to
+			// open the ledger (e.g. permission denied) is logged and the run
+			// continues with accounting disabled (Options.Accounting stays nil,
+			// orchestrator.recordUsage no-ops). A pre-existing corrupt log
+			// (Open still returns a usable, already-Unavailable Store) is passed
+			// through as-is: Append calls become no-ops on their own, nothing
+			// here needs to special-case that.
+			acctResolver := accounting.NewResolver(cfg.Pricing)
+			acct, acctErr := accounting.Open(runDir, acctResolver)
+			if acctErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: accounting: open usage ledger: %v\n", acctErr)
+			}
+			if acct != nil {
+				defer acct.Close()
+			}
+
 			// Populate flow/stage display names from the flow definition. Works for
 			// both new runs and resumed ones — names always come from the current
 			// flow file, so they stay correct even if the flow was edited between
@@ -269,6 +286,7 @@ func newRunCmd() *cobra.Command {
 				Debug:           debugEnabled,
 				Memory:          f.Memory,
 				MemoryDir:       memDir,
+				Accounting:      acct,
 			}
 			// ResolveFile/CurrentFileSHA питают review-ноты (AddNote,
 			// renderReviewFeedback): без workspace (host-режим, ws == nil)

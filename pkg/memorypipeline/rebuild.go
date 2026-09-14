@@ -110,6 +110,8 @@ func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir,
 	if err := p.run(ctx, AgentSpec{
 		Kind:       KindReflect,
 		StageName:  stage.Name,
+		StageID:    stage.ID,
+		Phase:      PhaseReflect,
 		Sources:    inv.All(),
 		DatasetOut: datasetOut,
 		LogFile:    logPath,

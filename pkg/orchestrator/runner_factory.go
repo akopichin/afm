@@ -5,11 +5,26 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
+
+// usageHintFor returns a best-effort accounting.UsageHint for the given agent
+// command, taken from the docker.agents recipe declared for it (if any) —
+// empty when there's no such recipe (including the plain "claude" default).
+// This is only a non-authoritative hint fed to accounting.NewCollector: a
+// model/channel actually discovered in the agent's own stream-json output
+// always wins over it (see accounting.Collector.Finish).
+func (o *Orchestrator) usageHintFor(cmd string) accounting.UsageHint {
+	recipe, ok := o.opts.Config.Docker.Agents[cmd]
+	if !ok {
+		return accounting.UsageHint{}
+	}
+	return accounting.UsageHint{Channel: recipe.Type, Model: recipe.Model}
+}
 
 // runnerFor returns the appropriate Runner for a stage's phase.
 // For interactive stages it generates a session id and returns an executor
@@ -43,7 +58,10 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or
 			// skill that uses the file-based dialog protocol always has somewhere
 			// to write question.json — the poller auto-answers it (dialog_poller.go).
-			StageDir: filepath.Join(o.opts.RunDir, s.ID),
+			StageDir:  filepath.Join(o.opts.RunDir, s.ID),
+			Phase:     phase,
+			UsageHint: o.usageHintFor(cmd),
+			OnUsage:   o.recordUsage(s.ID, phase, ""),
 		}
 		if ch, ok := o.interruptChans.Load(s.ID); ok {
 			cfg.InterruptCh = ch.(chan struct{})
@@ -56,7 +74,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	sessionID, err := stagefiles.LoadOrCreateSession(stageDir, phase)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: interactive stage %q: session failed: %v; using non-interactive runner\n", s.ID, err)
-		return o.runnerForFallback(s)
+		return o.runnerForFallback(s, phase)
 	}
 
 	cmd := s.Command
@@ -80,6 +98,9 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 		StageID:        s.ID,
+		Phase:          phase,
+		UsageHint:      o.usageHintFor(cmd),
+		OnUsage:        o.recordUsage(s.ID, phase, ""),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
@@ -87,7 +108,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	return executor.New(cfg)
 }
 
-func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
+func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Runner {
 	if s.Command == "" {
 		return o.runner
 	}
@@ -99,6 +120,10 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage) executor.Runner {
 		WrapperDir:     executor.WrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
+		StageID:        s.ID,
+		Phase:          phase,
+		UsageHint:      o.usageHintFor(s.Command),
+		OnUsage:        o.recordUsage(s.ID, phase, ""),
 	})
 }
 

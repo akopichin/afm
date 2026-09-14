@@ -443,6 +443,15 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 //     main agent's active marker.
 //   - Separate <phase>.<id>.jsonfix.log — keeps the fix agent's tool actions
 //     out of the stage's own <phase>.jsonl (event feed / WrittenFiles).
+//
+// It builds its own executor.Config outside runnerFor (a fresh, isolated
+// agent, not one of the stage's normal phase runners) — its usage is still
+// attributed to the source stage via recordUsage under a distinct accounting
+// phase (phaseJSONFix), so a stage that needed several json-fix attempts
+// shows that cost without being confused with its real planning/implementation/
+// review/autonomous usage.
+const phaseJSONFix = "json_fix"
+
 func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan struct{} {
 	done := make(chan struct{})
 	ctx := o.runCtx
@@ -472,6 +481,9 @@ func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan st
 		Debug:       o.opts.Debug,
 		RunDir:      o.opts.RunDir,
 		StageID:     s.ID,
+		Phase:       phaseJSONFix,
+		UsageHint:   o.usageHintFor(cmd),
+		OnUsage:     o.recordUsage(s.ID, phaseJSONFix, ""),
 	}
 	ex := executor.New(cfg)
 	prompt := buildJSONFixPrompt(qPath, id)

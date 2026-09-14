@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akopichin/afm/pkg/accounting"
 )
 
 // writeFakeAgentScript writes a small hermetic shell script that:
@@ -113,5 +115,107 @@ func TestNewExecRunner_CommandNotFoundSurfacesError(t *testing.T) {
 	}
 	if err := run(context.Background(), spec); err == nil {
 		t.Fatal("expected an error for a nonexistent command, got nil")
+	}
+}
+
+// writeUsageAgentScript writes a hermetic shell script that drains stdin,
+// emits one well-formed claude terminal `result` line carrying real usage
+// tokens, and exits 0 — enough for accounting.Collector to produce a
+// Metered=true Observation, without needing any of the actual reflect/
+// aggregate/prioritize/update file effects NewExecRunner itself never
+// validates (that's Pipeline.DistillTarget/CaptureStage's job, not
+// NewExecRunner's).
+func writeUsageAgentScript(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "usage-agent.sh")
+	body := "#!/bin/sh\n" +
+		"cat > /dev/null\n" +
+		`echo '{"type":"result","subtype":"success","usage":{"input_tokens":5,"output_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}'` + "\n" +
+		"exit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// TestNewExecRunner_UsageAttribution proves NewExecRunner threads each
+// AgentSpec's StageID/Phase/Scope into AgentConfig.OnUsage's factory call
+// exactly once per invocation, and that the resulting per-call
+// accounting.Observation callback actually fires (Metered=true, since
+// writeUsageAgentScript emits a real terminal result). This is the
+// memorypipeline-side half of Task 10's accounting wiring: reflect is
+// attributed to its source stage; aggregate/prioritize/update are
+// attributed to the run as a whole (empty StageID, ScopeRunOverhead) —
+// see pkg/orchestrator/reflection.go for how the orchestrator builds these
+// specs via the SAME phase/scope constants.
+func TestNewExecRunner_UsageAttribution(t *testing.T) {
+	script := writeUsageAgentScript(t)
+	rootDir := t.TempDir()
+	logDir := t.TempDir()
+
+	type recordedCall struct {
+		stageID, phase, scope string
+		metered               bool
+	}
+	var calls []recordedCall
+
+	cfg := AgentConfig{
+		Command: script,
+		RootDir: rootDir,
+		OnUsage: func(stageID, phase, scope string) func(accounting.Observation) {
+			return func(obs accounting.Observation) {
+				calls = append(calls, recordedCall{stageID: stageID, phase: phase, scope: scope, metered: obs.Metered})
+			}
+		},
+	}
+	run := NewExecRunner(cfg, Prompts{})
+
+	specs := []AgentSpec{
+		{
+			Kind: KindReflect, StageName: "s1", StageID: "s1", Phase: PhaseReflect,
+			Sources:    []string{filepath.Join(rootDir, "s1", "implementation.log")},
+			DatasetOut: filepath.Join(rootDir, "s1", "reflect_dataset.yaml"),
+			LogFile:    filepath.Join(logDir, "reflect.log"),
+		},
+		{
+			Kind: KindAggregate, StageName: "flow-memory", Phase: PhaseAggregate, Scope: ScopeRunOverhead,
+			InPaths: []string{filepath.Join(rootDir, "s1", "reflect_dataset.yaml")},
+			Out:     filepath.Join(rootDir, "patterns.md"),
+			LogFile: filepath.Join(logDir, "aggregate.log"),
+		},
+		{
+			Kind: KindPrioritize, StageName: "flow-memory", Phase: PhasePrioritize, Scope: ScopeRunOverhead,
+			In:      filepath.Join(rootDir, "patterns.md"),
+			Out:     filepath.Join(rootDir, "prioritized.md"),
+			LogFile: filepath.Join(logDir, "prioritize.log"),
+		},
+		{
+			Kind: KindUpdate, StageName: "flow-memory", Phase: PhaseUpdate, Scope: ScopeRunOverhead,
+			HighPath:   filepath.Join(rootDir, "high.md"),
+			TargetFile: filepath.Join(rootDir, "memory.md"),
+			LogFile:    filepath.Join(logDir, "update.log"),
+		},
+	}
+
+	for i, spec := range specs {
+		if err := run(context.Background(), spec); err != nil {
+			t.Fatalf("spec[%d] kind=%s: run: %v", i, spec.Kind, err)
+		}
+	}
+
+	want := []recordedCall{
+		{stageID: "s1", phase: PhaseReflect, scope: "", metered: true},
+		{stageID: "", phase: PhaseAggregate, scope: ScopeRunOverhead, metered: true},
+		{stageID: "", phase: PhasePrioritize, scope: ScopeRunOverhead, metered: true},
+		{stageID: "", phase: PhaseUpdate, scope: ScopeRunOverhead, metered: true},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("OnUsage fired %d times, want %d: %+v", len(calls), len(want), calls)
+	}
+	for i, w := range want {
+		if calls[i] != w {
+			t.Errorf("call[%d] = %+v, want %+v", i, calls[i], w)
+		}
 	}
 }

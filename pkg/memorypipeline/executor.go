@@ -3,6 +3,7 @@ package memorypipeline
 import (
 	"context"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/executor"
 )
 
@@ -17,6 +18,10 @@ import (
 // агентом, per-spec переопределения команды нет.
 func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 	return func(ctx context.Context, spec AgentSpec) error {
+		var onUsage func(accounting.Observation)
+		if cfg.OnUsage != nil {
+			onUsage = cfg.OnUsage(spec.StageID, spec.Phase, spec.Scope)
+		}
 		ex := executor.New(executor.Config{
 			Command:     cfg.Command,
 			ExtraArgs:   executor.ResolveArgs(cfg.ExtraArgs),
@@ -25,6 +30,9 @@ func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 			Dir:         cfg.RootDir,
 			RunDir:      cfg.RunDir,
 			Debug:       cfg.Debug,
+			StageID:     spec.StageID,
+			Phase:       spec.Phase,
+			OnUsage:     onUsage,
 			// fresh context: SessionID/Resume/StageDir intentionally unset
 			// (AFM_STAGE_DIR is stripped by the executor even if inherited).
 		})
