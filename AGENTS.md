@@ -313,6 +313,7 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 | `AFM_HOST_UID` / `AFM_HOST_GID` | Passed inside; the entrypoint drops root to this uid/gid (`gosu`), so writes to volumes belong to the host user |
 | `AFM_DOCKER_IMAGE` | Override the image (e.g. for a local build) |
 | `AFM_DEBUG` | Forwarded into the container by value (`-e AFM_DEBUG=…`, not a secret), so the re-exec inside also logs the agent input; on the host it's set by the `--debug` flag in `PersistentPreRunE` |
+| `AFM_ACCOUNTING` | Forwarded into the container by value (`-e AFM_ACCOUNTING=…`, not a secret) when set — the cost-display switch is resolved INSIDE the container (dashboard server + `afm check`/`report` call `config.AccountingConfig.IsEnabled` there), so the host env must cross over. `=0` hides cost display, `=1` overrides a config `accounting.enabled: false`; unset → config decides |
 | `ANTHROPIC_API_KEY` | Forwarded in bare form `-e KEY` (without a value — not exposed in `ps aux`/history) |
 | `ANTHROPIC_AUTH_TOKEN` | Same |
 | `ANTHROPIC_BASE_URL` | Same |
