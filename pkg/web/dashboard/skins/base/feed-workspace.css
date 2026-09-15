@@ -168,6 +168,21 @@
 /* Ошибка/провал — danger-поверхность. */
 .feed-item.tone-danger { background: rgba(var(--danger-rgb), 0.10); padding: 6px 10px; }
 
+/* navigable-элемент (dialog_question/dialog_answer, клик → открыть диалог
+   стадии, см. FeedWorkspace/onOpenDialog) — рендерится <button>, subtle
+   affordance поверх обычных стилей .feed-item. */
+.feed-item-navigable {
+  cursor: pointer;
+  width: 100%;
+  border: none;
+  font: inherit;
+}
+.feed-item-navigable:hover { background: rgba(var(--accent-primary-rgb), 0.08); }
+.feed-item-navigable:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* --- Log-режим --- */
 .log-scroll { padding-right: 0; }
 .log-content {

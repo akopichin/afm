@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, within } from '@testing-library/react'
-import { beforeEach, describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent, LogEntry } from '../../types'
 import { FeedWorkspace } from './FeedWorkspace'
 
@@ -132,5 +132,48 @@ describe('FeedWorkspace', () => {
     expect(container.querySelectorAll('.feed-group')).toHaveLength(1)
     expect(screen.queryByText('No events for this stage yet')).not.toBeInTheDocument()
     expect(container.textContent).toContain('→ running')
+  })
+
+  // --- Навигация по diалог-элементам (dialog_question/dialog_answer) ---
+
+  it('navigable-элемент (dialog_question) рендерится кнопкой и вызывает onOpenDialog с координатами вопроса', () => {
+    const events = [
+      ev('dialog_question', { phase: 'planning', id: 'q1', title: 'what next?' }, 's1', '2026-07-10T10:00:00Z'),
+    ]
+    const onOpenDialog = vi.fn()
+    render(<FeedWorkspace events={events} logEntries={[]} stageId="s1" onOpenDialog={onOpenDialog} />)
+    const button = screen.getByRole('button', { name: /what next\?/ })
+    expect(button.tagName).toBe('BUTTON')
+    expect(button).toHaveClass('feed-item-navigable')
+    fireEvent.click(button)
+    expect(onOpenDialog).toHaveBeenCalledWith('s1', 'planning', 'q1')
+  })
+
+  it('navigable-элемент (dialog_answer) рендерится кнопкой и вызывает onOpenDialog с координатами вопроса', () => {
+    const events = [
+      ev('dialog_answer', { phase: 'implementation', id: 'q2', title: 'reply text' }, 's1', '2026-07-10T10:00:00Z'),
+    ]
+    const onOpenDialog = vi.fn()
+    render(<FeedWorkspace events={events} logEntries={[]} stageId="s1" onOpenDialog={onOpenDialog} />)
+    const button = screen.getByRole('button', { name: /reply text/ })
+    fireEvent.click(button)
+    expect(onOpenDialog).toHaveBeenCalledWith('s1', 'implementation', 'q2')
+  })
+
+  it('не-navigable элемент (agent_action) НЕ рендерится кнопкой', () => {
+    const events = [ev('agent_action', { tool: 'read_file', detail: 'x.ts' }, 's1', '2026-07-10T10:00:00Z')]
+    const onOpenDialog = vi.fn()
+    render(<FeedWorkspace events={events} logEntries={[]} stageId="s1" onOpenDialog={onOpenDialog} />)
+    expect(screen.queryByRole('button', { name: /read_file/ })).not.toBeInTheDocument()
+    expect(screen.getByText('read_file: x.ts').closest('.feed-item')?.tagName).toBe('DIV')
+  })
+
+  it('без onOpenDialog navigable-элемент рендерится как обычный div, без падения', () => {
+    const events = [
+      ev('dialog_question', { phase: 'planning', id: 'q1', title: 'what next?' }, 's1', '2026-07-10T10:00:00Z'),
+    ]
+    expect(() => render(<FeedWorkspace events={events} logEntries={[]} stageId="s1" />)).not.toThrow()
+    expect(screen.queryByRole('button', { name: /what next\?/ })).not.toBeInTheDocument()
+    expect(screen.getByText('what next?').closest('.feed-item')?.tagName).toBe('DIV')
   })
 })

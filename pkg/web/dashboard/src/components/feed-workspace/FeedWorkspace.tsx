@@ -13,6 +13,11 @@ type FeedWorkspaceProps = {
   // Разрешённый id стадии воркспейса (уже сверен со списком stages в App), либо
   // null, если стадия не выбрана / устарела. Основа фильтра «This stage».
   stageId: string | null
+  // Клик по navigable-элементу ленты (dialog_question/dialog_answer) — открыть
+  // диалог соответствующей стадии на нужном вопросе. Сама навигация — задача
+  // другой таски (T6); здесь только проброс координат из FeedItem. Без пропа
+  // navigable-элементы рендерятся как обычные (не интерактивные) строки.
+  onOpenDialog?: (stageId: string, phase: string, id: string) => void
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -29,7 +34,7 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
 // (`afm-feed-mode`), независимый stick-to-bottom для ленты и лога, Jump to latest.
 // Плюс scope-фильтр This stage | All (useFeedScope, `afm-feed-scope`): по
 // умолчанию лента показывает события выбранной стадии, All — весь флоу.
-export function FeedWorkspace({ events, logEntries, stageId }: FeedWorkspaceProps): ReactElement {
+export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   const log = useStickToBottom<HTMLPreElement>()
   const { mode, toggle } = useFeedMode()
@@ -81,7 +86,7 @@ export function FeedWorkspace({ events, logEntries, stageId }: FeedWorkspaceProp
           {groups.length === 0 ? (
             <div className="empty-hint feed-empty">{stageScopeActive ? 'No events for this stage yet' : 'No events yet'}</div>
           ) : (
-            groups.map((g) => <FeedGroupView key={g.key} group={g} />)
+            groups.map((g) => <FeedGroupView key={g.key} group={g} onOpenDialog={onOpenDialog} />)
           )}
           {!feed.stick && (
             <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>↓ Jump to latest</button>
@@ -102,8 +107,17 @@ export function FeedWorkspace({ events, logEntries, stageId }: FeedWorkspaceProp
   )
 }
 
+type FeedGroupViewProps = {
+  group: FeedGroup
+  onOpenDialog?: (stageId: string, phase: string, id: string) => void
+}
+
 // FeedGroupView — один пузырь: шапка (стадия + актор) + стопка item-строк.
-function FeedGroupView({ group }: { group: FeedGroup }): ReactElement {
+// navigable-элементы (dialog_question/dialog_answer, см. feed-view-model) при
+// наличии onOpenDialog рендерятся кнопкой — переход к вопросу диалога стадии
+// (сама навигация — задача T6, здесь только клик → проброс координат); без
+// onOpenDialog или для остальных item — неизменный <div> как раньше.
+function FeedGroupView({ group, onOpenDialog }: FeedGroupViewProps): ReactElement {
   return (
     <div className={`feed-group feed-${group.side}`} data-actor={group.actor}>
       <div className="feed-group-head">
@@ -111,15 +125,33 @@ function FeedGroupView({ group }: { group: FeedGroup }): ReactElement {
         <span className="feed-actor">{ACTOR_LABEL[group.actor]}</span>
       </div>
       <div className="feed-bubble">
-        {group.items.map((item) => (
-          <div
-            key={item.key}
-            className={`feed-item feed-kind-${item.kind} tone-${item.tone}${item.mono ? ' mono' : ''}`}
-          >
-            <span className="feed-item-text">{item.text}</span>
-            {item.gap !== '—' && <span className="feed-item-gap">{item.gap}</span>}
-          </div>
-        ))}
+        {group.items.map((item) => {
+          const className = `feed-item feed-kind-${item.kind} tone-${item.tone}${item.mono ? ' mono' : ''}`
+          const content = (
+            <>
+              <span className="feed-item-text">{item.text}</span>
+              {item.gap !== '—' && <span className="feed-item-gap">{item.gap}</span>}
+            </>
+          )
+          if (item.navigable === true && onOpenDialog) {
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={`${className} feed-item-navigable`}
+                title="Open in dialog"
+                onClick={() => onOpenDialog(item.stageId, item.phase ?? '', item.id ?? '')}
+              >
+                {content}
+              </button>
+            )
+          }
+          return (
+            <div key={item.key} className={className}>
+              {content}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
