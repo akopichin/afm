@@ -11,7 +11,6 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
       ev('stage_status_changed', 'running', 's1', '2026-07-10T10:00:00Z'),
       ev('agent_action', { tool: 'read_file', detail: 'src/x.ts' }, 's1', '2026-07-10T10:00:01Z'),
       ev('agent_completed', 'implementation', 's1', '2026-07-10T10:00:02Z'),
-      ev('user_answered', {}, 's1', '2026-07-10T10:00:03Z'),
       ev('approved', {}, 's1', '2026-07-10T10:00:04Z'),
       ev('hook_failed', { hook: 'post', error: 'boom' }, 's1', '2026-07-10T10:00:05Z'),
       ev('custom_unknown', null, '', '2026-07-10T10:00:06Z'),
@@ -19,11 +18,10 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
     expect(items[0]).toMatchObject({ text: '→ running', actor: 'system', side: 'left' })
     expect(items[1]).toMatchObject({ text: 'read_file: src/x.ts', actor: 'agent', side: 'left', mono: true, kind: 'tool' })
     expect(items[2]).toMatchObject({ text: 'agent implementation completed', tone: 'success', kind: 'success' })
-    expect(items[3]).toMatchObject({ text: 'reply to user', actor: 'user', side: 'right' })
-    expect(items[4]).toMatchObject({ text: 'approved', actor: 'user', side: 'right', tone: 'success' })
-    expect(items[5]).toMatchObject({ text: 'post-hook failed: boom', tone: 'danger' })
+    expect(items[3]).toMatchObject({ text: 'approved', actor: 'user', side: 'right', tone: 'success' })
+    expect(items[4]).toMatchObject({ text: 'post-hook failed: boom', tone: 'danger' })
     // Неизвестный тип — падать нельзя, показываем сам тип.
-    expect(items[6]).toMatchObject({ text: 'custom_unknown', actor: 'system' })
+    expect(items[5]).toMatchObject({ text: 'custom_unknown', actor: 'system' })
   })
 
   it('renders an agent text action as clean prose (no "text:" prefix, not mono)', () => {
@@ -67,13 +65,73 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
   })
 })
 
+describe('dialog_question/dialog_answer — реальный текст диалога, ask_user/user_answered вытеснены', () => {
+  it('dialog_question maps to a navigable agent item carrying phase/id from the payload', () => {
+    const items = toFeedItems([
+      ev('dialog_question', { phase: 'planning', id: 'q1', title: 'Which approach?' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      actor: 'agent',
+      side: 'left',
+      kind: 'dialog',
+      text: 'Which approach?',
+      navigable: true,
+      phase: 'planning',
+      id: 'q1',
+    })
+  })
+
+  it('dialog_answer maps to a navigable user item on the right side', () => {
+    const items = toFeedItems([
+      ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'Option A' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      actor: 'user',
+      side: 'right',
+      kind: 'message',
+      text: 'Option A',
+      navigable: true,
+      phase: 'planning',
+      id: 'q1',
+    })
+  })
+
+  it('ask_user and user_answered produce no feed item — replaced by dialog_question/dialog_answer', () => {
+    const items = toFeedItems([
+      ev('ask_user', { phase: 'planning', id: 'q1' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('user_answered', { phase: 'planning', id: 'q1' }, 's1', '2026-07-10T10:00:01Z'),
+    ])
+    expect(items).toHaveLength(0)
+  })
+
+  it('falls back to a generic label when title is missing or empty, and stays navigable', () => {
+    const items = toFeedItems([
+      ev('dialog_question', { phase: 'planning', id: 'q1' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('dialog_answer', { phase: 'planning', id: 'q1', title: '' }, 's1', '2026-07-10T10:00:01Z'),
+    ])
+    expect(items[0]).toMatchObject({ text: 'question', navigable: true })
+    expect(items[1]).toMatchObject({ text: 'reply', navigable: true })
+  })
+
+  it('grouping preserves phase/id/navigable on each item', () => {
+    const groups = groupFeedItems(
+      toFeedItems([
+        ev('dialog_question', { phase: 'planning', id: 'q1', title: 'Q1?' }, 's1', '2026-07-10T10:00:00Z'),
+      ]),
+    )
+    expect(groups[0]?.items[0]).toMatchObject({ phase: 'planning', id: 'q1', navigable: true })
+  })
+})
+
 describe('groupFeedItems', () => {
   it('merges consecutive same-side, same-stage items into one group', () => {
     const groups = groupFeedItems(
       toFeedItems([
         ev('stage_status_changed', 'running', 's1', '2026-07-10T10:00:00Z'),
         ev('agent_action', { tool: 'a' }, 's1', '2026-07-10T10:00:01Z'),
-        ev('user_answered', {}, 's1', '2026-07-10T10:00:02Z'),
+        ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'yes' }, 's1', '2026-07-10T10:00:02Z'),
         ev('agent_action', { tool: 'b' }, 's1', '2026-07-10T10:00:03Z'),
       ]),
     )

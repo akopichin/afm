@@ -12,7 +12,7 @@ describe('FeedWorkspace', () => {
   it('renders messenger groups with stage badge and side alignment', () => {
     const events = [
       ev('agent_action', { tool: 'read_file', detail: 'x.ts' }, 's1', '2026-07-10T10:00:00Z'),
-      ev('user_answered', {}, 's1', '2026-07-10T10:00:01Z'),
+      ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'reply to user' }, 's1', '2026-07-10T10:00:01Z'),
     ]
     const { container } = render(<FeedWorkspace events={events} logEntries={[]} stageId={null} />)
     const groups = container.querySelectorAll('.feed-group')

@@ -21,6 +21,11 @@ export type FeedItem = {
   text: string
   gap: string // статичная длительность: разница с предыдущим событием ленты
   mono: boolean // tool/script/auto-answer — компактная mono-строка
+  // dialog_question/dialog_answer: координаты вопроса диалога для последующего
+  // перехода к нему (клик по item — задача другой таски, здесь только данные).
+  phase?: string
+  id?: string
+  navigable?: boolean
 }
 
 // FeedGroup — последовательные items одной стороны и стадии, слитые визуально в
@@ -68,10 +73,20 @@ function extractStatusString(data: unknown): string {
   return ''
 }
 
-type Mapped = { actor: FeedActor; tone: FeedTone; kind: FeedItemKind; text: string; mono: boolean }
+type Mapped = {
+  actor: FeedActor
+  tone: FeedTone
+  kind: FeedItemKind
+  text: string
+  mono: boolean
+  phase?: string
+  id?: string
+  navigable?: boolean
+}
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
-function mapEvent(event: AfmEvent): Mapped {
+// null — событие сознательно не рендерится в ленте (см. ask_user/user_answered ниже).
+function mapEvent(event: AfmEvent): Mapped | null {
   const data = event.payload
   const obj = isRecord(data) ? data : {}
 
@@ -110,9 +125,37 @@ function mapEvent(event: AfmEvent): Mapped {
     case 'manual_retry':
       return { actor: 'system', tone: 'warning', kind: 'status', text: 'manual retry', mono: false }
     case 'ask_user':
-      return { actor: 'agent', tone: 'accent', kind: 'dialog', text: 'question to agent', mono: false }
     case 'user_answered':
-      return { actor: 'user', tone: 'accent', kind: 'message', text: 'reply to user', mono: false }
+      // Вытеснены dialog_question/dialog_answer (несут реальный текст вопроса/
+      // ответа) — эти события больше не рендерим, чтобы не дублировать их пустой
+      // заглушкой в ленте.
+      return null
+    case 'dialog_question': {
+      const title = str(obj.title)
+      return {
+        actor: 'agent',
+        tone: 'accent',
+        kind: 'dialog',
+        text: title !== '' ? title : 'question',
+        mono: false,
+        navigable: true,
+        phase: str(obj.phase),
+        id: str(obj.id),
+      }
+    }
+    case 'dialog_answer': {
+      const title = str(obj.title)
+      return {
+        actor: 'user',
+        tone: 'accent',
+        kind: 'message',
+        text: title !== '' ? title : 'reply',
+        mono: false,
+        navigable: true,
+        phase: str(obj.phase),
+        id: str(obj.id),
+      }
+    }
     case 'auto_answered':
       return { actor: 'system', tone: 'neutral', kind: 'dialog', text: `auto-answered ${str(obj.id)}: ${str(obj.answer)}`, mono: true }
     case 'context_warning':
@@ -139,16 +182,20 @@ export function formatEventGap(tsMs: number, prevTsMs: number): string {
 // occurrence-суффикс `#N`, детерминированно при неизменном порядке).
 export function toFeedItems(events: AfmEvent[]): FeedItem[] {
   const counts = new Map<string, number>()
-  return events.map((event, index) => {
+  const items: FeedItem[] = []
+
+  events.forEach((event, index) => {
+    const m = mapEvent(event)
+    if (m === null) return // ask_user/user_answered — не рендерим (см. mapEvent)
+
     const base = event.seq !== undefined ? `seq:${event.seq}` : `${event.timestamp}|${event.type}|${event.stageId}`
     const n = counts.get(base) ?? 0
     counts.set(base, n + 1)
     const key = n === 0 ? base : `${base}#${n}`
 
-    const m = mapEvent(event)
     const ts = Date.parse(event.timestamp)
     const prevTs = index > 0 ? Date.parse(events[index - 1]?.timestamp ?? '') : NaN
-    return {
+    items.push({
       key,
       stageId: event.stageId,
       actor: m.actor,
@@ -158,8 +205,13 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       text: m.text,
       gap: formatEventGap(ts, prevTs),
       mono: m.mono,
-    }
+      phase: m.phase,
+      id: m.id,
+      navigable: m.navigable,
+    })
   })
+
+  return items
 }
 
 // groupFeedItems сливает подряд идущие items одной стороны и стадии в один

@@ -93,6 +93,8 @@ describe('SIGNIFICANT_EVENT_TYPES', () => {
         'ask_user',
         'user_answered',
         'agent_completed',
+        'dialog_question',
+        'dialog_answer',
       ]),
     )
   })
@@ -115,6 +117,8 @@ describe('AFM_EVENT_TYPES', () => {
       'hook_failed',
       'hook_resolved',
       'auto_answered',
+      'dialog_question',
+      'dialog_answer',
     ])
   })
 })

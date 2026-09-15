@@ -18,6 +18,8 @@ export const AFM_EVENT_TYPES = [
   'hook_failed',
   'hook_resolved',
   'auto_answered',
+  'dialog_question',
+  'dialog_answer',
 ] as const
 
 export type AfmEventType = (typeof AFM_EVENT_TYPES)[number]
@@ -50,6 +52,8 @@ export const SIGNIFICANT_EVENT_TYPES: ReadonlySet<string> = new Set([
   'ask_user',
   'user_answered',
   'agent_completed',
+  'dialog_question',
+  'dialog_answer',
 ])
 
 // Извлекает новый статус стадии из stage_status_changed (data — строка или { status }).
