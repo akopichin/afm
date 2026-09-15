@@ -393,6 +393,135 @@ describe('useEventFeed', () => {
     expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3])
   })
 
+  // T4b: dialog_question/dialog_answer публикуются И live, И в notices.jsonl
+  // (реплеятся через /api/events) — без seq (не FSM-transition), поэтому
+  // дедуп идёт по контенту. Гонка «live обогнал историю» уже работала через
+  // mergeHistory; проверяем явно как регресс.
+  test('dialog_question arriving live first, then the same question in history — one row', async () => {
+    const questionPayload = { id: 'q1', question: 'Proceed?', options: ['yes', 'no'] }
+    let resolveFetch: (value: unknown) => void = () => {}
+    const fetchPromise = new Promise((res) => {
+      resolveFetch = res
+    })
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'dialog_question', stage_id: 's1', data: questionPayload })
+    })
+
+    await act(async () => {
+      resolveFetch({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { type: 'dialog_question', stage_id: 's1', data: questionPayload, timestamp: '2026-09-15T10:00:00.000Z' },
+          ]),
+      })
+      await fetchPromise
+    })
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(1)
+    })
+  })
+
+  // Обратный порядок — тот самый баг: onmessage слепо аппендил live-событие,
+  // даже если та же самая (по контенту) запись уже пришла из истории раньше.
+  test('dialog_question already in history, then the same question arrives live — dedup keeps one row', async () => {
+    const questionPayload = { id: 'q1', question: 'Proceed?', options: ['yes', 'no'] }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { type: 'dialog_question', stage_id: 's1', data: questionPayload, timestamp: '2026-09-15T10:00:00.000Z' },
+          ]),
+      }),
+    )
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(1)
+    })
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    // Та же question, что уже вошла из истории, теперь долетает по WS (была
+    // в полёте на момент фетча) — без фикса onmessage добавил бы вторую строку.
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'dialog_question', stage_id: 's1', data: questionPayload })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(1)
+  })
+
+  // Trap #1 из брифа: одна FSM-transition может породить ДВА события с общим
+  // seq (stage_status_changed + retry_scheduled). Дедуп по одному только seq
+  // схлопнул бы их в одно — ключ должен учитывать ещё и type.
+  test('stage_status_changed and retry_scheduled sharing the same seq both survive merge with history', async () => {
+    let resolveFetch: (value: unknown) => void = () => {}
+    const fetchPromise = new Promise((res) => {
+      resolveFetch = res
+    })
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    // Live-версия одной половины пары (stage_status_changed) долетает до
+    // резолва /api/events.
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', stage_id: 's1', data: 'retrying', seq: 5 })
+    })
+
+    // История содержит СОСЕДНЕЕ семантическое событие с ТЕМ ЖЕ seq — это
+    // другая, самостоятельная запись, а не дубликат.
+    await act(async () => {
+      resolveFetch({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            {
+              type: 'retry_scheduled',
+              stage_id: 's1',
+              data: { attempt: 1 },
+              timestamp: '2026-09-15T10:00:00.000Z',
+              seq: 5,
+            },
+          ]),
+      })
+      await fetchPromise
+    })
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(2)
+    })
+    expect(result.current.events.map((e) => e.type).sort()).toEqual(['retry_scheduled', 'stage_status_changed'])
+  })
+
+  // Trap #2 из брифа: контент-дедуп на входе не должен схлопывать легитимные
+  // повторы agent_action/script_output — только dialog_question/dialog_answer.
+  test('identical seq-less agent_action live messages are not content-deduped', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'agent_action', stage_id: 's1', data: { tool: 'Bash', detail: 'pwd' } })
+      FakeWebSocket.last().emitMessage({ type: 'agent_action', stage_id: 's1', data: { tool: 'Bash', detail: 'pwd' } })
+    })
+
+    expect(result.current.events).toHaveLength(2)
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })

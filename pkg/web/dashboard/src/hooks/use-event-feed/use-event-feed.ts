@@ -12,6 +12,12 @@ const MAX_RECONNECT_DELAY_MS = 10000
 const MAX_EVENTS = 200
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
+// Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ (см. onmessage
+// выше). Только эти два — они публикуются live И персистятся в notices.jsonl
+// без seq, так что реплей истории после live-сообщения (или наоборот) может
+// дать дубль контента. agent_action/script_output намеренно исключены —
+// легитимные одинаковые повторы не должны схлопываться.
+const CONTENT_DEDUPE_ON_INGEST = new Set(['dialog_question', 'dialog_answer'])
 
 export function useEventFeed(url: string): { events: AfmEvent[]; connected: boolean } {
   const [events, setEvents] = useState<AfmEvent[]>([])
@@ -91,6 +97,20 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
           // раз, но повторы (реконнект/дребезг) не должны засорять ленту.
           const last = prev[prev.length - 1]
           if (last !== undefined && isSameStatusEvent(last, event)) return prev
+
+          // dialog_question/dialog_answer публикуются И live, И в
+          // notices.jsonl (реплеятся через /api/events) — без seq (не
+          // FSM-transition), поэтому mergeHistory их обычную дедуп-гонку не
+          // ловит, когда история приходит РАНЬШЕ этого live-сообщения (а не
+          // наоборот): тогда запись уже в prev, а onmessage раньше слепо
+          // аппендил ещё одну. Дедупим по контенту ТОЛЬКО эти два типа —
+          // бланковый контент-дедуп всех seq-less событий схлопнул бы
+          // легитимные повторы agent_action/script_output.
+          if (CONTENT_DEDUPE_ON_INGEST.has(event.type)) {
+            const key = dedupeKey(event)
+            if (prev.some((e) => dedupeKey(e) === key)) return prev
+          }
+
           return [...prev, event].slice(-MAX_EVENTS)
         })
       }
@@ -139,11 +159,15 @@ function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
 // теперь прикладывает его и к live-событиям (triggerWithSeq в orchestrator.go),
 // а не только к реплею истории, так что seq — надёжный ключ для событий,
 // производных от transition (stage_status_changed/ask_user/user_answered/
-// retry_scheduled/retry_exhausted). Для типов без transition (agent_action,
-// agent_completed, context_warning) seq не приходит ни
-// оттуда, ни отсюда — падаем на ключ по содержимому (type+stageId+payload).
+// retry_scheduled/retry_exhausted). Ключ включает ещё и type: одна
+// FSM-transition может опубликовать ДВА события с общим seq (напр.
+// stage_status_changed + retry_scheduled) — дедуп по одному только seq
+// схлопнул бы их в одно, потеряв самостоятельную запись. Для типов без
+// transition (agent_action, agent_completed, context_warning, dialog_question,
+// dialog_answer) seq не приходит ни оттуда, ни отсюда — падаем на ключ по
+// содержимому (type+stageId+payload).
 function dedupeKey(e: AfmEvent): string {
-  if (e.seq !== undefined) return `seq:${e.seq}`
+  if (e.seq !== undefined) return `seq:${e.seq}|${e.type}`
   return `${e.type}|${e.stageId}|${JSON.stringify(e.payload)}`
 }
 
