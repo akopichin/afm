@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 
@@ -78,7 +78,7 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
 // тест проверяет наличие/отсутствие самой панели плана/диалога.
 function openDetail(): void {
   const tabs = screen.getAllByRole('tab')
-  const detail = tabs.find((t) => t.textContent !== 'Feed')
+  const detail = tabs.find((t) => t.textContent !== 'Feed' && t.textContent !== 'Cost')
   if (detail) fireEvent.click(detail)
 }
 
@@ -300,7 +300,9 @@ describe('App', () => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(labels.some((l) => /Approval/.test(l))).toBe(true) // маяк остался
       expect(labels.some((l) => l === 'Gamma')).toBe(false) // блёклый дубль скрыт
-      expect(labels.length).toBe(2) // только Feed + маяк
+      // Feed + постоянная Cost-вкладка (Task 11) + маяк — никакого блёклого
+      // дубля-detail сверх этих трёх.
+      expect(labels.length).toBe(3)
     })
   })
 
@@ -319,7 +321,8 @@ describe('App', () => {
 
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
-      expect(labels).toEqual(['Feed']) // ни detail-таба, ни маяка
+      // Feed + постоянная Cost-вкладка (Task 11); ни detail-таба, ни маяка.
+      expect(labels).toEqual(['Feed', 'Cost'])
     })
   })
 
@@ -843,5 +846,99 @@ describe('App', () => {
     })
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument())
+  })
+
+  test('Cost tab: opening it hides the stage-scoped WorkspaceHeader and shows the cost report', async () => {
+    // Task 11: Cost — глобальный отчёт, не привязанный к выбранной стадии.
+    // Клик по постоянной вкладке Cost должен убрать имя/статус ранее выбранной
+    // стадии (WorkspaceHeader, id detail-title) — иначе создаётся ложное
+    // впечатление, что отчёт отфильтрован по этой стадии.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'running')],
+      accounting: { health: 'ok', has_data: false },
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+
+    await waitFor(() => expect(screen.getByText('No usage data')).toBeInTheDocument())
+    expect(document.getElementById('detail-title')).not.toBeInTheDocument()
+  })
+
+  test('Cost panel: a long stage list with several expanded rows keeps Total reachable via its own scroll container', async () => {
+    const manyStages = Array.from({ length: 20 }, (_, i) => ({
+      ...stageView(`s${i}`, `Stage ${i}`, 'done'),
+      cost: {
+        display_cost: '$1.00',
+        coverage: 'full',
+        estimated_cost_usd: 1,
+        metered: 1,
+        priced_invocations: 1,
+        unpriced: 0,
+        unmetered: 0,
+        models: ['claude'],
+        uncached_input: 10,
+        cache_read: 10,
+        cache_write_5m: 0,
+        cache_write_1h: 0,
+        cache_write_other: 0,
+        output: 10,
+        reasoning_output: 0,
+        total_tokens: 30,
+        cache_write_total: 0,
+        cache_hit_ratio: 0.5,
+        phases: { implementation: 1 },
+      },
+    }))
+
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: manyStages,
+      run_cost: {
+        display_cost: '$20.00',
+        coverage: 'full',
+        estimated_cost_usd: 20,
+        metered: 20,
+        priced_invocations: 20,
+        unpriced: 0,
+        unmetered: 0,
+        models: ['claude'],
+        uncached_input: 200,
+        cache_read: 200,
+        cache_write_5m: 0,
+        cache_write_1h: 0,
+        cache_write_other: 0,
+        output: 200,
+        reasoning_output: 0,
+        total_tokens: 600,
+        cache_write_total: 0,
+        cache_hit_ratio: 0.5,
+        phases: {},
+      },
+      accounting: { health: 'ok', has_data: true },
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+    const table = await screen.findByRole('table')
+
+    // Раскрываем несколько строк ВНУТРИ таблицы, а не любую кнопку с именем
+    // "Stage N" — в рейле слева тоже есть кнопки-строки с такими же именами
+    // (клик по ним переключил бы workspace обратно на attention/history и
+    // увёл бы нас с вкладки Cost, см. handleSelectStage).
+    const expandButtons = within(table).getAllByRole('button', { name: /Stage \d+/ })
+    fireEvent.click(expandButtons[0] as HTMLElement)
+    fireEvent.click(expandButtons[5] as HTMLElement)
+    fireEvent.click(expandButtons[10] as HTMLElement)
+
+    const totalRow = within(table).getByText('Total').closest('tr')
+    expect(totalRow).not.toBeNull()
+    expect(totalRow).toHaveTextContent('$20.00')
+    expect(document.querySelector('.cost-panel-scroll')).not.toBeNull()
   })
 })

@@ -1,5 +1,13 @@
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
+import { costReason, summarizeCoverageGroups } from '../cost-panel/coverage-summary'
+
+// costReason/summarizeCoverageGroups живут в components/cost-panel/coverage-summary
+// (Task 11) — и тайл Est. cost здесь, и CostPanel строят строку покрытия по одним
+// и тем же группам issues; ре-экспортируем их отсюда же, чтобы не ломать
+// существующие импорты (`import { costReason, summarizeCoverageGroups } from
+// './RunMetrics'` в RunMetrics.test.tsx).
+export { costReason, summarizeCoverageGroups }
 
 type RunMetricsProps = {
   startedAt: string
@@ -23,8 +31,6 @@ type RunMetricsProps = {
 
 type Metric = { key: string; label: string; value: string; icon: ReactElement }
 
-const MAX_COVERAGE_GROUPS_SHOWN = 3
-
 // hasCostMarker — единственное место, где решается «показывать amber-маркер
 // или нет» (round-4 #6 спеки): пробел покрытия ИЛИ недоступность хранилища.
 // hasData сюда сознательно не входит — health/coverage уже сами по себе
@@ -32,43 +38,6 @@ const MAX_COVERAGE_GROUPS_SHOWN = 3
 // «—» без маркера).
 function hasCostMarker(coverageIssues: CoverageIssue[], accounting: AccountingState): boolean {
   return coverageIssues.length > 0 || (accounting.supported && accounting.health === 'unavailable')
-}
-
-// summarizeCoverageGroups — общий ограниченный билдер сводки по пробелам
-// покрытия: первые MAX_COVERAGE_GROUPS_SHOWN групп как есть, остаток сворачивается
-// в одну фразу «and K more groups (M invocations)» (K — число скрытых групп,
-// M — сумма их count, а не количество групп) — тайл не должен раздуваться на
-// десятки строк при большом числе разных пробелов. Экспортирован, т.к. это
-// тот самый «shared summary builder» из спеки: co Cost-панель (Task 11) будет
-// строить свою строку покрытия по тем же группам.
-export function summarizeCoverageGroups(issues: CoverageIssue[]): string {
-  const shown = issues.slice(0, MAX_COVERAGE_GROUPS_SHOWN).map(describeCoverageIssue)
-  const rest = issues.slice(MAX_COVERAGE_GROUPS_SHOWN)
-  if (rest.length === 0) return shown.join('; ')
-  const invocations = rest.reduce((sum, issue) => sum + issue.count, 0)
-  return `${shown.join('; ')}; and ${rest.length} more groups (${invocations} invocations)`
-}
-
-function describeCoverageIssue(issue: CoverageIssue): string {
-  const model = issue.model === '' ? 'unknown model' : issue.model
-  const label = issue.kind === 'unmetered' ? 'unmetered' : 'unpriced'
-  return `${label} ${issue.phase}/${issue.channel} ${model} (×${issue.count})`
-}
-
-// costReason — составляет пояснение маркера по ДВУМ независимым осям (round-6
-// #3 спеки): недоступность accounting-хранилища и пробелы покрытия. Если
-// сработали обе — обе фразы идут подряд, ни одна не перекрывает другую (это
-// разные факты: упавший writer и непрайсед модель). Экспортирован для юнит-
-// тестов и переиспользования (см. summarizeCoverageGroups выше).
-export function costReason(coverageIssues: CoverageIssue[], accounting: AccountingState): string {
-  const parts: string[] = []
-  if (accounting.supported && accounting.health === 'unavailable') {
-    parts.push('Cost accounting storage is unavailable right now — totals may be incomplete.')
-  }
-  if (coverageIssues.length > 0) {
-    parts.push(`Coverage gaps: ${summarizeCoverageGroups(coverageIssues)}.`)
-  }
-  return parts.join(' ')
 }
 
 // RunMetrics — пять метрик прогона (Started/Elapsed/Idle/Backoff/Est. cost) в

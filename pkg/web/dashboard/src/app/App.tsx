@@ -7,6 +7,7 @@ import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { FeedWorkspace } from '../components/feed-workspace'
+import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
@@ -47,7 +48,7 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, flowPausedStages, accounting, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, flowPausedStages, runCost, runOverheadCost, coverageIssues, accounting, refresh } = useStatus()
 
   // Модалка ревью-раунда (Task 23) — открывается по клику ReviewBanner's "Send
   // notes". Держит только флаг открытия: сам список заметок/выбор стадии
@@ -190,7 +191,7 @@ export function App(): ReactElement {
   const [filesOpen, setFilesOpen] = useState(false)
   const anyModalOpen = filesOpen || noteModalStageId !== null || preNoteModalStageId !== null || reviewModalOpen
   const editing = useIsEditing() || anyModalOpen
-  const { state: wsState, activeItem: attnItem, openFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openAttention, openHistory } = useWorkspaceView(stages, editing)
 
   // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный
   // элемент очереди (он может отличаться от того, что вручную выбрано в рейле —
@@ -393,7 +394,10 @@ export function App(): ReactElement {
     contextKind !== null &&
     workspaceStage !== null &&
     attentionTabItem?.stageId === workspaceStage.id
-  const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
+  // Cost — вторая постоянная вкладка (increment 2), рядом с Feed: глобальный
+  // отчёт по затратам, не привязанный к выбранной стадии. Никогда не
+  // auto-open'ится (в отличие от контекстных attention-вкладок ниже).
+  const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }, { id: 'cost', label: 'Cost' }]
   if (workspaceStage !== null) {
     if (inAttention && contextKind !== null) {
       // Тело показывает attention самой стадии → detail = attention (active, glow).
@@ -431,9 +435,10 @@ export function App(): ReactElement {
       glow: true,
     })
   }
-  const activeTabId = wsState.view === 'feed' ? 'feed' : 'detail'
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
+    if (id === 'cost') { openCost(); return }
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
       if (attentionTabItem !== null) {
@@ -488,6 +493,10 @@ export function App(): ReactElement {
         elapsedMs={elapsedMs}
         idleMs={idleMs}
         backoffMs={backoffMs}
+        runCost={runCost}
+        coverageIssues={coverageIssues}
+        accounting={accounting}
+        onOpenCost={openCost}
         notificationsPermission={notificationsPermission}
         notificationsEnabled={notificationsEnabled}
         onRequestEnableNotifications={onRequestEnableNotifications}
@@ -524,8 +533,10 @@ export function App(): ReactElement {
               <>
                 {/* Контекст стадии воркспейса (имя + статус) — общая шапка и для
                     Feed, и для деталей (мокап показывает контекст стадии над
-                    лентой). */}
-                {workspaceStage !== null && (
+                    лентой). Cost — глобальный отчёт, не привязанный к стадии:
+                    оставлять над ним имя/статус последней выбранной стадии
+                    подразумевало бы несуществующий пер-стейдж фильтр. */}
+                {workspaceStage !== null && wsState.view !== 'cost' && (
                   <WorkspaceHeader
                     stage={workspaceStage}
                     connected={connected}
@@ -536,7 +547,15 @@ export function App(): ReactElement {
                     }
                   />
                 )}
-                {wsState.view === 'feed' || workspaceStage === null ? (
+                {wsState.view === 'cost' ? (
+                  <CostPanel
+                    stages={stages}
+                    runCost={runCost}
+                    runOverheadCost={runOverheadCost}
+                    coverageIssues={coverageIssues}
+                    accounting={accounting}
+                  />
+                ) : wsState.view === 'feed' || workspaceStage === null ? (
                   <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>

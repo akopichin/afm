@@ -1,0 +1,197 @@
+/* pkg/web/dashboard/skins/base/cost-panel.css
+   Cost tab (cost-ui increment 2, Task 11): a table of per-stage cost + run
+   overhead + Total, with an expandable token-mix/figure detail per row. Own
+   vertical scroll (the workspace body must never page-scroll) + sticky
+   Stage/Cost columns across horizontal scroll. Semantic tokens only — this
+   file is wired into every skin's index.css in Task 12 (tokens + @import),
+   so for now it leans on tokens that already exist (--accent-primary,
+   --success, --text-muted, …) plus a `--cost-cachewrite` fallback until
+   Task 12 defines it natively per skin. */
+
+.cost-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.cost-panel-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+}
+
+.cost-panel-banner {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  background: rgba(var(--attention-rgb), 0.12);
+  border-bottom: 1px solid rgba(var(--attention-rgb), 0.35);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+/* Own vertical scroll — expanded rows must never push Total/coverage out of
+   view, and the dashboard forbids page-level scroll. */
+.cost-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+/* Own horizontal scroll for the table, independent of the vertical one, so
+   Stage/Cost can stay sticky while Model/Tokens/Cache R/W scroll under them. */
+.cost-table-wrap {
+  overflow-x: auto;
+}
+
+.cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.cost-table th,
+.cost-table td {
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--separator-subtle);
+}
+
+.cost-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-weight: 600;
+  z-index: 2;
+}
+
+/* Sticky Stage (first) and Cost (last) columns — they stay visible while
+   Model/Tokens/Cache R/W scroll horizontally underneath. Opaque background
+   is required so scrolled-under content doesn't show through. */
+.cost-table .cost-col-stage,
+.cost-table .cost-col-cost {
+  position: sticky;
+  background: var(--surface-canvas);
+  z-index: 1;
+}
+.cost-table .cost-col-stage { left: 0; }
+.cost-table .cost-col-cost { right: 0; }
+.cost-table thead .cost-col-stage,
+.cost-table thead .cost-col-cost {
+  z-index: 3;
+}
+
+.cost-row-overhead .cost-col-stage,
+.cost-row-total .cost-col-stage {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.cost-row-total td {
+  font-weight: 600;
+  border-bottom: none;
+  border-top: 2px solid var(--separator-subtle);
+}
+.cost-row-total .cost-col-stage {
+  font-style: normal;
+  color: var(--text-primary);
+}
+
+.cost-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cost-expand-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cost-chevron {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+.cost-chevron.open {
+  transform: rotate(90deg);
+}
+
+.cost-detail-row td {
+  background: var(--surface-raised);
+  padding: 12px 16px;
+}
+
+.cost-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  white-space: normal;
+}
+
+/* Token-mix bar — segment widths are proportions of totalTokens. Colors carry
+   a distinct meaning per segment; a legend isn't included here (Task 12 may
+   add one alongside the token vocabulary) but each segment's `title` gives
+   the exact figure on hover. */
+.cost-tokenmix {
+  display: flex;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-hover);
+}
+
+.cost-tokenmix-empty {
+  background: var(--surface-hover);
+  opacity: 0.5;
+}
+
+.cost-tokenmix-seg {
+  display: block;
+  height: 100%;
+}
+.cost-seg-cacheread { background: var(--accent-primary); }
+.cost-seg-cachewrite { background: var(--cost-cachewrite, #8b7fd6); }
+.cost-seg-output { background: var(--success); }
+.cost-seg-uncached { background: var(--text-muted); }
+
+.cost-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.cost-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cost-figure dt {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.cost-figure dd {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-coverage-line {
+  margin: 10px 14px 0;
+  color: var(--attention);
+  font-size: 0.85rem;
+}
