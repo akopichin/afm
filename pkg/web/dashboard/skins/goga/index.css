@@ -15,6 +15,7 @@
 @import url("../base/log-panel.css");
 @import url("../base/dialog-channel.css");
 @import url("../base/feed-workspace.css");
+@import url("../base/cost-panel.css");
 @import url("../base/markdown.css");
 @import url("../base/agent-note-modal.css");
 @import url("../base/pasteable-textarea.css");
@@ -40,6 +41,11 @@
   --amber:     #3882F6;
   --violet:    #3882F6;
   --coral:     #FF6B5A;
+
+  /* cost-ui increment2 (task-12): true violet for the token-mix bar's
+     cache-write segment — goga's own --violet is aliased to blue (matches
+     --amber), so it can't serve as a hue distinct from --accent-primary. */
+  --cost-cachewrite: #c084fc;
 
   /* dialog accents — goga их не переопределял и сегодня, сохраняем
      дословные значения novacorps (текущее поведение — унаследованные через
@@ -90,6 +96,9 @@
   --amber:     #2563EB;
   --violet:    #2563EB;
   --coral:     #E11D48;
+
+  /* cost-ui increment2 (task-12): darkened for AA on white. */
+  --cost-cachewrite: #9333ea;
 
   /* dialog accents — переподобраны под светлый фон */
   --qa-answer:              #0f766e;

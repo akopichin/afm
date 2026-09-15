@@ -24,6 +24,7 @@
 @import url("../base/log-panel.css");
 @import url("../base/dialog-channel.css");
 @import url("../base/feed-workspace.css");
+@import url("../base/cost-panel.css");
 @import url("../base/markdown.css");
 @import url("../base/agent-note-modal.css");
 @import url("../base/pasteable-textarea.css");
@@ -56,6 +57,12 @@
   --success-rgb:        73, 201, 145;
   --danger:             #f06b78;
   --danger-rgb:         240, 107, 120;
+
+  /* cost-ui increment2 (task-12): true violet for the token-mix bar's
+     cache-write segment, distinct in hue from --accent-primary (indigo) and
+     --success (mint) — a reader must be able to tell the two blue-ish/green
+     segments apart from this one at a glance, not just by tooltip text. */
+  --cost-cachewrite: #c084fc;
 
   --focus-ring:     rgba(95, 120, 255, 0.55);
   --overlay-scrim:  rgba(0, 0, 0, 0.60);
@@ -139,6 +146,10 @@
   --success-rgb:        24, 125, 89;
   --danger:             #c44150;
   --danger-rgb:         196, 65, 80;
+
+  /* cost-ui increment2 (task-12): darkened for AA on the white/near-white
+     raised surface, still a clear violet next to accent-primary/success. */
+  --cost-cachewrite: #9333ea;
 
   --focus-ring:     rgba(77, 99, 215, 0.5);
   --overlay-scrim:  rgba(15, 20, 30, 0.45);

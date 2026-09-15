@@ -44,8 +44,10 @@ docker:
   #            auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" } }
 ```
 
-See [Docker mode](docker.md) for the full `docker:` section, and
-[Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`.
+See [Docker mode](docker.md) for the full `docker:` section,
+[Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and
+[Cost accounting](accounting.md) for the `pricing:` overrides key (rate
+cards, precedence, and what "estimated cost" means).
 
 ## Settings priority
 

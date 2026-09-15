@@ -3,10 +3,11 @@
    overhead + Total, with an expandable token-mix/figure detail per row. Own
    vertical scroll (the workspace body must never page-scroll) + sticky
    Stage/Cost columns across horizontal scroll. Semantic tokens only — this
-   file is wired into every skin's index.css in Task 12 (tokens + @import),
-   so for now it leans on tokens that already exist (--accent-primary,
-   --success, --text-muted, …) plus a `--cost-cachewrite` fallback until
-   Task 12 defines it natively per skin. */
+   file is wired into every skin's index.css (Task 12): imported from
+   graphite/goga/novacorps, and `--cost-cachewrite` (violet) is defined
+   natively per skin × light/dark there, alongside pre-existing tokens
+   (--accent-primary, --success, --text-muted, --cost-rail*). The `#8b7fd6`
+   fallback here only guards a skin that forgets to define the token. */
 
 .cost-panel {
   display: flex;

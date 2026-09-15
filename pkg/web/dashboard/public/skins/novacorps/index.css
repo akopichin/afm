@@ -12,6 +12,7 @@
 @import url("../base/log-panel.css");
 @import url("../base/dialog-channel.css");
 @import url("../base/feed-workspace.css");
+@import url("../base/cost-panel.css");
 @import url("../base/markdown.css");
 @import url("../base/agent-note-modal.css");
 @import url("../base/pasteable-textarea.css");
@@ -37,6 +38,10 @@
   --amber:     #e5d442;
   --violet:    #b787ff;
   --coral:     #ff6b5a;
+
+  /* cost-ui increment2 (task-12): novacorps already has a genuine violet
+     distinct from --amber (yellow) and --mint (teal) — reuse it verbatim. */
+  --cost-cachewrite: var(--violet);
 
   /* dialog accents (dark-mode-tuned pale hues, как раньше) */
   --qa-answer:              #9fe0d8;
@@ -85,6 +90,10 @@
   --amber:     #a6790a;
   --violet:    #7c3aed;
   --coral:     #c2410c;
+
+  /* cost-ui increment2 (task-12): same reuse as dark — already AA-safe on
+     white (used for --dialog-option-text/awaiting-user status there too). */
+  --cost-cachewrite: var(--violet);
 
   /* dialog accents — переподобраны под светлый фон */
   --qa-answer:              #0f766e;
