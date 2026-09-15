@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { STAGE_STATUS_LABELS, type Stage } from '../../types'
+import type { AccountingState, Coverage } from '../../types/cost'
 import { ATTENTION_STATUSES } from '../../hooks/use-attention'
 
 // Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
@@ -23,6 +24,43 @@ type StagesListProps = {
   // (совместимость со старыми тестами StagesList без этих пропсов).
   progressDone?: number
   progressTotal?: number
+  // accounting — состояние учёта затрат с бэкенда (GET /api/status). Нужно
+  // railCost, чтобы решить, показывать ли плейсхолдер «…» для ещё не
+  // оценённой (cost==null) активной стадии — сама по себе стадия не знает,
+  // включён ли учёт затрат и жив ли прайсер.
+  accounting: AccountingState
+}
+
+// Статусы, для которых имеет смысл плейсхолдер «оценка ожидается» — стадия
+// реально гоняет агента ПРЯМО СЕЙЧАС (а не просто ждёт человека/бэкоффа).
+const COST_PENDING_STATUSES: ReadonlySet<Stage['status']> = new Set(['planning', 'running', 'revising'])
+
+// Доступный (a11y) хвост описания стоимости по покрытию прайс-листа: полное
+// покрытие ничего не добавляет к «Estimated cost $X», частичное — уточняет,
+// что часть вызовов не покрыта прайсом, отсутствие покрытия — заменяет всю
+// фразу на «недоступно» (при coverage:'none' displayCost сам по себе '—').
+function costA11yText(displayCost: string, coverage: Coverage): string {
+  if (coverage === 'none') return 'Estimated cost unavailable'
+  const suffix = coverage === 'partial' ? ', partial pricing coverage' : ''
+  return `Estimated cost ${displayCost}${suffix}`
+}
+
+// railCost — единая точка принятия решения «что показать в рейле для этой
+// стадии» (см. бриф increment2/task-10). Приоритет:
+//   1. stage.cost есть → ВСЕГДА показываем displayCost (даже на ещё бегущей
+//      стадии — запись уже посчитана и покрытие уже известно).
+//   2. cost==null, но стадия реально гоняет агента прямо сейчас, не скрипт, и
+//      бэкенд поддерживает учёт затрат и он жив (health:'ok') → плейсхолдер
+//      «…» (оценка ожидается).
+//   3. иначе — ничего (pending, скрипт, unsupported/unavailable — включая
+//      unavailable с историческими данными, retrying).
+function railCost(stage: Stage, accounting: AccountingState): { text: string; a11y: string } | null {
+  if (stage.cost != null) {
+    return { text: stage.cost.displayCost, a11y: costA11yText(stage.cost.displayCost, stage.cost.coverage) }
+  }
+  const canEstimate = !stage.isScript && accounting.supported && accounting.health === 'ok' && COST_PENDING_STATUSES.has(stage.status)
+  if (!canEstimate) return null
+  return { text: '…', a11y: 'Estimated cost pending' }
 }
 
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
@@ -66,7 +104,11 @@ function hasKebab(stage: Stage): boolean {
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause, onButton, progressDone, progressTotal }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting }: StagesListProps): ReactElement {
+  // useId() нельзя звать внутри stages.map (правила хуков запрещают хук в
+  // цикле) — берём одну базу на компонент и добавляем к ней индекс строки,
+  // чтобы id стоимостного спана оставался уникальным и стабильным для React.
+  const costIdBase = useId()
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -176,7 +218,13 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
         )}
       </div>
       <ul id="stages-list" className="stages-list">
-        {stages.map((stage, index) => (
+        {stages.map((stage, index) => {
+          // railCost — null означает «пустой рейл»: ни фигуры, ни описания
+          // (см. документацию функции выше). costId существует, только пока
+          // есть что описывать — иначе aria-describedby указывал бы в никуда.
+          const cost = railCost(stage, accounting)
+          const costId = cost !== null ? `${costIdBase}-cost-${index}` : undefined
+          return (
           <li
             key={stage.id}
             className={`stage-item${stage.id === selectedStageId ? ' active' : ''}${justDone.has(stage.id) ? ' just-done' : ''}`}
@@ -197,6 +245,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
               className="stage-row"
               title={STAGE_STATUS_LABELS[stage.status]}
               onClick={() => onSelect(stage.id)}
+              aria-describedby={costId}
             >
               <span className="status-dot" data-status={stage.status}>
                 <span className="dot-check" aria-hidden="true">✓</span>
@@ -221,6 +270,16 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
             {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
+            {/* Стоимость — тихий моно-спан ПЕРЕД кебабом. Видимая цифра
+                помечена aria-hidden (тон/ellipsis не несут собственного
+                смысла для скринридера); полное предложение — в спрятанном
+                узле, на который указывает aria-describedby строки. */}
+            {cost !== null && (
+              <span className="stage-cost">
+                <span aria-hidden="true">{cost.text}</span>
+                <span id={costId} className="stage-cost-sr">{cost.a11y}</span>
+              </span>
+            )}
             {hasKebab(stage) && (
               <span className="stage-kebab-wrap">
                 <button
@@ -325,7 +384,8 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
             </span>
             {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
           </li>
-        ))}
+          )
+        })}
       </ul>
     </aside>
   )

@@ -1,7 +1,39 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import type { Stage } from '../../types'
+import type { AccountingState, CostSummary } from '../../types/cost'
 import { StagesList } from './StagesList'
+
+// Минимальный валидный CostSummary для тестов рейла (значения токенов не
+// проверяются — важен только displayCost/coverage).
+function makeCost(overrides: Partial<CostSummary> = {}): CostSummary {
+  return {
+    displayCost: '$1.23',
+    coverage: 'full',
+    estimatedCostUsd: 1.23,
+    metered: 1,
+    pricedInvocations: 1,
+    unpriced: 0,
+    unmetered: 0,
+    models: ['claude'],
+    uncachedInput: 0,
+    cacheRead: 0,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
+    cacheWriteOther: 0,
+    output: 0,
+    reasoningOutput: 0,
+    totalTokens: 0,
+    cacheWriteTotal: 0,
+    cacheHitRatio: null,
+    phases: {},
+    ...overrides,
+  }
+}
+
+const ACCOUNTING_OK: AccountingState = { supported: true, health: 'ok', hasData: true }
+const ACCOUNTING_UNAVAILABLE: AccountingState = { supported: true, health: 'unavailable', hasData: true }
+const ACCOUNTING_UNSUPPORTED: AccountingState = { supported: false }
 
 describe('StagesList', () => {
   test('renders rail progress (done / total) when progress props are given', () => {
@@ -9,13 +41,13 @@ describe('StagesList', () => {
       { id: 's1', name: 'A', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 's2', name: 'B', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} accounting={{ supported: false }} />)
     expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
     expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
   })
 
   test('omits rail progress when props are absent (0/0 stays safe)', () => {
-    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} />)
+    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
     expect(document.getElementById('progress-text')).toBeNull()
   })
 
@@ -26,7 +58,7 @@ describe('StagesList', () => {
     ]
     const onSelect = vi.fn()
 
-    render(<StagesList stages={stages} selectedStageId="s2" onSelect={onSelect} />)
+    render(<StagesList stages={stages} selectedStageId="s2" onSelect={onSelect} accounting={{ supported: false }} />)
 
     const items = screen.getAllByRole('listitem')
     expect(items[0]).not.toHaveClass('active')
@@ -42,7 +74,7 @@ describe('StagesList', () => {
       { id: 's2', name: 'Plan', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     const onSelect = vi.fn()
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={onSelect} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={onSelect} accounting={{ supported: false }} />)
 
     // Строка — настоящая <button> с доступным именем из содержимого (имя+статус).
     const row = screen.getByRole('button', { name: /Propose/i })
@@ -62,7 +94,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Propose', status: 'awaiting_user_input', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
     const item = screen.getByRole('listitem')
     expect(item).toHaveAttribute('data-attention', 'true')
@@ -74,7 +106,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
     const item = screen.getByRole('listitem')
     expect(item).toHaveAttribute('data-attention', 'true')
@@ -92,7 +124,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
     const item = screen.getByRole('listitem')
     const actions = item.querySelector('.stage-actions')
@@ -108,7 +140,7 @@ describe('StagesList', () => {
       { id: 's1', name: 'Run', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
     const item = screen.getByRole('listitem')
     expect(item).not.toHaveAttribute('data-attention', 'true')
@@ -119,7 +151,7 @@ describe('StagesList', () => {
       { id: 's1', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
 
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
     // Заголовок стадии всегда есть (макет показывает имя жирным); при пустом
     // name показываем id.
@@ -132,7 +164,7 @@ describe('StagesList', () => {
       { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(2) // a и c, не b
   })
 
@@ -142,7 +174,7 @@ describe('StagesList', () => {
       { id: 'b', name: '', status: 'revising', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 'c', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(3)
   })
 
@@ -152,7 +184,7 @@ describe('StagesList', () => {
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 'b', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} accounting={{ supported: false }} />)
 
     const buttons = screen.getAllByRole('button', { name: /more actions/i })
     expect(buttons).toHaveLength(1) // только stage a — у running-СКРИПТА (b) кебаба нет (пустое меню)
@@ -166,7 +198,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
   })
@@ -177,7 +209,7 @@ describe('StagesList', () => {
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 'b', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onAddNote={onAddNote} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onAddNote={onAddNote} accounting={{ supported: false }} />)
 
     const buttons = screen.getAllByRole('button', { name: /more actions/i })
     expect(buttons).toHaveLength(1) // running СКРИПТОВАЯ стадия (b) кебаба не имеет — единственный её пункт (add-note) отфильтрован
@@ -190,7 +222,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={onEditPreNote} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={onEditPreNote} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     fireEvent.click(screen.getByText('Add note (before start)'))
@@ -201,7 +233,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: 'учти лимиты', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={vi.fn()} accounting={{ supported: false }} />)
 
     expect(screen.getByTitle('Note attached for agent')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
@@ -212,7 +244,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
   })
 
@@ -220,7 +252,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={vi.fn()} accounting={{ supported: false }} />)
     expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
   })
 
@@ -228,7 +260,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
 
@@ -245,7 +277,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
@@ -258,7 +290,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
@@ -276,7 +308,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Add note for agent')).toBeInTheDocument()
@@ -293,7 +325,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Zebra', 'Apple'] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     const labels = screen.getAllByRole('button').map((b) => b.textContent)
@@ -308,7 +340,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={onButton} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={onButton} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     fireEvent.click(screen.getByText('Run linter'))
@@ -321,7 +353,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
 
     // running СКРИПТ: add-note/buttons/pre-note/pause — все отфильтрованы, поэтому
     // кебаба нет вовсе (а значит и кнопки в нём).
@@ -333,7 +365,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} />)
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.queryByText('Run linter')).not.toBeInTheDocument()
@@ -343,7 +375,7 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    const { baseElement } = render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} />)
+    const { baseElement } = render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(baseElement.querySelector('.stage-kebab-buttons')).toBeNull()
@@ -353,11 +385,11 @@ describe('StagesList', () => {
     const base: Stage[] = [
       { id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    const { container, rerender } = render(<StagesList stages={base} selectedStageId={null} onSelect={() => {}} />)
+    const { container, rerender } = render(<StagesList stages={base} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     expect(container.querySelector('.stage-item.just-done')).toBeNull()
 
     const done: Stage[] = [{ ...base[0]!, status: 'done' }]
-    rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />)
+    rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
   })
 
@@ -365,17 +397,117 @@ describe('StagesList', () => {
     vi.useFakeTimers()
     try {
       const running: Stage[] = [{ id: 's1', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] }]
-      const { container, rerender } = render(<StagesList stages={running} selectedStageId={null} onSelect={() => {}} />)
+      const { container, rerender } = render(<StagesList stages={running} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
       const done: Stage[] = [{ ...running[0]!, status: 'done' }]
-      act(() => { rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} />) })
+      act(() => { rerender(<StagesList stages={done} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />) })
       expect(container.querySelector('.stage-item.just-done')).not.toBeNull()
       // промежуточное обновление stages (новый массив, без нового перехода) через 300мс
-      act(() => { vi.advanceTimersByTime(300); rerender(<StagesList stages={[{ ...done[0]! }]} selectedStageId={null} onSelect={() => {}} />) })
+      act(() => { vi.advanceTimersByTime(300); rerender(<StagesList stages={[{ ...done[0]! }]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />) })
       // к 700мс от перехода класс должен уйти
       act(() => { vi.advanceTimersByTime(500) })
       expect(container.querySelector('.stage-item.just-done')).toBeNull()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // --- Стоимость в рейле (railCost precedence, cost-ui increment 2) ---
+
+  test('rail cost: running stage with a priced stage.cost shows the display cost, not the ellipsis placeholder', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [], cost: makeCost({ displayCost: '$4.56' }) },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    const rail = screen.getByRole('listitem').querySelector('.stage-cost')
+    expect(rail).toHaveTextContent('$4.56')
+    expect(rail).not.toHaveTextContent('…')
+  })
+
+  test('rail cost: cost==null + running + non-script + accounting ok shows the pending ellipsis placeholder', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toHaveTextContent('…')
+  })
+
+  test('rail cost: cost==null + running SCRIPT stage shows nothing (a script has no priced agent turn to estimate)', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+  })
+
+  test('rail cost: cost==null + accounting unavailable shows nothing, even with data', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_UNAVAILABLE} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+  })
+
+  test('rail cost: retrying stage (cost==null) shows nothing — retrying is passive backoff, not an active agent turn', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+  })
+
+  test('rail cost: unsupported accounting + running shows nothing', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_UNSUPPORTED} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+  })
+
+  test('rail cost: pending stage (cost==null) shows nothing regardless of accounting health', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+  })
+
+  test('rail cost: partial coverage adds ", partial pricing coverage" to the accessible description', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [], cost: makeCost({ displayCost: '$2.00', coverage: 'partial' }) },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    const row = screen.getByRole('button', { name: /^a/ })
+    const describedBy = row.getAttribute('aria-describedby')
+    expect(describedBy).not.toBeNull()
+    expect(document.getElementById(describedBy!)).toHaveTextContent('Estimated cost $2.00, partial pricing coverage')
+  })
+
+  test('rail cost: coverage none renders "Estimated cost unavailable" as the accessible description', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [], cost: makeCost({ displayCost: '—', coverage: 'none' }) },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    const row = screen.getByRole('button', { name: /^a/ })
+    const describedBy = row.getAttribute('aria-describedby')
+    expect(describedBy).not.toBeNull()
+    expect(document.getElementById(describedBy!)).toHaveTextContent('Estimated cost unavailable')
+  })
+
+  test('rail cost: an empty rail (no cost figure) leaves the stage row without aria-describedby', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    expect(screen.getByRole('button', { name: /^a/ })).not.toHaveAttribute('aria-describedby')
   })
 })

@@ -47,7 +47,7 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, flowPausedStages, refresh } = useStatus()
+  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, flowPausedStages, accounting, refresh } = useStatus()
 
   // Модалка ревью-раунда (Task 23) — открывается по клику ReviewBanner's "Send
   // notes". Держит только флаг открытия: сам список заметок/выбор стадии
@@ -516,6 +516,7 @@ export function App(): ReactElement {
                 onButton={handleButton}
                 progressDone={stages.filter((s) => s.status === 'done').length}
                 progressTotal={stages.length}
+                accounting={accounting}
               />
             }
             tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}

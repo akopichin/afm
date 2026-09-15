@@ -146,10 +146,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Статус только для скринридеров (visually-hidden): попадает в accessible name
-   кнопки строки, но не рисуется — визуально статус несёт точка-нода, а видимую
-   строку статуса убрали по запросу. */
-.stage-status-sr {
+/* Только для скринридеров (visually-hidden): .stage-status-sr попадает в
+   accessible name кнопки строки (статус несёт сама точка-нода визуально);
+   .stage-cost-sr — полное предложение про стоимость, на которое указывает
+   aria-describedby строки (видимая цифра рядом помечена aria-hidden). Одно
+   общее visually-hidden правило на оба класса. */
+.stage-status-sr,
+.stage-cost-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -257,6 +260,25 @@
 .prenote-badge {
   font-size: 11px;
   opacity: 0.75;
+}
+
+/* Per-stage cost figure (cost-ui increment2, task-10): a quiet mono span,
+   never opacity — intensifies via COLOR on row hover/active so the digits
+   stay fully legible even at rest (see --cost-rail token doc in tokens.css). */
+.stage-cost {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cost-rail);
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.stage-item:hover .stage-cost,
+.stage-item.active .stage-cost {
+  color: var(--cost-rail-strong);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-cost { transition: none; }
 }
 
 /* === Active (selected) stage === */
