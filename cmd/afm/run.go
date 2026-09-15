@@ -347,6 +347,7 @@ func newRunCmd() *cobra.Command {
 					Store:            store,
 					Theme:            cfg.EffectiveTheme(),
 					SkinDir:          cfg.SkinDir,
+					Accounting:       serverAccountingProvider(acct, acctErr),
 					UIBus:            orch.UIBus(),
 					Actions:          orch,
 					Secondary:        orch,
@@ -614,6 +615,25 @@ func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.W
 		HasSysPrompt: recipe.SystemPrompt != "",
 		Bare:         bare,
 		MaxTurns:     recipe.MaxTurns,
+	}
+}
+
+// serverAccountingProvider decides what the dashboard server sees as its
+// accounting.CostProvider: the live *Store when accounting.Open succeeded
+// (acct != nil), accounting.StaticUnavailable() when it hard-failed to open
+// (acct == nil, acctErr != nil — e.g. permission denied), or nil (accounting
+// unsupported for this server) in the (currently unreachable in practice,
+// see accounting.Open's doc) case of neither. nil vs StaticUnavailable are
+// deliberately distinct in the API: nil omits every accounting field from
+// /api/status, StaticUnavailable reports health:"unavailable" explicitly.
+func serverAccountingProvider(acct *accounting.Store, acctErr error) accounting.CostProvider {
+	switch {
+	case acct != nil:
+		return acct
+	case acctErr != nil:
+		return accounting.StaticUnavailable()
+	default:
+		return nil
 	}
 }
 

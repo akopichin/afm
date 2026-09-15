@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -49,6 +50,10 @@ type StageView struct {
 	// (статический конфиг флоу). Пусто, если кнопок нет. Фронт рисует по одному
 	// пункту меню на подпись и POST'ит подпись в /button при клике.
 	Buttons []string `json:"buttons,omitempty"`
+	// Cost — снапшот стоимости/токенов этой стадии (accounting.CostBundle.
+	// Stages[id]). nil, если у стадии нет ни одной записи в usage.jsonl или
+	// accounting вообще не подключён к серверу (см. Server.accounting).
+	Cost *accounting.CostView `json:"cost,omitempty"`
 }
 
 // buildStageViews joins rs.Stages (event-log state) with the flow's static
@@ -57,8 +62,11 @@ type StageView struct {
 // slice ordered by topoOrder(rs.StageOrder, dependsOn) — a display-only
 // reordering. rs.StageOrder itself (the authoritative declaration order used
 // by state/scheduling) is never touched. Replaces handleStatus's previous
-// five-parallel-map construction.
-func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string, stageButtons map[string][]string) []StageView {
+// five-parallel-map construction. stageCosts is the per-stage slice of a
+// single accounting.CostBundle.Stages map (nil when accounting isn't wired
+// up) — handleStatus calls CostSnapshot() once per request and passes the
+// same bundle here and into the run-level statusResponse fields.
+func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string, stageButtons map[string][]string, stageCosts map[string]*accounting.CostView) []StageView {
 	order := topoOrder(rs.StageOrder, dependsOn)
 	views := make([]StageView, 0, len(order))
 	for _, id := range order {
@@ -104,6 +112,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			ShowDialog:  showDialog,
 			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
 			Buttons:     stageButtons[id],
+			Cost:        stageCosts[id],
 		})
 	}
 	return views

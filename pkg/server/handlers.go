@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
@@ -61,6 +62,25 @@ type statusResponse struct {
 	// support, in which case FlowPauseState is always "none".
 	FlowPauseState   string   `json:"flow_pause_state"`
 	FlowPausedStages []string `json:"flow_paused_stages,omitempty"`
+	// RunCost/RunOverheadCost/CoverageIssues/Accounting — все четыре приходят
+	// из одного accounting.CostBundle (один CostSnapshot() за запрос, см.
+	// handleStatus) и опускаются целиком, когда Server.accounting == nil
+	// (accounting вообще не подключён к этому серверу — отличается от
+	// подключённого, но неработающего провайдера, у которого Accounting всё
+	// равно присутствует со health:"unavailable").
+	RunCost         *accounting.CostView       `json:"run_cost,omitempty"`
+	RunOverheadCost *accounting.CostView       `json:"run_overhead_cost,omitempty"`
+	CoverageIssues  []accounting.CoverageIssue `json:"coverage_issues,omitempty"`
+	Accounting      *accountingHealth          `json:"accounting,omitempty"`
+}
+
+// accountingHealth surfaces CostBundle.Health/HasData as-is — the server does
+// no interpretation of coverage from health (see CostBundle doc): a healthy
+// provider can still report Coverage:"none" on a given CostView, and that is
+// not a contradiction.
+type accountingHealth struct {
+	Health  string `json:"health"`
+	HasData bool   `json:"has_data"`
 }
 
 // capabilities advertises optional dashboard features gated by server-side
@@ -71,17 +91,31 @@ type capabilities struct {
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	rs := s.store.Snapshot()
+
+	// One CostSnapshot() call per request feeds both the per-stage views and
+	// the run-level fields below — never two independent snapshots (which
+	// could observe two different revisions of the ledger within the same
+	// response).
+	var stageCosts map[string]*accounting.CostView
 	resp := statusResponse{
 		FlowName:             rs.FlowName,
 		StartedAt:            rs.StartedAt,
 		Description:          s.Description,
-		Stages:               buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn, s.stageButtons),
 		LastSeq:              rs.LastSeq,
 		IdleAccumulatedMs:    rs.IdleAccumulatedMs,
 		IdleSince:            rs.IdleSince(),
 		BackoffAccumulatedMs: rs.BackoffAccumulatedMs,
 		BackoffOpenSince:     rs.BackoffOpenSince(),
 	}
+	if s.accounting != nil {
+		bundle := s.accounting.CostSnapshot()
+		stageCosts = bundle.Stages
+		resp.RunCost = bundle.Run
+		resp.RunOverheadCost = bundle.Overhead
+		resp.CoverageIssues = bundle.Issues
+		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData}
+	}
+	resp.Stages = buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn, s.stageButtons, stageCosts)
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	if s.reviewState != nil {
 		st, owners := s.reviewState()

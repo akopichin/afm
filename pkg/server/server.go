@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/server/workspace"
@@ -79,6 +80,7 @@ type Server struct {
 	stageButtons     map[string][]string // id стадии → подписи кнопок кебаб-меню (статический конфиг флоу)
 	store            *state.Store
 	uiBus            *bus.UIBus
+	accounting       accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
 	actions          StageActions              // never nil in practice — see StageActions doc
 	secondary        SecondaryActions          // may be nil — see SecondaryActions doc
 	flowActions      FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
@@ -117,14 +119,21 @@ type Config struct {
 	StageDependsOn   map[string][]string
 	StageButtons     map[string][]string
 	Store            *state.Store
-	UIBus            *bus.UIBus
-	Actions          StageActions
-	Secondary        SecondaryActions
-	FlowActions      FlowActions
-	ReviewState      func() (string, []string)
-	Workspace        workspace.FS // Docker project file browser backend; nil = capability off
-	Theme            string
-	SkinDir          string
+	// Accounting — источник данных о стоимости/токенах run'а для /api/status.
+	// nil означает "accounting не поддерживается этим сервером" (accounting
+	// вообще не был подключён к run'у) — отличается от подключённого, но
+	// нерабочего провайдера (accounting.StaticUnavailable(), см. cmd/afm/run.go):
+	// в первом случае все accounting-поля статуса опускаются целиком, во
+	// втором — присутствуют со health:"unavailable".
+	Accounting  accounting.CostProvider
+	UIBus       *bus.UIBus
+	Actions     StageActions
+	Secondary   SecondaryActions
+	FlowActions FlowActions
+	ReviewState func() (string, []string)
+	Workspace   workspace.FS // Docker project file browser backend; nil = capability off
+	Theme       string
+	SkinDir     string
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
 	WSPongWait   time.Duration
 	WSPingPeriod time.Duration
@@ -156,6 +165,7 @@ func New(cfg Config) *Server {
 		stageButtons:     cfg.StageButtons,
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,
+		accounting:       cfg.Accounting,
 		actions:          cfg.Actions,
 		secondary:        cfg.Secondary,
 		flowActions:      cfg.FlowActions,

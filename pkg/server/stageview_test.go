@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -33,7 +34,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, map[string]bool{"a": false}, nil, nil)
+	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, map[string]bool{"a": false}, nil, nil, nil)
 
 	if len(views) != 2 || views[0].ID != "b" || views[1].ID != "a" {
 		t.Fatalf("order not preserved: %+v", views)
@@ -88,7 +89,7 @@ func TestBuildStageViews_ShowDialogOnlyWithContent(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
 	byID := map[string]StageView{}
 	for _, v := range views {
 		byID[v.ID] = v
@@ -161,7 +162,7 @@ func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{"a": true}, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{"a": true}, nil, nil, nil)
 
 	a, b := views[0], views[1]
 	if !a.IsScript {
@@ -201,7 +202,7 @@ func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
 
 	if !views[0].ShowPlan {
 		t.Errorf("autonomous stage paused: ShowPlan should be true (Continue button lives in PlanPanel), got %+v", views[0])
@@ -220,10 +221,46 @@ func TestBuildStageViews_IncludesButtons(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, map[string][]string{"a": {"Run linter", "Rebuild"}})
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, map[string][]string{"a": {"Run linter", "Rebuild"}}, nil)
 
 	if !equalSlices(views[0].Buttons, []string{"Run linter", "Rebuild"}) {
 		t.Errorf("Buttons = %v, want [Run linter Rebuild]", views[0].Buttons)
+	}
+}
+
+// TestBuildStageViews_SetsCostFromBundle проверяет проброс stageCosts:
+// стадия, для которой в bundle.Stages есть запись, получает её в Cost;
+// стадия без записи (не участвовавшая в accounting) получает nil, не пустой
+// *CostView — фронт отличает "нет данных" от "данные нулевые".
+func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
+	runDir := t.TempDir()
+	for _, id := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(runDir, id), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs := state.RunState{
+		StageOrder: []string{"a", "b"},
+		Stages: map[string]state.StageState{
+			"a": {Status: state.StatusDone},
+			"b": {Status: state.StatusDone},
+		},
+	}
+	stageCosts := map[string]*accounting.CostView{
+		"a": {DisplayCost: "$0.12", Coverage: "full"},
+	}
+
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, stageCosts)
+	byID := map[string]StageView{}
+	for _, v := range views {
+		byID[v.ID] = v
+	}
+
+	if byID["a"].Cost == nil || byID["a"].Cost.DisplayCost != "$0.12" {
+		t.Errorf("stage a: Cost = %+v, want DisplayCost=$0.12", byID["a"].Cost)
+	}
+	if byID["b"].Cost != nil {
+		t.Errorf("stage b: Cost = %+v, want nil (no bundle entry)", byID["b"].Cost)
 	}
 }
 
