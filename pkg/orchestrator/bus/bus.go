@@ -21,7 +21,16 @@ const (
 	// EventAutoAnswered fires when a non-interactive stage's open question was
 	// answered by afm itself (see pkg/mcp.PickAutoAnswer), not by a real user.
 	// Never triggers an FSM transition — the stage's status is unaffected.
-	EventAutoAnswered   EventType = "auto_answered"
+	EventAutoAnswered EventType = "auto_answered"
+	// EventDialogQuestion fires exactly once, the first time an interactive
+	// question is surfaced to a human — carries the display-ready
+	// {phase,id,title} payload for the dashboard Feed (see
+	// mcp.DialogFeedNotice/DialogSnippet). Never re-fires for the same
+	// surfacing (tied to the same `processed`-map lifecycle that gates
+	// EventAskUser in pollQuestions); a genuinely new question that later
+	// reuses the same id (after the first was answered) fires again, exactly
+	// like EventAskUser does. Never triggers an FSM transition itself.
+	EventDialogQuestion EventType = "dialog_question"
 	EventContextWarning EventType = "context_warning"
 	// EventScriptOutput carries one line of stdout from a script/hook run.
 	// Data: map[string]string{"hook": "before"|"script"|"after", "line": "..."}.

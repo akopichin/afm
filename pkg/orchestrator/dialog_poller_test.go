@@ -313,6 +313,157 @@ func TestPollQuestions_InteractiveStageStillAsksUser(t *testing.T) {
 	}
 }
 
+// TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce покрывает
+// базовый случай T2: когда interactive-вопрос впервые всплывает пользователю,
+// поллер публикует РОВНО ОДНО событие dialog_question — живьём в UI-шину и
+// продублированное в notices.jsonl (тот же паттерн, что и у auto_answered),
+// с одной и той же полезной нагрузкой {phase,id,title}, где title —
+// mcp.DialogSnippet текста вопроса.
+func TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	question := "Which approach should we take?\nsome extra detail on a second line"
+	payload, _ := json.Marshal(map[string]any{"id": "q1", "question": question, "options": []string{}, "allow_custom": true})
+	if err := os.WriteFile(filepath.Join(stageDir, "implementation.q1.question.json"), payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	subID, events := o.ui.Subscribe(64)
+	defer o.ui.Unsubscribe(subID)
+
+	o.pollQuestions(map[string]bool{}, map[string]*malformedQuestionState{})
+
+	wantTitle := mcp.DialogSnippet(question)
+	dialogEvents := drainDialogQuestionEvents(events)
+	if len(dialogEvents) != 1 {
+		t.Fatalf("want exactly 1 EventDialogQuestion, got %d: %+v", len(dialogEvents), dialogEvents)
+	}
+	data, ok := dialogEvents[0].Data.(map[string]any)
+	if !ok {
+		t.Fatalf("event Data has unexpected type: %T", dialogEvents[0].Data)
+	}
+	if data["phase"] != "implementation" || data["id"] != "q1" || data["title"] != wantTitle {
+		t.Errorf("event data = %+v, want phase=implementation id=q1 title=%q", data, wantTitle)
+	}
+
+	notices := readDialogQuestionNotices(t, runDir)
+	if len(notices) != 1 {
+		t.Fatalf("want exactly 1 dialog_question line in notices.jsonl, got %d: %+v", len(notices), notices)
+	}
+	if notices[0].Phase != "implementation" || notices[0].ID != "q1" || notices[0].Title != wantTitle {
+		t.Errorf("notice data = %+v, want phase=implementation id=q1 title=%q", notices[0], wantTitle)
+	}
+}
+
+// TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce is the
+// regression guard for the hardest requirement of T2: giveUpOnMalformedQuestion
+// persists a valid stub question.json and publishes EventAskUser ITSELF,
+// bypassing the normal interactive branch of pollQuestions (the one that sets
+// processed[key]=true and calls publishDialogQuestion) entirely — so no
+// dialog_question fires on the exhaustion tick. Only on the NEXT tick, once the
+// stub is on disk and processed[key] is still false, does the question flow
+// through the normal branch and fire dialog_question — exactly once, no matter
+// how many further ticks re-poll the same (now-processed) question.
+func TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce(t *testing.T) {
+	broken := `not json at all {{{`
+	o, store, _ := setupMalformedTestOrch(t, broken)
+	injectFixStub(t, o, "") // every fix agent fails to repair
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	subID, events := o.ui.Subscribe(256)
+	defer o.ui.Unsubscribe(subID)
+
+	// grace tick + maxJSONFixAttempts spawns + exhaustion tick + several
+	// re-polls of the now-valid stub, with margin.
+	for i := 0; i < maxJSONFixAttempts+5; i++ {
+		o.pollQuestions(processed, malformed)
+	}
+
+	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusAwaitingUserInput {
+		t.Fatalf("status = %s, want awaiting_user_input", got)
+	}
+
+	dialogEvents := drainDialogQuestionEvents(events)
+	if len(dialogEvents) != 1 {
+		t.Fatalf("want exactly 1 EventDialogQuestion across the whole malformed→stub→repoll sequence, got %d: %+v", len(dialogEvents), dialogEvents)
+	}
+
+	notices := readDialogQuestionNotices(t, o.opts.RunDir)
+	if len(notices) != 1 {
+		t.Fatalf("want exactly 1 dialog_question line in notices.jsonl, got %d: %+v", len(notices), notices)
+	}
+}
+
+// drainDialogQuestionEvents non-blockingly drains every currently-buffered
+// EventDialogQuestion from a UI bus subscription channel.
+func drainDialogQuestionEvents(events <-chan bus.Event) []bus.Event {
+	var got []bus.Event
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == bus.EventDialogQuestion {
+				got = append(got, ev)
+			}
+		default:
+			return got
+		}
+	}
+}
+
+// dialogQuestionNotice — поле "data" одной строки notices.jsonl для
+// dialog_question-уведомления (см. mcp.DialogFeedNotice).
+type dialogQuestionNotice struct {
+	Phase string `json:"phase"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// readDialogQuestionNotices читает notices.jsonl и возвращает данные всех
+// строк с type == dialog_question.
+func readDialogQuestionNotices(t *testing.T, runDir string) []dialogQuestionNotice {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	var out []dialogQuestionNotice
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var envelope struct {
+			Type string               `json:"type"`
+			Data dialogQuestionNotice `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			t.Fatalf("invalid notices.jsonl line: %v (%s)", err, line)
+		}
+		if envelope.Type == string(bus.EventDialogQuestion) {
+			out = append(out, envelope.Data)
+		}
+	}
+	return out
+}
+
 // TestPollQuestions_ReusedIDAfterAnswerAsksAgain is a regression test for a
 // bug found in a real production log: the prompt tells agents "never reuse an
 // ID within a phase", but a real agent (goga-brainstorm's revision loop) did

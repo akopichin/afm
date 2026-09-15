@@ -211,6 +211,15 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				continue
 			}
 			processed[key] = true
+			// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт,
+			// что уже гарантирует единственность EventAskUser (processed[key]).
+			// giveUpOnMalformedQuestion (терминальный fallback для malformed)
+			// публикует свой собственный EventAskUser в обход этой ветки и НЕ
+			// трогает processed — поэтому здесь он не задваивается; вместо
+			// этого его валидный стаб на следующем тике проходит через эту же
+			// ветку как обычный новый вопрос и публикует dialog_question один
+			// единственный раз. См. TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce.
+			o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
 
 			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
 			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал
@@ -241,6 +250,20 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			}
 		}
 	}
+}
+
+// publishDialogQuestion emits a "dialog_question" feed message the first time
+// an interactive question is surfaced to a human — live to the UI bus AND
+// persisted to notices.jsonl, the same one-map-two-sinks shape as
+// EventAutoAnswered (see the auto-answer branch above): a client that
+// connects/reloads AFTER the question was asked still sees it in the feed
+// history via /api/events' reconstructNotices, which replays only from
+// notices.jsonl, not from the live bus. The payload map is built ONCE so the
+// live and persisted JSON are byte-identical (feed dedup depends on it).
+func (o *Orchestrator) publishDialogQuestion(stageID, phase, id, questionText string) {
+	payload := mcp.DialogFeedNotice(phase, id, mcp.DialogSnippet(questionText))
+	o.ui.Publish(bus.Event{Type: bus.EventDialogQuestion, StageID: stageID, Data: payload})
+	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventDialogQuestion), payload)
 }
 
 // reconcileMalformedFixes drops every tracked malformed key for stageID whose
