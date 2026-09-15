@@ -33,6 +33,15 @@ type Store struct {
 	ledger      Ledger
 	unavailable bool
 	lastErr     error
+
+	// revision counts every change that can affect a CostSnapshot result: a
+	// successful Append, or the store latching unavailable. CostSnapshot
+	// compares it against cachedRevision to decide whether the cached
+	// cachedBundle can be reused as-is (no re-aggregation) or must be
+	// rebuilt.
+	revision       uint64
+	cachedRevision uint64
+	cachedBundle   *CostBundle
 }
 
 // Open opens (creating if needed) <runDir>/usage.jsonl for append and
@@ -166,6 +175,7 @@ func (s *Store) Append(obs Observation, stageID, phase, scope string) error {
 	}
 
 	s.ledger.Add(rec)
+	s.revision++
 	return nil
 }
 
@@ -173,6 +183,7 @@ func (s *Store) Append(obs Observation, stageID, phase, scope string) error {
 func (s *Store) markUnavailable(err error) {
 	s.unavailable = true
 	s.lastErr = err
+	s.revision++
 }
 
 // Snapshot returns a point-in-time copy of the ledger accumulated so far —

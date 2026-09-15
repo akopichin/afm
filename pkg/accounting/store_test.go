@@ -145,6 +145,167 @@ func TestOpenPreExistingCorruptFileReturnsUsableUnavailableStore(t *testing.T) {
 	}
 }
 
+// openTestStore opens a fresh Store over a temp dir with a plain (no
+// config-override) Resolver — the common setup every CostSnapshot test
+// needs.
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	r := NewResolver(PricingConfig{})
+	s, err := Open(t.TempDir(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// unmeteredObs is an Observation for a process that produced no usable
+// usage at all (Metered=false) — still one invocation, still attributable
+// to a stage, just with nothing to price.
+func unmeteredObs() Observation {
+	return Observation{
+		Metered: false,
+		Reason:  ReasonMissingTerminal,
+	}
+}
+
+// sameBundleIdentity reports whether both CostBundles were produced by the
+// same CostSnapshot build (i.e. the second call reused the cache instead of
+// re-aggregating), by comparing the Store revision each was built from.
+func sameBundleIdentity(a, b CostBundle) bool {
+	return a.builtAt == b.builtAt
+}
+
+func TestCostSnapshot_RevisionCacheReusesBuild(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+	b1 := s.CostSnapshot()
+	b2 := s.CostSnapshot() // no Append between
+	if !sameBundleIdentity(b1, b2) {
+		t.Fatal("expected cached bundle reuse without rebuild")
+	}
+
+	if err := s.Append(obsGLM(), "backend", "review", ""); err != nil {
+		t.Fatal(err)
+	}
+	b3 := s.CostSnapshot()
+	if sameBundleIdentity(b2, b3) {
+		t.Fatal("append must invalidate the cache")
+	}
+}
+
+// TestCostSnapshot_CacheInvalidatesOnUnavailableLatch covers the other
+// revision-bump trigger besides Append: a write failure that latches the
+// store unavailable must also invalidate any cached bundle, so Health
+// flips to HealthUnavailable on the very next CostSnapshot call.
+func TestCostSnapshot_CacheInvalidatesOnUnavailableLatch(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+	b1 := s.CostSnapshot()
+	if b1.Health != HealthOK {
+		t.Fatalf("expected HealthOK, got %v", b1.Health)
+	}
+
+	// Force the next write to fail, latching unavailable.
+	if err := s.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err == nil {
+		t.Fatal("expected a write error once the file handle is closed")
+	}
+
+	b2 := s.CostSnapshot()
+	if sameBundleIdentity(b1, b2) {
+		t.Fatal("marking unavailable must invalidate the cache")
+	}
+	if b2.Health != HealthUnavailable {
+		t.Fatalf("expected HealthUnavailable after latch, got %v", b2.Health)
+	}
+}
+
+func TestCostSnapshot_AllUnmeteredIsData(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(unmeteredObs(), "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+	b := s.CostSnapshot()
+	if !b.HasData {
+		t.Fatal("one record ⇒ has_data")
+	}
+	if b.Run == nil || b.Run.Coverage != string(CoverageNone) {
+		t.Fatalf("run=%+v", b.Run)
+	}
+	if b.Stages["backend"] == nil {
+		t.Fatal("stage-attributed record ⇒ non-nil stage cost")
+	}
+}
+
+// TestCostSnapshot_NoDataYieldsNilRun covers the opposite edge: a Store with
+// no records at all must report HasData=false and a nil Run, not a
+// zero-value CostView masquerading as real coverage.
+func TestCostSnapshot_NoDataYieldsNilRun(t *testing.T) {
+	s := openTestStore(t)
+	b := s.CostSnapshot()
+	if b.HasData {
+		t.Fatal("empty store must report HasData=false")
+	}
+	if b.Run != nil {
+		t.Fatal("empty store must report a nil Run")
+	}
+	if b.Stages != nil {
+		t.Fatal("empty store must report a nil Stages map")
+	}
+}
+
+// TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot is the
+// immutability guarantee: a caller that mutates the map/slice it got back
+// from CostSnapshot must never affect what a later CostSnapshot call
+// returns, cached or freshly built.
+func TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	b1 := s.CostSnapshot()
+	b1.Stages["injected"] = &CostView{DisplayCost: "corrupted"}
+	b1.Issues = append(b1.Issues, CoverageIssue{Kind: "corrupted"})
+
+	b2 := s.CostSnapshot() // cache hit — must not see the mutation above
+	if _, ok := b2.Stages["injected"]; ok {
+		t.Fatal("mutating a returned Stages map corrupted a later cached snapshot")
+	}
+	if len(b2.Issues) != 0 {
+		t.Fatalf("mutating a returned Issues slice corrupted a later cached snapshot: %+v", b2.Issues)
+	}
+
+	b2.Stages["injected-2"] = &CostView{DisplayCost: "corrupted"}
+	if err := s.Append(obsGLM(), "backend", "review", ""); err != nil {
+		t.Fatal(err)
+	}
+	b3 := s.CostSnapshot() // fresh rebuild — must not see the mutation above either
+	if _, ok := b3.Stages["injected-2"]; ok {
+		t.Fatal("mutating a returned Stages map corrupted a later rebuilt snapshot")
+	}
+}
+
+func TestStaticUnavailable(t *testing.T) {
+	p := StaticUnavailable()
+	b := p.CostSnapshot()
+	if b.Health != HealthUnavailable {
+		t.Fatalf("expected HealthUnavailable, got %v", b.Health)
+	}
+	if b.HasData {
+		t.Fatal("expected HasData=false")
+	}
+	if b.Run != nil || b.Stages != nil || b.Overhead != nil || b.Issues != nil {
+		t.Fatalf("expected an entirely empty bundle, got %+v", b)
+	}
+}
+
 func TestStoreUnavailableAfterWriteFailureStopsWrites(t *testing.T) {
 	dir := t.TempDir()
 	r := NewResolver(PricingConfig{})
