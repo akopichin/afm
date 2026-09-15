@@ -64,20 +64,42 @@ func resolveDebug(flag bool, env string) bool {
 }
 
 func main() {
-	cmd, err := newRootCmd().ExecuteC()
-	if err != nil {
-		var exitErr *docker.SubprocessExitError
-		if errors.As(err, &exitErr) {
-			// Код завершения docker-контейнера (в т.ч. 0 — успех) передаётся
-			// через error-канал Cobra чисто как транспорт для os.Exit(code) в
-			// main; это не настоящая ошибка пользователя, поэтому подавляем
-			// её через SilenceErrors/SilenceUsage на root и не печатаем здесь.
-			os.Exit(exitErr.Code)
-		}
-		cmd.PrintErrln(cmd.ErrPrefix(), err.Error())
-		cmd.Println(cmd.UsageString())
-		os.Exit(1)
+	os.Exit(runMain(os.Args[1:]))
+}
+
+// runMain выполняет корневую команду и переводит любой ошибочный результат
+// в код завершения процесса, сам не вызывая os.Exit — так main() остаётся
+// тонкой обёрткой, а сам перевод error → exit code проверяем в тестах
+// (включая настоящий процесс, см. exit_test.go) без падения тестового
+// бинаря.
+func runMain(args []string) int {
+	root := newRootCmd()
+	root.SetArgs(args)
+	cmd, err := root.ExecuteC()
+	if err == nil {
+		return 0
 	}
+
+	var subprocessErr *docker.SubprocessExitError
+	if errors.As(err, &subprocessErr) {
+		// Код завершения docker-контейнера (в т.ч. 0 — успех) передаётся
+		// через error-канал Cobra чисто как транспорт для os.Exit(code) в
+		// main; это не настоящая ошибка пользователя, поэтому подавляем
+		// её через SilenceErrors/SilenceUsage на root и не печатаем здесь.
+		return subprocessErr.Code
+	}
+
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) {
+		if !exitErr.Silent {
+			cmd.PrintErrln(cmd.ErrPrefix(), err.Error())
+		}
+		return exitErr.Code
+	}
+
+	cmd.PrintErrln(cmd.ErrPrefix(), err.Error())
+	cmd.Println(cmd.UsageString())
+	return 1
 }
 
 func newRootCmd() *cobra.Command {

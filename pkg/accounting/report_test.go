@@ -54,7 +54,7 @@ func TestRenderMarkdown_Golden(t *testing.T) {
 		"backend": {Status: "done", Duration: "12m34s"},
 	}
 
-	got := RenderMarkdown("myflow-20260914-100000", stages, led)
+	got := RenderMarkdown("myflow-20260914-100000", stages, led, RenderNormal)
 
 	for _, want := range []string{
 		"# Cost report: myflow-20260914-100000",
@@ -97,7 +97,7 @@ func TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts(t *testing.T) {
 	led := &Ledger{}
 	led.Add(BuildRecord(r, reportObsOverhead(), "", "memory_update", ScopeRunOverhead))
 
-	got := RenderMarkdown("myflow-20260914-100000", nil, led)
+	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
 
 	idx := strings.Index(got, "## Run overhead")
 	if idx == -1 {
@@ -124,7 +124,7 @@ func TestRenderMarkdown_NoUsageData(t *testing.T) {
 		"empty ledger": {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := RenderMarkdown("myflow-20260914-100000", nil, led)
+			got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
 			if !strings.Contains(got, "No usage data") {
 				t.Errorf("expected a clean \"No usage data\" report; got:\n%s", got)
 			}
@@ -172,7 +172,7 @@ func TestRenderMarkdown_CoverageAndPricing(t *testing.T) {
 	led.Add(unpricedRec)
 	led.Add(mismatchRec)
 
-	got := RenderMarkdown("myflow-20260914-100000", nil, led)
+	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
 
 	for _, want := range []string{
 		"## Coverage and pricing",
@@ -185,5 +185,125 @@ func TestRenderMarkdown_CoverageAndPricing(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("coverage appendix missing %q; got:\n%s", want, got)
 		}
+	}
+}
+
+// TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount verifies the
+// coverage appendix now groups identical unmetered/unpriced records via
+// aggregateIssues instead of listing one line per record — two identical
+// unpriced records for the same stage/phase/channel/model must render as a
+// single grouped line carrying "×2", not two separate lines each silently
+// implying a count of 1.
+func TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	unpricedRec := BuildRecord(r, Observation{
+		Metered: true,
+		Schema:  SchemaAnthropic,
+		Channel: "claude-cli",
+		Model:   "some-unknown-model",
+		Tokens:  Tokens{Output: 10},
+	}, "docs", "implementation", "")
+
+	led := &Ledger{}
+	led.Add(unpricedRec)
+	led.Add(unpricedRec)
+
+	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
+
+	idx := strings.Index(got, "## Coverage and pricing")
+	if idx == -1 {
+		t.Fatalf("report missing \"## Coverage and pricing\" section; got:\n%s", got)
+	}
+	coverage := got[idx:]
+
+	if !strings.Contains(coverage, "×2") {
+		t.Errorf("expected the grouped unpriced line to show ×2 for two identical records; got:\n%s", coverage)
+	}
+	if strings.Count(coverage, "some-unknown-model") != 1 {
+		t.Errorf("expected exactly one grouped line for the two identical unpriced records in the coverage appendix; got:\n%s", coverage)
+	}
+}
+
+// TestRenderMarkdown_DegradedCorrupt verifies the self-contained degraded
+// shape for a corrupt ledger: no bare "No usage data", but a title, the
+// caller-supplied FSM stage rows, and a note that plainly distinguishes
+// "corrupt" from "unreadable" or "missing" — all of it on stdout (the return
+// value here), since a caller redirecting `afm report > out.md` never sees
+// stderr.
+func TestRenderMarkdown_DegradedCorrupt(t *testing.T) {
+	stages := map[string]StageInfo{"backend": {Status: "done", Duration: "12m34s"}}
+
+	got := RenderMarkdown("myflow-20260914-100000", stages, nil, RenderCorrupt)
+
+	for _, want := range []string{
+		"# Cost report: myflow-20260914-100000",
+		"backend",
+		"done (12m34s)",
+		"Cost unavailable",
+		"corrupt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("degraded corrupt report missing %q; got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "No usage data") {
+		t.Errorf("corrupt report must not read as plain \"No usage data\"; got:\n%s", got)
+	}
+	if strings.Contains(got, "$0.00") || strings.Contains(got, "## Total") {
+		t.Errorf("corrupt report must not invent any totals; got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_DegradedUnreadable mirrors
+// TestRenderMarkdown_DegradedCorrupt for the "other read error" case — the
+// note must never say "corrupt" for a cause that isn't a parse failure.
+func TestRenderMarkdown_DegradedUnreadable(t *testing.T) {
+	stages := map[string]StageInfo{"backend": {Status: "running"}}
+
+	got := RenderMarkdown("myflow-20260914-100000", stages, nil, RenderUnreadable)
+
+	for _, want := range []string{
+		"# Cost report: myflow-20260914-100000",
+		"backend",
+		"Cost unavailable",
+		"cannot read",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("degraded unreadable report missing %q; got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "corrupt") {
+		t.Errorf("an \"other read error\" report must never claim \"corrupt\"; got:\n%s", got)
+	}
+	if strings.Contains(got, "No usage data") || strings.Contains(got, "## Total") {
+		t.Errorf("unreadable report must not read as missing, and must not invent totals; got:\n%s", got)
+	}
+}
+
+// TestLedger_CoverageIssues_SumsCountAcrossIdenticalRecords is the
+// pkg/accounting-level companion to the CLI's coverageNote test: two
+// identical unpriced records must aggregate into ONE CoverageIssue with
+// Count==2, never two separate issues (which would make a naive len(issues)
+// undercount).
+func TestLedger_CoverageIssues_SumsCountAcrossIdenticalRecords(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	rec := BuildRecord(r, Observation{
+		Metered: true,
+		Schema:  SchemaAnthropic,
+		Channel: "claude-cli",
+		Model:   "some-unknown-model",
+		Tokens:  Tokens{Output: 10},
+	}, "docs", "implementation", "")
+
+	led := &Ledger{}
+	led.Add(rec)
+	led.Add(rec)
+
+	issues := led.CoverageIssues()
+	if len(issues) != 1 {
+		t.Fatalf("expected exactly one grouped issue, got %d: %+v", len(issues), issues)
+	}
+	if issues[0].Count != 2 {
+		t.Errorf("expected Count==2 for two identical unpriced records, got %d", issues[0].Count)
 	}
 }

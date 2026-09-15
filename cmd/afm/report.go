@@ -36,12 +36,23 @@ func newReportCmd() *cobra.Command {
 				return fmt.Errorf("load state: %w", err)
 			}
 
-			// Read-only, best-effort: a run without usage.jsonl (accounting
+			// Read-only: a run without usage.jsonl at all (accounting
 			// disabled, or a run predating this feature) must still produce
-			// a valid report — accounting.Load already returns an empty
-			// ledger with a nil error for that case, exactly like `afm
-			// check` relies on.
-			led, _ := accounting.Load(runDir)
+			// a valid report — accounting.Load returns an empty ledger with
+			// a nil error for that case. A CORRUPT or otherwise-unreadable
+			// ledger renders a self-contained degraded report (see the
+			// matrix in RenderMarkdown's RenderState) and exits 3.
+			led, loadErr := accounting.Load(runDir)
+
+			var renderState accounting.RenderState
+			switch {
+			case loadErr == nil:
+				renderState = accounting.RenderNormal
+			case errors.Is(loadErr, accounting.ErrCorruptUsage):
+				renderState = accounting.RenderCorrupt
+			default:
+				renderState = accounting.RenderUnreadable
+			}
 
 			durations := stageDurations(runDir)
 			stages := make(map[string]accounting.StageInfo, len(rs.Stages))
@@ -52,8 +63,18 @@ func newReportCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Print(accounting.RenderMarkdown(filepath.Base(runDir), stages, led))
-			return nil
+			fmt.Print(accounting.RenderMarkdown(filepath.Base(runDir), stages, led, renderState))
+
+			switch {
+			case loadErr == nil:
+				return nil
+			case errors.Is(loadErr, accounting.ErrCorruptUsage):
+				fmt.Fprintln(os.Stderr, "cost unavailable (ledger corrupt)")
+				return &ExitError{Code: 3, Silent: true}
+			default:
+				fmt.Fprintf(os.Stderr, "cost unavailable (cannot read usage ledger): %v\n", loadErr)
+				return &ExitError{Code: 3, Silent: true}
+			}
 		},
 	}
 }

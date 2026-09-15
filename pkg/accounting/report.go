@@ -18,6 +18,29 @@ type StageInfo struct {
 	Duration string
 }
 
+// RenderState distinguishes WHY a report has no usage figures, so
+// RenderMarkdown can render the reason directly into the markdown itself —
+// `afm report run > report.md` must be self-contained: stdout survives the
+// redirect, stderr doesn't.
+type RenderState int
+
+const (
+	// RenderNormal is the default: render the full report from led, or (if
+	// led is nil/empty — a run genuinely never recorded any usage) fall
+	// back to a "No usage data" note, same as always.
+	RenderNormal RenderState = iota
+	// RenderCorrupt means the ledger's usage.jsonl exists but a complete
+	// line in it failed to parse (accounting.ErrCorruptUsage) — led is
+	// always nil for this state; nothing about the (possibly partial, now
+	// untrusted) file is rendered.
+	RenderCorrupt
+	// RenderUnreadable means usage.jsonl could not even be read (permission
+	// denied, the path is a directory, a transient I/O error) — distinct
+	// from RenderCorrupt so the note never claims "corrupt" for a cause
+	// that isn't a parse failure.
+	RenderUnreadable
+)
+
 // RenderMarkdown renders a deterministic markdown cost/usage report for one
 // run: a per-stage token/cost table, a run-overhead summary, a grand total,
 // and a coverage/pricing appendix (unmetered/unpriced invocations, rate
@@ -27,16 +50,34 @@ type StageInfo struct {
 //
 // stages may be nil — it only supplies the optional status/duration column,
 // and a stage present in the ledger but absent from stages simply renders
-// with an unknown status.
+// with an unknown status. For any degraded state (missing/corrupt/
+// unreadable) the FSM-derived stage rows from `stages` are still rendered —
+// only the usage/cost columns are omitted.
 //
-// led may be nil, or non-nil with zero records — either shape (a run with
-// no usage.jsonl at all, or accounting simply disabled for it) renders a
-// plain "No usage data" report instead of a misleading $0.00.
-func RenderMarkdown(runName string, stages map[string]StageInfo, led *Ledger) string {
+// led is only consulted when state == RenderNormal; for RenderCorrupt/
+// RenderUnreadable the caller passes nil (accounting.Load already failed)
+// and this function renders the matching self-contained note instead of any
+// usage data. A nil/empty led under RenderNormal (a run with no usage.jsonl
+// at all, or accounting simply disabled for it) renders the same "No usage
+// data" note as it always has — that shape isn't an error, so it doesn't
+// need its own RenderState.
+func RenderMarkdown(runName string, stages map[string]StageInfo, led *Ledger, state RenderState) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Cost report: %s\n\n", runName)
 
+	switch state {
+	case RenderCorrupt:
+		renderStageStatusOnly(&b, stages)
+		b.WriteString("> Cost unavailable — usage ledger is corrupt; token and cost totals are omitted.\n")
+		return b.String()
+	case RenderUnreadable:
+		renderStageStatusOnly(&b, stages)
+		b.WriteString("> Cost unavailable — cannot read the usage ledger; totals omitted.\n")
+		return b.String()
+	}
+
 	if led == nil || len(led.Records()) == 0 {
+		renderStageStatusOnly(&b, stages)
 		b.WriteString("No usage data.\n")
 		return b.String()
 	}
@@ -48,6 +89,31 @@ func RenderMarkdown(runName string, stages map[string]StageInfo, led *Ledger) st
 	renderCoverage(&b, recs)
 
 	return b.String()
+}
+
+// renderStageStatusOnly renders a bare stage/status(duration) table with no
+// usage columns at all — used by every degraded RenderMarkdown shape
+// (missing/corrupt/unreadable usage ledger), since a stage's FSM status is
+// always available from the caller regardless of whether accounting is.
+func renderStageStatusOnly(b *strings.Builder, stages map[string]StageInfo) {
+	b.WriteString("## Stages\n\n")
+	if len(stages) == 0 {
+		b.WriteString("No stages recorded.\n\n")
+		return
+	}
+
+	ids := make([]string, 0, len(stages))
+	for id := range stages {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	b.WriteString("| Stage | Status (duration) |\n")
+	b.WriteString("|---|---|\n")
+	for _, id := range ids {
+		fmt.Fprintf(b, "| %s | %s |\n", id, statusAndDuration(stages[id]))
+	}
+	b.WriteString("\n")
 }
 
 // renderStagesTable renders one markdown table row per stage: id, per-phase
@@ -79,7 +145,7 @@ func renderStagesTable(b *strings.Builder, recs []UsageRecord, byStage map[strin
 			sum.Tokens.CacheWriteTotal(),
 			sum.Tokens.Output,
 			sum.Tokens.Total(),
-			FormatUSD(sum.CostUSD, sum.Priced),
+			DisplayCost(sum),
 			statusAndDuration(stages[id]),
 		)
 	}
@@ -164,14 +230,14 @@ func renderOverhead(b *strings.Builder, recs []UsageRecord) {
 	fmt.Fprintf(b, "Invocations: %d (%s). Tokens: %d total (uncached in %d, cache read %d, cache write %d, output %d). Estimated cost: %s.\n\n",
 		len(overhead), phaseCounts(overhead, ""),
 		sum.Tokens.Total(), sum.Tokens.UncachedInput, sum.Tokens.CacheRead, sum.Tokens.CacheWriteTotal(), sum.Tokens.Output,
-		FormatUSD(sum.CostUSD, sum.Priced))
+		DisplayCost(sum))
 }
 
 // renderTotal reports the whole-run total (stages + overhead combined) —
 // exactly Ledger.RunSummary(), never recomputed here.
 func renderTotal(b *strings.Builder, run Summary) {
 	b.WriteString("## Total\n\n")
-	fmt.Fprintf(b, "Tokens: %d total. Estimated cost: %s.\n\n", run.Tokens.Total(), FormatUSD(run.CostUSD, run.Priced))
+	fmt.Fprintf(b, "Tokens: %d total. Estimated cost: %s.\n\n", run.Tokens.Total(), DisplayCost(run))
 }
 
 // renderCoverage lists everything a reader should distrust or double-check
@@ -183,21 +249,30 @@ func renderTotal(b *strings.Builder, run Summary) {
 func renderCoverage(b *strings.Builder, recs []UsageRecord) {
 	b.WriteString("## Coverage and pricing\n\n")
 
-	var unmetered, unpriced, mismatched []UsageRecord
+	var mismatched []UsageRecord
 	rates := map[string]RateSnapshot{}
 	for _, r := range recs {
-		switch {
-		case !r.Metered:
-			unmetered = append(unmetered, r)
-		case !r.Priced:
-			unpriced = append(unpriced, r)
-		default:
-			if r.Rate != nil {
-				rates[r.Rate.Key] = *r.Rate
-			}
+		if r.Metered && r.Priced && r.Rate != nil {
+			rates[r.Rate.Key] = *r.Rate
 		}
 		if recordHasWarning(r, "reported_cost_differs_from_estimate") {
 			mismatched = append(mismatched, r)
+		}
+	}
+
+	// Gaps (unmetered/unpriced) go through the same grouping the dashboard's
+	// cost tab uses, so `afm report`'s appendix and the API total pricing
+	// gaps identically — see CoverageIssue's count semantics (sum(count),
+	// never len(issues)).
+	var unmetered, unpriced []CoverageIssue
+	for _, issue := range aggregateIssues(recs) {
+		switch issue.Kind {
+		case IssueKindUnmetered:
+			unmetered = append(unmetered, issue)
+		case IssueKindUnpriced:
+			unpriced = append(unpriced, issue)
+		default:
+			// aggregateIssues only ever produces these two kinds.
 		}
 	}
 
@@ -226,24 +301,24 @@ func renderCoverage(b *strings.Builder, recs []UsageRecord) {
 
 	if len(unmetered) > 0 {
 		b.WriteString("Unmetered invocations:\n\n")
-		for _, r := range sortedByStagePhase(unmetered) {
-			reason := r.Reason
+		for _, issue := range unmetered {
+			reason := issue.Reason
 			if reason == "" {
 				reason = "no reason recorded"
 			}
-			fmt.Fprintf(b, "- %s/%s: %s\n", recordLabel(r), r.Phase, reason)
+			fmt.Fprintf(b, "- %s/%s: %s (×%d)\n", issue.Attribution.Label(), issue.Phase, reason, issue.Count)
 		}
 		b.WriteString("\n")
 	}
 
 	if len(unpriced) > 0 {
 		b.WriteString("Unpriced invocations (metered, no rate resolved):\n\n")
-		for _, r := range sortedByStagePhase(unpriced) {
-			model := r.Model
+		for _, issue := range unpriced {
+			model := issue.Model
 			if model == "" {
 				model = "unknown model"
 			}
-			fmt.Fprintf(b, "- %s/%s: channel=%s model=%s\n", recordLabel(r), r.Phase, r.Channel, model)
+			fmt.Fprintf(b, "- %s/%s: channel=%s model=%s (×%d)\n", issue.Attribution.Label(), issue.Phase, issue.Channel, model, issue.Count)
 		}
 		b.WriteString("\n")
 	}

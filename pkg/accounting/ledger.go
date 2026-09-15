@@ -220,3 +220,13 @@ func (l *Ledger) SummaryByStage() map[string]Summary {
 func (l *Ledger) RunSummary() Summary {
 	return summarize(l.Records())
 }
+
+// CoverageIssues groups every unmetered/unpriced record in the ledger via
+// the same aggregation the dashboard's cost tab and `afm report`'s coverage
+// appendix use (see aggregateIssues), so every surface computes pricing-gap
+// totals identically instead of each re-deriving them from Summary's
+// Unmetered/Unpriced counters by hand. Empty when every metered record in
+// the ledger was priced.
+func (l *Ledger) CoverageIssues() []CoverageIssue {
+	return aggregateIssues(l.Records())
+}

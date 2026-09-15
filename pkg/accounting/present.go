@@ -59,6 +59,14 @@ type CoverageIssue struct {
 	Count       int         `json:"count"`
 }
 
+// The two values CoverageIssue.Kind ever takes — exported so every consumer
+// (this package's own renderCoverage, cmd/afm's coverageNote) compares
+// against the same identifier instead of re-typing the literal.
+const (
+	IssueKindUnmetered = "unmetered"
+	IssueKindUnpriced  = "unpriced"
+)
+
 func coverageOf(s Summary) Coverage {
 	priced := s.Metered - s.Unpriced
 	gaps := s.Unpriced + s.Unmetered
@@ -138,9 +146,9 @@ func aggregateIssues(recs []UsageRecord) []CoverageIssue {
 		// Determine if this record is an issue
 		var issueKind string
 		if !r.Metered {
-			issueKind = "unmetered"
+			issueKind = IssueKindUnmetered
 		} else if !r.Priced {
-			issueKind = "unpriced"
+			issueKind = IssueKindUnpriced
 		} else {
 			// Record is priced and metered, not an issue
 			continue

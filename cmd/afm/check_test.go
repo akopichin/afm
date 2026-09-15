@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -290,6 +291,197 @@ func TestCheckWithoutUsageDataRendersCleanly(t *testing.T) {
 	}
 	if !strings.Contains(out, cmdInit) {
 		t.Errorf("the stage table itself must still render, got:\n%s", out)
+	}
+}
+
+// captureOutput redirects both os.Stdout and os.Stderr for the duration of
+// fn and returns everything written to each SEPARATELY — the load-error
+// matrix below must assert stdout and stderr independently (check.go prints
+// via fmt.Printf/os.Stderr directly, not cmd.OutOrStdout()/ErrOrStderr()).
+func captureOutput(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outW, errW
+	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+
+	fn()
+
+	if err := outW.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := errW.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var outBuf, errBuf bytes.Buffer
+	if _, err := io.Copy(&outBuf, outR); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(&errBuf, errR); err != nil {
+		t.Fatal(err)
+	}
+	return outBuf.String(), errBuf.String()
+}
+
+// TestCheck_LoadErrorMatrix exercises accounting.Load's four outcomes for
+// `afm check`, asserting stdout, stderr and the exit code (via the RunE's
+// returned *ExitError, translated to a real process exit by cmd/afm/exit.go
+// — see TestExitError_ProcessExitCode for the process-level proof) totally
+// independently, per the CLI-consistency contract in the design spec.
+func TestCheck_LoadErrorMatrix(t *testing.T) {
+	exitCodeOf := func(t *testing.T, err error) int {
+		t.Helper()
+		if err == nil {
+			return 0
+		}
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.Code
+		}
+		t.Fatalf("expected either nil or *ExitError, got %v (%T)", err, err)
+		return -1
+	}
+
+	t.Run("missing usage.jsonl", func(t *testing.T) {
+		chdirTemp(t)
+		makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+
+		var runErr error
+		stdout, stderr := captureOutput(t, func() {
+			cmd := newCheckCmd()
+			cmd.SilenceErrors = true
+			cmd.SilenceUsage = true
+			runErr = cmd.Execute()
+		})
+
+		if exitCodeOf(t, runErr) != 0 {
+			t.Errorf("missing usage.jsonl: exit code = %d, want 0", exitCodeOf(t, runErr))
+		}
+		if !strings.Contains(stdout, "No usage data") {
+			t.Errorf("missing usage.jsonl: expected stdout \"No usage data\", got:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Errorf("missing usage.jsonl: expected empty stderr, got:\n%s", stderr)
+		}
+	})
+
+	t.Run("corrupt usage.jsonl", func(t *testing.T) {
+		chdirTemp(t)
+		runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+		if err := os.WriteFile(filepath.Join(runDir, "usage.jsonl"), []byte("not valid json\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		var runErr error
+		stdout, stderr := captureOutput(t, func() {
+			cmd := newCheckCmd()
+			cmd.SilenceErrors = true
+			cmd.SilenceUsage = true
+			runErr = cmd.Execute()
+		})
+
+		if exitCodeOf(t, runErr) != 3 {
+			t.Errorf("corrupt usage.jsonl: exit code = %d, want 3", exitCodeOf(t, runErr))
+		}
+		if !strings.Contains(stdout, cmdInit) {
+			t.Errorf("corrupt usage.jsonl: expected the stage table to still render on stdout, got:\n%s", stdout)
+		}
+		if strings.Contains(stdout, "EST. COST") {
+			t.Errorf("corrupt usage.jsonl: no cost columns should render, got:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, "corrupt") {
+			t.Errorf("corrupt usage.jsonl: expected stderr to mention \"corrupt\", got:\n%s", stderr)
+		}
+	})
+
+	t.Run("other read error", func(t *testing.T) {
+		chdirTemp(t)
+		runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+		// usage.jsonl as a DIRECTORY is a portable way to force a read
+		// error (EISDIR) without chmod, which is unstable across users/CI
+		// (e.g. root always bypasses permission bits).
+		if err := os.MkdirAll(filepath.Join(runDir, "usage.jsonl"), 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		var runErr error
+		stdout, stderr := captureOutput(t, func() {
+			cmd := newCheckCmd()
+			cmd.SilenceErrors = true
+			cmd.SilenceUsage = true
+			runErr = cmd.Execute()
+		})
+
+		if exitCodeOf(t, runErr) != 3 {
+			t.Errorf("other read error: exit code = %d, want 3", exitCodeOf(t, runErr))
+		}
+		if !strings.Contains(stdout, cmdInit) {
+			t.Errorf("other read error: expected the stage table to still render on stdout, got:\n%s", stdout)
+		}
+		if strings.Contains(stderr, "corrupt") {
+			t.Errorf("other read error: stderr must never say \"corrupt\" for a non-parse failure, got:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "cannot read") {
+			t.Errorf("other read error: expected stderr to mention \"cannot read\", got:\n%s", stderr)
+		}
+	})
+
+	t.Run("normal", func(t *testing.T) {
+		chdirTemp(t)
+		runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+		writeUsageLog(t, runDir, []accounting.UsageRecord{
+			{
+				RecordVersion: 1, StageID: cmdInit, Phase: "implementation", Model: "claude-sonnet-4-5",
+				Metered: true, Priced: true,
+				Tokens:           accounting.Tokens{UncachedInput: 1000, Output: 200},
+				EstimatedCostUSD: 0.05,
+			},
+		})
+
+		var runErr error
+		stdout, stderr := captureOutput(t, func() {
+			cmd := newCheckCmd()
+			cmd.SilenceErrors = true
+			cmd.SilenceUsage = true
+			runErr = cmd.Execute()
+		})
+
+		if exitCodeOf(t, runErr) != 0 {
+			t.Errorf("normal: exit code = %d, want 0", exitCodeOf(t, runErr))
+		}
+		if !strings.Contains(stdout, "TOTAL") {
+			t.Errorf("normal: expected a TOTAL line on stdout, got:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Errorf("normal: expected empty stderr, got:\n%s", stderr)
+		}
+	})
+}
+
+// TestCoverageNote_SumsCountNotGroups is the CLI-level companion to
+// pkg/accounting's TestLedger_CoverageIssues_SumsCountAcrossIdenticalRecords:
+// two identical unpriced records must render as "2 unpriced" in `afm
+// check`'s coverage note, not "1" (which a naive len(issues) would produce,
+// since aggregateIssues groups identical gaps into one issue with Count==2).
+func TestCoverageNote_SumsCountNotGroups(t *testing.T) {
+	led := &accounting.Ledger{}
+	rec := accounting.UsageRecord{
+		StageID: "docs", Phase: "implementation",
+		Metered: true, Priced: false, Channel: "claude-cli", Model: "some-unknown-model",
+	}
+	led.Add(rec)
+	led.Add(rec)
+
+	got := coverageNote(led)
+	if got != "2 unpriced" {
+		t.Errorf("coverageNote = %q, want %q", got, "2 unpriced")
 	}
 }
 

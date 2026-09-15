@@ -70,15 +70,18 @@ func newCheckCmd() *cobra.Command {
 				return fmt.Errorf("load state: %w", err)
 			}
 
-			// Read-only, best-effort: a run with no usage.jsonl (accounting
+			// Read-only: a run with no usage.jsonl at all (accounting
 			// disabled, or a run predating this feature) must never fail
-			// `check` — Load already returns an empty ledger, nil error for
-			// that case, and we ignore any other error the same way.
-			led, _ := accounting.Load(latest)
+			// `check` — Load returns an empty ledger, nil error for that
+			// case. A CORRUPT or otherwise-unreadable ledger is different:
+			// the stage table still renders (best-effort), but the command
+			// now surfaces the problem on stderr and exits 3 instead of
+			// silently reading as "no usage data" (see the matrix below).
+			led, loadErr := accounting.Load(latest)
 			var byStage map[string]accounting.Summary
 			var runSummary accounting.Summary
 			hasUsage := false
-			if led != nil {
+			if loadErr == nil {
 				byStage = led.SummaryByStage()
 				runSummary = led.RunSummary()
 				hasUsage = runSummary.Metered+runSummary.Unmetered > 0
@@ -109,7 +112,7 @@ func newCheckCmd() *cobra.Command {
 					sum := byStage[id]
 					r.tokens = humanizeTokens(sum.Tokens.Total())
 					r.cache = formatCache(sum.Tokens)
-					r.cost = accounting.FormatUSD(sum.CostUSD, sum.Priced)
+					r.cost = accounting.DisplayCost(sum)
 				}
 				rows = append(rows, r)
 			}
@@ -134,13 +137,20 @@ func newCheckCmd() *cobra.Command {
 			}
 
 			fmt.Println()
-			if !hasUsage {
+			switch {
+			case loadErr != nil && errors.Is(loadErr, accounting.ErrCorruptUsage):
+				fmt.Fprintln(os.Stderr, "cost unavailable (ledger corrupt)")
+				return &ExitError{Code: 3, Silent: true}
+			case loadErr != nil:
+				fmt.Fprintf(os.Stderr, "cost unavailable (cannot read usage ledger): %v\n", loadErr)
+				return &ExitError{Code: 3, Silent: true}
+			case !hasUsage:
 				fmt.Println("No usage data")
 				return nil
 			}
 			fmt.Printf("TOTAL: %s tokens, %s (incl. run overhead)\n",
-				humanizeTokens(runSummary.Tokens.Total()), accounting.FormatUSD(runSummary.CostUSD, runSummary.Priced))
-			if note := coverageNote(runSummary); note != "" {
+				humanizeTokens(runSummary.Tokens.Total()), accounting.DisplayCost(runSummary))
+			if note := coverageNote(led); note != "" {
 				fmt.Printf("  %s\n", note)
 			}
 			return nil
@@ -172,13 +182,29 @@ func formatCache(t accounting.Tokens) string {
 // coverageNote reports partial pricing coverage (e.g. "2 unmetered, 1
 // unpriced") so a reader knows the TOTAL may understate the real cost. Empty
 // when every metered record in the run was priced.
-func coverageNote(s accounting.Summary) string {
-	var parts []string
-	if s.Unmetered > 0 {
-		parts = append(parts, fmt.Sprintf("%d unmetered", s.Unmetered))
+//
+// Totals are sum(issue.Count) over led.CoverageIssues() — the same grouping
+// `afm report`'s coverage appendix and the dashboard's cost tab use — NOT
+// len(issues): two identical unpriced invocations group into a single issue
+// with Count==2, and must still read as "2 unpriced", never "1".
+func coverageNote(led *accounting.Ledger) string {
+	var unmetered, unpriced int
+	for _, issue := range led.CoverageIssues() {
+		switch issue.Kind {
+		case accounting.IssueKindUnmetered:
+			unmetered += issue.Count
+		case accounting.IssueKindUnpriced:
+			unpriced += issue.Count
+		default:
+			// CoverageIssue only ever carries these two kinds.
+		}
 	}
-	if s.Unpriced > 0 {
-		parts = append(parts, fmt.Sprintf("%d unpriced", s.Unpriced))
+	var parts []string
+	if unmetered > 0 {
+		parts = append(parts, fmt.Sprintf("%d unmetered", unmetered))
+	}
+	if unpriced > 0 {
+		parts = append(parts, fmt.Sprintf("%d unpriced", unpriced))
 	}
 	return strings.Join(parts, ", ")
 }
