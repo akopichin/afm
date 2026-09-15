@@ -212,3 +212,13 @@ client:
 #   # access, use an SSH tunnel to loopback.
 #   # file_browser:
 #   #   enabled: false   # opt-out; ON by default (env AFM_FILE_BROWSER overrides)
+
+# Accounting DISPLAY switch (cost/usage).
+# Controls only whether cost is SHOWN: the dashboard cost tile/tab/rail, the
+# TOKENS/CACHE/EST. COST columns in `afm check`, and `afm report`. Collection
+# into .afm/runs/<run>/usage.jsonl keeps running regardless — the data is still
+# there, so turning display back on reveals past runs too (AFM_ACCOUNTING=1 afm report).
+# ON by default. Priority: env AFM_ACCOUNTING > config > default true.
+# AFM_ACCOUNTING=1/true force-shows, =0/false force-hides; empty/unset → config decides.
+# accounting:
+#   enabled: false   # hide cost everywhere (data still collected)

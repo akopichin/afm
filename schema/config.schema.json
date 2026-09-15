@@ -27,9 +27,21 @@
       "type": "boolean",
       "description": "Auto-reset failed stages to pending on run start/resume. Default true."
     },
-    "pricing": { "$ref": "#/definitions/pricing" }
+    "pricing": { "$ref": "#/definitions/pricing" },
+    "accounting": { "$ref": "#/definitions/accounting" }
   },
   "definitions": {
+    "accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cost/usage accounting DISPLAY switch (dashboard cost UI, `afm check` cost columns, `afm report`). Collection into usage.jsonl is unaffected.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Show accounting. ON by default; explicit false / env AFM_ACCOUNTING=0 hides the display (data is still collected)."
+        }
+      }
+    },
     "duration": {
       "type": "string",
       "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",

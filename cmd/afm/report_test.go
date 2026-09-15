@@ -90,6 +90,44 @@ func TestReportNoUsageData(t *testing.T) {
 	}
 }
 
+// TestReport_AccountingDisabledEmitsHintExit0 verifies the display switch:
+// with AFM_ACCOUNTING=0, `afm report` writes nothing to stdout (so a
+// redirected report stays empty) and a one-line hint on stderr, exiting 0 —
+// even with recorded usage present. It short-circuits before resolving a run,
+// so it also succeeds when no runs exist at all.
+func TestReport_AccountingDisabledEmitsHintExit0(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("AFM_ACCOUNTING", "0")
+
+	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	writeUsageLog(t, runDir, []accounting.UsageRecord{
+		{
+			RecordVersion: 1, StageID: cmdInit, Phase: "implementation", Model: "claude-sonnet-4-5",
+			Metered: true, Priced: true,
+			Tokens:           accounting.Tokens{UncachedInput: 1000, Output: 200},
+			EstimatedCostUSD: 0.05,
+		},
+	})
+
+	var runErr error
+	stdout, stderr := captureOutput(t, func() {
+		cmd := newReportCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		runErr = cmd.Execute()
+	})
+
+	if runErr != nil {
+		t.Fatalf("accounting disabled: expected nil error (exit 0), got %v", runErr)
+	}
+	if stdout != "" {
+		t.Errorf("accounting disabled: stdout must be empty, got:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "accounting display disabled") {
+		t.Errorf("accounting disabled: expected a hint on stderr, got:\n%s", stderr)
+	}
+}
+
 // TestReportExplicitRunID verifies the positional [run] argument accepts a
 // bare run id (a directory name under .afm/runs), not just "latest".
 func TestReportExplicitRunID(t *testing.T) {

@@ -294,6 +294,47 @@ func TestCheckWithoutUsageDataRendersCleanly(t *testing.T) {
 	}
 }
 
+// TestCheck_AccountingDisabledHidesCost verifies the display switch: with
+// AFM_ACCOUNTING=0 the ledger is not read at all, so even a run WITH recorded
+// usage renders the pre-accounting table — no cost columns, no TOTAL, and no
+// misleading "No usage data" note (the data exists, it's just hidden). The
+// stage table itself must still render. Exit 0.
+func TestCheck_AccountingDisabledHidesCost(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("AFM_ACCOUNTING", "0")
+
+	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	writeUsageLog(t, runDir, []accounting.UsageRecord{
+		{
+			RecordVersion: 1, StageID: cmdInit, Phase: "implementation", Model: "claude-sonnet-4-5",
+			Metered: true, Priced: true,
+			Tokens:           accounting.Tokens{UncachedInput: 10_000, Output: 9_300},
+			EstimatedCostUSD: 1.2345,
+		},
+	})
+
+	stdout, stderr := captureOutput(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	for _, banned := range []string{"EST. COST", "$1.2345", "TOTAL", "No usage data"} {
+		if strings.Contains(stdout, banned) {
+			t.Errorf("accounting disabled: stdout must not contain %q, got:\n%s", banned, stdout)
+		}
+	}
+	if !strings.Contains(stdout, cmdInit) {
+		t.Errorf("accounting disabled: the stage table must still render, got:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("accounting disabled: expected empty stderr, got:\n%s", stderr)
+	}
+}
+
 // captureOutput redirects both os.Stdout and os.Stderr for the duration of
 // fn and returns everything written to each SEPARATELY — the load-error
 // matrix below must assert stdout and stderr independently (check.go prints

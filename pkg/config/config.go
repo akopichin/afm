@@ -58,6 +58,25 @@ type ServerConfig struct {
 	OpenBrowser *bool `yaml:"open_browser"`
 }
 
+// AccountingConfig controls the cost/usage accounting DISPLAY surfaces
+// (the dashboard cost tile/tab/rail, `afm check`'s cost columns, and `afm
+// report`). It is a display switch only: collection into usage.jsonl keeps
+// running regardless, so the data is still there when display is re-enabled.
+type AccountingConfig struct {
+	Enabled *bool `yaml:"enabled"` // nil = отображение включено по умолчанию; env AFM_ACCOUNTING имеет приоритет
+}
+
+// IsEnabled сообщает, показывать ли accounting (стоимость/токены).
+// Приоритет: env AFM_ACCOUNTING > config > по умолчанию ВКЛЮЧЕНО.
+// Только явный enabled: false (или AFM_ACCOUNTING=0) прячет отображение;
+// сбор usage.jsonl при этом продолжается.
+func (c AccountingConfig) IsEnabled() bool {
+	if v, set := envBool("AFM_ACCOUNTING"); set {
+		return v
+	}
+	return c.Enabled == nil || *c.Enabled
+}
+
 // IsOpenBrowser returns OpenBrowser value (defaults to false).
 func (s ServerConfig) IsOpenBrowser() bool {
 	if s.OpenBrowser == nil {
@@ -324,6 +343,10 @@ type Config struct {
 	// Pricing overrides/extends the built-in accounting rate table (list-price
 	// USD per 1M tokens, an estimate — not a bank charge). Empty = builtins only.
 	Pricing accounting.PricingConfig `yaml:"pricing"`
+	// Accounting toggles the cost/usage DISPLAY (dashboard cost UI, `afm check`
+	// cost columns, `afm report`). Collection into usage.jsonl is unaffected.
+	// nil/true = shown (default); explicit false / AFM_ACCOUNTING=0 hides it.
+	Accounting AccountingConfig `yaml:"accounting"`
 }
 
 // Default returns the built-in default configuration.
@@ -511,6 +534,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.AutoRecover != nil {
 		dst.AutoRecover = overlay.AutoRecover
+	}
+	if overlay.Accounting.Enabled != nil {
+		dst.Accounting.Enabled = overlay.Accounting.Enabled
 	}
 	if overlay.Pricing.Models != nil {
 		if dst.Pricing.Models == nil {

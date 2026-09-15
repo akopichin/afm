@@ -31,6 +31,11 @@ server:
 # prompts_dir: .afm/prompts/  # custom prompt templates
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
+accounting:
+  enabled: false            # hide cost display everywhere (dashboard + afm check/report);
+                            # ON by default, env AFM_ACCOUNTING overrides. Data is still
+                            # collected into usage.jsonl — this hides the display, not the data.
+
 docker:
   enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
   # image: akopichin/afm:latest
@@ -47,7 +52,8 @@ docker:
 See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and
 [Cost accounting](accounting.md) for the `pricing:` overrides key (rate
-cards, precedence, and what "estimated cost" means).
+cards, precedence, and what "estimated cost" means) and the `accounting:`
+display switch (`AFM_ACCOUNTING`).
 
 ## Settings priority
 

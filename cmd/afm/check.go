@@ -77,14 +77,26 @@ func newCheckCmd() *cobra.Command {
 			// the stage table still renders (best-effort), but the command
 			// now surfaces the problem on stderr and exits 3 instead of
 			// silently reading as "no usage data" (see the matrix below).
-			led, loadErr := accounting.Load(latest)
-			var byStage map[string]accounting.Summary
-			var runSummary accounting.Summary
+			//
+			// display=false (accounting.enabled: false / AFM_ACCOUNTING=0)
+			// hides cost entirely: the ledger is not even read, so the table
+			// falls back to its pre-accounting columns and no cost/coverage
+			// line is printed. Collection into usage.jsonl is unaffected.
+			display := accountingDisplayEnabled()
+			var (
+				led        *accounting.Ledger
+				loadErr    error
+				byStage    map[string]accounting.Summary
+				runSummary accounting.Summary
+			)
 			hasUsage := false
-			if loadErr == nil {
-				byStage = led.SummaryByStage()
-				runSummary = led.RunSummary()
-				hasUsage = runSummary.Metered+runSummary.Unmetered > 0
+			if display {
+				led, loadErr = accounting.Load(latest)
+				if loadErr == nil {
+					byStage = led.SummaryByStage()
+					runSummary = led.RunSummary()
+					hasUsage = runSummary.Metered+runSummary.Unmetered > 0
+				}
 			}
 
 			fmt.Printf("Run: %s\n\n", filepath.Base(latest))
@@ -145,7 +157,12 @@ func newCheckCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "cost unavailable (cannot read usage ledger): %v\n", loadErr)
 				return &ExitError{Code: 3, Silent: true}
 			case !hasUsage:
-				fmt.Println("No usage data")
+				// Distinguish "accounting display off" (say nothing — the
+				// data may well exist on disk) from "display on but this run
+				// recorded no usage" (the informative note).
+				if display {
+					fmt.Println("No usage data")
+				}
 				return nil
 			}
 			fmt.Printf("TOTAL: %s tokens, %s (incl. run overhead)\n",

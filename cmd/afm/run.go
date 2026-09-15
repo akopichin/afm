@@ -347,7 +347,7 @@ func newRunCmd() *cobra.Command {
 					Store:            store,
 					Theme:            cfg.EffectiveTheme(),
 					SkinDir:          cfg.SkinDir,
-					Accounting:       serverAccountingProvider(acct, acctErr),
+					Accounting:       serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
 					UIBus:            orch.UIBus(),
 					Actions:          orch,
 					Secondary:        orch,
@@ -626,7 +626,15 @@ func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.W
 // see accounting.Open's doc) case of neither. nil vs StaticUnavailable are
 // deliberately distinct in the API: nil omits every accounting field from
 // /api/status, StaticUnavailable reports health:"unavailable" explicitly.
-func serverAccountingProvider(acct *accounting.Store, acctErr error) accounting.CostProvider {
+//
+// display=false (accounting.enabled: false / AFM_ACCOUNTING=0) returns nil
+// regardless of the ledger: the dashboard omits every cost field and renders
+// no tile/tab/rail, while collection into usage.jsonl (via Options.Accounting)
+// keeps running untouched — the switch hides the display, not the data.
+func serverAccountingProvider(display bool, acct *accounting.Store, acctErr error) accounting.CostProvider {
+	if !display {
+		return nil
+	}
 	switch {
 	case acct != nil:
 		return acct

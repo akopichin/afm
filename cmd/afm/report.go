@@ -22,6 +22,16 @@ func newReportCmd() *cobra.Command {
 		Short: "Render a markdown cost/usage summary for a run",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// `afm report` is a pure cost/usage command. With the accounting
+			// display switched off (accounting.enabled: false / AFM_ACCOUNTING=0)
+			// it emits nothing to stdout (so a redirected report stays empty) and
+			// a one-line hint on stderr, exiting 0. usage.jsonl is still being
+			// collected, so `AFM_ACCOUNTING=1 afm report` shows it on demand.
+			if !accountingDisplayEnabled() {
+				fmt.Fprintln(os.Stderr, "accounting display disabled; set AFM_ACCOUNTING=1 or accounting.enabled: true to view")
+				return nil
+			}
+
 			var runArg string
 			if len(args) > 0 {
 				runArg = args[0]

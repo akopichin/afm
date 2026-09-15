@@ -245,3 +245,33 @@ implies the other.
 All three CLI and dashboard totals are computed from the same
 `pkg/accounting` helpers (`Coverage`, `DisplayCost`, `CoverageIssue`) — they
 are byte-identical for the same run, by construction, not by convention.
+
+## Turning the display off
+
+Cost is shown by default. To hide it everywhere — the dashboard tile/tab/rail,
+`afm check`'s cost columns, and `afm report` — set:
+
+```yaml
+accounting:
+  enabled: false
+```
+
+or, without touching config, the environment variable:
+
+```bash
+AFM_ACCOUNTING=0 afm run       # hide
+AFM_ACCOUNTING=1 afm report    # show on demand, even when config disables it
+```
+
+Priority is **env `AFM_ACCOUNTING` > config > default on** (the same shape as
+`AFM_FILE_BROWSER`): `AFM_ACCOUNTING=1/true` force-shows, `=0/false`
+force-hides, empty/unset lets the config decide.
+
+This is a **display switch only** — collection into
+`.afm/runs/<run>/usage.jsonl` keeps running regardless. The data is still on
+disk, so switching display back on reveals past runs too:
+`AFM_ACCOUNTING=1 afm report <run>` renders a run recorded while the display
+was off. With the display off, the dashboard omits every cost field from
+`/api/status` (no tile/tab/rail), `afm check` falls back to its pre-accounting
+columns, and `afm report` prints nothing to stdout plus a one-line hint on
+stderr, exiting `0`.

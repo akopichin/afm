@@ -463,6 +463,113 @@ func TestFileBrowser_EnvOverridesConfig(t *testing.T) {
 	}
 }
 
+func TestAccounting_DefaultsEnabled(t *testing.T) {
+	if !(config.AccountingConfig{}).IsEnabled() {
+		t.Fatal("nil Enabled should default to enabled")
+	}
+	f := false
+	if (config.AccountingConfig{Enabled: &f}).IsEnabled() {
+		t.Fatal("explicit false must disable")
+	}
+	tr := true
+	if !(config.AccountingConfig{Enabled: &tr}).IsEnabled() {
+		t.Fatal("explicit true must enable")
+	}
+}
+
+func TestAccounting_EnvOverridesConfig(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name    string
+		env     string // "" = не задавать
+		enabled *bool
+		want    bool
+	}{
+		{name: "env on overrides config off", env: "1", enabled: &f, want: true},
+		{name: "env off overrides config on", env: "0", enabled: &tr, want: false},
+		{name: "env true, config nil", env: "true", enabled: nil, want: true},
+		{name: "env empty falls back to config", env: "", enabled: &tr, want: true},
+		{name: "env unset, config off", env: "", enabled: &f, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env != "" {
+				t.Setenv("AFM_ACCOUNTING", tc.env)
+			}
+			c := config.AccountingConfig{Enabled: tc.enabled}
+			if got := c.IsEnabled(); got != tc.want {
+				t.Errorf("IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFrom_AccountingEnabledMergesAcrossLayers(t *testing.T) {
+	cases := []struct {
+		name        string
+		globalYAML  string
+		projectYAML string
+		want        bool
+	}{
+		{
+			name:        "both unset -> enabled (default on)",
+			globalYAML:  ``,
+			projectYAML: ``,
+			want:        true,
+		},
+		{
+			name: "global false, project unset -> disabled",
+			globalYAML: `
+accounting:
+  enabled: false
+`,
+			projectYAML: ``,
+			want:        false,
+		},
+		{
+			name:       "global unset, project false -> disabled",
+			globalYAML: ``,
+			projectYAML: `
+accounting:
+  enabled: false
+`,
+			want: false,
+		},
+		{
+			name: "global false, project true -> enabled (project overrides)",
+			globalYAML: `
+accounting:
+  enabled: false
+`,
+			projectYAML: `
+accounting:
+  enabled: true
+`,
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir := t.TempDir()
+			projectDir := t.TempDir()
+			if tc.globalYAML != "" {
+				writeYAML(t, globalDir, "config.yaml", tc.globalYAML)
+			}
+			if tc.projectYAML != "" {
+				writeYAML(t, projectDir, "config.yaml", tc.projectYAML)
+			}
+			cfg, err := config.LoadFrom(globalDir, projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Accounting.IsEnabled(); got != tc.want {
+				t.Errorf("Accounting.IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtraMounts_Validate(t *testing.T) {
 	cases := []struct {
 		name string
