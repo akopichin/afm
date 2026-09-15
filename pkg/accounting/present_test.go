@@ -39,3 +39,34 @@ func TestDisplayCost(t *testing.T) {
 		}
 	}
 }
+
+func TestAttributionIdentityDistinct(t *testing.T) {
+	recs := []UsageRecord{
+		{Metered: true, Priced: false, StageID: "run_overhead", Phase: "planning", Model: "m"},   // a STAGE named run_overhead
+		{Metered: true, Priced: false, Scope: ScopeRunOverhead, Phase: "planning", Model: "m"},    // real overhead
+	}
+	got := aggregateIssues(recs)
+	if len(got) != 2 {
+		t.Fatalf("want 2 distinct groups, got %d: %+v", len(got), got)
+	}
+}
+
+func TestAggregateCountsAndStableOrder(t *testing.T) {
+	r := UsageRecord{Metered: true, Priced: false, StageID: "s", Phase: "impl", Model: "codex"}
+	a := aggregateIssues([]UsageRecord{r, r, r})
+	if len(a) != 1 || a[0].Count != 3 {
+		t.Fatalf("want 1 issue count=3, got %+v", a)
+	}
+	// stable order: same slice regardless of input order
+	x := aggregateIssues([]UsageRecord{{Metered: true, StageID: "b", Phase: "p"}, {Priced: false, Metered: true, StageID: "a", Phase: "p", Model: "m"}})
+	y := aggregateIssues([]UsageRecord{{Priced: false, Metered: true, StageID: "a", Phase: "p", Model: "m"}, {Metered: true, StageID: "b", Phase: "p"}})
+	// only unpriced/unmetered are issues; assert equal ordering of whatever groups exist
+	if len(x) != len(y) {
+		t.Fatalf("len differ %d vs %d", len(x), len(y))
+	}
+	for i := range x {
+		if x[i] != y[i] {
+			t.Fatalf("order not stable at %d: %+v vs %+v", i, x[i], y[i])
+		}
+	}
+}
