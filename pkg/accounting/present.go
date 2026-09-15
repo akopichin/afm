@@ -26,6 +26,29 @@ type Attribution struct {
 	StageID string   `json:"stage_id,omitempty"`
 }
 
+// CostView is the JSON DTO for cost information displayed in the UI.
+type CostView struct {
+	DisplayCost       string         `json:"display_cost"`
+	Coverage          string         `json:"coverage"`
+	EstimatedCostUSD  float64        `json:"estimated_cost_usd"`
+	Metered           int            `json:"metered"`
+	PricedInvocations int            `json:"priced_invocations"`
+	Unpriced          int            `json:"unpriced"`
+	Unmetered         int            `json:"unmetered"`
+	Models            []string       `json:"models"`
+	UncachedInput     uint64         `json:"uncached_input"`
+	CacheRead         uint64         `json:"cache_read"`
+	CacheWrite5m      uint64         `json:"cache_write_5m"`
+	CacheWrite1h      uint64         `json:"cache_write_1h"`
+	CacheWriteOther   uint64         `json:"cache_write_other"`
+	Output            uint64         `json:"output"`
+	ReasoningOutput   uint64         `json:"reasoning_output"`
+	TotalTokens       uint64         `json:"total_tokens"`
+	CacheWriteTotal   uint64         `json:"cache_write_total"`
+	CacheHitRatio     *float64       `json:"cache_hit_ratio"`
+	Phases            map[string]int `json:"phases"`
+}
+
 type CoverageIssue struct {
 	Kind        string      `json:"kind"`
 	Attribution Attribution `json:"attribution"`
@@ -196,4 +219,39 @@ func aggregateIssues(recs []UsageRecord) []CoverageIssue {
 	})
 
 	return issues
+}
+
+// cacheHitRatioPtr returns a pointer to the cache hit ratio if InputTotal > 0,
+// otherwise returns nil.
+func cacheHitRatioPtr(t Tokens) *float64 {
+	if t.InputTotal() == 0 {
+		return nil
+	}
+	ratio := t.CacheHitRatio()
+	return &ratio
+}
+
+// BuildCostView constructs a CostView DTO from a Summary and phases map.
+func BuildCostView(s Summary, phases map[string]int) *CostView {
+	return &CostView{
+		DisplayCost:       DisplayCost(s),
+		Coverage:          string(coverageOf(s)),
+		EstimatedCostUSD:  s.CostUSD,
+		Metered:           s.Metered,
+		PricedInvocations: s.Metered - s.Unpriced,
+		Unpriced:          s.Unpriced,
+		Unmetered:         s.Unmetered,
+		Models:            s.Models,
+		UncachedInput:     s.Tokens.UncachedInput,
+		CacheRead:         s.Tokens.CacheRead,
+		CacheWrite5m:      s.Tokens.CacheWrite5m,
+		CacheWrite1h:      s.Tokens.CacheWrite1h,
+		CacheWriteOther:   s.Tokens.CacheWriteOther,
+		Output:            s.Tokens.Output,
+		ReasoningOutput:   s.Tokens.ReasoningOutput,
+		TotalTokens:       s.Tokens.Total(),
+		CacheWriteTotal:   s.Tokens.CacheWriteTotal(),
+		CacheHitRatio:     cacheHitRatioPtr(s.Tokens),
+		Phases:            phases,
+	}
 }
