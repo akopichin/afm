@@ -55,10 +55,12 @@ func (staticUnavailableProvider) CostSnapshot() CostBundle {
 // CostSnapshot returns the current cost bundle for the run this Store
 // backs. If nothing has changed (no Append, no unavailable-latch) since the
 // last build, the cached bundle is returned as-is — no ledger copy, no
-// re-aggregation. Otherwise it rebuilds: the raw records/summaries/health
-// are copied out under the lock, the CostViews/issues are computed from that
-// local copy without holding the lock, and the result is cached under the
-// lock before being returned.
+// re-aggregation. Otherwise it rebuilds: only the raw records and health are
+// copied out under the lock (a slice copy, not an aggregation); the
+// per-stage/run summaries, CostViews and issues are all computed from that
+// local copy without holding the lock, so an O(records) aggregation never
+// delays a concurrent Append. The result is cached under the lock before
+// being returned.
 //
 // Every value reachable from the returned CostBundle is a fresh copy — the
 // Stages map, the Issues slice, each *CostView (including its own Phases
@@ -72,11 +74,17 @@ func (s *Store) CostSnapshot() CostBundle {
 		return b
 	}
 	recs := append([]UsageRecord(nil), s.ledger.recs...)
-	byStage := s.ledger.SummaryByStage()
-	run := s.ledger.RunSummary()
 	unavailable := s.unavailable
 	rev := s.revision
 	s.mu.Unlock()
+
+	// Aggregate the copied records outside the lock — SummaryByStage/
+	// RunSummary are both O(records) scans, and Append must not wait on
+	// them. tmp only wraps our own local copy, so this is race-free even
+	// though the Store's real ledger is being mutated concurrently.
+	tmp := &Ledger{recs: recs}
+	byStage := tmp.SummaryByStage()
+	run := tmp.RunSummary()
 
 	built := buildCostBundle(recs, byStage, run, unavailable, rev)
 

@@ -331,6 +331,57 @@ func TestCostSnapshot_CallerMutatingNestedCostViewDoesNotCorrupt(t *testing.T) {
 	}
 }
 
+// TestCostSnapshot_ColdBuildMatchesDirectLedgerAggregation guards the
+// lock-scope change in CostSnapshot: on a cache miss it now copies only the
+// raw records under s.mu and aggregates them into byStage/run afterwards,
+// via a throwaway *Ledger wrapping that copy — instead of calling
+// s.ledger.SummaryByStage()/RunSummary() while still holding the lock. Both
+// approaches must produce identical results, since Ledger's aggregation
+// methods are a pure function of the records slice.
+func TestCostSnapshot_ColdBuildMatchesDirectLedgerAggregation(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(obsGLM(), "backend", "review", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(obsGLM(), "frontend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(obsMemory(), "", "memory_update", ScopeRunOverhead); err != nil {
+		t.Fatal(err)
+	}
+
+	// Compute the expected byStage/run the old way, directly against the
+	// live ledger, for comparison against what CostSnapshot (cache miss)
+	// actually built.
+	wantByStage := s.ledger.SummaryByStage()
+	wantRun := s.ledger.RunSummary()
+	wantBundle := buildCostBundle(s.ledger.Records(), wantByStage, wantRun, s.unavailable, s.revision)
+
+	got := s.CostSnapshot()
+
+	if len(got.Stages) != len(wantBundle.Stages) {
+		t.Fatalf("Stages length mismatch: got %d, want %d", len(got.Stages), len(wantBundle.Stages))
+	}
+	for id, wantView := range wantBundle.Stages {
+		gotView, ok := got.Stages[id]
+		if !ok {
+			t.Fatalf("missing stage %q in CostSnapshot result", id)
+		}
+		if gotView.DisplayCost != wantView.DisplayCost || gotView.Coverage != wantView.Coverage {
+			t.Fatalf("stage %q mismatch: got %+v, want %+v", id, gotView, wantView)
+		}
+	}
+	if got.Run == nil || wantBundle.Run == nil || got.Run.DisplayCost != wantBundle.Run.DisplayCost {
+		t.Fatalf("Run mismatch: got %+v, want %+v", got.Run, wantBundle.Run)
+	}
+	if got.Overhead == nil || wantBundle.Overhead == nil || got.Overhead.DisplayCost != wantBundle.Overhead.DisplayCost {
+		t.Fatalf("Overhead mismatch: got %+v, want %+v", got.Overhead, wantBundle.Overhead)
+	}
+}
+
 func TestStaticUnavailable(t *testing.T) {
 	p := StaticUnavailable()
 	b := p.CostSnapshot()
