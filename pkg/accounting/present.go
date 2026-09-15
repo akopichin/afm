@@ -1,7 +1,8 @@
 package accounting
 
 import (
-	"sort"
+	"slices"
+	"strings"
 )
 
 type Coverage string
@@ -15,9 +16,9 @@ const (
 type AttrKind string
 
 const (
-	AttrStage      AttrKind = "stage"
+	AttrStage       AttrKind = "stage"
 	AttrRunOverhead AttrKind = "run_overhead"
-	AttrUnknown    AttrKind = "unknown"
+	AttrUnknown     AttrKind = "unknown"
 )
 
 type Attribution struct {
@@ -83,7 +84,7 @@ func attributionOf(r UsageRecord) Attribution {
 func (a Attribution) Label() string {
 	switch a.Kind {
 	case AttrRunOverhead:
-		return "run_overhead"
+		return string(AttrRunOverhead)
 	case AttrStage:
 		return a.StageID
 	default:
@@ -159,41 +160,39 @@ func aggregateIssues(recs []UsageRecord) []CoverageIssue {
 	}
 
 	// Sort by: attrKind, stageID, phase, issueKind, channel, model, reason
-	sort.SliceStable(issues, func(i, j int) bool {
-		a, b := issues[i], issues[j]
-
+	slices.SortStableFunc(issues, func(a, b CoverageIssue) int {
 		// Compare attribution kind
 		if a.Attribution.Kind != b.Attribution.Kind {
-			return a.Attribution.Kind < b.Attribution.Kind
+			return strings.Compare(string(a.Attribution.Kind), string(b.Attribution.Kind))
 		}
 
 		// Compare stage id
 		if a.Attribution.StageID != b.Attribution.StageID {
-			return a.Attribution.StageID < b.Attribution.StageID
+			return strings.Compare(a.Attribution.StageID, b.Attribution.StageID)
 		}
 
 		// Compare phase
 		if a.Phase != b.Phase {
-			return a.Phase < b.Phase
+			return strings.Compare(a.Phase, b.Phase)
 		}
 
 		// Compare issue kind
 		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
+			return strings.Compare(a.Kind, b.Kind)
 		}
 
 		// Compare channel
 		if a.Channel != b.Channel {
-			return a.Channel < b.Channel
+			return strings.Compare(a.Channel, b.Channel)
 		}
 
 		// Compare model
 		if a.Model != b.Model {
-			return a.Model < b.Model
+			return strings.Compare(a.Model, b.Model)
 		}
 
 		// Compare reason
-		return a.Reason < b.Reason
+		return strings.Compare(a.Reason, b.Reason)
 	})
 
 	return issues
