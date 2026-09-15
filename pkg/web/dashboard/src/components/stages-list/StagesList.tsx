@@ -268,7 +268,15 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                 ячейка строки, чтобы кебаб не оказался вложен в кнопку строки. */}
             <span className="stage-actions">
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
-            {stage.status === 'awaiting_approval' && <span className="approval-badge" title="Awaiting plan approval">📋</span>}
+            {stage.status === 'awaiting_approval' && (
+              <span className="approval-badge" title="Awaiting plan approval">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="7" fill="currentColor" />
+                  <rect x="7" y="3.5" width="2" height="6" rx="1" fill="var(--surface-canvas)" />
+                  <circle cx="8" cy="11.5" r="1.15" fill="var(--surface-canvas)" />
+                </svg>
+              </span>
+            )}
             {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
             {/* Стоимость — тихий моно-спан ПЕРЕД кебабом. Видимая цифра
                 помечена aria-hidden (тон/ellipsis не несут собственного

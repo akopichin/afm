@@ -254,8 +254,16 @@
   color: var(--c-awaiting-user);
 }
 .approval-badge {
-  font-size: 11px;
+  display: inline-flex;
   color: var(--c-awaiting);
+  animation: approvalPulse 1.8s ease-in-out infinite;
+}
+@keyframes approvalPulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: .55; transform: scale(1.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-badge { animation: none; }
 }
 .prenote-badge {
   font-size: 11px;
