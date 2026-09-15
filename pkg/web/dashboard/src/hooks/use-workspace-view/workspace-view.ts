@@ -1,11 +1,12 @@
 import type { Stage, StageStatus } from '../../types'
 
 // WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла
-// стадий (плана §4). 'feed' — постоянный дефолт; 'attention' — контекстный
-// воркспейс текущего элемента, требующего действия (approval/question/failed/
-// hook_failed/paused); 'plan-history'/'dialog-history' — read-only просмотр
-// завершённого плана/диалога (rule 13: они НЕ считаются attention и не светятся).
-export type WorkspaceView = 'feed' | 'attention' | 'plan-history' | 'dialog-history'
+// стадий (плана §4). 'feed' — постоянный дефолт; 'cost' — постоянный вид учёта
+// токенов/стоимости (increment 2); 'attention' — контекстный воркспейс текущего
+// элемента, требующего действия (approval/question/failed/hook_failed/paused);
+// 'plan-history'/'dialog-history' — read-only просмотр завершённого плана/диалога
+// (rule 13: они НЕ считаются attention и не светятся).
+export type WorkspaceView = 'feed' | 'cost' | 'attention' | 'plan-history' | 'dialog-history'
 
 // AttentionKind — вид элемента, требующего действия пользователя. В отличие от
 // use-attention (которое схлопывает failed/hook_failed в один 'failed' для
@@ -75,6 +76,13 @@ export interface WorkspaceState {
   // появление той же стадии+вида снова считалось новым прибытием (симметрично
   // забыванию отвеченных вопросов в pollQuestions на бэкенде).
   autoOpenedSignatures: string[]
+  // returnView — куда вернуться, когда закроется/разрешится attention.
+  // Ограничен двумя ГЛОБАЛЬНЫМИ видами ('feed'/'cost') — history-виды
+  // (plan-history/dialog-history) не подлежат восстановлению: они привязаны к
+  // конкретной выбранной стадии, а не к постоянному воркспейсу. Записывается
+  // ровно на переходе non-attention → attention (см. reduceSync) и обновляется
+  // явной ручной навигацией (openFeed/openCost), в том числе во время attention.
+  returnView: 'feed' | 'cost'
 }
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -82,6 +90,7 @@ export const initialWorkspaceState: WorkspaceState = {
   items: [],
   activeStageId: null,
   autoOpenedSignatures: [],
+  returnView: 'feed',
 }
 
 export type WorkspaceAction =
@@ -93,6 +102,8 @@ export type WorkspaceAction =
   | { type: 'openAttention'; stageId?: string }
   // openFeed — пользователь вернулся на Feed.
   | { type: 'openFeed' }
+  // openCost — пользователь открыл постоянный вид учёта стоимости (increment 2).
+  | { type: 'openCost' }
   // openHistory — read-only просмотр плана/диалога завершённой стадии (rule 13).
   | { type: 'openHistory'; view: 'plan-history' | 'dialog-history' }
 
@@ -119,9 +130,11 @@ function reduceSync(state: WorkspaceState, items: AttentionItem[], suppressed: b
 
   let view = state.view
   let activeStageId = state.activeStageId
+  let returnView = state.returnView
 
   // Резолюция: активный элемент исчез из очереди (rule 10) → переходим к
-  // следующему оставшемуся; если очередь пуста — назад на Feed.
+  // следующему оставшемуся; если очередь пуста — возвращаемся на returnView
+  // (тот глобальный вид, откуда пришли в attention — feed или cost).
   if (view === 'attention') {
     const stillActive = items.some((it) => it.stageId === activeStageId)
     if (!stillActive) {
@@ -129,7 +142,7 @@ function reduceSync(state: WorkspaceState, items: AttentionItem[], suppressed: b
       if (next) {
         activeStageId = next.stageId
       } else {
-        view = 'feed'
+        view = returnView
         activeStageId = null
       }
     }
@@ -144,12 +157,15 @@ function reduceSync(state: WorkspaceState, items: AttentionItem[], suppressed: b
   if (firstArrival) {
     for (const a of arrivals) autoOpened.push(sig(a))
     if (!suppressed && view !== 'attention') {
+      // Переход non-attention → attention: запоминаем returnView. History-виды
+      // (plan-history/dialog-history) не восстанавливаемы — падаем на 'feed'.
+      returnView = view === 'cost' ? 'cost' : 'feed'
       view = 'attention'
       activeStageId = firstArrival.stageId
     }
   }
 
-  return { view, items, activeStageId, autoOpenedSignatures: autoOpened }
+  return { view, items, activeStageId, autoOpenedSignatures: autoOpened, returnView }
 }
 
 export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
@@ -168,7 +184,9 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: 'attention', activeStageId: target }
     }
     case 'openFeed':
-      return { ...state, view: 'feed' }
+      return { ...state, view: 'feed', returnView: 'feed' }
+    case 'openCost':
+      return { ...state, view: 'cost', returnView: 'cost' }
     case 'openHistory':
       return { ...state, view: action.view }
     default:

@@ -211,3 +211,83 @@ describe('selectors', () => {
     expect(s.activeStageId).toBe('a')
   })
 })
+
+describe('workspaceReducer — cost view + returnView contract', () => {
+  it('openCost/openFeed set both view and returnView', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    expect(cost.view).toBe('cost')
+    expect(cost.returnView).toBe('cost')
+
+    const feed = workspaceReducer(cost, { type: 'openFeed' })
+    expect(feed.view).toBe('feed')
+    expect(feed.returnView).toBe('feed')
+  })
+
+  it('cost → attention → resolve → cost (returnView recorded on entry into attention)', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const attn = sync(cost, [item('b', 'approval')])
+    expect(attn.view).toBe('attention')
+    expect(attn.returnView).toBe('cost')
+    const resolved = sync(attn, [])
+    expect(resolved.view).toBe('cost')
+    expect(resolved.returnView).toBe('cost')
+  })
+
+  it('feed → attention → resolve → feed', () => {
+    const attn = sync(initialWorkspaceState, [item('b', 'approval')])
+    expect(attn.returnView).toBe('feed')
+    const resolved = sync(attn, [])
+    expect(resolved.view).toBe('feed')
+    expect(resolved.returnView).toBe('feed')
+  })
+
+  it('history → attention → resolve → feed (history is stage-scoped, not restorable)', () => {
+    const history = workspaceReducer(initialWorkspaceState, { type: 'openHistory', view: 'plan-history' })
+    const attn = sync(history, [item('b', 'approval')])
+    expect(attn.view).toBe('attention')
+    expect(attn.returnView).toBe('feed')
+    const resolved = sync(attn, [])
+    expect(resolved.view).toBe('feed')
+    expect(resolved.returnView).toBe('feed')
+  })
+
+  it('manual openCost mid-attention updates returnView so a later resolve lands on cost', () => {
+    const attn = sync(initialWorkspaceState, [item('b', 'approval')])
+    expect(attn.view).toBe('attention')
+    expect(attn.returnView).toBe('feed')
+    // Пользователь вручную переключился на Cost, не дожидаясь резолюции.
+    const midway = workspaceReducer(attn, { type: 'openCost' })
+    expect(midway.view).toBe('cost')
+    expect(midway.returnView).toBe('cost')
+    // Если пользователь снова откроет attention и оно разрешится — приземлится на cost.
+    const reopened = workspaceReducer(midway, { type: 'openAttention' })
+    const resolved = sync(reopened, [])
+    expect(resolved.view).toBe('cost')
+    expect(resolved.returnView).toBe('cost')
+  })
+
+  it('manual openFeed mid-attention updates returnView so a later resolve lands on feed', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const attn = sync(cost, [item('b', 'approval')])
+    expect(attn.returnView).toBe('cost')
+    const midway = workspaceReducer(attn, { type: 'openFeed' })
+    expect(midway.returnView).toBe('feed')
+    const reopened = workspaceReducer(midway, { type: 'openAttention' })
+    const resolved = sync(reopened, [])
+    expect(resolved.view).toBe('feed')
+    expect(resolved.returnView).toBe('feed')
+  })
+
+  it('a second attention arriving while already in attention does not overwrite returnView', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const attn = sync(cost, [item('b', 'approval')])
+    expect(attn.view).toBe('attention')
+    expect(attn.returnView).toBe('cost')
+    // Второе прибытие, пока уже в attention — returnView не должен измениться.
+    const second = sync(attn, [item('b', 'approval'), item('d', 'question')])
+    expect(second.view).toBe('attention')
+    expect(second.returnView).toBe('cost')
+    const resolved = sync(second, [])
+    expect(resolved.view).toBe('cost')
+  })
+})
