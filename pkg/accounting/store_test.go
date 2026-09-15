@@ -292,6 +292,45 @@ func TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot(t *testing.T) {
 	}
 }
 
+// TestCostSnapshot_CallerMutatingNestedCostViewDoesNotCorrupt covers one
+// level deeper than TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot:
+// a caller that reaches INTO a returned *CostView (its Phases map, Models
+// slice, or the value behind CacheHitRatio) and mutates it must not corrupt
+// the cached bundle a later cache-hit snapshot serves to someone else.
+func TestCostSnapshot_CallerMutatingNestedCostViewDoesNotCorrupt(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	b1 := s.CostSnapshot()
+	stage := b1.Stages["backend"]
+	if stage == nil {
+		t.Fatal("expected a non-nil stage cost view")
+	}
+	if stage.CacheHitRatio == nil {
+		t.Fatal("obsGLM has cache_read>0 — expected a non-nil CacheHitRatio")
+	}
+
+	stage.Phases["injected-phase"] = 999
+	stage.Models = append(stage.Models, "injected-model")
+	*stage.CacheHitRatio = -1
+
+	b2 := s.CostSnapshot() // same revision — cache hit
+	stage2 := b2.Stages["backend"]
+	if _, ok := stage2.Phases["injected-phase"]; ok {
+		t.Fatal("mutating a returned CostView.Phases corrupted a later cached snapshot")
+	}
+	for _, m := range stage2.Models {
+		if m == "injected-model" {
+			t.Fatal("mutating a returned CostView.Models corrupted a later cached snapshot")
+		}
+	}
+	if stage2.CacheHitRatio == nil || *stage2.CacheHitRatio == -1 {
+		t.Fatalf("mutating *CacheHitRatio corrupted a later cached snapshot: %+v", stage2.CacheHitRatio)
+	}
+}
+
 func TestStaticUnavailable(t *testing.T) {
 	p := StaticUnavailable()
 	b := p.CostSnapshot()

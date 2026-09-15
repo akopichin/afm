@@ -60,8 +60,10 @@ func (staticUnavailableProvider) CostSnapshot() CostBundle {
 // local copy without holding the lock, and the result is cached under the
 // lock before being returned.
 //
-// The returned CostBundle's Stages map and Issues slice are always fresh —
-// a caller mutating them can never corrupt a later CostSnapshot call.
+// Every value reachable from the returned CostBundle is a fresh copy — the
+// Stages map, the Issues slice, each *CostView (including its own Phases
+// map, Models slice and CacheHitRatio pointer). A caller mutating anything
+// it got back, at any depth, can never corrupt a later CostSnapshot call.
 func (s *Store) CostSnapshot() CostBundle {
 	s.mu.Lock()
 	if s.cachedBundle != nil && s.cachedRevision == s.revision {
@@ -154,20 +156,49 @@ func buildCostBundle(recs []UsageRecord, byStage map[string]Summary, run Summary
 	return bundle
 }
 
-// cloneBundle returns a copy of b whose Stages map and Issues slice are
-// fresh — safe to hand to a caller who might mutate them. The *CostView
-// values themselves are shared (they're never mutated once built).
+// cloneBundle returns a deep copy of b: a fresh Stages map, a fresh Issues
+// slice, and a fresh *CostView (with its own fresh Phases map, Models slice
+// and CacheHitRatio pointer) for each of Stages/Run/Overhead — safe to hand
+// to a caller who might mutate any of it, at any depth, without corrupting
+// the cached bundle or a later snapshot.
 func cloneBundle(b CostBundle) CostBundle {
 	clone := b
 	if b.Stages != nil {
 		stages := make(map[string]*CostView, len(b.Stages))
 		for k, v := range b.Stages {
-			stages[k] = v
+			stages[k] = cloneCostView(v)
 		}
 		clone.Stages = stages
 	}
+	clone.Run = cloneCostView(b.Run)
+	clone.Overhead = cloneCostView(b.Overhead)
 	if b.Issues != nil {
 		clone.Issues = append([]CoverageIssue(nil), b.Issues...)
 	}
 	return clone
+}
+
+// cloneCostView returns a deep copy of v: a fresh CostView whose Phases map,
+// Models slice and CacheHitRatio pointer are all independent of v's. Nil in,
+// nil out.
+func cloneCostView(v *CostView) *CostView {
+	if v == nil {
+		return nil
+	}
+	clone := *v
+	if v.Models != nil {
+		clone.Models = append([]string(nil), v.Models...)
+	}
+	if v.Phases != nil {
+		phases := make(map[string]int, len(v.Phases))
+		for k, n := range v.Phases {
+			phases[k] = n
+		}
+		clone.Phases = phases
+	}
+	if v.CacheHitRatio != nil {
+		ratio := *v.CacheHitRatio
+		clone.CacheHitRatio = &ratio
+	}
+	return &clone
 }
