@@ -91,10 +91,10 @@ func TestReportNoUsageData(t *testing.T) {
 }
 
 // TestReport_AccountingDisabledEmitsHintExit0 verifies the display switch:
-// with AFM_ACCOUNTING=0, `afm report` writes nothing to stdout (so a
-// redirected report stays empty) and a one-line hint on stderr, exiting 0 —
-// even with recorded usage present. It short-circuits before resolving a run,
-// so it also succeeds when no runs exist at all.
+// with AFM_ACCOUNTING=0, `afm report` on a VALID run writes nothing to stdout
+// (so a redirected report stays empty) and a one-line hint on stderr, exiting
+// 0 — even with recorded usage present. The gate runs after resolving the run
+// and loading its state, so a bad run id still errors (see the sibling test).
 func TestReport_AccountingDisabledEmitsHintExit0(t *testing.T) {
 	chdirTemp(t)
 	t.Setenv("AFM_ACCOUNTING", "0")
@@ -125,6 +125,28 @@ func TestReport_AccountingDisabledEmitsHintExit0(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "accounting display disabled") {
 		t.Errorf("accounting disabled: expected a hint on stderr, got:\n%s", stderr)
+	}
+}
+
+// TestReport_AccountingDisabledStillErrorsOnBadRun verifies the display gate
+// does NOT mask invalid input: with AFM_ACCOUNTING=0, a nonexistent run id
+// still fails (resolution happens before the gate), matching `afm report`'s
+// behavior with the display on and `afm check`'s run validation.
+func TestReport_AccountingDisabledStillErrorsOnBadRun(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("AFM_ACCOUNTING", "0")
+
+	// A runs dir exists but is empty, and we ask for a specific missing id.
+	if err := os.MkdirAll(filepath.Join(".afm", "runs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newReportCmd()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{"does-not-exist"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("accounting disabled must still error on a nonexistent run id, not succeed silently")
 	}
 }
 

@@ -300,6 +300,54 @@ func TestReExec_PassthroughEnv(t *testing.T) {
 	}
 }
 
+// TestReExec_ForwardsAccounting verifies AFM_ACCOUNTING reaches the container
+// by value (not a secret): the display switch is resolved INSIDE the container,
+// so `AFM_ACCOUNTING=0/1 afm run` with Docker enabled must carry the same env
+// through. Both 0 and 1 forward; unset forwards nothing.
+func TestReExec_ForwardsAccounting(t *testing.T) {
+	run := func(t *testing.T, envVal string, setEnv bool) string {
+		var capturedArgs []string
+		docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+			capturedArgs = argv
+			return nil
+		})
+		defer docker.ResetExecFunc()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		if setEnv {
+			t.Setenv("AFM_ACCOUNTING", envVal)
+		} else {
+			_ = os.Unsetenv("AFM_ACCOUNTING")
+		}
+
+		if err := docker.ReExec(docker.ReExecConfig{
+			Image:      "akopichin/afm:latest",
+			ProjectDir: "/tmp/proj",
+			ExtraArgs:  []string{"run", "flow.yaml"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(capturedArgs, " ")
+	}
+
+	for _, v := range []string{"0", "1"} {
+		t.Run("forwards "+v, func(t *testing.T) {
+			if got := run(t, v, true); !strings.Contains(got, "-e AFM_ACCOUNTING="+v) {
+				t.Errorf("AFM_ACCOUNTING=%s not forwarded by value: %s", v, got)
+			}
+		})
+	}
+	t.Run("unset forwards nothing", func(t *testing.T) {
+		if got := run(t, "", false); strings.Contains(got, "AFM_ACCOUNTING") {
+			t.Errorf("AFM_ACCOUNTING must not appear when unset: %s", got)
+		}
+	})
+}
+
 func TestReExec_RecipeTransientEnv_NoMount(t *testing.T) {
 	// секрет в host-only файле
 	tokFile := filepath.Join(t.TempDir(), "token")

@@ -202,7 +202,10 @@ describe('RunMetrics', () => {
       expect(reasonText).toMatch(/coverage/i)
     })
 
-    it('shows a plain dash with no marker when accounting is unsupported', () => {
+    it('hides the Est. cost tile entirely when accounting is unsupported', () => {
+      // accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status omits the
+      // accounting object → supported:false → no tile at all (not a dash tile):
+      // the whole point of the display switch is that cost chrome disappears.
       render(
         <RunMetrics
           {...baseTimeProps}
@@ -211,10 +214,27 @@ describe('RunMetrics', () => {
           onOpenCost={() => {}}
         />,
       )
-      const btn = screen.getByRole('button', { name: /est\. cost/i })
-      expect(btn.querySelector('.metric-marker')).toBeNull()
-      expect(btn).not.toHaveAttribute('aria-describedby')
-      expect(btn).toHaveTextContent('—')
+      expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
+      expect(document.querySelector('.metric-cost')).toBeNull()
+      // The other four metrics still render.
+      expect(document.getElementById('elapsed')).not.toBeNull()
+    })
+
+    it('does not render the Est. cost tile inside the popover when unsupported', () => {
+      installControllableMatchMedia(false) // narrow header → popover available
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          elapsedMs={0}
+          idleMs={0}
+          coverageIssues={[]}
+          accounting={unsupported}
+          onOpenCost={() => {}}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /show all run metrics/i }))
+      expect(screen.getByRole('group', { name: /all run metrics/i })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
     })
 
     it('keeps all DOM ids unique across the inline and popover copies', () => {

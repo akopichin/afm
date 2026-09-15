@@ -210,6 +210,13 @@ export function App(): ReactElement {
     document.querySelector<HTMLElement>('.workspace-tabs [data-tab-id="cost"]')?.focus()
     setCostFocusPending(false)
   }, [costFocusPending, wsState.view])
+  // Защита: если accounting выключён на бэкенде (supported:false), а вид застрял
+  // на 'cost' — уводим в Feed. В норме недостижимо (без вкладки/тайла открыть
+  // Cost нечем), но рестарт afm с AFM_ACCOUNTING=0 при уже открытом Cost иначе
+  // оставил бы пустую CostPanel без вкладки для выхода.
+  useEffect(() => {
+    if (!accounting.supported && wsState.view === 'cost') openFeed()
+  }, [accounting.supported, wsState.view])
 
   // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный
   // элемент очереди (он может отличаться от того, что вручную выбрано в рейле —
@@ -465,8 +472,13 @@ export function App(): ReactElement {
     })
   }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу
-  // после Feed (иначе контекстные вкладки оказывались «за» ней).
-  tabs.push({ id: 'cost', label: 'Cost' })
+  // после Feed (иначе контекстные вкладки оказывались «за» ней). Вкладку
+  // показываем только когда accounting поддержан бэкендом: при
+  // accounting.enabled: false / AFM_ACCOUNTING=0 /api/status приходит без
+  // объекта accounting (supported:false) — ни вкладки, ни тайла Est. cost.
+  if (accounting.supported) {
+    tabs.push({ id: 'cost', label: 'Cost' })
+  }
   const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }

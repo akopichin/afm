@@ -71,6 +71,10 @@ export function RunMetrics({
     { key: 'backoff', label: 'Backoff', value: hasStarted ? formatDuration(backoffMs) : '--', icon: iconPulse() },
   ]
 
+  // Est. cost скрыт целиком, когда accounting не поддержан бэкендом
+  // (accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status без объекта
+  // accounting → supported:false). Тогда ни тайла, ни маркера, ни поповер-копии.
+  const showCost = accounting.supported
   const costMarker = hasCostMarker(coverageIssues, accounting)
   const costReasonText = costMarker ? costReason(coverageIssues, accounting) : ''
   const costValue = runCost?.displayCost ?? '—'
@@ -179,7 +183,7 @@ export function RunMetrics({
   return (
     <div className="run-metrics" role="group" aria-label="Run metrics" ref={rootRef}>
       {metrics.map((m) => renderMetric(m, true))}
-      {renderCostMetric(false)}
+      {showCost && renderCostMetric(false)}
       <button
         type="button"
         className="metrics-more"
@@ -193,7 +197,7 @@ export function RunMetrics({
       {moreOpen && (
         <div className="metrics-popover" role="group" aria-label="All run metrics">
           {metrics.map((m) => renderMetric(m, false))}
-          {renderCostMetric(true)}
+          {showCost && renderCostMetric(true)}
         </div>
       )}
       {/* Общий скрытый узел с пояснением маркера — оба рендера тайла (инлайн +

@@ -22,16 +22,6 @@ func newReportCmd() *cobra.Command {
 		Short: "Render a markdown cost/usage summary for a run",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// `afm report` is a pure cost/usage command. With the accounting
-			// display switched off (accounting.enabled: false / AFM_ACCOUNTING=0)
-			// it emits nothing to stdout (so a redirected report stays empty) and
-			// a one-line hint on stderr, exiting 0. usage.jsonl is still being
-			// collected, so `AFM_ACCOUNTING=1 afm report` shows it on demand.
-			if !accountingDisplayEnabled() {
-				fmt.Fprintln(os.Stderr, "accounting display disabled; set AFM_ACCOUNTING=1 or accounting.enabled: true to view")
-				return nil
-			}
-
 			var runArg string
 			if len(args) > 0 {
 				runArg = args[0]
@@ -44,6 +34,19 @@ func newReportCmd() *cobra.Command {
 			rs, err := state.LoadRunState(runDir)
 			if err != nil {
 				return fmt.Errorf("load state: %w", err)
+			}
+
+			// `afm report` is a pure cost/usage command. With the accounting
+			// display switched off (accounting.enabled: false / AFM_ACCOUNTING=0)
+			// it renders nothing — a one-line hint on stderr, exit 0 (so a
+			// redirected report stays empty). The gate runs AFTER resolving the
+			// run and loading its state, so a bad run id / no runs / corrupt
+			// state still errors exactly as with the display on — only the
+			// cost rendering is skipped. usage.jsonl keeps being collected, so
+			// `AFM_ACCOUNTING=1 afm report` shows it on demand.
+			if !accountingDisplayEnabled() {
+				fmt.Fprintln(os.Stderr, "accounting display disabled; set AFM_ACCOUNTING=1 or accounting.enabled: true to view")
+				return nil
 			}
 
 			// Read-only: a run without usage.jsonl at all (accounting

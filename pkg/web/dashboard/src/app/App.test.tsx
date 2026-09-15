@@ -62,7 +62,16 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
 
     if (url.includes('/api/status')) {
       onStatusCall?.()
-      return { ok: true, json: async () => statusPayload() } as Response
+      // The real accounting-enabled backend (the default) always sends an
+      // `accounting` object; the Cost tab / Est. cost tile are gated on its
+      // presence. Default it in when a payload omits it, so tests model the
+      // enabled backend; a test exercising the disabled switch sets
+      // `accounting` explicitly (e.g. null → supported:false, no Cost chrome).
+      const payload = statusPayload()
+      if (payload !== null && typeof payload === 'object' && !('accounting' in payload)) {
+        ;(payload as Record<string, unknown>).accounting = { health: 'ok', has_data: false }
+      }
+      return { ok: true, json: async () => payload } as Response
     }
 
     if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
@@ -866,6 +875,26 @@ describe('App', () => {
 
     await waitFor(() => expect(screen.getByText('No usage data')).toBeInTheDocument())
     expect(document.getElementById('detail-title')).not.toBeInTheDocument()
+  })
+
+  test('Cost tab is absent when accounting is unsupported (display switch off)', async () => {
+    // accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status omits the
+    // accounting object → supported:false. The permanent Cost tab must NOT
+    // render (and neither the Est. cost tile — see RunMetrics test), otherwise
+    // the display switch wouldn't actually hide the cost UI. `accounting: null`
+    // opts this payload out of the mock's enabled-by-default injection.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'running')],
+      accounting: null,
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+    expect(labels).not.toContain('Cost')
+    expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
   })
 
   test('Cost tab is always the LAST tab, after the contextual detail/beacon tabs', async () => {

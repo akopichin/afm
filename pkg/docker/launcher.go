@@ -358,6 +358,14 @@ func ReExec(cfg ReExecConfig) error {
 	if os.Getenv("AFM_DEBUG") != "" {
 		args = append(args, "-e", "AFM_DEBUG="+os.Getenv("AFM_DEBUG"))
 	}
+	// AFM_ACCOUNTING — не секрет, передаём значением: выключатель отображения
+	// стоимости резолвится ВНУТРИ контейнера (сервер dashboard + afm check/report
+	// вызывают config.AccountingConfig.IsEnabled там), поэтому env с хоста должен
+	// доехать до контейнера. Иначе AFM_ACCOUNTING=0 при Docker-режиме не скрывал
+	// бы стоимость, а AFM_ACCOUNTING=1 не мог бы переопределить config внутри.
+	if os.Getenv("AFM_ACCOUNTING") != "" {
+		args = append(args, "-e", "AFM_ACCOUNTING="+os.Getenv("AFM_ACCOUNTING"))
+	}
 	// File browser: манифест корней (не секрет) передаём значением — контейнер
 	// читает его один раз при старте, чтобы знать, какие пути показывать в UI.
 	if cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0 {
