@@ -153,6 +153,10 @@ integration-tests     pending                15:31:02
 Or in real time via the [web dashboard](dashboard.md) — stages, progress bar,
 event feed, logs.
 
+Once a run has recorded token usage, `afm check` also shows a per-stage token/cost
+summary and `afm report` renders a full markdown cost breakdown — see
+[Cost accounting](accounting.md) (and how to turn the display off).
+
 ## Usage in Claude Code
 
 After `./install.sh` (or `afm install-skills`) the following skills are available:

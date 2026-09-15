@@ -21,6 +21,10 @@ right (there is no three-column layout or bottom progress bar).
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.
 - **Folder icon (Docker mode only)** — opens the [project file browser](docker.md#project-file-browser).
+- **Est. cost tile & Cost tab** — the header's fifth metric shows the run's estimated
+  cost and opens a **Cost** tab with a per-stage/overhead/total breakdown; the stage
+  rail shows a quiet per-stage cost. All of it can be switched off — see
+  [Cost tracking](#cost-tracking) below.
 
 ## Themes
 
@@ -39,6 +43,21 @@ that normalizes to `graphite`. Light vs. dark mode is toggled inside the dashboa
 itself and is independent of the theme choice. A fully custom skin can be supplied
 via the top-level `skin_dir:` config option (a directory containing `index.css`),
 which overrides the built-in theme.
+
+## Cost tracking
+
+The dashboard surfaces the run's **estimated** cost in three places:
+
+- an **Est. cost** tile in the header (the run total; an amber marker flags a coverage
+  gap or that the accounting writer went unavailable),
+- a **Cost** tab — the same per-stage / run-overhead / total table as `afm report`,
+  each row expandable into a token-mix breakdown,
+- a quiet per-stage figure in the stage rail once a stage has a priced record.
+
+All three are a **list-price estimate**, not an invoice. To hide them entirely, set
+`accounting: { enabled: false }` (or `AFM_ACCOUNTING=0`) — cost is still collected
+into `usage.jsonl`, just not displayed. See [Cost accounting](accounting.md) for the
+full model (token semantics, `pricing:` overrides, coverage, and the display switch).
 
 ## Inline plan comments
 

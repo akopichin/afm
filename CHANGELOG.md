@@ -4,6 +4,53 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-15
+
+### Feature: token & cost accounting
+
+afm now records the token usage of every agent invocation and turns it into an
+**estimated** dollar cost, surfaced across the CLI and the dashboard. Nothing here is
+an invoice — it's a transparent, reproducible **list-price estimate** computed from
+the tokens afm actually observed and the rates it knows about (a Claude Max / Codex
+subscription, credits, and gateway markups are all invisible to afm). See the full
+model in [Cost accounting](https://akopichin.github.io/afm/accounting/).
+
+**How it's collected.** Each agent process ends its stream-json output with a terminal
+`result` line carrying a usage object; afm reads exactly that line (never the streaming
+`assistant` messages, which would double-count), normalizes the many provider shapes
+(Anthropic exclusive-input, OpenAI/Codex inclusive-input, Chat Completions) into one
+`Tokens` shape, prices it per category, and appends one record to a **separate**
+`.afm/runs/<run>/usage.jsonl` — deliberately not `events.jsonl`, so the reliability
+core is untouched. A usage-store failure never affects the run.
+
+**Pricing.** A small built-in rate table covers a conservative set of models; anything
+else (an internal model, a renamed SKU, a channel billed differently) gets a
+`pricing:` override in `config.yaml`, merged category-by-category onto any matching
+builtin. An invocation is priced only if every token category it used resolves to a
+rate — a missing category makes the invocation `unpriced`, never a silent `$0`. An
+explicit `0` rate is a real "this category is free". Coverage is reported as
+`full` / `partial` (`$X+`) / `none` (`—`) from invocation counts, never from money.
+
+**Where cost shows up.**
+
+- **`afm check`** — adds `TOKENS` / `CACHE` / `EST. COST` columns and a `TOTAL` line,
+  with a coverage note (`2 unmetered, 1 unpriced`) when the total isn't `full`.
+- **`afm report [run]`** — a full markdown report: per-stage token/cost table, a
+  `Run overhead` section, a grand total, and a coverage/pricing appendix. A missing
+  `usage.jsonl` still renders the stage table; a corrupt one renders a self-contained
+  degraded report and exits non-zero.
+- **Dashboard** — an **Est. cost** header tile, a permanent **Cost** tab (per-stage /
+  overhead / total, each row expandable into a token-mix breakdown), and a quiet
+  per-stage figure in the stage rail. All three totals are computed from the same
+  `pkg/accounting` helpers, so they're byte-identical for the same run.
+
+**Turning the display off.** `accounting: { enabled: false }` in `config.yaml` — or
+`AFM_ACCOUNTING=0` — hides cost everywhere (dashboard tile/tab/rail, `afm check`
+columns, `afm report`). It's a **display switch only**: `usage.jsonl` keeps being
+collected, so the data is still there and `AFM_ACCOUNTING=1 afm report` shows past
+runs on demand. Priority is env `AFM_ACCOUNTING` > config > default on (mirroring
+`AFM_FILE_BROWSER`); in Docker mode the env is forwarded into the container.
+
 ## 2026-09-11 — v1.0.0
 
 ### The dashboard, redesigned
