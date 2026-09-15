@@ -31,6 +31,16 @@ const (
 	// reuses the same id (after the first was answered) fires again, exactly
 	// like EventAskUser does. Never triggers an FSM transition itself.
 	EventDialogQuestion EventType = "dialog_question"
+	// EventDialogAnswer fires exactly once, right after a HUMAN answer to an
+	// interactive dialog question is authorized and durably recorded (i.e.
+	// after NotifyAnswer succeeds and the dialog.jsonl history entry is
+	// written) — carries the same display-ready {phase,id,title} payload
+	// shape as EventDialogQuestion (see mcp.DialogFeedNotice/DialogSnippet),
+	// with title derived from the answer text. Mirrors EventDialogQuestion on
+	// the answer side; never fires on a rejected/rolled-back answer (e.g. the
+	// review-pause 409/TOCTOU path in handleDialogAnswer). Never triggers an
+	// FSM transition itself — NotifyAnswer already did that.
+	EventDialogAnswer   EventType = "dialog_answer"
 	EventContextWarning EventType = "context_warning"
 	// EventScriptOutput carries one line of stdout from a script/hook run.
 	// Data: map[string]string{"hook": "before"|"script"|"after", "line": "..."}.

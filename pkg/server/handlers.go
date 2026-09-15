@@ -18,6 +18,8 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -744,6 +746,15 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: req.ID, Answer: req.Answer, FromOptions: req.FromOptions}); err != nil {
 		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, req.Phase, req.ID, err) //nolint:gosec // G706: phase/id validated safe (flow.IsValidPhase/isValidDialogID) above
 	}
+
+	// The human answer took effect — mirror dialog_question (T2) on the
+	// answer side: one payload map, published live on the ui bus (so an
+	// already-connected dashboard sees it without waiting for a reconnect)
+	// and duplicated into notices.jsonl (so a client that connects/reloads
+	// afterwards still sees it via /api/events' notices replay).
+	payload := mcp.DialogFeedNotice(req.Phase, req.ID, mcp.DialogSnippet(req.Answer))
+	s.uiBus.Publish(bus.Event{Type: bus.EventDialogAnswer, StageID: stageID, Data: payload})
+	stagefiles.AppendNotice(s.runDir, stageID, string(bus.EventDialogAnswer), payload)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"})
