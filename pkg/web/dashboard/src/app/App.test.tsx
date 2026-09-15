@@ -907,6 +907,52 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Cost' })).toHaveAttribute('aria-selected', 'true'))
   })
 
+  test('FIX 1: Cost view never shows a redundant stage-detail tab alongside the attention beacon', async () => {
+    // User-reported bug: Cost is a GLOBAL report, not stage-scoped, but the
+    // tab list still emitted a detail-tab named after the selected stage
+    // AND the attention beacon for that same stage — two tabs pointing at
+    // the same thing. s1 is awaiting approval (its own attention); it's also
+    // the selected/workspace stage while we're on Cost. Expected order:
+    // Feed | Approval·1 | Cost — no third "Propose" detail tab.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'awaiting_approval')],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+
+    await waitFor(() => {
+      const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+      expect(labels).toEqual(['Feed', expect.stringMatching(/Approval/), 'Cost'])
+    })
+  })
+
+  test('FIX 3: activating Cost from the RunMetrics "…" popover moves focus onto the Cost tab', async () => {
+    // Round-5 #6 спеки: after the popover closes and Cost opens, focus must
+    // land on the destination (the Cost tab button), not linger on the now
+    // out-of-context "…" disclosure button.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'running')],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    fireEvent.click(screen.getByRole('button', { name: /show all run metrics/i }))
+    const popover = screen.getByRole('group', { name: /all run metrics/i })
+    fireEvent.click(within(popover).getByRole('button', { name: /est\. cost/i }))
+
+    await waitFor(() => {
+      const costTab = screen.getByRole('tab', { name: 'Cost' })
+      expect(costTab).toHaveAttribute('aria-selected', 'true')
+      expect(document.activeElement).toBe(costTab)
+    })
+  })
+
   test('Cost panel: a long stage list with several expanded rows keeps Total reachable via its own scroll container', async () => {
     const manyStages = Array.from({ length: 20 }, (_, i) => ({
       ...stageView(`s${i}`, `Stage ${i}`, 'done'),

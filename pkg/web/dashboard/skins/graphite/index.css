@@ -64,6 +64,19 @@
      segments apart from this one at a glance, not just by tooltip text. */
   --cost-cachewrite: #c084fc;
 
+  /* FIX 5 (codex#5, AA contrast): dedicated cost tokens, natively defined
+     rather than aliased to --text-muted/--attention (see tokens.css doc).
+     Values reused verbatim from the existing (already-passing) text-muted/
+     attention — graphite never had a contrast problem here, this only makes
+     the dependency explicit and immune to future retuning of those two
+     general-purpose tokens.
+       --cost-rail        #828da1 on --surface-raised #111a27 → 5.22:1
+       --cost-rail-strong #aab4c4 on --surface-raised #111a27 → 8.36:1
+       --cost-warning     #f2b84b on --surface-canvas #0b111b → 10.57:1 */
+  --cost-rail:        #828da1;
+  --cost-rail-strong: #aab4c4;
+  --cost-warning:     #f2b84b;
+
   --focus-ring:     rgba(95, 120, 255, 0.55);
   --overlay-scrim:  rgba(0, 0, 0, 0.60);
   --shadow-overlay: 0 24px 60px rgba(0, 0, 0, 0.55);
@@ -150,6 +163,14 @@
   /* cost-ui increment2 (task-12): darkened for AA on the white/near-white
      raised surface, still a clear violet next to accent-primary/success. */
   --cost-cachewrite: #9333ea;
+
+  /* FIX 5 (codex#5, AA contrast) — see the dark block above for rationale.
+       --cost-rail        #616c7e on --surface-raised #ffffff → 5.31:1
+       --cost-rail-strong #596579 on --surface-raised #ffffff → 5.90:1
+       --cost-warning     #9c5a06 on --surface-canvas #f3f5f9 → 4.96:1 */
+  --cost-rail:        #616c7e;
+  --cost-rail-strong: #596579;
+  --cost-warning:     #9c5a06;
 
   --focus-ring:     rgba(77, 99, 215, 0.5);
   --overlay-scrim:  rgba(15, 20, 30, 0.45);

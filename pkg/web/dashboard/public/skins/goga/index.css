@@ -47,6 +47,17 @@
      --amber), so it can't serve as a hue distinct from --accent-primary. */
   --cost-cachewrite: #c084fc;
 
+  /* FIX 5 (codex#5, AA contrast): dedicated cost tokens, natively defined
+     rather than aliased to --text-muted/--attention (see tokens.css doc).
+     goga's own --ink-dim/--amber already clear AA here — this only makes the
+     dependency explicit, decoupled from unrelated future retuning.
+       --cost-rail        #A0AEC0 on --surface-raised #121830 → 7.76:1
+       --cost-rail-strong #FFFFFF on --surface-raised #121830 → 17.51:1
+       --cost-warning     #3882F6 on --surface-canvas #0A0E1A → 5.22:1 */
+  --cost-rail:        #A0AEC0;
+  --cost-rail-strong: #FFFFFF;
+  --cost-warning:     #3882F6;
+
   /* dialog accents — goga их не переопределял и сегодня, сохраняем
      дословные значения novacorps (текущее поведение — унаследованные через
      старый @import — не меняется) */
@@ -99,6 +110,14 @@
 
   /* cost-ui increment2 (task-12): darkened for AA on white. */
   --cost-cachewrite: #9333ea;
+
+  /* FIX 5 (codex#5, AA contrast) — see the dark block above for rationale.
+       --cost-rail        #64748B on --surface-raised #FFFFFF → 4.76:1
+       --cost-rail-strong #0F172A on --surface-raised #FFFFFF → 17.85:1
+       --cost-warning     #2563EB on --surface-canvas #F7F9FC → 4.90:1 */
+  --cost-rail:        #64748B;
+  --cost-rail-strong: #0F172A;
+  --cost-warning:     #2563EB;
 
   /* dialog accents — переподобраны под светлый фон */
   --qa-answer:              #0f766e;

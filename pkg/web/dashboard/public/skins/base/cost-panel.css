@@ -88,6 +88,32 @@
   z-index: 3;
 }
 
+/* FIX 6a (codex#6): the sticky Stage column had `white-space:nowrap` (from the
+   generic td/th rule above) but no width cap — a long stage name pushed the
+   column wide enough to overrun/overlap the OTHER sticky column (Cost) on a
+   narrow viewport (~375px), since both are `position:sticky` and don't
+   naturally yield space to each other. Capping the column's width and
+   ellipsizing the label keeps both sticky columns usable at any width. */
+.cost-table .cost-col-stage {
+  max-width: 160px;
+}
+.cost-expand-btn {
+  max-width: 100%;
+}
+.cost-row-label {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+@media (max-width: 480px) {
+  .cost-table .cost-col-stage {
+    max-width: 108px;
+  }
+}
+
 .cost-row-overhead .cost-col-stage,
 .cost-row-total .cost-col-stage {
   font-style: italic;
@@ -126,6 +152,13 @@
 }
 .cost-chevron.open {
   transform: rotate(90deg);
+}
+/* FIX 6b (codex#7): the rotate transition had no prefers-reduced-motion
+   override — every other animated element in this file (chevron aside) does. */
+@media (prefers-reduced-motion: reduce) {
+  .cost-chevron {
+    transition: none;
+  }
 }
 
 .cost-detail-row td {
@@ -193,6 +226,10 @@
 
 .cost-coverage-line {
   margin: 10px 14px 0;
-  color: var(--attention);
+  /* FIX 5 (codex#5, AA contrast): dedicated --cost-warning, not --attention —
+     novacorps-light's --attention measured 3.68:1 on this line's canvas
+     background, below AA; --cost-warning is tuned per skin × theme for this
+     surface specifically (see tokens.css / each skin's index.css doc). */
+  color: var(--cost-warning);
   font-size: 0.85rem;
 }

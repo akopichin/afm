@@ -60,8 +60,21 @@
   /* Per-stage cost figure in the rail (cost-ui increment2, task-10): quiet at
      rest, intensifies to a stronger-but-still-muted tone on row hover/active.
      Color only — NEVER opacity (a dim digit must stay fully legible, not
-     partially vanish). Aliased to the existing text tokens so every skin ×
-     theme gets a correct pair for free without a per-skin override. */
+     partially vanish).
+
+     FIX 5 (codex#5, AA contrast audit): these used to be plain aliases of
+     --text-muted/--attention — fine for graphite/goga (already ≥4.5:1 on
+     their cost surfaces) but NOT for novacorps, whose --ink-dim/--amber sit at
+     3.66–4.36:1 there (measured on the rail's --surface-raised background and
+     the coverage line's --surface-canvas background respectively) — below
+     WCAG AA for normal text. Every skin now defines these three tokens
+     NATIVELY (graphite/goga/novacorps index.css, dark+light) with a value
+     reasoned to ≥4.5:1 against its actual cost surface, instead of silently
+     inheriting whatever --text-muted/--attention happen to be tuned to for
+     unrelated UI. The generic aliases below are ONLY a fallback for a skin
+     that forgets to define them (none of the three shipped skins rely on it
+     for --cost-rail/--cost-rail-strong/--cost-warning today). */
   --cost-rail:        var(--text-muted);
   --cost-rail-strong: var(--text-secondary);
+  --cost-warning:     var(--attention);
 }

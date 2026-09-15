@@ -1,4 +1,4 @@
-import type { AccountingState, CoverageIssue } from '../../types/cost'
+import type { AccountingState, Attribution, CoverageIssue } from '../../types/cost'
 
 // Вынесено из RunMetrics.tsx (Task 11): и тайл Est. cost в шапке, и CostPanel
 // строят строку покрытия по одним и тем же группам issues — единая логика
@@ -18,10 +18,27 @@ export function summarizeCoverageGroups(issues: CoverageIssue[]): string {
   return `${shown.join('; ')}; and ${rest.length} more groups (${invocations} invocations)`
 }
 
+// attributionLabel — owner of a coverage gap: a stage id, run overhead, or
+// unknown when neither is resolvable. Codex#2/opus#2 review: the coverage line
+// used to drop this entirely, leaving no way to tell "this stage's invocations
+// aren't priced" from "run overhead isn't priced" — both rendered identically.
+function attributionLabel(attribution: Attribution): string {
+  switch (attribution.kind) {
+    case 'stage':
+      return attribution.stageId
+    case 'run_overhead':
+      return 'run overhead'
+    case 'unknown':
+      return 'unknown'
+  }
+}
+
 function describeCoverageIssue(issue: CoverageIssue): string {
   const model = issue.model === '' ? 'unknown model' : issue.model
   const label = issue.kind === 'unmetered' ? 'unmetered' : 'unpriced'
-  return `${label} ${issue.phase}/${issue.channel} ${model} (×${issue.count})`
+  const attrLabel = attributionLabel(issue.attribution)
+  const reasonSuffix = issue.reason !== '' ? ` — ${issue.reason}` : ''
+  return `${label} — ${attrLabel}/${issue.phase} — ${model}${reasonSuffix} (×${issue.count})`
 }
 
 // costReason — составляет пояснение маркера по ДВУМ независимым осям (round-6

@@ -43,6 +43,19 @@
      distinct from --amber (yellow) and --mint (teal) — reuse it verbatim. */
   --cost-cachewrite: var(--violet);
 
+  /* FIX 5 (codex#5, AA contrast audit): novacorps was the ONE skin that
+     actually failed AA here — plain --ink-dim (#4a8a85) on the rail's
+     --surface-raised (#0c1c24) measured 4.36:1, just under the 4.5:1 floor
+     for normal text. A lightened teal (still clearly the same hue family,
+     not a re-skin) clears it with margin. --cost-warning (--amber, #e5d442)
+     was already comfortably AA-safe here (12.29:1 on canvas) — kept verbatim.
+       --cost-rail        #549a94 on --surface-raised #0c1c24 → 5.32:1
+       --cost-rail-strong #8fc3bd on --surface-raised #0c1c24 → 8.87:1
+       --cost-warning     #e5d442 on --surface-canvas #08141a → 12.29:1 */
+  --cost-rail:        #549a94;
+  --cost-rail-strong: #8fc3bd;
+  --cost-warning:     #e5d442;
+
   /* dialog accents (dark-mode-tuned pale hues, как раньше) */
   --qa-answer:              #9fe0d8;
   --dialog-option-text:     #d4baff;
@@ -94,6 +107,18 @@
   /* cost-ui increment2 (task-12): same reuse as dark — already AA-safe on
      white (used for --dialog-option-text/awaiting-user status there too). */
   --cost-cachewrite: var(--violet);
+
+  /* FIX 5 (codex#5, AA contrast audit): the failing pair. Plain --ink-dim
+     (#5c8f88) on the rail's white --surface-raised measured 3.66:1, and plain
+     --amber (#a6790a) on the coverage line's --surface-canvas (#f4f9f8)
+     measured 3.68:1 — both clearly below the 4.5:1 AA floor for normal text.
+     Darkened within the same hue (teal / amber) to clear it with margin.
+       --cost-rail        #457871 on --surface-raised #ffffff → 5.03:1
+       --cost-rail-strong #245049 on --surface-raised #ffffff → 9.06:1
+       --cost-warning     #8d6100 on --surface-canvas #f4f9f8 → 5.14:1 */
+  --cost-rail:        #457871;
+  --cost-rail-strong: #245049;
+  --cost-warning:     #8d6100;
 
   /* dialog accents — переподобраны под светлый фон */
   --qa-answer:              #0f766e;

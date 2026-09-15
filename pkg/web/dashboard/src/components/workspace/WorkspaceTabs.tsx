@@ -59,6 +59,7 @@ export function WorkspaceTabs({ tabs, activeId, onSelect }: WorkspaceTabsProps):
               (tab.glow ? ' glow' : '')
             }
             data-kind={tab.kind}
+            data-tab-id={tab.id}
             onClick={() => onSelect(tab.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
           >

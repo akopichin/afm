@@ -21,7 +21,7 @@ type GlobalHeaderProps = {
   runCost?: CostSummary
   coverageIssues?: CoverageIssue[]
   accounting?: AccountingState
-  onOpenCost?: () => void
+  onOpenCost?: (fromPopover: boolean) => void
   notificationsPermission?: NotificationPermissionState
   notificationsEnabled?: boolean
   onRequestEnableNotifications?: () => void

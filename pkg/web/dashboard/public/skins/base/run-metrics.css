@@ -69,6 +69,54 @@
   outline-offset: 2px;
 }
 
+/* Visible reason tooltip (FIX 4, codex#4): the reason (coverage gap /
+   unavailable storage) used to be reachable ONLY via the native `title`
+   attribute, which browsers reveal on mouse hover but never on keyboard
+   focus — a keyboard-only user had no way to learn WHY the amber marker is
+   lit. `data-tooltip` (set in RunMetrics.tsx, same text as the SR-only
+   aria-describedby node) drives a small CSS-only popover shown on BOTH
+   :hover and :focus-visible, so the reason is reachable identically by mouse
+   and keyboard. Hidden by default via opacity+visibility (not display:none)
+   so the transition can animate; `prefers-reduced-motion` drops it to an
+   instant toggle. */
+.metric-cost[data-tooltip] {
+  position: relative;
+}
+.metric-cost[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  text-align: left;
+  box-shadow: var(--shadow-overlay);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+  z-index: 20;
+}
+.metric-cost[data-tooltip]:hover::after,
+.metric-cost[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+@media (prefers-reduced-motion: reduce) {
+  .metric-cost[data-tooltip]::after {
+    transition: none;
+  }
+}
+
 /* Amber marker — a coverage gap or an unavailable accounting store (see
    hasCostMarker in RunMetrics.tsx). Anchored to the button itself, NOT nested
    inside .metric-label, so it stays visible even once the <1280px breakpoint

@@ -26,7 +26,13 @@ type RunMetricsProps = {
   runCost?: CostSummary
   coverageIssues: CoverageIssue[]
   accounting: AccountingState
-  onOpenCost: () => void
+  // fromPopover сообщает вызывающему (App.tsx), что активация пришла из
+  // поповера «⋯» — только тогда финальный фокус нужно увести дальше, на саму
+  // вкладку Cost воркспейса (round-5 #6 спеки, FIX 3): здесь, внутри
+  // RunMetrics, фокус лишь стабилизируется на «⋯» (кнопка никуда не денется),
+  // а окончательный перенос на Cost-таб — забота App.tsx, который один знает
+  // о существовании WorkspaceTabs.
+  onOpenCost: (fromPopover: boolean) => void
 }
 
 type Metric = { key: string; label: string; value: string; icon: ReactElement }
@@ -122,7 +128,7 @@ export function RunMetrics({
       setMoreOpen(false)
       moreButtonRef.current?.focus()
     }
-    onOpenCost()
+    onOpenCost(fromPopover)
   }
 
   // withId=true только для инлайновых метрик (id started-at/elapsed/idle/backoff
@@ -143,8 +149,12 @@ export function RunMetrics({
   // Est. cost — единственная метрика-кнопка (destination = вкладка Cost).
   // Маркер — отдельный элемент, а не часть metric-label, чтобы не пропадать
   // вместе с лейблом на узкой шапке (<1280px, run-metrics.css прячет
-  // .metric-label). Tooltip — нативный title (hover/focus), без кастомного
-  // tap-toggle: тайл — кнопка навигации, не место для второй интерактивности.
+  // .metric-label). Tooltip (FIX 4, codex#4): раньше причина была доступна
+  // только через нативный title — тот показывается исключительно по mouse
+  // hover, клавиатурный фокус его не раскрывает. data-tooltip + CSS-псевдоэлемент
+  // (run-metrics.css, :hover/:focus-visible) делают ту же причину видимой и по
+  // Tab-фокусу, без второй интерактивности — тайл остаётся кнопкой навигации.
+  // aria-describedby остаётся отдельно — SR не зависит от CSS-видимости тултипа.
   function renderCostMetric(fromPopover: boolean): ReactElement {
     return (
       <button
@@ -154,7 +164,7 @@ export function RunMetrics({
         key="cost"
         onClick={() => handleCostActivate(fromPopover)}
         aria-describedby={costMarker ? costReasonId : undefined}
-        title={costMarker ? costReasonText : undefined}
+        data-tooltip={costMarker ? costReasonText : undefined}
       >
         {costMarker && <span className="metric-marker" aria-hidden="true" />}
         <span className="metric-icon" aria-hidden="true">{iconCoin()}</span>
