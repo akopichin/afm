@@ -1,6 +1,7 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, it, expect } from 'vitest'
-import { RunMetrics } from './RunMetrics'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { RunMetrics, costReason, summarizeCoverageGroups } from './RunMetrics'
+import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 
 // Управляемая заглушка matchMedia: запоминает listener'ы, чтобы тест мог
 // сымитировать переход через breakpoint (resize) вручную.
@@ -27,9 +28,65 @@ function installControllableMatchMedia(initialMatches: boolean): {
   }
 }
 
+const unsupported: AccountingState = { supported: false }
+const okHealthy: AccountingState = { supported: true, health: 'ok', hasData: true }
+const unavailableWithData: AccountingState = { supported: true, health: 'unavailable', hasData: true }
+const unavailableNoData: AccountingState = { supported: true, health: 'unavailable', hasData: false }
+
+function makeIssue(overrides: Partial<CoverageIssue> = {}): CoverageIssue {
+  return {
+    kind: 'unpriced',
+    attribution: { kind: 'unknown' },
+    phase: 'implementation',
+    channel: 'claude',
+    model: 'claude-x',
+    reason: 'unknown model',
+    count: 1,
+    ...overrides,
+  }
+}
+
+function makeCostSummary(displayCost: string): CostSummary {
+  return {
+    displayCost,
+    coverage: 'full',
+    estimatedCostUsd: 0,
+    metered: 0,
+    pricedInvocations: 0,
+    unpriced: 0,
+    unmetered: 0,
+    models: [],
+    uncachedInput: 0,
+    cacheRead: 0,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
+    cacheWriteOther: 0,
+    output: 0,
+    reasoningOutput: 0,
+    totalTokens: 0,
+    cacheWriteTotal: 0,
+    cacheHitRatio: null,
+    phases: {},
+  }
+}
+
+// Пропсы, общие для всех тестов, не завязанных на конкретную комбинацию
+// coverageIssues/accounting — не увеличивать копипасту базовых времянок.
+const baseTimeProps = {
+  startedAt: '2026-07-29T10:00:00.000Z',
+  elapsedMs: 65_000,
+  idleMs: 5_000,
+  backoffMs: 0,
+}
+const baseCostProps = {
+  coverageIssues: [] as CoverageIssue[],
+  accounting: unsupported,
+  onOpenCost: () => {},
+}
+
 describe('RunMetrics', () => {
   it('formats started clock and mm:ss durations', () => {
-    render(<RunMetrics startedAt="2026-07-29T10:00:00.000Z" elapsedMs={65_000} idleMs={5_000} backoffMs={0} />)
+    render(<RunMetrics {...baseTimeProps} {...baseCostProps} />)
     // Started — локальные часы; проверяем формат HH:MM:SS без привязки к TZ.
     expect(document.getElementById('started-at')?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/)
     expect(document.getElementById('elapsed')).toHaveTextContent('01:05')
@@ -38,12 +95,12 @@ describe('RunMetrics', () => {
   })
 
   it('uses h:mm:ss once past an hour', () => {
-    render(<RunMetrics startedAt="2026-07-29T10:00:00.000Z" elapsedMs={3_661_000} idleMs={0} backoffMs={0} />)
+    render(<RunMetrics startedAt="2026-07-29T10:00:00.000Z" elapsedMs={3_661_000} idleMs={0} backoffMs={0} {...baseCostProps} />)
     expect(document.getElementById('elapsed')).toHaveTextContent('1:01:01')
   })
 
   it('shows placeholders when the run has not started', () => {
-    render(<RunMetrics startedAt="" elapsedMs={0} idleMs={0} backoffMs={0} />)
+    render(<RunMetrics startedAt="" elapsedMs={0} idleMs={0} backoffMs={0} {...baseCostProps} />)
     expect(document.getElementById('started-at')).toHaveTextContent('--')
     expect(document.getElementById('elapsed')).toHaveTextContent('--')
     expect(document.getElementById('idle')).toHaveTextContent('--')
@@ -57,7 +114,7 @@ describe('RunMetrics', () => {
     it('opening the popover on a narrow header, then widening to desktop, closes it', () => {
       // Стартуем НЕ на desktop (matches=false для min-width:1280).
       mm = installControllableMatchMedia(false)
-      render(<RunMetrics startedAt="2026-07-29T10:00:00.000Z" elapsedMs={0} idleMs={0} backoffMs={0} />)
+      render(<RunMetrics {...baseTimeProps} elapsedMs={0} idleMs={0} {...baseCostProps} />)
 
       // Открываем поповер «⋯».
       fireEvent.click(screen.getByRole('button', { name: /show all run metrics/i }))
@@ -67,5 +124,206 @@ describe('RunMetrics', () => {
       act(() => mm.set(true))
       expect(screen.queryByRole('group', { name: /all run metrics/i })).toBeNull()
     })
+  })
+
+  describe('Est. cost tile', () => {
+    it('is a button that calls onOpenCost when clicked', () => {
+      const onOpenCost = vi.fn()
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={okHealthy}
+          runCost={makeCostSummary('$1.23')}
+          onOpenCost={onOpenCost}
+        />,
+      )
+      const btn = screen.getByRole('button', { name: /est\. cost/i })
+      expect(btn.tagName).toBe('BUTTON')
+      expect(btn).toHaveTextContent('$1.23')
+      fireEvent.click(btn)
+      expect(onOpenCost).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows an amber marker and a non-empty accessible reason for ok health with coverage issues', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[makeIssue()]}
+          accounting={okHealthy}
+          runCost={makeCostSummary('$1.23')}
+          onOpenCost={() => {}}
+        />,
+      )
+      const btn = screen.getByRole('button', { name: /est\. cost/i })
+      expect(btn.querySelector('.metric-marker')).not.toBeNull()
+      const describedBy = btn.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      const reasonNode = document.getElementById(describedBy as string)
+      expect(reasonNode?.textContent).toBeTruthy()
+      expect(reasonNode?.textContent).toMatch(/coverage/i)
+      expect(reasonNode?.textContent).not.toMatch(/storage|unavailable/i)
+    })
+
+    it.each([
+      ['hasData=true', unavailableWithData],
+      ['hasData=false', unavailableNoData],
+    ])('shows a marker with a storage reason when health is unavailable and there are no issues (%s)', (_label, accounting) => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={accounting}
+          onOpenCost={() => {}}
+        />,
+      )
+      const btn = screen.getByRole('button', { name: /est\. cost/i })
+      expect(btn.querySelector('.metric-marker')).not.toBeNull()
+      const describedBy = btn.getAttribute('aria-describedby')
+      const reasonNode = document.getElementById(describedBy as string)
+      expect(reasonNode?.textContent).toBeTruthy()
+      expect(reasonNode?.textContent).toMatch(/unavailable|storage|incomplete/i)
+      expect(reasonNode?.textContent).not.toMatch(/coverage gaps/i)
+    })
+
+    it('composes both sentences when health is unavailable and coverage issues exist', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[makeIssue()]}
+          accounting={unavailableWithData}
+          onOpenCost={() => {}}
+        />,
+      )
+      const btn = screen.getByRole('button', { name: /est\. cost/i })
+      const describedBy = btn.getAttribute('aria-describedby')
+      const reasonText = document.getElementById(describedBy as string)?.textContent ?? ''
+      expect(reasonText).toMatch(/unavailable|storage|incomplete/i)
+      expect(reasonText).toMatch(/coverage/i)
+    })
+
+    it('shows a plain dash with no marker when accounting is unsupported', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={unsupported}
+          onOpenCost={() => {}}
+        />,
+      )
+      const btn = screen.getByRole('button', { name: /est\. cost/i })
+      expect(btn.querySelector('.metric-marker')).toBeNull()
+      expect(btn).not.toHaveAttribute('aria-describedby')
+      expect(btn).toHaveTextContent('—')
+    })
+
+    it('keeps all DOM ids unique across the inline and popover copies', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[makeIssue()]}
+          accounting={okHealthy}
+          runCost={makeCostSummary('$1.23')}
+          onOpenCost={() => {}}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /show all run metrics/i }))
+      expect(screen.getByRole('group', { name: /all run metrics/i })).toBeInTheDocument()
+
+      const ids = Array.from(document.querySelectorAll('[id]')).map((el) => el.id)
+      expect(new Set(ids).size).toBe(ids.length)
+    })
+
+    it('activating Cost from the popover closes it, calls onOpenCost, and moves focus off the removed node', () => {
+      const onOpenCost = vi.fn()
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[makeIssue()]}
+          accounting={okHealthy}
+          runCost={makeCostSummary('$1.23')}
+          onOpenCost={onOpenCost}
+        />,
+      )
+      const moreBtn = screen.getByRole('button', { name: /show all run metrics/i })
+      fireEvent.click(moreBtn)
+      const popover = screen.getByRole('group', { name: /all run metrics/i })
+      const popoverCostBtn = within(popover).getByRole('button', { name: /est\. cost/i })
+
+      fireEvent.click(popoverCostBtn)
+
+      expect(onOpenCost).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('group', { name: /all run metrics/i })).toBeNull()
+      expect(document.body.contains(popoverCostBtn)).toBe(false)
+      expect(document.activeElement).toBe(moreBtn)
+    })
+
+    it('inline activation does not touch popover state or focus', () => {
+      const onOpenCost = vi.fn()
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={okHealthy}
+          runCost={makeCostSummary('$1.23')}
+          onOpenCost={onOpenCost}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /est\. cost/i }))
+      expect(onOpenCost).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('group', { name: /all run metrics/i })).toBeNull()
+    })
+  })
+})
+
+describe('costReason', () => {
+  it('is empty when there is nothing to warn about', () => {
+    expect(costReason([], unsupported)).toBe('')
+    expect(costReason([], okHealthy)).toBe('')
+  })
+
+  it('includes a storage sentence when health is unavailable with no issues', () => {
+    expect(costReason([], unavailableWithData)).toMatch(/unavailable|storage|incomplete/i)
+  })
+
+  it('includes a coverage sentence when there are issues', () => {
+    const text = costReason([makeIssue()], okHealthy)
+    expect(text).toMatch(/coverage/i)
+    expect(text).not.toMatch(/storage|unavailable/i)
+  })
+
+  it('includes both sentences when both axes fire', () => {
+    const text = costReason([makeIssue()], unavailableWithData)
+    expect(text).toMatch(/unavailable|storage|incomplete/i)
+    expect(text).toMatch(/coverage/i)
+  })
+})
+
+describe('summarizeCoverageGroups', () => {
+  it('shows all groups as-is when there are 3 or fewer', () => {
+    const issues = [makeIssue({ model: 'model-a' }), makeIssue({ model: 'model-b' }), makeIssue({ model: 'model-c' })]
+    const text = summarizeCoverageGroups(issues)
+    const segments = text.split('; ')
+    expect(segments).toHaveLength(3)
+    expect(text).not.toMatch(/more groups/)
+  })
+
+  it('caps at 3 groups and folds the rest into "and K more groups (M invocations)"', () => {
+    const issues = [
+      makeIssue({ model: 'model-a', count: 1 }),
+      makeIssue({ model: 'model-b', count: 2 }),
+      makeIssue({ model: 'model-c', count: 3 }),
+      makeIssue({ model: 'model-d', count: 4 }),
+      makeIssue({ model: 'model-e', count: 5 }),
+    ]
+    const text = summarizeCoverageGroups(issues)
+    const segments = text.split('; ')
+    expect(segments).toHaveLength(4)
+    expect(segments[3]).toBe('and 2 more groups (9 invocations)')
+    expect(text).toContain('model-a')
+    expect(text).toContain('model-b')
+    expect(text).toContain('model-c')
+    expect(text).not.toContain('model-d')
+    expect(text).not.toContain('model-e')
   })
 })

@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import { useThemeMode } from '../../hooks/use-theme-mode'
 import type { NotificationPermissionState } from '../../hooks/use-desktop-notifications'
+import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { useFileBrowser } from '../file-browser'
 import { RunMetrics } from '../run-metrics'
 
@@ -14,6 +15,13 @@ type GlobalHeaderProps = {
   elapsedMs: number
   idleMs: number
   backoffMs: number
+  // Est. cost (Increment 2) — прокидываются в RunMetrics как есть; дефолты
+  // здесь только на случай, если вызывающий код ещё не дошёл до полного
+  // проброса из App.tsx (см. types/cost.ts).
+  runCost?: CostSummary
+  coverageIssues?: CoverageIssue[]
+  accounting?: AccountingState
+  onOpenCost?: () => void
   notificationsPermission?: NotificationPermissionState
   notificationsEnabled?: boolean
   onRequestEnableNotifications?: () => void
@@ -36,6 +44,10 @@ export function GlobalHeader({
   elapsedMs,
   idleMs,
   backoffMs,
+  runCost,
+  coverageIssues = [],
+  accounting = { supported: false },
+  onOpenCost = () => {},
   notificationsPermission = 'unsupported',
   notificationsEnabled = false,
   onRequestEnableNotifications,
@@ -62,7 +74,16 @@ export function GlobalHeader({
       </div>
 
       <div className="gh-center">
-        <RunMetrics startedAt={startedAt} elapsedMs={elapsedMs} idleMs={idleMs} backoffMs={backoffMs} />
+        <RunMetrics
+          startedAt={startedAt}
+          elapsedMs={elapsedMs}
+          idleMs={idleMs}
+          backoffMs={backoffMs}
+          runCost={runCost}
+          coverageIssues={coverageIssues}
+          accounting={accounting}
+          onOpenCost={onOpenCost}
+        />
       </div>
 
       <div className="gh-right header-actions">

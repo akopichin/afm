@@ -1,7 +1,8 @@
 /* pkg/web/dashboard/skins/base/run-metrics.css
-   Four run metrics (Started / Elapsed / Idle / Backoff) in the header center.
-   icon + label + value; value uses tabular-nums so per-second updates don't
-   make the row jitter. Semantic tokens only → adapts to every skin × theme. */
+   Five run metrics (Started / Elapsed / Idle / Backoff / Est. cost) in the
+   header center. icon + label + value; value uses tabular-nums so per-second
+   updates don't make the row jitter. Semantic tokens only → adapts to every
+   skin × theme. */
 
 .run-metrics {
   position: relative; /* anchor for the overflow popover */
@@ -50,6 +51,57 @@
   color: var(--text-primary);
 }
 
+/* Est. cost — the only metric that's a real <button> (destination = the Cost
+   tab, see App.tsx/GlobalHeader). Resets browser button chrome to match the
+   plain .metric look; keeps a relative anchor for the amber marker dot below. */
+.metric-cost {
+  position: relative;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.metric-cost:hover .metric-label,
+.metric-cost:hover .metric-value {
+  color: var(--text-primary);
+}
+.metric-cost:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Amber marker — a coverage gap or an unavailable accounting store (see
+   hasCostMarker in RunMetrics.tsx). Anchored to the button itself, NOT nested
+   inside .metric-label, so it stays visible even once the <1280px breakpoint
+   below hides label text. */
+.metric-marker {
+  position: absolute;
+  top: -2px;
+  right: -6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+/* Visually-hidden reason node the tile's aria-describedby points at — ONE
+   shared node for both the inline and popover copies of the tile (twin
+   render), so the DOM never carries two elements with the same id. */
+.metric-cost-reason {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Overflow control: a "⋯" button that pops the full four-metric list. Hidden on
    desktop; revealed only once the two secondary metrics collapse (<1000px), so
    Idle/Backoff stay reachable instead of silently vanishing. */
@@ -88,20 +140,25 @@
 /* Labels always show inside the popover — it exists precisely to name the values. */
 .metrics-popover .metric-label { display: block; }
 
-/* Responsive contract (plan §5.1): the collapse order keeps the two LIVE metrics
-   (Elapsed + Idle) inline longest and folds the rest behind the "⋯" popover; the
-   popover copies (grandchildren) always keep labels + stay visible.
-   - 900–1279px: inline Elapsed + Idle only; Started + Backoff → popover.
-   - <900px: all four fold into the single "⋯" popover.
-   Rationale: a static Started must never outrank live Idle (the previous
-   breakpoints hid Idle first and kept Started, and left two metrics inline down
-   to 680px — denser than the agreed design). */
+/* Responsive contract (Increment 2, task 9 — re-tuned for the 5th metric):
+   collapse order keeps Started + Elapsed inline longest (the two "anchor"
+   facts about the run), folding the rest behind the "⋯" popover in this
+   order: Idle + Backoff first (least surprising to lose — Idle/Backoff are
+   secondary timers), then Est. cost, then everything.
+   - 1080–1279px: inline Started + Elapsed + Est. cost; Idle + Backoff → popover.
+   - 900–1079px: inline Started + Elapsed only; Idle + Backoff + Est. cost → popover.
+   - <900px: all five fold into the single "⋯" popover.
+   The popover copies (grandchildren) always keep labels + stay visible,
+   regardless of tier. */
 @media (max-width: 1279px) {
   .run-metrics { gap: 16px; }
   .run-metrics > .metric .metric-label { display: none; }
-  .run-metrics > .metric[data-metric="started"],
+  .run-metrics > .metric[data-metric="idle"],
   .run-metrics > .metric[data-metric="backoff"] { display: none; }
   .metrics-more { display: inline-flex; }
+}
+@media (max-width: 1079px) {
+  .run-metrics > .metric[data-metric="cost"] { display: none; }
 }
 @media (max-width: 899px) {
   .run-metrics > .metric { display: none; }

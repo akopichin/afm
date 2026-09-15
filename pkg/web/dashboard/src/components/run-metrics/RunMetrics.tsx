@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
+import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 
 type RunMetricsProps = {
   startedAt: string
@@ -9,16 +10,84 @@ type RunMetricsProps = {
   // App.tsx); RunMetrics только форматирует, поведение аккумуляторов не меняет.
   idleMs: number
   backoffMs: number
+  // Пятая метрика — Est. cost (Increment 2). runCost отсутствует, пока
+  // accounting не поддержан/нет данных — тогда тайл показывает плоский «—»
+  // без маркера. coverageIssues/accounting приходят готовыми из FlowStatus
+  // (см. types/cost.ts) — RunMetrics не считает деньги, только форматирует и
+  // решает, показывать ли amber-маркер. onOpenCost — переход на вкладку Cost.
+  runCost?: CostSummary
+  coverageIssues: CoverageIssue[]
+  accounting: AccountingState
+  onOpenCost: () => void
 }
 
 type Metric = { key: string; label: string; value: string; icon: ReactElement }
 
-// RunMetrics — четыре метрики прогона (Started/Elapsed/Idle/Backoff) в центре
-// компактной шапки. Форматирование перенесено 1:1 из старого Footer (тот же
-// formatClock/formatDuration), но презентация — иконка+лейбл+значение с
-// tabular-nums, чтобы значение не «прыгало» каждую секунду. id started-at/
-// elapsed/idle/backoff сохранены для совместимости с существующими проверками.
-export function RunMetrics({ startedAt, elapsedMs, idleMs, backoffMs }: RunMetricsProps): ReactElement {
+const MAX_COVERAGE_GROUPS_SHOWN = 3
+
+// hasCostMarker — единственное место, где решается «показывать amber-маркер
+// или нет» (round-4 #6 спеки): пробел покрытия ИЛИ недоступность хранилища.
+// hasData сюда сознательно не входит — health/coverage уже сами по себе
+// достаточны, а «нет данных» — это отдельный, не тревожный, случай (плоский
+// «—» без маркера).
+function hasCostMarker(coverageIssues: CoverageIssue[], accounting: AccountingState): boolean {
+  return coverageIssues.length > 0 || (accounting.supported && accounting.health === 'unavailable')
+}
+
+// summarizeCoverageGroups — общий ограниченный билдер сводки по пробелам
+// покрытия: первые MAX_COVERAGE_GROUPS_SHOWN групп как есть, остаток сворачивается
+// в одну фразу «and K more groups (M invocations)» (K — число скрытых групп,
+// M — сумма их count, а не количество групп) — тайл не должен раздуваться на
+// десятки строк при большом числе разных пробелов. Экспортирован, т.к. это
+// тот самый «shared summary builder» из спеки: co Cost-панель (Task 11) будет
+// строить свою строку покрытия по тем же группам.
+export function summarizeCoverageGroups(issues: CoverageIssue[]): string {
+  const shown = issues.slice(0, MAX_COVERAGE_GROUPS_SHOWN).map(describeCoverageIssue)
+  const rest = issues.slice(MAX_COVERAGE_GROUPS_SHOWN)
+  if (rest.length === 0) return shown.join('; ')
+  const invocations = rest.reduce((sum, issue) => sum + issue.count, 0)
+  return `${shown.join('; ')}; and ${rest.length} more groups (${invocations} invocations)`
+}
+
+function describeCoverageIssue(issue: CoverageIssue): string {
+  const model = issue.model === '' ? 'unknown model' : issue.model
+  const label = issue.kind === 'unmetered' ? 'unmetered' : 'unpriced'
+  return `${label} ${issue.phase}/${issue.channel} ${model} (×${issue.count})`
+}
+
+// costReason — составляет пояснение маркера по ДВУМ независимым осям (round-6
+// #3 спеки): недоступность accounting-хранилища и пробелы покрытия. Если
+// сработали обе — обе фразы идут подряд, ни одна не перекрывает другую (это
+// разные факты: упавший writer и непрайсед модель). Экспортирован для юнит-
+// тестов и переиспользования (см. summarizeCoverageGroups выше).
+export function costReason(coverageIssues: CoverageIssue[], accounting: AccountingState): string {
+  const parts: string[] = []
+  if (accounting.supported && accounting.health === 'unavailable') {
+    parts.push('Cost accounting storage is unavailable right now — totals may be incomplete.')
+  }
+  if (coverageIssues.length > 0) {
+    parts.push(`Coverage gaps: ${summarizeCoverageGroups(coverageIssues)}.`)
+  }
+  return parts.join(' ')
+}
+
+// RunMetrics — пять метрик прогона (Started/Elapsed/Idle/Backoff/Est. cost) в
+// центре компактной шапки. Форматирование Started/Elapsed/Idle/Backoff
+// перенесено 1:1 из старого Footer (тот же formatClock/formatDuration), но
+// презентация — иконка+лейбл+значение с tabular-nums, чтобы значение не
+// «прыгало» каждую секунду. id started-at/elapsed/idle/backoff сохранены для
+// совместимости с существующими проверками. Est. cost — единственная метрика,
+// которая всегда <button> (переход на вкладку Cost), см. renderCostMetric.
+export function RunMetrics({
+  startedAt,
+  elapsedMs,
+  idleMs,
+  backoffMs,
+  runCost,
+  coverageIssues,
+  accounting,
+  onOpenCost,
+}: RunMetricsProps): ReactElement {
   const hasStarted = startedAt !== ''
   const metrics: Metric[] = [
     { key: 'started', label: 'Started', value: formatClock(startedAt), icon: iconPlay() },
@@ -27,11 +96,21 @@ export function RunMetrics({ startedAt, elapsedMs, idleMs, backoffMs }: RunMetri
     { key: 'backoff', label: 'Backoff', value: hasStarted ? formatDuration(backoffMs) : '--', icon: iconPulse() },
   ]
 
-  // Поповер «⋯» — на узкой шапке (<1000px, CSS прячет Idle/Backoff инлайн)
-  // раскрывает все четыре метрики с подписями, чтобы вторичные не пропадали
-  // молча. На десктопе кнопка скрыта CSS-ом. Закрытие — клик вне / Escape.
+  const costMarker = hasCostMarker(coverageIssues, accounting)
+  const costReasonText = costMarker ? costReason(coverageIssues, accounting) : ''
+  const costValue = runCost?.displayCost ?? '—'
+  // Один id на оба рендера тайла (инлайн + поповер) — twin render не должен
+  // плодить дубликаты id в DOM (round-5 #6 спеки). useId() уникален на
+  // экземпляр RunMetrics, так что двух RunMetrics на странице тоже не столкнёт.
+  const costReasonId = useId()
+
+  // Поповер «⋯» — на узкой шапке (<1280px, CSS прячет часть метрик инлайн)
+  // раскрывает все пять метрик с подписями, чтобы вторичные не пропадали
+  // молча. На десктопе кнопка скрыта CSS-ом. Закрытие — клик вне / Escape /
+  // активация Est. cost изнутри поповера (см. handleCostActivate).
   const [moreOpen, setMoreOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const moreButtonRef = useRef<HTMLButtonElement>(null)
 
   // Finding #3 раунда 4: на desktop-брейкпоинте (>=1280px) все метрики видны
   // инлайн, а кнопка «⋯» скрыта CSS-ом. Если поповер был открыт на узкой шапке
@@ -62,6 +141,21 @@ export function RunMetrics({ startedAt, elapsedMs, idleMs, backoffMs }: RunMetri
     }
   }, [moreOpen])
 
+  // Активация Est. cost из поповера убирает саму нажатую кнопку из DOM (поповер
+  // закрывается) — если не увести фокус явно, браузер уронит его на <body>
+  // (round-5 #6 спеки: "focus explicitly moved to a stable Cost target").
+  // Возвращаем фокус на «⋯»-кнопку — она никуда не денется; дальнейшее
+  // перемещение фокуса на саму вкладку Cost — забота onOpenCost (App.tsx).
+  // Инлайновая активация ничего дополнительно не делает — та кнопка и так
+  // остаётся на месте.
+  function handleCostActivate(fromPopover: boolean): void {
+    if (fromPopover) {
+      setMoreOpen(false)
+      moreButtonRef.current?.focus()
+    }
+    onOpenCost()
+  }
+
   // withId=true только для инлайновых метрик (id started-at/elapsed/idle/backoff
   // — на них завязаны существующие проверки); копии в поповере id НЕ несут,
   // иначе в DOM оказалось бы два элемента с одним id.
@@ -77,22 +171,57 @@ export function RunMetrics({ startedAt, elapsedMs, idleMs, backoffMs }: RunMetri
     )
   }
 
+  // Est. cost — единственная метрика-кнопка (destination = вкладка Cost).
+  // Маркер — отдельный элемент, а не часть metric-label, чтобы не пропадать
+  // вместе с лейблом на узкой шапке (<1280px, run-metrics.css прячет
+  // .metric-label). Tooltip — нативный title (hover/focus), без кастомного
+  // tap-toggle: тайл — кнопка навигации, не место для второй интерактивности.
+  function renderCostMetric(fromPopover: boolean): ReactElement {
+    return (
+      <button
+        type="button"
+        className="metric metric-cost"
+        data-metric="cost"
+        key="cost"
+        onClick={() => handleCostActivate(fromPopover)}
+        aria-describedby={costMarker ? costReasonId : undefined}
+        title={costMarker ? costReasonText : undefined}
+      >
+        {costMarker && <span className="metric-marker" aria-hidden="true" />}
+        <span className="metric-icon" aria-hidden="true">{iconCoin()}</span>
+        <span className="metric-text">
+          <span className="metric-label">Est. cost</span>
+          <span id={fromPopover ? undefined : 'cost'} className="metric-value">{costValue}</span>
+        </span>
+      </button>
+    )
+  }
+
   return (
     <div className="run-metrics" role="group" aria-label="Run metrics" ref={rootRef}>
       {metrics.map((m) => renderMetric(m, true))}
+      {renderCostMetric(false)}
       <button
         type="button"
         className="metrics-more"
         aria-label="Show all run metrics"
         aria-expanded={moreOpen}
         onClick={() => setMoreOpen((open) => !open)}
+        ref={moreButtonRef}
       >
         ⋯
       </button>
       {moreOpen && (
         <div className="metrics-popover" role="group" aria-label="All run metrics">
           {metrics.map((m) => renderMetric(m, false))}
+          {renderCostMetric(true)}
         </div>
+      )}
+      {/* Общий скрытый узел с пояснением маркера — оба рендера тайла (инлайн +
+          поповер) ссылаются на ОДИН и тот же id через aria-describedby, чтобы
+          twin render не плодил дубликаты id в DOM. */}
+      {costMarker && (
+        <span id={costReasonId} className="metric-cost-reason">{costReasonText}</span>
       )}
     </div>
   )
@@ -138,4 +267,7 @@ function iconPause(): ReactElement {
 }
 function iconPulse(): ReactElement {
   return svg(<path d="M3 12 h4 l2 -5 l3 10 l2 -5 h7" />)
+}
+function iconCoin(): ReactElement {
+  return svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7 V17 M9.5 9.3 a2.5 1.6 0 0 1 5 0 c0 2 -5 1.4 -5 3.4 a2.5 1.6 0 0 0 5 0" /></>)
 }
