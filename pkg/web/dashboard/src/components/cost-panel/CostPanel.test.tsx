@@ -199,6 +199,28 @@ describe('CostPanel — table + Total + expand', () => {
     expect(overheadBtn).toHaveAttribute('aria-expanded', 'true')
   })
 
+  test('a stage id containing a space produces a whitespace-free aria-controls id that resolves to exactly one region', () => {
+    // Stage ids legally contain spaces (flow validation only forbids `/`, `\`,
+    // `.`/`..`, NUL). aria-controls/aria-labelledby are space-delimited
+    // IDREF-LIST attributes — an id with an embedded space would be parsed by
+    // assistive tech as TWO broken references. DOM ids must be derived from
+    // the row's position, not from the raw stage id.
+    const stages = [makeStage('a stage', makeCost(), 'A stage')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+
+    const btn = screen.getByRole('button', { name: /A stage/ })
+    fireEvent.click(btn)
+
+    const regionId = btn.getAttribute('aria-controls')
+    expect(regionId).toBeTruthy()
+    expect(regionId).not.toMatch(/\s/)
+
+    const region = document.getElementById(regionId as string)
+    expect(region).not.toBeNull()
+    expect(region).toHaveAttribute('role', 'region')
+    expect(document.querySelectorAll(`#${CSS.escape(regionId as string)}`).length).toBe(1)
+  })
+
   test('detail region lives inside a td with colSpan=5', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)

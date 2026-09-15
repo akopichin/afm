@@ -96,11 +96,20 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
 
   const rows: CostRow[] = overheadRow !== null ? [...stageRows, overheadRow] : stageRows
 
-  function renderRow(row: CostRow): ReactElement {
+  function renderRow(row: CostRow, index: number): ReactElement {
     const keyStr = rowKeyToString(row.key)
     const isExpanded = expanded.has(keyStr)
-    const regionId = `${idBase}-region-${keyStr}`
-    const labelId = `${idBase}-label-${keyStr}`
+    // Ids for aria-controls/aria-labelledby are derived from the row's
+    // POSITION, not from the raw stage id embedded in keyStr: stage ids
+    // legally contain spaces (flow validation only forbids `/`, `\`, `.`/`..`,
+    // NUL), and aria-controls/aria-labelledby are space-delimited IDREF-LIST
+    // attributes — an id with a space is parsed as two broken references by
+    // assistive tech. The `expanded` Set still keys off keyStr (discriminated,
+    // collision-free by construction); only the DOM id needed the index
+    // (same technique StagesList.tsx already uses for its cost figure ids).
+    const domSuffix = row.key.kind === 'overhead' ? 'overhead' : String(index)
+    const regionId = `${idBase}-region-${domSuffix}`
+    const labelId = `${idBase}-label-${domSuffix}`
     const rowClassName = row.key.kind === 'overhead' ? 'cost-row cost-row-overhead' : 'cost-row'
 
     return (
@@ -157,7 +166,7 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => renderRow(row))}
+              {rows.map((row, index) => renderRow(row, index))}
               <tr className="cost-row cost-row-total">
                 <td className="cost-col-stage">Total</td>
                 <td className="cost-col-model" />
