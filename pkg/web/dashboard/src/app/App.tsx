@@ -394,10 +394,11 @@ export function App(): ReactElement {
     contextKind !== null &&
     workspaceStage !== null &&
     attentionTabItem?.stageId === workspaceStage.id
-  // Cost — вторая постоянная вкладка (increment 2), рядом с Feed: глобальный
-  // отчёт по затратам, не привязанный к выбранной стадии. Никогда не
-  // auto-open'ится (в отличие от контекстных attention-вкладок ниже).
-  const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }, { id: 'cost', label: 'Cost' }]
+  // Cost — постоянная вкладка (increment 2): глобальный отчёт по затратам, не
+  // привязанный к выбранной стадии. Никогда не auto-open'ится (в отличие от
+  // контекстных attention-вкладок ниже). Должна оставаться ПОСЛЕДНЕЙ в списке —
+  // добавляется в конце, после detail/beacon вкладок (см. push ниже).
+  const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
   if (workspaceStage !== null) {
     if (inAttention && contextKind !== null) {
       // Тело показывает attention самой стадии → detail = attention (active, glow).
@@ -435,6 +436,9 @@ export function App(): ReactElement {
       glow: true,
     })
   }
+  // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу
+  // после Feed (иначе контекстные вкладки оказывались «за» ней).
+  tabs.push({ id: 'cost', label: 'Cost' })
   const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }

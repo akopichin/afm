@@ -868,6 +868,45 @@ describe('App', () => {
     expect(document.getElementById('detail-title')).not.toBeInTheDocument()
   })
 
+  test('Cost tab is always the LAST tab, after the contextual detail/beacon tabs', async () => {
+    // Живой ревью-баг: Cost был второй вкладкой сразу после Feed, поэтому
+    // detail-таб выбранной стадии и attention-маяк оказывались ПОСЛЕ Cost —
+    // Cost «застревала» посередине списка. Cost должна всегда идти последней.
+    // s1 done с планом (история) — выбрана и открыта в Feed; s2 ждёт аппрув —
+    // отдельный маяк Approval. Порядок: Feed, Greet (detail), Approval (маяк), Cost.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Greet', 'done', { showPlan: true, showDialog: false }),
+        stageView('s2', 'Approve', 'awaiting_approval'),
+      ],
+    }))
+
+    render(<App />)
+    // Воркспейс авто-открывает ожидание s2.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Approve'))
+
+    // Выбираем s1 (его история) и уходим в Feed — тогда одновременно видны и
+    // detail-таб выбранной стадии, и маяк чужого ожидания.
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Greet'))
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
+
+    await waitFor(() => {
+      const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
+      expect(labels[0]).toBe('Feed')
+      expect(labels[labels.length - 1]).toBe('Cost')
+      expect(labels.indexOf('Greet')).toBeGreaterThan(0)
+      expect(labels.indexOf('Greet')).toBeLessThan(labels.length - 1)
+      expect(labels.some((l) => /Approval/.test(l))).toBe(true)
+    })
+
+    // Клик по Cost по-прежнему активирует вкладку отчёта, даже будучи последней.
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Cost' })).toHaveAttribute('aria-selected', 'true'))
+  })
+
   test('Cost panel: a long stage list with several expanded rows keeps Total reachable via its own scroll container', async () => {
     const manyStages = Array.from({ length: 20 }, (_, i) => ({
       ...stageView(`s${i}`, `Stage ${i}`, 'done'),
