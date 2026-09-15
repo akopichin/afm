@@ -385,4 +385,174 @@ describe('useStatus', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
   })
+
+  test('normalizeStatus: fully old JSON shape (no accounting, no cost, no coverage_issues)', () => {
+    const raw = {
+      flow_name: 'old-backend',
+      started_at: '2026-09-15T10:00:00Z',
+      stages: [
+        { id: 's1', status: 'running', name: 'Stage 1', updated_at: '2026-09-15T10:01:00Z' },
+        { id: 's2', status: 'pending', name: 'Stage 2', updated_at: '' },
+      ],
+      idle_accumulated_ms: 0,
+      backoff_accumulated_ms: 0,
+      // NO accounting, NO coverage_issues, NO cost on stages, NO run_cost/run_overhead_cost
+    }
+
+    const status = normalizeStatus(raw)
+
+    // accounting должен быть {supported: false} для старого бэкенда
+    expect(status.accounting).toEqual({ supported: false })
+    // coverageIssues должен быть пустым массивом
+    expect(status.coverageIssues).toEqual([])
+    // runCost и runOverheadCost отсутствуют (undefined)
+    expect(status.runCost).toBeUndefined()
+    expect(status.runOverheadCost).toBeUndefined()
+    // Стадии не имеют cost
+    expect(status.stages[0]?.cost).toBeUndefined()
+    expect(status.stages[1]?.cost).toBeUndefined()
+  })
+
+  test('normalizeStatus: new shape with full accounting, cost, and coverage_issues', () => {
+    const raw = {
+      flow_name: 'new-backend',
+      started_at: '2026-09-15T10:00:00Z',
+      stages: [
+        {
+          id: 's1',
+          status: 'done',
+          name: 'Stage 1',
+          updated_at: '2026-09-15T10:01:00Z',
+          cost: {
+            display_cost: '$0.42',
+            coverage: 'full',
+            estimated_cost_usd: 0.42,
+            metered: 100,
+            priced_invocations: 1,
+            unpriced: 0,
+            unmetered: 0,
+            models: ['claude-3-5-sonnet-20241022'],
+            uncached_input: 500,
+            cache_read: 100,
+            cache_write_5m: 50,
+            cache_write_1h: 0,
+            cache_write_other: 0,
+            output: 200,
+            reasoning_output: 0,
+            total_tokens: 850,
+            cache_write_total: 50,
+            cache_hit_ratio: 0.15,
+            phases: { planning: 850 },
+          },
+        },
+      ],
+      run_cost: {
+        display_cost: '$0.50',
+        coverage: 'partial',
+        estimated_cost_usd: 0.50,
+        metered: 120,
+        priced_invocations: 1,
+        unpriced: 10,
+        unmetered: 0,
+        models: ['claude-3-5-sonnet-20241022'],
+        uncached_input: 600,
+        cache_read: 150,
+        cache_write_5m: 60,
+        cache_write_1h: 0,
+        cache_write_other: 0,
+        output: 250,
+        reasoning_output: 0,
+        total_tokens: 1000,
+        cache_write_total: 60,
+        cache_hit_ratio: 0.2,
+        phases: { planning: 1000 },
+      },
+      run_overhead_cost: {
+        display_cost: '$0.08',
+        coverage: 'none',
+        estimated_cost_usd: 0.08,
+        metered: 20,
+        priced_invocations: 0,
+        unpriced: 20,
+        unmetered: 0,
+        models: [],
+        uncached_input: 100,
+        cache_read: 0,
+        cache_write_5m: 0,
+        cache_write_1h: 0,
+        cache_write_other: 0,
+        output: 50,
+        reasoning_output: 0,
+        total_tokens: 150,
+        cache_write_total: 0,
+        cache_hit_ratio: null,
+        phases: { overhead: 150 },
+      },
+      coverage_issues: [
+        {
+          kind: 'unpriced',
+          attribution: { kind: 'run_overhead' },
+          phase: 'planning',
+          channel: 'stdout',
+          model: 'claude-3-5-sonnet-20241022',
+          reason: 'Model not in pricing database',
+          count: 10,
+        },
+        {
+          kind: 'unmetered',
+          attribution: { kind: 'stage', stage_id: 's1' },
+          phase: 'implementation',
+          channel: 'stderr',
+          model: 'claude-3-5-sonnet-20241022',
+          reason: 'Could not detect token count',
+          count: 5,
+        },
+      ],
+      accounting: {
+        health: 'ok',
+        has_data: true,
+      },
+      idle_accumulated_ms: 0,
+      backoff_accumulated_ms: 0,
+    }
+
+    const status = normalizeStatus(raw)
+
+    // accounting должен быть {supported: true, health: 'ok', hasData: true}
+    expect(status.accounting).toEqual({ supported: true, health: 'ok', hasData: true })
+
+    // runCost должен быть маппирован
+    expect(status.runCost).toBeDefined()
+    expect(status.runCost?.displayCost).toBe('$0.50')
+    expect(status.runCost?.coverage).toBe('partial')
+    expect(status.runCost?.estimatedCostUsd).toBe(0.50)
+    expect(status.runCost?.cacheHitRatio).toBe(0.2)
+
+    // runOverheadCost должен быть маппирован
+    expect(status.runOverheadCost).toBeDefined()
+    expect(status.runOverheadCost?.displayCost).toBe('$0.08')
+    expect(status.runOverheadCost?.coverage).toBe('none')
+    expect(status.runOverheadCost?.cacheHitRatio).toBeNull()
+
+    // coverageIssues должны быть маппированы
+    expect(status.coverageIssues).toHaveLength(2)
+    expect(status.coverageIssues[0]).toMatchObject({
+      kind: 'unpriced',
+      attribution: { kind: 'run_overhead' },
+      phase: 'planning',
+    })
+    expect(status.coverageIssues[1]).toMatchObject({
+      kind: 'unmetered',
+      attribution: { kind: 'stage', stageId: 's1' },
+      phase: 'implementation',
+    })
+
+    // Stage cost должен быть маппирован
+    expect(status.stages[0]?.cost).toBeDefined()
+    expect(status.stages[0]?.cost?.displayCost).toBe('$0.42')
+    expect(status.stages[0]?.cost?.coverage).toBe('full')
+    expect(status.stages[0]?.cost?.pricedInvocations).toBe(1)
+    expect(status.stages[0]?.cost?.cacheHitRatio).toBe(0.15)
+    expect(status.stages[0]?.cost?.phases).toEqual({ planning: 850 })
+  })
 })

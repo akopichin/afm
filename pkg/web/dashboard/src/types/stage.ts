@@ -10,6 +10,7 @@
 // `import type` рядом.
 export { STAGE_STATUSES, type StageStatus } from './stage-status.generated'
 import type { StageStatus } from './stage-status.generated'
+import type { CostSummary } from './cost'
 
 // Данные одной стадии afm-флоу. Источник — элемент упорядоченного массива
 // stages ответа GET /api/status (см. pkg/server/stageview.go's StageView) —
@@ -43,6 +44,8 @@ export type Stage = {
   // Кебаб-меню рендерит по одному пункту на метку; клик POST'ит метку на
   // /button, сервер сам достаёт промпт и доставляет его агенту через Revise.
   buttons: string[]
+  // cost — сводка по затратам стадии (omitempty, если нет записи использования).
+  cost?: CostSummary
 }
 
 // Человекочитаемые подписи статусов для списка стадий и панели деталей.
