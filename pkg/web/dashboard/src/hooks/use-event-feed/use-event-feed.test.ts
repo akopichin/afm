@@ -522,6 +522,39 @@ describe('useEventFeed', () => {
     expect(result.current.events).toHaveLength(2)
   })
 
+  // agent_note публикуется И live, И в notices.jsonl (реплеится через
+  // /api/events) без seq — как dialog_answer. Уникальный id в payload делает
+  // контент-ключ надёжным: тот же note (live+replay) схлопывается в одну строку.
+  test('the same agent_note arriving live and via history collapses to one row', () => {
+    const notePayload = { id: 7, text: 'fix it' }
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'agent_note', stage_id: 's1', data: notePayload })
+      // Тот же note повторно (гонка live/replay) — не должен удвоиться.
+      FakeWebSocket.last().emitMessage({ type: 'agent_note', stage_id: 's1', data: notePayload })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'agent_note')).toHaveLength(1)
+  })
+
+  // ...но две РАЗНЫЕ заметки с одинаковым текстом (разный id) — две строки:
+  // именно для этого id и нужен, иначе контент-дедуп схлопнул бы их.
+  test('two agent_notes with identical text but different id are not collapsed', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'agent_note', stage_id: 's1', data: { id: 1, text: 'fix it' } })
+      FakeWebSocket.last().emitMessage({ type: 'agent_note', stage_id: 's1', data: { id: 2, text: 'fix it' } })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'agent_note')).toHaveLength(2)
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })

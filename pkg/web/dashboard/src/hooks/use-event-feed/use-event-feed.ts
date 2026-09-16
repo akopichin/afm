@@ -17,7 +17,11 @@ const WATCHDOG_SILENCE_MS = 75000
 // без seq, так что реплей истории после live-сообщения (или наоборот) может
 // дать дубль контента. agent_action/script_output намеренно исключены —
 // легитимные одинаковые повторы не должны схлопываться.
-const CONTENT_DEDUPE_ON_INGEST = new Set(['dialog_question', 'dialog_answer'])
+// agent_note добавлен по той же причине: он публикуется live И персистится в
+// notices.jsonl без seq, так что live+replay могут дать дубль. Его payload
+// несёт уникальный id (seq перехода), поэтому контент-ключ различает две
+// РАЗНЫЕ заметки с одинаковым текстом и схлопывает только один и тот же note.
+const CONTENT_DEDUPE_ON_INGEST = new Set(['dialog_question', 'dialog_answer', 'agent_note'])
 
 export function useEventFeed(url: string): { events: AfmEvent[]; connected: boolean } {
   const [events, setEvents] = useState<AfmEvent[]>([])

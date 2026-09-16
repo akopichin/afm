@@ -45,7 +45,16 @@ const (
 	// the answer side; never fires on a rejected/rolled-back answer (e.g. the
 	// review-pause 409/TOCTOU path in handleDialogAnswer). Never triggers an
 	// FSM transition itself — NotifyAnswer already did that.
-	EventDialogAnswer   EventType = "dialog_answer"
+	EventDialogAnswer EventType = "dialog_answer"
+	// EventAgentNote fires once, right after a HUMAN note is delivered to a live
+	// agent via Revise (the messenger-style feed composer, or the plan-panel
+	// revise) and the durable EvRevise transition is applied. Carries
+	// map[string]any{"id": <transition seq>, "text": <mcp.DialogSnippet>} — the
+	// id makes the live event and its persisted notice reconcile without
+	// collapsing two distinct notes that happen to share text (see
+	// use-event-feed.ts). Never fires on a no-op Revise (wrong status / lost
+	// CAS) and never triggers an FSM transition itself — Revise already did.
+	EventAgentNote      EventType = "agent_note"
 	EventContextWarning EventType = "context_warning"
 	// EventScriptOutput carries one line of stdout from a script/hook run.
 	// Data: map[string]string{"hook": "before"|"script"|"after", "line": "..."}.

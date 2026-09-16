@@ -125,6 +125,24 @@ describe('dialog_question/dialog_answer — реальный текст диал
   })
 })
 
+describe('agent_note — заметка агенту справа своим текстом, но НЕ кликабельна', () => {
+  it('maps to a right-side user message carrying the payload text, non-navigable', () => {
+    const items = toFeedItems([
+      ev('agent_note', { id: 42, text: 'Учти что API возвращает 500' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      actor: 'user',
+      side: 'right',
+      kind: 'message',
+      text: 'Учти что API возвращает 500',
+      mono: false,
+    })
+    // navigable опущен → FeedGroupView отрендерит обычный <div>, не кнопку.
+    expect(items[0]?.navigable).toBeUndefined()
+  })
+})
+
 describe('groupFeedItems', () => {
   it('merges consecutive same-side, same-stage items into one group', () => {
     const groups = groupFeedItems(

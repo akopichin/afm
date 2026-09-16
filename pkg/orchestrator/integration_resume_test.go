@@ -312,7 +312,7 @@ func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
 	// plan.md, написанным mockPlanningScript (никто его вручную не раскладывает).
 	waitForStatus(t, stateFile, "a", state.StatusAwaitingApproval, 10*time.Second)
 
-	if err := orch.Revise(context.Background(), "a", "please add error handling for edge case X"); err != nil {
+	if _, _, err := orch.Revise(context.Background(), "a", "please add error handling for edge case X"); err != nil {
 		t.Fatalf("Revise: %v", err)
 	}
 

@@ -69,7 +69,7 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 // nothing, matching what most handler tests need.
 type fakeStageActions struct {
 	approve   func(ctx context.Context, stageID string) error
-	revise    func(ctx context.Context, stageID, feedback string) error
+	revise    func(ctx context.Context, stageID, feedback string) (applied bool, seq uint64, err error)
 	retry     func(ctx context.Context, stageID string) error
 	pause     func(ctx context.Context, stageID string) error
 	continue_ func(ctx context.Context, stageID string) error
@@ -83,9 +83,9 @@ func (f fakeStageActions) Approve(ctx context.Context, stageID string) error {
 	return f.approve(ctx, stageID)
 }
 
-func (f fakeStageActions) Revise(ctx context.Context, stageID, feedback string) error {
+func (f fakeStageActions) Revise(ctx context.Context, stageID, feedback string) (bool, uint64, error) {
 	if f.revise == nil {
-		return nil
+		return true, 1, nil
 	}
 	return f.revise(ctx, stageID, feedback)
 }
@@ -526,7 +526,11 @@ func TestHandleApprove(t *testing.T) {
 func TestHandleRevise(t *testing.T) {
 	var revisedID, revisedFB string
 	srv, _ := setupTestServer(t)
-	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) error { revisedID = id; revisedFB = fb; return nil }}
+	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
+		revisedID = id
+		revisedFB = fb
+		return true, 1, nil
+	}}
 
 	body := `{"feedback":"Добавь Redis"}`
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", strings.NewReader(body))
@@ -1397,9 +1401,9 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 		RunDir: runDir,
 		Store:  store,
 		UIBus:  bus.NewUIBus(),
-		Actions: fakeStageActions{revise: func(_ context.Context, _, _ string) error {
+		Actions: fakeStageActions{revise: func(_ context.Context, _, _ string) (bool, uint64, error) {
 			reviseCalled = true
-			return nil
+			return true, 1, nil
 		}},
 	})
 

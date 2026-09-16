@@ -12,7 +12,9 @@ type StagesListProps = {
   stages: Stage[]
   selectedStageId: string | null
   onSelect: (stageId: string) => void
-  onAddNote?: (stageId: string) => void // «Add note for agent» (revise, живой агент)
+  // Заметку живому агенту (running) шлют теперь из messenger-поля внизу ленты
+  // (FeedComposer), а не из кебаба — поэтому onAddNote убран. Кебаб оставляет
+  // pre-note (pending), кастомные кнопки стадии и Pause.
   onEditPreNote?: (stageId: string) => void // «Add note (before start)» (pending-стадия)
   onPause?: (stageId: string) => void
   // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём
@@ -67,23 +69,23 @@ function railCost(stage: Stage, accounting: AccountingState): { text: string; a1
 // Статусы, из которых можно поставить стадию на паузу вручную.
 const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying'])
 
-// "Add note for agent" (Revise) — только для running/awaiting_approval, и
-// НИКОГДА для скриптовых стадий (see `!stage.isScript` в JSX): у скрипта нет
-// агента, которому можно что-то сказать, а RunScript даже не принимает
-// interrupt-канал, так что заметка на running-скрипте была бы no-op.
-const ADD_NOTE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
+// Статусы, при которых у стадии есть ЖИВОЙ агент, которому Revise доставит
+// промпт: running/awaiting_approval и никогда скрипт (у скрипта нет агента, а
+// RunScript не принимает interrupt-канал). Гейтит кастомные кнопки стадии (см.
+// hasLiveAgent). Заметку живому агенту теперь шлют из messenger-поля ленты, а
+// не из кебаба, поэтому отдельного «Add note for agent» здесь больше нет.
+const LIVE_AGENT_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // Pre-note (заметка ДО старта) доступна только пока стадия pending и только у
-// стадий с агентом — у скрипта нет агента, которому вклеить заметку в контекст
-// (симметрично !isScript-гейту "Add note for agent").
+// стадий с агентом — у скрипта нет агента, которому вклеить заметку в контекст.
 function canPreNote(stage: Stage): boolean {
   return stage.status === 'pending' && !stage.isScript
 }
 
-// "Add note for agent" (Revise) — только running/awaiting_approval и никогда на
-// скрипте (у скрипта нет агента; RunScript не принимает interrupt-канал).
-function canAddNote(stage: Stage): boolean {
-  return ADD_NOTE_STATUSES.has(stage.status) && !stage.isScript
+// У стадии есть живой агент (running/awaiting_approval, не скрипт) — под ним и
+// живут кастомные кнопки стадии, которые Revise доставляет как промпт.
+function hasLiveAgent(stage: Stage): boolean {
+  return LIVE_AGENT_STATUSES.has(stage.status) && !stage.isScript
 }
 
 // Ручная пауза — из PAUSABLE_STATUSES, но не на running-скрипте (его нельзя
@@ -93,18 +95,19 @@ function canPause(stage: Stage): boolean {
 }
 
 // Кебаб показываем ТОЛЬКО если реально есть хоть один пункт меню — считаем из
-// тех же предикатов, что и сами пункты (canAddNote/canPreNote/canPause, они же
-// используются в JSX ниже). Иначе для стадии, где все пункты отфильтрованы
-// (напр. running-скрипт: не add-note, не pre-note, не pause), рисовался пустой ⋮.
+// тех же предикатов, что и сами пункты. Кнопки стадии есть лишь при живом
+// агенте И непустом buttons; плюс pre-note (pending) и Pause. Так у стадии без
+// пунктов (напр. awaiting_approval без кнопок, или running-скрипт) не рисуется
+// пустой ⋮.
 function hasKebab(stage: Stage): boolean {
-  return canAddNote(stage) || canPreNote(stage) || canPause(stage)
+  return (hasLiveAgent(stage) && stage.buttons.length > 0) || canPreNote(stage) || canPause(stage)
 }
 
 // Левая панель: список стадий с выбором активной. На переходе стадии в done
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting }: StagesListProps): ReactElement {
   // useId() нельзя звать внутри stages.map (правила хуков запрещают хук в
   // цикле) — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -318,28 +321,13 @@ export function StagesList({ stages, selectedStageId, onSelect, onAddNote, onEdi
                       style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canAddNote(stage) && (
-                        <li>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenMenuStageId(null)
-                              setMenuPos(null)
-                              onAddNote?.(stage.id)
-                            }}
-                          >
-                            Add note for agent
-                          </button>
-                        </li>
-                      )}
-                      {/* Кастомные кнопки стадии (flow.yaml). Тот же гейт, что и
-                          «Add note for agent» (running/awaiting_approval, не
-                          скрипт) — под ним и живёт живой агент, которому Revise
-                          доставит промпт. Сабблок с разделителем показывается,
-                          только если кнопки реально объявлены. */}
-                      {canAddNote(stage) && stage.buttons.length > 0 && (
+                      {/* Кастомные кнопки стадии (flow.yaml) — при живом агенте
+                          (running/awaiting_approval, не скрипт), которому Revise
+                          доставит промпт. Показываем, только если кнопки реально
+                          объявлены. Разделитель больше не нужен: это верхний
+                          блок меню (пункт «Add note for agent» убран). */}
+                      {hasLiveAgent(stage) && stage.buttons.length > 0 && (
                         <>
-                          <li className="stage-kebab-divider" role="separator" aria-hidden="true" />
                           {stage.buttons.map((label) => (
                             <li key={`btn-${label}`} className="stage-kebab-buttons">
                               <button

@@ -120,8 +120,11 @@ describe('StagesList', () => {
   // «кебаб съезжает вниз-влево». Чиним, группируя бейджи+кебаб в единый слот
   // .stage-actions, чтобы у грида всегда было ровно 3 in-flow ребёнка.
   test('badge and kebab share one .stage-actions slot (grid does not overflow)', () => {
+    // awaiting_approval с кастомной кнопкой: есть и approval-бейдж, и кебаб
+    // (кнопка стадии). Без кнопок у awaiting_approval кебаба нет — заметка
+    // живому агенту ушла в поле ленты, а Pause к нему неприменим.
     const stages: Stage[] = [
-      { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+      { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
@@ -158,14 +161,17 @@ describe('StagesList', () => {
     expect(screen.getByRole('listitem').querySelector('.stage-name')).toHaveTextContent('s1')
   })
 
-  test('shows the kebab menu for running/awaiting_approval/planning/revising/retrying only', () => {
+  test('kebab shows for a pausable running stage; a bare awaiting_approval (no buttons) and a done stage have none', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+      // awaiting_approval без кнопок: пункт «Add note for agent» убран (заметка —
+      // в поле ленты), Pause к нему неприменим, pre-note только для pending →
+      // кебаба нет вовсе.
       { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-    expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(2) // a и c, не b
+    expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(1) // только a (pausable)
   })
 
   test('shows the kebab for planning/revising/retrying too, not just running/awaiting_approval', () => {
@@ -194,27 +200,15 @@ describe('StagesList', () => {
     expect(onPause).toHaveBeenCalledWith('a')
   })
 
-  test('"Add note for agent" stays limited to running/awaiting_approval even though the kebab now also opens for planning/revising/retrying', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
-  })
-
-  test('"Add note for agent" is present on a regular running stage; a running script stage shows no kebab at all', () => {
-    const onAddNote = vi.fn()
+  test('the kebab no longer offers "Add note for agent" on a running stage — that moved to the feed composer', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      { id: 'b', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
     ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onAddNote={onAddNote} accounting={{ supported: false }} />)
-
-    const buttons = screen.getAllByRole('button', { name: /more actions/i })
-    expect(buttons).toHaveLength(1) // running СКРИПТОВАЯ стадия (b) кебаба не имеет — единственный её пункт (add-note) отфильтрован
-    fireEvent.click(buttons[0]!) // обычная running-стадия — пункт есть
-    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={vi.fn()} accounting={{ supported: false }} />)
+    // Кебаб у running-стадии есть (через Pause), но пункта заметки в нём нет.
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
+    expect(screen.getByText('Pause')).toBeInTheDocument()
   })
 
   test('pre-note: pending non-script stage shows the "Add note (before start)" item, calling onEditPreNote', () => {
@@ -264,7 +258,7 @@ describe('StagesList', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
 
-    const menuItem = screen.getByText('Add note for agent')
+    const menuItem = screen.getByText('Pause')
     const menu = menuItem.closest('ul')
     expect(menu).not.toBeNull()
     // #stages-panel has overflow-y: auto (layout.css) — any descendant that opens
@@ -280,10 +274,10 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+    expect(screen.getByText('Pause')).toBeInTheDocument()
 
     fireEvent.mouseDown(document.body)
-    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
   })
 
   test('scrolling the stages panel closes the open kebab menu (the menu is anchored to a button inside it)', () => {
@@ -293,10 +287,10 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+    expect(screen.getByText('Pause')).toBeInTheDocument()
 
     fireEvent.scroll(document.getElementById('stages-panel')!)
-    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
   })
 
   // Регресс: раньше меню слушало скролл на window с capture:true и закрывалось
@@ -311,14 +305,14 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+    expect(screen.getByText('Pause')).toBeInTheDocument()
 
     // Отдельный скролл-контейнер вне #stages-panel — модель ленты событий.
     const feed = document.createElement('div')
     document.body.appendChild(feed)
     fireEvent.scroll(feed)
 
-    expect(screen.getByText('Add note for agent')).toBeInTheDocument()
+    expect(screen.getByText('Pause')).toBeInTheDocument()
   })
 
   test('custom buttons: renders one menu item per button in declared order', () => {

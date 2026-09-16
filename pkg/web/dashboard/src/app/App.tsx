@@ -55,13 +55,10 @@ export function App(): ReactElement {
   // модалка загружает и владеет собой (listNotes() на маунте).
   const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
-  // Стадия, для которой сейчас открыта модалка «Добавить поправку агенту»
-  // (agent_suggest, Task 8); null — модалка скрыта.
-  const [noteModalStageId, setNoteModalStageId] = useState<string | null>(null)
-
   // Стадия, для которой открыта модалка pre-note (заметка ДО старта, только
-  // pending-стадии); null — модалка скрыта. Отдельно от noteModalStageId:
-  // другой вариант модалки (префилл + пустой=удалить), другой обработчик.
+  // pending-стадии); null — модалка скрыта. Заметку ЖИВОМУ агенту теперь шлют
+  // не через модалку из кебаба, а из messenger-поля внизу ленты (FeedComposer),
+  // поэтому отдельного noteModalStageId больше нет.
   const [preNoteModalStageId, setPreNoteModalStageId] = useState<string | null>(null)
 
   async function handleSubmitPreNote(note: string): Promise<void> {
@@ -77,23 +74,14 @@ export function App(): ReactElement {
     }
   }
 
-  async function handleSubmitNote(note: string): Promise<void> {
-    if (noteModalStageId === null) return
-
-    try {
-      await reviseStage(noteModalStageId, note)
-      setNoteModalStageId(null)
-    } catch (err) {
-      // Стадия могла уйти из ожидаемого статуса за время, пока юзер печатал
-      // (или сеть отвалилась) — не закрываем модалку молча, будто заметка
-      // ушла: оставляем noteModalStageId как есть, юзер видит модалку с
-      // введённым текстом всё ещё открытой и может повторить попытку.
-      // AgentNoteModal.onSubmit — не-async проп (вызывается без await из
-      // onClick), поэтому здесь обязателен свой catch, а не пробрасывание
-      // наверх как unhandled rejection.
-      console.error('Failed to submit agent note:', err)
-    }
-  }
+  // Отправка заметки живому агенту из messenger-поля ленты (FeedComposer).
+  // Возвращаем промис reviseStage КАК ЕСТЬ — при неудаче (стадия ушла из
+  // running → 409, либо сеть) он отклоняется, и FeedComposer сохраняет текст.
+  // Здесь НЕ глотаем ошибку (в отличие от прежней модалочной handleSubmitNote):
+  // ловит её сам композер.
+  const handleSendNote = useCallback((stageId: string, text: string): Promise<void> => {
+    return reviseStage(stageId, text)
+  }, [])
 
   function handlePause(stageId: string): void {
     // StagesList закрывает кебаб синхронно ДО вызова onPause, так что здесь
@@ -189,7 +177,7 @@ export function App(): ReactElement {
   // за непрозрачной модалкой; оно только светится (маяк-вкладка/шорткат в шапке
   // модалки). Сами модальные состояния объявлены выше по файлу.
   const [filesOpen, setFilesOpen] = useState(false)
-  const anyModalOpen = filesOpen || noteModalStageId !== null || preNoteModalStageId !== null || reviewModalOpen
+  const anyModalOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
   const editing = useIsEditing() || anyModalOpen
   const { state: wsState, activeItem: attnItem, openFeed, openCost, openAttention, openHistory } = useWorkspaceView(stages, editing)
 
@@ -308,6 +296,15 @@ export function App(): ReactElement {
   // adds the "nothing selected → show both, neutral state" rule on top.
   const showPlan = workspaceStage === null || workspaceStage.showPlan
   const showDialog = workspaceStage === null || workspaceStage.showDialog
+
+  // noteTarget — стадия, живому агенту которой можно послать заметку из
+  // messenger-поля ленты: только running (агент реально работает и примет
+  // Revise) И не скрипт (у скрипта нет живого агента; Revise увёл бы его в
+  // revising и подвесил). Прочие статусы/скрипты → null (поле не показываем).
+  const noteTarget =
+    workspaceStage !== null && workspaceStage.status === 'running' && !workspaceStage.isScript
+      ? workspaceStage.id
+      : null
 
   const logEntries = useStageLog(workspaceStageId)
   const elapsedMs = useElapsed(startedAt)
@@ -593,7 +590,6 @@ export function App(): ReactElement {
                 stages={stages}
                 selectedStageId={workspaceStageId}
                 onSelect={handleSelectStage}
-                onAddNote={setNoteModalStageId}
                 onEditPreNote={setPreNoteModalStageId}
                 onPause={handlePause}
                 onButton={handleButton}
@@ -630,7 +626,7 @@ export function App(): ReactElement {
                     accounting={accounting}
                   />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
-                  <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} onOpenDialog={handleOpenDialogFromFeed} />
+                  <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} onOpenDialog={handleOpenDialogFromFeed} noteTarget={noteTarget} onSendNote={handleSendNote} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (
@@ -673,15 +669,6 @@ export function App(): ReactElement {
           />
         </MaximizeProvider>
       </main>
-
-      {noteModalStageId !== null && (
-        <AgentNoteModal
-          stageId={noteModalStageId}
-          onCancel={() => setNoteModalStageId(null)}
-          onSubmit={handleSubmitNote}
-          attentionShortcut={attentionShortcut}
-        />
-      )}
 
       {preNoteModalStageId !== null && (
         <AgentNoteModal

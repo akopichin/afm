@@ -5,6 +5,7 @@ import { useFeedMode } from '../../hooks/use-feed-mode'
 import { useFeedScope } from '../../hooks/use-feed-scope'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
+import { FeedComposer } from './FeedComposer'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -19,6 +20,12 @@ type FeedWorkspaceProps = {
   // другой таски (T6); здесь только проброс координат из FeedItem. Без пропа
   // navigable-элементы рендерятся как обычные (не интерактивные) строки.
   onOpenDialog?: (stageId: string, phase: string, id: string) => void
+  // noteTarget — стадия, живому агенту которой можно послать заметку прямо из
+  // ленты (running и не скрипт; вычисляется в App). null → messenger-поле не
+  // показываем. onSendNote доставляет заметку (через Revise) и ДОЛЖЕН
+  // отклоняться при неудаче, чтобы FeedComposer сохранил текст.
+  noteTarget?: string | null
+  onSendNote?: (stageId: string, text: string) => Promise<void>
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -35,7 +42,7 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
 // (`afm-feed-mode`), независимый stick-to-bottom для ленты и лога, Jump to latest.
 // Плюс scope-фильтр This stage | All (useFeedScope, `afm-feed-scope`): по
 // умолчанию лента показывает события выбранной стадии, All — весь флоу.
-export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog }: FeedWorkspaceProps): ReactElement {
+export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog, noteTarget = null, onSendNote }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   const log = useStickToBottom<HTMLPreElement>()
   const { mode, toggle } = useFeedMode()
@@ -99,6 +106,14 @@ export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog }: Fee
           {hasLogEntries && !log.stick && <JumpToLatestButton onClick={log.jumpToBottom} />}
           <div id="log-empty" className={`empty-hint${hasLogEntries ? ' hidden' : ''}`}>Log is empty</div>
         </div>
+      )}
+
+      {/* Messenger-поле заметки живому агенту — прибито к низу ленты, только в
+          режиме Feed и только когда стадия принимает заметки (noteTarget != null:
+          running и не скрипт). key=noteTarget: смена стадии даёт свежий пустой
+          черновик (черновик не «переедет» в другую стадию). */}
+      {mode === 'feed' && noteTarget !== null && onSendNote !== undefined && (
+        <FeedComposer key={noteTarget} stageId={noteTarget} onSend={(text) => onSendNote(noteTarget, text)} />
       )}
     </section>
   )

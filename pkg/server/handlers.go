@@ -240,6 +240,15 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
 		return
 	}
+	// A script stage has no live agent to revise; Revise would move it to
+	// `revising`, after which script completion is dropped (completeStage
+	// rejects `revising`) and the stage would hang. Mirror the same guard
+	// handleStageButton/handleStageNote apply. Defense-in-depth behind the
+	// client-side !isScript gate on the feed composer.
+	if s.stageIsScript[stageID] {
+		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
+		return
+	}
 	var req reviseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -249,10 +258,29 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "feedback is required", http.StatusBadRequest)
 		return
 	}
-	if err := s.actions.Revise(r.Context(), stageID, req.Feedback); err != nil {
+	applied, seq, err := s.actions.Revise(r.Context(), stageID, req.Feedback)
+	if err != nil {
 		writeActionError(w, err, "revise failed", http.StatusInternalServerError)
 		return
 	}
+	// A no-op Revise (the stage left the running/awaiting_approval window
+	// between our snapshot and the action, or the CAS was lost) delivered
+	// nothing — report a conflict so the caller (feed composer) keeps the
+	// typed text instead of clearing it as if the note had been sent.
+	if !applied {
+		http.Error(w, "stage no longer accepts a note", http.StatusConflict)
+		return
+	}
+	// Surface the delivered note as a right-side feed line, mirroring
+	// dialog_answer (T2): publish live so an already-connected dashboard sees
+	// it, and duplicate into notices.jsonl so a client that connects/reloads
+	// afterwards still sees it via /api/events' notices replay. The seq is the
+	// note's unique id — the SAME payload object goes to both sinks so live and
+	// replay reconcile in use-event-feed (see bus.EventAgentNote).
+	payload := map[string]any{"id": seq, "text": mcp.DialogSnippet(req.Feedback)}
+	s.uiBus.Publish(bus.Event{Type: bus.EventAgentNote, StageID: stageID, Data: payload})
+	stagefiles.AppendNotice(s.runDir, stageID, string(bus.EventAgentNote), payload)
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "revised", keyStageID: stageID})
 }

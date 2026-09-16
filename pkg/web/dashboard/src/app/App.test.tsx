@@ -605,9 +605,7 @@ describe('App', () => {
     await waitFor(() => expect(document.title).toBe('demo-flow'))
   })
 
-  test('CRITICAL: a failed /revise POST from AgentNoteModal keeps the modal open instead of closing silently', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-
+  test('CRITICAL: a failed /revise from the feed composer keeps the typed note instead of clearing it', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url
 
@@ -620,7 +618,7 @@ describe('App', () => {
           }),
         } as Response
       }
-      // Стадия ушла из ожидаемого статуса за время, пока юзер печатал заметку.
+      // Стадия ушла из running за время, пока юзер печатал заметку → 409.
       if (url.includes('/revise')) {
         return { ok: false, status: 409, json: async () => ({}) } as Response
       }
@@ -634,18 +632,17 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(screen.getByText('Add note for agent'))
-    fireEvent.change(screen.getByPlaceholderText(/what should the agent take into account/i), {
-      target: { value: 'test note' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: /send/i }))
+    // Композер живёт только в ленте — открываем её.
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
 
-    await waitFor(() => expect(consoleError).toHaveBeenCalled())
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    fireEvent.change(composer, { target: { value: 'test note' } })
+    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
 
-    // Модалка не закрылась молча — текст заметки не потерян, юзер может повторить попытку.
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/what should the agent take into account/i)).toHaveValue('test note')
+    // /revise вернул 409 — reviseStage отклонился, FeedComposer НЕ очистил поле:
+    // текст сохранён, юзер может повторить попытку.
+    await waitFor(() => expect(composer).toHaveValue('test note'))
   })
 
   test('a failed /pause POST is logged, not left as an unhandled rejection', async () => {

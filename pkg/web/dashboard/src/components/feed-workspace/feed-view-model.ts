@@ -156,6 +156,12 @@ function mapEvent(event: AfmEvent): Mapped | null {
         id: str(obj.id),
       }
     }
+    case 'agent_note':
+      // Заметка агенту (messenger-поле ленты / правка плана) — справа своим
+      // текстом, как ответ на вопрос, но НЕ кликабельна (navigable опущен):
+      // это доставленный юзером текст, а не переход к диалогу. id (seq перехода)
+      // в payload нужен для дедупа live/replay, в презентацию не попадает.
+      return { actor: 'user', tone: 'neutral', kind: 'message', text: str(obj.text), mono: false }
     case 'auto_answered':
       return { actor: 'system', tone: 'neutral', kind: 'dialog', text: `auto-answered ${str(obj.id)}: ${str(obj.answer)}`, mono: true }
     case 'context_warning':

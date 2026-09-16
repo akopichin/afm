@@ -176,4 +176,30 @@ describe('FeedWorkspace', () => {
     expect(screen.queryByRole('button', { name: /what next\?/ })).not.toBeInTheDocument()
     expect(screen.getByText('what next?').closest('.feed-item')?.tagName).toBe('DIV')
   })
+
+  describe('note composer', () => {
+    it('renders the composer in feed mode when noteTarget is set', () => {
+      render(<FeedWorkspace events={[]} logEntries={[]} stageId="s1" noteTarget="s1" onSendNote={vi.fn()} />)
+      expect(screen.getByRole('button', { name: /send note to agent/i })).toBeInTheDocument()
+    })
+
+    it('does not render the composer when noteTarget is null', () => {
+      render(<FeedWorkspace events={[]} logEntries={[]} stageId="s1" noteTarget={null} onSendNote={vi.fn()} />)
+      expect(screen.queryByRole('button', { name: /send note to agent/i })).not.toBeInTheDocument()
+    })
+
+    it('does not render the composer in log mode even with a noteTarget', () => {
+      render(<FeedWorkspace events={[]} logEntries={[]} stageId="s1" noteTarget="s1" onSendNote={vi.fn()} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+      expect(screen.queryByRole('button', { name: /send note to agent/i })).not.toBeInTheDocument()
+    })
+
+    it('delivers the typed note to onSendNote for the target stage', () => {
+      const onSendNote = vi.fn().mockResolvedValue(undefined)
+      render(<FeedWorkspace events={[]} logEntries={[]} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'учти 500' } })
+      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+      expect(onSendNote).toHaveBeenCalledWith('s1', 'учти 500')
+    })
+  })
 })

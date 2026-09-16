@@ -203,3 +203,60 @@
 }
 .log-content.hidden,
 .empty-hint.hidden { display: none; }
+
+/* --- Messenger-поле заметки живому агенту (FeedComposer) ---
+   Прибито к низу ленты (flex-shrink:0 под .feed-scroll{flex:1}). Показывается
+   только в feed-режиме и только для running-стадии (см. FeedWorkspace/App). */
+.feed-composer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--separator-subtle);
+}
+/* PasteableTextarea оборачивает textarea + strip вложений — растягиваем на всю
+   доступную ширину, кнопка отправки справа. */
+.feed-composer .pasteable-textarea-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.feed-composer-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  min-height: 40px;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-lg);
+}
+.feed-composer-textarea::placeholder { color: var(--text-muted); }
+.feed-composer-textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.28);
+}
+/* Круглая кнопка отправки — акцентная, как «primary» действие. */
+.feed-composer-send {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  color: var(--surface-canvas);
+  cursor: pointer;
+  transition: opacity var(--motion-fast, 120ms) ease, filter var(--motion-fast, 120ms) ease;
+}
+.feed-composer-send:hover:not(:disabled) { filter: brightness(1.06); }
+.feed-composer-send:disabled { opacity: 0.4; cursor: default; }
+.feed-composer-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }

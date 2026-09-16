@@ -116,7 +116,7 @@ func TestRevise_DurableTransition(t *testing.T) {
 	o.Trigger("a", bus.EvStartPlanning, bus.GuardCtx{}, "")
 	o.Trigger("a", bus.EvPlanReady, bus.GuardCtx{}, "")
 
-	if err := o.Revise(context.Background(), "a", "нужны правки"); err != nil {
+	if _, _, err := o.Revise(context.Background(), "a", "нужны правки"); err != nil {
 		t.Fatal(err)
 	}
 	rs, _ := state.LoadRunState(dir)

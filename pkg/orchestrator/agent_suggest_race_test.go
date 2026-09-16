@@ -115,7 +115,7 @@ func TestAgentSuggest_NaturalCompletionRaceReconciles(t *testing.T) {
 	// The non-blocking send on interruptChans either lands in an empty buffer
 	// nobody will read, or is a no-op — call 1's RunAgent below never checks
 	// that channel at all.
-	if err := orch.Revise(ctx, "impl", "please add extra logging"); err != nil {
+	if _, _, err := orch.Revise(ctx, "impl", "please add extra logging"); err != nil {
 		t.Fatalf("Revise: %v", err)
 	}
 	waitForStatus(t, stateFile, "impl", state.StatusRevising, 5*time.Second)

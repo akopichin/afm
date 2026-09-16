@@ -133,7 +133,7 @@ func TestAgentSuggest_InterruptRestartsWithFeedback(t *testing.T) {
 
 	// planning уже должно было пройти (agents: [planning, implementation]),
 	// implementation блокируется в blockingThenFeedbackRunner.RunAgent.
-	if err := orch.Revise(ctx, "impl", "please add extra logging"); err != nil {
+	if _, _, err := orch.Revise(ctx, "impl", "please add extra logging"); err != nil {
 		t.Fatalf("Revise: %v", err)
 	}
 

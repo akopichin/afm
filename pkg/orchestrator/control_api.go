@@ -178,23 +178,30 @@ func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
 // running-ветка ничего не спаунит сама — перезапуск с фидбеком делает
 // onUserInterrupted изнутри уже идущего runWithRetry, когда SIGINT реально
 // завершит текущий subprocess (см. pkg/executor: Config.InterruptCh).
-func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) error {
+//
+// Returns (applied, seq): applied is true only when the durable EvRevise
+// transition actually happened AND the feedback was saved — every no-op path
+// (wrong status, lost CAS) returns applied=false, seq=0, err=nil. seq is the
+// transition's sequence number, used by handleRevise as the unique id of the
+// resulting agent_note feed line (see bus.EventAgentNote).
+func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) (applied bool, seq uint64, err error) {
 	if err := o.rejectIfReviewPaused(); err != nil {
-		return err
+		return false, 0, err
 	}
 	current := o.currentStatus(stageID)
 	if current != state.StatusAwaitingApproval && current != state.StatusRunning {
-		return nil
+		return false, 0, nil
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
 
 	if current == state.StatusRunning {
-		if _, ok := o.Trigger(stageID, bus.EvRevise, bus.GuardCtx{}, feedback); !ok {
-			return nil
+		_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, feedback)
+		if !ok {
+			return false, 0, nil
 		}
 		if err := state.SaveFeedback(stageDir, feedback); err != nil {
-			return fmt.Errorf("save feedback for %s: %w", stageID, err)
+			return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
 		}
 		if ch, ok := o.interruptChans.Load(stageID); ok {
 			select {
@@ -202,17 +209,18 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 			default: // канал уже сигнализирован (двойной клик) — не блокируемся
 			}
 		}
-		return nil
+		return true, seq, nil
 	}
 
-	if _, ok := o.Trigger(stageID, bus.EvRevise, bus.GuardCtx{}, feedback); !ok {
-		return nil
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, feedback)
+	if !ok {
+		return false, 0, nil
 	}
 	if _, err := state.VersionPlan(stageDir); err != nil {
-		return fmt.Errorf("version plan for %s: %w", stageID, err)
+		return false, 0, fmt.Errorf("version plan for %s: %w", stageID, err)
 	}
 	if err := state.SaveFeedback(stageDir, feedback); err != nil {
-		return fmt.Errorf("save feedback for %s: %w", stageID, err)
+		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
 	}
 
 	if stage := o.graph.Stage(stageID); stage != nil {
@@ -220,7 +228,7 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 		// после возврата ответа, и агент был бы убит немедленно (см. runContext).
 		o.concurrency.SpawnAgent(o.runContext(reqCtx), *stage, o.runPlanningWithFeedback)
 	}
-	return nil
+	return true, seq, nil
 }
 
 // Button resolves the named button's prompt from the flow and delivers it to
@@ -239,7 +247,8 @@ func (o *Orchestrator) Button(ctx context.Context, stageID, name string) error {
 	if prompt == "" {
 		return nil
 	}
-	return o.Revise(ctx, stageID, prompt)
+	_, _, err := o.Revise(ctx, stageID, prompt)
+	return err
 }
 
 // Pause synchronously transitions a stage to paused and, if it has a live

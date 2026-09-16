@@ -20,6 +20,7 @@ export const AFM_EVENT_TYPES = [
   'auto_answered',
   'dialog_question',
   'dialog_answer',
+  'agent_note',
 ] as const
 
 export type AfmEventType = (typeof AFM_EVENT_TYPES)[number]

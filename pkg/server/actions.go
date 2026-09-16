@@ -14,7 +14,12 @@ import (
 // state, unlike SecondaryActions.
 type StageActions interface {
 	Approve(ctx context.Context, stageID string) error
-	Revise(ctx context.Context, stageID, feedback string) error
+	// Revise delivers feedback to a live agent. applied is false (with a nil
+	// error) when the transition was a no-op (stage left the running/
+	// awaiting_approval window, or the CAS was lost); seq is the transition's
+	// sequence number, used as the unique id of the resulting agent_note feed
+	// line. handleRevise emits the notice only when applied.
+	Revise(ctx context.Context, stageID, feedback string) (applied bool, seq uint64, err error)
 	Retry(ctx context.Context, stageID string) error
 	Pause(ctx context.Context, stageID string) error
 	Continue(ctx context.Context, stageID string) error

@@ -119,6 +119,7 @@ describe('AFM_EVENT_TYPES', () => {
       'auto_answered',
       'dialog_question',
       'dialog_answer',
+      'agent_note',
     ])
   })
 })
