@@ -32,6 +32,13 @@
   --text-primary:   var(--ink-hi);
   --text-secondary: var(--ink);
   --text-muted:     var(--ink-dim);
+  /* Текст строк-команд в ленте (feed, .feed-item.mono) — приглушённее «голоса»
+     агента, но обязан оставаться читаемым (WCAG AA ≥4.5:1 для 12.5px). По
+     умолчанию = --text-muted (AA-safe в graphite/goga на surface-tool). Скины,
+     где --ink-dim проседает ниже 4.5:1 (novacorps dark/light, coffee light),
+     переопределяют этот токен нативно AA-safe значением — тот же приём, что и
+     у --cost-rail (см. ниже). */
+  --feed-command:   var(--text-muted);
 
   /* accents (semantic) */
   --accent-primary:     var(--amber);

@@ -6,6 +6,27 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-16
 
+### Feature: agent prose stands out from command rows in the feed
+
+The feed now distinguishes the agent's **prose** (its narration — the `text`
+actions it emits between tool calls) from the mechanical **command rows**
+(`Bash: …`, `Read: …`). Prose renders at full brightness, medium weight, a touch
+larger, with a thin accent bar down its left edge — reading as the agent's
+"voice" — while command rows are quieter: muted, monospace, on a subtle chip.
+
+- **Theme-correct across every skin.** The accent bar uses the solid per-skin
+  `--accent-primary` (so graphite is blue, novacorps gold, coffee amber) rather
+  than a shared RGB that only graphite overrides.
+- **Accessible everywhere.** The muted command text is driven by a new
+  `--feed-command` token that stays ≥ 4.5:1 (WCAG AA for 12.5px) in all
+  skins × light/dark — defaulting to `--text-muted` where that already passes
+  (graphite/goga) and overridden with an AA-tuned tone where `--ink-dim` fell
+  short (novacorps dark/light, coffee light), mirroring the `--cost-rail`
+  precedent. Verified across all eight skin × theme combinations.
+- Presentation-only (CSS): it targets only the agent side
+  (`data-actor="agent"` prose), so user notes/answers, dialog rows, and status
+  lines are untouched.
+
 ### Feature: messenger-style note composer in the feed
 
 Sending a note to a live agent moved from the stage kebab (⋮) menu into a

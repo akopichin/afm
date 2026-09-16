@@ -133,15 +133,36 @@
 }
 .feed-right .feed-item { flex-direction: row-reverse; text-align: right; }
 
-/* mono (tool/script/auto-answer) — компактная подчинённая строка */
+/* mono (tool/script/auto-answer) — компактная подчинённая строка. Команды
+   намеренно бледнее «голоса» агента (нарратива ниже): приглушённый text-muted
+   вместо text-secondary. Плашка — прежний тема-зависимый surface-tool (не
+   трогаем, чтобы не ломать палитры скинов). */
 .feed-item.mono .feed-item-text {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  color: var(--text-secondary);
+  color: var(--feed-command);
 }
 .feed-item.mono {
   background: var(--surface-tool);
   padding: 4px 8px;
+}
+
+/* Нарратив агента (tool="text" → kind message) — «голос» агента: он должен
+   выделяться от механических mono-строк команд (Bash/Read/…). Ярче (полная
+   text-primary), средний вес, чуть крупнее и тонкая accent-полоса слева.
+   Таргетим ТОЛЬКО сторону агента (data-actor=agent), чтобы не задеть правые
+   пользовательские сообщения и заметки — они тоже kind message. Тон-строки
+   (kind status/success/dialog) и mono сюда не попадают. */
+.feed-group[data-actor="agent"] .feed-item.feed-kind-message {
+  font-weight: 500;
+  font-size: 15px;
+  color: var(--text-primary);
+  /* Сплошной per-skin акцент (var(--accent-primary)=--amber каждого скина), а НЕ
+     rgba(--accent-primary-rgb): последний переопределён только в graphite, в
+     остальных скинах откатился бы к дефолтному синему и не совпал бы с их
+     палитрой. Так полоса берёт реальный акцент каждой темы. */
+  border-left: 2px solid var(--accent-primary);
+  padding-left: 10px;
 }
 
 /* Семантические тона: тонкая цветная метка слева + тинт текста.
