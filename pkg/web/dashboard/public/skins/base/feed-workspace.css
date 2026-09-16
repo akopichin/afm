@@ -175,6 +175,12 @@
   cursor: pointer;
   width: 100%;
   border: none;
+  /* background/color: сбрасываем UA-дефолты кнопки (buttonface ~ светло-серый +
+     buttontext), иначе в тёмной теме навигируемый элемент ленты получал светлую
+     плашку с почти невидимым текстом. Наследуем цвета ленты, тема-независимо. */
+  background: transparent;
+  color: inherit;
+  text-align: inherit;
   font: inherit;
 }
 .feed-item-navigable:hover { background: rgba(var(--accent-primary-rgb), 0.08); }

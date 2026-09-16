@@ -34,11 +34,12 @@ function jsonResponse(data: unknown): Response {
 // use-auto-grow-textarea also calls the SAME HTMLElement.prototype.scrollIntoView
 // spied on below (with block:'nearest', for a growing pending-question textarea) —
 // noise unrelated to the scrollTarget effect under test, which always calls it
-// with block:'center'. Filters that noise out and returns the target elements.
+// with block:'start' (align the target's TOP to the container top). Filters that
+// noise out and returns the target elements.
 function centeredScrollCalls(spy: ReturnType<typeof vi.spyOn>): HTMLElement[] {
   return spy.mock.calls
     .map((call, index) => ({ arg: call[0] as ScrollIntoViewOptions | undefined, context: spy.mock.contexts[index] }))
-    .filter(({ arg }) => arg?.block === 'center')
+    .filter(({ arg }) => arg?.block === 'start')
     .map(({ context }) => context as HTMLElement)
 }
 

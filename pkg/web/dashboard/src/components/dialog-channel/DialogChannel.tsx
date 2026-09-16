@@ -267,7 +267,9 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (pending !== null && pending.phase === retainedTarget.phase && pending.id === retainedTarget.id) {
       const el = document.getElementById('dialog-pending')
       if (el !== null) {
-        el.scrollIntoView({ block: 'center' })
+        // block:'start' — выравниваем ВЕРХ нужного Q&A к верху контейнера
+        // (переход из ленты к конкретному вопросу/ответу), а не по центру.
+        el.scrollIntoView({ block: 'start' })
         setRetainedTarget(null)
         onTargetConsumed?.()
         return
@@ -276,7 +278,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
     const el = document.getElementById(`qa-${retainedTarget.phase}-${retainedTarget.id}`)
     if (el !== null) {
-      el.scrollIntoView({ block: 'center' })
+      el.scrollIntoView({ block: 'start' })
       setRetainedTarget(null)
       onTargetConsumed?.()
     }
