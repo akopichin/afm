@@ -11,6 +11,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -172,10 +173,29 @@ func readLines(path string) []string {
 	return lines
 }
 
+// dialogDedupTypes — allowlist of notice types deduped by content in
+// reconstructNotices (task-fixB, F2/F3). ONLY dialog_question/dialog_answer:
+// `processed` in dialog_poller.go's pollQuestions is in-memory, so an afm
+// restart with a still-unanswered interactive question re-scans and re-emits
+// the SAME dialog_question notice (and the F1 give-up fallback can itself
+// double-emit for the same reason — see publishDialogQuestion/
+// giveUpOnMalformedQuestion). Every OTHER notice type is intentionally left
+// alone: script_output/auto_answered/context_warning legitimately repeat
+// (e.g. two script stages can genuinely print the same line), so a blanket
+// dedup would silently drop real, distinct feed rows.
+var dialogDedupTypes = map[string]bool{
+	string(bus.EventDialogQuestion): true,
+	string(bus.EventDialogAnswer):   true,
+}
+
 // reconstructNotices читает run-level notices.jsonl (Task 3, appendNotice).
+// dialog_question/dialog_answer записи дедуплицируются по содержимому
+// (type+stage_id+phase+id+title) — первое вхождение побеждает, порядок и
+// timestamp остальных записей не меняются (см. dialogDedupTypes).
 func reconstructNotices(runDir string) []feedEvent {
 	path := filepath.Join(runDir, "notices.jsonl")
 	var out []feedEvent
+	seen := map[string]bool{}
 	for _, line := range readLines(path) {
 		var e struct {
 			Time    time.Time `json:"time"`
@@ -186,7 +206,28 @@ func reconstructNotices(runDir string) []feedEvent {
 		if json.Unmarshal([]byte(line), &e) != nil {
 			continue
 		}
+		if dialogDedupTypes[e.Type] {
+			key := dialogNoticeDedupKey(e.Type, e.StageID, e.Data)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+		}
 		out = append(out, feedEvent{Type: e.Type, StageID: e.StageID, Data: e.Data, Timestamp: e.Time})
 	}
 	return out
+}
+
+// dialogNoticeDedupKey builds the content dedup key for a dialog_question/
+// dialog_answer notice: type + stage_id + phase + id + title. Data arrives as
+// `any` holding a map[string]any (the generic JSON round-trip of
+// mcp.DialogFeedNotice's payload) — fields are read defensively so a
+// malformed/missing field degrades to an empty string component instead of
+// panicking.
+func dialogNoticeDedupKey(typ, stageID string, data any) string {
+	m, _ := data.(map[string]any)
+	phase, _ := m["phase"].(string)
+	id, _ := m["id"].(string)
+	title, _ := m["title"].(string)
+	return typ + "|" + stageID + "|" + phase + "|" + id + "|" + title
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -370,16 +371,60 @@ func TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce(t *testing.T)
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce is the
-// regression guard for the hardest requirement of T2: giveUpOnMalformedQuestion
-// persists a valid stub question.json and publishes EventAskUser ITSELF,
-// bypassing the normal interactive branch of pollQuestions (the one that sets
-// processed[key]=true and calls publishDialogQuestion) entirely — so no
-// dialog_question fires on the exhaustion tick. Only on the NEXT tick, once the
-// stub is on disk and processed[key] is still false, does the question flow
-// through the normal branch and fire dialog_question — exactly once, no matter
-// how many further ticks re-poll the same (now-processed) question.
-func TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce(t *testing.T) {
+// TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately is
+// the regression guard for F1 (task-fixB): before this fix,
+// giveUpOnMalformedQuestion persisted a valid stub and published EventAskUser
+// ITSELF, bypassing the normal interactive branch of pollQuestions (the one
+// that calls publishDialogQuestion) entirely — no dialog_question fired on the
+// exhaustion tick itself, only on the NEXT ~1s poll once the stub flowed
+// through the normal branch. If the user answered/cancelled within that
+// window, the feed never showed the question at all. Now
+// giveUpOnMalformedQuestion emits dialog_question itself, on the very tick it
+// gives up — no second poll required.
+func TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately(t *testing.T) {
+	broken := `not json at all {{{`
+	o, store, _ := setupMalformedTestOrch(t, broken)
+	injectFixStub(t, o, "") // every fix agent fails to repair
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	subID, events := o.ui.Subscribe(256)
+	defer o.ui.Unsubscribe(subID)
+
+	// grace tick + maxJSONFixAttempts spawn/complete cycles + the exhaustion
+	// tick itself — exactly enough to reach give-up, no extra re-poll ticks
+	// (unlike the sibling test below, which re-polls further on purpose).
+	for i := 0; i < maxJSONFixAttempts+2; i++ {
+		o.pollQuestions(processed, malformed)
+	}
+
+	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusAwaitingUserInput {
+		t.Fatalf("status = %s, want awaiting_user_input", got)
+	}
+
+	dialogEvents := drainDialogQuestionEvents(events)
+	if len(dialogEvents) != 1 {
+		t.Fatalf("want exactly 1 EventDialogQuestion published on the exhaustion tick itself (no repoll), got %d: %+v", len(dialogEvents), dialogEvents)
+	}
+
+	notices := readDialogQuestionNotices(t, o.opts.RunDir)
+	if len(notices) != 1 {
+		t.Fatalf("want exactly 1 dialog_question line in notices.jsonl right after the exhaustion tick, got %d: %+v", len(notices), notices)
+	}
+}
+
+// TestPollQuestions_MalformedQuestion_GiveUpThenRepollEmitIdenticalDialogQuestion
+// covers what happens across MULTIPLE polls after giving up: the exhaustion
+// tick emits dialog_question itself (F1, see the sibling test above), and the
+// NEXT tick's normal branch — which sees the now-valid stub as an ordinary new
+// question — emits it AGAIN. Emitting twice is deliberately harmless: the fix
+// does not try to keep "exactly one notice" by gating here; instead
+// reconstructNotices (pkg/server/events_handler.go) dedupes dialog_question
+// notices by content (phase+id+title) on the read side, so both emissions
+// collapse to a single feed row. This test asserts the emission-side
+// invariant that makes that dedup safe: every dialog_question fired for this
+// question, however many, carries IDENTICAL content.
+func TestPollQuestions_MalformedQuestion_GiveUpThenRepollEmitIdenticalDialogQuestion(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, _ := setupMalformedTestOrch(t, broken)
 	injectFixStub(t, o, "") // every fix agent fails to repair
@@ -400,13 +445,23 @@ func TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce(t *t
 	}
 
 	dialogEvents := drainDialogQuestionEvents(events)
-	if len(dialogEvents) != 1 {
-		t.Fatalf("want exactly 1 EventDialogQuestion across the whole malformed→stub→repoll sequence, got %d: %+v", len(dialogEvents), dialogEvents)
+	if len(dialogEvents) == 0 {
+		t.Fatal("want at least 1 EventDialogQuestion across the whole malformed→stub→repoll sequence")
+	}
+	for _, ev := range dialogEvents[1:] {
+		if !reflect.DeepEqual(dialogEvents[0].Data, ev.Data) {
+			t.Errorf("dialog_question payloads must be content-identical so read-side dedup collapses them: first=%+v other=%+v", dialogEvents[0].Data, ev.Data)
+		}
 	}
 
 	notices := readDialogQuestionNotices(t, o.opts.RunDir)
-	if len(notices) != 1 {
-		t.Fatalf("want exactly 1 dialog_question line in notices.jsonl, got %d: %+v", len(notices), notices)
+	if len(notices) == 0 {
+		t.Fatal("want at least 1 dialog_question line in notices.jsonl")
+	}
+	for _, n := range notices[1:] {
+		if n != notices[0] {
+			t.Errorf("notices.jsonl dialog_question lines must be content-identical, got %+v and %+v", notices[0], n)
+		}
 	}
 }
 

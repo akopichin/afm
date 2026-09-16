@@ -99,6 +99,60 @@ func TestHandleEvents_CapsAt200(t *testing.T) {
 	}
 }
 
+// TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent is the
+// regression guard for F2/F3 (task-fixB): `processed` in dialog_poller.go is
+// in-memory, so an afm restart with a still-unanswered interactive question
+// re-emits the SAME dialog_question notice again (recovery re-scans, the
+// in-memory map starts empty). reconstructNotices must collapse repeated
+// dialog_question/dialog_answer notices that share (type, stage_id, phase,
+// id, title) down to one — the read-side half of "idempotent by content" —
+// while leaving every OTHER notice type untouched, since script_output/
+// auto_answered/context_warning legitimately repeat.
+func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T) {
+	runDir := t.TempDir()
+	lines := []string{
+		`{"time":"2026-09-16T10:00:00Z","type":"dialog_question","stage_id":"s1","data":{"phase":"planning","id":"q1","title":"Which approach?"}}`,
+		// A restart-duplicate: identical content, later timestamp.
+		`{"time":"2026-09-16T10:00:05Z","type":"dialog_question","stage_id":"s1","data":{"phase":"planning","id":"q1","title":"Which approach?"}}`,
+		// Two DIFFERENT script_output lines — must both survive (allowlist-gated dedup).
+		`{"time":"2026-09-16T10:00:01Z","type":"script_output","stage_id":"s1","data":"line one"}`,
+		`{"time":"2026-09-16T10:00:02Z","type":"script_output","stage_id":"s1","data":"line one"}`,
+		// Same phase/id as the question above but a DIFFERENT type+title — must survive as its own row.
+		`{"time":"2026-09-16T10:00:06Z","type":"dialog_answer","stage_id":"s1","data":{"phase":"planning","id":"q1","title":"Option B"}}`,
+	}
+	data := ""
+	for _, l := range lines {
+		data += l + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "notices.jsonl"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := reconstructNotices(runDir)
+
+	var dialogQuestions, dialogAnswers, scriptOutputs int
+	for _, e := range out {
+		switch e.Type {
+		case "dialog_question":
+			dialogQuestions++
+		case "dialog_answer":
+			dialogAnswers++
+		case "script_output":
+			scriptOutputs++
+		default:
+		}
+	}
+	if dialogQuestions != 1 {
+		t.Errorf("dialog_question count = %d, want 1 (duplicate must be deduped)", dialogQuestions)
+	}
+	if dialogAnswers != 1 {
+		t.Errorf("dialog_answer count = %d, want 1 (different type+title, must survive)", dialogAnswers)
+	}
+	if scriptOutputs != 2 {
+		t.Errorf("script_output count = %d, want 2 (non-allowlisted type must never be deduped)", scriptOutputs)
+	}
+}
+
 func TestReconstructAgentActions_CoversAllPhasesIncludingAutonomous(t *testing.T) {
 	stageDir := t.TempDir()
 

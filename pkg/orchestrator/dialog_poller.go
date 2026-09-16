@@ -214,11 +214,18 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт,
 			// что уже гарантирует единственность EventAskUser (processed[key]).
 			// giveUpOnMalformedQuestion (терминальный fallback для malformed)
-			// публикует свой собственный EventAskUser в обход этой ветки и НЕ
-			// трогает processed — поэтому здесь он не задваивается; вместо
-			// этого его валидный стаб на следующем тике проходит через эту же
-			// ветку как обычный новый вопрос и публикует dialog_question один
-			// единственный раз. См. TestPollQuestions_MalformedQuestion_GivesUpThenEmitsDialogQuestionOnce.
+			// публикует СВОЙ собственный EventAskUser в обход этой ветки и НЕ
+			// трогает processed — поэтому на следующем тике его валидный стаб
+			// проходит через эту же ветку как обычный новый вопрос и попадает
+			// сюда ЕЩЁ РАЗ. giveUpOnMalformedQuestion теперь тоже публикует
+			// dialog_question (task-fixB, F1 — иначе быстрый ответ/отмена
+			// пользователя в окне до следующего тика теряет уведомление
+			// совсем), так что здесь возможен повторный, но байт-в-байт
+			// идентичный dialog_question. Не гасим его гейтом намеренно —
+			// reconstructNotices (pkg/server/events_handler.go) схлопывает
+			// одинаковые по содержимому dialog_question/dialog_answer в одну
+			// строку на чтении. См.
+			// TestPollQuestions_MalformedQuestion_GiveUpThenRepollEmitIdenticalDialogQuestion.
 			o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
 
 			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
@@ -409,7 +416,10 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 // handleDialogAnswer (pkg/server/handlers.go) re-parses question.json strictly
 // on every answer submission, so leaving broken JSON in place would 500 forever
 // — and surfaces it to the user with no options, free text only; whatever they
-// type becomes the literal answer.
+// type becomes the literal answer. It also emits the dialog_question feed
+// notice itself (task-fixB, F1) instead of leaving that to the NEXT poller
+// tick — a user who answers or the stage gets cancelled within that ~1s
+// window must not lose the feed row entirely.
 func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp.QuestionFile, qPath string, raw []byte) {
 	explanation := fmt.Sprintf(
 		"⚠️ Отдельный агент %d раз(а) подряд не смог записать корректный JSON для этого вопроса. Показан необработанный текст файла — ответьте свободным текстом.\n\nСодержимое файла:\n%s",
@@ -434,6 +444,17 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
 		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: explanation, AllowCustom: true})
 	}
+	// Emit dialog_question HERE, on the give-up tick itself (task-fixB, F1) —
+	// do not wait for the stub to flow through pollQuestions' normal branch on
+	// the NEXT tick. If the user answers/cancels within that ~1s window, the
+	// old code never emitted the notice at all, and the feed silently never
+	// showed the question. The stub still re-enters the normal branch next
+	// tick and fires dialog_question again with IDENTICAL content (same
+	// phase/id, and title = DialogSnippet(explanation) both times) — that
+	// double-emission is deliberately left in place rather than gated: F2/F3's
+	// read-side dedup in reconstructNotices (pkg/server/events_handler.go)
+	// collapses same-content dialog_question notices to a single feed row.
+	o.publishDialogQuestion(stageID, q.Phase, q.ID, explanation)
 	o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
 	_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
 	o.ui.Publish(bus.Event{
