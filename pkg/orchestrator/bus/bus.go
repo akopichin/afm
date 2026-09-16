@@ -22,14 +22,19 @@ const (
 	// answered by afm itself (see pkg/mcp.PickAutoAnswer), not by a real user.
 	// Never triggers an FSM transition — the stage's status is unaffected.
 	EventAutoAnswered EventType = "auto_answered"
-	// EventDialogQuestion fires exactly once, the first time an interactive
-	// question is surfaced to a human — carries the display-ready
-	// {phase,id,title} payload for the dashboard Feed (see
-	// mcp.DialogFeedNotice/DialogSnippet). Never re-fires for the same
-	// surfacing (tied to the same `processed`-map lifecycle that gates
-	// EventAskUser in pollQuestions); a genuinely new question that later
-	// reuses the same id (after the first was answered) fires again, exactly
-	// like EventAskUser does. Never triggers an FSM transition itself.
+	// EventDialogQuestion surfaces an interactive question to the dashboard
+	// Feed — carries the display-ready {phase,id,title} payload (see
+	// mcp.DialogFeedNotice/DialogSnippet). Contract is exactly-one-feed-ROW,
+	// not exactly-one-emission: within a process the in-memory `processed` map
+	// normally emits it once per surfacing, but it can legitimately be emitted
+	// AGAIN — the malformed-question give-up fallback and, after an afm
+	// restart, a still-unanswered question re-scanned from awaiting_user_input
+	// both re-publish it. Duplicates are collapsed by content (type+stage+
+	// phase+id+title): the live path dedupes in use-event-feed.ts and the
+	// replay path in reconstructNotices' dialogDedupTypes allowlist, so the
+	// user sees one row. A genuinely new question reusing an answered id (with
+	// different text) has a different title → its own row. Never triggers an
+	// FSM transition itself.
 	EventDialogQuestion EventType = "dialog_question"
 	// EventDialogAnswer fires exactly once, right after a HUMAN answer to an
 	// interactive dialog question is authorized and durably recorded (i.e.
