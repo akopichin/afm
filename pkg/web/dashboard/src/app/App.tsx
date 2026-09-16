@@ -551,7 +551,6 @@ export function App(): ReactElement {
         flowName={flowName}
         description={description}
         connected={connected}
-        attention={anyAttention}
         startedAt={startedAt}
         elapsedMs={elapsedMs}
         idleMs={idleMs}

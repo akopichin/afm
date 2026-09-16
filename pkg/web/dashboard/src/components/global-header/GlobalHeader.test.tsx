@@ -37,6 +37,12 @@ describe('GlobalHeader', () => {
     expect(screen.getByText('Agent online')).toBeInTheDocument()
   })
 
+  it('never renders the removed header attention dot', () => {
+    render(<GlobalHeader {...baseProps} />)
+    expect(document.querySelector('.attention-dot')).toBeNull()
+    expect(screen.queryByLabelText('Action needed')).toBeNull()
+  })
+
   it('switches theme via the segmented sun/moon control', () => {
     document.documentElement.dataset.theme = 'dark'
     render(<GlobalHeader {...baseProps} />)

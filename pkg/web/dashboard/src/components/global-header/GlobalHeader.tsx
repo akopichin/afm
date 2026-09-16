@@ -9,7 +9,6 @@ type GlobalHeaderProps = {
   flowName: string
   description?: string
   connected: boolean
-  attention?: boolean
   // Метрики прогона — прокидываются в центральный RunMetrics (см. App.tsx).
   startedAt: string
   elapsedMs: number
@@ -39,7 +38,6 @@ export function GlobalHeader({
   flowName,
   description,
   connected,
-  attention = false,
   startedAt,
   elapsedMs,
   idleMs,
@@ -129,7 +127,6 @@ export function GlobalHeader({
           <span className="gh-connection-dot" aria-hidden="true" />
           <span className="gh-connection-text">{connected ? 'Agent online' : 'Offline'}</span>
         </div>
-        {attention && <span className="attention-dot" aria-label="Action needed" />}
       </div>
     </header>
   )
