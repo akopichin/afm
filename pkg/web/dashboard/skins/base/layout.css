@@ -544,6 +544,11 @@
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+/* В диалоге снизу залипает action-бар (.dialog-actions, sticky bottom:0,
+   ~60px высотой) — приподнимаем иконку над ним, чтобы не садилась на строку
+   SEND/«AGENT IS WAITING». В ленте/логе такого бара нет (raised не ставится). */
+.jump-latest-raised { bottom: 74px; }
+
 @media (prefers-reduced-motion: reduce) {
   .jump-latest { transition: none; }
   .jump-latest:hover { transform: none; }

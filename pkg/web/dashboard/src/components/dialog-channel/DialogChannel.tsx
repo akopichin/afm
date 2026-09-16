@@ -589,7 +589,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               </div>
             )}
 
-            {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
+            {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} raised />}
           </div>
 
           {hasAnswered && (
