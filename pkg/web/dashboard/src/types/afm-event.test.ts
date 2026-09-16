@@ -95,6 +95,7 @@ describe('SIGNIFICANT_EVENT_TYPES', () => {
         'agent_completed',
         'dialog_question',
         'dialog_answer',
+        'agent_note',
       ]),
     )
   })

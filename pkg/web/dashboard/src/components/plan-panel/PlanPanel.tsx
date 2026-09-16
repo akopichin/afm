@@ -160,6 +160,12 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
       await reviseStage(stage.id, feedback)
       setComments({})
       setActiveCommentLine(null)
+    } catch (err) {
+      // Стадия могла уйти из awaiting_approval за время правки (тогда сервер
+      // отвечает 409), либо сеть отвалилась — не теряем набранные комментарии
+      // (setComments не вызовется, throw произошёл раньше) и логируем, чтобы
+      // отказ не ушёл в unhandled rejection (sendRevision зовётся из onClick).
+      console.error('Failed to send plan revision:', err)
     } finally {
       setBusy(false)
     }

@@ -55,6 +55,12 @@ export const SIGNIFICANT_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent_completed',
   'dialog_question',
   'dialog_answer',
+  // agent_note сопровождает Revise (стадия меняет статус running→revising) и
+  // публикуется ПОСЛЕ stage_status_changed. App смотрит только на последнее
+  // событие — если пачка [stage_status_changed, agent_note] схлопнулась в один
+  // тик, без этого рефетч статуса промахнётся. Лишний /api/status на заметку
+  // безвреден (он и так идёт каждые 3с).
+  'agent_note',
 ])
 
 // Извлекает новый статус стадии из stage_status_changed (data — строка или { status }).

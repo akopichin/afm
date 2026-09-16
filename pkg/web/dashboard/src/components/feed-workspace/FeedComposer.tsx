@@ -25,10 +25,13 @@ export function FeedComposer({ stageId, onSend }: FeedComposerProps): ReactEleme
 
   async function submit(): Promise<void> {
     if (empty || sending) return
+    const submitted = value // снимок на момент отправки
     setSending(true)
     try {
-      await onSend(value.trim())
-      setValue('') // успех — очищаем поле
+      await onSend(submitted.trim())
+      // Очищаем ТОЛЬКО если пользователь не набрал новый текст поверх, пока шла
+      // отправка (поле остаётся редактируемым) — иначе затрём свежий черновик.
+      setValue((cur) => (cur === submitted ? '' : cur))
     } catch {
       // Доставка не удалась (стадия ушла из running → 409, либо сеть) —
       // ОСТАВЛЯЕМ текст, пользователь повторит.
