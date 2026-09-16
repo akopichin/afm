@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { useAutoGrowTextarea } from './use-auto-grow-textarea'
@@ -96,6 +97,23 @@ describe('useAutoGrowTextarea', () => {
       Object.defineProperty(textarea, 'scrollHeight', { value: 120, configurable: true })
       rerender(<TestComponent value="typed" maxHeight={400} />)
       expect(spy).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('does NOT scrollIntoView on mount even under StrictMode (layout effect replay)', () => {
+    // StrictMode double-invokes layout effects in dev; a "first effect run"
+    // counter would flip on the first pass and let the replay scroll. Tracking
+    // the value instead keeps mount silent across the replay.
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+    try {
+      render(
+        <StrictMode>
+          <TestComponent value="" maxHeight={400} />
+        </StrictMode>,
+      )
+      expect(spy).not.toHaveBeenCalled()
     } finally {
       spy.mockRestore()
     }

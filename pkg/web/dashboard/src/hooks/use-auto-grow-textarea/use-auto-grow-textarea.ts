@@ -25,22 +25,25 @@ export function useAutoGrowTextarea(
   const [node, setNode] = useState<HTMLTextAreaElement | null>(null)
   const lastAutoHeight = useRef<number | null>(null)
   const locked = useRef(false)
-  // Первый прогон layout-эффекта для ТЕКУЩЕГО узла — это монтирование. На
-  // монтировании textarea НЕ должна скроллить страницу к себе: сам факт
-  // появления поля ввода не повод дёргать вьюпорт. Иначе при переходе из ленты
-  // к старому Q&A (DialogChannel монтирует attention-вид с pending-textarea)
-  // её scrollIntoView перебивал прицельный скролл к нужному вопросу, утаскивая
-  // контейнер вниз к полю ответа. Скроллим только на ПОСЛЕДУЮЩИЙ рост (ввод).
-  const firstRun = useRef(true)
+  // Значение, которое хук УЖЕ обработал для текущего узла (null = свежий узел,
+  // ещё не мерили). На монтировании textarea НЕ должна скроллить страницу к
+  // себе: сам факт появления поля ввода не повод дёргать вьюпорт — иначе при
+  // переходе из ленты к старому Q&A (DialogChannel монтирует attention-вид с
+  // pending-textarea) её scrollIntoView перебивал прицельный скролл к вопросу.
+  // Скроллим ТОЛЬКО когда value реально изменилось (пользователь печатает).
+  // Сравнение по value, а не «первый прогон эффекта», устойчиво к повторному
+  // прогону layout-эффекта в React StrictMode (dev): реплей идёт с тем же
+  // value и тем же узлом → prevValue === value → скролла нет.
+  const prevValue = useRef<string | null>(null)
 
   // Новый вызов callback-ref'а — это либо реально новый DOM-узел (открылась
   // форма другой строки), либо unmount. В обоих случаях состояние
-  // lastAutoHeight/locked от ПРЕДЫДУЩЕГО узла бессмысленно для следующего —
-  // без сброса лок с одной строки протекал бы на форму другой строки.
+  // lastAutoHeight/locked/prevValue от ПРЕДЫДУЩЕГО узла бессмысленно для
+  // следующего — без сброса лок с одной строки протекал бы на форму другой.
   const ref = useCallback((el: HTMLTextAreaElement | null) => {
     lastAutoHeight.current = null
     locked.current = false
-    firstRun.current = true
+    prevValue.current = null
     setNode(el)
   }, [])
 
@@ -57,9 +60,12 @@ export function useAutoGrowTextarea(
     node.style.height = `${next}px`
     lastAutoHeight.current = next
 
-    // На монтировании только меряем/растим высоту, но НЕ скроллим (см. firstRun).
-    if (firstRun.current) {
-      firstRun.current = false
+    // Скроллим только при РЕАЛЬНОЙ смене value для этого узла (ввод). На
+    // монтировании (prevValue === null) и на StrictMode-реплее (prevValue ===
+    // value) — только меряем высоту, без scrollIntoView.
+    const changed = prevValue.current !== null && prevValue.current !== value
+    prevValue.current = value
+    if (!changed) {
       return
     }
 
