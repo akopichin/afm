@@ -241,12 +241,31 @@ export function App(): ReactElement {
   // не расходятся (единая state machine, без параллельной вкладочной).
   function handleSelectStage(stageId: string): void {
     setSelectedStageId(stageId)
+    // Ручной выбор другой стадии инвалидирует прицельный скролл к Q&A, заданный
+    // кликом по элементу ленты (handleOpenDialogFromFeed) — иначе, если у новой
+    // стадии случайно совпадёт phase/id, DialogChannel проскроллит не туда.
+    setScrollToDialogTarget(null)
     const stage = stages.find((s) => s.id === stageId) ?? null
     const kind = stage === null ? null : attentionKindForStatus(stage.status)
     if (kind !== null) openAttention(stageId)
     else if (stage?.showDialog === true) openHistory('dialog-history')
     else if (stage?.showPlan === true) openHistory('plan-history')
     else openFeed()
+  }
+
+  // Прицельный переход из ленты (FeedWorkspace.onOpenDialog) по клику на
+  // dialog_question/dialog_answer элемент: выбираем стадию, открываем диалог
+  // (attention, если стадия live-ждёт ответа; иначе history) и запоминаем,
+  // к какому именно Q&A прокрутить. Новый объект-литерал на каждый клик (а не
+  // переиспользование ссылки) — повторный клик по тому же элементу тоже должен
+  // повторно триггернуть попытку скролла в DialogChannel.
+  const [scrollToDialogTarget, setScrollToDialogTarget] = useState<{ phase: string; id: string } | null>(null)
+  function handleOpenDialogFromFeed(stageId: string, phase: string, id: string): void {
+    setSelectedStageId(stageId)
+    const stage = stages.find((s) => s.id === stageId) ?? null
+    if (stage?.status === 'awaiting_user_input') openAttention(stageId)
+    else openHistory('dialog-history')
+    setScrollToDialogTarget({ phase, id })
   }
 
   // anyAttention (любая стадия прогона ждёт) — точка в шапке И пульс favicon.
@@ -513,15 +532,15 @@ export function App(): ReactElement {
   if (workspaceStage !== null) {
     if (wsState.view === 'attention') {
       detailPanel = contextKind === 'question'
-        ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} />
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} scrollTarget={scrollToDialogTarget} />
         : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} />
     } else if (wsState.view === 'plan-history') {
       detailPanel = showPlan
         ? <PlanPanel key="plan" stage={workspaceStage} attention={false} />
-        : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} /> : null
+        : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} /> : null
     } else if (wsState.view === 'dialog-history') {
       detailPanel = showDialog
-        ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} />
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} />
         : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} /> : null
     }
   }
@@ -600,7 +619,7 @@ export function App(): ReactElement {
                     accounting={accounting}
                   />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
-                  <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} />
+                  <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} onOpenDialog={handleOpenDialogFromFeed} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

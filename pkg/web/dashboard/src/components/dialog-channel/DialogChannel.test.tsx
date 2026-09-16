@@ -1020,4 +1020,79 @@ describe('DialogChannel', () => {
     await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
     expect((container.querySelector('.btn-send') as HTMLButtonElement).disabled).toBe(false)
   })
+
+  // Task 6: переход из ленты (FeedWorkspace.onOpenDialog) передаёт scrollTarget —
+  // канал должен доскроллить до конкретного Q&A. /dialog грузится асинхронно,
+  // поэтому якорь (#qa-<phase>-<id>) на маунте ещё не существует — цель нужно
+  // удержать и повторить попытку после того, как история дорисуется.
+  describe('scrollTarget', () => {
+    test('delayed-fetch: scroll fires only after the matching qa-<phase>-<id> anchor renders', async () => {
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      let resolveFetch!: (value: Response) => void
+      const delayed = new Promise<Response>((resolve) => {
+        resolveFetch = resolve
+      })
+      vi.spyOn(globalThis, 'fetch').mockReturnValue(delayed)
+
+      const { container } = renderDialogChannel(
+        <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ phase: 'planning', id: 'q1' }} />,
+      )
+
+      // /dialog ещё не ответил — ни истории, ни якоря в DOM. hasContent=false
+      // (status не awaiting_user_input, hasDialog=false, entries=[]) → панель
+      // ещё вообще ничего не рендерит, и попытка скролла не может найти анкор.
+      expect(container.querySelector(`#qa-planning-q1`)).toBeNull()
+      expect(scrollSpy).not.toHaveBeenCalled()
+
+      // /dialog отвечает с задержкой (следующий тик) отвеченным вопросом q1.
+      await act(async () => {
+        resolveFetch(jsonResponse([{ id: 'q1', phase: 'planning', question: 'Q', answer: 'A' }]))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      // Якорь появился, и ИМЕННО тогда сработал скролл (не раньше).
+      expect(container.querySelector('#qa-planning-q1')).not.toBeNull()
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+    })
+
+    test('a scrollTarget whose anchor never appears does not throw and does not spam scrollIntoView', async () => {
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const entry = { id: 'q1', phase: 'planning', question: 'Q', answer: 'A' }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([entry]))
+      vi.useFakeTimers()
+
+      expect(() =>
+        renderDialogChannel(
+          <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ phase: 'planning', id: 'missing' }} />,
+        ),
+      ).not.toThrow()
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(scrollSpy).not.toHaveBeenCalled()
+
+      // Следующий опрос (2с) снова не находит анкор missing — не должно ни
+      // упасть, ни начать спамить scrollIntoView.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(scrollSpy).not.toHaveBeenCalled()
+    })
+
+    test('pending live-вопрос: scrollTarget с id ожидающего вопроса скроллит к #dialog-pending', async () => {
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const pending = { id: 'q1', phase: 'planning', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+      const { container } = renderDialogChannel(
+        <DialogChannel stage={makeStage()} scrollTarget={{ phase: 'planning', id: 'q1' }} />,
+      )
+
+      await waitFor(() => expect(container.querySelector('#dialog-pending')).not.toBeNull())
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalled())
+    })
+  })
 })

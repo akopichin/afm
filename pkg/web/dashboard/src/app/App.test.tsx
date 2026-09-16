@@ -1055,4 +1055,88 @@ describe('App', () => {
     expect(totalRow).toHaveTextContent('$20.00')
     expect(document.querySelector('.cost-panel-scroll')).not.toBeNull()
   })
+
+  // Task 6: клик по dialog_question/dialog_answer элементу ленты (FeedWorkspace's
+  // onOpenDialog) должен выбрать стадию вопроса и открыть её диалог — live-вопрос
+  // (attention), если стадия сейчас awaiting_user_input, иначе read-only историю.
+  test('клик по dialog_question в ленте для awaiting_user_input стадии выбирает её и показывает live-вопрос', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Ask', 'awaiting_user_input', { interactive: true, hasDialog: true, showDialog: true }),
+      ],
+    }))
+
+    render(<App />)
+    // s2 — единственная стадия с attention-статусом → авто-открытие на маунте
+    // (rule 9) сразу фокусирует воркспейс на её live-вопросе.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+
+    // Возвращаемся в Feed вручную — сигнатура авто-открытия для s2 уже
+    // потрачена (rule 9: ровно один раз на прибытие), так что редьюсер не
+    // перебросит нас назад сам.
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+    await waitFor(() => expect(document.getElementById('dialog-section')).toBeNull())
+
+    // Клик по Feed вернул выбор в attention-эпизод s2 (см. useEffect,
+    // синхронизирующий selectedStageId с активным attention-элементом) —
+    // лента по умолчанию (scope "This stage") уже показывает события s2.
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'dialog_question',
+          data: { phase: 'planning', id: 'q1', title: 'what next?' },
+          stage_id: 's2',
+        }),
+      })
+    })
+
+    const feedButton = await screen.findByRole('button', { name: /what next\?/ })
+    fireEvent.click(feedButton)
+
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+    expect(screen.getByText('Agent needs your input')).not.toBeNull()
+  })
+
+  test('клик по dialog_answer в ленте для завершённой стадии открывает историю диалога, а не live-вопрос', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Done', 'done', { hasDialog: true, showDialog: true }),
+      ],
+    }))
+
+    render(<App />)
+    // s2 не в attention-статусе → авто-выбор оставляет активную s1, Feed открыт.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    expect(document.getElementById('dialog-section')).toBeNull()
+
+    // s2 не выбрана → тумблер scope виден для s1; переключаемся на All, чтобы
+    // увидеть событие s2 в ленте.
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({
+        data: JSON.stringify({
+          type: 'dialog_answer',
+          data: { phase: 'implementation', id: 'q9', title: 'reply text' },
+          stage_id: 's2',
+        }),
+      })
+    })
+
+    const feedButton = await screen.findByRole('button', { name: /reply text/ })
+    fireEvent.click(feedButton)
+
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Done'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+    // История, не live-вопрос — баннер ожидания ответа не должен показываться.
+    expect(screen.queryByText('Agent needs your input')).not.toBeInTheDocument()
+  })
 })

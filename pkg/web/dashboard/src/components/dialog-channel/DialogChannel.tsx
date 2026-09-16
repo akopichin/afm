@@ -16,6 +16,13 @@ type DialogChannelProps = {
   // вместе с контентом при скролле и не съедает высоту у больших вопросов;
   // sticky-панель ответа остаётся на месте.
   banner?: ReactNode
+  // scrollTarget — переход из ленты (клик по dialog_question/dialog_answer
+  // элементу в FeedWorkspace, App.tsx's handleOpenDialogFromFeed): к какому
+  // именно Q&A прокрутить канал при открытии. /dialog грузится асинхронно —
+  // на момент маунта якорь обычно ещё не существует в DOM, поэтому цель
+  // сохраняется и попытка повторяется при каждом изменении entries/pending,
+  // пока скролл не удастся (см. эффект ниже).
+  scrollTarget?: { phase: string; id: string } | null
 }
 
 type DialogEntry = {
@@ -33,7 +40,7 @@ type DialogEntry = {
 // Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос
 // (опции и/или свободный ответ), отмена. Поведение перенесено из loadDialog /
 // renderDialog / renderPendingQuestion в текущем app.js.
-export function DialogChannel({ stage, attention = false, banner }: DialogChannelProps): ReactElement {
+export function DialogChannel({ stage, attention = false, banner, scrollTarget = null }: DialogChannelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [entries, setEntries] = useState<DialogEntry[]>([])
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
@@ -161,6 +168,42 @@ export function DialogChannel({ stage, attention = false, banner }: DialogChanne
     const handle = requestAnimationFrame(() => jumpToBottom())
     return () => cancelAnimationFrame(handle)
   }, [maximized, jumpToBottom])
+
+  // Прицельный скролл к конкретному Q&A (переход из ленты). Целится в
+  // отдельный state (retainedTarget), а не напрямую в проп: /dialog грузится
+  // асинхронно, поэтому якорь (#dialog-pending либо #qa-<phase>-<id>) обычно
+  // отсутствует в DOM на момент прихода target — цель нужно удержать и
+  // повторить попытку на следующих изменениях entries/pending, а не бросать
+  // после первого промаха. Ресинк с пропом — на смену scrollTarget (в т.ч.
+  // повторный клик по тому же элементу ленты — App.tsx каждый раз создаёт
+  // новый объект-литерал) и на смену стадии (иначе цель, оставшаяся от
+  // предыдущей стадии, могла бы дождаться случайного совпадения id и
+  // проскроллить не туда).
+  const [retainedTarget, setRetainedTarget] = useState<{ phase: string; id: string } | null>(null)
+  useEffect(() => {
+    setRetainedTarget(scrollTarget)
+  }, [scrollTarget, stage?.id])
+
+  useEffect(() => {
+    if (retainedTarget === null) return
+
+    if (pending !== null && pending.id === retainedTarget.id) {
+      const el = document.getElementById('dialog-pending')
+      if (el !== null) {
+        el.scrollIntoView({ block: 'center' })
+        setRetainedTarget(null)
+        return
+      }
+    }
+
+    const el = document.getElementById(`qa-${retainedTarget.phase}-${retainedTarget.id}`)
+    if (el !== null) {
+      el.scrollIntoView({ block: 'center' })
+      setRetainedTarget(null)
+    }
+    // Промах — не очищаем retainedTarget, следующий рендер entries/pending
+    // (очередной опрос /dialog) повторит попытку.
+  }, [entries, pending, retainedTarget])
 
   if (!hasContent) return <></>
 
@@ -524,7 +567,11 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
 
     if (entry.answer !== null && entry.answer !== undefined) {
       nodes.push(
-        <div className={`qa${entry.auto_answered === true ? ' qa-auto' : ''}`} key={`qa-${entry.phase ?? ''}-${entry.id ?? ''}`}>
+        <div
+          className={`qa${entry.auto_answered === true ? ' qa-auto' : ''}`}
+          key={`qa-${entry.phase ?? ''}-${entry.id ?? ''}`}
+          id={`qa-${entry.phase ?? ''}-${entry.id ?? ''}`}
+        >
           <div className="q">
             <MarkdownRenderer source={entry.question ?? ''} />
           </div>
