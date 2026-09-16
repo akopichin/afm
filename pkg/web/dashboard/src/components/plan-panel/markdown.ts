@@ -67,83 +67,48 @@ export function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-// Единица построчного (комментируемого) рендера: либо обычная строка, либо
-// многострочный блок (fenced-код / markdown-таблица), отрендеренный целиком и
-// заякоренный на своей ПЕРВОЙ исходной строке. Номер строки сохраняется, поэтому
-// клик-по-строке и цитирование в feedback продолжают работать. Блоки нужны, чтобы
-// код и таблицы не разваливались построчно (renderInline не понимает блочную
-// разметку) — из-за этого в диалоге «резался» yaml-контракт, а в review-плане
-// таблицы превращались в мешанину.
+// Единица блочного (комментируемого) рендера: один markdown-блок верхнего уровня
+// (параграф, список, blockquote, fenced-код, таблица, заголовок), отрендеренный
+// ЦЕЛИКОМ и заякоренный на своей ПЕРВОЙ исходной строке. Номер строки сохраняется,
+// поэтому клик-по-строке и цитирование в feedback продолжают работать. Блоки нужны,
+// чтобы списки/цитаты/многострочные параграфы не разваливались построчно —
+// построчное сканирование не умеет CommonMark (lazy continuation, loose-списки,
+// "2." посреди параграфа — не начало списка, а "-" после параграфа — начало).
 export type LineBlock = { line: number; html: string }
 
-// Строка таблицы — начинается с `|` (лидирующий пайп; консервативно, чтобы обычная
-// проза с одиночным `|` не опозналась как таблица).
-function isTableRow(line: string | undefined): boolean {
-  return line !== undefined && line.trim().startsWith('|')
-}
-
-// Разделитель заголовка таблицы: строка из `|`, `-`, `:` и пробелов, с хотя бы
-// одним `-` (напр. `|---|:--:|`). Именно он отличает таблицу от простых `|`-строк.
-function isTableDelimiter(line: string | undefined): boolean {
-  if (line === undefined) return false
-  const trimmed = line.trim()
-  return trimmed.includes('|') && trimmed.includes('-') && /^[|\-:\s]+$/.test(trimmed)
-}
-
-function isTableStart(lines: string[], i: number): boolean {
-  return isTableRow(lines[i]) && isTableDelimiter(lines[i + 1])
-}
-
-// Полный блочный рендер многострочного фрагмента (код/таблица) через markdown-it —
-// в отличие от formatLine, который форматирует одну строку инлайн.
+// Полный блочный рендер фрагмента через markdown-it — в отличие от formatLine,
+// который форматирует одну строку инлайн.
 function renderBlock(text: string): string {
   return decorateCheckboxes(md.render(text))
 }
 
-// nextLineBlock возвращает блок, начинающийся на lines[i], и индекс строки за ним.
-// Fenced-код (```) и таблицы схлопываются в один блок; всё прочее — одна строка.
-export function nextLineBlock(lines: string[], i: number): { block: LineBlock; next: number } {
-  const first = lines[i] ?? ''
+// Сегментирует текст на markdown-блоки верхнего уровня через token.map из
+// markdown-it: парсим весь текст один раз, берём только блок-открывающие токены
+// уровня 0 c непустым `map` (paragraph_open/heading_open/bullet_list_open/
+// ordered_list_open/blockquote_open/fence/table_open — у закрывающих и у
+// вложенных токенов `map` не задан или level > 0), рендерим срез исходных строк
+// по границам `map` целиком. level === 0 гарантирует, что вложенные конструкции
+// (элементы списка, параграф внутри blockquote, вложенный список) не рендерятся
+// повторно — они уже часть среза родительского блока.
+export function blockSpans(text: string): LineBlock[] {
+  const lines = text.split('\n')
+  const tokens = md.parse(text, {})
+  const blocks: LineBlock[] = []
 
-  // Fenced-код: собираем до закрывающего ``` (или до конца при незакрытом блоке).
-  if (first.trim().startsWith('```')) {
-    const buffer = [first]
-    let j = i + 1
-    for (; j < lines.length; j++) {
-      const line = lines[j] ?? ''
-      buffer.push(line)
-      if (line.trim().startsWith('```')) {
-        j++
-        break
-      }
-    }
-    return { block: { line: i + 1, html: renderBlock(buffer.join('\n')) }, next: j }
+  for (const token of tokens) {
+    if (token.level !== 0 || token.map === null) continue
+    const [start, end] = token.map
+    const slice = lines.slice(start, end).join('\n')
+    blocks.push({ line: start + 1, html: renderBlock(slice) })
   }
 
-  // Markdown-таблица: строка-заголовок + строка-разделитель, затем строки тела.
-  if (isTableStart(lines, i)) {
-    const buffer = [first, lines[i + 1] ?? '']
-    let j = i + 2
-    for (; j < lines.length && isTableRow(lines[j]); j++) {
-      buffer.push(lines[j] ?? '')
-    }
-    return { block: { line: i + 1, html: renderBlock(buffer.join('\n')) }, next: j }
-  }
-
-  return { block: { line: i + 1, html: formatLine(first) }, next: i + 1 }
+  return blocks
 }
 
-// Разбивает текст на построчные блоки (обычные строки + схлопнутые код/таблицы).
-// Общая основа для pending-вопроса диалога и review-плана.
+// Разбивает текст на блоки для построчного (per-line) UI: pending-вопрос диалога
+// и review-план. Общая основа для обоих потребителей.
 export function parseLineBlocks(text: string): LineBlock[] {
-  const lines = text.split('\n')
-  const blocks: LineBlock[] = []
-  for (let i = 0; i < lines.length; ) {
-    const { block, next } = nextLineBlock(lines, i)
-    blocks.push(block)
-    i = next
-  }
-  return blocks
+  return blockSpans(text)
 }
 
 export function isSpecialSection(line: string): SpecialSection | null {

@@ -4,7 +4,7 @@ import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
 import { Maximizable } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
-import { isHeading2, isSpecialSection, nextLineBlock, renderMarkdown, type SpecialSection } from './markdown'
+import { blockSpans, isHeading2, isSpecialSection, renderMarkdown, type SpecialSection } from './markdown'
 
 type PlanPanelProps = {
   stage: Stage | null
@@ -404,33 +404,35 @@ function parseReviewPlan(text: string): ReviewItem[] {
     }
   }
 
-  for (let i = 0; i < lines.length; ) {
-    const line = lines[i] ?? ''
+  // blockSpans сегментирует текст на markdown-блоки верхнего уровня (см.
+  // markdown.ts) — каждый блок якорится на своей первой исходной строке, ровно
+  // как раньше делал nextLineBlock, но корректно для списков/цитат/параграфов.
+  // Спецсекции определяются по тексту ПЕРВОЙ строки блока — заголовок ##
+  // Assumptions/## Acceptance Criteria всегда сам по себе отдельный блок
+  // (heading_open), поэтому это условие эквивалентно построчной проверке.
+  for (const block of blockSpans(text)) {
+    const line = lines[block.line - 1] ?? ''
 
     // Спецсекция (## Assumptions / ## Acceptance Criteria) — заголовок в одну
-    // строку; открывает сворачиваемую обёртку.
+    // строку; открывает сворачиваемую обёртку. Сам заголовок как отдельная
+    // строка не рендерится — секция рисует его сама (icon + label).
     const section = isSpecialSection(line)
     if (section !== null) {
       if (currentSection !== null) {
         items.push(currentSection)
       }
       currentSection = { kind: 'section', section, body: [] }
-      i++
       continue
     }
 
     // Любой другой заголовок ## закрывает открытую спецсекцию (сам заголовок
-    // всё равно отрендерится ниже как обычная строка).
+    // всё равно отрендерится ниже как обычный блок).
     if (currentSection !== null && isHeading2(line)) {
       items.push(currentSection)
       currentSection = null
     }
 
-    // Обычная строка ИЛИ схлопнутый блок (fenced-код / таблица) — nextLineBlock
-    // сам решает, сколько строк поглотить, и якорит блок на первой строке.
-    const { block, next } = nextLineBlock(lines, i)
     pushLeaf({ kind: 'line', line: block.line, html: block.html })
-    i = next
   }
 
   if (currentSection !== null) {

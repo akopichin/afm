@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
+  blockSpans,
   escapeHtml,
   formatLine,
   isHeading2,
@@ -76,13 +77,103 @@ describe('formatLine', () => {
   })
 })
 
-describe('parseLineBlocks', () => {
-  test('обычные строки — по одному блоку на строку, номера от 1', () => {
-    const blocks = parseLineBlocks('First line\nSecond line')
+// parseLineBlocks — тонкий алиас над blockSpans (используется DialogChannel),
+// поэтому оба имени покрываются одним набором кейсов; часть тестов дублирует
+// вызов через оба имени, чтобы зафиксировать, что сигнатуры остаются идентичны.
+describe('blockSpans / parseLineBlocks — сегментация по markdown-it token.map', () => {
+  test('обёрнутый многострочный параграф — ОДИН <p>, заякоренный на первой строке', () => {
+    // До block-сегментации построчное сканирование резало это на 3 отдельных
+    // <p> — по CommonMark это один параграф (lazy continuation внутри абзаца).
+    const blocks = blockSpans('line one\nline two\nline three')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('line one')
+    expect(blocks[0]?.html).toContain('line two')
+    expect(blocks[0]?.html).toContain('line three')
+    expect((blocks[0]?.html.match(/<p>/g) ?? []).length).toBe(1)
+  })
+
+  test('нумерованный список (1./2.) — один <ol>, заякоренный на первой строке', () => {
+    const blocks = blockSpans('1. one\n2. two')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<ol>')
+    expect(blocks[0]?.html).toContain('<li>one</li>')
+    expect(blocks[0]?.html).toContain('<li>two</li>')
+  })
+
+  test('маркированный список (-) — один <ul>, заякоренный на первой строке', () => {
+    const blocks = parseLineBlocks('- a\n- b')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<ul>')
+    expect(blocks[0]?.html).toContain('<li>a</li>')
+    expect(blocks[0]?.html).toContain('<li>b</li>')
+  })
+
+  test('вложенный список — один блок верхнего уровня, вложенный <ul> не дублируется', () => {
+    const blocks = blockSpans('- a\n  - nested\n- b')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    // Ровно два <ul> — внешний и один вложенный, без повторного рендера.
+    expect((blocks[0]?.html.match(/<ul>/g) ?? []).length).toBe(2)
+    expect(blocks[0]?.html).toContain('nested')
+  })
+
+  test('loose-список (пустая строка между пунктами) — один блок, оба пункта внутри', () => {
+    const blocks = blockSpans('- a\n\n- b')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<li>')
+    expect(blocks[0]?.html).toContain('a')
+    expect(blocks[0]?.html).toContain('b')
+  })
+
+  test('lazy continuation ("- a"⏎"b") — один пункт списка, вторая строка внутри него', () => {
+    const blocks = blockSpans('- a\nb')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<ul>')
+    expect(blocks[0]?.html).toContain('a')
+    expect(blocks[0]?.html).toContain('b')
+    expect((blocks[0]?.html.match(/<li>/g) ?? []).length).toBe(1)
+  })
+
+  test('параграф + "- item" — ДВА блока: параграф и список', () => {
+    const blocks = blockSpans('para\n- item')
     expect(blocks).toHaveLength(2)
     expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<p>para</p>')
     expect(blocks[1]).toMatchObject({ line: 2 })
-    expect(blocks[0]?.html).toContain('First line')
+    expect(blocks[1]?.html).toContain('<ul>')
+    expect(blocks[1]?.html).toContain('item')
+  })
+
+  test('параграф + "2. item" — ОДИН блок-параграф ("2." посреди параграфа — не начало списка)', () => {
+    const blocks = blockSpans('para\n2. item')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).not.toContain('<ol>')
+    expect(blocks[0]?.html).toContain('para')
+    expect(blocks[0]?.html).toContain('2. item')
+  })
+
+  test('blockquote с продолжением на второй строке — один блок <blockquote>', () => {
+    const blocks = blockSpans('> quote\n> cont')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<blockquote>')
+    expect(blocks[0]?.html).toContain('quote')
+    expect(blocks[0]?.html).toContain('cont')
+  })
+
+  test('blockquote, затем параграф — ДВА блока', () => {
+    const blocks = blockSpans('> quote\n\npara')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<blockquote>')
+    expect(blocks[1]).toMatchObject({ line: 3 }) // после пустой строки-разделителя
+    expect(blocks[1]?.html).toContain('<p>para</p>')
   })
 
   test('fenced-код схлопывается в один блок <pre>, заякоренный на строке ```', () => {
@@ -113,6 +204,13 @@ describe('parseLineBlocks', () => {
     const blocks = parseLineBlocks('value | with pipe')
     expect(blocks).toHaveLength(1)
     expect(blocks[0]?.html).not.toContain('<table>')
+  })
+
+  test('заголовок и пустая строка — один блок-заголовок', () => {
+    const blocks = blockSpans('## Heading\n')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ line: 1 })
+    expect(blocks[0]?.html).toContain('<h2>Heading</h2>')
   })
 })
 

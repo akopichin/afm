@@ -64,7 +64,7 @@ describe('PlanPanel', () => {
   })
 
   test('awaiting_approval: renders review lines with line numbers and opens a comment form on click', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
@@ -76,6 +76,47 @@ describe('PlanPanel', () => {
 
     fireEvent.click(line1)
     expect(container.querySelector('.line-comment-form')).not.toBeNull()
+  })
+
+  test('awaiting_approval: a special section plus a list renders both correctly, and each stays commentable (block segmentation)', async () => {
+    // Регресс: построчный парсер рендерил список внутри спецсекции как голые
+    // <li> без <ul>-обёртки. Теперь parseReviewPlan сегментирует через
+    // blockSpans — список внутри секции и список после неё оба должны
+    // рендериться целыми <ul>-блоками, а не построчной мешаниной, и при этом
+    // якорение на первой строке блока (для клика/комментария) не ломается.
+    const plan = ['## Assumptions', '- risk one', '- risk two', '## Next', '- item a', '- item b'].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(plan))
+
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+
+    await waitFor(() => expect(container.querySelector('.plan-section-wrapper.plan-section-assumptions')).not.toBeNull())
+
+    // Секция Assumptions: заголовок из wrapper'а, список внутри — целый <ul>,
+    // заякоренный на строке 2 (первая строка списка, а не строка заголовка).
+    const section = container.querySelector('.plan-section-wrapper.plan-section-assumptions') as HTMLElement
+    expect(section.querySelector('.section-header')?.textContent).toContain('Assumptions')
+    const sectionLine = section.querySelector('[data-line="2"]') as HTMLElement
+    expect(sectionLine).not.toBeNull()
+    expect(sectionLine.querySelector('ul')).not.toBeNull()
+    expect(sectionLine.textContent).toContain('risk one')
+    expect(sectionLine.textContent).toContain('risk two')
+
+    // Список внутри секции остаётся комментируемым.
+    fireEvent.click(sectionLine)
+    expect(sectionLine.querySelector('.line-comment-form')).not.toBeNull()
+
+    // Список ПОСЛЕ секции (## Next закрывает Assumptions) — отдельный блок вне
+    // обёртки, заякоренный на строке 5, тоже целый <ul>.
+    const outsideLine = container.querySelector('[data-line="5"]') as HTMLElement
+    expect(outsideLine).not.toBeNull()
+    expect(outsideLine.closest('.plan-section-wrapper')).toBeNull()
+    expect(outsideLine.querySelector('ul')).not.toBeNull()
+    expect(outsideLine.textContent).toContain('item a')
+    expect(outsideLine.textContent).toContain('item b')
+
+    // И он тоже комментируемый — якорение на первой строке блока не сломано.
+    fireEvent.click(outsideLine)
+    expect(outsideLine.querySelector('.line-comment-form')).not.toBeNull()
   })
 
   test('approve(): posts to the approve endpoint and disables the button while in flight', async () => {
@@ -108,7 +149,7 @@ describe('PlanPanel', () => {
   })
 
   test('Approve is disabled while a draft comment exists, and re-enables once it is removed', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -130,7 +171,7 @@ describe('PlanPanel', () => {
   })
 
   test('Approve is disabled while a draft comment is open but unsaved, and re-enables once the form is closed', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -157,7 +198,7 @@ describe('PlanPanel', () => {
       const url = typeof input === 'string' ? input : (input as Request).url
       calls.push({ url, body: init?.body as string | undefined })
 
-      if (url.endsWith('/plan')) return textResponse('First line\nSecond line')
+      if (url.endsWith('/plan')) return textResponse('# First line\n# Second line')
       if (url.endsWith('/revise')) return { ok: true } as Response
       return textResponse('')
     })
@@ -192,7 +233,7 @@ describe('PlanPanel', () => {
   })
 
   test('the X on a saved comment removes it without opening the edit form', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -216,7 +257,7 @@ describe('PlanPanel', () => {
   })
 
   test('a non-empty draft ignores clicks on other lines and on itself; only × discards it', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -244,7 +285,7 @@ describe('PlanPanel', () => {
   })
 
   test('an empty draft still lets a row click switch to a different line', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -355,7 +396,7 @@ describe('PlanPanel', () => {
   })
 
   test('the line-comment textarea offers the file-browser picker (Attach → Choose project file…)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -373,7 +414,7 @@ describe('PlanPanel', () => {
   // too, not just the header button — otherwise host mode still shows
   // "Attach project file" and clicking it hits the disabled /api/files/*.
   test('capabilities.file_browser=false: the line-comment textarea offers Upload image but no project picker and never calls the files API (R2 #6a)', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />, false)
     await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
@@ -397,7 +438,7 @@ describe('PlanPanel', () => {
   // on every render) hits a corrupted getter that recurses into itself and
   // blows the call stack (see the identical note in PasteableTextarea.test.tsx).
   test('the comment textarea grows to fit its content via the auto-grow hook', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('First line\nSecond line'))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
     const scrollHeightSpy = vi
       .spyOn(window.HTMLTextAreaElement.prototype, 'scrollHeight', 'get')
       .mockReturnValue(150)
