@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { answerDialog, cancelDialog } from '../../api/run-client'
 import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
@@ -45,6 +45,12 @@ type DialogEntry = {
   text?: string
   auto_answered?: boolean
 }
+
+// R2: сколько ждём, что якорь прицельного скролла (scrollTarget) появится в
+// DOM, прежде чем сдаться. Опрос /dialog идёт раз в 2с — этого времени
+// хватает на несколько попыток, но цель не остаётся навязанной навсегда,
+// если якорь в принципе не существует (id не из этой стадии).
+const TARGET_GIVE_UP_MS = 4000
 
 // Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос
 // (опции и/или свободный ответ), отмена. Поведение перенесено из loadDialog /
@@ -174,23 +180,63 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }, [scrollTarget, stage?.id])
 
+  // R1: pending-эффект ниже читает текущую цель через ref, а не как свою
+  // зависимость — иначе очистка retainedTarget эффектом попадания (ниже)
+  // сама пересоздаёт pending-эффект, и тот, увидев retainedTarget===null,
+  // планирует requestAnimationFrame(jumpToBottom) на пустом месте, стирая
+  // только что сделанный прицельный скролл на кадр позже. Присваивание в
+  // теле рендера (а не в отдельном эффекте) — стандартный паттерн «читать
+  // свежее значение без объявления зависимости»: коммитится к моменту, когда
+  // эффекты того же рендера начинают выполняться.
+  const retainedTargetRef = useRef(retainedTarget)
+  retainedTargetRef.current = retainedTarget
+
+  // onTargetConsumed читаем через ref по той же причине: таймер отказа (R2,
+  // ниже) не должен перезапускаться из-за смены идентичности колбэка
+  // родителя — только из-за смены самой цели (retainedTarget в его deps).
+  const onTargetConsumedRef = useRef(onTargetConsumed)
+  onTargetConsumedRef.current = onTargetConsumed
+
+  // R2: если якорь цели никогда не появляется (id не существует в диалоге
+  // этой стадии), retainedTarget иначе оставался бы навязан навсегда — это
+  // не только держит скролл «застрявшим», но и (вместе с ref выше) подавляет
+  // обычный автопрыжок на ЛЮБОМ будущем pending-вопросе, а родитель никогда
+  // не получает onTargetConsumed, чтобы сбросить свою собственную цель.
+  // Даём цели ограниченное время на самостоятельную попытку найтись — опрос
+  // /dialog идёт раз в 2с, окна в TARGET_GIVE_UP_MS хватает на несколько
+  // попыток. Таймер отменяется/пересоздаётся при смене retainedTarget —
+  // в т.ч. когда эффект попадания (ниже) сам очищает цель при успехе.
+  useEffect(() => {
+    if (retainedTarget === null) return
+    const timeoutId = window.setTimeout(() => {
+      setRetainedTarget(null)
+      onTargetConsumedRef.current?.()
+    }, TARGET_GIVE_UP_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [retainedTarget])
+
   // Ждущий ответа вопрос — всегда в конце истории. Проматываем к нему диалог:
   // и при загрузке страницы (пользователь сразу видит опции ответа), и при
   // появлении нового вопроса от агента. rAF — к следующему кадру, после layout
   // (панель могла только что пересчитать высоту), чтобы scrollHeight был финальным.
   //
-  // F5: пока retainedTarget указывает НЕ на текущий pending (прицельная
+  // F5/R1: пока retainedTargetRef указывает НЕ на текущий pending (прицельная
   // навигация из ленты ещё не доехала до своего Q&A), не перебиваем её этим
   // автопрыжком — иначе он срабатывает на каждое изменение pending.id и
   // перетягивает скролл обратно вниз, отменяя переход к более старому
-  // отвеченному вопросу. Once retainedTarget указывает на pending (или снят) —
-  // обычное поведение продолжает работать как раньше.
+  // отвеченному вопросу. retainedTarget НЕ в зависимостях эффекта (R1) —
+  // только его ref: иначе очистка цели эффектом попадания (ниже) сама
+  // пересоздаёт этот эффект и планирует лишний прыжок в конец кадром позже.
+  // Once retainedTarget указывает на pending (или снят) — обычное поведение
+  // продолжает работать как раньше, потому что pending?.id меняется на
+  // следующий реальный pending-вопрос и заново триггерит этот эффект.
   useEffect(() => {
     if (pending === null) return
-    if (retainedTarget !== null && !(retainedTarget.phase === pending.phase && retainedTarget.id === pending.id)) return
+    const target = retainedTargetRef.current
+    if (target !== null && !(target.phase === pending.phase && target.id === pending.id)) return
     const handle = requestAnimationFrame(() => jumpToBottom())
     return () => cancelAnimationFrame(handle)
-  }, [pending?.id, jumpToBottom, retainedTarget])
+  }, [pending?.id, jumpToBottom])
 
   // One-shot glow рамки диалога при появлении нового pending-вопроса (B3):
   // класс dialog-flash навешивается на смену pending.id и снимается через 2.5s

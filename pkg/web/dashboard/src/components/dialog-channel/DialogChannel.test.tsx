@@ -1197,5 +1197,92 @@ describe('DialogChannel', () => {
       await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
       await waitFor(() => expect(onTargetConsumed).toHaveBeenCalledTimes(1))
     })
+
+    // R1: clearing retainedTarget after a successful targeted scroll re-runs the
+    // pending auto-jump effect (it lists retainedTarget in its deps), which now
+    // sees retainedTarget===null and schedules requestAnimationFrame(jumpToBottom)
+    // — undoing the targeted scroll one frame later. The old F5 test only checked
+    // the immediate frame and missed this; this test advances a FAKED rAF past
+    // that frame and asserts the undo never happens.
+    test('R1: clearing the target after a successful scroll does not schedule a delayed jump back to the pending question', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'],
+      })
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const entries = [
+        { id: 'q1', phase: 'planning', question: 'Old Q', answer: 'Old A' },
+        { id: 'q2', phase: 'planning', question: 'New Q', answer: null, options: ['A'], allow_custom: true },
+      ]
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(entries))
+
+      renderDialogChannel(<DialogChannel stage={makeStage()} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }} />)
+
+      // Let the initial /dialog fetch resolve and the targeted-scroll effect fire.
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(centeredScrollCalls(scrollSpy)).toHaveLength(1)
+      expect(centeredScrollCalls(scrollSpy)[0]?.id).toBe('qa-planning-q1')
+      expect(mockJumpToBottom).not.toHaveBeenCalled()
+
+      // Flush the requestAnimationFrame the retainedTarget clear may have
+      // scheduled — the undo-jump bug fires one frame later, not immediately.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100)
+      })
+
+      expect(mockJumpToBottom).not.toHaveBeenCalled()
+      expect(centeredScrollCalls(scrollSpy)).toHaveLength(1)
+    })
+
+    // R2: a same-stage target whose anchor never appears (the id doesn't exist
+    // in this stage's dialog) used to retain the target FOREVER — with R1 fixed
+    // via a ref, the pending auto-jump stays suppressed for every future pending
+    // question, and the parent never gets onTargetConsumed to clear its own
+    // target. A bounded give-up timer must release it.
+    test('R2: a same-stage target whose anchor never appears is released after the give-up window, restoring normal auto-jump', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'],
+      })
+      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const answered = { id: 'q1', phase: 'planning', question: 'Q', answer: 'A' }
+      const pending = { id: 'q2', phase: 'planning', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+      let withPending = false
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse(withPending ? [answered, pending] : [answered]))
+      const onTargetConsumed = vi.fn()
+
+      renderDialogChannel(
+        <DialogChannel
+          stage={makeStage({ status: 'done' })}
+          scrollTarget={{ stageId: 's1', phase: 'planning', id: 'missing' }}
+          onTargetConsumed={onTargetConsumed}
+        />,
+      )
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(onTargetConsumed).not.toHaveBeenCalled()
+
+      // Past the give-up window (~4s): the target is released even though its
+      // anchor never rendered.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4001)
+      })
+      expect(onTargetConsumed).toHaveBeenCalledTimes(1)
+
+      // A subsequent pending question now auto-jumps again — normal behaviour
+      // is restored, not permanently suppressed.
+      withPending = true
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000) // next /dialog poll picks up the pending question
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100) // flush the scheduled requestAnimationFrame
+      })
+      expect(mockJumpToBottom).toHaveBeenCalled()
+    })
   })
 })
