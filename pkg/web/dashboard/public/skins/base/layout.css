@@ -521,6 +521,14 @@
   bottom: 10px;
   margin-left: auto;
   margin-right: 8px;
+  /* В .feed-scroll (display:flex; column) кнопка — flex-элемент: без align-self
+     родительский align-items:stretch растягивал её по ширине, и border-radius:50%
+     давал овал вместо круга. flex:none + align-self:flex-end фиксируют 34×34 и
+     прижимают вправо в любом контейнере (в блочном #dialog-scroll — игнор,
+     right-align через margin-left:auto). box-sizing — чтобы border не раздувал. */
+  flex: none;
+  align-self: flex-end;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
