@@ -81,27 +81,27 @@ describe('FileBrowserProvider', () => {
 
     const { rerender } = render(
       <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <BrowseHarness />
+        <PickHarness onInsert={() => {}} />
       </FileBrowserProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick files' }))
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /copy references/i })).not.toBeDisabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: /insert references/i })).not.toBeDisabled())
 
     // New run starts — the flow footer would report a different startedAt.
     rerender(
       <FileBrowserProvider flowName="flow1" startedAt="t2">
-        <BrowseHarness />
+        <PickHarness onInsert={() => {}} />
       </FileBrowserProvider>,
     )
 
     // The run change also closes the modal (freshly opened next time, empty selection).
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick files' }))
     await screen.findByRole('button', { name: 'afm' })
-    expect(screen.getByRole('button', { name: /copy references/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /insert references/i })).toBeDisabled()
   })
 
   test('closing the overlay restores focus to the button that opened it (#5)', async () => {
@@ -162,18 +162,18 @@ describe('FileBrowserProvider', () => {
 
     render(
       <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <BrowseHarness />
+        <PickHarness onInsert={() => {}} />
       </FileBrowserProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick files' }))
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /copy references/i })).not.toBeDisabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: /insert references/i })).not.toBeDisabled())
 
     fireEvent.click(screen.getByRole('button', { name: /remove afm\/a\.go/i }))
 
-    expect(screen.getByRole('button', { name: /copy references/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /insert references/i })).toBeDisabled()
   })
 
   // Finding 5: capabilities.file_browser=false must gate the provider itself,
@@ -224,11 +224,11 @@ describe('FileBrowserProvider', () => {
 
     const { rerender } = render(
       <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <BrowseHarness />
+        <PickHarness onInsert={() => {}} />
       </FileBrowserProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick files' }))
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
     expect(referenceCalls).toBe(1)
@@ -237,7 +237,7 @@ describe('FileBrowserProvider', () => {
     // (the flow footer would report a new startedAt for a fresh run).
     rerender(
       <FileBrowserProvider flowName="flow1" startedAt="t2">
-        <BrowseHarness />
+        <PickHarness onInsert={() => {}} />
       </FileBrowserProvider>,
     )
 
@@ -247,11 +247,11 @@ describe('FileBrowserProvider', () => {
       await Promise.resolve()
     })
 
-    // Reopen the browser for the new run — selection must still be empty,
+    // Reopen the picker for the new run — selection must still be empty,
     // not resurrected by the stale resolve.
-    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick files' }))
     await screen.findByRole('button', { name: 'afm' })
-    expect(screen.getByRole('button', { name: /copy references/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /insert references/i })).toBeDisabled()
   })
 
   test('stale getReference: resolving after picker submit does not resurrect the selection in the next pick session', async () => {
@@ -340,11 +340,11 @@ describe('FileBrowserProvider', () => {
 
     render(
       <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <BrowseHarness />
+        <PickHarness onInsert={() => {}} />
       </FileBrowserProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick files' }))
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     const checkbox = await screen.findByRole('checkbox', { name: /a\.go/ })
     fireEvent.click(checkbox)

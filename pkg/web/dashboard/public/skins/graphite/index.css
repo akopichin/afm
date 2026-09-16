@@ -249,7 +249,6 @@
   background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.30), var(--accent-primary));
   box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.35);
 }
-.jump-latest { background: rgba(var(--accent-primary-rgb), 0.15); }
 .icon-btn { border-color: rgba(var(--accent-primary-rgb), 0.4); }
 @keyframes attentionPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0); }

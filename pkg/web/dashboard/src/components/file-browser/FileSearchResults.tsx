@@ -10,6 +10,9 @@ type FileSearchResultsProps = {
   onToggleSelect: (entry: TreeEntry) => void
   isSelected: (path: string) => boolean
   activePath: string | null
+  // Чекбоксы выбора: только в режиме attach (см. FileTree.showCheckboxes).
+  // По умолчанию true — изолированные тесты компонента без изменений.
+  showCheckboxes?: boolean
 }
 
 // dirPrefix возвращает каталог файла с завершающим слэшем ("pkg/server/") или
@@ -25,7 +28,7 @@ function dirPrefix(path: string): string {
 // не терял клавиатурную доступность дерева; чекбокс — отдельный сосед. В
 // aria-label чекбокса — полный путь: одинаковые basename из разных каталогов
 // иначе неразличимы для скринридера.
-export function FileSearchResults({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath }: FileSearchResultsProps): ReactElement {
+export function FileSearchResults({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: FileSearchResultsProps): ReactElement {
   if (error !== null) return <div className="file-tree-hint file-tree-error">{error}</div>
   if (loading && result === null) return <div className="file-tree-hint">Searching…</div>
   if (result === null) return <div className="file-tree-hint">Type to search</div>
@@ -42,12 +45,14 @@ export function FileSearchResults({ result, loading, error, onOpenFile, onToggle
             data-kind="file"
             className={`file-tree-row file-search-row${activePath === entry.path ? ' active' : ''}`}
           >
-            <input
-              type="checkbox"
-              aria-label={`Select ${entry.path}`}
-              checked={isSelected(entry.path)}
-              onChange={() => onToggleSelect(entry)}
-            />
+            {showCheckboxes && (
+              <input
+                type="checkbox"
+                aria-label={`Select ${entry.path}`}
+                checked={isSelected(entry.path)}
+                onChange={() => onToggleSelect(entry)}
+              />
+            )}
             <button type="button" className="file-search-open" onClick={() => onOpenFile(entry)}>
               <span className="file-tree-icon file-tree-icon-file" aria-hidden="true">📄</span>
               <span className="file-search-name">

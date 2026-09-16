@@ -10,6 +10,8 @@ type ChangedFilesListProps = {
   onToggleSelect: (entry: TreeEntry) => void
   isSelected: (path: string) => boolean
   activePath: string | null
+  // Чекбоксы выбора: только в режиме attach (см. FileTree.showCheckboxes).
+  showCheckboxes?: boolean
 }
 
 const BADGE: Record<ChangeStatus, string> = { modified: 'M', added: 'A', deleted: 'D' }
@@ -35,7 +37,7 @@ function dirPrefix(path: string): string {
 // Unstaged/vs HEAD в репозитории без изменений оставляло бы панель вообще без
 // доступного имени (FileBrowserModal ждёт именно эту метку, чтобы понять, что
 // панель изменений уже смонтирована и поисковая колонка ей уступила место).
-export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, isSelected, activePath }: ChangedFilesListProps): ReactElement {
+export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: ChangedFilesListProps): ReactElement {
   return (
     <div className="file-search-results" role="list" aria-label="Changed files">
       {error !== null ? (
@@ -78,12 +80,14 @@ export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, is
                 data-kind="file"
                 className={`file-tree-row file-search-row${activePath === entry.path ? ' active' : ''}`}
               >
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${entry.path}`}
-                  checked={isSelected(entry.path)}
-                  onChange={() => onToggleSelect(entry)}
-                />
+                {showCheckboxes && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${entry.path}`}
+                    checked={isSelected(entry.path)}
+                    onChange={() => onToggleSelect(entry)}
+                  />
+                )}
                 <button type="button" className="file-search-open" onClick={() => onOpenFile(entry)}>
                   {badge}
                   <span className="file-search-name">

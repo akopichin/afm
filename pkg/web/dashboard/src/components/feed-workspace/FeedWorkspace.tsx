@@ -4,6 +4,7 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useFeedMode } from '../../hooks/use-feed-mode'
 import { useFeedScope } from '../../hooks/use-feed-scope'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
+import { JumpToLatestButton } from '../jump-to-latest'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -88,18 +89,14 @@ export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog }: Fee
           ) : (
             groups.map((g) => <FeedGroupView key={g.key} group={g} onOpenDialog={onOpenDialog} />)
           )}
-          {!feed.stick && (
-            <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>↓ Jump to latest</button>
-          )}
+          {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
         </div>
       ) : (
         <div className="feed-scroll log-scroll">
           <pre id="log-content" ref={log.ref} className={`log-content${hasLogEntries ? '' : ' hidden'}`}>
             {logEntries.map((entry) => entry.message).join('\n')}
           </pre>
-          {hasLogEntries && !log.stick && (
-            <button type="button" className="jump-latest" onClick={log.jumpToBottom}>↓ Jump to latest</button>
-          )}
+          {hasLogEntries && !log.stick && <JumpToLatestButton onClick={log.jumpToBottom} />}
           <div id="log-empty" className={`empty-hint${hasLogEntries ? ' hidden' : ''}`}>Log is empty</div>
         </div>
       )}

@@ -115,19 +115,35 @@ describe('FileBrowserModal', () => {
     expect(await screen.findByText(/not available/i)).toBeInTheDocument()
   })
 
-  test('checkbox click delegates to onToggleSelect with the root and the entry', async () => {
+  test('checkbox click delegates to onToggleSelect with the root and the entry (picker mode)', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])
     api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
     api.install()
     const onToggleSelect = vi.fn()
 
-    renderModal({ onToggleSelect })
+    renderModal({ mode: 'picker', onToggleSelect })
 
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
 
     expect(onToggleSelect).toHaveBeenCalledWith('project', expect.objectContaining({ path: 'a.go' } satisfies Partial<TreeEntry>))
+  })
+
+  test('browse mode is view-only: no selection checkboxes and no footer/submit', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm' }])
+    api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+    api.install()
+
+    renderModal({ mode: 'browse' })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    await screen.findByText('a.go')
+
+    expect(screen.queryByRole('checkbox', { name: /a\.go/ })).toBeNull()
+    // No selection footer submit in browse mode (Copy/Insert references gone).
+    expect(screen.queryByRole('button', { name: /references/i })).toBeNull()
   })
 
   test('renders a chip per selected file and calls onSubmit on the primary action', async () => {
@@ -151,25 +167,25 @@ describe('FileBrowserModal', () => {
     expect(onSubmit).toHaveBeenCalled()
   })
 
-  test('the primary action button is disabled with no selection, and labeled per mode', async () => {
+  test('picker mode: the primary action button is disabled with no selection and labeled "Insert references"', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])
     api.install()
 
-    renderModal({ mode: 'browse', selection: [] })
+    renderModal({ mode: 'picker', selection: [] })
     await screen.findByRole('button', { name: 'afm' })
 
-    expect(screen.getByRole('button', { name: /copy references/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /insert references/i })).toBeDisabled()
   })
 
-  test('a chip remove button calls onRemoveSelect with root and path', async () => {
+  test('a chip remove button calls onRemoveSelect with root and path (picker mode)', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])
     api.install()
     const selection: SelectedFile[] = [{ root: 'project', path: 'a.go', displayPath: 'a.go', reference: 'x' }]
     const onRemoveSelect = vi.fn()
 
-    renderModal({ selection, onRemoveSelect })
+    renderModal({ mode: 'picker', selection, onRemoveSelect })
     await screen.findByRole('button', { name: 'afm' })
 
     fireEvent.click(screen.getByRole('button', { name: /remove a\.go/i }))

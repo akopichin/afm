@@ -6,6 +6,7 @@ import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { MarkdownRenderer } from '../plan-panel'
 import { parseLineBlocks, type LineBlock } from '../plan-panel/markdown'
+import { JumpToLatestButton } from '../jump-to-latest'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 
 type DialogChannelProps = {
@@ -588,11 +589,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               </div>
             )}
 
-            {!feed.stick && (
-              <button type="button" className="jump-latest" onClick={feed.jumpToBottom}>
-                ↓ latest
-              </button>
-            )}
+            {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
           </div>
 
           {hasAnswered && (

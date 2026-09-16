@@ -11,6 +11,10 @@ type FileTreeProps = {
   onToggleSelect: (entry: TreeEntry) => void
   isSelected: (path: string) => boolean
   activePath: string | null
+  // Показывать чекбоксы выбора файлов. В режиме просмотра (открыт из шапки)
+  // их быть НЕ должно — только просмотр; в режиме attach (pickFiles) — нужны.
+  // По умолчанию true, чтобы изолированные тесты компонента вели себя как раньше.
+  showCheckboxes?: boolean
 }
 
 // Состояние одной раскрытой директории: то, что реально пришло с бэкенда —
@@ -30,7 +34,7 @@ type DirState = {
 // строкам (roving tabIndex), Enter открывает файл или раскрывает/схлопывает
 // директорию — символьные ссылки (kind: 'symlink') всегда лист, без чекбокса
 // и без предпросмотра (workspace.FS их read всё равно отклоняет).
-export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath }: FileTreeProps): ReactElement {
+export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: FileTreeProps): ReactElement {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['.']))
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
@@ -192,7 +196,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
           <span className="file-tree-toggle" aria-hidden="true">
             {entry.kind === 'directory' ? (isExpanded ? '▾' : '▸') : ''}
           </span>
-          {entry.kind === 'file' && entry.selectable && (
+          {entry.kind === 'file' && entry.selectable && showCheckboxes && (
             <input
               type="checkbox"
               aria-label={`Select ${entry.name}`}

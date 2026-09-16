@@ -718,6 +718,7 @@ export function FileBrowserModal({
                         onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
                         isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
                         activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
+                        showCheckboxes={mode === 'picker'}
                       />
                     ) : null}
                   </>
@@ -732,6 +733,7 @@ export function FileBrowserModal({
                     onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
                     isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
                     activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
+                    showCheckboxes={mode === 'picker'}
                   />
                 ) : null}
 
@@ -745,6 +747,7 @@ export function FileBrowserModal({
                     onToggleSelect={(entry) => onToggleSelect(selectedRoot, entry)}
                     isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
                     activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
+                    showCheckboxes={mode === 'picker'}
                   />
                 </div>
               </>
@@ -818,25 +821,32 @@ export function FileBrowserModal({
           </section>
         </div>
 
-        <footer className="file-browser-footer">
-          <div className="file-browser-chips">
-            {/* f.displayPath уже приходит от бэкенда в виде "<root label>/<path>"
-                (workspace.FS.Reference — см. pkg/server/workspace/content.go) —
-                повторно приписывать rootLabel(f.root) спереди значило бы задвоить
-                метку root'а в каждом чипе. */}
-            {selection.map((f) => (
-              <span key={`${f.root}:${f.path}`} className="file-chip">
-                {f.displayPath}
-                <button type="button" aria-label={`Remove ${f.displayPath}`} onClick={() => onRemoveSelect(f.root, f.path)}>
-                  ✕
-                </button>
-              </span>
-            ))}
-          </div>
-          <button type="button" className="btn btn-approve" disabled={selection.length === 0} onClick={onSubmit}>
-            {submitLabel}
-          </button>
-        </footer>
+        {/* Футер с выбором (чипы + «Insert/Copy references») — только в режиме
+            attach (picker). В режиме просмотра (открыт из шапки) файлы не
+            выбираются: чекбоксов нет, поэтому и футер выбора не нужен —
+            модалка становится чистым просмотрщиком (дерево + превью + diff),
+            закрывается кнопкой Close в шапке / Esc. */}
+        {mode === 'picker' && (
+          <footer className="file-browser-footer">
+            <div className="file-browser-chips">
+              {/* f.displayPath уже приходит от бэкенда в виде "<root label>/<path>"
+                  (workspace.FS.Reference — см. pkg/server/workspace/content.go) —
+                  повторно приписывать rootLabel(f.root) спереди значило бы задвоить
+                  метку root'а в каждом чипе. */}
+              {selection.map((f) => (
+                <span key={`${f.root}:${f.path}`} className="file-chip">
+                  {f.displayPath}
+                  <button type="button" aria-label={`Remove ${f.displayPath}`} onClick={() => onRemoveSelect(f.root, f.path)}>
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+            <button type="button" className="btn btn-approve" disabled={selection.length === 0} onClick={onSubmit}>
+              {submitLabel}
+            </button>
+          </footer>
+        )}
       </div>
     </div>
   )

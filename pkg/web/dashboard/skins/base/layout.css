@@ -513,18 +513,40 @@
   min-height: 0;
 }
 
+/* Плавающая круглая иконка «вниз, к последнему»: sticky к низу скролл-контейнера,
+   прижата вправо. Непрозрачная surface-подложка + accent-обводка + тень делают её
+   похожей на FAB, читаемой поверх любого контента и в любой теме. */
 .jump-latest {
   position: sticky;
-  bottom: 6px;
+  bottom: 10px;
   margin-left: auto;
-  display: block;
-  background: rgba(var(--accent-primary-rgb), 0.15);
+  margin-right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: var(--surface-raised);
   border: 1px solid var(--accent-primary);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  padding: 3px 8px;
-  font-size: 10px;
+  border-radius: 50%;
+  color: var(--accent-primary);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.30);
   cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+.jump-latest:hover {
+  background: rgba(var(--accent-primary-rgb), 0.16);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.36);
+}
+.jump-latest:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-latest { transition: none; }
+  .jump-latest:hover { transform: none; }
 }
 
 /* === Icon buttons (theme toggle, files, maximize, mode-toggle) === */
