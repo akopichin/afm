@@ -152,6 +152,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const hasContent = stage !== null && (entries.length > 0 || stage.status === 'awaiting_user_input' || stage.hasDialog)
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
   const jumpToBottom = feed.jumpToBottom
+  const releaseStick = feed.release
   const commentCount = Object.keys(comments).length
 
   // Прицельный скролл к конкретному Q&A (переход из ленты). Целится в
@@ -278,13 +279,19 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
     const el = document.getElementById(`qa-${retainedTarget.phase}-${retainedTarget.id}`)
     if (el !== null) {
+      // Отпускаем «прилипание» к низу ПЕРЕД скроллом: цель — исторический Q&A
+      // выше pending-вопроса, а stick-to-bottom (MutationObserver) на ближайшей
+      // мутации вернул бы scrollTop к низу и отменил бы переход. release() ставит
+      // stick=false синхронно, поэтому наблюдатель больше не докручивает вниз, и
+      // пользователь остаётся на выбранном вопросе/ответе.
+      releaseStick()
       el.scrollIntoView({ block: 'start' })
       setRetainedTarget(null)
       onTargetConsumed?.()
     }
     // Промах — не очищаем retainedTarget, следующий рендер entries/pending
     // (очередной опрос /dialog) повторит попытку.
-  }, [entries, pending, retainedTarget, onTargetConsumed])
+  }, [entries, pending, retainedTarget, onTargetConsumed, releaseStick])
 
   if (!hasContent) return <></>
 

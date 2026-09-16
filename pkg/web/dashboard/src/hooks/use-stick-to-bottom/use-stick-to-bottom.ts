@@ -14,6 +14,7 @@ export function useStickToBottom<T extends HTMLElement>(): {
   ref: (node: T | null) => void
   stick: boolean
   jumpToBottom: () => void
+  release: () => void
 } {
   const [node, setNode] = useState<T | null>(null)
   const [stick, setStick] = useState(true)
@@ -25,6 +26,18 @@ export function useStickToBottom<T extends HTMLElement>(): {
     node.scrollTop = node.scrollHeight
     setStick(true)
   }, [node])
+
+  // release — императивно отпускает «прилипание» к низу. Нужен, когда что-то
+  // вне хука намеренно уводит скролл (прицельный переход к конкретному Q&A из
+  // ленты, DialogChannel): иначе MutationObserver ниже на ближайшей же мутации
+  // контента (React-коммит, авто-рост textarea, flash-класс) пока stick=true
+  // тут же вернул бы scrollTop к низу и «съел» бы целевой скролл. Пишем и
+  // stickRef.current сразу (не только setStick), чтобы наблюдатель перестал
+  // докручивать в ТОМ ЖЕ кадре, до асинхронного ре-рендера.
+  const release = useCallback(() => {
+    stickRef.current = false
+    setStick(false)
+  }, [])
 
   // useLayoutEffect (не useEffect): начальную позицию скролла выставляем ДО
   // отрисовки кадра. Иначе список/диалог сначала рисуется прижатым к верху
@@ -55,5 +68,5 @@ export function useStickToBottom<T extends HTMLElement>(): {
     }
   }, [node])
 
-  return { ref: setNode, stick, jumpToBottom }
+  return { ref: setNode, stick, jumpToBottom, release }
 }

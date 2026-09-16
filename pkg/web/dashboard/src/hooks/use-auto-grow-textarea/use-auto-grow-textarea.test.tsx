@@ -82,6 +82,25 @@ describe('useAutoGrowTextarea', () => {
     expect(textarea.style.height).toBe('120px')
   })
 
+  it('does NOT scrollIntoView on mount, but DOES on a later value change (typing)', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+    try {
+      const { rerender } = render(<TestComponent value="" maxHeight={400} />)
+      const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
+      // Mount ran the layout effect once — it must NOT have scrolled the page
+      // (else a mounting textarea, e.g. the pending answer box, yanks the
+      // dialog to the bottom and overrides feed→dialog targeted navigation).
+      expect(spy).not.toHaveBeenCalled()
+
+      // A subsequent value change (the user typing) DOES keep the field visible.
+      Object.defineProperty(textarea, 'scrollHeight', { value: 120, configurable: true })
+      rerender(<TestComponent value="typed" maxHeight={400} />)
+      expect(spy).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('clamps growth at maxHeightPx', () => {
     const { rerender } = render(<TestComponent value="" maxHeight={400} />)
     const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement

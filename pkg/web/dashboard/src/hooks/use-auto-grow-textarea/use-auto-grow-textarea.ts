@@ -25,6 +25,13 @@ export function useAutoGrowTextarea(
   const [node, setNode] = useState<HTMLTextAreaElement | null>(null)
   const lastAutoHeight = useRef<number | null>(null)
   const locked = useRef(false)
+  // Первый прогон layout-эффекта для ТЕКУЩЕГО узла — это монтирование. На
+  // монтировании textarea НЕ должна скроллить страницу к себе: сам факт
+  // появления поля ввода не повод дёргать вьюпорт. Иначе при переходе из ленты
+  // к старому Q&A (DialogChannel монтирует attention-вид с pending-textarea)
+  // её scrollIntoView перебивал прицельный скролл к нужному вопросу, утаскивая
+  // контейнер вниз к полю ответа. Скроллим только на ПОСЛЕДУЮЩИЙ рост (ввод).
+  const firstRun = useRef(true)
 
   // Новый вызов callback-ref'а — это либо реально новый DOM-узел (открылась
   // форма другой строки), либо unmount. В обоих случаях состояние
@@ -33,6 +40,7 @@ export function useAutoGrowTextarea(
   const ref = useCallback((el: HTMLTextAreaElement | null) => {
     lastAutoHeight.current = null
     locked.current = false
+    firstRun.current = true
     setNode(el)
   }, [])
 
@@ -48,6 +56,12 @@ export function useAutoGrowTextarea(
     const next = Math.min(node.scrollHeight, maxHeightPx)
     node.style.height = `${next}px`
     lastAutoHeight.current = next
+
+    // На монтировании только меряем/растим высоту, но НЕ скроллим (см. firstRun).
+    if (firstRun.current) {
+      firstRun.current = false
+      return
+    }
 
     // Рост textarea может вытолкнуть то, что лежит под ней (например, кнопку
     // «Добавить»/«Отправить»), за пределы ближайшего скролл-контейнера

@@ -10,9 +10,10 @@ import { FileBrowserProvider } from '../file-browser'
 // в jsdom scrollHeight всегда 0 и реальный скролл незаметен) — так тест #7 может
 // проверить сам факт вызова при переходе панели в maximized, не завися от layout jsdom.
 const mockJumpToBottom = vi.fn()
+const mockRelease = vi.fn()
 
 vi.mock('../../hooks/use-stick-to-bottom', () => ({
-  useStickToBottom: () => ({ ref: { current: null }, stick: true, jumpToBottom: mockJumpToBottom }),
+  useStickToBottom: () => ({ ref: { current: null }, stick: true, jumpToBottom: mockJumpToBottom, release: mockRelease }),
 }))
 
 type RawDialogEntry = {
@@ -79,6 +80,7 @@ function renderDialogChannel(ui: ReactElement, enabled = true) {
 describe('DialogChannel', () => {
   beforeEach(() => {
     mockJumpToBottom.mockClear()
+    mockRelease.mockClear()
   })
 
   afterEach(() => {
@@ -1151,11 +1153,14 @@ describe('DialogChannel', () => {
       await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
       await waitFor(() => expect(container.querySelector('#dialog-pending')).not.toBeNull())
 
-      // Targeted scroll wins: exactly one targeted (block:'center') scroll, on
+      // Targeted scroll wins: exactly one targeted (block:'start') scroll, on
       // the OLD qa anchor — the pending auto-jump (mockJumpToBottom) never fired.
       await waitFor(() => expect(centeredScrollCalls(scrollSpy)).toHaveLength(1))
       expect(centeredScrollCalls(scrollSpy)[0]?.id).toBe('qa-planning-q1')
       expect(mockJumpToBottom).not.toHaveBeenCalled()
+      // stick-to-bottom released for a HISTORY target, so the MutationObserver
+      // doesn't re-pin to the bottom and undo the targeted scroll.
+      expect(mockRelease).toHaveBeenCalled()
     })
 
     // F6a: цель, предназначенная ДРУГОЙ стадии, не должна применяться к этой —
