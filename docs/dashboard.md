@@ -67,24 +67,36 @@ When a stage is in `awaiting_approval`:
 2. Write a remark — the line highlights yellow.
 3. Click "Send revision (N)" — all comments are sent to the agent with line numbers.
 
-## Suggesting a note to a running stage
+## Sending a note to a running stage
 
-Normally you can only redirect a stage at the `awaiting_approval` checkpoint. You can
-also do it while a stage is actively `running`:
+While a stage is actively `running`, a messenger-style composer is pinned to the
+bottom of its **Feed** — the same input you'd expect in a chat app:
 
-1. Click the kebab (⋮) menu on a `running` (or `awaiting_approval`) stage row and
-   choose "Add a note for the agent".
-2. Type the note and send — the agent finishes its current step, then receives SIGINT
-   (a graceful interrupt, not a kill).
-3. The stage moves through `revising` and restarts the same phase
-   (planning/implementation/review/autonomous) with your note folded into its context,
-   then continues toward `done`.
+1. Select the `running` stage and open its **Feed** tab. A note input sits at the
+   bottom: a growing textarea, an **Attach** button, and a round send button. It
+   appears only for a `running`, non-script stage.
+2. Type your note and send it — click the send button or press **Cmd/Ctrl+Enter**
+   (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
+   and in Docker mode reference a project file.
+3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
+   not a kill); the stage moves through `revising` and restarts the same phase
+   (planning/implementation/review/autonomous) with your note folded into its
+   context, then continues toward `done`.
+4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
+   the agent's own messages (it is not clickable — it's a record of what you sent).
+
+At the `awaiting_approval` checkpoint you redirect the stage a different way — with
+line comments and "Send revision" (see [Inline plan comments](#inline-plan-comments) above).
+
+> An earlier version offered "Add a note for the agent" in the stage's kebab (⋮)
+> menu; that item was replaced by this Feed composer. The kebab still hosts stage
+> buttons, **Pause**, and the pre-note item for `pending` stages.
 
 ## Stage buttons
 
 A stage can declare named one-click actions in `flow.yaml`. Each button carries a
 canned prompt; clicking it in the kebab (⋮) menu delivers that prompt to the stage's
-live agent — the same path as "Add a note for the agent", but reusable with a single
+live agent — the same graceful-revise path as a Feed note, but reusable with a single
 click.
 
 ```yaml
@@ -108,7 +120,7 @@ that has one.
 
 ## Review notes — pause the whole flow and comment on files (Docker mode)
 
-Where "Add a note for the agent" redirects **one running stage** with free-text,
+Where a Feed note redirects **one running stage** with free-text,
 **review notes** let you pause the **entire flow**, walk the project source in the
 [file browser](docker.md#project-file-browser), attach comments **anchored to
 specific file lines**, and then hand the whole batch to a stage of your choice. It's

@@ -4,6 +4,50 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-16
+
+### Feature: messenger-style note composer in the feed
+
+Sending a note to a live agent moved from the stage kebab (⋮) menu into a
+**messenger-style composer pinned to the bottom of the feed**, matching the
+chat-like feel of the redesigned dashboard. When a stage is actively `running`
+(and is not a `script:` stage), its **Feed** tab shows a note input at the
+bottom — a growing textarea, an **Attach** button (paste/upload an image, or, in
+Docker mode, reference a project file), and a round send button. Send with the
+button or **Cmd/Ctrl+Enter** (plain Enter inserts a newline).
+
+**Delivery is the existing revise path — no new machinery.** The composer calls
+the same `POST /api/stages/{id}/revise` used before: the agent finishes its
+current step, receives a graceful SIGINT, and restarts the same phase
+(planning/implementation/review/autonomous) with your note folded into its
+`feedback.md` context. The stage flips through `revising` and back to `running`
+on its way to `done`.
+
+**The note shows up in the feed as a right-side bubble** carrying its text —
+like a dialog answer, but **not clickable** (it's a record of what you sent, not
+a link). This rides a new `agent_note` feed event, published live on the UI bus
+**and** persisted to `notices.jsonl`, so it survives a reload or an afm restart.
+Each note carries a unique id (the revise transition's sequence number) so the
+live event and its replayed copy reconcile without collapsing two distinct notes
+that happen to share the same text.
+
+**Reliability details.** `Revise` now reports whether the transition was
+actually applied: a no-op revise (the stage left the `running`/`awaiting_approval`
+window, or lost a concurrent CAS) returns **HTTP 409** and emits **no** feed
+bubble, instead of silently claiming success — and the composer keeps your typed
+text so you can retry. A revise against a `running` **script** stage is rejected
+with **HTTP 400** (a script has no live agent to interrupt).
+
+**Kebab changes.** The "Add note for agent" item was **removed** from the kebab
+for `running` and `awaiting_approval` stages (that job now belongs to the feed
+composer). The kebab still hosts stage **buttons**, **Pause**, and — unchanged —
+the **pre-note** item ("Add note (before start)") for `pending` stages, so you
+can still queue a note for a stage that hasn't started yet. At the
+`awaiting_approval` checkpoint you keep redirecting a stage with inline plan
+comments + "Send revision".
+
+Design/spec: `docs/superpowers/specs/2026-09-16-feed-note-composer-design.md`.
+
 ## 2026-09-15
 
 ### Feature: token & cost accounting
