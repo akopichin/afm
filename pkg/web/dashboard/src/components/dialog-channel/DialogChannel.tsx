@@ -21,8 +21,17 @@ type DialogChannelProps = {
   // именно Q&A прокрутить канал при открытии. /dialog грузится асинхронно —
   // на момент маунта якорь обычно ещё не существует в DOM, поэтому цель
   // сохраняется и попытка повторяется при каждом изменении entries/pending,
-  // пока скролл не удастся (см. эффект ниже).
-  scrollTarget?: { phase: string; id: string } | null
+  // пока скролл не удастся (см. эффект ниже). stageId — чья это цель: без неё
+  // цель, оставшаяся от предыдущей стадии (attention auto-advance, повторное
+  // открытие того же диалога), могла бы дождаться случайного совпадения
+  // phase/id на ДРУГОЙ стадии и проскроллить не туда (F6).
+  scrollTarget?: { stageId: string; phase: string; id: string } | null
+  // onTargetConsumed — вызывается ровно один раз, сразу после того как
+  // scrollTarget был успешно применён (скролл состоялся). Родитель должен
+  // сбросить свой scrollToDialogTarget в ответ — иначе цель переживёт своё
+  // назначение и повторное открытие того же диалога проиграет старый скролл
+  // заново (F6).
+  onTargetConsumed?: () => void
 }
 
 type DialogEntry = {
@@ -40,7 +49,7 @@ type DialogEntry = {
 // Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос
 // (опции и/или свободный ответ), отмена. Поведение перенесено из loadDialog /
 // renderDialog / renderPendingQuestion в текущем app.js.
-export function DialogChannel({ stage, attention = false, banner, scrollTarget = null }: DialogChannelProps): ReactElement {
+export function DialogChannel({ stage, attention = false, banner, scrollTarget = null, onTargetConsumed }: DialogChannelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [entries, setEntries] = useState<DialogEntry[]>([])
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
@@ -139,15 +148,49 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const jumpToBottom = feed.jumpToBottom
   const commentCount = Object.keys(comments).length
 
+  // Прицельный скролл к конкретному Q&A (переход из ленты). Целится в
+  // отдельный state (retainedTarget), а не напрямую в проп: /dialog грузится
+  // асинхронно, поэтому якорь (#dialog-pending либо #qa-<phase>-<id>) обычно
+  // отсутствует в DOM на момент прихода target — цель нужно удержать и
+  // повторить попытку на следующих изменениях entries/pending, а не бросать
+  // после первого промаха. Ресинк с пропом — на смену scrollTarget (в т.ч.
+  // повторный клик по тому же элементу ленты — App.tsx каждый раз создаёт
+  // новый объект-литерал) и на смену стадии (иначе цель, оставшаяся от
+  // предыдущей стадии, могла бы дождаться случайного совпадения id и
+  // проскроллить не туда). Объявлен ДО эффекта автопрыжка к pending ниже —
+  // тому эффекту (F5) нужно читать retainedTarget, чтобы уступить прицельной
+  // навигации.
+  //
+  // Адопция гейтится по stageId (F6): scrollTarget может пережить смену
+  // рендерящейся стадии (attention auto-advance, повторное открытие того же
+  // диалога) — если он предназначен ДРУГОЙ стадии, отбрасываем его вместо
+  // того чтобы ждать случайного совпадения phase/id на этой.
+  const [retainedTarget, setRetainedTarget] = useState<{ stageId: string; phase: string; id: string } | null>(null)
+  useEffect(() => {
+    if (scrollTarget !== null && stage !== null && scrollTarget.stageId === stage.id) {
+      setRetainedTarget(scrollTarget)
+    } else {
+      setRetainedTarget(null)
+    }
+  }, [scrollTarget, stage?.id])
+
   // Ждущий ответа вопрос — всегда в конце истории. Проматываем к нему диалог:
   // и при загрузке страницы (пользователь сразу видит опции ответа), и при
   // появлении нового вопроса от агента. rAF — к следующему кадру, после layout
   // (панель могла только что пересчитать высоту), чтобы scrollHeight был финальным.
+  //
+  // F5: пока retainedTarget указывает НЕ на текущий pending (прицельная
+  // навигация из ленты ещё не доехала до своего Q&A), не перебиваем её этим
+  // автопрыжком — иначе он срабатывает на каждое изменение pending.id и
+  // перетягивает скролл обратно вниз, отменяя переход к более старому
+  // отвеченному вопросу. Once retainedTarget указывает на pending (или снят) —
+  // обычное поведение продолжает работать как раньше.
   useEffect(() => {
     if (pending === null) return
+    if (retainedTarget !== null && !(retainedTarget.phase === pending.phase && retainedTarget.id === pending.id)) return
     const handle = requestAnimationFrame(() => jumpToBottom())
     return () => cancelAnimationFrame(handle)
-  }, [pending?.id, jumpToBottom])
+  }, [pending?.id, jumpToBottom, retainedTarget])
 
   // One-shot glow рамки диалога при появлении нового pending-вопроса (B3):
   // класс dialog-flash навешивается на смену pending.id и снимается через 2.5s
@@ -169,29 +212,18 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     return () => cancelAnimationFrame(handle)
   }, [maximized, jumpToBottom])
 
-  // Прицельный скролл к конкретному Q&A (переход из ленты). Целится в
-  // отдельный state (retainedTarget), а не напрямую в проп: /dialog грузится
-  // асинхронно, поэтому якорь (#dialog-pending либо #qa-<phase>-<id>) обычно
-  // отсутствует в DOM на момент прихода target — цель нужно удержать и
-  // повторить попытку на следующих изменениях entries/pending, а не бросать
-  // после первого промаха. Ресинк с пропом — на смену scrollTarget (в т.ч.
-  // повторный клик по тому же элементу ленты — App.tsx каждый раз создаёт
-  // новый объект-литерал) и на смену стадии (иначе цель, оставшаяся от
-  // предыдущей стадии, могла бы дождаться случайного совпадения id и
-  // проскроллить не туда).
-  const [retainedTarget, setRetainedTarget] = useState<{ phase: string; id: string } | null>(null)
-  useEffect(() => {
-    setRetainedTarget(scrollTarget)
-  }, [scrollTarget, stage?.id])
-
   useEffect(() => {
     if (retainedTarget === null) return
 
-    if (pending !== null && pending.id === retainedTarget.id) {
+    // F4: id уникален только В ПРЕДЕЛАХ фазы — сверяем И phase, И id, иначе
+    // клик по отвеченному planning/q1 при live-ожидающем implementation/q1
+    // ошибочно уводил бы к pending-вопросу вместо истории planning/q1.
+    if (pending !== null && pending.phase === retainedTarget.phase && pending.id === retainedTarget.id) {
       const el = document.getElementById('dialog-pending')
       if (el !== null) {
         el.scrollIntoView({ block: 'center' })
         setRetainedTarget(null)
+        onTargetConsumed?.()
         return
       }
     }
@@ -200,10 +232,11 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (el !== null) {
       el.scrollIntoView({ block: 'center' })
       setRetainedTarget(null)
+      onTargetConsumed?.()
     }
     // Промах — не очищаем retainedTarget, следующий рендер entries/pending
     // (очередной опрос /dialog) повторит попытку.
-  }, [entries, pending, retainedTarget])
+  }, [entries, pending, retainedTarget, onTargetConsumed])
 
   if (!hasContent) return <></>
 

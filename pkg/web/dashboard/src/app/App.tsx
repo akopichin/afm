@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, listNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
@@ -258,17 +258,29 @@ export function App(): ReactElement {
   // (attention, если стадия live-ждёт ответа; иначе history) и запоминаем,
   // к какому именно Q&A прокрутить. Новый объект-литерал на каждый клик (а не
   // переиспользование ссылки) — повторный клик по тому же элементу тоже должен
-  // повторно триггернуть попытку скролла в DialogChannel.
-  const [scrollToDialogTarget, setScrollToDialogTarget] = useState<{ phase: string; id: string } | null>(null)
+  // повторно триггернуть попытку скролла в DialogChannel. stageId — чья это
+  // цель (F6): без него цель, не сброшенная после применения, могла бы дожить
+  // до другой стадии (attention auto-advance, повторное открытие того же
+  // диалога) и проскроллить там что-то не то по случайному совпадению phase/id.
+  const [scrollToDialogTarget, setScrollToDialogTarget] = useState<{ stageId: string; phase: string; id: string } | null>(null)
   function handleOpenDialogFromFeed(stageId: string, phase: string, id: string): void {
     setSelectedStageId(stageId)
     const stage = stages.find((s) => s.id === stageId) ?? null
     if (stage?.status === 'awaiting_user_input') openAttention(stageId)
     else openHistory('dialog-history')
-    setScrollToDialogTarget({ phase, id })
+    setScrollToDialogTarget({ stageId, phase, id })
   }
 
-  // anyAttention (любая стадия прогона ждёт) — точка в шапке И пульс favicon.
+  // Вызывается DialogChannel'ом сразу после того, как scrollToDialogTarget
+  // был успешно применён (скролл состоялся) — родитель обязан сбросить цель,
+  // иначе она переживёт своё назначение (F6: повторное открытие того же
+  // диалога иначе проигрывало бы старый скролл заново).
+  const handleDialogTargetConsumed = useCallback((): void => {
+    setScrollToDialogTarget(null)
+  }, [])
+
+  // anyAttention (любая стадия прогона ждёт) — пульс favicon (шапочная точка
+  // была убрана в этой ветке — пульс остался единственным глобальным сигналом).
   const anyAttention = anyAwaiting(stages)
   // Title flash завязан на ГЛОБАЛЬНОЕ непросмотренное ожидание, а не только на
   // текущую workspace-стадию (Finding #1 второго раунда): мигаем, когда в
@@ -532,15 +544,15 @@ export function App(): ReactElement {
   if (workspaceStage !== null) {
     if (wsState.view === 'attention') {
       detailPanel = contextKind === 'question'
-        ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} scrollTarget={scrollToDialogTarget} />
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
         : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} />
     } else if (wsState.view === 'plan-history') {
       detailPanel = showPlan
         ? <PlanPanel key="plan" stage={workspaceStage} attention={false} />
-        : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} /> : null
+        : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} /> : null
     } else if (wsState.view === 'dialog-history') {
       detailPanel = showDialog
-        ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} />
+        ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
         : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} /> : null
     }
   }

@@ -31,6 +31,17 @@ function jsonResponse(data: unknown): Response {
   return { ok: true, json: async () => data } as Response
 }
 
+// use-auto-grow-textarea also calls the SAME HTMLElement.prototype.scrollIntoView
+// spied on below (with block:'nearest', for a growing pending-question textarea) —
+// noise unrelated to the scrollTarget effect under test, which always calls it
+// with block:'center'. Filters that noise out and returns the target elements.
+function centeredScrollCalls(spy: ReturnType<typeof vi.spyOn>): HTMLElement[] {
+  return spy.mock.calls
+    .map((call, index) => ({ arg: call[0] as ScrollIntoViewOptions | undefined, context: spy.mock.contexts[index] }))
+    .filter(({ arg }) => arg?.block === 'center')
+    .map(({ context }) => context as HTMLElement)
+}
+
 function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
     id: 's1',
@@ -1035,7 +1046,7 @@ describe('DialogChannel', () => {
       vi.spyOn(globalThis, 'fetch').mockReturnValue(delayed)
 
       const { container } = renderDialogChannel(
-        <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ phase: 'planning', id: 'q1' }} />,
+        <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }} />,
       )
 
       // /dialog ещё не ответил — ни истории, ни якоря в DOM. hasContent=false
@@ -1064,7 +1075,7 @@ describe('DialogChannel', () => {
 
       expect(() =>
         renderDialogChannel(
-          <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ phase: 'planning', id: 'missing' }} />,
+          <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'missing' }} />,
         ),
       ).not.toThrow()
 
@@ -1088,11 +1099,103 @@ describe('DialogChannel', () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
       const { container } = renderDialogChannel(
-        <DialogChannel stage={makeStage()} scrollTarget={{ phase: 'planning', id: 'q1' }} />,
+        <DialogChannel stage={makeStage()} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }} />,
       )
 
       await waitFor(() => expect(container.querySelector('#dialog-pending')).not.toBeNull())
       await waitFor(() => expect(scrollSpy).toHaveBeenCalled())
+    })
+
+    // F4: id уникален только В ПРЕДЕЛАХ фазы — совпадение по одному id не
+    // должно уводить к pending-вопросу ДРУГОЙ фазы.
+    test('F4: a pending question in a different phase does not steal a same-id targeted scroll', async () => {
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const entries = [
+        { id: 'q1', phase: 'planning', question: 'Old Q', answer: 'Old A' },
+        { id: 'q1', phase: 'implementation', question: 'Live Q', answer: null, options: ['A'], allow_custom: true },
+      ]
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(entries))
+
+      const { container } = renderDialogChannel(
+        <DialogChannel stage={makeStage()} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }} />,
+      )
+
+      await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
+      // Отфильтровываем шум от use-auto-grow-textarea (тот же
+      // HTMLElement.prototype.scrollIntoView, но вызывается с block:'nearest'
+      // для растущего textarea pending-вопроса) — нас интересует только вызов
+      // ИЗ прицельного эффекта (block:'center').
+      await waitFor(() => expect(centeredScrollCalls(scrollSpy)).toHaveLength(1))
+
+      // Скроллили именно к отвеченному planning/q1, а не к #dialog-pending
+      // (implementation/q1, тот же id — другая фаза).
+      expect(centeredScrollCalls(scrollSpy)[0]?.id).toBe('qa-planning-q1')
+    })
+
+    // F5: клик по старому отвеченному Q&A, пока ждёт ответа НОВЫЙ вопрос —
+    // автопрыжок в конец (эффект на pending?.id) не должен перебивать
+    // прицельный скролл к старому ответу.
+    test('F5: targeting an older answered Q&A while a newer question is pending does not get overridden by the pending auto-jump', async () => {
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const entries = [
+        { id: 'q1', phase: 'planning', question: 'Old Q', answer: 'Old A' },
+        { id: 'q2', phase: 'planning', question: 'New Q', answer: null, options: ['A'], allow_custom: true },
+      ]
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(entries))
+
+      const { container } = renderDialogChannel(
+        <DialogChannel stage={makeStage()} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }} />,
+      )
+
+      await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
+      await waitFor(() => expect(container.querySelector('#dialog-pending')).not.toBeNull())
+
+      // Targeted scroll wins: exactly one targeted (block:'center') scroll, on
+      // the OLD qa anchor — the pending auto-jump (mockJumpToBottom) never fired.
+      await waitFor(() => expect(centeredScrollCalls(scrollSpy)).toHaveLength(1))
+      expect(centeredScrollCalls(scrollSpy)[0]?.id).toBe('qa-planning-q1')
+      expect(mockJumpToBottom).not.toHaveBeenCalled()
+    })
+
+    // F6a: цель, предназначенная ДРУГОЙ стадии, не должна применяться к этой —
+    // без stageId-гейта случайное совпадение phase/id увело бы скролл не туда.
+    test('F6: a scrollTarget for a different stageId is ignored (no scroll)', async () => {
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const entries = [{ id: 'q1', phase: 'planning', question: 'Q', answer: 'A' }]
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(entries))
+
+      const { container } = renderDialogChannel(
+        <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ stageId: 'OTHER-STAGE', phase: 'planning', id: 'q1' }} />,
+      )
+
+      await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
+      // Даём эффектам ещё один цикл на случай ошибочного срабатывания.
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(scrollSpy).not.toHaveBeenCalled()
+    })
+
+    // F6b: после успешного применения цели родитель должен получить сигнал —
+    // без него он никогда не сбросит scrollToDialogTarget, и она переживёт своё
+    // назначение (реплей скролла при повторном открытии того же диалога).
+    test('F6: onTargetConsumed fires exactly once after a successful scroll', async () => {
+      vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
+      const entries = [{ id: 'q1', phase: 'planning', question: 'Q', answer: 'A' }]
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(entries))
+      const onTargetConsumed = vi.fn()
+
+      const { container } = renderDialogChannel(
+        <DialogChannel
+          stage={makeStage({ status: 'done' })}
+          scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }}
+          onTargetConsumed={onTargetConsumed}
+        />,
+      )
+
+      await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
+      await waitFor(() => expect(onTargetConsumed).toHaveBeenCalledTimes(1))
     })
   })
 })
