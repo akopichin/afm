@@ -29,6 +29,22 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
     expect(items[0]).toMatchObject({ text: 'I initialized the build.', kind: 'message', mono: false, actor: 'agent' })
   })
 
+  it('flags ONLY the agent narrative (agent_action tool=text) as markdown', () => {
+    const items = toFeedItems([
+      ev('agent_action', { tool: 'text', detail: '## H' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('agent_action', { tool: 'Read', detail: 'x.ts' }, 's1', '2026-07-10T10:00:01Z'),
+      ev('agent_note', { text: '**literal**' }, 's1', '2026-07-10T10:00:02Z'),
+      ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'reply' }, 's1', '2026-07-10T10:00:03Z'),
+      ev('dialog_question', { phase: 'planning', id: 'q1', title: 'ask' }, 's1', '2026-07-10T10:00:04Z'),
+    ])
+    expect(items[0]?.markdown).toBe(true)
+    // Обычный tool, заметка пользователя и оба dialog-элемента — plain (markdown не выставлен).
+    expect(items[1]?.markdown).toBeUndefined()
+    expect(items[2]?.markdown).toBeUndefined()
+    expect(items[3]?.markdown).toBeUndefined()
+    expect(items[4]?.markdown).toBeUndefined()
+  })
+
   it('maps status transitions to tones', () => {
     const items = toFeedItems([
       ev('stage_status_changed', 'done', 's1', '2026-07-10T10:00:00Z'),

@@ -26,6 +26,11 @@ export type FeedItem = {
   phase?: string
   id?: string
   navigable?: boolean
+  // markdown — рендерить text как markdown (заголовки/таблицы/жирный/код), а не как
+  // сырую строку. Выставляется ТОЛЬКО для нарратива агента (agent_action tool="text"):
+  // источник события знает его семантику. User-текст (заметки/ответы) остаётся plain,
+  // чтобы введённые `*`/`#`/URL не меняли вид сообщения.
+  markdown?: boolean
 }
 
 // FeedGroup — последовательные items одной стороны и стадии, слитые визуально в
@@ -82,6 +87,7 @@ type Mapped = {
   phase?: string
   id?: string
   navigable?: boolean
+  markdown?: boolean
 }
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
@@ -104,7 +110,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // mono: это сообщение агента, а не вызов инструмента. Прочие инструменты
       // (Bash/Read/Write…) — компактная mono-строка "<tool>: <detail>".
       if (tool === 'text') {
-        return { actor: 'agent', tone: 'neutral', kind: 'message', text: detail, mono: false }
+        return { actor: 'agent', tone: 'neutral', kind: 'message', text: detail, mono: false, markdown: true }
       }
       return { actor: 'agent', tone: 'neutral', kind: 'tool', text: `${tool}${detail !== '' ? `: ${detail}` : ''}`, mono: true }
     }
@@ -214,6 +220,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       phase: m.phase,
       id: m.id,
       navigable: m.navigable,
+      markdown: m.markdown,
     })
   })
 

@@ -5,6 +5,7 @@ import { useFeedScope } from '../../hooks/use-feed-scope'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer } from './FeedComposer'
+import { renderPlainMarkdown } from '../plan-panel/markdown'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -113,10 +114,21 @@ function FeedGroupView({ group, onOpenDialog }: FeedGroupViewProps): ReactElemen
       </div>
       <div className="feed-bubble">
         {group.items.map((item) => {
-          const className = `feed-item feed-kind-${item.kind} tone-${item.tone}${item.mono ? ' mono' : ''}`
+          const isMd = item.markdown === true
+          const className = `feed-item feed-kind-${item.kind} tone-${item.tone}${item.mono ? ' mono' : ''}${isMd ? ' feed-item-markdown' : ''}`
           const content = (
             <>
-              <span className="feed-item-text">{item.text}</span>
+              {isMd ? (
+                // Нарратив агента — markdown (заголовки/таблицы/жирный/код). Нейтральный
+                // рендерер (без plan-обёрток), html:false → без XSS. Класс feed-item-text
+                // сохранён ради flex-поведения (min-width:0), md — ради общих стилей .md.
+                <div
+                  className="feed-item-text md"
+                  dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(item.text) }}
+                />
+              ) : (
+                <span className="feed-item-text">{item.text}</span>
+              )}
               {item.gap !== '—' && <span className="feed-item-gap">{item.gap}</span>}
             </>
           )

@@ -8,10 +8,51 @@ import {
   parseLineBlocks,
   renderInline,
   renderMarkdown,
+  renderPlainMarkdown,
 } from './markdown'
 
 // Покрытие поведенческого порта markdown-рендера из app.js (renderMarkdownHTML + decorate* +
 // formatLine/inlineFormat). Функции чистые — DOM/fetch не нужен.
+
+// renderPlainMarkdown — нейтральный рендерер для ленты: тот же markdown-it, но БЕЗ
+// plan-специфики (спец-секции, decorateCheckboxes). Именно его использует нарратив
+// агента в FeedWorkspace.
+describe('renderPlainMarkdown', () => {
+  test('пустой ввод возвращает пустую строку', () => {
+    expect(renderPlainMarkdown('')).toBe('')
+    expect(renderPlainMarkdown('   \n  ')).toBe('')
+  })
+
+  test('рендерит блочный markdown: заголовок, жирный, inline code, таблицу', () => {
+    const html = renderPlainMarkdown(
+      '## Итог\n\n**жирно** и `code`\n\n| a | b |\n|---|---|\n| 1 | 2 |',
+    )
+    expect(html).toContain('<h2>')
+    expect(html).toContain('<strong>жирно</strong>')
+    expect(html).toContain('<code>code</code>')
+    expect(html).toContain('<table>')
+    expect(html).toContain('<th>a</th>')
+    expect(html).toContain('<td>1</td>')
+  })
+
+  test('НЕ применяет plan-специфику: спецсекции и decorateCheckboxes', () => {
+    const html = renderPlainMarkdown('## Assumptions\n- none\n\n- [x] done `[x]` inside')
+    // спец-секция плана не оборачивается
+    expect(html).not.toContain('plan-section-wrapper')
+    expect(html).toContain('<h2>Assumptions</h2>')
+    // чекбоксы не декорируются (в т.ч. внутри inline code)
+    expect(html).not.toContain('cb-done')
+    expect(html).not.toContain('cb-open')
+  })
+
+  test('безопасность: raw HTML экранируется, javascript:-ссылка не становится href', () => {
+    const imgHtml = renderPlainMarkdown('<img src=x onerror=alert(1)>')
+    expect(imgHtml).not.toContain('<img')
+    expect(imgHtml).toContain('&lt;img')
+    const linkHtml = renderPlainMarkdown('[x](javascript:alert(1))')
+    expect(linkHtml).not.toContain('href="javascript:')
+  })
+})
 
 describe('renderMarkdown', () => {
   test('пустой ввод возвращает пустую строку', () => {

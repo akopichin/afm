@@ -39,6 +39,48 @@ describe('FeedWorkspace', () => {
     expect(container.textContent).toContain('Мысль агента')
   })
 
+  // Реальный кейс из вывода стадии review (goga): агент пишет заголовок, жирный текст и
+  // markdown-таблицу. Раньше это отрисовывалось сырым текстом («сломанный md рендер»).
+  it('renders agent markdown narrative as real markdown (heading, table, bold, code)', () => {
+    const detail = [
+      'Ревью задачи завершено. ✅',
+      '',
+      '## Итог ревью (`goga-review-task`)',
+      '',
+      'Проверил `task.md`. **Критичных и High-находок нет.**',
+      '',
+      '| # | Severity | Область | Статус |',
+      '|---|----------|---------|--------|',
+      '| 1 | Medium | Current State — точность ссылок | ✅ Fixed |',
+      '',
+      '**Вердикт: passed.**',
+    ].join('\n')
+    const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]
+    const { container } = render(<FeedWorkspace events={events} stageId={null} />)
+
+    const item = container.querySelector('.feed-item-markdown')
+    expect(item).not.toBeNull()
+    const h2 = container.querySelector('h2')
+    expect(h2?.textContent).toContain('Итог ревью')
+    expect(container.querySelector('table')).not.toBeNull()
+    expect(container.querySelectorAll('th').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('td').length).toBeGreaterThan(0)
+    const strong = Array.from(container.querySelectorAll('strong')).map((el) => el.textContent)
+    expect(strong).toContain('Критичных и High-находок нет.')
+    const codes = Array.from(container.querySelectorAll('code')).map((el) => el.textContent)
+    expect(codes).toContain('task.md')
+    // Не должно быть сырых markdown-маркеров как текста.
+    expect(container.textContent).not.toContain('## Итог')
+  })
+
+  it('does NOT markdown-render a user note (agent_note stays literal text)', () => {
+    const events = [ev('agent_note', { text: '**literal**' }, 's1', '2026-07-10T10:00:00Z')]
+    const { container } = render(<FeedWorkspace events={events} stageId={null} />)
+    expect(container.querySelector('.feed-item-markdown')).toBeNull()
+    expect(container.querySelector('strong')).toBeNull()
+    expect(container.textContent).toContain('**literal**')
+  })
+
   // --- Фильтрация по стадии (scope This stage | All) ---
 
   // События двух стадий, для проверки фильтра.

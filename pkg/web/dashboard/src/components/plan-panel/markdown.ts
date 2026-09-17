@@ -43,6 +43,16 @@ export function renderMarkdown(text: string): string {
   return decorateCheckboxes(splitAndRender(text))
 }
 
+// Нейтральный блочный рендер markdown БЕЗ plan-специфики: не сворачивает спец-секции
+// (## Assumptions / ## Acceptance Criteria) и НЕ применяет decorateCheckboxes (та бьёт
+// по `[x]`/`[ ]` даже внутри `<code>`). Тот же настроенный экземпляр md (html:false —
+// без XSS, linkify, ссылки target=_blank). Для потребителей вне плана — например ленты,
+// где текст агента может содержать любой markdown, а plan-обёртки только мешают.
+export function renderPlainMarkdown(text: string): string {
+  if (text.trim() === '') return ''
+  return md.render(text)
+}
+
 // Инлайн-рендер одной строки для review-режима (inlineFormat в app.js).
 export function renderInline(text: string): string {
   return decorateCheckboxes(md.renderInline(text))
