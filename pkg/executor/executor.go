@@ -25,7 +25,7 @@ type Config struct {
 	Command        string
 	ExtraArgs      []string
 	IdleTimeout    time.Duration
-	TruncateOutput int                          // 0 = no truncation; max chars for logged agent text/Bash-command detail
+	TruncateOutput int                          // 0 = no truncation; max chars for Bash-command/tool detail (agent text narrative is never truncated)
 	OnAction       func(tool, detail string)    // called for each parsed agent action (may be nil)
 	SessionID      string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
 	Resume         bool                         // if true, --resume <SessionID> is used instead of --session-id
@@ -189,11 +189,11 @@ func contentToAction(c streamContent, limit int) (toolName, detail string, ok bo
 		if c.Text == "" {
 			return "", "", false
 		}
-		d := c.Text
-		if limit > 0 && len(d) > limit {
-			d = d[:limit] + "..."
-		}
-		return contentTypeText, d, true
+		// Нарратив агента (его «мысли»/лог) НЕ обрезаем: limit бьёт только по
+		// механическому выводу инструментов (Bash-команда, raw input) ниже.
+		// Пользователю нужен полный текст рассуждений — иначе в ленте длинный
+		// summary обрывался на «…», а таблицы/выводы за точкой обрезки терялись.
+		return contentTypeText, c.Text, true
 	case contentTypeToolUse:
 		var inp toolInput
 		json.Unmarshal(c.Input, &inp) //nolint:errcheck

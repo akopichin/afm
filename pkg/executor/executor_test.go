@@ -92,11 +92,14 @@ func TestParseToolAction(t *testing.T) {
 			wantOK:     true,
 		},
 		{
-			name:       "text truncation over 100 chars when limit is 100",
+			// Нарратив агента НЕ обрезается даже при заданном limit — limit бьёт
+			// только по tool/Bash-детали (см. кейс ниже). Полные «мысли» агента
+			// нужны в ленте целиком.
+			name:       "text NOT truncated even when limit is set",
 			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}`, strings.Repeat("x", 120)),
 			limit:      100,
 			wantTool:   testTypeText,
-			wantDetail: strings.Repeat("x", 100) + "...",
+			wantDetail: strings.Repeat("x", 120),
 			wantOK:     true,
 		},
 		{
