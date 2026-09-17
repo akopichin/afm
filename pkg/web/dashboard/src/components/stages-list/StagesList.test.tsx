@@ -418,13 +418,21 @@ describe('StagesList', () => {
     expect(rail).not.toHaveTextContent('…')
   })
 
-  test('rail cost: cost==null + running + non-script + accounting ok shows the pending ellipsis placeholder', () => {
+  test('rail cost: cost==null + running + non-script + accounting ok shows the pending spinner (no ellipsis text)', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
 
-    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toHaveTextContent('…')
+    const rail = screen.getByRole('listitem').querySelector('.stage-cost')
+    // Спиннер — не текст: старого «…» больше нет, но доступное предложение
+    // «Estimated cost pending» остаётся для скринридеров, а сам спиннер скрыт
+    // от них (aria-hidden), чтобы не озвучивался как отдельный узел.
+    const spinner = rail?.querySelector('.stage-cost-spinner')
+    expect(spinner).not.toBeNull()
+    expect(spinner).toHaveAttribute('aria-hidden', 'true')
+    expect(rail).not.toHaveTextContent('…')
+    expect(rail).toHaveTextContent('Estimated cost pending')
   })
 
   test('rail cost: cost==null + running SCRIPT stage shows nothing (a script has no priced agent turn to estimate)', () => {

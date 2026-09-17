@@ -56,13 +56,15 @@ function costA11yText(displayCost: string, coverage: Coverage): string {
 //      «…» (оценка ожидается).
 //   3. иначе — ничего (pending, скрипт, unsupported/unavailable — включая
 //      unavailable с историческими данными, retrying).
-function railCost(stage: Stage, accounting: AccountingState): { text: string; a11y: string } | null {
+function railCost(stage: Stage, accounting: AccountingState): { text: string; a11y: string; pending?: boolean } | null {
   if (stage.cost != null) {
     return { text: stage.cost.displayCost, a11y: costA11yText(stage.cost.displayCost, stage.cost.coverage) }
   }
   const canEstimate = !stage.isScript && accounting.supported && accounting.health === 'ok' && COST_PENDING_STATUSES.has(stage.status)
   if (!canEstimate) return null
-  return { text: '…', a11y: 'Estimated cost pending' }
+  // pending — маленький спиннер вместо текста (сам символ рисуется в CSS);
+  // text пустой, чтобы визуальная ветка не показывала ничего лишнего рядом.
+  return { text: '', a11y: 'Estimated cost pending', pending: true }
 }
 
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
@@ -287,7 +289,9 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
                 узле, на который указывает aria-describedby строки. */}
             {cost !== null && (
               <span className="stage-cost">
-                <span aria-hidden="true">{cost.text}</span>
+                {cost.pending
+                  ? <span className="stage-cost-spinner" aria-hidden="true" />
+                  : <span aria-hidden="true">{cost.text}</span>}
                 <span id={costId} className="stage-cost-sr">{cost.a11y}</span>
               </span>
             )}

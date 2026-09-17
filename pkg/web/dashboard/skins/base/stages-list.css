@@ -285,8 +285,30 @@
 .stage-item.active .stage-cost {
   color: var(--cost-rail-strong);
 }
+
+/* Оценка стоимости ещё считается: маленький крутящийся ободок вместо цифры.
+   currentColor наследует --cost-rail(-strong) от .stage-cost, поэтому спиннер
+   тема-осознан и подсвечивается на hover/active вместе с остальной ценой.
+   inline-block + vertical-align — чтобы кружок сидел по центру строки, а не
+   уезжал к базовой линии текста рядом. */
+.stage-cost-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  vertical-align: -1px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.85;
+  animation: stageCostSpin 0.7s linear infinite;
+}
+@keyframes stageCostSpin {
+  to { transform: rotate(360deg); }
+}
 @media (prefers-reduced-motion: reduce) {
   .stage-cost { transition: none; }
+  /* Без анимации показываем статичный ободок — сигнал «ожидание» сохраняется. */
+  .stage-cost-spinner { animation: none; }
 }
 
 /* === Active (selected) stage === */

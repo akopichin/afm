@@ -52,7 +52,8 @@ The dashboard surfaces the run's **estimated** cost in three places:
   gap or that the accounting writer went unavailable),
 - a **Cost** tab — the same per-stage / run-overhead / total table as `afm report`,
   each row expandable into a token-mix breakdown,
-- a quiet per-stage figure in the stage rail once a stage has a priced record.
+- a quiet per-stage figure in the stage rail once a stage has a priced record — while
+  an active stage's first estimate is still pending, a small spinner sits in its place.
 
 All three are a **list-price estimate**, not an invoice. To hide them entirely, set
 `accounting: { enabled: false }` (or `AFM_ACCOUNTING=0`) — cost is still collected

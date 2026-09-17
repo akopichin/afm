@@ -4,6 +4,31 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-17
+
+### Feature: syntax highlighting for YAML, Markdown and Bash in the file browser
+
+The Docker file browser now highlights **yaml**, **markdown** and **bash** in addition
+to the existing go / ts / js / python. `detectLanguage` maps `.yaml`/`.yml`,
+`.md`/`.markdown` and `.sh`/`.bash` to the matching highlight.js grammar, and the
+frontend registers the three new grammars (seven total, still `highlight.js/lib/core`
+so the bundle stays lean).
+
+- **Theme-aware, no new hljs theme.** Added tokens `hljs-section`/`hljs-link` (Markdown
+  headings and links) and `hljs-code`/`hljs-variable` (Markdown inline code, Bash `$var`)
+  to the existing semantic palette, so highlighting stays readable in every skin ×
+  light/dark.
+- Known limitation: Markdown's embedded XML and YAML's ERB (Ruby) sub-languages stay
+  safely escaped but unhighlighted — those grammars aren't registered.
+
+### Change: a spinner replaces the "…" cost-estimate placeholder in the stage rail
+
+While an active stage's first cost estimate is still pending, the stage rail used to
+show a `…`, which read like truncated text. It's now a small, theme-aware spinner sitting
+in the same cost slot — it inherits the rail's `--cost-rail` colour (so it matches every
+skin), respects `prefers-reduced-motion` (a static ring), and stays hidden from screen
+readers while the "Estimated cost pending" sentence still reaches them.
+
 ## 2026-09-16
 
 ### Feature: agent prose stands out from command rows in the feed
