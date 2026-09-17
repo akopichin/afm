@@ -1,9 +1,11 @@
 # afm
 
-**Orchestrate multi-stage AI tasks.** Describe a task in a YAML file, break it into
-stages — afm runs AI agents sequentially or in parallel, waits for your approval of
-their plans, and carries out the implementation. Works with `claude` and any
-claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
+**A control plane for AI workflows that need to finish.** Coordinate multiple agents
+across long-running stages, keep humans in the loop when judgment is needed, and make
+every run observable, resumable, and recoverable from failure.
+
+Use Claude, Codex, GLM, DeepSeek, Cursor, or other compatible agents — together in the
+same workflow.
 
 [![CI](https://github.com/akopichin/afm/actions/workflows/ci.yml/badge.svg)](https://github.com/akopichin/afm/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/akopichin/afm?sort=semver)](https://github.com/akopichin/afm/releases)
