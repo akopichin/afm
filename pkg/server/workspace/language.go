@@ -9,6 +9,7 @@ import (
 // extensions.
 const (
 	langGo    = "go"
+	langYAML  = "yaml"
 	langPlain = "plain"
 )
 
@@ -16,6 +17,12 @@ const (
 // language id the frontend expects. Unknown extensions fall back to langPlain.
 // This is the single definition of the mapping — Task 8's Read reuses it.
 func detectLanguage(name string) string {
+	// goga CODEMANIFEST files have no extension but hold YAML-structured
+	// content. Match the exact base name (case-insensitive) so a near-miss
+	// like CODEMANIFEST.bak still falls through to the extension switch below.
+	if strings.EqualFold(filepath.Base(name), "CODEMANIFEST") {
+		return langYAML
+	}
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".go":
 		return langGo
@@ -26,7 +33,7 @@ func detectLanguage(name string) string {
 	case ".py", ".pyi":
 		return "python"
 	case ".yaml", ".yml":
-		return "yaml"
+		return langYAML
 	case ".md", ".markdown":
 		return "markdown"
 	case ".sh", ".bash":

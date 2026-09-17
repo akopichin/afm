@@ -26,6 +26,12 @@ func TestDetectLanguage(t *testing.T) {
 		"Alpha.GO":       "go",   // case-insensitive extension
 		"Config.YML":     "yaml", // case-insensitive extension
 		"archive.TAR":    "plain",
+		// goga CODEMANIFEST files: no extension, YAML-structured content.
+		"CODEMANIFEST":                     "yaml",  // exact base name
+		"codemanifest":                     "yaml",  // case-insensitive
+		"internal/core/model/CODEMANIFEST": "yaml",  // nested path → base name
+		"CODEMANIFEST.bak":                 "plain", // near-miss: not exact base
+		"CODEMANIFEST.yaml":                "yaml",  // covered by .yaml case
 	}
 	for name, want := range cases {
 		if got := detectLanguage(name); got != want {
