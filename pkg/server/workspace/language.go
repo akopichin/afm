@@ -25,6 +25,12 @@ func detectLanguage(name string) string {
 		return "javascript"
 	case ".py", ".pyi":
 		return "python"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".md", ".markdown":
+		return "markdown"
+	case ".sh", ".bash":
+		return "bash"
 	default:
 		return langPlain
 	}

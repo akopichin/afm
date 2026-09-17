@@ -8,6 +8,21 @@ describe('highlight', () => {
     expect(html).toContain('package')
   })
 
+  test('highlights yaml', () => {
+    const html = highlight('yaml', 'name: build')
+    expect(html).toContain('hljs-attr')
+  })
+
+  test('highlights markdown', () => {
+    const html = highlight('markdown', '# Title')
+    expect(html).toContain('hljs-section')
+  })
+
+  test('highlights bash', () => {
+    const html = highlight('bash', 'echo "$HOME"')
+    expect(html).toContain('hljs-built_in')
+  })
+
   test('falls back to escaped plain text for language "plain"', () => {
     const html = highlight('plain', '<b>hi</b>')
     expect(html).toBe('&lt;b&gt;hi&lt;/b&gt;')

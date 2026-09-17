@@ -665,6 +665,17 @@
 .hljs-attr {
   color: var(--danger);
 }
+/* markdown-заголовки и ссылки, bash-переменные ($var) — классы, которые
+   дают yaml/markdown/bash поверх базовой четвёрки. Те же семантические токены
+   скина, поэтому подсветка остаётся тема-осознанной. */
+.hljs-section,
+.hljs-link {
+  color: var(--accent-primary);
+}
+.hljs-code,
+.hljs-variable {
+  color: var(--attention);
+}
 .hljs-symbol,
 .hljs-bullet,
 .hljs-meta,

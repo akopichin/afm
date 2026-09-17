@@ -1,7 +1,12 @@
-// Тонкая обёртка над highlight.js/lib/core с ЯВНЫМ списком из 4 грамматик —
-// go/typescript/javascript/python (см. бриф Task 13). core (не index.js)
+// Тонкая обёртка над highlight.js/lib/core с ЯВНЫМ списком из 7 грамматик —
+// go/typescript/javascript/python/yaml/markdown/bash. core (не index.js)
 // нужен, чтобы не тянуть в бандл все ~190 грамматик highlight.js — дашборд
-// показывает только код проекта afm, для которого этих четырёх достаточно.
+// показывает только код проекта afm, для которого этого набора достаточно.
+//
+// markdown объявляет xml как sub-language (inline HTML), а yaml — ruby (ERB);
+// эти грамматики мы НЕ регистрируем, поэтому такие вкрапления остаются
+// безопасно экранированными, но без подсветки — осознанный компромисс, чтобы
+// не тащить в бандл лишние грамматики ради краевых случаев.
 //
 // highlight() — единственная функция, чей вывод разрешено класть в
 // dangerouslySetInnerHTML (см. FileViewer.tsx): hljs.highlight() сам
@@ -10,22 +15,28 @@
 // 'plain' или нераспознанной грамматики, чтобы обе ветки одинаково безопасны
 // класть в HTML.
 import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
 import go from 'highlight.js/lib/languages/go'
 import javascript from 'highlight.js/lib/languages/javascript'
+import markdown from 'highlight.js/lib/languages/markdown'
 import python from 'highlight.js/lib/languages/python'
 import typescript from 'highlight.js/lib/languages/typescript'
+import yaml from 'highlight.js/lib/languages/yaml'
 
 hljs.registerLanguage('go', go)
 hljs.registerLanguage('typescript', typescript)
 hljs.registerLanguage('javascript', javascript)
 hljs.registerLanguage('python', python)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('bash', bash)
 
 export function escapeHtml(source: string): string {
   return source.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 // highlight возвращает HTML-строку: подсвеченную (hljs сам экранирует текст
-// внутри span'ов) для языка из зарегистрированных четырёх, иначе — просто
+// внутри span'ов) для языка из зарегистрированных семи, иначе — просто
 // экранированный исходник как есть (язык 'plain' — явный сигнал "не пытайся
 // подсвечивать", как и любой язык, которого нет в hljs.getLanguage).
 export function highlight(language: string, source: string): string {

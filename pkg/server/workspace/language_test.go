@@ -7,19 +7,25 @@ import "testing"
 // evidence on a non-Linux dev host.
 func TestDetectLanguage(t *testing.T) {
 	cases := map[string]string{
-		"main.go":     "go",
-		"app.ts":      "typescript",
-		"App.tsx":     "typescript",
-		"index.js":    "javascript",
-		"App.jsx":     "javascript",
-		"esm.mjs":     "javascript",
-		"legacy.cjs":  "javascript",
-		"script.py":   "python",
-		"types.pyi":   "python",
-		"README.md":   "plain",
-		"noext":       "plain",
-		"Alpha.GO":    "go", // case-insensitive extension
-		"archive.TAR": "plain",
+		"main.go":        "go",
+		"app.ts":         "typescript",
+		"App.tsx":        "typescript",
+		"index.js":       "javascript",
+		"App.jsx":        "javascript",
+		"esm.mjs":        "javascript",
+		"legacy.cjs":     "javascript",
+		"script.py":      "python",
+		"types.pyi":      "python",
+		"flow.yaml":      "yaml",
+		"config.yml":     "yaml",
+		"README.md":      "markdown",
+		"NOTES.markdown": "markdown",
+		"build.sh":       "bash",
+		"lib.bash":       "bash",
+		"noext":          "plain",
+		"Alpha.GO":       "go",   // case-insensitive extension
+		"Config.YML":     "yaml", // case-insensitive extension
+		"archive.TAR":    "plain",
 	}
 	for name, want := range cases {
 		if got := detectLanguage(name); got != want {
