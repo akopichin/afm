@@ -221,8 +221,8 @@
 }
 
 /* Maximized-режим (портал Maximizable в <body>, см. .maximize-overlay в layout.css):
-   тот же приём, что и для .log-content (см. log-panel.css) — фиксированный
-   потолок высоты снимается, план занимает всё доступное место оверлея. */
+   фиксированный потолок высоты снимается, план занимает всё доступное место
+   оверлея. */
 .maximize-overlay #plan-content {
   max-height: none;
   flex: 1;

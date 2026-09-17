@@ -55,7 +55,7 @@ function stageView(id: string, name: string, status: string, overrides: StageVie
 }
 
 // Мокирует fetch для App: /api/status отдаёт statusPayload() (и считает вызовы через
-// onStatusCall), остальные эндпоинты (log/plan/dialog) отвечают пустыми заглушками.
+// onStatusCall), остальные эндпоинты (plan/dialog) отвечают пустыми заглушками.
 function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => void) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : (input as Request).url
@@ -74,7 +74,6 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
       return { ok: true, json: async () => payload } as Response
     }
 
-    if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
     if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
     if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
 
@@ -622,8 +621,7 @@ describe('App', () => {
       if (url.includes('/revise')) {
         return { ok: false, status: 409, json: async () => ({}) } as Response
       }
-      if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
-      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+        if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
 
       return { ok: true, json: async () => [] } as Response
@@ -664,8 +662,7 @@ describe('App', () => {
       if (url.includes('/pause')) {
         return { ok: false, status: 409, json: async () => ({}) } as Response
       }
-      if (url.includes('/log')) return { ok: true, text: async () => '' } as Response
-      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+        if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
 
       return { ok: true, json: async () => [] } as Response

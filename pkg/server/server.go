@@ -332,8 +332,6 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(path, "/plan"):
 		s.handlePlan(w, r)
-	case strings.HasSuffix(path, "/log"):
-		s.handleLog(w, r)
 	case strings.HasSuffix(path, "/approve") && r.Method == http.MethodPost:
 		s.handleApprove(w, r)
 	case strings.HasSuffix(path, "/revise") && r.Method == http.MethodPost:

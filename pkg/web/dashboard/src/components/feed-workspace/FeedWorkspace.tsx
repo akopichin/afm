@@ -1,7 +1,6 @@
 import { useMemo, type ReactElement } from 'react'
-import type { AfmEvent, LogEntry } from '../../types'
+import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
-import { useFeedMode } from '../../hooks/use-feed-mode'
 import { useFeedScope } from '../../hooks/use-feed-scope'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
@@ -9,9 +8,6 @@ import { FeedComposer } from './FeedComposer'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
-  // Лог выбранной стадии — второй режим той же панели (Feed/Log). Приходит из
-  // useStageLog (App.tsx), очищается при смене стадии.
-  logEntries: LogEntry[]
   // Разрешённый id стадии воркспейса (уже сверен со списком stages в App), либо
   // null, если стадия не выбрана / устарела. Основа фильтра «This stage».
   stageId: string | null
@@ -36,16 +32,14 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
 
 // FeedWorkspace — единый воркспейс ленты: мессенджер-презентация РЕАЛЬНЫХ событий
 // (агент/флоу слева, пользователь справа; tool/script — компактные mono-строки;
-// success/warning/failure — семантические тональные поверхности) плюс локальный
-// сегмент-переключатель Feed/Log. Пришёл на смену EventFeedPanel: без PanelFrame/
-// Maximizable (воркспейс и так на всю ширину). Сохранены useFeedMode
-// (`afm-feed-mode`), независимый stick-to-bottom для ленты и лога, Jump to latest.
-// Плюс scope-фильтр This stage | All (useFeedScope, `afm-feed-scope`): по
-// умолчанию лента показывает события выбранной стадии, All — весь флоу.
-export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog, noteTarget = null, onSendNote }: FeedWorkspaceProps): ReactElement {
+// success/warning/failure — семантические тональные поверхности). Пришёл на смену
+// EventFeedPanel: без PanelFrame/Maximizable (воркспейс и так на всю ширину),
+// stick-to-bottom + Jump to latest. Scope-фильтр This stage | All (useFeedScope,
+// `afm-feed-scope`): по умолчанию лента показывает события выбранной стадии, All —
+// весь флоу. Мысли агента (agent_action tool="text") рендерятся здесь как проза —
+// это событие ленты, отдельного лог-режима больше нет.
+export function FeedWorkspace({ events, stageId, onOpenDialog, noteTarget = null, onSendNote }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
-  const log = useStickToBottom<HTMLPreElement>()
-  const { mode, toggle } = useFeedMode()
   const { scope, toggle: toggleScope } = useFeedScope()
 
   // Эффективный scope: «только эта стадия» работает лишь когда стадия реально
@@ -63,56 +57,37 @@ export function FeedWorkspace({ events, logEntries, stageId, onOpenDialog, noteT
     return groupFeedItems(toFeedItems(visible))
   }, [events, scope, stageId])
 
-  const hasLogEntries = logEntries.length > 0
-
-  const showFeed = () => { if (mode !== 'feed') toggle() }
-  const showLog = () => { if (mode !== 'log') toggle() }
   const showStageScope = () => { if (scope !== 'stage') toggleScope() }
   const showAllScope = () => { if (scope !== 'all') toggleScope() }
 
-  // Тумблер scope имеет смысл только в ленте (Feed) и только при выбранной
-  // стадии: в Log-режиме своя per-stage логика (/api/stages/<id>/log).
-  const showScopeSwitch = mode === 'feed' && stageId !== null
+  // Тумблер scope имеет смысл только при выбранной стадии.
+  const showScopeSwitch = stageId !== null
 
   return (
     <section className="feed-workspace" aria-label="Feed">
-      <div className="feed-controls">
-        <div className="feed-switch" role="group" aria-label="Feed or log">
-          <button type="button" className={`feed-switch-btn${mode === 'feed' ? ' active' : ''}`} aria-pressed={mode === 'feed'} onClick={showFeed}>Feed</button>
-          <button type="button" className={`feed-switch-btn${mode === 'log' ? ' active' : ''}`} aria-pressed={mode === 'log'} onClick={showLog}>Log</button>
-        </div>
-        {showScopeSwitch && (
+      {showScopeSwitch && (
+        <div className="feed-controls">
           <div className="feed-switch" role="group" aria-label="Feed scope">
             <button type="button" className={`feed-switch-btn${scope === 'stage' ? ' active' : ''}`} aria-pressed={scope === 'stage'} onClick={showStageScope}>This stage</button>
             <button type="button" className={`feed-switch-btn${scope === 'all' ? ' active' : ''}`} aria-pressed={scope === 'all'} onClick={showAllScope}>All</button>
           </div>
-        )}
-      </div>
-
-      {mode === 'feed' ? (
-        <div id="feed-content" className="feed-scroll" ref={feed.ref}>
-          {groups.length === 0 ? (
-            <div className="empty-hint feed-empty">{stageScopeActive ? 'No events for this stage yet' : 'No events yet'}</div>
-          ) : (
-            groups.map((g) => <FeedGroupView key={g.key} group={g} onOpenDialog={onOpenDialog} />)
-          )}
-          {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
-        </div>
-      ) : (
-        <div className="feed-scroll log-scroll">
-          <pre id="log-content" ref={log.ref} className={`log-content${hasLogEntries ? '' : ' hidden'}`}>
-            {logEntries.map((entry) => entry.message).join('\n')}
-          </pre>
-          {hasLogEntries && !log.stick && <JumpToLatestButton onClick={log.jumpToBottom} />}
-          <div id="log-empty" className={`empty-hint${hasLogEntries ? ' hidden' : ''}`}>Log is empty</div>
         </div>
       )}
 
-      {/* Messenger-поле заметки живому агенту — прибито к низу ленты, только в
-          режиме Feed и только когда стадия принимает заметки (noteTarget != null:
-          running и не скрипт). key=noteTarget: смена стадии даёт свежий пустой
-          черновик (черновик не «переедет» в другую стадию). */}
-      {mode === 'feed' && noteTarget !== null && onSendNote !== undefined && (
+      <div id="feed-content" className="feed-scroll" ref={feed.ref}>
+        {groups.length === 0 ? (
+          <div className="empty-hint feed-empty">{stageScopeActive ? 'No events for this stage yet' : 'No events yet'}</div>
+        ) : (
+          groups.map((g) => <FeedGroupView key={g.key} group={g} onOpenDialog={onOpenDialog} />)
+        )}
+        {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
+      </div>
+
+      {/* Messenger-поле заметки живому агенту — прибито к низу ленты, только когда
+          стадия принимает заметки (noteTarget != null: running и не скрипт).
+          key=noteTarget: смена стадии даёт свежий пустой черновик (черновик не
+          «переедет» в другую стадию). */}
+      {noteTarget !== null && onSendNote !== undefined && (
         <FeedComposer key={noteTarget} stageId={noteTarget} onSend={(text) => onSendNote(noteTarget, text)} />
       )}
     </section>

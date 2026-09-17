@@ -15,7 +15,6 @@ import { FileBrowserProvider } from '../components/file-browser'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useEventFeed } from '../hooks/use-event-feed'
-import { useStageLog } from '../hooks/use-stage-log'
 import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
@@ -306,7 +305,6 @@ export function App(): ReactElement {
       ? workspaceStage.id
       : null
 
-  const logEntries = useStageLog(workspaceStageId)
   const elapsedMs = useElapsed(startedAt)
   const idleMs = useIdleMs(idleAccumulatedMs, idleSince, connected)
   const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, connected)
@@ -626,7 +624,7 @@ export function App(): ReactElement {
                     accounting={accounting}
                   />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
-                  <FeedWorkspace events={events} logEntries={logEntries} stageId={workspaceStage?.id ?? null} onOpenDialog={handleOpenDialogFromFeed} noteTarget={noteTarget} onSendNote={handleSendNote} />
+                  <FeedWorkspace events={events} stageId={workspaceStage?.id ?? null} onOpenDialog={handleOpenDialogFromFeed} noteTarget={noteTarget} onSendNote={handleSendNote} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

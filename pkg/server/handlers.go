@@ -146,55 +146,6 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data) //nolint:gosec // G705: data read from server-side file, not user input
 }
 
-// maxLogBytes ограничивает размер ответа GET /log хвостом (finding #10).
-const maxLogBytes = 1 << 20 // 1 MB
-
-func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/log")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	stageDir := filepath.Join(s.runDir, stageID)
-
-	var logContent string
-	appendLog := func(name string) {
-		data, err := os.ReadFile(filepath.Join(stageDir, name))
-		if err == nil {
-			logContent += string(data)
-		}
-	}
-	// before.log/script.log/after.log — логи script_before/script-стадий/
-	// script_after хуков (см. pkg/orchestrator/hooks.go, agents.go). Стадии
-	// без хуков их просто не пишут — appendLog молча пропускает отсутствующие
-	// файлы, как и обычные phase-логи ниже.
-	appendLog("before.log")
-	for _, p := range flow.Phases() {
-		for _, name := range flow.PhaseLogFiles(p) {
-			appendLog(name)
-		}
-	}
-	appendLog("script.log")
-	appendLog("after.log")
-	if logContent == "" {
-		http.Error(w, "no logs found", http.StatusNotFound)
-		return
-	}
-	// Tail-cap (finding #10): без ограничения ответ /log растёт неограниченно с
-	// длительностью рана, а UI перекачивает и перепарсивает его целиком каждые 3с
-	// (стоимость сети/аллокаций/GC/рендера растёт бесконечно). Отдаём только
-	// последние maxLogBytes, обрезая до границы строки, с маркером усечения.
-	if len(logContent) > maxLogBytes {
-		trimmed := logContent[len(logContent)-maxLogBytes:]
-		if nl := strings.IndexByte(trimmed, '\n'); nl >= 0 && nl+1 <= len(trimmed) {
-			trimmed = trimmed[nl+1:]
-		}
-		logContent = "… (log truncated to last 1 MB) …\n" + trimmed
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = fmt.Fprint(w, logContent) //nolint:gosec // G705: log content from server-side files
-}
-
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/approve")
 	if !isValidStageID(stageID) {

@@ -5,7 +5,6 @@ export type { AfmEvent, AfmEventType } from './afm-event'
 export type { DialogQuestion } from './dialog-question'
 export type { DialogAnswer } from './dialog-answer'
 export type { PlanComment } from './plan-comment'
-export type { LogEntry, LogLevel } from './log-entry'
 export type { ReviewNote } from './review-note'
 
 export {

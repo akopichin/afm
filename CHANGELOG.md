@@ -6,6 +6,23 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-17
 
+### Change: the Feed/Log toggle is gone — the Feed is the only workspace view
+
+The right-hand workspace used to carry a **Feed / Log** segmented control: *Feed* is the
+messenger view of the real event log, *Log* was a raw dump of the selected stage's
+`<phase>.log` files. The Log view is removed — the agent's thoughts/narrative
+(`agent_action` with `tool="text"`) already render as prose **in the Feed**, driven by
+events, so the separate raw-log mode was redundant.
+
+- **Frontend:** dropped `useFeedMode` (`afm-feed-mode`), `useStageLog`, the `LogEntry`
+  type, the Feed/Log buttons and the `<pre>` log branch in `FeedWorkspace`. The Feed now
+  renders unconditionally; the only control left is the **This stage | All** scope switch
+  (`useFeedScope`), shown when a stage is selected. Deleted `base/log-panel.css` and its
+  `@import` from every skin.
+- **Backend:** removed the `GET /api/stages/{id}/log` handler and its route. The raw
+  `<phase>.log` files on disk are untouched — they still feed the event stream; only the
+  HTTP endpoint that served them verbatim is gone.
+
 ### Feature: syntax highlighting for YAML, Markdown and Bash in the file browser
 
 The Docker file browser now highlights **yaml**, **markdown** and **bash** in addition

@@ -210,24 +210,11 @@
   outline-offset: 1px;
 }
 
-/* --- Log-режим --- */
-.log-scroll { padding-right: 0; }
-.log-content {
-  margin: 0;
-  padding: 8px 12px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-  white-space: pre;
-  overflow-x: auto;
-}
-.log-content.hidden,
 .empty-hint.hidden { display: none; }
 
 /* --- Messenger-поле заметки живому агенту (FeedComposer) ---
    Прибито к низу ленты (flex-shrink:0 под .feed-scroll{flex:1}). Показывается
-   только в feed-режиме и только для running-стадии (см. FeedWorkspace/App). */
+   только для running-стадии (см. FeedWorkspace/App). */
 .feed-composer {
   flex-shrink: 0;
   display: flex;

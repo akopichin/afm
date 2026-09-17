@@ -9,9 +9,9 @@ function readInitialScope(): FeedScope {
 }
 
 // Область ленты: 'stage' (события только выбранной стадии + flow-level) или 'all'
-// (все события флоу). Глобальный, как и useFeedMode: переживает смену выбранной
-// стадии и reload страницы, пока пользователь не переключит сам. Дефолт 'stage' —
-// лента по умолчанию сфокусирована на текущей стадии.
+// (все события флоу). Глобальный: переживает смену выбранной стадии и reload
+// страницы, пока пользователь не переключит сам. Дефолт 'stage' — лента по
+// умолчанию сфокусирована на текущей стадии.
 export function useFeedScope(): { scope: FeedScope; toggle: () => void } {
   const [scope, setScope] = useState<FeedScope>(readInitialScope)
 
