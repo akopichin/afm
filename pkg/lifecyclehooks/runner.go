@@ -89,12 +89,11 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	cmd.Env = buildEnv(cfg, p)
 	// Своя process group: таймаут-килл бьёт по группе (-pid), иначе внук
 	// скрипта (sleep &) держал бы stdout-канал и Run висел до его конца —
-	// тот же урок, что pkg/executor.killProcessGroup.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// тот же урок, что pkg/executor.killProcessGroup. Платформозависимые
+	// части — в runner_unix.go/runner_windows.go.
+	setProcessGroup(cmd)
 	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
+		killProcessGroup(cmd, syscall.SIGKILL)
 		return nil
 	}
 
