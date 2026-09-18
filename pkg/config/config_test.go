@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 )
 
 func writeYAML(t *testing.T, dir, name, content string) string {
@@ -196,6 +197,80 @@ func TestAutoRecoverMerge_ProjectDisablesGlobalDefault(t *testing.T) {
 	}
 	if cfg.IsAutoRecover() {
 		t.Error("explicit auto_recover: false in project config should override the true default")
+	}
+}
+
+func TestHooksMerge_KeyedByID(t *testing.T) {
+	dir := t.TempDir()
+	global := "hooks:\n  - id: a\n    events: all\n    command: /bin/ga\n  - id: b\n    events: [flow_started]\n    command: /bin/gb\n"
+	project := "hooks:\n  - id: b\n    events: [flow_failed]\n    command: /bin/pb\n  - id: c\n    events: all\n    command: /bin/pc\n"
+	if err := os.MkdirAll(filepath.Join(dir, "global"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "project"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "global", "config.yaml"), []byte(global), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "project", "config.yaml"), []byte(project), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadFrom(filepath.Join(dir, "global"), filepath.Join(dir, "project"))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(cfg.Hooks) != 3 {
+		t.Fatalf("want 3 hooks, got %+v", cfg.Hooks)
+	}
+	byID := map[string]lifecyclehooks.Hook{}
+	for _, h := range cfg.Hooks {
+		byID[h.ID] = h
+	}
+	if byID["b"].Command != "/bin/pb" || byID["b"].Events.All {
+		t.Fatalf("project must override global by id: %+v", byID["b"])
+	}
+	if byID["a"].Command != "/bin/ga" || byID["c"].Command != "/bin/pc" {
+		t.Fatalf("other ids must survive: %+v", byID)
+	}
+}
+
+func TestHooksMerge_ProjectOnly(t *testing.T) {
+	dir := t.TempDir()
+	proj := "hooks:\n  - id: solo\n    events: all\n    command: /bin/x\n"
+	if err := os.MkdirAll(filepath.Join(dir, "g"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "p", "config.yaml"), []byte(proj), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadFrom(filepath.Join(dir, "g"), filepath.Join(dir, "p"))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(cfg.Hooks) != 1 || cfg.Hooks[0].ID != "solo" {
+		t.Fatalf("got %+v", cfg.Hooks)
+	}
+}
+
+func TestHooksMerge_InvalidEventFails(t *testing.T) {
+	dir := t.TempDir()
+	proj := "hooks:\n  - id: bad\n    events: [stage_strted]\n    command: /bin/x\n"
+	if err := os.MkdirAll(filepath.Join(dir, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "g"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "p", "config.yaml"), []byte(proj), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadFrom(filepath.Join(dir, "g"), filepath.Join(dir, "p")); err == nil {
+		t.Fatal("unknown event name must fail config load")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 )
 
 // envFlag reports whether an environment variable is truthy ("1" or "true").
@@ -347,6 +348,10 @@ type Config struct {
 	// cost columns, `afm report`). Collection into usage.jsonl is unaffected.
 	// nil/true = shown (default); explicit false / AFM_ACCOUNTING=0 hides it.
 	Accounting AccountingConfig `yaml:"accounting"`
+	// Hooks — lifecycle-хуки глобального и проектного слоёв (Phase 1).
+	// mergeFile мёржит их keyed по id: проектный слой заменяет одноимённый
+	// глобальный хук, остальные складываются. См. pkg/lifecyclehooks.
+	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
 }
 
 // Default returns the built-in default configuration.
@@ -416,6 +421,9 @@ func LoadFrom(globalDir, projectDir string) (Config, error) {
 	}
 	if err := validatePricing(cfg.Pricing); err != nil {
 		return cfg, err
+	}
+	if err := lifecyclehooks.ValidateLayer(cfg.Hooks, false); err != nil {
+		return cfg, fmt.Errorf("hooks: %w", err)
 	}
 	return cfg, nil
 }
@@ -556,6 +564,29 @@ func mergeFile(dst *Config, path string) error {
 			}
 			for model, rc := range models {
 				dst.Pricing.Channels[channel][model] = rc
+			}
+		}
+	}
+	if overlay.Hooks != nil {
+		// Слой overlay валидируется ДО keyed-merge: иначе дубль id внутри
+		// одного файла молча «схлопнется» заменой до ValidateLayer в LoadFrom.
+		if err := lifecyclehooks.ValidateLayer(overlay.Hooks, false); err != nil {
+			return fmt.Errorf("hooks: %w", err)
+		}
+		if dst.Hooks == nil {
+			dst.Hooks = make([]lifecyclehooks.Hook, 0, len(overlay.Hooks))
+		}
+		for _, h := range overlay.Hooks {
+			replaced := false
+			for i := range dst.Hooks {
+				if dst.Hooks[i].ID == h.ID {
+					dst.Hooks[i] = h // более специфичный слой заменяет по id
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				dst.Hooks = append(dst.Hooks, h)
 			}
 		}
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -126,7 +127,10 @@ func schemaForType(t *testing.T, doc schemaDocument, node map[string]any, want, 
 	return nil
 }
 
-var buttonsType = reflect.TypeOf(flow.Buttons{})
+var (
+	buttonsType       = reflect.TypeOf(flow.Buttons{})
+	eventSelectorType = reflect.TypeOf(lifecyclehooks.EventSelector{})
+)
 
 func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, typ reflect.Type, at string) {
 	t.Helper()
@@ -139,6 +143,13 @@ func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, ty
 	// by the behavioral tests below.
 	if typ == buttonsType {
 		schemaForType(t, doc, node, "object", at)
+		return
+	}
+
+	// EventSelector has a deliberately different YAML shape from its Go struct:
+	// the scalar "all" or a list of event names — there is no object form to
+	// walk, and the property's presence was already checked by the caller.
+	if typ == eventSelectorType {
 		return
 	}
 
