@@ -9,6 +9,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 )
 
 func TestScanCommands_SkipsGenerated(t *testing.T) {
@@ -814,5 +815,159 @@ func TestReExec_CodexRecipeNoAuth_DoesNotFail(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(capturedArgs, " "), "AFM_SECRET_CODEX") {
 		t.Error("no-auth codex recipe must not emit an AFM_SECRET_ env var")
+	}
+}
+
+// TestReExec_HookSecretTransport доказывает Task 5: два хука с env, чьи id
+// различаются только пунктуацией/регистром (envName/sanitize схлопнул бы их в
+// один суффикс), получают РАЗНЫЕ транспортные имена (инъективность по
+// индексам combined, codex #1), значение секрета уходит только в env
+// afm-процесса (bare `-e`, не argv), а секрет-файл не монтируется.
+func TestReExec_HookSecretTransport(t *testing.T) {
+	tokFile := filepath.Join(t.TempDir(), "hook-token")
+	if err := os.WriteFile(tokFile, []byte("hook-secret-value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("TG_TOKEN", "env-secret-value")
+
+	// "tg-notify" / "TG_NOTIFY" — под sanitize(hookID) (envName: [A-Z0-9_],
+	// остальное → '_', + ToUpper) оба схлопнулись бы в "TG_NOTIFY".
+	hooks := []lifecyclehooks.RegisteredHook{
+		{Hook: lifecyclehooks.Hook{ID: "tg-notify", Command: "true", Env: map[string]lifecyclehooks.SecretRef{ //nolint:gosec // test fixture, not a real secret
+			"TOKEN": "env:TG_TOKEN",
+		}}},
+		{Hook: lifecyclehooks.Hook{ID: "TG_NOTIFY", Command: "true", Env: map[string]lifecyclehooks.SecretRef{
+			"TOKEN": lifecyclehooks.SecretRef("file:" + tokFile),
+		}}},
+	}
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:      "akopichin/afm:latest",
+		ProjectDir: "/tmp/proj",
+		ExtraArgs:  []string{"run", "flow.yaml"},
+		Hooks:      hooks,
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	defer func() {
+		_ = os.Unsetenv(lifecyclehooks.TransportName(0, 0))
+		_ = os.Unsetenv(lifecyclehooks.TransportName(1, 0))
+	}()
+
+	name0 := lifecyclehooks.TransportName(0, 0)
+	name1 := lifecyclehooks.TransportName(1, 0)
+	if name0 == name1 {
+		t.Fatalf("transport names must differ for distinct hooks: %q == %q", name0, name1)
+	}
+
+	argsStr := strings.Join(capturedArgs, " ")
+	if !strings.Contains(argsStr, "-e "+name0) {
+		t.Errorf("missing transient -e %s (bare): %s", name0, argsStr)
+	}
+	if !strings.Contains(argsStr, "-e "+name1) {
+		t.Errorf("missing transient -e %s (bare): %s", name1, argsStr)
+	}
+	// значения НЕ должны попасть в argv (bare -e без "=value")
+	if strings.Contains(argsStr, "env-secret-value") || strings.Contains(argsStr, "hook-secret-value") {
+		t.Errorf("secret value leaked into argv: %s", argsStr)
+	}
+	// секрет-файл не монтируется
+	if strings.Contains(argsStr, "-v "+tokFile) {
+		t.Errorf("secret file must not be mounted: %s", argsStr)
+	}
+	// значения — в env хоста (то же env, что уйдёт docker'у как envv)
+	if v := os.Getenv(name0); v != "env-secret-value" {
+		t.Errorf("os.Getenv(%s) = %q, want env-secret-value", name0, v)
+	}
+	if v := os.Getenv(name1); v != "hook-secret-value" {
+		t.Errorf("os.Getenv(%s) = %q, want hook-secret-value", name1, v)
+	}
+}
+
+// TestReExec_HookNoEnv_NoTransport доказывает гейт UsesLifecycleSecrets: хук
+// без Env не должен породить ни одной AFM_HOOK_SECRET_* переменной.
+func TestReExec_HookNoEnv_NoTransport(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	hooks := []lifecyclehooks.RegisteredHook{
+		{Hook: lifecyclehooks.Hook{ID: "plain", Command: "true"}}, // без Env
+	}
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj",
+		ExtraArgs: []string{"run", "flow.yaml"}, Hooks: hooks,
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	if strings.Contains(strings.Join(capturedArgs, " "), lifecyclehooks.HookSecretTransportPrefix) {
+		t.Error("a hook without Env must not emit any AFM_HOOK_SECRET_ transport var")
+	}
+}
+
+// TestReExec_HookSecretMissingFailFast — как TestReExec_RecipeMissingSecretFailFast,
+// но для lifecycle-хуков: отсутствующий секрет должен fail-fast'ить ДО docker run,
+// а не молча уйти в контейнер с недорезолвленным env.
+func TestReExec_HookSecretMissingFailFast(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	hooks := []lifecyclehooks.RegisteredHook{
+		{Hook: lifecyclehooks.Hook{ID: "tg", Command: "true", Env: map[string]lifecyclehooks.SecretRef{ //nolint:gosec // test fixture, not a real secret
+			"TOKEN": "env:NOPE_MISSING_HOOK_SECRET",
+		}}},
+	}
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj", Hooks: hooks,
+	})
+	if err == nil {
+		t.Fatal("expected fail-fast on missing hook secret")
+	}
+	if !strings.Contains(err.Error(), "tg") {
+		t.Errorf("error should name the hook: %v", err)
+	}
+}
+
+func TestUsesLifecycleSecrets(t *testing.T) {
+	if docker.UsesLifecycleSecrets(nil) {
+		t.Error("nil hooks → false")
+	}
+	noEnv := []lifecyclehooks.RegisteredHook{{Hook: lifecyclehooks.Hook{ID: "a"}}}
+	if docker.UsesLifecycleSecrets(noEnv) {
+		t.Error("hooks without Env → false")
+	}
+	withEnv := []lifecyclehooks.RegisteredHook{
+		{Hook: lifecyclehooks.Hook{ID: "a"}},
+		{Hook: lifecyclehooks.Hook{ID: "b", Env: map[string]lifecyclehooks.SecretRef{"X": "env:X"}}},
+	}
+	if !docker.UsesLifecycleSecrets(withEnv) {
+		t.Error("a hook with Env among others → true")
 	}
 }

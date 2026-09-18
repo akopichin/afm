@@ -89,7 +89,7 @@ func minimalBaseEnv() []string {
 func stripTransportVars(env []string) []string {
 	out := env[:0]
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "AFM_HOOK_SECRET_") || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") {
+		if strings.HasPrefix(kv, HookSecretTransportPrefix) || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") {
 			continue
 		}
 		out = append(out, kv)

@@ -73,6 +73,22 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("parse flow: %w", err)
 			}
 
+			// Lifecycle hooks (Phase 1-3): слои global+project (уже смёржены в
+			// cfg.Hooks, config.LoadFrom) + flow + per-stage, собранные в ИТОГОВЫЙ
+			// []RegisteredHook (Combine, с учётом override по id) ЗДЕСЬ, ДО
+			// докер-ветки ниже (codex #3) — иначе host-резолв секретов хуков
+			// (docker.ReExec) и in-container резолв после re-exec работали бы по
+			// РАЗНЫМ спискам (сырые слои вместо итоговых hooks), и транспортные
+			// индексы (hookIdx,varIdx, см. lifecyclehooks.TransportName)
+			// разошлись бы между хостом и контейнером.
+			hookLayers := []lifecyclehooks.Layer{{Hooks: cfg.Hooks}, {Hooks: f.Hooks}}
+			for _, st := range f.Stages {
+				if len(st.Hooks) > 0 {
+					hookLayers = append(hookLayers, lifecyclehooks.Layer{StageID: st.ID, Hooks: st.Hooks})
+				}
+			}
+			combinedHooks := lifecyclehooks.Combine(hookLayers...)
+
 			// Docker self-re-exec: если включён Docker-режим и мы не внутри контейнера —
 			// перезапускаем себя в Docker.
 			if cfg.Docker.IsDockerEnabled() {
@@ -141,6 +157,7 @@ func newRunCmd() *cobra.Command {
 					ClientCommand:      cfg.Client.Command,
 					Recipes:            recipes,
 					SecretsFile:        cfg.Docker.SecretsFile,
+					Hooks:              combinedHooks,
 					MountCodexState:    mountCodexState,
 					FileBrowserEnabled: browserEnabled,
 					FileRoots:          fileRoots,
@@ -235,8 +252,11 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
-			// Lifecycle hooks (Phase 1): слои global+project уже смёржены в
-			// cfg.Hooks (config.LoadFrom), сюда добавляются flow- и stage-слои.
+			// Lifecycle hooks (Phase 1-3): combinedHooks — итоговый []RegisteredHook,
+			// собранный ВЫШЕ (до докер-ветки, codex #3) из ТЕХ ЖЕ слоёв, что видит
+			// (при re-exec) и хост, и контейнер — переиспользуем его как есть, не
+			// пересобираем из layers здесь, иначе рисковали бы разойтись индексами
+			// hookIdx транспорта, случайно поменяв местами слои.
 			// Dispatcher живёт на собственном ctx (Stop ниже) — хуки-наблюдатели
 			// не зависят от отмены run-ctx (flow_interrupted должен уйти).
 			runID := filepath.Base(runDir)
@@ -244,21 +264,38 @@ func newRunCmd() *cobra.Command {
 			resumed := store.Snapshot().LastSeq > 0
 			var hooksDisp *lifecyclehooks.Dispatcher
 			var orchRef *orchestrator.Orchestrator
-			layers := []lifecyclehooks.Layer{{Hooks: cfg.Hooks}, {Hooks: f.Hooks}}
-			for _, st := range f.Stages {
-				if len(st.Hooks) > 0 {
-					layers = append(layers, lifecyclehooks.Layer{StageID: st.ID, Hooks: st.Hooks})
+			inDocker := os.Getenv("AFM_IN_DOCKER") == "1"
+			if inDocker {
+				// In-container: секреты хуков УЖЕ резолвнуты хостом (docker.ReExec)
+				// и переданы transient bare `-e` env-переменными (см.
+				// lifecyclehooks.TransportName) — читаем ИЗ транспорта, а НЕ из
+				// secrets.env/файлов (их в контейнере может и не быть смонтировано,
+				// да и не нужно — хост уже резолвнул).
+				for i := range combinedHooks {
+					resolved, rerr := lifecyclehooks.ResolveHookEnvFromTransport(i, combinedHooks[i].Hook)
+					if rerr != nil {
+						return fmt.Errorf("lifecycle hooks: %w", rerr) // fail-fast до flow_started
+					}
+					combinedHooks[i].Hook.ResolvedEnv = resolved
 				}
+				// Единая точка изоляции (codex #2): сразу после того как ВСЕ хуки
+				// резолвили ResolvedEnv из транспорта — и ДО Orchestrator.Run, до
+				// любого запуска агента/стадии — снимаем ВСЕ AFM_HOOK_SECRET_* из
+				// окружения afm-процесса. Дальше их нет вовсе → ни один дочерний
+				// процесс (агент, script-стадия, RunVerify, RunJSONQuery, git,
+				// другой хук) не унаследует их — без аудита каждого spawn-сайта.
+				lifecyclehooks.UnsetTransportVars()
 			}
-			if combined := lifecyclehooks.Combine(layers...); len(combined) > 0 {
-				// Резолв env-секретов хуков — ДО New/flow_started (fail-fast:
-				// ран не должен стартовать с недорезолвленным секретом).
-				// secrets.env грузим ТОЛЬКО если хотя бы у одного собранного
-				// хука непустой Env — иначе нечитаемый secrets.env заблокировал
-				// бы чистый Phase 1-хук без секретов (codex #8).
+			if len(combinedHooks) > 0 && !inDocker {
+				// Хост (без Docker) — прежний путь (Task 3): резолв env-секретов
+				// хуков ДО New/flow_started (fail-fast: ран не должен стартовать с
+				// недорезолвленным секретом). secrets.env грузим ТОЛЬКО если хотя бы
+				// у одного собранного хука непустой Env — иначе нечитаемый
+				// secrets.env заблокировал бы чистый Phase 1-хук без секретов
+				// (codex #8).
 				anyEnv := false
-				for i := range combined {
-					if len(combined[i].Hook.Env) > 0 {
+				for i := range combinedHooks {
+					if len(combinedHooks[i].Hook.Env) > 0 {
 						anyEnv = true
 						break
 					}
@@ -274,16 +311,18 @@ func newRunCmd() *cobra.Command {
 						return fmt.Errorf("lifecycle hooks: load secrets.env: %w", serr)
 					}
 				}
-				for i := range combined {
-					if len(combined[i].Hook.Env) == 0 {
+				for i := range combinedHooks {
+					if len(combinedHooks[i].Hook.Env) == 0 {
 						continue // чистый Phase 1-хук: секретов нет, слои не нужны
 					}
-					resolved, rerr := lifecyclehooks.ResolveHookEnv(combined[i].Hook, hookSecrets)
+					resolved, rerr := lifecyclehooks.ResolveHookEnv(combinedHooks[i].Hook, hookSecrets)
 					if rerr != nil {
 						return fmt.Errorf("lifecycle hooks: %w", rerr) // fail-fast до flow_started
 					}
-					combined[i].Hook.ResolvedEnv = resolved
+					combinedHooks[i].Hook.ResolvedEnv = resolved
 				}
+			}
+			if len(combinedHooks) > 0 {
 				hooksDisp = lifecyclehooks.New(lifecyclehooks.DispatcherOptions{
 					Config: lifecyclehooks.DispatcherConfig{
 						FlowName: f.Name,
@@ -292,7 +331,7 @@ func newRunCmd() *cobra.Command {
 						RootDir:  hooksRootDir,
 						Resumed:  resumed,
 					},
-					Hooks:  combined,
+					Hooks:  combinedHooks,
 					LogDir: filepath.Join(runDir, "hooks"),
 					OnError: func(hookID, eventID string, err error) {
 						if orchRef != nil {

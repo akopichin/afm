@@ -15,6 +15,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/secrets"
 )
 
@@ -55,6 +56,28 @@ type ReExecConfig struct {
 	// закодированный и передаваемый в контейнер только когда FileBrowserEnabled
 	// и Roots непусты.
 	FileRoots FileRootManifest
+
+	// Hooks — итоговый список lifecycle-хуков (Combine global+project+flow+stage
+	// слоёв, с учётом override по id), собранный ВЫЗЫВАЮЩИМ КОДОМ (cmd/afm/run.go)
+	// ДО этой докер-ветки (codex #3). ReExec резолвит секреты хуков (Hook.Env) на
+	// ХОСТЕ и передаёт их в контейнер transient bare `-e` env (см. TransportName) —
+	// контейнер после re-exec строит ТОТ ЖЕ combined из тех же слоёв и читает
+	// значения из транспорта по (hookIdx,varIdx), а не из secrets.env/файлов.
+	Hooks []lifecyclehooks.RegisteredHook
+}
+
+// UsesLifecycleSecrets сообщает, объявляет ли хоть один хук из combined
+// непустой Env — гейтит host-side загрузку secrets.env-слоёв и резолв в
+// ReExec: если ни у одного хука нет Env, нечего резолвить и нечего
+// транспортировать (тот же anyEnv-гейт, что и в non-docker пути
+// cmd/afm/run.go, Task 3).
+func UsesLifecycleSecrets(hooks []lifecyclehooks.RegisteredHook) bool {
+	for _, rh := range hooks {
+		if len(rh.Hook.Env) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker
@@ -420,6 +443,37 @@ func ReExec(cfg ReExecConfig) error {
 					_ = os.Setenv("AFM_SYSPROMPT_"+name, sp)
 					args = append(args, "-e", "AFM_SYSPROMPT_"+name)
 				}
+			}
+		}
+	}
+
+	// Lifecycle hooks (Phase 3): секреты хука (Hook.Env) резолвим на ХОСТЕ и
+	// передаём в контейнер тем же паттерном, что autoShim-секреты выше —
+	// transient bare-form `-e` (значение в env afm-процесса, не в argv).
+	// Транспортное имя инъективно по ИНДЕКСАМ combined (hookIdx,varIdx),
+	// НЕ по sanitized hook id (codex #1) — разные id, схлопывающиеся под
+	// sanitize (пунктуация/регистр), не могут получить секрет чужого хука.
+	// cfg.Hooks — тот же итоговый []RegisteredHook, что заново соберёт
+	// контейнер после re-exec из ТЕХ ЖЕ слоёв (codex #3) — индексы совпадают
+	// по обе стороны транспорта без явной передачи данных. Секрет-файлы в
+	// контейнер НЕ монтируются.
+	if UsesLifecycleSecrets(cfg.Hooks) {
+		loadedSecrets, err := LoadSecretLayers(cfg.SecretsFile, cfg.ProjectDir)
+		if err != nil {
+			return err
+		}
+		for hookIdx, rh := range cfg.Hooks {
+			if len(rh.Hook.Env) == 0 {
+				continue
+			}
+			for varIdx, varName := range lifecyclehooks.SortedEnvKeys(rh.Hook) {
+				val, rErr := secrets.ResolveRef(string(rh.Hook.Env[varName]), loadedSecrets)
+				if rErr != nil {
+					return fmt.Errorf("lifecycle hook %q env %q: %w", rh.Hook.ID, varName, rErr)
+				}
+				name := lifecyclehooks.TransportName(hookIdx, varIdx)
+				_ = os.Setenv(name, val) // процесс далее exec'нет docker; утечки в argv нет
+				args = append(args, "-e", name)
 			}
 		}
 	}
