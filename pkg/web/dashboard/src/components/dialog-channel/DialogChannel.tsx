@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { answerDialog, cancelDialog } from '../../api/run-client'
+import { answerDialog, cancelDialog, FlowApiError } from '../../api/run-client'
 import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
@@ -45,6 +45,15 @@ type DialogEntry = {
   options?: string[]
   text?: string
   auto_answered?: boolean
+}
+
+// questionKey — составной ключ вопроса (phase,id): id уникален только В
+// ПРЕДЕЛАХ фазы (см. комментарий F4 ниже), поэтому сравнение «сменился ли
+// pending-вопрос» по одному id путало planning/q1 и implementation/q1.
+// '/' — безопасный разделитель (фазы — фиксированные слова без '/'), в
+// отличие от литерального NUL, который пометил бы файл как бинарный.
+function questionKey(e: { phase?: string; id?: string } | null | undefined): string | undefined {
+  return e == null ? undefined : `${e.phase ?? ''}/${e.id ?? ''}`
 }
 
 // R2: сколько ждём, что якорь прицельного скролла (scrollTarget) появится в
@@ -101,7 +110,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (current === null) return
 
     let cancelled = false
-    let lastPendingId: string | undefined
+    let lastPendingKey: string | undefined
     // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно в
     // порядке отправки. requestGen — счётчик поколений (как latestRequestId в
     // useStatus): каждый refresh запоминает свой номер ДО await и применяет
@@ -123,9 +132,9 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
         if (requestId !== requestGen) return // более свежий запрос уже применён
         if (data === null) return // транзиентная ошибка — сохраняем последнее успешное состояние
         setEntries(data)
-        const nextPendingId = findPending(data)?.id
-        if (nextPendingId !== lastPendingId) {
-          lastPendingId = nextPendingId
+        const nextPendingKey = questionKey(findPending(data))
+        if (nextPendingKey !== lastPendingKey) {
+          lastPendingKey = nextPendingKey
           setSelectedOption(null)
           setCustomText('')
           setComments({})
@@ -238,7 +247,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (target !== null && !(target.phase === pending.phase && target.id === pending.id)) return
     const handle = requestAnimationFrame(() => jumpToBottom())
     return () => cancelAnimationFrame(handle)
-  }, [pending?.id, jumpToBottom])
+  }, [questionKey(pending), jumpToBottom])
 
   // One-shot glow рамки диалога при появлении нового pending-вопроса (B3):
   // класс dialog-flash навешивается на смену pending.id и снимается через 2.5s
@@ -248,7 +257,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setFlash(true)
     const t = window.setTimeout(() => setFlash(false), 2500)
     return () => window.clearTimeout(t)
-  }, [pending?.id])
+  }, [questionKey(pending)])
 
   // При разворачивании панели на весь экран (меняется высота контейнера) канал
   // должен показать хвост диалога, а не то место, на котором застал скролл в компактном
@@ -336,6 +345,9 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
       await reload()
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'failed to send answer')
+      if (e instanceof FlowApiError && e.code === 'answer_out_of_order') {
+        await reload() // stale view — resync to the real current question
+      }
     } finally {
       setSubmitting(false)
     }
@@ -364,6 +376,9 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
       await reload()
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'failed to send feedback')
+      if (e instanceof FlowApiError && e.code === 'answer_out_of_order') {
+        await reload() // stale view — resync to the real current question
+      }
     } finally {
       setSubmitting(false)
     }

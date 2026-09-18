@@ -5,6 +5,20 @@ import type { Stage } from '../../types'
 import { MaximizeProvider } from '../layout/Maximizable'
 import { DialogChannel } from './DialogChannel'
 import { FileBrowserProvider } from '../file-browser'
+import { answerDialog, FlowApiError } from '../../api/run-client'
+
+// answerDialog заменяется на vi.fn(), обёрнутый вокруг реальной реализации
+// (пропускает вызовы дальше, к fetch) — так существующие тесты, проверяющие
+// POST-тело через spy на globalThis.fetch, продолжают работать без изменений,
+// а тесты answer_out_of_order/generic-error переопределяют его по одному
+// разу через mockRejectedValueOnce.
+vi.mock('../../api/run-client', async () => {
+  const actual = await vi.importActual<typeof import('../../api/run-client')>('../../api/run-client')
+  return {
+    ...actual,
+    answerDialog: vi.fn(actual.answerDialog),
+  }
+})
 
 // jumpToBottom заспайен на уровне модуля (не через spyOn существующего хука, у которого
 // в jsdom scrollHeight всегда 0 и реальный скролл незаметен) — так тест #7 может
@@ -1033,6 +1047,94 @@ describe('DialogChannel', () => {
 
     await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
     expect((container.querySelector('.btn-send') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // Task 7: answerDialog теперь бросает типизированный FlowApiError — панель
+  // резинхронизируется (discard draft) ТОЛЬКО для code==='answer_out_of_order',
+  // любая другая ошибка сохраняет черновик пользователя.
+  test('answer_out_of_order rejection triggers reload() and discards the stale selection', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'Pick one',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+    vi.mocked(answerDialog).mockRejectedValueOnce(
+      new FlowApiError('/api/stages/s1/dialog/answer', 409, 'answer_out_of_order'),
+    )
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+
+    await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
+    // reload() re-fetched /dialog and reset selectedOption — the stale "Alpha"
+    // selection from before the rejection is gone.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Alpha' })).not.toHaveClass('selected'))
+  })
+
+  test('a generic (non-FlowApiError) rejection shows the error but preserves the draft — no reload', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'Pick one',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+    vi.mocked(answerDialog).mockRejectedValueOnce(new Error('network blip'))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+    const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'my draft answer' } })
+    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+
+    await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
+    // reload() was NOT called — it would have cleared customText to ''.
+    expect(textarea.value).toBe('my draft answer')
+  })
+
+  // Composite (phase,id) key: the SAME id in a DIFFERENT phase is a different
+  // question — the draft must reset, unlike the old id-only comparison.
+  test('pending switching planning/q1 → implementation/q1 (same id, different phase) clears the draft', async () => {
+    vi.useFakeTimers()
+    const planningPending = { id: 'q1', phase: 'planning', question: 'Pick', answer: null, options: ['Alpha'], allow_custom: true }
+    const implementationPending = {
+      id: 'q1',
+      phase: 'implementation',
+      question: 'Pick again',
+      answer: null,
+      options: ['Beta'],
+      allow_custom: true,
+    }
+
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse([planningPending]))
+      .mockResolvedValue(jsonResponse([implementationPending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'still about planning q1' } })
+    expect(textarea.value).toBe('still about planning q1')
+
+    // Next poll (2s) picks up implementation/q1 — same raw id, different phase.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+
+    const newTextarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    expect(newTextarea.value).toBe('')
   })
 
   // Task 6: переход из ленты (FeedWorkspace.onOpenDialog) передаёт scrollTarget —

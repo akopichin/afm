@@ -108,6 +108,10 @@ export async function skipHookStage(stageId: string): Promise<void> {
   await postJson(stageUrl(stageId, 'skip-hook'), null)
 }
 
+// answerDialog бросает типизированный FlowApiError (а не Error из postJson) —
+// DialogChannel различает конкретный код answer_out_of_order (стадия успела
+// переключиться на другой вопрос, ответ отправлен на устаревший id) от прочих
+// ошибок, чтобы решить, стоит ли резинхронизировать панель.
 export async function answerDialog(
   stageId: string,
   phase: string,
@@ -115,7 +119,15 @@ export async function answerDialog(
   answer: string,
   fromOptions: boolean,
 ): Promise<void> {
-  await postJson(stageUrl(stageId, 'dialog/answer'), { id, phase, answer, from_options: fromOptions })
+  const url = stageUrl(stageId, 'dialog/answer')
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, phase, answer, from_options: fromOptions }),
+  })
+  if (!response.ok) {
+    throw new FlowApiError(url, response.status, await readErrorCode(response))
+  }
 }
 
 export async function cancelDialog(stageId: string): Promise<void> {
