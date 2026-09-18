@@ -176,6 +176,20 @@ type Orchestrator struct {
 	// writer — горутина Run, отдельная синхронизация не нужна).
 	terminalFlow lifecyclehooks.EventType
 
+	// pollerDone закрывается горутиной startQuestionPoller при её выходе
+	// (defer close). finalizeLifecycle bounded-ждёт этот канал ПЕРЕД эмитом
+	// терминального flow-события: сама горутина не входит в agentWG/
+	// WaitAgents (она наблюдатель, а не агент), поэтому без явного ожидания
+	// она могла дожить до момента ПОСЛЕ терминального emit+Flush и опубликовать
+	// stage-событие (EvAskUser и т.п.) уже после flow_finished/failed —
+	// нарушая гарантию "терминальное событие — последнее". cancel() в Run
+	// выполняется раньше (LIFO) — к моменту ожидания ctx поллера уже Done,
+	// так что ожидание почти всегда моментальное; таймаут — просто safety cap.
+	// nil, если startQuestionPoller не был вызван (не должно случаться в
+	// проде, но тесты строят Orchestrator без Run) — finalizeLifecycle это
+	// учитывает.
+	pollerDone chan struct{}
+
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
 	// сбой стораджа (StorageError) должен останавливать run, а не безобидный
@@ -657,12 +671,30 @@ func (o *Orchestrator) hasFailedStage() bool {
 	return false
 }
 
+// finalizeLifecyclePollerWait — safety cap на ожидание завершения горутины
+// question poller (см. поле pollerDone). cancel() уже выполнен к этому
+// моменту (LIFO в Run), так что поллер обычно возвращается почти сразу —
+// таймаут защищает только от аномально долгой текущей итерации pollQuestions.
+const finalizeLifecyclePollerWait = 5 * time.Second
+
 // finalizeLifecycle эмитит терминальное flow-событие и bounded-ждёт
 // опустошения очередей dispatcher. Вызывается ТОЛЬКО из defer, живёт после
 // cancel()+WaitAgents() — продюсеры событий (агенты) уже остановлены.
 // Раньше инлайн-flush на выходах Run наблюдал sent==done ДО того, как
 // отменённые агенты успевали эмитить последнее (codex MAJ#7).
+//
+// Question poller ждём ЗДЕСЬ отдельно (WaitAgents его не покрывает — это
+// наблюдатель, а не агент, см. поле pollerDone): иначе горутина поллера
+// могла эмитить stage-событие ПОСЛЕ терминального flow-события, нарушая
+// гарантию "терминальное событие — последнее" (finding #1 финального ревью).
 func (o *Orchestrator) finalizeLifecycle() {
+	if o.pollerDone != nil {
+		select {
+		case <-o.pollerDone:
+		case <-time.After(finalizeLifecyclePollerWait):
+			log.Printf("WARN: question poller did not finish within %s before terminal lifecycle event", finalizeLifecyclePollerWait)
+		}
+	}
 	if o.terminalFlow == "" || o.hooks == nil {
 		return
 	}

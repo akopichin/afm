@@ -50,8 +50,18 @@ type violationCacheEntry struct {
 
 // startQuestionPoller launches a goroutine that scans active stage directories
 // every second for new *.question.json files (file-based dialog protocol).
+//
+// o.pollerDone is created here and closed on exit (defer) — finalizeLifecycle
+// (orchestrator.go) bounded-waits on it before emitting the terminal
+// flow_* lifecycle event, so a poller tick still in flight at shutdown can
+// never publish a stage event after the terminal one (finding #1, final
+// review). This goroutine isn't tracked by concurrency.WaitAgents (it's an
+// observer, not an agent), so without this explicit channel nothing would
+// wait for it at all.
 func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
+	o.pollerDone = make(chan struct{})
 	go func() {
+		defer close(o.pollerDone)
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		processed := map[string]bool{}                    // "stageID|phase|id" → true
