@@ -171,6 +171,11 @@ type Orchestrator struct {
 	// hooks — lifecycle dispatcher (observer-only; nil-safe).
 	hooks *lifecyclehooks.Dispatcher
 
+	// terminalFlow — финальное flow-событие, установленное одним из выходов
+	// Run; эмитится finalizeLifecycle ПОСЛЕ остановки продюсеров (single
+	// writer — горутина Run, отдельная синхронизация не нужна).
+	terminalFlow lifecyclehooks.EventType
+
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
 	// сбой стораджа (StorageError) должен останавливать run, а не безобидный
@@ -545,8 +550,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	o.runMu.Lock()
 	o.runCtx = ctx
 	o.runMu.Unlock()
+	// finalizeLifecycle зарегистрирован ПЕРВЫМ — LIFO исполнит его ПОСЛЕДНИМ,
+	// после cancel()+WaitAgents(): продюсеры lifecycle-событий (агенты) уже
+	// остановлены к моменту терминального emit+flush (codex MAJ#7) —
+	// раньше инлайн-flush на выходах Run наблюдал sent==done ДО того, как
+	// отменённые агенты успевали эмитить последнее событие.
+	defer o.finalizeLifecycle()
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
+
+	if o.opts.Resumed {
+		o.emitLifecycle(lifecyclehooks.Event{Type: lifecyclehooks.EventFlowResumed})
+	} else {
+		o.emitLifecycle(lifecyclehooks.Event{Type: lifecyclehooks.EventFlowStarted})
+	}
 
 	// recoverReviewPause MUST run before startPlanningForPending: it
 	// re-establishes activationHeld/reviewMarker from the durable
@@ -579,14 +596,22 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			if ferr := o.loadFatal(); ferr != nil {
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return ferr
+			}
+			if o.hasFailedStage() {
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
+			} else {
+				o.setTerminalFlow(lifecyclehooks.EventFlowInterrupted)
 			}
 			return ctx.Err()
 		case ev := <-o.critical.Recv():
 			if err := o.handleEvent(ctx, ev); err != nil {
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return err
 			}
 			if ferr := o.loadFatal(); ferr != nil {
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return ferr
 			}
 			if o.shouldExit() {
@@ -601,11 +626,49 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 					o.finalizing.Store(true)
 					o.flowPauseMu.Unlock()
 					o.runEndOfRunMemory(ctx)
+					snap := o.opts.Store.Snapshot()
+					if snap.AllDone() {
+						o.setTerminalFlow(lifecyclehooks.EventFlowFinished)
+					} else {
+						o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
+					}
 					return nil
 				}
 				o.flowPauseMu.Unlock()
 			}
 		}
+	}
+}
+
+// setTerminalFlow фиксирует финальное flow-событие выхода Run.
+func (o *Orchestrator) setTerminalFlow(ev lifecyclehooks.EventType) {
+	o.terminalFlow = ev
+}
+
+// hasFailedStage — есть ли в снапшоте Failed-стадия. Классификатор codex
+// MAJ#8: отмена ctx поверх рана, заблокированного failed-стадией (дашборд
+// держит Run живым для retry), — это flow_failed, а не flow_interrupted.
+func (o *Orchestrator) hasFailedStage() bool {
+	for _, st := range o.opts.Store.Snapshot().Stages {
+		if st.Status == state.StatusFailed {
+			return true
+		}
+	}
+	return false
+}
+
+// finalizeLifecycle эмитит терминальное flow-событие и bounded-ждёт
+// опустошения очередей dispatcher. Вызывается ТОЛЬКО из defer, живёт после
+// cancel()+WaitAgents() — продюсеры событий (агенты) уже остановлены.
+// Раньше инлайн-flush на выходах Run наблюдал sent==done ДО того, как
+// отменённые агенты успевали эмитить последнее (codex MAJ#7).
+func (o *Orchestrator) finalizeLifecycle() {
+	if o.terminalFlow == "" || o.hooks == nil {
+		return
+	}
+	o.emitLifecycle(lifecyclehooks.Event{Type: o.terminalFlow})
+	if !o.hooks.Flush(lifecyclehooks.FlushTimeout) {
+		log.Printf("WARN: lifecycle hooks flush timed out after %s", lifecyclehooks.FlushTimeout)
 	}
 }
 
