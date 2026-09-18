@@ -75,6 +75,41 @@ stages:
 See more in [`examples/`](examples/), and every field in the
 [flow.yaml reference](https://akopichin.github.io/afm/flow-reference/).
 
+## Lifecycle hooks
+
+Observe flow/stage events — notifications, metrics, external status — with
+**lifecycle hooks**. They only observe: a hook error never touches the FSM or the
+flow result. Declare them in `config.yaml`, the flow root, or a single stage:
+
+```yaml
+hooks:
+  - id: telegram
+    events: all                       # or a list, e.g. [flow_finished, stage_failed]
+    command: "bash ~/.afm/t-notify.sh"
+    env:                              # secrets injected by reference, never in argv/logs
+      TELEGRAM_BOT_TOKEN: "file:~/.afm/secrets/telegram-bot-token"
+      TELEGRAM_CHAT_ID:   "env:TELEGRAM_CHAT_ID"
+
+stages:
+  - id: build
+    script: "make build"
+```
+
+The hook command gets the event as JSON on stdin plus `AFM_*` env vars
+(`AFM_HOOK_EVENT`, `AFM_STAGE_ID`, `AFM_STAGE_FROM`/`AFM_STAGE_TO`, …), so a
+one-liner works:
+
+```bash
+#!/usr/bin/env bash
+msg="afm: ${AFM_HOOK_EVENT} — ${AFM_FLOW_NAME} / ${AFM_STAGE_ID:-flow}"
+curl -fsS --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+     --data-urlencode "text=${msg}" \
+     "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null
+```
+
+Full event catalog, secret/`env:` reference, redaction and Docker transport in
+[Lifecycle hooks](https://akopichin.github.io/afm/lifecycle-hooks/).
+
 ## Documentation
 
 Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github.io/afm/)**:
