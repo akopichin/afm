@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+// defaultRedactionMarker — маркер по умолчанию (пробуется первым в
+// redactMarker); экспортируется как константа, а не повторяющийся литерал
+// (goconst), и тесты пакета ссылаются на неё же вместо копий строки.
+const defaultRedactionMarker = "[REDACTED]"
+
 // redactingWriter — потоковый редактор секретов: io.Writer, заменяющий
 // вхождения известных секретных значений на безопасный маркер перед записью
 // в нижележащий writer. Bounded-память: buf удерживает ≤ maxLen-1 байт
@@ -14,7 +19,7 @@ import (
 type redactingWriter struct {
 	w       io.Writer
 	secrets []string // дедуп, отсортированы по убыванию длины
-	marker  string   // безопасен: не содержит секрета И ни один его суффикс не префикс секрета
+	marker  string   // безопасен: не содержит секрета, ни один его суффикс не префикс секрета, и сам не подстрока секрета
 	maxLen  int      // длина самого длинного секрета
 	buf     []byte   // СЫРОЙ хвост ≤ maxLen-1 байт (возможное начало секрета на границе Write)
 }
@@ -93,14 +98,25 @@ func (r *redactingWriter) Close() error {
 	return nil
 }
 
-// redactMarker выбирает маркер, который (а) не содержит ни одного секрета и
-// (б) ни один его непустой суффикс не является префиксом какого-либо секрета —
-// (б) гарантирует, что удержание хвоста в Write никогда не заденет байты маркера
-// (иначе секрет вида "]x" при маркере, оканчивающемся на "]", ломал бы лог —
-// codex). Fallback — "" (удаление), если безопасного маркера нет.
+// redactMarker выбирает маркер, который безопасен по трём независимым условиям:
+//
+//	(а) не содержит ни одного секрета целиком;
+//	(б) ни один его непустой суффикс не является префиксом какого-либо секрета —
+//	    гарантирует, что удержание хвоста в Write никогда не заденет байты
+//	    маркера (иначе секрет вида "]x" при маркере, оканчивающемся на "]",
+//	    ломал бы лог — codex);
+//	(в) сам маркер не встречается как подстрока ни в одном секрете — иначе
+//	    редактирование ДРУГОГО секрета рядом с уже сброшенным контекстом может
+//	    ВОССТАНОВИТЬ этот секрет: секреты "QR" и "a[REDACTED]b", запись
+//	    двумя Write "aQ"+"Rb" → флаш "a", затем "QR"→маркер даёт в логе
+//	    "a[REDACTED]b" — байт-в-байт значение второго секрета (codex).
+//
+// Fallback — "" (удаление), если безопасного маркера нет: пустая строка сама
+// по себе ничего не добавляет в поток, так что условие (в) для неё выполнено
+// тривиально (подстрокой секрета быть не может — она пустая).
 func redactMarker(secrets []string) string {
-	for _, cand := range []string{"[REDACTED]", "[[hook-secret-redacted]]", "\x00REDACTED\x00"} {
-		if !containsAnySecret(cand, secrets) && !anySuffixIsSecretPrefix(cand, secrets) {
+	for _, cand := range []string{defaultRedactionMarker, "[[hook-secret-redacted]]", "\x00REDACTED\x00"} {
+		if !containsAnySecret(cand, secrets) && !anySuffixIsSecretPrefix(cand, secrets) && !anySecretContains(cand, secrets) {
 			return cand
 		}
 	}
@@ -127,6 +143,20 @@ func anySuffixIsSecretPrefix(s string, secrets []string) bool {
 			if strings.HasPrefix(sec, s[len(s)-k:]) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// anySecretContains — встречается ли marker как подстрока в каком-либо
+// секрете. Условие (в) redactMarker: если да, подстановка этого маркера
+// рядом с окружающим контекстом (уже сброшенным в лог на предыдущем Write
+// или являющимся обычным нередактируемым текстом) может побайтово
+// восстановить значение этого секрета.
+func anySecretContains(marker string, secrets []string) bool {
+	for _, sec := range secrets {
+		if sec != "" && strings.Contains(sec, marker) {
+			return true
 		}
 	}
 	return false

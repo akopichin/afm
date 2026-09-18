@@ -154,7 +154,7 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	// Если у хука есть резолвнутые секреты — лог оборачивается редактором
 	// (codex #5): секрет не должен попасть в лог хука ни через stdout/stderr
 	// самой команды, ни через finish-строку.
-	logFile, logErr := openAttemptLog(logPath, p, attempt)
+	logFile, logErr := openAttemptLog(logPath)
 	var sink io.Writer = logFile
 	var redactor *redactingWriter
 	if logErr == nil {
@@ -162,6 +162,12 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 			redactor = newRedactingWriter(logFile, vals)
 			sink = redactor
 		}
+		// Заголовок пишем через sink (редактор при наличии секретов), а не
+		// напрямую в logFile: сами поля заголовка (event/id/stage) — не
+		// секреты, но defense-in-depth — не должно быть ни одной строки
+		// лога хука, обходящей редактор, если он активен (codex).
+		_, _ = fmt.Fprintf(sink, "=== %s event=%s id=%s stage=%s attempt=%d ===\n",
+			time.Now().Format(time.RFC3339), p.Event, p.EventID, stageIDOrDash(p), attempt)
 		cmd.Stdout = sink
 		cmd.Stderr = sink
 	} else {
@@ -185,21 +191,16 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	return err
 }
 
-// openAttemptLog создаёт/дописывает лог хука и пишет заголовок попытки.
-// Один воркер на хук → записи сериализованы, мьютекс не нужен.
-func openAttemptLog(logPath string, p Payload, attempt int) (*os.File, error) {
+// openAttemptLog создаёт/дописывает лог хука. Заголовок попытки пишет
+// вызывающий код (execOne) — через sink, ПОСЛЕ того как решено, нужен ли
+// редактор секретов, чтобы заголовок тоже проходил через него при наличии
+// секретов (codex, defense-in-depth). Один воркер на хук → записи
+// сериализованы, мьютекс не нужен.
+func openAttemptLog(logPath string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	// Заголовок best-effort: если не записался — сам лог-файл открыт, вывод
-	// попытки всё равно попадёт в него.
-	_, _ = fmt.Fprintf(f, "=== %s event=%s id=%s stage=%s attempt=%d ===\n",
-		time.Now().Format(time.RFC3339), p.Event, p.EventID, stageIDOrDash(p), attempt)
-	return f, nil
+	return os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 }
 
 func stageIDOrDash(p Payload) string {

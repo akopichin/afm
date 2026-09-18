@@ -71,8 +71,35 @@ func TestRunCommand_RedactsSecretInLog(t *testing.T) {
 	if strings.Contains(string(raw), "s3cr3t") {
 		t.Fatalf("secret leaked into log: %s", raw)
 	}
-	if !strings.Contains(string(raw), "[REDACTED]") {
+	if !strings.Contains(string(raw), defaultRedactionMarker) {
 		t.Fatalf("expected redaction: %s", raw)
+	}
+}
+
+// TestRunCommand_HeaderRoutedThroughRedactor — Finding #3: заголовок попытки
+// (event/id/stage) раньше писался напрямую в logFile ДО оборачивания
+// редактором. Проверяем defense-in-depth: если (гипотетически) значение
+// секрета хука совпадает с полем заголовка (здесь — stage id), это значение
+// не должно попасть в лог сырым.
+func TestRunCommand_HeaderRoutedThroughRedactor(t *testing.T) {
+	dir := t.TempDir()
+	h := Hook{ID: "h", Command: "true", Timeout: 5 * time.Second,
+		Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "s3cr3t-stage"}}
+	cfg := DispatcherConfig{RunID: "r", RunDir: dir, RootDir: dir}
+	p := BuildPayload(cfg, Event{Type: EventStageFailed, StageID: "s3cr3t-stage", Time: time.Now()}, "eid-header")
+	logPath := filepath.Join(dir, "h.log")
+	if err := runCommand(context.Background(), h, cfg, p, logPath); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if strings.Contains(string(raw), "s3cr3t-stage") {
+		t.Fatalf("secret leaked raw via attempt header: %s", raw)
+	}
+	if !strings.Contains(string(raw), defaultRedactionMarker) {
+		t.Fatalf("expected header to be redacted: %s", raw)
+	}
+	if !strings.Contains(string(raw), "event=stage_failed") {
+		t.Fatalf("header must still carry non-secret metadata: %s", raw)
 	}
 }
 

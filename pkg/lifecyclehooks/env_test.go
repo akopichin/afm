@@ -167,7 +167,7 @@ func TestRedactingWriter(t *testing.T) {
 	if strings.Contains(out, "topsecret") {
 		t.Fatalf("secret leaked: %q", out)
 	}
-	if !strings.Contains(out, "[REDACTED]") {
+	if !strings.Contains(out, defaultRedactionMarker) {
 		t.Fatalf("no redaction marker: %q", out)
 	}
 	if !strings.Contains(out, "before ") || !strings.Contains(out, " after") {
@@ -188,7 +188,7 @@ func TestRedactingWriter_FullSecretOneWrite(t *testing.T) {
 	if strings.Contains(out, "topsecret") {
 		t.Fatalf("secret leaked: %q", out)
 	}
-	if !strings.Contains(out, "[REDACTED]") {
+	if !strings.Contains(out, defaultRedactionMarker) {
 		t.Fatalf("no redaction marker: %q", out)
 	}
 }
@@ -219,7 +219,7 @@ func TestRedactingWriter_BoundedMemoryOnLargeStream(t *testing.T) {
 	if strings.Contains(out, secret) {
 		t.Fatal("secret leaked in large stream")
 	}
-	if !strings.Contains(out, "[REDACTED]") {
+	if !strings.Contains(out, defaultRedactionMarker) {
 		t.Fatal("no redaction marker in large stream")
 	}
 }
@@ -233,6 +233,55 @@ func TestRedactMarker_FallsBackWhenSecretIsSubstringOfCandidates(t *testing.T) {
 	}
 }
 
+func TestRedactMarker_RejectsCandidateThatIsSubstringOfAnotherSecret(t *testing.T) {
+	// Секрет "a[REDACTED]b" содержит стандартный маркер как подстроку —
+	// redactMarker обязан пропустить его (условие (в), Finding #2).
+	overlapping := "a[REDACTED]b"
+	secrets := []string{"QR", overlapping}
+	m := redactMarker(secrets)
+	if strings.Contains(overlapping, m) && m != "" {
+		t.Fatalf("marker must not be a substring of another secret: %q", m)
+	}
+	if m == defaultRedactionMarker {
+		t.Fatalf("expected redactMarker to skip the default marker, got %q", m)
+	}
+}
+
+// TestRedactingWriter_NoSynthesisAcrossFlushedBoundary воспроизводит утечку
+// из Finding #2: секрет "QR" редактируется на границе двух Write так, что
+// сброшенный в лог контекст "a" + маркер + "b" совпадает со значением
+// ДРУГОГО секрета "a[REDACTED]b". Правильный маркер должен исключать такое
+// совпадение — итоговый лог не должен содержать значение второго секрета
+// целиком.
+func TestRedactingWriter_NoSynthesisAcrossFlushedBoundary(t *testing.T) {
+	shortSecret := "QR"
+	overlapping := "a[REDACTED]b" // содержит дефолтный маркер как подстроку
+	var buf bytes.Buffer
+	w := newRedactingWriter(&buf, []string{shortSecret, overlapping})
+	if w.marker == defaultRedactionMarker {
+		t.Fatalf("redactingWriter must not pick a marker that is a substring of overlapping, got %q", w.marker)
+	}
+	// "aQ" flush-ит "a" (Q удержан как возможный префикс shortSecret), затем
+	// "Rb" достраивает "QR" -> marker, стыкуясь с уже сброшенным "a" и
+	// последующим "b" — именно граница, которую пропускала старая проверка.
+	if _, err := w.Write([]byte("aQ")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("Rb")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, shortSecret) {
+		t.Fatalf("shortSecret leaked: %q", out)
+	}
+	if strings.Contains(out, overlapping) {
+		t.Fatalf("overlapping secret synthesized across flushed Write boundary: %q", out)
+	}
+}
+
 func TestRedactString(t *testing.T) {
 	if got := redactString("no secrets here", nil); got != "no secrets here" {
 		t.Fatalf("no secrets: no-op expected, got %q", got)
@@ -241,7 +290,7 @@ func TestRedactString(t *testing.T) {
 	if strings.Contains(got, "s3cr3t") {
 		t.Fatalf("secret leaked in error string: %q", got)
 	}
-	if !strings.Contains(got, "[REDACTED]") {
+	if !strings.Contains(got, defaultRedactionMarker) {
 		t.Fatalf("expected redaction marker: %q", got)
 	}
 }
