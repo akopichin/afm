@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { answerDialog, cancelDialog, FlowApiError } from '../../api/run-client'
 import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
@@ -98,6 +98,35 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const { maximizedKey } = useMaximize()
   const maximized = maximizedKey === 'dialog'
 
+  // requestGenRef/lastPendingKeyRef — поколение живёт на уровне компонента (не
+  // локально внутри эффекта опроса), потому что reload() (вызывается после
+  // успешного ответа и на answer_out_of_order) — ОТДЕЛЬНАЯ точка входа,
+  // применяющая тот же /dialog поверх того же состояния. Без общих refs
+  // reload() не мог ни (а) отменить уже летящий poll-запрос предыдущего
+  // вопроса (тот применился бы ПОСЛЕ reload и откатил бы к старому pending),
+  // ни (б) сообщить следующему poll «pending уже сменился» — тот увидел бы
+  // смену ключа сам и второй раз стёр черновик, который пользователь только
+  // начал печатать на новом вопросе.
+  const requestGenRef = useRef(0)
+  const lastPendingKeyRef = useRef<string | undefined>(undefined)
+
+  // applyDialog — единая точка применения ответа /dialog, общая для опроса и
+  // reload(): пишет entries и сбрасывает черновик/выбор ТОЛЬКО когда
+  // (phase,id) pending-вопроса реально изменился — иначе повторное применение
+  // одного и того же pending (например, poll сразу после reload) не трогает
+  // то, что пользователь уже начал вводить.
+  const applyDialog = useCallback((data: DialogEntry[]) => {
+    setEntries(data)
+    const nextKey = questionKey(findPending(data))
+    if (nextKey !== lastPendingKeyRef.current) {
+      lastPendingKeyRef.current = nextKey
+      setSelectedOption(null)
+      setCustomText('')
+      setComments({})
+      setActiveCommentLine(null)
+    }
+  }, [])
+
   // Грузим диалог при открытии стадии и опрашиваем каждые 2 c — агент может
   // дописать новый вопрос/answer в любой момент, и канал должен обновляться live.
   // Без опроса новый вопрос виден только после ручной перезагрузки страницы.
@@ -110,14 +139,13 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (current === null) return
 
     let cancelled = false
-    let lastPendingKey: string | undefined
-    // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно в
-    // порядке отправки. requestGen — счётчик поколений (как latestRequestId в
-    // useStatus): каждый refresh запоминает свой номер ДО await и применяет
-    // ответ, только если он всё ещё самый свежий — иначе более старый
-    // (до-ответа) response, резолвнувшийся после нового (уже-отвеченного), снова
-    // открыл бы отвеченный вопрос.
-    let requestGen = 0
+
+    // Смена стадии инвалидирует любой ещё не резолвнувшийся запрос предыдущей
+    // стадии (общий requestGenRef — reload() тоже его бампает) и сбрасывает
+    // lastPendingKeyRef, чтобы первый ответ новой стадии не сравнивался с
+    // ключом чужого pending-вопроса.
+    requestGenRef.current++
+    lastPendingKeyRef.current = undefined
 
     setEntries([])
     setSelectedOption(null)
@@ -126,20 +154,19 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setActiveCommentLine(null)
 
     const refresh = (): void => {
-      const requestId = ++requestGen
+      // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно
+      // в порядке отправки. requestGenRef — счётчик поколений (как
+      // latestRequestId в useStatus): каждый refresh запоминает свой номер ДО
+      // await и применяет ответ, только если он всё ещё самый свежий — иначе
+      // более старый (до-ответа) response, резолвнувшийся после более нового
+      // (уже применённого reload() или другим poll), снова открыл бы
+      // отвеченный вопрос.
+      const requestId = ++requestGenRef.current
       void loadDialog(current.id).then((data) => {
         if (cancelled) return
-        if (requestId !== requestGen) return // более свежий запрос уже применён
+        if (requestId !== requestGenRef.current) return // более свежий запрос уже применён
         if (data === null) return // транзиентная ошибка — сохраняем последнее успешное состояние
-        setEntries(data)
-        const nextPendingKey = questionKey(findPending(data))
-        if (nextPendingKey !== lastPendingKey) {
-          lastPendingKey = nextPendingKey
-          setSelectedOption(null)
-          setCustomText('')
-          setComments({})
-          setActiveCommentLine(null)
-        }
+        applyDialog(data)
       })
     }
 
@@ -150,7 +177,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [stage?.id])
+  }, [stage?.id, applyDialog])
 
   const pending = useMemo(() => findPending(entries), [entries])
   // stage.hasDialog — серверный сигнал «на диске уже есть хотя бы один
@@ -307,13 +334,16 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
   async function reload() {
     if (stage === null) return
+    // Бампаем общий requestGenRef ДО await: любой poll-запрос, уже летящий в
+    // этот момент (значит, запущенный ДО reload), не пройдёт проверку
+    // requestId===requestGenRef.current в опросе выше и не сможет применить
+    // свой более старый ответ ПОСЛЕ reload — иначе он откатил бы канал к
+    // вопросу, который reload только что сменил на новый.
+    const requestId = ++requestGenRef.current
     const data = await loadDialog(stage.id)
+    if (requestId !== requestGenRef.current) return // superseded by a newer request
     if (data === null) return // транзиентная ошибка — сохраняем последнее успешное состояние
-    setEntries(data)
-    setSelectedOption(null)
-    setCustomText('')
-    setComments({})
-    setActiveCommentLine(null)
+    applyDialog(data)
   }
 
   async function sendAnswer() {

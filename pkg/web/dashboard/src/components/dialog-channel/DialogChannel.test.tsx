@@ -990,6 +990,125 @@ describe('DialogChannel', () => {
     expect(container.querySelector('#dialog-pending')).not.toBeNull()
   })
 
+  // codex MAJOR#4: reload() (called after a successful answer) used to run its
+  // own setEntries/reset WITHOUT bumping the shared generation counter — an
+  // in-flight poll issued before the answer, still pending, could resolve
+  // AFTER reload() applied the new question and stomp it back to the old one.
+  test('a stale in-flight poll resolving after reload() does not revert to the previous question', async () => {
+    vi.useFakeTimers()
+
+    const q1 = { id: 'q1', phase: 'p1', question: 'Pick 1', answer: null, options: ['Alpha'], allow_custom: true }
+    const q2 = { id: 'q2', phase: 'p1', question: 'Pick 2', answer: null, options: ['Beta'], allow_custom: true }
+
+    let resolveStalePoll!: (r: Response) => void
+    const stalePollPromise = new Promise<Response>((r) => {
+      resolveStalePoll = r
+    })
+
+    let getCallCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.endsWith('/dialog/answer')) return { ok: true } as Response
+      if (url.endsWith('/dialog')) {
+        getCallCount++
+        if (getCallCount === 1) return jsonResponse([q1]) // mount poll
+        if (getCallCount === 2) return stalePollPromise as unknown as Promise<Response> // in-flight poll, stays pending
+        return jsonResponse([q2]) // reload() after the answer is sent
+      }
+      return jsonResponse([])
+    })
+
+    renderDialogChannel(<DialogChannel stage={makeStage()} />)
+
+    // Fake timers are active — findByRole/waitFor's internal polling would
+    // never fire; flush the mount fetch's microtasks manually instead.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+
+    // Next 2s poll fires WHILE the answer hasn't been sent yet — it becomes the
+    // stale in-flight request (call #2), left unresolved.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+
+    // Send the answer: answerDialog POST resolves, then reload() issues call #3
+    // and applies q2. Flush the microtask chain (fetch → .json() → reload()).
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve()
+      }
+    })
+    expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+
+    // The stale poll (call #2, requestId assigned before reload's own bump)
+    // resolves LATE with the OLD q1 data — the shared generation guard must
+    // drop it instead of reverting the just-applied q2.
+    await act(async () => {
+      resolveStalePoll(jsonResponse([q1]))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('button', { name: 'Alpha' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+  })
+
+  // codex MAJOR#4: reload() used to reset the draft/selection WITHOUT updating
+  // the poll effect's own "last pending key" — the very next 2s poll then saw
+  // the (already-applied) new question as "changed" and wiped the draft a
+  // second time, discarding anything the user had just started typing on it.
+  test('a poll right after reload() does not re-clear a draft started on the new pending question', async () => {
+    vi.useFakeTimers()
+
+    const q1 = { id: 'q1', phase: 'p1', question: 'Pick 1', answer: null, options: ['Alpha'], allow_custom: true }
+    const q2 = { id: 'q2', phase: 'p1', question: 'Pick 2', answer: null, options: ['Beta'], allow_custom: true }
+
+    let getCallCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.endsWith('/dialog/answer')) return { ok: true } as Response
+      if (url.endsWith('/dialog')) {
+        getCallCount++
+        return getCallCount === 1 ? jsonResponse([q1]) : jsonResponse([q2]) // mount sees q1, reload() and every poll after sees q2
+      }
+      return jsonResponse([])
+    })
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+
+    // Fake timers are active — findByRole/waitFor's internal polling would
+    // never fire; flush the mount fetch's microtasks manually instead.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve()
+      }
+    })
+    expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+
+    const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'draft for q2' } })
+    expect(textarea.value).toBe('draft for q2')
+
+    // Next poll (2s) re-fetches q2 — unchanged since reload() already applied
+    // it — and must NOT see it as a fresh pending question.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect((container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement).value).toBe('draft for q2')
+  })
+
   // Finding #8: the SEND button must disable while a submit is in flight so a
   // second click can't fire a duplicate POST (which the server 409s).
   test('SEND disables while a submit is in flight — no double-submit', async () => {
@@ -1061,7 +1180,18 @@ describe('DialogChannel', () => {
       options: ['Alpha'],
       allow_custom: true,
     }
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+    // reload()'s /dialog re-fetch (after the 409) reflects the real cause of an
+    // answer_out_of_order rejection: the server-side question actually moved on
+    // (here: a phase change) while the client still held a stale view — so the
+    // (phase,id) key genuinely changes and applyDialog's reset fires. Same id
+    // and options as before, so the "Alpha" button still renders — only its
+    // "selected" state must be gone.
+    const pendingAfterReload: RawDialogEntry = { ...pending, phase: 'p2' }
+    let getCallCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      getCallCount++
+      return jsonResponse([getCallCount === 1 ? pending : pendingAfterReload])
+    })
     vi.mocked(answerDialog).mockRejectedValueOnce(
       new FlowApiError('/api/stages/s1/dialog/answer', 409, 'answer_out_of_order'),
     )
