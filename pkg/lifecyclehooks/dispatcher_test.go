@@ -115,6 +115,40 @@ func TestDispatcher_NonFSMStageEventID(t *testing.T) {
 	}
 }
 
+// TestDispatcher_KeyedNonFSMStageEventID проверяет, что два разных
+// не-FSM stage-события с разным Key (например, авто-ответы на разные
+// вопросы q1/q2 одной стадии/фазы) получают РАЗНЫЕ event_id — иначе
+// идемпотентный по event_id получатель потерял бы второе событие
+// (finding #3 финального ревью lifecycle-hooks).
+func TestDispatcher_KeyedNonFSMStageEventID(t *testing.T) {
+	d, rec := newRecordingDispatcher(t, []RegisteredHook{{Hook: Hook{ID: "g", Events: EventSelector{Events: []EventType{EventStageQuestionAnswered}}, Command: "true"}}})
+	d.Start()
+	defer d.Stop()
+	d.Emit(Event{Type: EventStageQuestionAnswered, StageID: "brainstorm", Key: "planning/q1", Time: time.Now()})
+	d.Emit(Event{Type: EventStageQuestionAnswered, StageID: "brainstorm", Key: "planning/q2", Time: time.Now()})
+	waitFor(t, rec, 2)
+	dl, _ := rec.snapshot()
+	if len(dl) != 2 {
+		t.Fatalf("deliveries: %+v", dl)
+	}
+	if dl[0] == dl[1] {
+		t.Fatalf("expected distinct event ids for different Key, got same: %+v", dl)
+	}
+	wantFirst := "g:stage_question_answered:run-1:brainstorm:planning/q1:stage_question_answered"
+	wantSecond := "g:stage_question_answered:run-1:brainstorm:planning/q2:stage_question_answered"
+	has := func(s string) bool {
+		for _, d := range dl {
+			if d == s {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(wantFirst) || !has(wantSecond) {
+		t.Fatalf("unexpected ids: %+v", dl)
+	}
+}
+
 func TestDispatcher_SequentialPerHook(t *testing.T) {
 	d, rec := newRecordingDispatcher(t, []RegisteredHook{{Hook: Hook{ID: "g", Events: EventSelector{All: true}, Command: "true"}}})
 	rec.gate = make(chan struct{})

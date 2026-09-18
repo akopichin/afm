@@ -114,13 +114,20 @@ func (d *Dispatcher) Emit(ev Event) {
 
 // eventID — стабильный идентификатор по спеке: FSM-переходы несут durable
 // seq, flow-события уникальны в пределах рана, прочие stage-события —
-// best-effort (повтор при retry стадии допустим).
+// best-effort (повтор при retry стадии допустим). Для не-FSM stage-событий с
+// непустым ev.Key (например, два разных auto-answered вопроса q1/q2 в одной
+// стадии/фазе) в id подмешивается Key — иначе разные вопросы схлопнулись бы
+// в один и тот же event_id и получатель с идемпотентностью по нему потерял
+// бы второе событие. Script-события Key не задают — их повторяемый между
+// retry id остаётся как раньше.
 func (d *Dispatcher) eventID(ev Event) string {
 	switch {
 	case ev.Seq > 0:
 		return fmt.Sprintf("%s:transition:%d:%s", d.cfg.RunID, ev.Seq, ev.Type)
 	case ev.StageID == "":
 		return fmt.Sprintf("%s:flow:%s", d.cfg.RunID, ev.Type)
+	case ev.Key != "":
+		return fmt.Sprintf("%s:%s:%s:%s", d.cfg.RunID, ev.StageID, ev.Key, ev.Type)
 	default:
 		return fmt.Sprintf("%s:%s:%s", d.cfg.RunID, ev.StageID, ev.Type)
 	}

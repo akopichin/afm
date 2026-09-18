@@ -133,6 +133,13 @@ type Event struct {
 	Reason    string
 	Seq       uint64
 	Time      time.Time
+	// Key — необязательный дискриминатор для не-FSM stage-событий, которые
+	// внутри одной активации стадии могут повториться с разной семантикой
+	// (например, два разных auto-answered вопроса q1/q2 в одной фазе).
+	// Участвует в eventID (Dispatcher.eventID), чтобы такие события не
+	// схлопывались в один и тот же id. Пусто для FSM-переходов и
+	// flow-событий — там дискриминатор не нужен.
+	Key string
 }
 
 // DispatcherConfig — метаданные рана для payload/env.

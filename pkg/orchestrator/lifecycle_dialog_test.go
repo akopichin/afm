@@ -167,6 +167,61 @@ func TestPollQuestions_AutoAnswerParkedStageSkipsLifecycleEvents(t *testing.T) {
 	}
 }
 
+// TestPollQuestions_AutoAnswerDistinctQuestionsGetDistinctEventIDs — finding
+// #3 финального ревью: два РАЗНЫХ авто-ответа (q1, затем q2) в одной
+// стадии/фазе не должны схлопываться в один и тот же event_id
+// (<run>:<stage>:stage_question_answered без Key) — идемпотентный по
+// event_id получатель хука иначе потерял бы второе событие.
+func TestPollQuestions_AutoAnswerDistinctQuestionsGetDistinctEventIDs(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	capture := newCaptureDispatcher()
+	o.hooks = captureDispatcherAsReal(t, capture)
+
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"Вариант A (recommended)"})
+	o.pollQuestions(processed, malformed)
+	writeQuestionFile(t, stageDir, "implementation", "q2", []string{"Вариант B (recommended)"})
+	o.pollQuestions(processed, malformed)
+
+	if !o.hooks.Flush(2 * time.Second) {
+		t.Fatal("Flush timed out — delivery never completed")
+	}
+
+	var answeredIDs []string
+	for {
+		select {
+		case p := <-capture.events:
+			if p.Event == lifecyclehooks.EventStageQuestionAnswered {
+				answeredIDs = append(answeredIDs, p.EventID)
+			}
+		default:
+			goto drained
+		}
+	}
+drained:
+	if len(answeredIDs) != 2 {
+		t.Fatalf("expected exactly 2 stage_question_answered deliveries, got %v", answeredIDs)
+	}
+	if answeredIDs[0] == answeredIDs[1] {
+		t.Fatalf("q1 and q2 auto-answers must not share event_id, got %q twice", answeredIDs[0])
+	}
+}
+
 // TestPollQuestions_AutoAnswerMalformedFallbackEmitsLifecycleEvents — та же
 // пара, но по симметричному пути autoAnswerMalformed (терминальный fallback
 // после исчерпания попыток fix-агента для non-interactive стадии).

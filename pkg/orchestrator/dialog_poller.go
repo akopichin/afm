@@ -245,6 +245,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 						StageName: o.stageName(stageID),
 						Phase:     q.Phase,
 						Reason:    q.Question,
+						Key:       q.Phase + "/" + q.ID,
 					})
 					o.emitLifecycle(lifecyclehooks.Event{
 						Type:      lifecyclehooks.EventStageQuestionAnswered,
@@ -252,6 +253,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 						StageName: o.stageName(stageID),
 						Phase:     q.Phase,
 						Reason:    answer,
+						Key:       q.Phase + "/" + q.ID,
 					})
 				}
 				// Если агент уже вышел, оставив стадию запаркованной в
@@ -472,6 +474,7 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 			StageName: o.stageName(stageID),
 			Phase:     q.Phase,
 			Reason:    q.Question,
+			Key:       q.Phase + "/" + q.ID,
 		})
 		o.emitLifecycle(lifecyclehooks.Event{
 			Type:      lifecyclehooks.EventStageQuestionAnswered,
@@ -479,6 +482,7 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 			StageName: o.stageName(stageID),
 			Phase:     q.Phase,
 			Reason:    answer,
+			Key:       q.Phase + "/" + q.ID,
 		})
 	}
 }
