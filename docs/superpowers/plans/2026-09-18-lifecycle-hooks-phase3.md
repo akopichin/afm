@@ -4,7 +4,7 @@
 
 **Goal:** Дать lifecycle-хукам безопасную доставку секретов/переменных: поле `env` со ссылками `env:`/`file:` (та же семантика, что `auth.from`), вынос резолвера в нейтральный `pkg/secrets`, минимальное окружение hook-процесса по умолчанию + `inherit_env`, редакцию `[REDACTED]` в логах/dashboard, приоритеты `secrets.env` (project > global > env процесса), и Docker-транспорт секретов без монтирования файлов в контейнер.
 
-**Architecture:** Резолвер секретов (`ResolveAuthValue`/`LoadSecrets`/`LoadSecretLayers`/`expandHome`) переезжает из `pkg/docker` в нейтральный `pkg/secrets`; `pkg/docker` и lifecycle-хуки используют его. Хук получает `env map[string]SecretRef` и `inherit_env bool`. Секреты резолвятся ОДИН раз при сборке dispatcher (host, `cmd/afm/run.go`), до `flow_started`, fail-fast с указанием hook id + имени переменной; резолвнутые значения живут только в памяти (`RegisteredHook.ResolvedEnv`), не пишутся в payload/логи/journal. Runner строит окружение hook-процесса: по умолчанию (spec) минимальный базовый набор (PATH/HOME/locale/tmp/proxy-certs) + `AFM_*` + резолвнутый `env`; полный `os.Environ()` только при `inherit_env: true` (и всегда с вырезанием transport-префиксов); лог оборачивается в редактирующий writer (`[REDACTED]`). В Docker-режиме host-launcher резолвит ссылки до `docker run`, передаёт значения транзиентными bare `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` (инъективно по индексам, codex #1); in-container резолвер читает их вместо файлов и делает `Unsetenv`, transport-переменные вырезаются из окружения всех дочерних процессов (агенты/скрипты/verify/другие хуки).
+**Architecture:** Резолвер секретов (`ResolveAuthValue`/`LoadSecrets`/`LoadSecretLayers`/`expandHome`) переезжает из `pkg/docker` в нейтральный `pkg/secrets`; `pkg/docker` и lifecycle-хуки используют его. Хук получает `env map[string]SecretRef` и `inherit_env bool`. Секреты резолвятся ОДИН раз при сборке dispatcher (host, `cmd/afm/run.go`), до `flow_started`, fail-fast с указанием hook id + имени переменной; резолвнутые значения живут только в памяти (`RegisteredHook.ResolvedEnv`), не пишутся в payload/логи/journal. Runner строит окружение hook-процесса: по умолчанию (spec) минимальный базовый набор (PATH/HOME/locale/tmp/proxy-certs) + `AFM_*` + резолвнутый `env`; полный `os.Environ()` только при `inherit_env: true` (и всегда с вырезанием transport-префиксов); лог оборачивается в редактирующий writer (`[REDACTED]`). В Docker-режиме host-launcher резолвит ссылки до `docker run`, передаёт значения транзиентными bare `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` (инъективно по индексам, codex #1); in-container резолвер читает их из транспорта, затем глобально `os.Unsetenv` всех `AFM_HOOK_SECRET_*` (единая точка) — ни один дочерний процесс их не наследует.
 
 **Tech Stack:** Go (stdlib), существующие `pkg/lifecyclehooks`, `pkg/docker` (`secrets.go`/`launcher.go`/`wrapper.go`), `pkg/config`, `pkg/flow`, `cmd/afm/run.go`, `schema/*.json`.
 
@@ -39,7 +39,7 @@
 Модифицируемые:
 - `pkg/docker/secrets.go` — стать тонкой обёрткой над `pkg/secrets` (или удалить, обновив call sites launcher.go/wrapper.go/run.go); `ResolveSystemPrompt` остаётся в docker (docker-специфичен) либо тоже переезжает — по месту.
 - `pkg/docker/launcher.go` — переиспользовать `pkg/secrets`; добавить транспорт секретов хуков (`AFM_HOOK_SECRET_<hookIdx>_<varIdx>`, инъективно по индексам), `docker.UsesLifecycleSecrets`.
-- `pkg/orchestrator/stagefiles/completion.go` — `RunVerify` (прямой `exec.Command`) тоже вырезает transport-префиксы из окружения (codex #2).
+- (транспорт хуков изолируется единой точкой — глобальный `os.Unsetenv` всех `AFM_HOOK_SECRET_*` после in-container резолва, до `Run`; отдельные spawn-сайты RunVerify/RunJSONQuery править НЕ нужно.)
 - `pkg/lifecyclehooks/types.go` — `Hook.Env map[string]SecretRef`, `Hook.InheritEnv bool`, `Hook.ResolvedEnv map[string]string` (yaml:"-", runtime).
 - `pkg/lifecyclehooks/validate.go` — валидация `env` (имя переменной, AFM_-префикс, префикс источника).
 - `pkg/lifecyclehooks/runner.go` — `buildEnv` учитывает ResolvedEnv/InheritEnv/минимальное окружение; лог через `redactingWriter`.
@@ -729,7 +729,9 @@ func anySuffixIsSecretPrefix(s string, secrets []string) bool {
 // (a) redactMarker), так что сам он новых вхождений не порождает — только
 // контекстные стыки, которые следующий проход и добивает.
 func redactAll(b []byte, secrets []string, marker string) []byte {
-	for pass := 0; pass < len(b)+1; pass++ {
+	maxPasses := len(b) + 1 // зафиксировать ДО цикла: при fallback-маркере "" строка
+	// сжимается, а пересчёт len(b) в условии дал бы ранний выход с остатком секрета (codex).
+	for pass := 0; pass < maxPasses; pass++ {
 		changed := false
 		for _, s := range secrets {
 			if s == "" {
@@ -787,7 +789,7 @@ git commit -m "feat(lifecyclehooks): окружение hook-процесса (m
 
 **Interfaces:**
 - Consumes: Tasks 1-3; образец autoShim-транспорта (`launcher.go:391-424`, `wrapper.go`).
-- Produces: в Docker-режиме секреты хуков резолвятся ХОСТОМ до `docker run` и передаются транзиентными bare `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` (инъективно по индексам итогового `combined`, codex #1); in-container путь берёт значения из этих переменных (не из файлов/secrets.env), делает `Unsetenv`; транспортные переменные вырезаются из окружения агентов/скриптов/verify/других хуков (codex #2).
+- Produces: в Docker-режиме секреты хуков резолвятся ХОСТОМ до `docker run` и передаются транзиентными bare `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` (инъективно по индексам итогового `combined`, codex #1); in-container путь берёт значения из транспорта (не из файлов/secrets.env), затем глобально снимает все `AFM_HOOK_SECRET_*` (единая точка, codex #2) — наследование в любые дочерние процессы исключено.
 
 > ВАЖНО: перед реализацией прочитать `pkg/docker/launcher.go` (ReExec, блок autoShim-секретов :391-424, dockerForwardEnvVars, сборку `-e`), `pkg/docker/wrapper.go` (`envName`, unset-паттерн) и docker-режим в `cmd/afm/run.go` (как флоу/конфиг доезжает в контейнер, `AFM_IN_DOCKER`). Реализация должна ЗЕРКАЛИТЬ существующий AFM_SECRET_<CMD>-паттерн, а не изобретать новый.
 
@@ -802,9 +804,11 @@ git commit -m "feat(lifecyclehooks): окружение hook-процесса (m
 2. Загрузить `secrets.env`-слои + `ResolveHookEnv` каждый хук (fail-fast ДО `docker run`); для каждой резолвнутой пары `os.Setenv(transportName, val)` + `args=append(args,"-e",transportName)` (bare, без значения в argv — как autoShim `launcher.go:412`).
 3. Секрет-файлы НЕ монтировать в контейнер.
 
-In-container (`AFM_IN_DOCKER=1`): резолвить `Hook.Env` НЕ через файлы, а из транспортных переменных — `ResolvedEnv[targetVar] = os.Getenv(transportName(hookIdx,varIdx))`; отсутствие/пусто → ошибка (fail-fast). **Затем ОБЯЗАТЕЛЬНО `os.Unsetenv(transportName)` для ВСЕХ транспортных переменных** (codex #2 — не «unset ИЛИ фильтр», а unset всегда), чтобы транспорт не наследовался никакими дочерними процессами (агенты, script-стадии, verify/JSONQuery, другие хуки).
+In-container (`AFM_IN_DOCKER=1`): резолвить `Hook.Env` НЕ через файлы, а из транспортных переменных — `ResolvedEnv[targetVar] = os.Getenv(transportName(hookIdx,varIdx))`; отсутствие/пусто → ошибка (fail-fast).
 
-**Дополнительно (codex #2):** в построении окружения ЛЮБОГО дочернего процесса, наследующего окружение (агенты/скрипты — executor/runner_factory; verify — stagefiles.RunVerify/completion.go, прямой exec.Command; и hook при `inherit_env:true`), вырезать все внутренние transport-префиксы: `AFM_HOOK_SECRET_*`, а также уже существующие autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` (сейчас их снимают только generated-wrappers; обычные агенты/скрипты их наследуют — закрыть). `minimalBaseEnv` их не тащит по построению (whitelist), но `inherit_env:true`-хук и агенты с полным окружением — тащат.
+**Изоляция транспорта хуков — ЕДИНОЙ точкой, не перечислением spawn-сайтов (codex).** Сразу ПОСЛЕ резолва всех хук-секретов из транспорта — до `Orchestrator.Run`, до любого запуска агента/стадии — сделать глобальный `os.Unsetenv` для КАЖДОЙ `AFM_HOOK_SECRET_*` переменной процесса (просканировать `os.Environ()`, снять все с этим префиксом). После этого их нет в окружении процесса afm вовсе → НИ ОДИН дочерний процесс (агент, script-стадия, `RunVerify`, `RunJSONQuery`, `git`, другой хук) их не унаследует — без аудита каждого spawn-сайта. Хуки используют `ResolvedEnv` (в памяти), а не транспортные переменные, поэтому глобальное снятие безопасно.
+
+**autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` — отдельный, ПРЕДСУЩЕСТВУЮЩИЙ случай.** Их читают generated-wrappers в момент запуска агента, поэтому глобально снять их до агентов нельзя (в отличие от хук-транспорта). Их per-wrapper unset — существующее поведение; утечка в не-wrapper дочерние процессы (RunVerify/git) существовала ДО этой фичи и вне её scope. В `buildEnv` хука при `inherit_env:true` мы всё равно вырезаем и `AFM_SECRET_*`/`AFM_SYSPROMPT_*` через `stripTransportVars` — чтобы хук-процесс их не получал; расширять фильтрацию на все прочие spawn-сайты в рамках Phase 3 не требуется (это отдельная задача по autoShim).
 
 Тест (host, unit — как существующие `TestReExec_*`): флоу с двумя хуками, у обоих `env: {TOK: ...}`, id различаются только пунктуацией/регистром → транспортные имена РАЗНЫЕ (инъективность); `-e <transport>` присутствует bare; значение в `os.Environ` хоста, НЕ в argv; секрет-файл НЕ среди `-v`. In-container unit: `resolveHookEnvFromTransport(combined)` даёт правильный `ResolvedEnv` и делает Unsetenv транспортных.
 
@@ -826,7 +830,7 @@ In-container резолв — unit-тест: при `AFM_IN_DOCKER=1` и выс�
 Run: `go test ./pkg/docker/ -run TestReExec_HookSecret -v`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — по образцу autoShim-секретов (`launcher.go:391-424`). Общий хелпер `transportName(hookIdx, varIdx int) string` (в pkg/lifecyclehooks или pkg/docker, доступный обоим). Развилка host vs in-container в `cmd/afm/run.go`: `os.Getenv("AFM_IN_DOCKER")=="1"` → `ResolvedEnv` из транспортных переменных + `os.Unsetenv` каждой; иначе → `secrets.env`+файлы (Task 3). Combine вынесен ДО docker-ветки (#3). Фильтрацию transport-префиксов (`AFM_HOOK_SECRET_*`, `AFM_SECRET_*`, `AFM_SYSPROMPT_*`) из наследуемого окружения сделать во ВСЕХ spawn-точках (executor/runner_factory И stagefiles.RunVerify/completion.go — прямой exec.Command, codex #2) И в `buildEnv` хука при `inherit_env:true`. Тесты покрыть: agent, script, verify, no-env-hook, inherit-hook — ни один не видит транспортных переменных.
+- [ ] **Step 3: Implement** — по образцу autoShim-секретов (`launcher.go:391-424`). Общий хелпер `transportName(hookIdx, varIdx int) string` (в pkg/lifecyclehooks или pkg/docker, доступный обоим). Развилка host vs in-container в `cmd/afm/run.go`: `os.Getenv("AFM_IN_DOCKER")=="1"` → `ResolvedEnv` из транспортных переменных; иначе → `secrets.env`+файлы (Task 3). Combine вынесен ДО docker-ветки (#3). **Изоляция единой точкой:** после in-container резолва — глобальный `os.Unsetenv` ВСЕХ `AFM_HOOK_SECRET_*` (скан `os.Environ()` по префиксу) до `Run`; этого достаточно, чтобы ни один дочерний процесс их не унаследовал (не нужно трогать executor/runner_factory/RunVerify/RunJSONQuery). Дополнительно `stripTransportVars` в `buildEnv` хука при `inherit_env:true` вырезает и autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` из окружения самого хука. Тесты: agent, script, verify, no-env-hook, inherit-hook — ни один не видит `AFM_HOOK_SECRET_*` (после глобального Unsetenv); inherit-хук не видит и autoShim-префиксов.
 
 - [ ] **Step 4: Run tests + сборка**
 
