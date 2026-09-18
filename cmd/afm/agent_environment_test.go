@@ -208,6 +208,28 @@ func TestLifecycleRootDir_NonEmptyPassesThrough(t *testing.T) {
 	}
 }
 
+// TestLoadHookSecretLayers_ProjectOverridesGlobal — Task 3 (lifecycle hooks
+// phase 3): loadHookSecretLayers должен вести себя как docker.LoadSecretLayers
+// с project-слоем последним (project приоритетнее global) — она лишь
+// делегирует, но сам факт делегирования (пути afmRoot/.afm/secrets.env)
+// стоит закрепить регрессионным тестом здесь.
+func TestLoadHookSecretLayers_ProjectOverridesGlobal(t *testing.T) {
+	proj := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(proj, ".afm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, ".afm", "secrets.env"), []byte("K=project\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := loadHookSecretLayers(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m["K"] != "project" {
+		t.Errorf("loadHookSecretLayers(%q) = %#v, want K=project", proj, m)
+	}
+}
+
 // TestLifecycleRootDir_EmptyReturnsAbsoluteCWD — task-13: пустой
 // agentRootDir означает «агенты наследуют CWD процесса» (resolveAgentRoot),
 // но контракт lifecycle-хуков (AFM_ROOT_DIR) требует непустой абсолютный

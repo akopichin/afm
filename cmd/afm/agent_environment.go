@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
 )
 
@@ -50,6 +51,16 @@ func lifecycleRootDir(agentRootDir string) string {
 		return ""
 	}
 	return wd
+}
+
+// loadHookSecretLayers собирает map секретов для env lifecycle-хуков: слои
+// global ~/.afm/secrets.env и project <afmRoot>/.afm/secrets.env (project
+// приоритетнее — та же семантика, что docker.LoadSecretLayers уже реализует
+// для agent-recipe секретов; повторно используем её здесь, а не дублируем
+// список путей). Дальше приоритет уходит к env процесса — это уже делает
+// secrets.ResolveRef.
+func loadHookSecretLayers(afmRoot string) (map[string]string, error) {
+	return docker.LoadSecretLayers("", afmRoot)
 }
 
 // resolveMemoryDir возвращает директорию памяти флоу: если память выключена

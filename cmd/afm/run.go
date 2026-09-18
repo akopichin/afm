@@ -251,6 +251,39 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 			if combined := lifecyclehooks.Combine(layers...); len(combined) > 0 {
+				// Резолв env-секретов хуков — ДО New/flow_started (fail-fast:
+				// ран не должен стартовать с недорезолвленным секретом).
+				// secrets.env грузим ТОЛЬКО если хотя бы у одного собранного
+				// хука непустой Env — иначе нечитаемый secrets.env заблокировал
+				// бы чистый Phase 1-хук без секретов (codex #8).
+				anyEnv := false
+				for i := range combined {
+					if len(combined[i].Hook.Env) > 0 {
+						anyEnv = true
+						break
+					}
+				}
+				var hookSecrets map[string]string
+				if anyEnv {
+					var serr error
+					// Слои: project .afm/secrets.env > global ~/.afm/secrets.env >
+					// env процесса (порядок обеспечивает secrets.ResolveRef:
+					// сначала loaded map, затем os.Getenv; в loaded проектный
+					// слой перекрывает глобальный).
+					if hookSecrets, serr = loadHookSecretLayers(rootDir); serr != nil {
+						return fmt.Errorf("lifecycle hooks: load secrets.env: %w", serr)
+					}
+				}
+				for i := range combined {
+					if len(combined[i].Hook.Env) == 0 {
+						continue // чистый Phase 1-хук: секретов нет, слои не нужны
+					}
+					resolved, rerr := lifecyclehooks.ResolveHookEnv(combined[i].Hook, hookSecrets)
+					if rerr != nil {
+						return fmt.Errorf("lifecycle hooks: %w", rerr) // fail-fast до flow_started
+					}
+					combined[i].Hook.ResolvedEnv = resolved
+				}
 				hooksDisp = lifecyclehooks.New(lifecyclehooks.DispatcherOptions{
 					Config: lifecyclehooks.DispatcherConfig{
 						FlowName: f.Name,
