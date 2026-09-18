@@ -463,6 +463,11 @@ func TestValidateLayer(t *testing.T) {
 		{"flow event ok in flow layer", []Hook{{ID: "x", Events: EventSelector{Events: []EventType{EventFlowFinished}}, Command: "true"}}, false, ""},
 		{"negative retries", []Hook{{ID: "x", Events: EventSelector{All: true}, Command: "true", Retries: -1}}, false, "retries"},
 		{"negative timeout", []Hook{{ID: "x", Events: EventSelector{All: true}, Command: "true", Timeout: -1}}, false, "timeout"},
+		// id становится именем файла лога — path traversal запрещён (codex CRIT#1):
+		{"id traversal", []Hook{{ID: "../events.jsonl", Events: EventSelector{All: true}, Command: "true"}}, false, "id"},
+		{"id with slash", []Hook{{ID: "a/b", Events: EventSelector{All: true}, Command: "true"}}, false, "id"},
+		{"id dot", []Hook{{ID: ".", Events: EventSelector{All: true}, Command: "true"}}, false, "id"},
+		{"id dotdot", []Hook{{ID: "..", Events: EventSelector{All: true}, Command: "true"}}, false, "id"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -538,7 +543,7 @@ package lifecyclehooks
 
 import (
 	"fmt"
-	"time"
+	"strings"
 )
 
 // ValidateLayer проверяет слой хуков (config-слой, flow-слой или хуки одной
@@ -553,6 +558,12 @@ func ValidateLayer(defs []Hook, stageScoped bool) error {
 	for i, h := range defs {
 		if h.ID == "" {
 			return fmt.Errorf("hooks[%d]: id is required", i)
+		}
+		// id становится именем файла лога (<LogDir>/<id>.log) — обязан быть
+		// безопасным одиночным компонентом пути, иначе `id: ../events.jsonl`
+		// допишет hook-лог в авторитетный events.jsonl (codex CRIT#1).
+		if h.ID == "." || h.ID == ".." || strings.ContainsAny(h.ID, "/\\\x00") {
+			return fmt.Errorf("hooks[%d]: id %q must be a single safe path component (no /, \\, NUL, dot segments)", i, h.ID)
 		}
 		if ids[h.ID] {
 			return fmt.Errorf("hooks[%d]: duplicate id %q in the same layer", i, h.ID)
@@ -583,13 +594,10 @@ func ValidateLayer(defs []Hook, stageScoped bool) error {
 		if h.Timeout < 0 {
 			return fmt.Errorf("hooks[%d] (%s): timeout must not be negative", i, h.ID)
 		}
-		_ = time.Second // импорт time используется типом ниже при расширении; см. goimports
 	}
 	return nil
 }
 ```
-
-(Строку `_ = time.Second` и импорт time убрать, если lint ругается — Timeout уже `time.Duration`, отдельный импорт не нужен.)
 
 `matcher.go`:
 
@@ -1036,41 +1044,38 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 		return nil
 	}
 
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	// Потоковая запись stdout/stderr прямо в лог-файл (codex MAJ#12): буфер
+	// в памяти не ограничен, шумный хук за 30s-таймаута мог бы исчерпать
+	// память и уронить afm — observer не должен иметь такой рычаг. Ошибки
+	// открытия лога не влияют на доставку (best-effort): вывод уходит в никуда.
+	logFile, logErr := openAttemptLog(logPath, p, attempt)
+	if logErr == nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	} else {
+		log.Printf("WARN: lifecycle hook log %s: %v", logPath, logErr)
+	}
 	err = cmd.Run()
-	appendHookLog(logPath, p, buf.String(), attempt, err)
+	if logFile != nil {
+		fmt.Fprintf(logFile, "=== attempt %d finished: %v ===\n", attempt, err)
+		logFile.Close()
+	}
 	return err
 }
 
-var logMu sync.Mutex
-
-// appendHookLog дописывает одну попытку в лог хука. Ошибки лога не влияют на
-// результат доставки (best-effort), поэтому глотаются.
-func appendHookLog(logPath string, p Payload, output string, attempt int, runErr error) {
-	logMu.Lock()
-	defer logMu.Unlock()
+// openAttemptLog создаёт/дописывает лог хука и пишет заголовок попытки.
+// Один воркер на хук → записи сериализованы, мьютекс не нужен.
+func openAttemptLog(logPath string, p Payload, attempt int) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return
+		return nil, err
 	}
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return
+		return nil, err
 	}
-	defer f.Close()
-	status := "ok"
-	if runErr != nil {
-		status = runErr.Error()
-	}
-	fmt.Fprintf(f, "=== %s event=%s id=%s stage=%s attempt=%d status=%s ===\n",
-		time.Now().Format(time.RFC3339), p.Event, p.EventID, stageIDOrDash(p), attempt, status)
-	if output != "" {
-		f.WriteString(output)
-		if !strings.HasSuffix(output, "\n") {
-			f.WriteString("\n")
-		}
-	}
+	fmt.Fprintf(f, "=== %s event=%s id=%s stage=%s attempt=%d ===\n",
+		time.Now().Format(time.RFC3339), p.Event, p.EventID, stageIDOrDash(p), attempt)
+	return f, nil
 }
 
 func stageIDOrDash(p Payload) string {
@@ -1104,7 +1109,7 @@ func runCommand(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, lo
 }
 ```
 
-Импорты: `bytes, context, encoding/json, fmt, os, os/exec, path/filepath, strings, sync, syscall, time`. Убрать `perAttemptTimeout`/`buildPayloadForEnv`/`p_` — их заменяет финальный код.
+Импорты: `bytes, context, encoding/json, fmt, log, os, os/exec, path/filepath, syscall, time` (bytes — Stdin-Reader; strings/sync больше не нужны — appendHookLog/logMu удалены). Убрать `perAttemptTimeout`/`buildPayloadForEnv`/`p_` из первого эскиза — их заменяет финальный код.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1317,6 +1322,34 @@ func TestDispatcher_QueueOverflowDropsNotBlocks(t *testing.T) {
 	close(rec.gate)
 }
 
+func TestDispatcher_ConcurrentEmitStopNoPanic(t *testing.T) {
+	// codex CRIT#2: поздние эмиттеры (poller, agent-горутины) против Stop.
+	// Гоняется вместе с -race.
+	d, _ := newRecordingDispatcher(t, []RegisteredHook{{Hook: Hook{ID: "g", Events: EventSelector{All: true}, Command: "true"}}})
+	d.Start()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					d.Emit(Event{Type: EventFlowStarted, Time: time.Now()})
+				}
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	d.Stop()  // на гонящихся эмиттерах
+	d.Stop()  // идемпотентность
+	close(done)
+	wg.Wait()
+}
+
 func waitFor(t *testing.T, rec *recorder, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1388,6 +1421,13 @@ type Dispatcher struct {
 	wg     sync.WaitGroup
 	sent   atomic.Int64
 	done   atomic.Int64
+
+	// mu/stopped закрывают гонку Emit-vs-Stop (codex CRIT#2): Emit шлёт под
+	// RLock, Stop закрывает каналы под Lock — пересечение невозможно; Emit
+	// после Stop — тихий no-op. Поздние эмиттеры (question poller, agent
+	// goroutine, пережившие возврат Run) не паникуют на closed channel.
+	mu      sync.RWMutex
+	stopped bool
 }
 
 // New создаёт dispatcher (воркеры ещё не запущены — см. Start).
@@ -1420,7 +1460,9 @@ func (d *Dispatcher) Start() {
 // одного хука не задерживает эмиттера (оркестратор) — доставка дропается
 // с отчётом в OnError.
 func (d *Dispatcher) Emit(ev Event) {
-	if len(d.hooks) == 0 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.stopped || len(d.hooks) == 0 {
 		return
 	}
 	if ev.Time.IsZero() {
@@ -1480,15 +1522,20 @@ func (d *Dispatcher) Flush(timeout time.Duration) bool {
 	return true
 }
 
-// Stop закрывает очереди и воркеров; повторный вызов безопасен.
+// Stop закрывает очереди и воркеров; идемпотентен (повторный вызов — no-op).
 func (d *Dispatcher) Stop() {
-	if d.cancel == nil {
+	d.mu.Lock()
+	if d.stopped || d.cancel == nil {
+		d.mu.Unlock()
 		return
 	}
+	d.stopped = true
 	for _, q := range d.queues {
 		close(q)
 	}
-	d.cancel()
+	cancel := d.cancel
+	d.mu.Unlock()
+	cancel()
 	d.wg.Wait()
 }
 
@@ -1623,10 +1670,13 @@ Expected: FAIL (compile error — поля Hooks нет).
 
 Импорт: `"github.com/akopichin/afm/pkg/lifecyclehooks"` (проверить фактический module path — `github.com/akopichin/afm/...` по go.mod; pkg/lifecyclehooks его не импортирует → цикла нет).
 
-`mergeFile` — блок перед `return nil` (после Pricing.Channels):
+`mergeFile` — блок перед `return nil` (после Pricing.Channels). ВАЖНО (codex MAJ#4): валидация слоя overlay ДО keyed-merge — иначе дубль id внутри одного файла молча «схлопнется» заменой до того, как ValidateLayer в LoadFrom его увидит:
 
 ```go
 	if overlay.Hooks != nil {
+		if err := lifecyclehooks.ValidateLayer(overlay.Hooks, false); err != nil {
+			return fmt.Errorf("hooks: %w", err)
+		}
 		if dst.Hooks == nil {
 			dst.Hooks = make([]lifecyclehooks.Hook, 0, len(overlay.Hooks))
 		}
@@ -1646,7 +1696,7 @@ Expected: FAIL (compile error — поля Hooks нет).
 	}
 ```
 
-`LoadFrom` — после `validatePricing`:
+`LoadFrom` — после `validatePricing` (итоговая проверка смёрженного списка; ошибка mergeFile уже перехватила внутрислойные проблемы глобального и проектного файлов по отдельности):
 
 ```go
 	if err := lifecyclehooks.ValidateLayer(cfg.Hooks, false); err != nil {
@@ -1793,6 +1843,10 @@ stages: [{id: s1, script: "true"}]
 name: h
 stages: [{id: s1, script: "true", hooks: [{id: x, events: all, command: "a"}, {id: x, events: all, command: "b"}]}]
 `},
+		{"dup id across stages", `
+name: h
+stages: [{id: s1, script: "true", hooks: [{id: x, events: all, command: "a"}]}, {id: s2, script: "true", hooks: [{id: x, events: all, command: "b"}]}]
+`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1853,15 +1907,22 @@ Expected: FAIL (compile error — полей нет).
 	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
 ```
 
-`Flow.validate()` — после блока reflect (перед закрывающей скобкой validate):
+`Flow.validate()` — после блока reflect (перед закрывающей скобкой validate). Блок про cross-stage дубли (codex MAJ#3, ruling): плоская замена по id между СЛОЯМИ — специфицированное поведение (global < project < flow < stage, спека «Наследование и порядок»), но один и тот же id в хуках РАЗНЫХ стадий не должен молча схлопываться в Combine (выиграла бы последняя стадия в YAML) — это отдельная ошибка валидации:
 
 ```go
 	if err := lifecyclehooks.ValidateLayer(f.Hooks, false); err != nil {
 		return fmt.Errorf("hooks: %w", err)
 	}
+	stageHookIDs := map[string]string{} // hook id -> stage id (первый объявивший)
 	for _, s := range f.Stages {
 		if err := lifecyclehooks.ValidateLayer(s.Hooks, true); err != nil {
 			return fmt.Errorf("stage %q: %w", s.ID, err)
+		}
+		for _, h := range s.Hooks {
+			if other, dup := stageHookIDs[h.ID]; dup {
+				return fmt.Errorf("stage %q: hooks: duplicate hook id %q across stages (already used by stage %q)", s.ID, h.ID, other)
+			}
+			stageHookIDs[h.ID] = s.ID
 		}
 	}
 ```
@@ -1887,7 +1948,8 @@ git commit -m "feat(flow): hooks на уровне флоу и стадии с �
 **Files:**
 - Create: `pkg/orchestrator/lifecycle_emit.go`
 - Modify: `pkg/orchestrator/orchestrator.go` (Options :57-94, структура Orchestrator :113+, New :394, triggerWithSeq :489-524)
-- Test: `pkg/orchestrator/lifecycle_emit_test.go`
+- Modify: `pkg/orchestrator/bus/fsm.go` (FSM.Apply — возвращает `from`)
+- Test: `pkg/orchestrator/lifecycle_emit_test.go`, `pkg/orchestrator/bus/fsm_test.go` (сигнатура Apply)
 
 **Interfaces:**
 - Consumes: Tasks 1-5 (`lifecyclehooks.Dispatcher`, `Event`, константы).
@@ -2103,10 +2165,20 @@ func phaseForStatus(st state.StageStatus) string {
 ```
 
 - `New` — после `o := &Orchestrator{...}`: `o.hooks = opts.Hooks`.
-- `triggerWithSeq` — в начале функции (до `o.fsm.Apply`):
+- `pkg/orchestrator/bus/fsm.go` — `FSM.Apply` получает дополнительное возвращаемое значение `from` (codex MAJ#5: отдельное чтение `o.currentStatus` ДО Apply — TOCTOU-гонка; durable-переход пишет фактический from, lifecycle-payload обязан видеть тот же). У Apply ровно один продакшн-call site (orchestrator.go:490), смена сигнатуры безопасна:
 
 ```go
-	from := o.currentStatus(stageID)
+// было: func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (to state.StageStatus, seq uint64, ok bool, err error)
+// стало:
+func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (from, to state.StageStatus, seq uint64, ok bool, err error)
+```
+
+внутри Apply: `from` — статус, прочитанный для CAS-проверки ruleAllowsFrom (уже существует локально как current); возвращать его во всех ветках (при err/not applied — `from = current, to = current, seq = 0`). Обновить единственный call site и тесты bus, если они зовут Apply напрямую.
+
+- `triggerWithSeq` — вызов меняется на:
+
+```go
+	from, to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 ```
 
 и внутри `if ok {` (после `o.critical.TryPublish(pubEv)`):
@@ -2139,7 +2211,7 @@ git commit -m "feat(orchestrator): emit-хелперы lifecycle и интегр
 
 **Interfaces:**
 - Consumes: Task 8 (emitLifecycle, o.hooks).
-- Produces: `func (o *Orchestrator) finishLifecycleFlow(ev lifecyclehooks.EventType)` — эмит + `Flush(lifecyclehooks.FlushTimeout)`; вызовы на всех четырёх выходах Run.
+- Produces: `func (o *Orchestrator) setTerminalFlow(ev lifecyclehooks.EventType)` + `func (o *Orchestrator) finalizeLifecycle()`; поле `Orchestrator.terminalFlow`. Порядок shutdown (codex MAJ#7): terminal-событие эмитится и флашится ПОСЛЕ `cancel()`+`WaitAgents()` (defer, зарегистрированный ПЕРВЫМ — исполняется ПОСЛЕДНИМ), а не инлайн в выходах Run. Классификация выхода (codex MAJ#8): fatal ИЛИ есть Failed-стадия → `flow_failed`; всё Done → `flow_finished`; прочая отмена ctx → `flow_interrupted`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2169,7 +2241,7 @@ func TestRun_FlowEvents_Finished(t *testing.T) {
 	assertContains(t, evs, lifecyclehooks.EventFlowStarted)
 	assertContains(t, evs, lifecyclehooks.EventFlowFinished)
 	assertContains(t, evs, lifecyclehooks.EventStageScriptStarted)
-	assertContains(t, lifecyclehooks.EventStageScriptFinished)
+	assertContains(t, evs, lifecyclehooks.EventStageScriptFinished)
 	assertContains(t, lifecyclehooks.EventStageFinished)
 	assertOrder(t, evs, lifecyclehooks.EventFlowStarted, lifecyclehooks.EventFlowFinished)
 	assertOrder(t, evs, lifecyclehooks.EventStageFinished, lifecyclehooks.EventFlowFinished)
@@ -2239,24 +2311,62 @@ Expected: FAIL — событий нет (assertContains падает).
 
 - [ ] **Step 3: Write minimal implementation**
 
-`orchestrator.go` — добавить метод (рядом с Run):
+`orchestrator.go` — новые поле и методы.
+
+Поле структуры Orchestrator (рядом с `hooks`):
 
 ```go
-// finishLifecycleFlow эмитит финальное flow-событие и bounded-ждёт
-// опустошения очередей dispatcher (спека Phase 1: flow_* уходят ДО flush).
-func (o *Orchestrator) finishLifecycleFlow(ev lifecyclehooks.EventType) {
-	o.emitLifecycle(lifecyclehooks.Event{Type: ev})
-	if o.hooks != nil {
-		if !o.hooks.Flush(lifecyclehooks.FlushTimeout) {
-			log.Printf("WARN: lifecycle hooks flush timed out after %s", lifecyclehooks.FlushTimeout)
+	// terminalFlow — финальное flow-событие, установленное одним из выходов
+	// Run; эмитится finalizeLifecycle ПОСЛЕ остановки продюсеров (single
+	// writer — горутина Run, отдельная синхронизация не нужна).
+	terminalFlow lifecyclehooks.EventType
+```
+
+Методы (рядом с Run):
+
+```go
+// setTerminalFlow фиксирует финальное flow-событие выхода Run.
+func (o *Orchestrator) setTerminalFlow(ev lifecyclehooks.EventType) {
+	o.terminalFlow = ev
+}
+
+// hasFailedStage — есть ли в снапшоте Failed-стадия. Классификатор codex
+// MAJ#8: отмена ctx поверх рана, заблокированного failed-стадией (дашборд
+// держит Run живым для retry), — это flow_failed, а не flow_interrupted.
+func (o *Orchestrator) hasFailedStage() bool {
+	for _, st := range o.opts.Store.Snapshot().Stages {
+		if st.Status == state.StatusFailed {
+			return true
 		}
+	}
+	return false
+}
+
+// finalizeLifecycle эмитит терминальное flow-событие и bounded-ждёт
+// опустошения очередей dispatcher. Вызывается ТОЛЬКО из defer, живёт после
+// cancel()+WaitAgents() — продюсеры событий (агенты) уже остановлены.
+// Раньше инлайн-flush на выходах Run наблюдал sent==done ДО того, как
+// отменённые агенты успевали эмитить последнее (codex MAJ#7).
+func (o *Orchestrator) finalizeLifecycle() {
+	if o.terminalFlow == "" || o.hooks == nil {
+		return
+	}
+	o.emitLifecycle(lifecyclehooks.Event{Type: o.terminalFlow})
+	if !o.hooks.Flush(lifecyclehooks.FlushTimeout) {
+		log.Printf("WARN: lifecycle hooks flush timed out after %s", lifecyclehooks.FlushTimeout)
 	}
 }
 ```
 
-`Run` — четыре правки:
+`Run` — пять правок:
 
-1. После `o.runMu.Unlock()` (блок :533-535), ДО recoverReviewPause:
+1. ПЕРВОЙ строкой тела Run (до `defer o.concurrency.WaitAgents()` / `defer cancel()`) зарегистрировать финализатор — LIFO исполнит его ПОСЛЕДНИМ (после cancel и WaitAgents):
+
+```go
+	defer o.finalizeLifecycle()
+```
+
+2. После `o.runMu.Unlock()` (:533-535), ДО recoverReviewPause:
 
 ```go
 	if o.opts.Resumed {
@@ -2266,43 +2376,48 @@ func (o *Orchestrator) finishLifecycleFlow(ev lifecyclehooks.EventType) {
 	}
 ```
 
-2. Выход ctx.Done с fatal (:569-571):
+3. Выход ctx.Done (:568-572) — классифицируем, не флашим:
 
 ```go
 		case <-ctx.Done():
 			if ferr := o.loadFatal(); ferr != nil {
-				o.finishLifecycleFlow(lifecyclehooks.EventFlowFailed)
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return ferr
 			}
-			o.finishLifecycleFlow(lifecyclehooks.EventFlowInterrupted)
+			if o.hasFailedStage() {
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
+			} else {
+				o.setTerminalFlow(lifecyclehooks.EventFlowInterrupted)
+			}
 			return ctx.Err()
 ```
 
-3. Выход после handleEvent-ошибки (:574-576):
+4. Выход после handleEvent-ошибки и post-handleEvent fatal (:574-579):
 
 ```go
 			if err := o.handleEvent(ctx, ev); err != nil {
-				o.finishLifecycleFlow(lifecyclehooks.EventFlowFailed)
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return err
 			}
 			if ferr := o.loadFatal(); ferr != nil {
-				o.finishLifecycleFlow(lifecyclehooks.EventFlowFailed)
+				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return ferr
 			}
 ```
 
-4. Выход shouldExit (:580-595), перед `return nil` (после runEndOfRunMemory):
+5. Выход shouldExit (:580-595), перед `return nil` (после runEndOfRunMemory). Снапшот — в локальную переменную: у `AllDone` pointer-receiver, вызов на non-addressable результате `Snapshot()` не компилируется (codex MAJ#13):
 
 ```go
-					if o.opts.Store.Snapshot().AllDone() {
-						o.finishLifecycleFlow(lifecyclehooks.EventFlowFinished)
+					snap := o.opts.Store.Snapshot()
+					if snap.AllDone() {
+						o.setTerminalFlow(lifecyclehooks.EventFlowFinished)
 					} else {
-						o.finishLifecycleFlow(lifecyclehooks.EventFlowFailed)
+						o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 					}
 					return nil
 ```
 
-Примечание: idiom `Snapshot().AllDone()` сверить с scheduling.go:428-443 (shouldExit уже вызывает то же самое — переиспользовать тот же способ доступа).
+Импорт `state` в orchestrator.go уже есть.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2327,7 +2442,7 @@ git commit -m "feat(orchestrator): flow-события lifecycle на выход
 
 **Interfaces:**
 - Consumes: Task 8 (emitStageEvent).
-- Produces: эмиссия 9 script-событий на границах операций. Семантика повторных попыток (спека): `*_started` один раз перед всей последовательностью попыток (`runScriptWithRetry`), `*_finished` после итогового успеха, `*_failed` после исчерпания попыток; повторный запуск после решения пользователя (Retry в hook_failed UI) — новая серия с теми же правилами (повторный event_id допустим, best-effort).
+- Produces: эмиссия 9 script-событий на границах операций. Семантика серий попыток (спека + codex MAJ#11): `*_started` эмитится перед КАЖДОЙ серией `runScriptWithRetry` (внутри внешнего `for` — пользовательский Retry в hook_failed UI запускает новую серию, и она получает свой started), `*_finished` после успеха серии, `*_failed` после исчерпания попыток серии. Повторный event_id при retry допустим (best-effort).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2426,9 +2541,11 @@ Expected: FAIL — событий нет.
 
 ```go
 	logFile := filepath.Join(stageDir, "before.log")
-	o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeStarted, s.ID, "")
 
 	for {
+		// started на каждую серию попыток — пользовательский Retry начинает
+		// новую серию (codex MAJ#11).
+		o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeStarted, s.ID, "")
 		err := runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookBefore, s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
 		})
@@ -2440,7 +2557,7 @@ Expected: FAIL — событий нет.
 		// ... существующий код registerHookWaiter/writeHookPending/triggerWithSeq
 ```
 
-`runAfterHook` — симметрично с `EventStageScriptAfterStarted/Finished/Failed` (finished — в ветке `err == nil` перед `return`; failed — сразу после исчерпания `err != nil`, ДО registerHookWaiter).
+`runAfterHook` — симметрично с `EventStageScriptAfterStarted/Finished/Failed`, started тоже ВНУТРИ внешнего цикла перед каждым `runScriptWithRetry` (finished — в ветке `err == nil` перед `return`; failed — сразу после исчерпания `err != nil`, ДО registerHookWaiter).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2502,26 +2619,39 @@ Expected: FAIL.
 
 - [ ] **Step 3: Write minimal implementation**
 
-`dialog_poller.go`, ветка `if stage != nil && !stage.Interactive` — сразу после успешного `mcp.WriteAnswer` (после строки `processed[key] = true`):
+`dialog_poller.go`, ветка `if stage != nil && !stage.Interactive`. Два изменения против наивной эмиссии (codex MAJ#10):
+
+1. **Гейт против дублей:** в паркинге (стадия в `awaiting_user_input`) `resumeAfterAnswer` ниже применяет FSM `EvUserAnswered`, который Task 8 уже мапит в `stage_question_answered`; `stage_question_asked` в паркинге уже случился через `EvAskUser`. Безгословная эмиссия здесь дублировала бы события. Поэтому не-FSM пара эмитится ТОЛЬКО когда стадия НЕ была запаркована (обычный случай: агент жив, опрашивает answer.json, FSM не участвует). `parked` снимаем ДО WriteAnswer.
+2. **Malformed-fallback:** та же пара нужна в `autoAnswerMalformed` (~:413-431) после успешного `WriteAnswer`, с тем же гейтом.
 
 ```go
-				o.emitLifecycle(lifecyclehooks.Event{
-					Type:      lifecyclehooks.EventStageQuestionAsked,
-					StageID:   stageID,
-					StageName: o.stageName(stageID),
-					Phase:     q.Phase,
-					Reason:    q.Question,
-				})
-				o.emitLifecycle(lifecyclehooks.Event{
-					Type:      lifecyclehooks.EventStageQuestionAnswered,
-					StageID:   stageID,
-					StageName: o.stageName(stageID),
-					Phase:     q.Phase,
-					Reason:    answer,
-				})
+				// Гейт снимаем ДО WriteAnswer: паркинг-стадию покрывает
+				// FSM-путь (EvAskUser/EvUserAnswered через triggerWithSeq).
+				parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
+				answer, fromOptions := mcp.PickAutoAnswer(q)
+				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
+					// ... существующий обработчик ошибки (log + continue)
+				}
+				processed[key] = true
+				if !parked {
+					o.emitLifecycle(lifecyclehooks.Event{
+						Type:      lifecyclehooks.EventStageQuestionAsked,
+						StageID:   stageID,
+						StageName: o.stageName(stageID),
+						Phase:     q.Phase,
+						Reason:    q.Question,
+					})
+					o.emitLifecycle(lifecyclehooks.Event{
+						Type:      lifecyclehooks.EventStageQuestionAnswered,
+						StageID:   stageID,
+						StageName: o.stageName(stageID),
+						Phase:     q.Phase,
+						Reason:    answer,
+					})
+				}
 ```
 
-(второй эмит — перед/после `o.ui.Publish(EventAutoAnswered)` — порядок внутри ветки не критичен, поставить сразу после processed[key] = true).
+В `autoAnswerMalformed` — симметричный блок после успешного `mcp.WriteAnswer` (тот же `parked`-гейт; asked Reason — сырой текст заглушки, answered — авто-ответ). Импорты: lifecyclehooks, state — проверить наличие в dialog_poller.go.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2666,8 +2796,9 @@ git commit -m "feat(lifecycle): dashboard-notice о сбое lifecycle-хука 
 ### Task 13: Сборка в `cmd/afm/run.go` + интеграционный тест
 
 **Files:**
-- Modify: `cmd/afm/run.go` (блок orchOpts :275-290 и код после `orch.Run`)
-- Test: `pkg/orchestrator/lifecycle_integration_test.go`
+- Modify: `pkg/state/store.go` (Snapshot: копировать LastSeq)
+- Modify: `cmd/afm/agent_environment.go` (lifecycleRootDir) + `cmd/afm/run.go` (блок orchOpts :275-290, unified defer)
+- Test: `pkg/state/store_test.go` (доп.), `cmd/afm/agent_environment_test.go` (доп.), `pkg/orchestrator/lifecycle_integration_test.go`
 
 **Interfaces:**
 - Consumes: всё выше (Combine, New/Start/Stop/Flush, Options-поля, PublishLifecycleHookFailure).
@@ -2774,7 +2905,45 @@ stages:
 Run: `go test ./pkg/orchestrator/ -run TestIntegration_LifecycleHooks_EndToEnd -v`
 Expected: FAIL — capture-файл пуст/отсутствует (пока wiring не сделан... wiring в orchestrator уже есть из Task 8-11; этот тест проверяет ТО ЖЕ САМОЕ через реальный раннер и ДОЛЖЕН пройти уже сейчас; если упал — чинить findbug в хелперах, а не в проде. Если он проходит сразу — это нормально: он страховка регресса для wiring run.go, который ниже).
 
-- [ ] **Step 3: Modify `cmd/afm/run.go`**
+- [ ] **Step 3a: `pkg/state/store.go` — Snapshot() теряет LastSeq (codex MAJ#6)**
+
+`Snapshot()` (:189-206) не копирует `LastSeq` — `Snapshot().LastSeq` всегда 0, и `Resumed` в production никогда не сработал бы. Добавить поле в копию:
+
+```go
+	out := RunState{
+		FlowName:             s.snapshot.FlowName,
+		StartedAt:            s.snapshot.StartedAt,
+		LastSeq:              s.snapshot.LastSeq,
+		StageOrder:           append([]string(nil), s.snapshot.StageOrder...),
+		Stages:               make(map[string]StageState, len(s.snapshot.Stages)),
+		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,
+		BackoffAccumulatedMs: s.snapshot.BackoffAccumulatedMs,
+	}
+```
+
+Регресс-тест (в `pkg/state`, по образцу соседних): открыть store на пустом каталоге → `Snapshot().LastSeq == 0`; применить переход → `Snapshot().LastSeq == 1`. Запуск: `go test ./pkg/state/ -count=1`.
+
+- [ ] **Step 3b: Modify `cmd/afm/run.go`**
+
+Предпосылки (codex MAJ#9, MAJ#13): в run.go НЕТ переменной `runID` — вычислить `runID := filepath.Base(runDir)` рядом с определением runDir. При пустом `agentRootDir` («наследовать CWD») метаданные хука всё равно требуют абсолютный `AFM_ROOT_DIR` по спеке — хелпер рядом с `resolveAgentRoot` (cmd/afm/agent_environment.go):
+
+```go
+// lifecycleRootDir — абсолютный корень для метаданных lifecycle-хуков
+// (AFM_ROOT_DIR, CWD hook-команды). Пустой agentRootDir означает
+// «наследовать CWD» — для контракта хуков это фактический CWD процесса.
+func lifecycleRootDir(agentRootDir string) string {
+	if agentRootDir != "" {
+		return agentRootDir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+```
+
+плюс мини-тест в `cmd/afm` (по образцу TestResolveAgentRoot_MatchesRunInlineLogic): непустой — passthrough; пустой — непустой абсолютный путь.
 
 Блок после `memDir`-резолва (:232) / перед `orchOpts` (:275):
 
@@ -2783,7 +2952,11 @@ Expected: FAIL — capture-файл пуст/отсутствует (пока wi
 			// cfg.Hooks (config.LoadFrom), сюда добавляются flow- и stage-слои.
 			// Dispatcher живёт на собственном ctx (Stop ниже) — хуки-наблюдатели
 			// не зависят от отмены run-ctx (flow_interrupted должен уйти).
+			runID := filepath.Base(runDir)
+			hooksRootDir := lifecycleRootDir(agentRootDir)
+			resumed := store.Snapshot().LastSeq > 0
 			var hooksDisp *lifecyclehooks.Dispatcher
+			var orchRef *orchestrator.Orchestrator
 			layers := []lifecyclehooks.Layer{{Hooks: cfg.Hooks}, {Hooks: f.Hooks}}
 			for _, st := range f.Stages {
 				if len(st.Hooks) > 0 {
@@ -2791,14 +2964,13 @@ Expected: FAIL — capture-файл пуст/отсутствует (пока wi
 				}
 			}
 			if combined := lifecyclehooks.Combine(layers...); len(combined) > 0 {
-				var orchRef *orchestrator.Orchestrator
 				hooksDisp = lifecyclehooks.New(lifecyclehooks.DispatcherOptions{
 					Config: lifecyclehooks.DispatcherConfig{
 						FlowName: f.Name,
 						RunID:    runID,
 						RunDir:   runDir,
-						RootDir:  agentRootDir,
-						Resumed:  store.Snapshot().LastSeq > 0,
+						RootDir:  hooksRootDir,
+						Resumed:  resumed,
 					},
 					Hooks: combined,
 					LogDir: filepath.Join(runDir, "hooks"),
@@ -2810,7 +2982,18 @@ Expected: FAIL — capture-файл пуст/отсутствует (пока wi
 						fmt.Fprintf(os.Stderr, "warning: lifecycle hook %s failed (%s): %v\n", hookID, eventID, err)
 					},
 				})
-				defer hooksDisp.Stop()
+				// Единая точка остановки: bounded flush, затем Stop. defer
+				// исполняется на ЛЮБОМ выходе из runHandler (в т.ч. по ошибке
+				// orch.Run — ранний return с пропущенным flush терял бы
+				// terminal-события; codex MAJ#7).
+				defer func() {
+					if hooksDisp != nil {
+						if !hooksDisp.Flush(lifecyclehooks.FlushTimeout) {
+							fmt.Fprintf(os.Stderr, "warning: lifecycle hooks flush timed out\n")
+						}
+						hooksDisp.Stop()
+					}
+				}()
 			}
 ```
 
@@ -2819,7 +3002,7 @@ Expected: FAIL — capture-файл пуст/отсутствует (пока wi
 ```go
 				FlowName: f.Name,
 				RunID:    runID,
-				Resumed:  store.Snapshot().LastSeq > 0,
+				Resumed:  resumed,
 				Hooks:    hooksDisp,
 ```
 
@@ -2844,19 +3027,9 @@ Expected: FAIL — capture-файл пуст/отсутствует (пока wi
 			}
 ```
 
-`runID` — переменная run-id уже существует в run.go рядом с runDir (grep `runID :=` / `state.NewRunID`; используется для имени каталога рана). Использовать её же.
+`runID` вычислен выше (Step 3b) — `filepath.Base(runDir)`.
 
-После вызова `orch.Run(...)` (найти фактический call site — в конце runHandler) добавить финальный flush ДО выхода из обработчика (покрывает flow_interrupted, эмитнутый на самом выходе Run):
-
-```go
-		if hooksDisp != nil {
-			if !hooksDisp.Flush(lifecyclehooks.FlushTimeout) {
-				fmt.Fprintf(os.Stderr, "warning: lifecycle hooks flush timed out\n")
-			}
-		}
-```
-
-(Переменные hooksDisp/runID должны быть в scope места вызова Run — при необходимости поднять объявление выше по функции.)
+Отдельный flush ПОСЛЕ `orch.Run(...)` не нужен: orchestrator флашит в `finalizeLifecycle` (Task 9), а defer выше ловит всё, что эмитилось после него (поздние продюсеры, flow_interrupted). Отмена run-ctx не убивает hook-команды — dispatcher живёт на собственном ctx.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2914,7 +3087,13 @@ git commit -m "docs: lifecycle-хуки Phase 1 в AGENTS.md"
 
 ---
 
-## Self-Review (выполнен автором плана)
+## Self-Review
+
+### Раунд codex (2026-09-18, 2 CRITICAL + 11 MAJOR) — все внесены в план
+
+Приняты: path-traversal id (T2), Emit/Stop race (T5), overlay-валидация до merge (T6), racy from → FSM.Apply возвращает from (T8), Snapshot LastSeq + shutdown-порядок + классификатор выхода + ROOT_DIR/runID/компилябельность (T9/T13), started на каждую серию (T10), дубли авто-ответов + malformed (T11), потоковый лог вместо буфера (T4).
+
+Единственное отклонение от рекомендации codex (MAJ#3): предложен scope-aware routing stage-override; вместо него — плоская замена по id (требование спеки «Наследование и порядок», одобрено пользователем) + новая ошибка валидации на одинаковый id в хуках разных стадий (молчаливое схлопывание — реальная проблема). Ruling: scope-aware routing противоречит утверждённой спеке; цена ошибки — флоу с одинаковыми id в разных стадиях потребует переименования (явная ошибка подскажет).
 
 - **Spec coverage:** 4 слоя + keyed-merge id (Tasks 3, 6, 7, 13); каталог+`all`+`skip_events` (1, 2); payload stdin + env (1, 4); timeout/retries (4); последовательность/параллельность (5); логи (4); dashboard-warning (12); bounded flush (5, 9, 13); FSM-эмиссия через triggerWithSeq (8); flow-события+resumed (9, 13); script-события (10); диалоговые авто-ответы (11); schemacheck (6, 7). Не входит в Phase 1 по спеке: outbox, секреты, Docker, `[REDACTED]`, `inherit_env` — задач нет, и не должно быть.
 - **Placeholder scan:** код во всех шагах полный; места, требующие сверки с соседним кодом (feed-view-model, тест-хелперы orchestrator), снабжены точным указанием, что сверять и по какому эталону.
