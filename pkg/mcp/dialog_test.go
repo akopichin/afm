@@ -693,3 +693,60 @@ func TestFindUnansweredQuestions_FilenameIDAuthoritative(t *testing.T) {
 		t.Fatalf("answer at the filename path must mark it answered, got %d: %+v", len(got), got)
 	}
 }
+
+func TestAskOrderLess(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"q2", "q10", true}, {"q10", "q2", false}, {"q1", "q2", true},
+		{"q1", "foo", true}, {"foo", "q1", false}, {"aaa", "bbb", true},
+		// Only exact q<N> is numeric; foo2/bar10/qX fall back to lexical.
+		{"foo2", "foo10", false}, // lexical: "foo10" < "foo2"
+		{"q1", "foo2", true},     // numeric q1 before non-numeric foo2
+		{"qX", "q1", false},      // qX not numeric → q1 (numeric) sorts first
+	}
+	for _, c := range cases {
+		if got := mcp.AskOrderLess(c.a, c.b); got != c.want {
+			t.Errorf("AskOrderLess(%q,%q)=%v want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestSelectCurrentQuestion(t *testing.T) {
+	qs := []mcp.QuestionFile{
+		{Phase: "autonomous_execution", ID: "q10"},
+		{Phase: "autonomous_execution", ID: "q2"},
+		{Phase: "autonomous_execution", ID: "q1", Malformed: true}, // malformed still wins if oldest
+	}
+	cur, ok := mcp.SelectCurrentQuestion(qs)
+	if !ok || cur.ID != "q1" {
+		t.Fatalf("expected q1 current, got ok=%v id=%q", ok, cur.ID)
+	}
+	if _, ok := mcp.SelectCurrentQuestion(nil); ok {
+		t.Fatal("empty input must return ok=false")
+	}
+}
+
+func TestCurrentQuestion_ReadsDirAndSelects(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []string{"q2", "q1"} {
+		body := `{"id":"` + id + `","question":"Q","options":["A"],"allow_custom":true}`
+		if err := os.WriteFile(filepath.Join(dir, "autonomous_execution."+id+".question.json"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cur, ok, err := mcp.CurrentQuestion(dir)
+	if err != nil || !ok || cur.ID != "q1" {
+		t.Fatalf("expected q1 current, got ok=%v id=%q err=%v", ok, cur.ID, err)
+	}
+	// Answer q1 → q2 becomes current.
+	if err := os.WriteFile(filepath.Join(dir, "autonomous_execution.q1.answer.json"),
+		[]byte(`{"id":"q1","answer":"A","from_options":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cur, ok, err = mcp.CurrentQuestion(dir)
+	if err != nil || !ok || cur.ID != "q2" {
+		t.Fatalf("expected q2 current after answering q1, got ok=%v id=%q err=%v", ok, cur.ID, err)
+	}
+}

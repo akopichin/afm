@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -450,4 +451,82 @@ func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered b
 		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, phase, id, err) //nolint:gosec // G706: phase/id are validated safe filename components by callers
 	}
 	return nil
+}
+
+// askOrder parses the strict q<N> form (q1, q2, … q10): the id must be 'q'
+// followed by one or more digits and nothing else. foo2/bar10/qX are NOT
+// numeric — they fall back to lexical order in AskOrderLess.
+func askOrder(id string) (int, bool) {
+	if len(id) < 2 || id[0] != 'q' {
+		return 0, false
+	}
+	for i := 1; i < len(id); i++ {
+		if id[i] < '0' || id[i] > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(id[1:])
+	if err != nil {
+		return 0, false // overflow → treat as non-numeric
+	}
+	return n, true
+}
+
+// AskOrderLess orders question ids by the q<N> convention the interactive
+// prompt mandates: numeric suffix order (q2 before q10), a numeric id before a
+// non-numeric one, else lexical. The id is authoritative (filename-derived) and
+// immutable across repair/relocation, so this is a stable ask-order key.
+func AskOrderLess(a, b string) bool {
+	na, oka := askOrder(a)
+	nb, okb := askOrder(b)
+	switch {
+	case oka && okb:
+		if na != nb {
+			return na < nb
+		}
+		return a < b
+	case oka:
+		return true
+	case okb:
+		return false
+	default:
+		return a < b
+	}
+}
+
+func questionBefore(a, b QuestionFile) bool {
+	if a.ID != b.ID {
+		return AskOrderLess(a.ID, b.ID)
+	}
+	return a.Phase < b.Phase
+}
+
+// SelectCurrentQuestion returns the oldest unanswered question in qs — the one
+// the agent's sequential polling loop is blocked on and the ONLY one afm should
+// surface / accept an answer for. Pure (no FS): callers that already scanned the
+// directory pass their slice, avoiding a second, inconsistent scan. Malformed
+// entries participate (a malformed oldest question still blocks younger ones;
+// the poller repairs it first). ok is false for empty input.
+func SelectCurrentQuestion(qs []QuestionFile) (QuestionFile, bool) {
+	var cur QuestionFile
+	found := false
+	for _, q := range qs {
+		if !found || questionBefore(q, cur) {
+			cur = q
+			found = true
+		}
+	}
+	return cur, found
+}
+
+// CurrentQuestion is the FS-backed convenience wrapper for server read/answer
+// paths. It propagates the FindUnansweredQuestions error so callers can fail
+// closed.
+func CurrentQuestion(stageDir string) (QuestionFile, bool, error) {
+	qs, err := FindUnansweredQuestions(stageDir)
+	if err != nil {
+		return QuestionFile{}, false, err
+	}
+	cur, ok := SelectCurrentQuestion(qs)
+	return cur, ok, nil
 }
