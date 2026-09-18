@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/prompts"
@@ -48,14 +49,17 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	}
 	logFile := filepath.Join(stageDir, phaseScript+".log")
 
+	o.emitStageEvent(lifecyclehooks.EventStageScriptStarted, s.ID, "")
 	err := runScriptWithRetry(ctx, func() error {
 		return o.execScript(ctx, s, phaseScript, s.Script, s.ScriptTimeout, logFile)
 	})
 	if err != nil {
+		o.emitStageEvent(lifecyclehooks.EventStageScriptFailed, s.ID, err.Error())
 		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
 		o.failBlockedStages()
 		return
 	}
+	o.emitStageEvent(lifecyclehooks.EventStageScriptFinished, s.ID, "")
 
 	stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phaseScript)
 	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phaseScript})

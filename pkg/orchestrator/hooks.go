@@ -10,6 +10,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
@@ -220,12 +221,17 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 	logFile := filepath.Join(stageDir, "before.log")
 
 	for {
+		// started на каждую серию попыток — пользовательский Retry начинает
+		// новую серию (codex MAJ#11), и она получает свой started.
+		o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeStarted, s.ID, "")
 		err := runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookBefore, s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
 		})
 		if err == nil {
+			o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeFinished, s.ID, "")
 			return true
 		}
+		o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeFailed, s.ID, err.Error())
 
 		// Register the waiter BEFORE the transition/event below make
 		// hook_failed observable — closes the race where a fast resolver
@@ -275,12 +281,17 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	logFile := filepath.Join(stageDir, "after.log")
 
 	for {
+		// started на каждую серию попыток — симметрично runBeforeHook: Retry
+		// начинает новую серию и получает свой started (codex MAJ#11).
+		o.emitStageEvent(lifecyclehooks.EventStageScriptAfterStarted, s.ID, "")
 		err := runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookAfter, s.ScriptAfter, s.ScriptAfterTimeout, logFile)
 		})
 		if err == nil {
+			o.emitStageEvent(lifecyclehooks.EventStageScriptAfterFinished, s.ID, "")
 			return
 		}
+		o.emitStageEvent(lifecyclehooks.EventStageScriptAfterFailed, s.ID, err.Error())
 
 		// Register the waiter BEFORE writing hook_pending.json/publishing
 		// EventHookFailed below make the failure observable — closes the
