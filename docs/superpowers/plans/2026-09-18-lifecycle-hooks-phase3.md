@@ -431,7 +431,7 @@ git commit -m "feat(lifecyclehooks): резолв env-секретов хука 
 - Produces:
   - `buildEnv` (spec-дефолт minimal): `InheritEnv==false` (дефолт) → `minimalBaseEnv()`; `InheritEnv==true` → `stripTransportVars(os.Environ())`. Затем всегда + `AFM_*` + `ResolvedEnv` последними (перекрывают базовые). Transport-префиксы не попадают ни в один режим.
   - `func minimalBaseEnv() []string` — PATH, HOME, locale (LANG/LC_*), TMPDIR, proxy/certs (HTTP(S)_PROXY/NO_PROXY/SSL_CERT_*), извлечённые из `os.Environ()`.
-  - `type redactingWriter struct{...}` — io.Writer, заменяющий вхождения известных секретных значений на `[REDACTED]` перед записью в лог. Буферизует хвост длиной max(len(secret)) для стыков между Write-ами.
+  - `type redactingWriter struct{...}` — io.Writer, ПОСТРОЧНО заменяющий вхождения известных секретных значений на безопасный маркер перед записью в лог (буфер незавершённой строки ограничен `redactLineCap`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -547,6 +547,7 @@ func stripTransportVars(env []string) []string {
 
 > Примечание: `stripTransportVars` (или эквивалент) нужен и в общей точке формирования окружения агентов/скриптов/verify (executor/runner_factory) — Task 5, codex #2. Здесь — только для hook при `inherit_env:true`; `minimalBaseEnv` (whitelist) transport не включает.
 
+```go
 func minimalBaseEnv() []string {
 	keys := []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
@@ -599,11 +600,14 @@ func minimalBaseEnv() []string {
 `env.go`/`redact.go` — `redactingWriter`:
 
 ```go
+const redactLineCap = 64 * 1024 // предел незавершённой строки: bounded-память (codex)
+
 type redactingWriter struct {
 	w       io.Writer
 	secrets []string // дедуп, отсортированы по убыванию длины
 	marker  string
-	buf     []byte // СЫРОЙ накопитель незавершённой строки (без \n)
+	maxLen  int    // длина самого длинного секрета (для overflow-удержания)
+	buf     []byte // СЫРОЙ накопитель незавершённой строки (без \n), ограничен redactLineCap
 }
 
 func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
@@ -611,25 +615,28 @@ func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
 	// короткий секрет — подстрока длинного, длинный уже редактирован).
 	seen := map[string]bool{}
 	nonEmpty := make([]string, 0, len(secrets))
+	max := 0
 	for _, s := range secrets {
 		if s == "" || seen[s] {
 			continue
 		}
 		seen[s] = true
 		nonEmpty = append(nonEmpty, s)
+		if len(s) > max {
+			max = len(s)
+		}
 	}
 	sort.Slice(nonEmpty, func(i, j int) bool { return len(nonEmpty[i]) > len(nonEmpty[j]) })
-	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty)}
+	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty), maxLen: max}
 }
 
-// Write — ПОСТРОЧНАЯ редакция: копит байты, на каждой завершённой строке
-// (по '\n') применяет redactAll к ПОЛНОЙ строке и сбрасывает её; неполный хвост
-// строки остаётся в буфере до следующего Write/Close. Так секрет всегда целиком
-// в одной строке при редактировании (в логах токен на одной строке — типовой
-// случай `echo`/`set -x`), redactAll видит полное вхождение (без разрезания на
-// границе Write), а маркер никогда не переанализируется (строка редактируется
-// один раз и уходит целиком). Ограничение (best-effort по спеке): секрет,
-// намеренно разорванный переводом строки, не ловится.
+// Write — ПОСТРОЧНАЯ редакция с ограничением памяти: копит байты, на каждой
+// завершённой строке ('\n') применяет redactAll к ПОЛНОЙ строке и сбрасывает её.
+// Секрет в пределах строки всегда целиком присутствует в момент redactAll (нет
+// разрезания на границе Write, маркер не переанализируется). Если незавершённая
+// строка превышает redactLineCap (поток без '\n'), делаем принудительный сброс,
+// придержав последние maxLen-1 байт (возможное начало секрета на границе) —
+// bounded-память вместо неограниченного роста буфера (codex).
 func (r *redactingWriter) Write(p []byte) (int, error) {
 	r.buf = append(r.buf, p...)
 	for {
@@ -637,19 +644,36 @@ func (r *redactingWriter) Write(p []byte) (int, error) {
 		if nl < 0 {
 			break
 		}
-		line := r.buf[:nl+1]
-		if _, err := r.w.Write(redactAll(line, r.secrets, r.marker)); err != nil {
+		if err := r.flush(r.buf[:nl+1]); err != nil {
 			return 0, err
 		}
 		r.buf = append(r.buf[:0], r.buf[nl+1:]...)
 	}
+	// Overflow: длинная строка без '\n' — не даём буферу расти без предела.
+	if len(r.buf) > redactLineCap {
+		keep := r.maxLen - 1
+		if keep < 0 {
+			keep = 0
+		}
+		if cut := len(r.buf) - keep; cut > 0 {
+			if err := r.flush(r.buf[:cut]); err != nil {
+				return 0, err
+			}
+			r.buf = append(r.buf[:0], r.buf[cut:]...)
+		}
+	}
 	return len(p), nil
+}
+
+func (r *redactingWriter) flush(b []byte) error {
+	_, err := r.w.Write(redactAll(b, r.secrets, r.marker))
+	return err
 }
 
 // Close сбрасывает незавершённый хвост строки (редактированным).
 func (r *redactingWriter) Close() error {
 	if len(r.buf) > 0 {
-		if _, err := r.w.Write(redactAll(r.buf, r.secrets, r.marker)); err != nil {
+		if err := r.flush(r.buf); err != nil {
 			return err
 		}
 		r.buf = nil
@@ -658,7 +682,7 @@ func (r *redactingWriter) Close() error {
 }
 ```
 
-> Корректность: редакция по полной строке — секрет в пределах строки всегда присутствует целиком в момент redactAll (нет разрезания на границе Write, нет удержания-префикса и связанной с ним порчи маркера — закрывает и утечку `topsecret` одним Write, и edge `]x`/marker codex). Импорты: `bytes`, `sort`. Тест `TestRedactingWriter` переписать под построчную семантику: split-секрет БЕЗ перевода строки между Write (`Write("top")`+`Write("secret\n")`) — ловится (обе части в одной строке); межстрочный разрыв — задокументированное ограничение.
+> Корректность: нормальный путь — редакция по полной строке (секрет целиком в строке в момент redactAll; нет разрезания на границе Write, маркер не переанализируется — закрывает утечку `topsecret` одним Write и edge `]x`/marker). Overflow-путь (строка > 64 KiB без '\n') сбрасывает всё, кроме последних maxLen-1 байт — bounded-память; в этом редком adversarial-случае возможна косметическая пере-редакция/разрыв маркера, но НЕ утечка (best-effort по спеке). Импорты: `bytes`, `sort`. Тест `TestRedactingWriter`: split-секрет без '\n' между Write + Close — ловится; добавить тест overflow (>64KiB без '\n' с секретом в начале → секрет отредактирован, память ограничена).
 
 // redactMarker выбирается так, чтобы САМ не содержать ни одного секрета
 // (codex #6: секрет "REDACTED"/"["/"]" сделал бы обычный "[REDACTED]" носителем
@@ -710,7 +734,7 @@ func secretValues(h Hook) []string {
 
 `redactingWriter` хранит выбранный `marker` (из `redactMarker(secrets)` в `newRedactingWriter`) и передаёт его в `redactAll`. Важно: длина маркера может отличаться от длины секрета — это не влияет на корректность (замена по значению), только на выравнивание в логе.
 
-(Хвост-буфер: keep = maxLen-1, последние maxLen-1 байт не пишутся до следующего Write/Close — гарантирует, что любое вхождение секрета целиком проходит через `redactAll` на границе Write. Пустые секреты игнорируются (иначе `ReplaceAll` по "" разорвал бы текст). Ограничение: редакция — защита от `set -x`/`echo`, не абсолютная (скрипт может закодировать секрет).)
+(Пустые секреты игнорируются (иначе `ReplaceAll` по "" разорвал бы текст). Ограничение: редакция — защита от `set -x`/`echo`, не абсолютная (скрипт может закодировать секрет или намеренно разорвать его переводом строки).)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
