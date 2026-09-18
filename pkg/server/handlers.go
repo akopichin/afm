@@ -473,7 +473,7 @@ func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stageDir := filepath.Join(s.runDir, stageID)
-	out := buildDialogEntries(stageDir)
+	out := buildDialogEntries(stageDir, s.stageInteractive[stageID])
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
@@ -505,7 +505,7 @@ type dialogUIEntry struct {
 // ask_user идут в реальной последовательности. Тексты показываются только
 // для фаз, где есть диалог (интерактивные стейджи), чтобы не раздувать
 // панель на обычных стейджах.
-func buildDialogEntries(stageDir string) []dialogUIEntry {
+func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 	var out []dialogUIEntry
 	for _, p := range flow.Phases() {
 		entries, err := mcp.ReadDialog(filepath.Join(stageDir, string(p)+".dialog.jsonl"))
@@ -571,7 +571,52 @@ func buildDialogEntries(stageDir string) []dialogUIEntry {
 			haveID[q.ID] = true
 		}
 	}
-	return out
+	if !serialize {
+		return out // non-interactive: unchanged behavior (all pending shown)
+	}
+
+	// Interactive stages: at most ONE open question — the current (oldest
+	// unanswered) valid one. Determine it once, fail closed on error.
+	cur, hasCur, curErr := mcp.CurrentQuestion(stageDir)
+	if curErr != nil {
+		log.Printf("WARN: dialog current-question lookup failed for %s: %v", stageDir, curErr) //nolint:gosec // G706: stageDir built from a validated stageID (isValidStageID)
+		hasCur = false
+	}
+	showCur := hasCur && !cur.Malformed
+
+	// Is the current question already present as an UNANSWERED entry? (An
+	// answered entry with a reused id must NOT block adding it.)
+	haveUnansweredCur := false
+	for _, e := range out {
+		if e.Type != typeAgentText && e.Phase == cur.Phase && e.ID == cur.ID && e.Answer == nil {
+			haveUnansweredCur = true
+			break
+		}
+	}
+	if showCur && !haveUnansweredCur {
+		out = append(out, dialogUIEntry{
+			Phase: cur.Phase, ID: cur.ID, Question: cur.Question,
+			Options: cur.Options, AllowCustom: cur.AllowCustom,
+		})
+	}
+
+	// Keep answered history + agent text; among unanswered questions keep
+	// exactly ONE — the current valid one (first occurrence wins, dropping any
+	// transcript duplicates).
+	filtered := out[:0]
+	keptCur := false
+	for _, e := range out {
+		isUnanswered := e.Type != typeAgentText && e.ID != "" && e.Answer == nil
+		if isUnanswered {
+			isCur := showCur && e.Phase == cur.Phase && e.ID == cur.ID
+			if !isCur || keptCur {
+				continue
+			}
+			keptCur = true
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
 }
 
 func questionUIEntry(phase string, e mcp.Entry) dialogUIEntry {

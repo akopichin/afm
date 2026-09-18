@@ -940,7 +940,7 @@ func TestDialogGetWithTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := buildDialogEntries(stageDir)
+	got := buildDialogEntries(stageDir, false)
 	if len(got) != 4 {
 		t.Fatalf("got %d entries, want 4: %+v", len(got), got)
 	}
@@ -969,8 +969,49 @@ func TestDialogGetNoDialogFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stageDir, "planning.jsonl"), []byte(jsonl), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := buildDialogEntries(stageDir); len(got) != 0 {
+	if got := buildDialogEntries(stageDir, false); len(got) != 0 {
 		t.Errorf("expected no entries, got %+v", got)
+	}
+}
+
+func TestBuildDialogEntries_SerializeShowsOnlyCurrent(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []string{"q1", "q2", "q3"} {
+		body := `{"id":"` + id + `","question":"Q ` + id + `","options":["A"],"allow_custom":true}`
+		if err := os.WriteFile(filepath.Join(dir, "autonomous_execution."+id+".question.json"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := buildDialogEntries(dir, true)
+	var unanswered []string
+	for _, e := range out {
+		if e.Type == typeAgentText || e.ID == "" || e.Answer != nil {
+			continue
+		}
+		unanswered = append(unanswered, e.ID)
+	}
+	if len(unanswered) != 1 || unanswered[0] != "q1" {
+		t.Fatalf("serialize=true: expected only q1 unanswered, got %v", unanswered)
+	}
+}
+
+func TestBuildDialogEntries_NoSerializeShowsAll(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []string{"q1", "q2"} {
+		body := `{"id":"` + id + `","question":"Q ` + id + `","options":["A"],"allow_custom":true}`
+		if err := os.WriteFile(filepath.Join(dir, "autonomous_execution."+id+".question.json"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := buildDialogEntries(dir, false)
+	count := 0
+	for _, e := range out {
+		if e.Type != typeAgentText && e.ID != "" && e.Answer == nil {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("serialize=false: expected both questions, got %d", count)
 	}
 }
 
