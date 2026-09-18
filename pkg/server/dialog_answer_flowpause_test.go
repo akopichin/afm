@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -242,5 +243,71 @@ func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 	rec = postAnswer("q1")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for current question, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock reproduces the
+// handler-side half of a real production hang (GogaRefinement...discover, the
+// python-qarium incident): an interactive stage wrote q1..q8.question.json
+// all at once, and the user answered q8 first while q1 (the one the agent's
+// bash loop actually polls for) was still unanswered. Answering q8 must be
+// rejected 409 answer_out_of_order and must not write q8.answer.json;
+// answering q1 (the actual current question) must succeed.
+func TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock(t *testing.T) {
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, testStageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 8; i++ {
+		id := "q" + strconv.Itoa(i)
+		body := `{"id":"` + id + `","question":"Q","options":["A"],"allow_custom":true}`
+		if err := os.WriteFile(filepath.Join(stageDir, "autonomous_execution."+id+".question.json"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := state.Open(runDir, []string{testStageID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{
+		Port: 0, RunDir: runDir, Store: store, UIBus: bus.NewUIBus(),
+		Actions: fakeStageActions{},
+		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+			return nil
+		}},
+		ReviewState:      func() (string, []string) { return "none", nil },
+		StageInteractive: map[string]bool{testStageID: true},
+	})
+
+	postAnswer := func(id string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(dialogAnswerRequest{ID: id, Phase: "autonomous_execution", Answer: "x"})
+		req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/dialog/answer", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		srv.handleDialogAnswer(w, req)
+		return w
+	}
+
+	rec := postAnswer("q8")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp["error"] != "answer_out_of_order" {
+		t.Fatalf("body = %s, want {\"error\":\"answer_out_of_order\"}", rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "autonomous_execution.q8.answer.json")); !os.IsNotExist(err) {
+		t.Fatalf("q8.answer.json must NOT be written on rejection, stat err=%v", err)
+	}
+
+	rec = postAnswer("q1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for the actual current question q1, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 }

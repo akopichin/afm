@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -413,6 +414,59 @@ func TestPollQuestions_InteractiveBatch_SurfacesOldestOnly(t *testing.T) {
 	second := drainDialogQuestionEvents(events)
 	if len(second) != 1 || second[0].Data.(map[string]any)["id"] != "q2" {
 		t.Fatalf("expected q2 surfaced after answering q1, got %+v", second)
+	}
+}
+
+// TestPollQuestions_Regression_BatchOfEight_NoDeadlock reproduces a real
+// production hang (GogaRefinement...discover, the python-qarium incident): an
+// interactive agents:[auto] stage wrote q1..q8.question.json ALL AT ONCE and
+// its bash loop polled only q1; the user answered q8 first — q1 never got
+// answered and the stage hung in "running" forever. The fix makes the poller
+// surface only the oldest unanswered question regardless of batch size; this
+// test locks that in for a full batch of 8, not just 2.
+func TestPollQuestions_Regression_BatchOfEight_NoDeadlock(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, stage.ID)
+
+	// Agent wrote q1..q8 at once (a batch); it polls only q1.
+	for i := 1; i <= 8; i++ {
+		writeQuestionFile(t, stageDir, "autonomous_execution", "q"+strconv.Itoa(i), []string{"A"})
+	}
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	subID, events := o.ui.Subscribe(64)
+	defer o.ui.Unsubscribe(subID)
+
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+	o.pollQuestions(processed, malformed)
+
+	ev := drainDialogQuestionEvents(events)
+	if len(ev) != 1 || ev[0].Data.(map[string]any)["id"] != "q1" {
+		t.Fatalf("batch of 8 must surface only q1, got %+v", ev)
+	}
+
+	// Answer q1 → the very next question (q2), not q3..q8, becomes current.
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous_execution.q1.answer.json"),
+		[]byte(`{"id":"q1","answer":"A","from_options":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusAwaitingUserInput, To: state.StatusRunning, Event: "user_answered"}); err != nil {
+		t.Fatal(err)
+	}
+	o.pollQuestions(processed, malformed)
+	ev = drainDialogQuestionEvents(events)
+	if len(ev) != 1 || ev[0].Data.(map[string]any)["id"] != "q2" {
+		t.Fatalf("after answering q1, only q2 must surface next, got %+v", ev)
 	}
 }
 
