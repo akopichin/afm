@@ -31,6 +31,11 @@
     "memory": {
       "$ref": "#/definitions/memory"
     },
+    "hooks": {
+      "type": "array",
+      "description": "Lifecycle hooks: observer commands receiving event JSON on stdin (flow layer, gets all stages' events).",
+      "items": { "$ref": "#/definitions/lifecycleHook" }
+    },
     "stages": {
       "type": "array",
       "description": "The stages of the flow.",
@@ -220,6 +225,11 @@
         "memory_use": {
           "type": "boolean",
           "description": "Override the flow-level memory.memory_use for this stage (controls reading only)."
+        },
+        "hooks": {
+          "type": "array",
+          "description": "Lifecycle hooks scoped to this stage. Flow-level events are not allowed here.",
+          "items": { "$ref": "#/definitions/lifecycleHook" }
         }
       },
       "allOf": [
@@ -319,6 +329,58 @@
           "description": "Access mode for this stage's file: r/w/rw. Default rw."
         }
       }
+    },
+    "lifecycleHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "events", "command"],
+      "description": "A lifecycle hook: an observer command that receives the event JSON payload on stdin. Its exit status never affects the flow.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique hook id within its layer; also the hook log file name (must be a safe path component)."
+        },
+        "events": {
+          "$ref": "#/definitions/lifecycleEventSelector"
+        },
+        "skip_events": {
+          "type": "array",
+          "description": "Event names excluded from `events: all`.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The command line, run via `sh -c` with the event JSON payload on stdin."
+        },
+        "timeout": {
+          "$ref": "#/definitions/duration",
+          "description": "Per-invocation timeout. Default 30s (DefaultHookTimeout)."
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Extra retry attempts after a non-zero exit. Default 0 (single attempt)."
+        }
+      }
+    },
+    "lifecycleEventSelector": {
+      "description": "Either the scalar \"all\", or a non-empty list of event names (validated by afm at load time).",
+      "oneOf": [
+        {
+          "const": "all"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      ]
     }
   }
 }

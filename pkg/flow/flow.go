@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"gopkg.in/yaml.v3"
 )
 
@@ -200,6 +201,9 @@ type Stage struct {
 	// только участием стадии в ЧТЕНИИ памяти (инъекции memory.md и своего файла),
 	// не влияет на запись (та управляется reflect / memory.mode).
 	MemoryUse *bool `yaml:"memory_use,omitempty"`
+	// Hooks — lifecycle-хуки, ограниченные этой стадией (flow-события в них
+	// запрещены валидацией).
+	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -326,7 +330,9 @@ type Flow struct {
 	// (docs/arch и т.п.) в чужом корне. Пусто → поведение не меняется.
 	RootDir string       `yaml:"root_dir,omitempty"`
 	Memory  MemoryConfig `yaml:"memory,omitempty"`
-	Stages  []Stage      `yaml:"stages"`
+	// Hooks — lifecycle-хуки флоу-слоя: получают события всех стадий.
+	Hooks  []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
+	Stages []Stage               `yaml:"stages"`
 }
 
 // MemoryEnabled сообщает, включена ли agent-память для этого флоу.
@@ -663,6 +669,22 @@ func (f *Flow) validate() error {
 		// reflect.mode must be one of r, w, rw
 		if s.Reflect.Mode != "" && s.Reflect.Mode != ReflectModeR && s.Reflect.Mode != ReflectModeW && s.Reflect.Mode != ReflectModeRW {
 			return fmt.Errorf("stage %q: reflect.mode must be r, w, or rw", s.ID)
+		}
+	}
+
+	if err := lifecyclehooks.ValidateLayer(f.Hooks, false); err != nil {
+		return fmt.Errorf("hooks: %w", err)
+	}
+	stageHookIDs := map[string]string{} // hook id -> stage id (первый объявивший)
+	for _, s := range f.Stages {
+		if err := lifecyclehooks.ValidateLayer(s.Hooks, true); err != nil {
+			return fmt.Errorf("stage %q: %w", s.ID, err)
+		}
+		for _, h := range s.Hooks {
+			if other, dup := stageHookIDs[h.ID]; dup {
+				return fmt.Errorf("stage %q: hooks: duplicate hook id %q across stages (already used by stage %q)", s.ID, h.ID, other)
+			}
+			stageHookIDs[h.ID] = s.ID
 		}
 	}
 

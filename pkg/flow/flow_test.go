@@ -1039,3 +1039,104 @@ func TestValidateMemoryV3(t *testing.T) {
 		t.Errorf("script+reflect must parse: %v", err)
 	}
 }
+
+func TestParseHooks_FlowLevel(t *testing.T) {
+	f := writeTemp(t, `
+name: h
+hooks:
+  - id: notify
+    events: [flow_started, stage_failed]
+    command: ./notify.sh
+stages:
+  - id: s1
+    script: "true"
+`)
+	parsed, err := flow.ParseFile(f)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(parsed.Hooks) != 1 || parsed.Hooks[0].ID != "notify" {
+		t.Fatalf("got %+v", parsed.Hooks)
+	}
+}
+
+func TestParseHooks_StageLevel(t *testing.T) {
+	f := writeTemp(t, `
+name: h
+stages:
+  - id: s1
+    script: "true"
+    hooks:
+      - id: dep
+        events: all
+        skip_events: [stage_question_answered]
+        command: ./dep.sh
+        timeout: 15s
+        retries: 1
+`)
+	parsed, err := flow.ParseFile(f)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(parsed.Stages[0].Hooks) != 1 {
+		t.Fatalf("got %+v", parsed.Stages[0].Hooks)
+	}
+	h := parsed.Stages[0].Hooks[0]
+	if h.Timeout != 15*time.Second || h.Retries != 1 || len(h.SkipEvents) != 1 {
+		t.Fatalf("hook fields: %+v", h)
+	}
+}
+
+func TestParseHooks_Errors(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"unknown event", `
+name: h
+hooks: [{id: x, events: [stage_strted], command: "true"}]
+stages: [{id: s1, script: "true"}]
+`},
+		{"dup id flow layer", `
+name: h
+hooks: [{id: x, events: all, command: "true"}, {id: x, events: all, command: "true"}]
+stages: [{id: s1, script: "true"}]
+`},
+		{"flow event in stage hook", `
+name: h
+stages: [{id: s1, script: "true", hooks: [{id: x, events: [flow_finished], command: "true"}]}]
+`},
+		{"empty command", `
+name: h
+hooks: [{id: x, events: all, command: ""}]
+stages: [{id: s1, script: "true"}]
+`},
+		{"dup id stage layer", `
+name: h
+stages: [{id: s1, script: "true", hooks: [{id: x, events: all, command: "a"}, {id: x, events: all, command: "b"}]}]
+`},
+		{"dup id across stages", `
+name: h
+stages: [{id: s1, script: "true", hooks: [{id: x, events: all, command: "a"}]}, {id: s2, script: "true", hooks: [{id: x, events: all, command: "b"}]}]
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := writeTemp(t, tc.yaml)
+			if _, err := flow.ParseFile(f); err == nil {
+				t.Fatal("want parse error, got nil")
+			}
+		})
+	}
+}
+
+func TestParseHooks_DifferentIDsAcrossLayersOK(t *testing.T) {
+	f := writeTemp(t, `
+name: h
+hooks: [{id: flowhook, events: all, command: "true"}]
+stages: [{id: s1, script: "true", hooks: [{id: stagehook, events: all, command: "true"}]}]
+`)
+	if _, err := flow.ParseFile(f); err != nil {
+		t.Fatalf("different ids must coexist: %v", err)
+	}
+}
