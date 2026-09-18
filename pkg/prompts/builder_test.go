@@ -142,6 +142,25 @@ func TestBuild_InteractivePrefixIsPhaseNotStageID(t *testing.T) {
 	}
 }
 
+func TestBuild_InteractiveRules_ForbidsBatchQuestions(t *testing.T) {
+	in := Inputs{
+		Interactive: true,
+		PhaseAgent:  "autonomous_execution",
+		StageDir:    t.TempDir(),
+		Stage:       flow.Stage{ID: "discover", Name: "Discover"},
+	}
+	out := Build(in)
+	for _, want := range []string{
+		"Write ONLY ONE question file at a time",
+		"do NOT write the next question until",
+		"afm accepts an answer only to the OLDEST unanswered question",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("interactive_rules missing %q", want)
+		}
+	}
+}
+
 func TestBuild_PromptBlockAppearsAfterStage(t *testing.T) {
 	in := Inputs{
 		Template:   "RULES",

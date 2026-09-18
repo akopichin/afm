@@ -101,7 +101,10 @@ func Build(in Inputs) string {
 		fmt.Fprintf(&sb, "4. You MUST keep waiting until $AFM_STAGE_DIR/%s.qN.answer.json exists. Do NOT end your turn, do NOT stop, do NOT write \"I'll wait\" and return control.\n", in.PhaseAgent)
 		sb.WriteString("5. Do NOT use ScheduleWakeup, background tasks, async waits, or \"wait for a notification\" — those mechanisms DO NOT EXIST here. The ONLY way to receive the user's answer is the blocking Bash polling loop above.\n")
 		sb.WriteString("6. Do NOT write to plan.md / output artifact yet — finish waiting for and processing all answers first, then produce the artifact in one go.\n")
-		sb.WriteString("Ask ONE question at a time.\n")
+		sb.WriteString("Ask ONE question at a time. Write ONLY ONE question file at a time.\n")
+		fmt.Fprintf(&sb, "  After writing %s.q<N>.question.json, WAIT for its %s.q<N>.answer.json (step 2) before writing the next question — do NOT write the next question until the current one is answered.\n", in.PhaseAgent, in.PhaseAgent)
+		sb.WriteString("  If you have several questions for this round, either ask them ONE BY ONE (recommended), or combine them into a SINGLE question file with numbered sub-questions inside 'question' and let the user answer them together.\n")
+		sb.WriteString("  Note: afm accepts an answer only to the OLDEST unanswered question — any extra question files you write ahead of time are ignored until the earlier ones are answered, so writing a batch will stall you.\n")
 		sb.WriteString("</interactive_rules>\n")
 	}
 	sb.WriteString("\n</system_rules>\n\n")
