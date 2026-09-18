@@ -728,6 +728,30 @@ func TestSelectCurrentQuestion(t *testing.T) {
 	}
 }
 
+func TestSelectCurrentQuestion_PrefersLaterLifecyclePhase(t *testing.T) {
+	// A stale planning.q1 lingering plus the active implementation.q1: the
+	// implementation question (later phase, the running agent's) must win, NOT
+	// the lexically-smaller "implementation" vs "planning" — regression guard
+	// for codex MAJOR#1 (cross-phase deadlock).
+	qs := []mcp.QuestionFile{
+		{Phase: "planning", ID: "q1"},
+		{Phase: "implementation", ID: "q1"},
+	}
+	cur, ok := mcp.SelectCurrentQuestion(qs)
+	if !ok || cur.Phase != "implementation" {
+		t.Fatalf("expected implementation/q1 (later phase) current, got ok=%v phase=%q", ok, cur.Phase)
+	}
+	// Even when the stale earlier-phase id is numerically larger.
+	qs = []mcp.QuestionFile{
+		{Phase: "implementation", ID: "q8"},
+		{Phase: "review", ID: "q1"},
+	}
+	cur, ok = mcp.SelectCurrentQuestion(qs)
+	if !ok || cur.Phase != "review" {
+		t.Fatalf("expected review/q1 (later phase) current, got ok=%v phase=%q", ok, cur.Phase)
+	}
+}
+
 func TestCurrentQuestion_ReadsDirAndSelects(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []string{"q2", "q1"} {

@@ -494,11 +494,29 @@ func AskOrderLess(a, b string) bool {
 	}
 }
 
-func questionBefore(a, b QuestionFile) bool {
-	if a.ID != b.ID {
-		return AskOrderLess(a.ID, b.ID)
+// phaseRank orders phases by their lifecycle position (planning < implementation
+// < review < autonomous_execution) using flow.Phases(). A higher rank is a
+// later, more-recently-active phase. Unknown phases rank -1 (least current);
+// in practice FindUnansweredQuestions already filters to valid phases.
+func phaseRank(phase string) int {
+	for i, p := range flow.Phases() {
+		if string(p) == phase {
+			return i
+		}
 	}
-	return a.Phase < b.Phase
+	return -1
+}
+
+func questionBefore(a, b QuestionFile) bool {
+	if a.Phase != b.Phase {
+		// Prefer the LATER lifecycle phase: phases advance forward and cannot
+		// advance past an unanswered question, so when two phases have open
+		// questions at once the later one belongs to the agent running now and
+		// the earlier is a stale leftover. Surfacing the stale earlier one would
+		// hide the actively-polled question and reintroduce the hang (codex MAJOR#1).
+		return phaseRank(a.Phase) > phaseRank(b.Phase)
+	}
+	return AskOrderLess(a.ID, b.ID)
 }
 
 // SelectCurrentQuestion returns the oldest unanswered question in qs — the one
