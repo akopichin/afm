@@ -12,6 +12,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
@@ -202,6 +203,12 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 					// the next tick, same as a failed WriteAnswer above.
 					continue
 				}
+				// Гейт снимаем ДО WriteAnswer: паркинг-стадию покрывает
+				// FSM-путь (EvAskUser/EvUserAnswered через triggerWithSeq,
+				// см. Task 8 fsmLifecycleEvents) — не-FSM пара ниже эмитится
+				// ТОЛЬКО когда стадия НЕ была запаркована, иначе
+				// stage_question_asked/answered задваивались бы.
+				parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
 				answer, fromOptions := mcp.PickAutoAnswer(q)
 				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
@@ -221,6 +228,22 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
 					keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
 				})
+				if !parked {
+					o.emitLifecycle(lifecyclehooks.Event{
+						Type:      lifecyclehooks.EventStageQuestionAsked,
+						StageID:   stageID,
+						StageName: o.stageName(stageID),
+						Phase:     q.Phase,
+						Reason:    q.Question,
+					})
+					o.emitLifecycle(lifecyclehooks.Event{
+						Type:      lifecyclehooks.EventStageQuestionAnswered,
+						StageID:   stageID,
+						StageName: o.stageName(stageID),
+						Phase:     q.Phase,
+						Reason:    answer,
+					})
+				}
 				// Если агент уже вышел, оставив стадию запаркованной в
 				// awaiting_user_input, написать answer.json недостаточно —
 				// стадию надо вывести из этого статуса и перезапустить агента
@@ -416,6 +439,9 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 // of leaving it polling forever. Mirrors the normal non-interactive auto-answer
 // path (EventAutoAnswered + notices.jsonl), leaving the stage FSM untouched.
 func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.QuestionFile) {
+	// Тот же гейт против дублей, что и в обычной non-interactive ветке
+	// pollQuestions: снимаем ДО WriteAnswer, паркинг-стадию покрывает FSM-путь.
+	parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
 	answer, fromOptions := mcp.PickAutoAnswer(mcp.QuestionFile{ID: q.ID, Phase: q.Phase})
 	if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 		log.Printf("WARN: auto-answer malformed %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
@@ -429,6 +455,22 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
 		keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
 	})
+	if !parked {
+		o.emitLifecycle(lifecyclehooks.Event{
+			Type:      lifecyclehooks.EventStageQuestionAsked,
+			StageID:   stageID,
+			StageName: o.stageName(stageID),
+			Phase:     q.Phase,
+			Reason:    q.Question,
+		})
+		o.emitLifecycle(lifecyclehooks.Event{
+			Type:      lifecyclehooks.EventStageQuestionAnswered,
+			StageID:   stageID,
+			StageName: o.stageName(stageID),
+			Phase:     q.Phase,
+			Reason:    answer,
+		})
+	}
 }
 
 // giveUpOnMalformedQuestion runs once fix attempts are exhausted on an
