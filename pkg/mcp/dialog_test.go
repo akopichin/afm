@@ -750,6 +750,19 @@ func TestSelectCurrentQuestion_PrefersLaterLifecyclePhase(t *testing.T) {
 	if !ok || cur.Phase != "review" {
 		t.Fatalf("expected review/q1 (later phase) current, got ok=%v phase=%q", ok, cur.Phase)
 	}
+
+	// Conflicting case: the active later phase wins even when its id is
+	// numerically larger than the stale earlier phase's — this FAILS under the
+	// old ID-primary comparator (which would pick planning/q1).
+	for _, order := range [][]mcp.QuestionFile{
+		{{Phase: "planning", ID: "q1"}, {Phase: "implementation", ID: "q8"}},
+		{{Phase: "implementation", ID: "q8"}, {Phase: "planning", ID: "q1"}},
+	} {
+		cur, ok := mcp.SelectCurrentQuestion(order)
+		if !ok || cur.Phase != "implementation" || cur.ID != "q8" {
+			t.Fatalf("expected implementation/q8 (active later phase), got ok=%v phase=%q id=%q", ok, cur.Phase, cur.ID)
+		}
+	}
 }
 
 func TestCurrentQuestion_ReadsDirAndSelects(t *testing.T) {
