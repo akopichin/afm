@@ -65,6 +65,10 @@ const (
 	// EventHookResolved fires when the user retries or skips a failed hook.
 	// Data: map[string]string{"hook": ..., "resolution": "retried"|"skipped"}.
 	EventHookResolved EventType = "hook_resolved"
+	// EventLifecycleHookFailed fires when a lifecycle (observer) hook exhausts
+	// its retries or its delivery queue overflows. Purely informational: never
+	// affects the FSM, the stage or the run outcome.
+	EventLifecycleHookFailed EventType = "lifecycle_hook_failed"
 	// EventReflectFailed fires when a step of the memory pipeline
 	// (maybeRunReflection/distill: reflect→aggregate→prioritize→update)
 	// returns an error. Best-effort notice only — never triggers an FSM

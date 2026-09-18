@@ -24,6 +24,16 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
     expect(items[5]).toMatchObject({ text: 'custom_unknown', actor: 'system' })
   })
 
+  it('renders lifecycle_hook_failed as a system-side warning carrying the hook id and error', () => {
+    const items = toFeedItems([
+      ev('lifecycle_hook_failed', { hook_id: 'telegram', event_id: 'run-1:flow:flow_started', error: 'exit status 1' }, '', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toContain('telegram')
+    expect(items[0]?.text).toContain('exit status 1')
+  })
+
   it('renders an agent text action as clean prose (no "text:" prefix, not mono)', () => {
     const items = toFeedItems([ev('agent_action', { tool: 'text', detail: 'I initialized the build.' }, 's1', '2026-07-10T10:00:00Z')])
     expect(items[0]).toMatchObject({ text: 'I initialized the build.', kind: 'message', mono: false, actor: 'agent' })

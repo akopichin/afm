@@ -120,6 +120,11 @@ function mapEvent(event: AfmEvent): Mapped | null {
       return { actor: 'system', tone: 'danger', kind: 'status', text: `${str(obj.hook)}-hook failed: ${str(obj.error)}`, mono: false }
     case 'hook_resolved':
       return { actor: 'system', tone: 'success', kind: 'status', text: `${str(obj.hook)}-hook ${str(obj.resolution)}`, mono: false }
+    case 'lifecycle_hook_failed':
+      // Финальный сбой lifecycle (observer) хука — чисто информационное
+      // предупреждение: FSM/стадию/ран оно не трогает (см. bus.go), поэтому
+      // tone 'warning', а не 'danger', как у блокирующего hook_failed выше.
+      return { actor: 'system', tone: 'warning', kind: 'status', text: `lifecycle hook ${str(obj.hook_id)} failed: ${str(obj.error)}`, mono: false }
     case 'approved':
       return { actor: 'user', tone: 'success', kind: 'message', text: 'approved', mono: false }
     case 'revised':

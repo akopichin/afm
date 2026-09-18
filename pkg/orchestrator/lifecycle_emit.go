@@ -5,6 +5,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -93,4 +94,15 @@ func phaseForStatus(st state.StageStatus) string {
 		return phaseImplementation
 	}
 	return ""
+}
+
+// PublishLifecycleHookFailure — dashboard-warning о финальном сбое lifecycle
+// хука: live в ui-шину + durable в notices.jsonl (тот же one-map-two-sinks
+// паттерн, что publishHookNotice). Вызывается из OnError-callback dispatcher
+// (cmd/afm/run.go), поэтому метод публичный.
+func (o *Orchestrator) PublishLifecycleHookFailure(hookID, eventID string, err error) {
+	const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
+	data := map[string]string{"hook_id": hookID, "event_id": eventID, keyError: err.Error()}
+	o.ui.Publish(bus.Event{Type: bus.EventLifecycleHookFailed, Data: data})
+	stagefiles.AppendNotice(o.opts.RunDir, "", string(bus.EventLifecycleHookFailed), data)
 }
