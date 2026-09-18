@@ -15,6 +15,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/secrets"
 )
 
 // containerHome — домашний каталог non-root пользователя внутри контейнера.
@@ -389,7 +390,7 @@ func ReExec(cfg ReExecConfig) error {
 	// врапперы внутри контейнера читают $AFM_SECRET_<CMD>/$AFM_SYSPROMPT_<CMD> и
 	// unset'ят их до exec claude. Команды с recipe НЕ монтируются (ScanCommands).
 	if len(cfg.Recipes) > 0 {
-		secrets, err := LoadSecretLayers(cfg.SecretsFile, cfg.ProjectDir)
+		loadedSecrets, err := LoadSecretLayers(cfg.SecretsFile, cfg.ProjectDir)
 		if err != nil {
 			return err
 		}
@@ -397,7 +398,7 @@ func ReExec(cfg ReExecConfig) error {
 			name := envName(cmd)
 			// codex — единственный тип, для которого Validate() допускает пустой
 			// Auth (авторизация идёт через смонтированную ~/.codex, не через
-			// секрет). Пропускаем резолв ТОЛЬКО для codex, иначе ResolveAuthValue("", ...)
+			// секрет). Пропускаем резолв ТОЛЬКО для codex, иначе secrets.ResolveRef("", ...)
 			// фейлит на пустом auth.from и валит весь запуск даже когда секрет не нужен.
 			// Для остальных типов (openai/cursor) пустой auth.from при заданном
 			// auth.to — это misconfiguration, которая должна fail-fast здесь, а не
@@ -405,7 +406,7 @@ func ReExec(cfg ReExecConfig) error {
 			if recipe.Type == config.RecipeTypeCodex && recipe.Auth.From == "" {
 				continue
 			}
-			val, vErr := ResolveAuthValue(recipe.Auth.From, secrets)
+			val, vErr := secrets.ResolveRef(recipe.Auth.From, loadedSecrets)
 			if vErr != nil {
 				return fmt.Errorf("agent %s: %w", cmd, vErr)
 			}
@@ -441,16 +442,10 @@ func isTTY() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// expandHome раскрывает ведущую ~ в абсолютный путь относительно home.
-// "~" → home, "~/foo" → home+"/foo"; прочее возвращается как есть.
+// expandHome — тонкий алиас над secrets.ExpandHome, чтобы не трогать все
+// call sites в этом файле.
 func expandHome(p, home string) string {
-	if p == "~" {
-		return home
-	}
-	if strings.HasPrefix(p, "~/") {
-		return home + p[1:] // p[1:] == "/…"
-	}
-	return p
+	return secrets.ExpandHome(p, home)
 }
 
 // ExtraMountContainerPaths возвращает container-side путь для каждой записи
