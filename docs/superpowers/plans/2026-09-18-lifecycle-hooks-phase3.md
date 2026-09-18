@@ -4,7 +4,7 @@
 
 **Goal:** Дать lifecycle-хукам безопасную доставку секретов/переменных: поле `env` со ссылками `env:`/`file:` (та же семантика, что `auth.from`), вынос резолвера в нейтральный `pkg/secrets`, минимальное окружение hook-процесса по умолчанию + `inherit_env`, редакцию `[REDACTED]` в логах/dashboard, приоритеты `secrets.env` (project > global > env процесса), и Docker-транспорт секретов без монтирования файлов в контейнер.
 
-**Architecture:** Резолвер секретов (`ResolveAuthValue`/`LoadSecrets`/`LoadSecretLayers`/`expandHome`) переезжает из `pkg/docker` в нейтральный `pkg/secrets`; `pkg/docker` и lifecycle-хуки используют его. Хук получает `env map[string]SecretRef` и `inherit_env bool`. Секреты резолвятся ОДИН раз при сборке dispatcher (host, `cmd/afm/run.go`), до `flow_started`, fail-fast с указанием hook id + имени переменной; резолвнутые значения живут только в памяти (`RegisteredHook.ResolvedEnv`), не пишутся в payload/логи/journal. Runner строит окружение hook-процесса: минимальный базовый набор (PATH/HOME/locale/tmp/proxy-certs) + `AFM_*` + резолвнутый `env` (или полный `os.Environ()` при `inherit_env: true`), и оборачивает лог в редактирующий writer, заменяющий известные значения на `[REDACTED]`. В Docker-режиме host-launcher резолвит ссылки до `docker run`, передаёт значения транзиентными bare `-e AFM_SECRET_<hook>_<VAR>`; in-container резолвер читает их вместо файлов, transport-переменные фильтруются из окружения агентов/скриптов/других хуков.
+**Architecture:** Резолвер секретов (`ResolveAuthValue`/`LoadSecrets`/`LoadSecretLayers`/`expandHome`) переезжает из `pkg/docker` в нейтральный `pkg/secrets`; `pkg/docker` и lifecycle-хуки используют его. Хук получает `env map[string]SecretRef` и `inherit_env bool`. Секреты резолвятся ОДИН раз при сборке dispatcher (host, `cmd/afm/run.go`), до `flow_started`, fail-fast с указанием hook id + имени переменной; резолвнутые значения живут только в памяти (`RegisteredHook.ResolvedEnv`), не пишутся в payload/логи/journal. Runner строит окружение hook-процесса: по умолчанию (spec) минимальный базовый набор (PATH/HOME/locale/tmp/proxy-certs) + `AFM_*` + резолвнутый `env`; полный `os.Environ()` только при `inherit_env: true` (и всегда с вырезанием transport-префиксов); лог оборачивается в редактирующий writer (`[REDACTED]`). В Docker-режиме host-launcher резолвит ссылки до `docker run`, передаёт значения транзиентными bare `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` (инъективно по индексам, codex #1); in-container резолвер читает их вместо файлов и делает `Unsetenv`, transport-переменные вырезаются из окружения всех дочерних процессов (агенты/скрипты/verify/другие хуки).
 
 **Tech Stack:** Go (stdlib), существующие `pkg/lifecyclehooks`, `pkg/docker` (`secrets.go`/`launcher.go`/`wrapper.go`), `pkg/config`, `pkg/flow`, `cmd/afm/run.go`, `schema/*.json`.
 
@@ -38,7 +38,8 @@
 
 Модифицируемые:
 - `pkg/docker/secrets.go` — стать тонкой обёрткой над `pkg/secrets` (или удалить, обновив call sites launcher.go/wrapper.go/run.go); `ResolveSystemPrompt` остаётся в docker (docker-специфичен) либо тоже переезжает — по месту.
-- `pkg/docker/launcher.go` — переиспользовать `pkg/secrets`; добавить транспорт секретов хуков (`AFM_SECRET_<hook>_<VAR>`), `docker.UsesLifecycleSecrets`.
+- `pkg/docker/launcher.go` — переиспользовать `pkg/secrets`; добавить транспорт секретов хуков (`AFM_HOOK_SECRET_<hookIdx>_<varIdx>`, инъективно по индексам), `docker.UsesLifecycleSecrets`.
+- `pkg/orchestrator/stagefiles/completion.go` — `RunVerify` (прямой `exec.Command`) тоже вырезает transport-префиксы из окружения (codex #2).
 - `pkg/lifecyclehooks/types.go` — `Hook.Env map[string]SecretRef`, `Hook.InheritEnv bool`, `Hook.ResolvedEnv map[string]string` (yaml:"-", runtime).
 - `pkg/lifecyclehooks/validate.go` — валидация `env` (имя переменной, AFM_-префикс, префикс источника).
 - `pkg/lifecyclehooks/runner.go` — `buildEnv` учитывает ResolvedEnv/InheritEnv/минимальное окружение; лог через `redactingWriter`.
@@ -174,6 +175,14 @@ func TestValidateLayer_HookEnv(t *testing.T) {
 		{"bad var name", map[string]SecretRef{"1BAD": "env:Y"}, true},
 		{"bad var name dash", map[string]SecretRef{"A-B": "env:Y"}, true},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateLayer(base(tc.env), false)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("env=%v err=%v wantErr=%v", tc.env, err, tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestValidateLayer_HookEnvCaseCollision(t *testing.T) {
@@ -182,14 +191,6 @@ func TestValidateLayer_HookEnvCaseCollision(t *testing.T) {
 		Env: map[string]SecretRef{"TOKEN": "env:A", "token": "env:B"}}}
 	if ValidateLayer(h, false) == nil {
 		t.Fatal("case-colliding env var names must be rejected")
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateLayer(base(tc.env), false)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("env=%v err=%v wantErr=%v", tc.env, err, tc.wantErr)
-			}
-		})
 	}
 }
 ```
@@ -428,7 +429,7 @@ git commit -m "feat(lifecyclehooks): резолв env-секретов хука 
 **Interfaces:**
 - Consumes: Task 3 (`Hook.ResolvedEnv`, `Hook.InheritEnv`).
 - Produces:
-  - `buildEnv` учитывает режим окружения: без `Env` и без `InheritEnv` → `os.Environ()` (Phase 1); иначе минимальный набор (или полный при `InheritEnv==true`) + `AFM_*` + `ResolvedEnv`. `AFM_*` и `ResolvedEnv` всегда добавляются последними (перекрывают базовые).
+  - `buildEnv` (spec-дефолт minimal): `InheritEnv==false` (дефолт) → `minimalBaseEnv()`; `InheritEnv==true` → `stripTransportVars(os.Environ())`. Затем всегда + `AFM_*` + `ResolvedEnv` последними (перекрывают базовые). Transport-префиксы не попадают ни в один режим.
   - `func minimalBaseEnv() []string` — PATH, HOME, locale (LANG/LC_*), TMPDIR, proxy/certs (HTTP(S)_PROXY/NO_PROXY/SSL_CERT_*), извлечённые из `os.Environ()`.
   - `type redactingWriter struct{...}` — io.Writer, заменяющий вхождения известных секретных значений на `[REDACTED]` перед записью в лог. Буферизует хвост длиной max(len(secret)) для стыков между Write-ами.
 
@@ -600,66 +601,86 @@ func minimalBaseEnv() []string {
 ```go
 type redactingWriter struct {
 	w       io.Writer
-	secrets []string
+	secrets []string // дедуп, отсортированы по убыванию длины
 	marker  string
 	maxLen  int
-	tail    []byte // незаписанный хвост (возможный префикс секрета на стыке Write)
+	buf     []byte // накопитель: заменяем полные вхождения, придерживаем хвост-префикс
 }
 
 func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
-	max := 0
+	// дедуп + сорт по убыванию длины (длинные секреты заменяем первыми: если
+	// короткий секрет — подстрока длинного, длинный уже редактирован).
+	seen := map[string]bool{}
 	nonEmpty := make([]string, 0, len(secrets))
+	max := 0
 	for _, s := range secrets {
-		if s == "" {
+		if s == "" || seen[s] {
 			continue
 		}
+		seen[s] = true
 		nonEmpty = append(nonEmpty, s)
 		if len(s) > max {
 			max = len(s)
 		}
 	}
+	sort.Slice(nonEmpty, func(i, j int) bool { return len(nonEmpty[i]) > len(nonEmpty[j]) })
 	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty), maxLen: max}
 }
 
-// Write редактирует известные секреты. Держит в буфере хвост длиной maxLen-1,
-// чтобы поймать секрет, разорванный между Write-ами. keep-байты НЕ пишутся до
-// следующего Write/Close — так любое вхождение целиком проходит через redactAll.
+// Write накапливает, заменяет все ПОЛНЫЕ вхождения секретов, затем придерживает
+// самый длинный суффикс (≤ maxLen-1), который является ПРЕФИКСОМ какого-либо
+// секрета (возможное начало секрета, разорванного на границе Write). Остальное
+// сбрасывает в w. Корректно ловит секрет, разорванный между Write-ами.
 func (r *redactingWriter) Write(p []byte) (int, error) {
-	n := len(p)
-	buf := append(r.tail, p...)
-	redacted := redactAll(buf, r.secrets, r.marker)
-	keep := r.maxLen - 1
-	if keep < 0 {
-		keep = 0
-	}
-	// keep считаем от НЕредактированного buf, но пишем из redacted; чтобы стык
-	// ловился, буферизуем последние keep байт ИСХОДНОГО хвоста, а redactAll
-	// применяем к полному buf на каждом Write и на Close. Поскольку marker может
-	// быть длиннее/короче секрета, держим хвост по исходным байтам:
-	if len(buf) > keep {
-		head := redactAll(buf[:len(buf)-keep], r.secrets, r.marker)
-		if _, err := r.w.Write(head); err != nil {
+	r.buf = append(r.buf, p...)
+	r.buf = redactAll(r.buf, r.secrets, r.marker) // заменить все полные вхождения
+	hold := r.longestSecretPrefixSuffix()          // сколько байт хвоста придержать
+	flush := len(r.buf) - hold
+	if flush > 0 {
+		if _, err := r.w.Write(r.buf[:flush]); err != nil {
 			return 0, err
 		}
-		r.tail = append(r.tail[:0], buf[len(buf)-keep:]...)
-	} else {
-		r.tail = append(r.tail[:0], buf...)
+		r.buf = append(r.buf[:0], r.buf[flush:]...)
 	}
-	return n, nil
+	return len(p), nil
+}
+
+// longestSecretPrefixSuffix возвращает длину самого длинного суффикса r.buf,
+// который равен собственному префиксу какого-либо секрета (кандидат на
+// разорванное вхождение). ≤ maxLen-1.
+func (r *redactingWriter) longestSecretPrefixSuffix() int {
+	max := 0
+	for _, s := range r.secrets {
+		lim := len(s) - 1
+		if lim > len(r.buf) {
+			lim = len(r.buf)
+		}
+		for k := lim; k > max; k-- {
+			if bytes.HasPrefix([]byte(s), r.buf[len(r.buf)-k:]) {
+				if k > max {
+					max = k
+				}
+				break
+			}
+		}
+	}
+	return max
 }
 
 func (r *redactingWriter) Close() error {
-	if len(r.tail) > 0 {
-		if _, err := r.w.Write(redactAll(r.tail, r.secrets, r.marker)); err != nil {
+	if len(r.buf) > 0 {
+		// хвост — только частичный префикс секрета (полные вхождения уже
+		// заменены), поэтому пишем как есть после финальной замены на всякий случай.
+		if _, err := r.w.Write(redactAll(r.buf, r.secrets, r.marker)); err != nil {
 			return err
 		}
-		r.tail = nil
+		r.buf = nil
 	}
 	return nil
 }
 ```
 
-> Замечание по буферизации: хвост держим по ИСХОДНЫМ (нередактированным) байтам длиной `maxLen-1`, а `redactAll` применяем к полному `buf` на каждом Write и на Close — так секрет, разорванный между Write, гарантированно проходит замену на границе (иначе частично-записанный редактированный префикс ломал бы поиск). `redacted` в первой строке Write используется только для вычисления — фактически пишем `redactAll(buf[:len-keep])`. Реализатору: упростить до одного `redactAll` вызова, если получится эквивалентно; ключевой инвариант — ни один секрет не пересекает границу записи в `w` нередактированным.
+> Корректность: полные вхождения заменяются на КАЖДОМ Write по всему накопителю; наружу отдаются только байты, за которыми не может начинаться разорванный секрет (придержан суффикс-префикс). Секрет `topsecret`, пришедший одним `Write("topsecret")`: `redactAll` заменит его целиком сразу (полное вхождение) → в `w` уйдёт marker. Секрет, разорванный `Write("top")`+`Write("secret")`: после первого Write `buf="top"`, это префикс секрета → придержан весь; после второго `buf="topsecret"` → заменён. Импорты: `bytes`, `sort`.
 
 // redactMarker выбирается так, чтобы САМ не содержать ни одного секрета
 // (codex #6: секрет "REDACTED"/"["/"]" сделал бы обычный "[REDACTED]" носителем
@@ -735,7 +756,7 @@ git commit -m "feat(lifecyclehooks): окружение hook-процесса (m
 
 **Interfaces:**
 - Consumes: Tasks 1-3; образец autoShim-транспорта (`launcher.go:391-424`, `wrapper.go`).
-- Produces: в Docker-режиме секреты хуков резолвятся ХОСТОМ до `docker run` и передаются транзиентными bare `-e AFM_SECRET_HOOK_<hookEnvName>_<VAR>`; in-container `ResolveHookEnv`-путь берёт значения из этих переменных, а не из файлов/secrets.env; транспортные переменные фильтруются из окружения агентов/скриптов/других хуков.
+- Produces: в Docker-режиме секреты хуков резолвятся ХОСТОМ до `docker run` и передаются транзиентными bare `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` (инъективно по индексам итогового `combined`, codex #1); in-container путь берёт значения из этих переменных (не из файлов/secrets.env), делает `Unsetenv`; транспортные переменные вырезаются из окружения агентов/скриптов/verify/других хуков (codex #2).
 
 > ВАЖНО: перед реализацией прочитать `pkg/docker/launcher.go` (ReExec, блок autoShim-секретов :391-424, dockerForwardEnvVars, сборку `-e`), `pkg/docker/wrapper.go` (`envName`, unset-паттерн) и docker-режим в `cmd/afm/run.go` (как флоу/конфиг доезжает в контейнер, `AFM_IN_DOCKER`). Реализация должна ЗЕРКАЛИТЬ существующий AFM_SECRET_<CMD>-паттерн, а не изобретать новый.
 
@@ -752,7 +773,7 @@ git commit -m "feat(lifecyclehooks): окружение hook-процесса (m
 
 In-container (`AFM_IN_DOCKER=1`): резолвить `Hook.Env` НЕ через файлы, а из транспортных переменных — `ResolvedEnv[targetVar] = os.Getenv(transportName(hookIdx,varIdx))`; отсутствие/пусто → ошибка (fail-fast). **Затем ОБЯЗАТЕЛЬНО `os.Unsetenv(transportName)` для ВСЕХ транспортных переменных** (codex #2 — не «unset ИЛИ фильтр», а unset всегда), чтобы транспорт не наследовался никакими дочерними процессами (агенты, script-стадии, verify/JSONQuery, другие хуки).
 
-**Дополнительно (codex #2):** в построении окружения ЛЮБОГО дочернего процесса, наследующего окружение (агенты/скрипты/verify — executor/runner_factory; и hook при `inherit_env:true`), вырезать все внутренние transport-префиксы: `AFM_HOOK_SECRET_*`, а также уже существующие autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` (сейчас их снимают только generated-wrappers; обычные агенты/скрипты их наследуют — закрыть). `minimalBaseEnv` их не тащит по построению (whitelist), но `inherit_env:true`-хук и агенты с полным окружением — тащат.
+**Дополнительно (codex #2):** в построении окружения ЛЮБОГО дочернего процесса, наследующего окружение (агенты/скрипты — executor/runner_factory; verify — stagefiles.RunVerify/completion.go, прямой exec.Command; и hook при `inherit_env:true`), вырезать все внутренние transport-префиксы: `AFM_HOOK_SECRET_*`, а также уже существующие autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` (сейчас их снимают только generated-wrappers; обычные агенты/скрипты их наследуют — закрыть). `minimalBaseEnv` их не тащит по построению (whitelist), но `inherit_env:true`-хук и агенты с полным окружением — тащат.
 
 Тест (host, unit — как существующие `TestReExec_*`): флоу с двумя хуками, у обоих `env: {TOK: ...}`, id различаются только пунктуацией/регистром → транспортные имена РАЗНЫЕ (инъективность); `-e <transport>` присутствует bare; значение в `os.Environ` хоста, НЕ в argv; секрет-файл НЕ среди `-v`. In-container unit: `resolveHookEnvFromTransport(combined)` даёт правильный `ResolvedEnv` и делает Unsetenv транспортных.
 
@@ -774,7 +795,7 @@ In-container резолв — unit-тест: при `AFM_IN_DOCKER=1` и выс�
 Run: `go test ./pkg/docker/ -run TestReExec_HookSecret -v`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — по образцу autoShim-секретов (`launcher.go:391-424`). Общий хелпер `transportName(hookIdx, varIdx int) string` (в pkg/lifecyclehooks или pkg/docker, доступный обоим). Развилка host vs in-container в `cmd/afm/run.go`: `os.Getenv("AFM_IN_DOCKER")=="1"` → `ResolvedEnv` из транспортных переменных + `os.Unsetenv` каждой; иначе → `secrets.env`+файлы (Task 3). Combine вынесен ДО docker-ветки (#3). Фильтрацию transport-префиксов (`AFM_HOOK_SECRET_*`, `AFM_SECRET_*`, `AFM_SYSPROMPT_*`) из наследуемого окружения сделать в общей точке формирования env дочерних процессов (executor/runner_factory) И в `buildEnv` хука при `inherit_env:true`. Тесты покрыть: agent, script, verify, no-env-hook, inherit-hook — ни один не видит транспортных переменных.
+- [ ] **Step 3: Implement** — по образцу autoShim-секретов (`launcher.go:391-424`). Общий хелпер `transportName(hookIdx, varIdx int) string` (в pkg/lifecyclehooks или pkg/docker, доступный обоим). Развилка host vs in-container в `cmd/afm/run.go`: `os.Getenv("AFM_IN_DOCKER")=="1"` → `ResolvedEnv` из транспортных переменных + `os.Unsetenv` каждой; иначе → `secrets.env`+файлы (Task 3). Combine вынесен ДО docker-ветки (#3). Фильтрацию transport-префиксов (`AFM_HOOK_SECRET_*`, `AFM_SECRET_*`, `AFM_SYSPROMPT_*`) из наследуемого окружения сделать во ВСЕХ spawn-точках (executor/runner_factory И stagefiles.RunVerify/completion.go — прямой exec.Command, codex #2) И в `buildEnv` хука при `inherit_env:true`. Тесты покрыть: agent, script, verify, no-env-hook, inherit-hook — ни один не видит транспортных переменных.
 
 - [ ] **Step 4: Run tests + сборка**
 
