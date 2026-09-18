@@ -431,7 +431,7 @@ git commit -m "feat(lifecyclehooks): резолв env-секретов хука 
 - Produces:
   - `buildEnv` (spec-дефолт minimal): `InheritEnv==false` (дефолт) → `minimalBaseEnv()`; `InheritEnv==true` → `stripTransportVars(os.Environ())`. Затем всегда + `AFM_*` + `ResolvedEnv` последними (перекрывают базовые). Transport-префиксы не попадают ни в один режим.
   - `func minimalBaseEnv() []string` — PATH, HOME, locale (LANG/LC_*), TMPDIR, proxy/certs (HTTP(S)_PROXY/NO_PROXY/SSL_CERT_*), извлечённые из `os.Environ()`.
-  - `type redactingWriter struct{...}` — io.Writer, ПОСТРОЧНО заменяющий вхождения известных секретных значений на безопасный маркер перед записью в лог (буфер незавершённой строки ограничен `redactLineCap`).
+  - `type redactingWriter struct{...}` — io.Writer, потоково заменяющий вхождения известных секретных значений на безопасный маркер перед записью в лог; bounded-память (удерживает ≤ maxLen-1 байт хвоста), безопасен на границах Write.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -597,22 +597,18 @@ func minimalBaseEnv() []string {
 
 (Аккуратно с закрытием: `redactor.Close()` сбрасывает буферизованный хвост в `logFile`, ПОТОМ `logFile.Close()`. finish-строка пишется в `sink` (редактор при наличии секретов), т.е. до `Close()`.)
 
-`env.go`/`redact.go` — `redactingWriter`:
+`env.go`/`redact.go` — `redactingWriter` (bounded streaming-редактор, единый fenced-блок):
 
 ```go
-const redactLineCap = 64 * 1024 // предел незавершённой строки: bounded-память (codex)
-
 type redactingWriter struct {
 	w       io.Writer
 	secrets []string // дедуп, отсортированы по убыванию длины
-	marker  string
-	maxLen  int    // длина самого длинного секрета (для overflow-удержания)
-	buf     []byte // СЫРОЙ накопитель незавершённой строки (без \n), ограничен redactLineCap
+	marker  string   // безопасен: не содержит секрета И ни один его суффикс не префикс секрета
+	maxLen  int      // длина самого длинного секрета
+	buf     []byte   // СЫРОЙ хвост ≤ maxLen-1 байт (возможное начало секрета на границе Write)
 }
 
 func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
-	// дедуп + сорт по убыванию длины (длинные секреты заменяем первыми: если
-	// короткий секрет — подстрока длинного, длинный уже редактирован).
 	seen := map[string]bool{}
 	nonEmpty := make([]string, 0, len(secrets))
 	max := 0
@@ -630,77 +626,95 @@ func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
 	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty), maxLen: max}
 }
 
-// Write — ПОСТРОЧНАЯ редакция с ограничением памяти: копит байты, на каждой
-// завершённой строке ('\n') применяет redactAll к ПОЛНОЙ строке и сбрасывает её.
-// Секрет в пределах строки всегда целиком присутствует в момент redactAll (нет
-// разрезания на границе Write, маркер не переанализируется). Если незавершённая
-// строка превышает redactLineCap (поток без '\n'), делаем принудительный сброс,
-// придержав последние maxLen-1 байт (возможное начало секрета на границе) —
-// bounded-память вместо неограниченного роста буфера (codex).
+// Write — bounded streaming-редакция без границы по строкам и без риска утечки:
+//   1. buf += p; red := redactAll(buf) — все ПОЛНЫЕ вхождения заменены на marker.
+//   2. hold := longest суффикс red, являющийся собственным префиксом какого-либо
+//      секрета (≤ maxLen-1) — единственное, что может достроиться до секрета
+//      следующим Write. Т.к. marker подобран так, что НИ ОДИН его суффикс не
+//      является префиксом секрета (redactMarker), hold никогда не попадает на
+//      байты marker — удержанные байты идентичны сырым (частичный префикс).
+//   3. Сбрасываем red[:len-hold], оставляем red[len-hold:] как новый buf.
+// Память ограничена maxLen-1 + len(p): buf после Write ≤ maxLen-1. Секрет,
+// разорванный между Write, достраивается и заменяется; полный секрет в одном
+// Write заменяется сразу. Утечки на границе нет (hold покрывает любой возможный
+// недостроенный префикс).
 func (r *redactingWriter) Write(p []byte) (int, error) {
 	r.buf = append(r.buf, p...)
-	for {
-		nl := bytes.IndexByte(r.buf, '\n')
-		if nl < 0 {
-			break
-		}
-		if err := r.flush(r.buf[:nl+1]); err != nil {
+	red := redactAll(r.buf, r.secrets, r.marker)
+	hold := r.longestSecretPrefixSuffix(red)
+	flush := len(red) - hold
+	if flush > 0 {
+		if _, err := r.w.Write(red[:flush]); err != nil {
 			return 0, err
 		}
-		r.buf = append(r.buf[:0], r.buf[nl+1:]...)
 	}
-	// Overflow: длинная строка без '\n' — не даём буферу расти без предела.
-	if len(r.buf) > redactLineCap {
-		keep := r.maxLen - 1
-		if keep < 0 {
-			keep = 0
-		}
-		if cut := len(r.buf) - keep; cut > 0 {
-			if err := r.flush(r.buf[:cut]); err != nil {
-				return 0, err
-			}
-			r.buf = append(r.buf[:0], r.buf[cut:]...)
-		}
-	}
+	r.buf = append(r.buf[:0], red[flush:]...) // хвост = сырой частичный префикс
 	return len(p), nil
 }
 
-func (r *redactingWriter) flush(b []byte) error {
-	_, err := r.w.Write(redactAll(b, r.secrets, r.marker))
-	return err
+// longestSecretPrefixSuffix — длина самого длинного суффикса b, равного
+// собственному префиксу какого-либо секрета (≤ maxLen-1).
+func (r *redactingWriter) longestSecretPrefixSuffix(b []byte) int {
+	best := 0
+	for _, s := range r.secrets {
+		lim := len(s) - 1
+		if lim > len(b) {
+			lim = len(b)
+		}
+		for k := lim; k > best; k-- {
+			if bytes.HasPrefix([]byte(s), b[len(b)-k:]) {
+				best = k
+				break
+			}
+		}
+	}
+	return best
 }
 
-// Close сбрасывает незавершённый хвост строки (редактированным).
 func (r *redactingWriter) Close() error {
 	if len(r.buf) > 0 {
-		if err := r.flush(r.buf); err != nil {
+		if _, err := r.w.Write(redactAll(r.buf, r.secrets, r.marker)); err != nil {
 			return err
 		}
 		r.buf = nil
 	}
 	return nil
 }
-```
 
-> Корректность: нормальный путь — редакция по полной строке (секрет целиком в строке в момент redactAll; нет разрезания на границе Write, маркер не переанализируется — закрывает утечку `topsecret` одним Write и edge `]x`/marker). Overflow-путь (строка > 64 KiB без '\n') сбрасывает всё, кроме последних maxLen-1 байт — bounded-память; в этом редком adversarial-случае возможна косметическая пере-редакция/разрыв маркера, но НЕ утечка (best-effort по спеке). Импорты: `bytes`, `sort`. Тест `TestRedactingWriter`: split-секрет без '\n' между Write + Close — ловится; добавить тест overflow (>64KiB без '\n' с секретом в начале → секрет отредактирован, память ограничена).
-
-// redactMarker выбирается так, чтобы САМ не содержать ни одного секрета
-// (codex #6: секрет "REDACTED"/"["/"]" сделал бы обычный "[REDACTED]" носителем
-// секрета). Fallback — пустая строка (удаление), если даже расширенные маркеры
-// содержат секрет.
+// redactMarker выбирает маркер, который (а) не содержит ни одного секрета и
+// (б) ни один его непустой суффикс не является префиксом какого-либо секрета —
+// (б) гарантирует, что удержание хвоста в Write никогда не заденет байты маркера
+// (иначе секрет вида "]x" при маркере, оканчивающемся на "]", ломал бы лог —
+// codex). Fallback — "" (удаление), если безопасного маркера нет.
 func redactMarker(secrets []string) string {
-	for _, cand := range []string{"[REDACTED]", "[REDACTED-SECRET]", "***REDACTED***"} {
-		if !containsAnySecret(cand, secrets) {
+	for _, cand := range []string{"[REDACTED]", "[[hook-secret-redacted]]", "\x00REDACTED\x00"} {
+		if !containsAnySecret(cand, secrets) && !anySuffixIsSecretPrefix(cand, secrets) {
 			return cand
 		}
 	}
-	return "" // ни один маркер не безопасен → просто вырезаем секрет
+	return ""
 }
 
 func containsAnySecret(s string, secrets []string) bool {
 	for _, sec := range secrets {
 		if sec != "" && strings.Contains(s, sec) {
 			return true
+		}
+	}
+	return false
+}
+
+// anySuffixIsSecretPrefix — есть ли непустой суффикс s, являющийся префиксом
+// какого-либо секрета.
+func anySuffixIsSecretPrefix(s string, secrets []string) bool {
+	for _, sec := range secrets {
+		if sec == "" {
+			continue
+		}
+		for k := 1; k <= len(s) && k <= len(sec); k++ {
+			if strings.HasPrefix(sec, s[len(s)-k:]) {
+				return true
+			}
 		}
 	}
 	return false
@@ -732,9 +746,7 @@ func secretValues(h Hook) []string {
 }
 ```
 
-`redactingWriter` хранит выбранный `marker` (из `redactMarker(secrets)` в `newRedactingWriter`) и передаёт его в `redactAll`. Важно: длина маркера может отличаться от длины секрета — это не влияет на корректность (замена по значению), только на выравнивание в логе.
-
-(Пустые секреты игнорируются (иначе `ReplaceAll` по "" разорвал бы текст). Ограничение: редакция — защита от `set -x`/`echo`, не абсолютная (скрипт может закодировать секрет или намеренно разорвать его переводом строки).)
+> Корректность и bounded-память: `buf` после каждого `Write` ≤ `maxLen-1` (удержан только возможный недостроенный префикс секрета), поэтому память ограничена и для потока без '\n', и для бинарного вывода — line-cap не нужен. Полные вхождения заменяются на каждом `Write`; секрет, разорванный между `Write`, достраивается на границе; утечки нет. Маркер выбран так, что его суффиксы не являются префиксами секретов — удержание никогда не режет маркер (закрывает edge `]x`). Пустые секреты игнорируются. Импорты: `bytes`, `sort`, `strings`. Тесты `TestRedactingWriter`: (а) полный секрет одним `Write("...topsecret...\n")` → отредактирован; (б) split `Write("top")`+`Write("secret")` → отредактирован; (в) большой поток без '\n' → память ограничена (buf ≤ maxLen-1), секрет в потоке отредактирован; (г) секрет = подстрока маркера-кандидата → выбран безопасный маркер/fallback.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
