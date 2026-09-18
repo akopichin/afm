@@ -110,6 +110,19 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const requestGenRef = useRef(0)
   const lastPendingKeyRef = useRef<string | undefined>(undefined)
 
+  // currentStageIdRef — какая стадия сейчас смонтирована в этой панели.
+  // reload() (вызывается из sendAnswer/sendFeedback после успешного POST)
+  // замыкает stage.id того РЕНДЕРА, в котором был вызван, — то есть стадию A,
+  // на которой пользователь отправил ответ. Если пользователь переключился на
+  // стадию B ДО того, как POST зарезолвился, reload() всё равно выполнится (в
+  // рамках того же React-замыкания) и применит ответ A поверх уже
+  // смонтированной панели B — бампая ОБЩИЙ requestGenRef, что попутно
+  // инвалидирует легитимный поллинг B. Ref обновляется только в эффекте
+  // опроса (а не в reload — иначе он обновлял бы сам себя), поэтому reload()
+  // может сверить «стадия, для которой я вызван» с «стадия, которая сейчас
+  // реально смонтирована», и отказаться применять устаревший результат.
+  const currentStageIdRef = useRef<string | null>(null)
+
   // applyDialog — единая точка применения ответа /dialog, общая для опроса и
   // reload(): пишет entries и сбрасывает черновик/выбор ТОЛЬКО когда
   // (phase,id) pending-вопроса реально изменился — иначе повторное применение
@@ -146,6 +159,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     // ключом чужого pending-вопроса.
     requestGenRef.current++
     lastPendingKeyRef.current = undefined
+    currentStageIdRef.current = current.id
 
     setEntries([])
     setSelectedOption(null)
@@ -176,6 +190,10 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     return () => {
       cancelled = true
       window.clearInterval(interval)
+      // Панель переключается на другую стадию (или размонтируется) —
+      // reload(), замкнувшийся на текущей стадии, больше не должен применять
+      // свой результат сюда.
+      currentStageIdRef.current = null
     }
   }, [stage?.id, applyDialog])
 
@@ -333,14 +351,19 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   if (!hasContent) return <></>
 
   async function reload() {
-    if (stage === null) return
-    // Бампаем общий requestGenRef ДО await: любой poll-запрос, уже летящий в
-    // этот момент (значит, запущенный ДО reload), не пройдёт проверку
-    // requestId===requestGenRef.current в опросе выше и не сможет применить
-    // свой более старый ответ ПОСЛЕ reload — иначе он откатил бы канал к
-    // вопросу, который reload только что сменил на новый.
+    // stageId — стадия, ДЛЯ КОТОРОЙ вызван этот reload (замыкание на stage из
+    // рендера, где был нажат SEND). Если к моменту резолва fetch панель уже
+    // переключилась на другую стадию (currentStageIdRef изменился — обновляется
+    // только эффектом опроса выше), этот reload устарел вместе со своей
+    // стадией: бампать ОБЩИЙ requestGenRef и применять ответ стадии A поверх
+    // уже смонтированной панели стадии B — баг (codex MAJOR). Проверяем и до
+    // await (не тратим запрос впустую), и после (стадия могла смениться, пока
+    // fetch летел).
+    const stageId = stage?.id
+    if (stageId === undefined || stageId !== currentStageIdRef.current) return
     const requestId = ++requestGenRef.current
-    const data = await loadDialog(stage.id)
+    const data = await loadDialog(stageId)
+    if (stageId !== currentStageIdRef.current) return // панель уже переключилась на другую стадию
     if (requestId !== requestGenRef.current) return // superseded by a newer request
     if (data === null) return // транзиентная ошибка — сохраняем последнее успешное состояние
     applyDialog(data)

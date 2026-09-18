@@ -1109,6 +1109,64 @@ describe('DialogChannel', () => {
     expect((container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement).value).toBe('draft for q2')
   })
 
+  // codex MAJOR: reload() (called from sendAnswer/sendFeedback after a
+  // successful POST) used to be bound only to the `stage` closed over at the
+  // moment it was invoked, not to whichever stage is CURRENTLY mounted in the
+  // panel. If the answer POST for stage A is still in flight when the user
+  // switches the panel to stage B, A's reload() ran anyway once the POST
+  // resolved — bumping the SHARED requestGenRef (invalidating B's own
+  // legitimate poll) and applying A's dialog data on top of B's panel. The
+  // currentStageIdRef guard must make A's stale reload() a no-op once the
+  // panel has moved on to B.
+  test("an answer POST for stage A resolving after switching to stage B does not overwrite B's panel", async () => {
+    const stageA = makeStage({ id: 'A' })
+    const stageB = makeStage({ id: 'B' })
+    const qA = { id: 'qa1', phase: 'planning', question: 'Pick A', answer: null, options: ['AlphaA'], allow_custom: true }
+    const qB = { id: 'qb1', phase: 'planning', question: 'Pick B', answer: null, options: ['BetaB'], allow_custom: true }
+
+    let resolveAnswerA!: (r: Response) => void
+    const answerAPromise = new Promise<Response>((r) => {
+      resolveAnswerA = r
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.endsWith('/api/stages/A/dialog/answer')) return answerAPromise as unknown as Promise<Response>
+      if (url.endsWith('/api/stages/A/dialog')) return jsonResponse([qA])
+      if (url.endsWith('/api/stages/B/dialog')) return jsonResponse([qB])
+      return jsonResponse([])
+    })
+
+    const { rerender } = renderDialogChannel(<DialogChannel stage={stageA} />)
+
+    await screen.findByRole('button', { name: 'AlphaA' })
+    fireEvent.click(screen.getByRole('button', { name: 'AlphaA' }))
+    // Fires answerDialog('A', ...) → POST /api/stages/A/dialog/answer, awaiting
+    // answerAPromise (not yet resolved) inside sendAnswer's still-pending await.
+    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+
+    // The user switches the panel to stage B BEFORE A's POST resolves.
+    rerender(
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+        <DialogChannel stage={stageB} />
+      </FileBrowserProvider>,
+    )
+    await screen.findByRole('button', { name: 'BetaB' })
+
+    // Now A's stale answer POST resolves — its reload() (closed over stage A)
+    // must see that the panel has moved on to stage B and no-op instead of
+    // applying A's data (or A's absence of data) onto B's panel.
+    await act(async () => {
+      resolveAnswerA({ ok: true } as Response)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('button', { name: 'BetaB' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'AlphaA' })).toBeNull()
+  })
+
   // Finding #8: the SEND button must disable while a submit is in flight so a
   // second click can't fire a duplicate POST (which the server 409s).
   test('SEND disables while a submit is in flight — no double-submit', async () => {
