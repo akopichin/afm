@@ -18,19 +18,15 @@
 - Новое YAML-поле в hook (`env`, `inherit_env`) → обновить `schema/config.schema.json` И `schema/flow.schema.json` (оба содержат `lifecycleHook`); guard `pkg/schemacheck` зелёный.
 - **Секреты не протекают:** резолвнутые значения не в payload, не в `hook_events`/`deliveries` (их нет — Phase 2 отложена), не в `*.log` (кроме как через редакцию), не в аргументах `sh -c`/`docker run`, не в сообщениях об ошибках AFM. Только в окружении конкретного hook-процесса.
 - **Инвариант Phase 1 сохраняется:** ошибка хука не трогает FSM. Но НЕразрешённый секрет — это **ошибка конфигурации** (fail-fast ДО `flow_started`), а не best-effort: ран не должен стартовать с хуком, чей секрет не резолвится.
-- **Обратная совместимость:** хук без `env`/`inherit_env` ведёт себя как в Phase 1 (наследует окружение AFM). `env` пуст → минимальное окружение НЕ включается (чтобы не ломать Phase 1-хуки, полагающиеся на наследование) — см. Task 4 (минимальное окружение применяется ТОЛЬКО когда задан `env` или явно `inherit_env: false`; по умолчанию без `env` — наследование, как в Phase 1). Это уточнение спеки: минимальное окружение — свойство хука с секретами, не глобальная смена поведения.
-- Префикс `AFM_` зарезервирован; имя целевой переменной — `[A-Za-z_][A-Za-z0-9_]*`.
+- **Дефолт окружения = minimal (по спеке, codex #4).** Фича lifecycle-хуков ещё НЕ релизнута (ветка `notify`, не запушена) — реальных пользователей, полагающихся на Phase 1-наследование, нет, поэтому «обратная совместимость с наследованием» неактуальна. Действуем буквально по спеке (`spec:457`): **по умолчанию hook-процесс НЕ наследует окружение AFM целиком** — минимальный набор (PATH/HOME/locale/tmp/proxy-certs) + `AFM_*` + резолвнутый `env`. Полное наследование — только явным `inherit_env: true`. Это единообразно для ВСЕХ хуков (с `env` и без), не зависит от наличия секретов.
+- Префикс `AFM_` зарезервирован (проверка **регистронезависимо** — Windows env case-insensitive, codex #7); имена целевых переменных уникальны после ASCII case-fold; имя — `[A-Za-z_][A-Za-z0-9_]*`.
 
-## Уточнение контракта (решение по умолчанию окружения)
+## Контракт окружения hook-процесса (по спеке)
 
-Спека говорит «по умолчанию (Phase 3) hook-процесс не наследует окружение целиком». Но Phase 1 уже релизнут с наследованием, и live-проверка полагалась на него. Во избежание тихой регрессии Phase 1-хуков принимается уточнение:
-
-- Хук **без** `env` и без явного `inherit_env` → **наследует окружение AFM** (поведение Phase 1, неизменно).
-- Хук с непустым `env` → **минимальное окружение** (PATH/HOME/locale/tmp/proxy-certs) + `AFM_*` + резолвнутый `env`, если не задан `inherit_env: true`.
-- `inherit_env: true` → полное наследование + `AFM_*` + резолвнутый `env` (для legacy-скриптов, которым нужно всё окружение вместе с секретом).
-- `inherit_env: false` явно → минимальное окружение даже без `env`.
-
-Это сохраняет обратную совместимость и одновременно даёт изоляцию там, где появляются секреты. (Если требуется буквальная трактовка спеки — эскалировать; по умолчанию действуем так.)
+- **По умолчанию (нет `inherit_env` или `inherit_env: false`)** → минимальное окружение (`minimalBaseEnv`) + `AFM_*` + резолвнутый `env`. Единообразно для всех хуков.
+- **`inherit_env: true`** → `os.Environ()` + `AFM_*` + резолвнутый `env` (для legacy-скриптов, которым нужно полное окружение).
+- Резолвнутый `env` и `AFM_*` всегда добавляются последними (перекрывают базовые одноимённые только для hook-процесса).
+- Внутренние transport-переменные (`AFM_HOOK_SECRET_*`, autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*`) ВСЕГДА вырезаются из окружения хука, даже при `inherit_env: true` (codex #2).
 
 ## File Structure
 
@@ -154,8 +150,8 @@ git commit -m "refactor(secrets): вынести резолвер секрето
 **Interfaces:**
 - Produces:
   - `type SecretRef string`.
-  - `Hook.Env map[string]SecretRef` (yaml `env,omitempty`), `Hook.InheritEnv *bool` (yaml `inherit_env,omitempty` — указатель, чтобы отличать «не задано» от `false`; см. уточнение контракта), `Hook.ResolvedEnv map[string]string` (yaml:"-", проставляется в рантайме — Task 3).
-  - `ValidateLayer` дополнительно проверяет `env`: имя целевой переменной матчит `^[A-Za-z_][A-Za-z0-9_]*$`, не начинается с `AFM_`; источник начинается с `env:` или `file:` (непустой хвост). (Существование источника проверяется при резолве — Task 3, не здесь.)
+  - `Hook.Env map[string]SecretRef` (yaml `env,omitempty`), `Hook.InheritEnv bool` (yaml `inherit_env,omitempty` — дефолт `false` = minimal-окружение, что и есть spec-дефолт; указатель не нужен), `Hook.ResolvedEnv map[string]string` (yaml:"-", проставляется в рантайме — Task 3).
+  - `ValidateLayer` дополнительно проверяет `env`: имя целевой переменной матчит `^[A-Za-z_][A-Za-z0-9_]*$`; **регистронезависимо** не начинается с `AFM_` (codex #7 — Windows env case-insensitive); имена уникальны после ASCII upper-case (две ссылки `TOKEN`/`token` — ошибка); источник начинается с `env:`/`file:` с непустым хвостом. (Существование источника проверяется при резолве — Task 3.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -174,8 +170,18 @@ func TestValidateLayer_HookEnv(t *testing.T) {
 		{"unprefixed source", map[string]SecretRef{"TOK": "plain-secret"}, true},
 		{"empty source tail", map[string]SecretRef{"TOK": "env:"}, true},
 		{"AFM_ reserved", map[string]SecretRef{"AFM_X": "env:Y"}, true},
+		{"AFM_ reserved lowercase", map[string]SecretRef{"afm_x": "env:Y"}, true}, // codex #7: case-insensitive
 		{"bad var name", map[string]SecretRef{"1BAD": "env:Y"}, true},
 		{"bad var name dash", map[string]SecretRef{"A-B": "env:Y"}, true},
+	}
+}
+
+func TestValidateLayer_HookEnvCaseCollision(t *testing.T) {
+	// codex #7: TOKEN и token коллизируют на Windows (case-insensitive env)
+	h := []Hook{{ID: "h", Events: EventSelector{All: true}, Command: "true",
+		Env: map[string]SecretRef{"TOKEN": "env:A", "token": "env:B"}}}
+	if ValidateLayer(h, false) == nil {
+		t.Fatal("case-colliding env var names must be rejected")
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -210,7 +216,7 @@ type Hook struct {
 	Timeout    time.Duration        `yaml:"timeout,omitempty"`
 	Retries    int                  `yaml:"retries,omitempty"`
 	Env        map[string]SecretRef `yaml:"env,omitempty"`
-	InheritEnv *bool                `yaml:"inherit_env,omitempty"`
+	InheritEnv bool                 `yaml:"inherit_env,omitempty"` // дефолт false = minimal env (spec-дефолт)
 	// ResolvedEnv — резолвнутые значения env (targetVar→value), проставляются
 	// при сборке dispatcher (cmd/afm/run.go), в памяти. Не сериализуется, не
 	// пишется в payload/логи. yaml:"-".
@@ -218,16 +224,22 @@ type Hook struct {
 }
 ```
 
-`validate.go` — в цикле по хукам добавить (после проверки command/events):
+`validate.go` — в цикле по хукам добавить (после проверки command/events). Резерв `AFM_` и уникальность имён — регистронезависимо (codex #7):
 
 ```go
+	seenUpper := make(map[string]bool, len(h.Env))
 	for varName, ref := range h.Env {
 		if !envVarNameRe.MatchString(varName) {
 			return fmt.Errorf("hooks[%d] (%s): env var name %q must match [A-Za-z_][A-Za-z0-9_]*", i, h.ID, varName)
 		}
-		if strings.HasPrefix(varName, "AFM_") {
-			return fmt.Errorf("hooks[%d] (%s): env var name %q: prefix AFM_ is reserved", i, h.ID, varName)
+		up := strings.ToUpper(varName)
+		if strings.HasPrefix(up, "AFM_") {
+			return fmt.Errorf("hooks[%d] (%s): env var name %q: prefix AFM_ is reserved (case-insensitive)", i, h.ID, varName)
 		}
+		if seenUpper[up] {
+			return fmt.Errorf("hooks[%d] (%s): env var name %q collides case-insensitively with another", i, h.ID, varName)
+		}
+		seenUpper[up] = true
 		s := string(ref)
 		okEnv := strings.HasPrefix(s, "env:") && len(s) > len("env:")
 		okFile := strings.HasPrefix(s, "file:") && len(s) > len("file:")
@@ -237,7 +249,7 @@ type Hook struct {
 	}
 ```
 
-с package-level `var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)` и импортом `regexp`/`strings`.
+с package-level `var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)` и импортом `regexp`/`strings`. Примечание: yaml.v3 отклоняет дублирующиеся ключи мэппинга, так что точный дубль `TOKEN`/`TOKEN` не дойдёт; case-collision `TOKEN`/`token` — дойдёт и ловится здесь.
 
 `schema/config.schema.json` и `schema/flow.schema.json` — в `lifecycleHook.properties` добавить:
 
@@ -357,18 +369,30 @@ func ResolveHookEnv(h Hook, loaded map[string]string) (map[string]string, error)
 
 (Убедиться, что `secrets.ResolveRef` не включает значение в текст ошибки — Task 1 это гарантирует: ошибки типа «secret not found: env:NAME».)
 
-`cmd/afm/run.go` — в блоке сборки хуков, ПОСЛЕ `Combine`, ДО `New`:
+`cmd/afm/run.go` — в блоке сборки хуков, ПОСЛЕ `Combine`, ДО `New`. `secrets.env` грузим ТОЛЬКО если хотя бы у одного собранного хука непустой `Env` (codex #8 — иначе нечитаемый secrets.env заблокировал бы чистый Phase 1-хук без секретов):
 
 ```go
-			// Секреты хуков: резолв один раз, до старта рана (спека). Слои:
-			// project .afm/secrets.env > global ~/.afm/secrets.env > env процесса
-			// (порядок обеспечивает secrets.ResolveRef: сначала loaded map, затем
-			// os.Getenv; в loaded проектный слой перекрывает глобальный).
-			hookSecrets, serr := loadHookSecretLayers(rootDir) // хелпер: LoadSecrets([global, project]) — project последним (приоритет)
-			if serr != nil {
-				return fmt.Errorf("lifecycle hooks: load secrets.env: %w", serr)
+			anyEnv := false
+			for i := range combined {
+				if len(combined[i].Hook.Env) > 0 {
+					anyEnv = true
+					break
+				}
+			}
+			var hookSecrets map[string]string
+			if anyEnv {
+				var serr error
+				// Слои: project .afm/secrets.env > global ~/.afm/secrets.env > env
+				// процесса (порядок обеспечивает secrets.ResolveRef: сначала loaded
+				// map, затем os.Getenv; в loaded проектный слой перекрывает глобальный).
+				if hookSecrets, serr = loadHookSecretLayers(rootDir); serr != nil {
+					return fmt.Errorf("lifecycle hooks: load secrets.env: %w", serr)
+				}
 			}
 			for i := range combined {
+				if len(combined[i].Hook.Env) == 0 {
+					continue // чистый Phase 1-хук: секретов нет, слои не нужны
+				}
 				resolved, rerr := lifecyclehooks.ResolveHookEnv(combined[i].Hook, hookSecrets)
 				if rerr != nil {
 					return fmt.Errorf("lifecycle hooks: %w", rerr) // fail-fast до flow_started
@@ -379,7 +403,7 @@ func ResolveHookEnv(h Hook, loaded map[string]string) (map[string]string, error)
 
 `loadHookSecretLayers(afmRoot)` — хелпер рядом (в run.go или agent_environment.go): `secrets.LoadSecrets([]string{ filepath.Join(homeAfmDir,"secrets.env"), filepath.Join(afmRoot, ".afm/secrets.env") })` (project последним → приоритет). Свериться с существующим `docker.LoadSecretLayers` для путей.
 
-(Docker-режим: в контейнере loaded-слои читаются из транзиентных транспортных переменных — см. Task 5; на этом шаге — host-путь.)
+(Docker-режим: резолв секретов хуков делает ХОСТ до `docker run`, значения доезжают транзиентными переменными; in-container этот блок читает их из транспорта, а не из файлов — см. Task 5. Combine выносится ДО docker-ветки — Task 5, codex #3.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -414,27 +438,30 @@ git commit -m "feat(lifecyclehooks): резолв env-секретов хука 
 func TestBuildEnv_Modes(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
 	t.Setenv("UNRELATED_KEY", "leak-me")
+	t.Setenv("AFM_HOOK_SECRET_0_0", "transport-secret") // должен вырезаться при inherit
 	cfg := DispatcherConfig{RunID: "r"}
 	p := BuildPayload(cfg, Event{Type: EventFlowStarted}, "id")
 
-	// Phase 1: без Env/InheritEnv → наследование (UNRELATED виден)
+	// spec-дефолт: без inherit_env → минимальное окружение (UNRELATED НЕ виден)
 	e1 := buildEnv(Hook{ID: "h"}, cfg, p)
-	if !hasEnv(e1, "UNRELATED_KEY", "leak-me") {
-		t.Fatal("no-env hook must inherit (Phase 1 compat)")
+	if hasEnvKey(e1, "UNRELATED_KEY") {
+		t.Fatal("default must be minimal env (no ambient leakage)")
 	}
-	// с Env → минимальное окружение (UNRELATED НЕ виден), но PATH/AFM_*/resolved есть
+	if !hasEnvKey(e1, "PATH") || !hasEnv(e1, "AFM_HOOK_EVENT", "flow_started") {
+		t.Fatalf("minimal must include PATH + AFM_*: %v", e1)
+	}
+	// с Env → минимальное + резолвнутый секрет
 	e2 := buildEnv(Hook{ID: "h", Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "secret"}}, cfg, p)
-	if hasEnvKey(e2, "UNRELATED_KEY") {
-		t.Fatal("env-hook must use minimal env (no unrelated leakage)")
+	if hasEnvKey(e2, "UNRELATED_KEY") || !hasEnv(e2, "T", "secret") {
+		t.Fatalf("env-hook: minimal + resolved: %v", e2)
 	}
-	if !hasEnvKey(e2, "PATH") || !hasEnv(e2, "AFM_HOOK_EVENT", "flow_started") || !hasEnv(e2, "T", "secret") {
-		t.Fatalf("minimal must include PATH, AFM_*, resolved: %v", e2)
-	}
-	// inherit_env: true → наследование + resolved
-	tru := true
-	e3 := buildEnv(Hook{ID: "h", InheritEnv: &tru, Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "secret"}}, cfg, p)
+	// inherit_env: true → наследование + resolved, но БЕЗ transport-переменных
+	e3 := buildEnv(Hook{ID: "h", InheritEnv: true, Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "secret"}}, cfg, p)
 	if !hasEnv(e3, "UNRELATED_KEY", "leak-me") || !hasEnv(e3, "T", "secret") {
 		t.Fatal("inherit_env:true must inherit AND include resolved")
+	}
+	if hasEnvKey(e3, "AFM_HOOK_SECRET_0_0") {
+		t.Fatal("inherit_env:true must still strip transport vars (codex #2)")
 	}
 }
 
@@ -491,13 +518,10 @@ Expected: FAIL.
 ```go
 func buildEnv(h Hook, cfg DispatcherConfig, p Payload) []string {
 	var env []string
-	switch {
-	case len(h.Env) == 0 && h.InheritEnv == nil:
-		env = os.Environ() // Phase 1 совместимость: нет секретов → наследуем
-	case h.InheritEnv != nil && *h.InheritEnv:
-		env = os.Environ() // явный inherit + секреты
-	default:
-		env = minimalBaseEnv() // есть Env или inherit_env:false → изоляция
+	if h.InheritEnv {
+		env = stripTransportVars(os.Environ()) // полное наследование, но без transport-переменных (codex #2)
+	} else {
+		env = minimalBaseEnv() // spec-дефолт: минимальное окружение (whitelist — transport не тащится)
 	}
 	env = append(env, afmVars(cfg, p)...) // AFM_* (вынести из старого buildEnv)
 	for k, v := range h.ResolvedEnv {
@@ -505,6 +529,22 @@ func buildEnv(h Hook, cfg DispatcherConfig, p Payload) []string {
 	}
 	return env
 }
+
+// stripTransportVars убирает внутренние transport-переменные из унаследованного
+// окружения (codex #2): секреты хуков/agent-shim не должны течь в hook-процесс.
+func stripTransportVars(env []string) []string {
+	out := env[:0]
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "AFM_HOOK_SECRET_") || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+```
+
+> Примечание: `stripTransportVars` (или эквивалент) нужен и в общей точке формирования окружения агентов/скриптов/verify (executor/runner_factory) — Task 5, codex #2. Здесь — только для hook при `inherit_env:true`; `minimalBaseEnv` (whitelist) transport не включает.
 
 func minimalBaseEnv() []string {
 	keys := []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
@@ -522,23 +562,38 @@ func minimalBaseEnv() []string {
 
 `afmVars(cfg, p) []string` — вынести существующий блок `AFM_*` из Phase 1 `buildEnv` в отдельную функцию (без изменения значений). Обновить вызов в `execOne`: `cmd.Env = buildEnv(h, cfg, p)`.
 
-`execOne` — обернуть лог в редактирующий writer, если у хука есть секреты:
+`execOne` — обернуть лог в редактирующий writer, если у хука есть секреты. **finish-строка и текст ошибки ТОЖЕ идут через редактор** (codex #5 — иначе секрет из stderr агента, попавший в `err`, утечёт в лог и через `OnError` в `notices.jsonl`):
 
 ```go
 	logFile, logErr := openAttemptLog(logPath, p, attempt)
+	var sink io.Writer = logFile
+	var redactor *redactingWriter
 	if logErr == nil {
-		var w io.WriteCloser = logFile
-		if len(h.ResolvedEnv) > 0 {
-			w = newRedactingWriter(logFile, secretValues(h)) // редакция stdout/stderr
+		if vals := secretValues(h); len(vals) > 0 {
+			redactor = newRedactingWriter(logFile, vals)
+			sink = redactor
 		}
-		cmd.Stdout = w
-		cmd.Stderr = w
-		// после Run: если w — редактор, Flush/Close его, затем закрыть logFile
-		...
+		cmd.Stdout = sink
+		cmd.Stderr = sink
 	}
+	err = cmd.Run()
+	if logErr == nil {
+		fmt.Fprintf(sink, "=== attempt %d finished: %v ===\n", attempt, err) // finish через редактор
+		if redactor != nil {
+			redactor.Close() // флаш хвоста в logFile
+		}
+		logFile.Close()
+	}
+	// Санитизировать ошибку ДО возврата (она уходит в OnError → notices.jsonl).
+	if err != nil {
+		err = errors.New(redactString(err.Error(), secretValues(h)))
+	}
+	return err
 ```
 
-(Аккуратно с закрытием: redactingWriter.Close() должен сбросить буферизованный хвост в logFile, затем закрыть logFile. Реализовать `redactingWriter` так, чтобы `Close()` флашил остаток и закрывал вложенный writer, ИЛИ разделить Flush и закрытие logFile. Учесть finish-строку `=== attempt N finished ===` — писать её в logFile напрямую ПОСЛЕ флаша редактора, чтобы не пропустить через редактор зря.)
+Санитизация ошибки: `redactString(s, secrets)` = применить `redactAll` к строке (та же замена, что в writer). Если у хука нет секретов — `secretValues` пуст, `redactString` — no-op.
+
+(Аккуратно с закрытием: `redactor.Close()` сбрасывает буферизованный хвост в `logFile`, ПОТОМ `logFile.Close()`. finish-строка пишется в `sink` (редактор при наличии секретов), т.е. до `Close()`.)
 
 `env.go`/`redact.go` — `redactingWriter`:
 
@@ -546,13 +601,14 @@ func minimalBaseEnv() []string {
 type redactingWriter struct {
 	w       io.Writer
 	secrets []string
+	marker  string
 	maxLen  int
 	tail    []byte // незаписанный хвост (возможный префикс секрета на стыке Write)
 }
 
 func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
 	max := 0
-	nonEmpty := secrets[:0]
+	nonEmpty := make([]string, 0, len(secrets))
 	for _, s := range secrets {
 		if s == "" {
 			continue
@@ -562,46 +618,86 @@ func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
 			max = len(s)
 		}
 	}
-	return &redactingWriter{w: w, secrets: nonEmpty, maxLen: max}
+	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty), maxLen: max}
 }
 
 // Write редактирует известные секреты. Держит в буфере хвост длиной maxLen-1,
-// чтобы поймать секрет, разорванный между Write-ами.
+// чтобы поймать секрет, разорванный между Write-ами. keep-байты НЕ пишутся до
+// следующего Write/Close — так любое вхождение целиком проходит через redactAll.
 func (r *redactingWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	buf := append(r.tail, p...)
-	redacted := redactAll(buf, r.secrets)
-	// оставить в хвосте последние maxLen-1 байт (могут быть началом секрета)
+	redacted := redactAll(buf, r.secrets, r.marker)
 	keep := r.maxLen - 1
 	if keep < 0 {
 		keep = 0
 	}
-	if len(redacted) > keep {
-		if _, err := r.w.Write(redacted[:len(redacted)-keep]); err != nil {
+	// keep считаем от НЕредактированного buf, но пишем из redacted; чтобы стык
+	// ловился, буферизуем последние keep байт ИСХОДНОГО хвоста, а redactAll
+	// применяем к полному buf на каждом Write и на Close. Поскольку marker может
+	// быть длиннее/короче секрета, держим хвост по исходным байтам:
+	if len(buf) > keep {
+		head := redactAll(buf[:len(buf)-keep], r.secrets, r.marker)
+		if _, err := r.w.Write(head); err != nil {
 			return 0, err
 		}
-		r.tail = append(r.tail[:0], redacted[len(redacted)-keep:]...)
+		r.tail = append(r.tail[:0], buf[len(buf)-keep:]...)
 	} else {
-		r.tail = append(r.tail[:0], redacted...)
+		r.tail = append(r.tail[:0], buf...)
 	}
 	return n, nil
 }
 
 func (r *redactingWriter) Close() error {
 	if len(r.tail) > 0 {
-		if _, err := r.w.Write(redactAll(r.tail, r.secrets)); err != nil {
+		if _, err := r.w.Write(redactAll(r.tail, r.secrets, r.marker)); err != nil {
 			return err
 		}
 		r.tail = nil
 	}
 	return nil
 }
+```
 
-func redactAll(b []byte, secrets []string) []byte {
+> Замечание по буферизации: хвост держим по ИСХОДНЫМ (нередактированным) байтам длиной `maxLen-1`, а `redactAll` применяем к полному `buf` на каждом Write и на Close — так секрет, разорванный между Write, гарантированно проходит замену на границе (иначе частично-записанный редактированный префикс ломал бы поиск). `redacted` в первой строке Write используется только для вычисления — фактически пишем `redactAll(buf[:len-keep])`. Реализатору: упростить до одного `redactAll` вызова, если получится эквивалентно; ключевой инвариант — ни один секрет не пересекает границу записи в `w` нередактированным.
+
+// redactMarker выбирается так, чтобы САМ не содержать ни одного секрета
+// (codex #6: секрет "REDACTED"/"["/"]" сделал бы обычный "[REDACTED]" носителем
+// секрета). Fallback — пустая строка (удаление), если даже расширенные маркеры
+// содержат секрет.
+func redactMarker(secrets []string) string {
+	for _, cand := range []string{"[REDACTED]", "[REDACTED-SECRET]", "***REDACTED***"} {
+		if !containsAnySecret(cand, secrets) {
+			return cand
+		}
+	}
+	return "" // ни один маркер не безопасен → просто вырезаем секрет
+}
+
+func containsAnySecret(s string, secrets []string) bool {
+	for _, sec := range secrets {
+		if sec != "" && strings.Contains(s, sec) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactAll(b []byte, secrets []string, marker string) []byte {
 	for _, s := range secrets {
-		b = bytes.ReplaceAll(b, []byte(s), []byte("[REDACTED]"))
+		if s == "" {
+			continue
+		}
+		b = bytes.ReplaceAll(b, []byte(s), []byte(marker))
 	}
 	return b
+}
+
+func redactString(s string, secrets []string) string {
+	if len(secrets) == 0 {
+		return s
+	}
+	return string(redactAll([]byte(s), secrets, redactMarker(secrets)))
 }
 
 func secretValues(h Hook) []string {
@@ -613,7 +709,9 @@ func secretValues(h Hook) []string {
 }
 ```
 
-(Важно: хвост-буфер может не поймать секрет, разорванный так, что часть уже записана в предыдущем Write за пределом keep — поэтому keep = maxLen-1 и мы НЕ пишем последние maxLen-1 байт до следующего Write/Close. Это гарантирует, что любое вхождение целиком проходит через `redactAll` на границе. Задокументировать ограничение: редакция — защита от `set -x`/`echo`, не абсолютная (скрипт может закодировать секрет).)
+`redactingWriter` хранит выбранный `marker` (из `redactMarker(secrets)` в `newRedactingWriter`) и передаёт его в `redactAll`. Важно: длина маркера может отличаться от длины секрета — это не влияет на корректность (замена по значению), только на выравнивание в логе.
+
+(Хвост-буфер: keep = maxLen-1, последние maxLen-1 байт не пишутся до следующего Write/Close — гарантирует, что любое вхождение секрета целиком проходит через `redactAll` на границе Write. Пустые секреты игнорируются (иначе `ReplaceAll` по "" разорвал бы текст). Ограничение: редакция — защита от `set -x`/`echo`, не абсолютная (скрипт может закодировать секрет).)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -643,14 +741,20 @@ git commit -m "feat(lifecyclehooks): окружение hook-процесса (m
 
 - [ ] **Step 1: Design + failing test**
 
-Транспортное имя: `AFM_HOOK_SECRET_<sanitize(hookID)>__<VAR>` (двойное подчёркивание-разделитель; `sanitize` как `wrapper.envName` — верхний регистр, не-alnum→`_`). Хост:
-1. Определить, использует ли флоу секреты хуков (`UsesLifecycleSecrets(cfg, flow)` — есть ли хоть один хук с непустым `env`). Если нет — ничего не делаем (существующее поведение).
-2. На хосте загрузить `secrets.env`-слои + резолвить каждый хук (та же `ResolveHookEnv`), для каждой пары `os.Setenv(transportName, val)` + `args=append(args,"-e",transportName)` (bare, без значения в argv — как autoShim).
-3. Не монтировать secret-файлы в контейнер.
+**Инъективное транспортное имя (codex #1):** НЕ санитизировать hookID (разные id `foo-bar`/`foo_bar`/`FOO_BAR` схлопнулись бы в один suffix → один хук получил бы секрет другого). Использовать ИНДЕКСЫ в итоговом `combined`: `AFM_HOOK_SECRET_<hookIdx>_<varIdx>`, где `hookIdx` — позиция хука в `combined`, `varIdx` — позиция переменной в отсортированном по имени списке ключей `Env` (детерминированно). Индекс инъективен по построению. Соответствие (hookIdx,varIdx)→имя целевой переменной вычисляется одинаково на хосте и в контейнере из ТОГО ЖЕ `combined` (см. #3 — Combine общий).
 
-In-container (`AFM_IN_DOCKER=1`): при сборке хуков вместо `loadHookSecretLayers` собрать `loaded` map из транспортных переменных: для каждой ожидаемой пары `AFM_HOOK_SECRET_<hook>__<VAR>` → положить значение под ключом, который `ResolveHookEnv` ищет. Проще: in-container резолвить `Hook.Env` НЕ через `secrets.ResolveRef` (файлов нет), а напрямую из транспортных переменных: `ResolvedEnv[VAR] = os.Getenv(transportName)`; отсутствие → ошибка (fail-fast). Затем `os.Unsetenv(transportName)` (чтобы не течь в агентов) ИЛИ отфильтровать транспортные `AFM_HOOK_SECRET_*` из окружения агентов/скриптов в executor/runner_factory.
+**Порядок (codex #3):** сборку слоёв хуков и `Combine(...)` вынести ДО docker-ветки в `cmd/afm/run.go`, чтобы и host-резолв, и передача в контейнер работали по ИТОГОВЫМ `RegisteredHook` (с учётом override по id), а не по сырым cfg/flow/stage (иначе секреты переопределённых хуков утекут, least-privilege нарушится). `ReExec`/`ReExecConfig` получают итоговый `[]RegisteredHook` (или уже резолвнутые пары для транспорта).
 
-Тест (host, unit — как существующие launcher-тесты): флоу с хуком `env: {TOK: "file:..."}` → `ReExec`-аргументы содержат `-e AFM_HOOK_SECRET_...__TOK`, значение выставлено в `os.Environ` процесса-хоста, но НЕ в argv; секрет-файл НЕ в списке `-v` монтирований.
+Хост (docker-ветка):
+1. Если ни у одного хука в `combined` нет `Env` — ничего не делаем.
+2. Загрузить `secrets.env`-слои + `ResolveHookEnv` каждый хук (fail-fast ДО `docker run`); для каждой резолвнутой пары `os.Setenv(transportName, val)` + `args=append(args,"-e",transportName)` (bare, без значения в argv — как autoShim `launcher.go:412`).
+3. Секрет-файлы НЕ монтировать в контейнер.
+
+In-container (`AFM_IN_DOCKER=1`): резолвить `Hook.Env` НЕ через файлы, а из транспортных переменных — `ResolvedEnv[targetVar] = os.Getenv(transportName(hookIdx,varIdx))`; отсутствие/пусто → ошибка (fail-fast). **Затем ОБЯЗАТЕЛЬНО `os.Unsetenv(transportName)` для ВСЕХ транспортных переменных** (codex #2 — не «unset ИЛИ фильтр», а unset всегда), чтобы транспорт не наследовался никакими дочерними процессами (агенты, script-стадии, verify/JSONQuery, другие хуки).
+
+**Дополнительно (codex #2):** в построении окружения ЛЮБОГО дочернего процесса, наследующего окружение (агенты/скрипты/verify — executor/runner_factory; и hook при `inherit_env:true`), вырезать все внутренние transport-префиксы: `AFM_HOOK_SECRET_*`, а также уже существующие autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` (сейчас их снимают только generated-wrappers; обычные агенты/скрипты их наследуют — закрыть). `minimalBaseEnv` их не тащит по построению (whitelist), но `inherit_env:true`-хук и агенты с полным окружением — тащат.
+
+Тест (host, unit — как существующие `TestReExec_*`): флоу с двумя хуками, у обоих `env: {TOK: ...}`, id различаются только пунктуацией/регистром → транспортные имена РАЗНЫЕ (инъективность); `-e <transport>` присутствует bare; значение в `os.Environ` хоста, НЕ в argv; секрет-файл НЕ среди `-v`. In-container unit: `resolveHookEnvFromTransport(combined)` даёт правильный `ResolvedEnv` и делает Unsetenv транспортных.
 
 ```go
 func TestReExec_HookSecretTransport(t *testing.T) {
@@ -670,7 +774,7 @@ In-container резолв — unit-тест: при `AFM_IN_DOCKER=1` и выс�
 Run: `go test ./pkg/docker/ -run TestReExec_HookSecret -v`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — по образцу autoShim-секретов (`launcher.go:391-424`). Развилка резолва host vs in-container вынести в `cmd/afm/run.go`: если `os.Getenv("AFM_IN_DOCKER")=="1"` → значения из транспортных переменных; иначе → `secrets.env`+файлы (Task 3). Фильтрацию транспортных переменных из окружения агентов сделать там, где формируется окружение агента/скрипта (executor/runner_factory) — вырезать `AFM_HOOK_SECRET_*` (и убедиться, что обычный `buildEnv` хука их тоже не тащит: хук берёт `ResolvedEnv`, а не транспортные напрямую — если минимальное окружение, они не попадут; при `inherit_env:true` — отфильтровать явно).
+- [ ] **Step 3: Implement** — по образцу autoShim-секретов (`launcher.go:391-424`). Общий хелпер `transportName(hookIdx, varIdx int) string` (в pkg/lifecyclehooks или pkg/docker, доступный обоим). Развилка host vs in-container в `cmd/afm/run.go`: `os.Getenv("AFM_IN_DOCKER")=="1"` → `ResolvedEnv` из транспортных переменных + `os.Unsetenv` каждой; иначе → `secrets.env`+файлы (Task 3). Combine вынесен ДО docker-ветки (#3). Фильтрацию transport-префиксов (`AFM_HOOK_SECRET_*`, `AFM_SECRET_*`, `AFM_SYSPROMPT_*`) из наследуемого окружения сделать в общей точке формирования env дочерних процессов (executor/runner_factory) И в `buildEnv` хука при `inherit_env:true`. Тесты покрыть: agent, script, verify, no-env-hook, inherit-hook — ни один не видит транспортных переменных.
 
 - [ ] **Step 4: Run tests + сборка**
 
@@ -712,10 +816,18 @@ git commit -m "docs: секреты и env lifecycle-хуков (Phase 3) в AGE
 
 ---
 
-## Self-Review (выполнен автором плана)
+## Self-Review + учёт ревью codex (2 CRITICAL + 6 MAJOR — все внесены)
 
-- **Spec coverage:** env со ссылками env:/file: (T2 валидация, T3 резолв); вынос pkg/secrets + рефактор docker (T1); secrets.env приоритеты project>global>env (T3); имя переменной + AFM_-резерв + fail-fast до flow_started (T2/T3); минимальное окружение + inherit_env (T4, с уточнением контракта для Phase 1-совместимости); [REDACTED] в логах/dashboard (T4 — dashboard получает те же строки лога/notice, редакция на источнике); Docker-транспорт без монтирования + фильтрация (T5); секреты не в payload/journal/argv/логах (T3/T4/T5); докум. (T6).
-- **Открытый вопрос (эскалирован в тексте):** спека требует «по умолчанию не наследовать окружение», но Phase 1 уже релизнут с наследованием. План принимает уточнение: изоляция включается наличием `env`/`inherit_env`, иначе Phase 1-совместимое наследование. Если нужна буквальная трактовка — менять дефолт в T4 и пометить как breaking для существующих хуков.
-- **Placeholder scan:** код для T1-T4 полный; T5 (Docker) намеренно на уровне дизайна + требование прочитать и зеркалить существующий autoShim-паттерн (launcher.go:391-424/wrapper.go) — точные argv/`-v` конструкции берутся из реального кода, не из догадок.
-- **Type consistency:** `secrets.ResolveRef/LoadSecrets/ExpandHome`, `Hook.Env map[string]SecretRef`/`InheritEnv *bool`/`ResolvedEnv map[string]string`, `ResolveHookEnv(h,loaded)`, `buildEnv(h,cfg,p)`, `minimalBaseEnv()`, `newRedactingWriter(w,secrets)`/`redactAll` — единообразны во всех задачах.
-- **Инвариант:** нерезолвнутый секрет = config-error fail-fast (до flow_started), не best-effort; ошибка самого хука по-прежнему не трогает FSM.
+- **Spec coverage:** env со ссылками env:/file: (T2 валидация, T3 резолв); вынос pkg/secrets + рефактор docker (T1); secrets.env приоритеты project>global>env (T3); имя переменной + AFM_-резерв + fail-fast до flow_started (T2/T3); minimal-by-default + inherit_env (T4, ПО СПЕКЕ); [REDACTED] в логах/dashboard (T4); Docker-транспорт без монтирования + фильтрация (T5); секреты не в payload/journal/argv/логах (T3/T4/T5); докум. (T6).
+- **Внесённые фиксы codex:**
+  - #1 CRIT (Docker имя не инъективно) → транспорт по индексам `AFM_HOOK_SECRET_<hookIdx>_<varIdx>`, не sanitize(id). T5.
+  - #2 CRIT (изоляция транспорта) → ВСЕГДА `os.Unsetenv` транспортных in-container + `stripTransportVars` в наследуемом окружении агентов/скриптов/verify/inherit-хука. T4/T5.
+  - #3 MAJOR (Combine до docker-ветки) → сборка слоёв+Combine ДО docker, в ReExec идут итоговые RegisteredHook. T5/T3.
+  - #4 MAJOR (дефолт окружения) → принят spec-дефолт minimal-by-default (фича не релизнута → нет регрессии). T4, раздел «Контракт окружения».
+  - #5 MAJOR (ошибка/finish мимо редактора) → finish и текст ошибки через редактор/`redactString`, ошибка санитизируется до OnError→notices.jsonl. T4.
+  - #6 MAJOR (маркер содержит секрет) → `redactMarker` выбирает маркер без секрета, fallback — удаление. T4.
+  - #7 MAJOR (AFM_ регистрозависимо) → резерв+уникальность по ASCII upper-case. T2.
+  - #8 MAJOR (secrets.env для Phase 1-хуков) → слои грузятся только если хоть у одного хука непустой Env. T3.
+- **Placeholder scan:** код для T1-T4 полный; T5 (Docker) на уровне дизайна + требование прочитать/зеркалить autoShim (launcher.go:391-424/wrapper.go).
+- **Type consistency:** `secrets.ResolveRef/LoadSecrets/ExpandHome`, `Hook.Env map[string]SecretRef`/`InheritEnv bool`/`ResolvedEnv map[string]string`, `ResolveHookEnv(h,loaded)`, `buildEnv(h,cfg,p)`, `minimalBaseEnv()`, `stripTransportVars`, `newRedactingWriter(w,secrets)`/`redactAll(b,secrets,marker)`/`redactString`/`redactMarker`, `transportName(hookIdx,varIdx)` — единообразны.
+- **Инвариант:** нерезолвнутый секрет = config-error fail-fast (до flow_started); ошибка самого хука не трогает FSM.
