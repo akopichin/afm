@@ -603,8 +603,7 @@ type redactingWriter struct {
 	w       io.Writer
 	secrets []string // дедуп, отсортированы по убыванию длины
 	marker  string
-	maxLen  int
-	buf     []byte // накопитель: заменяем полные вхождения, придерживаем хвост-префикс
+	buf     []byte // СЫРОЙ накопитель незавершённой строки (без \n)
 }
 
 func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
@@ -612,65 +611,44 @@ func newRedactingWriter(w io.Writer, secrets []string) *redactingWriter {
 	// короткий секрет — подстрока длинного, длинный уже редактирован).
 	seen := map[string]bool{}
 	nonEmpty := make([]string, 0, len(secrets))
-	max := 0
 	for _, s := range secrets {
 		if s == "" || seen[s] {
 			continue
 		}
 		seen[s] = true
 		nonEmpty = append(nonEmpty, s)
-		if len(s) > max {
-			max = len(s)
-		}
 	}
 	sort.Slice(nonEmpty, func(i, j int) bool { return len(nonEmpty[i]) > len(nonEmpty[j]) })
-	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty), maxLen: max}
+	return &redactingWriter{w: w, secrets: nonEmpty, marker: redactMarker(nonEmpty)}
 }
 
-// Write накапливает, заменяет все ПОЛНЫЕ вхождения секретов, затем придерживает
-// самый длинный суффикс (≤ maxLen-1), который является ПРЕФИКСОМ какого-либо
-// секрета (возможное начало секрета, разорванного на границе Write). Остальное
-// сбрасывает в w. Корректно ловит секрет, разорванный между Write-ами.
+// Write — ПОСТРОЧНАЯ редакция: копит байты, на каждой завершённой строке
+// (по '\n') применяет redactAll к ПОЛНОЙ строке и сбрасывает её; неполный хвост
+// строки остаётся в буфере до следующего Write/Close. Так секрет всегда целиком
+// в одной строке при редактировании (в логах токен на одной строке — типовой
+// случай `echo`/`set -x`), redactAll видит полное вхождение (без разрезания на
+// границе Write), а маркер никогда не переанализируется (строка редактируется
+// один раз и уходит целиком). Ограничение (best-effort по спеке): секрет,
+// намеренно разорванный переводом строки, не ловится.
 func (r *redactingWriter) Write(p []byte) (int, error) {
 	r.buf = append(r.buf, p...)
-	r.buf = redactAll(r.buf, r.secrets, r.marker) // заменить все полные вхождения
-	hold := r.longestSecretPrefixSuffix()          // сколько байт хвоста придержать
-	flush := len(r.buf) - hold
-	if flush > 0 {
-		if _, err := r.w.Write(r.buf[:flush]); err != nil {
+	for {
+		nl := bytes.IndexByte(r.buf, '\n')
+		if nl < 0 {
+			break
+		}
+		line := r.buf[:nl+1]
+		if _, err := r.w.Write(redactAll(line, r.secrets, r.marker)); err != nil {
 			return 0, err
 		}
-		r.buf = append(r.buf[:0], r.buf[flush:]...)
+		r.buf = append(r.buf[:0], r.buf[nl+1:]...)
 	}
 	return len(p), nil
 }
 
-// longestSecretPrefixSuffix возвращает длину самого длинного суффикса r.buf,
-// который равен собственному префиксу какого-либо секрета (кандидат на
-// разорванное вхождение). ≤ maxLen-1.
-func (r *redactingWriter) longestSecretPrefixSuffix() int {
-	max := 0
-	for _, s := range r.secrets {
-		lim := len(s) - 1
-		if lim > len(r.buf) {
-			lim = len(r.buf)
-		}
-		for k := lim; k > max; k-- {
-			if bytes.HasPrefix([]byte(s), r.buf[len(r.buf)-k:]) {
-				if k > max {
-					max = k
-				}
-				break
-			}
-		}
-	}
-	return max
-}
-
+// Close сбрасывает незавершённый хвост строки (редактированным).
 func (r *redactingWriter) Close() error {
 	if len(r.buf) > 0 {
-		// хвост — только частичный префикс секрета (полные вхождения уже
-		// заменены), поэтому пишем как есть после финальной замены на всякий случай.
 		if _, err := r.w.Write(redactAll(r.buf, r.secrets, r.marker)); err != nil {
 			return err
 		}
@@ -680,7 +658,7 @@ func (r *redactingWriter) Close() error {
 }
 ```
 
-> Корректность: полные вхождения заменяются на КАЖДОМ Write по всему накопителю; наружу отдаются только байты, за которыми не может начинаться разорванный секрет (придержан суффикс-префикс). Секрет `topsecret`, пришедший одним `Write("topsecret")`: `redactAll` заменит его целиком сразу (полное вхождение) → в `w` уйдёт marker. Секрет, разорванный `Write("top")`+`Write("secret")`: после первого Write `buf="top"`, это префикс секрета → придержан весь; после второго `buf="topsecret"` → заменён. Импорты: `bytes`, `sort`.
+> Корректность: редакция по полной строке — секрет в пределах строки всегда присутствует целиком в момент redactAll (нет разрезания на границе Write, нет удержания-префикса и связанной с ним порчи маркера — закрывает и утечку `topsecret` одним Write, и edge `]x`/marker codex). Импорты: `bytes`, `sort`. Тест `TestRedactingWriter` переписать под построчную семантику: split-секрет БЕЗ перевода строки между Write (`Write("top")`+`Write("secret\n")`) — ловится (обе части в одной строке); межстрочный разрыв — задокументированное ограничение.
 
 // redactMarker выбирается так, чтобы САМ не содержать ни одного секрета
 // (codex #6: секрет "REDACTED"/"["/"]" сделал бы обычный "[REDACTED]" носителем
