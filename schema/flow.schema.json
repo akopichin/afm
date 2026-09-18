@@ -364,6 +364,15 @@
           "type": "integer",
           "minimum": 0,
           "description": "Extra retry attempts after a non-zero exit. Default 0 (single attempt)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Hook process env: target var -> env:NAME | file:PATH source reference"
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "description": "Inherit the whole afm process environment. Default false (minimal env)."
         }
       }
     },

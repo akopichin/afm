@@ -1087,6 +1087,34 @@ stages:
 	}
 }
 
+func TestParseHooks_EnvAndInheritEnv(t *testing.T) {
+	f := writeTemp(t, `
+name: h
+stages:
+  - id: s1
+    script: "true"
+    hooks:
+      - id: dep
+        events: all
+        command: ./dep.sh
+        env:
+          TOK: "env:TELEGRAM_TOKEN"
+          SECRET: "file:~/.afm/secrets/x"
+        inherit_env: true
+`)
+	parsed, err := flow.ParseFile(f)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	h := parsed.Stages[0].Hooks[0]
+	if !h.InheritEnv {
+		t.Fatalf("InheritEnv: got %v, want true", h.InheritEnv)
+	}
+	if len(h.Env) != 2 || h.Env["TOK"] != "env:TELEGRAM_TOKEN" || h.Env["SECRET"] != "file:~/.afm/secrets/x" {
+		t.Fatalf("Env: got %+v", h.Env)
+	}
+}
+
 func TestParseHooks_Errors(t *testing.T) {
 	cases := []struct {
 		name string

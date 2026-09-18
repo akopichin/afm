@@ -44,6 +44,43 @@ func TestValidateLayer(t *testing.T) {
 	}
 }
 
+func TestValidateLayer_HookEnv(t *testing.T) {
+	base := func(env map[string]SecretRef) []Hook {
+		return []Hook{{ID: "h", Events: EventSelector{All: true}, Command: "true", Env: env}}
+	}
+	cases := []struct {
+		name    string
+		env     map[string]SecretRef
+		wantErr bool
+	}{
+		{"ok env", map[string]SecretRef{"TOK": "env:TELEGRAM"}, false},
+		{"ok file", map[string]SecretRef{"TOK": "file:~/.afm/secrets/x"}, false},
+		{"unprefixed source", map[string]SecretRef{"TOK": "plain-secret"}, true},
+		{"empty source tail", map[string]SecretRef{"TOK": "env:"}, true},
+		{"AFM_ reserved", map[string]SecretRef{"AFM_X": "env:Y"}, true},
+		{"AFM_ reserved lowercase", map[string]SecretRef{"afm_x": "env:Y"}, true}, // codex #7: case-insensitive
+		{"bad var name", map[string]SecretRef{"1BAD": "env:Y"}, true},
+		{"bad var name dash", map[string]SecretRef{"A-B": "env:Y"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateLayer(base(tc.env), false)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("env=%v err=%v wantErr=%v", tc.env, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateLayer_HookEnvCaseCollision(t *testing.T) {
+	// codex #7: TOKEN и token коллизируют на Windows (case-insensitive env)
+	h := []Hook{{ID: "h", Events: EventSelector{All: true}, Command: "true",
+		Env: map[string]SecretRef{"TOKEN": "env:A", "token": "env:B"}}}
+	if ValidateLayer(h, false) == nil {
+		t.Fatal("case-colliding env var names must be rejected")
+	}
+}
+
 func TestMatches(t *testing.T) {
 	all := Hook{ID: "a", Events: EventSelector{All: true}, Command: "true"}
 	allSkip := Hook{ID: "b", Events: EventSelector{All: true}, SkipEvents: []EventType{EventStageQuestionAnswered}, Command: "true"}

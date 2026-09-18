@@ -105,6 +105,12 @@ func (s *EventSelector) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// SecretRef — ссылка на источник секрета для env-переменной хука: либо
+// "env:NAME" (взять из окружения afm-процесса), либо "file:PATH" (прочитать
+// файл). Существование источника не проверяется при парсинге/валидации
+// флоу — это Task 3 (резолв в рантайме).
+type SecretRef string
+
 // Hook — декларация lifecycle-хука (одинаковая для config/flow/stage слоёв).
 type Hook struct {
 	ID         string        `yaml:"id"`
@@ -113,6 +119,18 @@ type Hook struct {
 	Command    string        `yaml:"command"`
 	Timeout    time.Duration `yaml:"timeout,omitempty"` // 0 → DefaultHookTimeout в runner
 	Retries    int           `yaml:"retries,omitempty"` // 0 → одна попытка
+	// Env — дополнительные переменные окружения процесса хука: имя целевой
+	// переменной → ссылка на источник секрета. Существование источника
+	// проверяется при резолве (Task 3), не здесь.
+	Env map[string]SecretRef `yaml:"env,omitempty"`
+	// InheritEnv — наследовать окружение afm-процесса целиком. Дефолт
+	// false = минимальное окружение (spec-дефолт): хук получает только Env
+	// плюс необходимый минимум (PATH и т.п., задаётся в runner).
+	InheritEnv bool `yaml:"inherit_env,omitempty"`
+	// ResolvedEnv — резолвнутые значения Env (targetVar→value), проставляются
+	// при сборке dispatcher (cmd/afm/run.go), только в памяти. Не
+	// сериализуется, не пишется в payload/логи.
+	ResolvedEnv map[string]string `yaml:"-"`
 }
 
 // RegisteredHook — хук, вписанный в итоговый список: StageID "" = все стадии.
