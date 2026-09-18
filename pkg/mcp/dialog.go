@@ -233,13 +233,20 @@ type QuestionFile struct {
 // FindUnansweredQuestions scans stageDir for *.question.json files that do not
 // have a matching *.answer.json. Filenames must follow "<phase>.<id>.question.json".
 func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
-	matches, err := filepath.Glob(filepath.Join(stageDir, "*.question.json"))
+	entries, err := os.ReadDir(stageDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var out []QuestionFile
-	for _, qPath := range matches {
-		base := strings.TrimSuffix(filepath.Base(qPath), ".question.json")
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".question.json") {
+			continue
+		}
+		qPath := filepath.Join(stageDir, ent.Name())
+		base := strings.TrimSuffix(ent.Name(), ".question.json")
 		dot := strings.Index(base, ".")
 		if dot < 0 {
 			continue

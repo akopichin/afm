@@ -377,6 +377,24 @@ func TestFindUnansweredQuestions_UnknownPhaseSkipped(t *testing.T) {
 	}
 }
 
+func TestFindUnansweredQuestions_GlobMetacharDir(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "run[1]")
+	if err := os.MkdirAll(base, 0755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"q1","question":"Q","options":["A"],"allow_custom":true}`
+	if err := os.WriteFile(filepath.Join(base, "planning.q1.question.json"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	qs, err := mcp.FindUnansweredQuestions(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qs) != 1 || qs[0].ID != "q1" {
+		t.Fatalf("expected q1 found in a '[' path, got %+v", qs)
+	}
+}
+
 // TestReadDialog_AnswerBeforeQuestion exercises the merge branch where the
 // answer line is appended before the question line (the question poller and
 // the HTTP answer handler write to dialog.jsonl from separate goroutines).
