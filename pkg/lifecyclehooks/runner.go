@@ -111,7 +111,8 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	}
 	err = cmd.Run()
 	if logFile != nil {
-		fmt.Fprintf(logFile, "=== attempt %d finished: %v ===\n", attempt, err)
+		// Best-effort финальная строка: диск мог отвалиться посреди попытки.
+		_, _ = fmt.Fprintf(logFile, "=== attempt %d finished: %v ===\n", attempt, err)
 		logFile.Close()
 	}
 	return err
@@ -127,7 +128,9 @@ func openAttemptLog(logPath string, p Payload, attempt int) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(f, "=== %s event=%s id=%s stage=%s attempt=%d ===\n",
+	// Заголовок best-effort: если не записался — сам лог-файл открыт, вывод
+	// попытки всё равно попадёт в него.
+	_, _ = fmt.Fprintf(f, "=== %s event=%s id=%s stage=%s attempt=%d ===\n",
 		time.Now().Format(time.RFC3339), p.Event, p.EventID, stageIDOrDash(p), attempt)
 	return f, nil
 }
