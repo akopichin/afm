@@ -45,7 +45,7 @@ func TestFSM_Apply_LegalTransitions(t *testing.T) {
 			defer store.Close()
 			_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: tc.from, Event: "test_setup"})
 
-			to, _, ok, err := fsm.Apply("a", tc.event, GuardCtx{}, "")
+			_, to, _, ok, err := fsm.Apply("a", tc.event, GuardCtx{}, "")
 			if err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
@@ -64,7 +64,7 @@ func TestFSM_Apply_IllegalReturnsApplyFalse(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusDone, Event: "test_setup"})
 
-	_, _, ok, err := fsm.Apply("a", EvStartPlanning, GuardCtx{}, "")
+	_, _, _, ok, err := fsm.Apply("a", EvStartPlanning, GuardCtx{}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestFSM_Apply_RetryingStartPlanning(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"})
 
-	to, _, ok, err := fsm.Apply("a", EvStartPlanning, GuardCtx{}, "")
+	_, to, _, ok, err := fsm.Apply("a", EvStartPlanning, GuardCtx{}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestFSM_RetryFromAwaitingUserInput(t *testing.T) {
 		defer store.Close()
 		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
 
-		to, _, ok, err := fsm.Apply("a", EvScheduleRetry, GuardCtx{Phase: string(flow.PhaseImplementation)}, "")
+		_, to, _, ok, err := fsm.Apply("a", EvScheduleRetry, GuardCtx{Phase: string(flow.PhaseImplementation)}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,7 +115,7 @@ func TestFSM_RetryFromAwaitingUserInput(t *testing.T) {
 		defer store.Close()
 		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
 
-		to, _, ok, err := fsm.Apply("a", EvResumeAfterRetry, GuardCtx{Phase: string(flow.PhaseImplementation)}, "")
+		_, to, _, ok, err := fsm.Apply("a", EvResumeAfterRetry, GuardCtx{Phase: string(flow.PhaseImplementation)}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestFSM_Apply_ReviseFromRunning(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
 
-	to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{}, "feedback text")
+	_, to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{}, "feedback text")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestEvRevise_FromPaused(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusPaused, Event: "test_setup"})
 
-	to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{}, "review inject")
+	_, to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{}, "review inject")
 	if err != nil || !ok || to != state.StatusRevising {
 		t.Fatalf("EvRevise from paused: to=%v ok=%v err=%v", to, ok, err)
 	}
@@ -160,7 +160,7 @@ func TestFSM_Apply_AskUser(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
 
-	to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
+	_, to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestFSM_Apply_AskUser_FromRetryAndRevising(t *testing.T) {
 		fsm, store := newTestFSM(t, []string{"a"})
 		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
 
-		to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
+		_, to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
 		store.Close()
 		if err != nil {
 			t.Fatalf("%s: Apply: %v", from, err)
@@ -194,7 +194,7 @@ func TestFSM_PhaseDispatch_UserAnswered(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingUserInput, Event: "test_setup"})
 
-	to, _, ok, err := fsm.Apply("a", EvUserAnswered, GuardCtx{Phase: "planning"}, "")
+	_, to, _, ok, err := fsm.Apply("a", EvUserAnswered, GuardCtx{Phase: "planning"}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestFSM_PhaseDispatch_ResumeAfterRetry(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"})
 
-	to, _, ok, err := fsm.Apply("a", EvResumeAfterRetry, GuardCtx{Phase: "implementation"}, "")
+	_, to, _, ok, err := fsm.Apply("a", EvResumeAfterRetry, GuardCtx{Phase: "implementation"}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestFSM_Property_LivenessTerminates(t *testing.T) {
 		const maxSteps = 200
 		for i := 0; i < maxSteps; i++ {
 			ev := rapid.SampledFrom(events).Draw(t, "event")
-			_, _, _, _ = fsm.Apply("a", ev, GuardCtx{Phase: "implementation"}, "")
+			_, _, _, _, _ = fsm.Apply("a", ev, GuardCtx{Phase: "implementation"}, "")
 			if IsTerminal(store.Get("a")) {
 				return
 			}
@@ -251,13 +251,13 @@ func TestFSM_HookFailedTransitions(t *testing.T) {
 	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatalf("setup transition: %v", err)
 	}
-	to, _, ok, err := fsm.Apply("s1", EvHookFailed, GuardCtx{}, "before hook failed")
+	_, to, _, ok, err := fsm.Apply("s1", EvHookFailed, GuardCtx{}, "before hook failed")
 	if err != nil || !ok || to != state.StatusHookFailed {
 		t.Fatalf("EvHookFailed from running: to=%v ok=%v err=%v", to, ok, err)
 	}
 
 	// hook_failed -> running (resolved)
-	to, _, ok, err = fsm.Apply("s1", EvHookResolved, GuardCtx{}, "user retried")
+	_, to, _, ok, err = fsm.Apply("s1", EvHookResolved, GuardCtx{}, "user retried")
 	if err != nil || !ok || to != state.StatusRunning {
 		t.Fatalf("EvHookResolved from hook_failed: to=%v ok=%v err=%v", to, ok, err)
 	}
@@ -266,7 +266,7 @@ func TestFSM_HookFailedTransitions(t *testing.T) {
 	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
 		t.Fatalf("setup transition to done: %v", err)
 	}
-	_, _, ok, err = fsm.Apply("s1", EvHookFailed, GuardCtx{}, "after hook failed")
+	_, _, _, ok, err = fsm.Apply("s1", EvHookFailed, GuardCtx{}, "after hook failed")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestFSM_Apply_Pause(t *testing.T) {
 		fsm, store := newTestFSM(t, []string{"a"})
 		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
 
-		to, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "manual pause")
+		_, to, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "manual pause")
 		store.Close()
 		if err != nil {
 			t.Fatalf("%s: Apply: %v", from, err)
@@ -308,7 +308,7 @@ func TestFSM_Apply_Pause_IllegalFromAwaitingApproval(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusAwaitingApproval, Event: "test_setup"})
 
-	_, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "")
+	_, _, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestFSM_Apply_Continue_ResumesToPausedFrom(t *testing.T) {
 		fsm, store := newTestFSM(t, []string{"a"})
 		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusPaused, Event: "test_setup"})
 
-		to, _, ok, err := fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: pausedFrom}, "")
+		_, to, _, ok, err := fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: pausedFrom}, "")
 		store.Close()
 		if err != nil {
 			t.Fatalf("%s: Apply: %v", pausedFrom, err)
@@ -338,7 +338,7 @@ func TestFSM_Apply_Continue_IllegalFromRunning(t *testing.T) {
 	defer store.Close()
 	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"})
 
-	_, _, ok, err := fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: state.StatusRunning}, "")
+	_, _, _, ok, err := fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: state.StatusRunning}, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

@@ -157,17 +157,25 @@ func phaseDispatch(ctx GuardCtx) state.StageStatus {
 // Apply возвращает вместе со статусом и seq применённой transition (0, если
 // переход не применился) — единственный надёжный источник seq для Trigger,
 // который прикладывает его к live-событию (дедуп истории /api/events с
-// live-потоком на фронте по стабильному ключу, а не по содержимому).
-func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (state.StageStatus, uint64, bool, error) {
-	rule, ok := f.rules[ev]
-	if !ok {
-		return "", 0, false, ErrNoRule
+// live-потоком на фронте по стабильному ключу, а не по содержимому). from —
+// статус, реально прочитанный ЗДЕСЬ для CAS-проверки ruleAllowsFrom (не
+// отдельное чтение o.currentStatus() до Apply — codex MAJ#5: та отдельная
+// гонка читала статус до, а не в момент CAS, так что lifecycle-payload мог
+// увидеть from, отличный от того, что реально проверялся). Возвращается во
+// всех ветках, включая err/not-applied (from=to=current, seq=0), — вызывающий
+// код (triggerWithSeq) публикует lifecycle-событие только при ok=true, но
+// сигнатура остаётся однородной.
+func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (from, to state.StageStatus, seq uint64, ok bool, err error) {
+	current := f.store.Get(stageID)
+	rule, ruleOK := f.rules[ev]
+	if !ruleOK {
+		return current, current, 0, false, ErrNoRule
 	}
-	from := f.store.Get(stageID)
+	from = current
 	if !ruleAllowsFrom(rule.From, from) {
-		return from, 0, false, nil
+		return from, from, 0, false, nil
 	}
-	to := rule.To(ctx)
+	to = rule.To(ctx)
 	tr := &state.Transition{
 		StageID: stageID,
 		From:    from,
@@ -177,11 +185,11 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (s
 	}
 	if err := f.store.Apply(tr); err != nil {
 		if errors.Is(err, state.ErrConcurrentChange) {
-			return from, 0, false, nil // доброкачественный CAS-mismatch, не storage-fatal
+			return from, from, 0, false, nil // доброкачественный CAS-mismatch, не storage-fatal
 		}
-		return from, 0, false, &StorageError{Inner: err}
+		return from, from, 0, false, &StorageError{Inner: err}
 	}
-	return to, tr.Seq, true, nil
+	return from, to, tr.Seq, true, nil
 }
 
 func ruleAllowsFrom(allowed []state.StageStatus, from state.StageStatus) bool {

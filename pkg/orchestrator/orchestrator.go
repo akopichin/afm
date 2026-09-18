@@ -16,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -91,6 +92,12 @@ type Options struct {
 	// through recordUsage, which no-ops safely when this is nil. Observability
 	// only: never gates the FSM, never fails the run.
 	Accounting *accounting.Store
+	// Lifecycle hooks (Phase 1): FlowName/RunID/Resumed питают payload,
+	// Hooks — собранный dispatcher (nil = хуков нет). Сборка — cmd/afm/run.go.
+	FlowName string
+	RunID    string
+	Resumed  bool
+	Hooks    *lifecyclehooks.Dispatcher
 }
 
 // ResolvedFile — то, что Options.ResolveFile возвращает про файл, к которому
@@ -160,6 +167,9 @@ type Orchestrator struct {
 	// Реальный раннер агента внутри — memorypipeline.NewExecRunner; тесты
 	// подменяют его через memorypipeline.WithRunner при построении Pipeline.
 	mem *memorypipeline.Pipeline
+
+	// hooks — lifecycle dispatcher (observer-only; nil-safe).
+	hooks *lifecyclehooks.Dispatcher
 
 	// fatalMu/fatalErr/cancelRun поддерживают разведение storage-fatal и
 	// concurrent-change (см. Trigger/setFatal/loadFatal/Run): только реальный
@@ -431,6 +441,7 @@ func New(opts Options) *Orchestrator {
 		maxRetries:     MaxRetries,
 		retryBackoff:   RetryBackoff,
 	}
+	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
 	o.mem = memorypipeline.New(memorypipeline.Prompts{
 		Reflect:    opts.Prompts.Reflect,
@@ -487,7 +498,7 @@ func (o *Orchestrator) Trigger(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx
 // /api/events с live-потоком по стабильному ключу, а не по содержимому.
 // Остальные ~60 call site'ов Trigger в этом не нуждаются и не меняются.
 func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, uint64, bool) {
-	to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
+	from, to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 	if err != nil {
 		var se *StorageError
 		if errors.As(err, &se) {
@@ -507,6 +518,7 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		o.ui.Publish(pubEv)
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
+		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)
 		// runnerKind больше не актуален: стадия завершилась (EvComplete),
 		// провалилась (EvFail) или ушла ждать пользователя (EvAskUser) — во
 		// всех трёх случаях раннер, который её вёл, для неё закончил работу.
