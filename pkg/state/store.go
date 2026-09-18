@@ -192,6 +192,7 @@ func (s *Store) Snapshot() RunState {
 	out := RunState{
 		FlowName:             s.snapshot.FlowName,
 		StartedAt:            s.snapshot.StartedAt,
+		LastSeq:              s.snapshot.LastSeq,
 		StageOrder:           append([]string(nil), s.snapshot.StageOrder...),
 		Stages:               make(map[string]StageState, len(s.snapshot.Stages)),
 		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,

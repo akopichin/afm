@@ -38,6 +38,20 @@ func absoluteAgentRoot(afmRoot string, f *flow.Flow) (string, error) {
 	return filepath.Abs(agentRoot)
 }
 
+// lifecycleRootDir — абсолютный корень для метаданных lifecycle-хуков
+// (AFM_ROOT_DIR, CWD hook-команды). Пустой agentRootDir означает
+// «наследовать CWD» — для контракта хуков это фактический CWD процесса.
+func lifecycleRootDir(agentRootDir string) string {
+	if agentRootDir != "" {
+		return agentRootDir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
 // resolveMemoryDir возвращает директорию памяти флоу: если память выключена
 // (!f.MemoryEnabled()) — пустая строка, ничего дальше её не использует.
 // Иначе f.Memory.Path резолвится относительно agentRoot (корень проекта

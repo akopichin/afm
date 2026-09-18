@@ -242,6 +242,32 @@ func TestSnapshot_IncludesFlowName(t *testing.T) {
 	}
 }
 
+// TestSnapshot_IncludesLastSeq guards a real bug (codex MAJ#6): Snapshot()'s
+// out := RunState{...} literal did not copy LastSeq, so Snapshot().LastSeq
+// was always 0 regardless of how many transitions were applied — and
+// production code that derives Resumed from it (cmd/afm/run.go) would never
+// detect a resumed run.
+func TestSnapshot_IncludesLastSeq(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	if got := store.Snapshot().LastSeq; got != 0 {
+		t.Errorf("LastSeq on fresh store = %d, want 0", got)
+	}
+
+	if err := store.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusPlanning, Event: "start_planning"}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if got := store.Snapshot().LastSeq; got != 1 {
+		t.Errorf("LastSeq after one Apply = %d, want 1", got)
+	}
+}
+
 func TestSnapshot_IncludesStageNames(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a", "b"})

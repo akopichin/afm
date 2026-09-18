@@ -197,3 +197,31 @@ func TestAbsoluteAgentRoot_DiffersFromResolveAgentRoot_OnEmptyRootDir(t *testing
 		t.Errorf("absoluteAgentRoot with empty root_dir = %q, want a non-empty absolute path", absGot)
 	}
 }
+
+// TestLifecycleRootDir_NonEmptyPassesThrough — task-13: непустой
+// agentRootDir (уже разрешённый resolveAgentRoot) отдаётся хуками как есть,
+// без повторного резолва.
+func TestLifecycleRootDir_NonEmptyPassesThrough(t *testing.T) {
+	got := lifecycleRootDir("/agent/root")
+	if got != "/agent/root" {
+		t.Errorf("lifecycleRootDir(%q) = %q, want passthrough", "/agent/root", got)
+	}
+}
+
+// TestLifecycleRootDir_EmptyReturnsAbsoluteCWD — task-13: пустой
+// agentRootDir означает «агенты наследуют CWD процесса» (resolveAgentRoot),
+// но контракт lifecycle-хуков (AFM_ROOT_DIR) требует непустой абсолютный
+// путь — lifecycleRootDir должен подставить os.Getwd().
+func TestLifecycleRootDir_EmptyReturnsAbsoluteCWD(t *testing.T) {
+	wantWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := lifecycleRootDir("")
+	if got == "" || !filepath.IsAbs(got) {
+		t.Errorf("lifecycleRootDir(\"\") = %q, want a non-empty absolute path", got)
+	}
+	if got != wantWd {
+		t.Errorf("lifecycleRootDir(\"\") = %q, want CWD %q", got, wantWd)
+	}
+}

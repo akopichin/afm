@@ -23,6 +23,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/server/workspace"
@@ -234,6 +235,52 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
+			// Lifecycle hooks (Phase 1): слои global+project уже смёржены в
+			// cfg.Hooks (config.LoadFrom), сюда добавляются flow- и stage-слои.
+			// Dispatcher живёт на собственном ctx (Stop ниже) — хуки-наблюдатели
+			// не зависят от отмены run-ctx (flow_interrupted должен уйти).
+			runID := filepath.Base(runDir)
+			hooksRootDir := lifecycleRootDir(agentRootDir)
+			resumed := store.Snapshot().LastSeq > 0
+			var hooksDisp *lifecyclehooks.Dispatcher
+			var orchRef *orchestrator.Orchestrator
+			layers := []lifecyclehooks.Layer{{Hooks: cfg.Hooks}, {Hooks: f.Hooks}}
+			for _, st := range f.Stages {
+				if len(st.Hooks) > 0 {
+					layers = append(layers, lifecyclehooks.Layer{StageID: st.ID, Hooks: st.Hooks})
+				}
+			}
+			if combined := lifecyclehooks.Combine(layers...); len(combined) > 0 {
+				hooksDisp = lifecyclehooks.New(lifecyclehooks.DispatcherOptions{
+					Config: lifecyclehooks.DispatcherConfig{
+						FlowName: f.Name,
+						RunID:    runID,
+						RunDir:   runDir,
+						RootDir:  hooksRootDir,
+						Resumed:  resumed,
+					},
+					Hooks:  combined,
+					LogDir: filepath.Join(runDir, "hooks"),
+					OnError: func(hookID, eventID string, err error) {
+						if orchRef != nil {
+							orchRef.PublishLifecycleHookFailure(hookID, eventID, err)
+							return
+						}
+						fmt.Fprintf(os.Stderr, "warning: lifecycle hook %s failed (%s): %v\n", hookID, eventID, err)
+					},
+				})
+				// Единая точка остановки: bounded flush, затем Stop. defer
+				// исполняется на ЛЮБОМ выходе из RunE (в т.ч. по ошибке
+				// orch.Run — ранний return с пропущенным flush терял бы
+				// terminal-события; codex MAJ#7).
+				defer func() {
+					if !hooksDisp.Flush(lifecyclehooks.FlushTimeout) {
+						fmt.Fprint(os.Stderr, "warning: lifecycle hooks flush timed out\n")
+					}
+					hooksDisp.Stop()
+				}()
+			}
+
 			// Docker project file browser: только внутри контейнера, где
 			// docker.ReExec передал манифест примонтированных корней через
 			// AFM_DOCKER_FILE_ROOTS. На хосте (или при отсутствии/битом
@@ -287,6 +334,10 @@ func newRunCmd() *cobra.Command {
 				Memory:          f.Memory,
 				MemoryDir:       memDir,
 				Accounting:      acct,
+				FlowName:        f.Name,
+				RunID:           runID,
+				Resumed:         resumed,
+				Hooks:           hooksDisp,
 			}
 			// ResolveFile/CurrentFileSHA питают review-ноты (AddNote,
 			// renderReviewFeedback): без workspace (host-режим, ws == nil)
@@ -297,6 +348,14 @@ func newRunCmd() *cobra.Command {
 				orchOpts.CurrentFileSHA = workspaceCurrentFileSHA(ws)
 			}
 			orch := orchestrator.New(orchOpts)
+			orchRef = orch
+			if hooksDisp != nil {
+				// orchRef замыкается в OnError выше; Start после New, чтобы
+				// warning-notice уже имел живой orchestrator. Присвоение
+				// orchRef делаем ДО Start (гонка Emit-до-Start безопасна:
+				// очереди буферизуются).
+				hooksDisp.Start()
+			}
 
 			// Disable interactive flags when dashboard is not running
 			if cfg.Server.GetPort() == 0 {
