@@ -183,9 +183,7 @@ func TestDispatcher_ConcurrentEmitStopNoPanic(t *testing.T) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-done:
@@ -194,7 +192,7 @@ func TestDispatcher_ConcurrentEmitStopNoPanic(t *testing.T) {
 					d.Emit(Event{Type: EventFlowStarted, Time: time.Now()})
 				}
 			}
-		}()
+		})
 	}
 	time.Sleep(50 * time.Millisecond)
 	d.Stop() // на гонящихся эмиттерах
