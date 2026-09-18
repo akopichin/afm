@@ -674,6 +674,24 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stageDir := filepath.Join(s.runDir, stageID)
+
+	// Serialize answers for interactive stages only: an agent's polling loop
+	// blocks on the first question it wrote; answering a later one leaves the
+	// earlier answer.json missing and deadlocks the agent. A well-behaved client
+	// only shows the current question (buildDialogEntries), so this guards
+	// stale/direct clients. Non-interactive stages auto-answer and are exempt.
+	if s.stageInteractive[stageID] {
+		cur, hasCur, err := mcp.CurrentQuestion(stageDir)
+		if err != nil {
+			writeFlowError(w, http.StatusInternalServerError, "current_question_lookup_failed")
+			return
+		}
+		if hasCur && (cur.Phase != req.Phase || cur.ID != req.ID) {
+			writeFlowError(w, http.StatusConflict, "answer_out_of_order")
+			return
+		}
+	}
+
 	questionPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".question.json")
 	answerPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".answer.json")
 
