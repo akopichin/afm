@@ -87,6 +87,7 @@ Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github
 | Statuses and resume | [Stage lifecycle](https://akopichin.github.io/afm/stage-lifecycle/) |
 | `agents: [auto]` | [Autonomous track](https://akopichin.github.io/afm/autonomous-track/) |
 | File-based dialog | [Interactive stages](https://akopichin.github.io/afm/interactive-stages/) |
+| Event notifications, secrets in hooks | [Lifecycle hooks](https://akopichin.github.io/afm/lifecycle-hooks/) |
 | Carrying lessons across runs | [Agent memory](https://akopichin.github.io/afm/agent-memory/) |
 | Token/cost tracking, `pricing:` overrides | [Cost accounting](https://akopichin.github.io/afm/accounting/) |
 | The web dashboard | [Dashboard](https://akopichin.github.io/afm/dashboard/) |

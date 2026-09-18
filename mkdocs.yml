@@ -53,6 +53,7 @@ nav:
       - Stage lifecycle: stage-lifecycle.md
       - Autonomous track: autonomous-track.md
       - Script stages & hooks: script-stages.md
+      - Lifecycle hooks: lifecycle-hooks.md
       - Interactive stages: interactive-stages.md
       - Artifacts & inputs: artifacts.md
       - Agent memory: agent-memory.md

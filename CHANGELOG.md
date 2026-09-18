@@ -4,6 +4,39 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-18
+
+### Feature: lifecycle hooks — observer commands for flow/stage events
+
+A new `hooks:` field (global/project config, flow root, or per-stage) declares
+**observer** commands that afm runs on flow/stage lifecycle events — for
+notifications, metrics, or external status updates. Unlike `script_before`/
+`script_after`, a lifecycle hook never touches the FSM: a failed hook is logged
+and surfaced in the dashboard, and the flow continues. See
+[Lifecycle hooks](https://akopichin.github.io/afm/lifecycle-hooks/).
+
+- **Events & scope.** `events: all` or a list, minus `skip_events`. A public
+  catalog of 27 events (flow, stage, and script boundaries) — raw FSM names are
+  never exposed. Global/project/flow hooks see all stages; a stage hook sees only
+  its own. Layers merge by `id` (`global < project < flow < stage`).
+- **Payload.** The event is delivered as JSON on stdin (`schema_version: 1`,
+  stable `event_id`) plus scalar `AFM_*` environment variables; the command runs
+  via `sh -c` in the effective `flow.root_dir`. Per-hook `timeout`/`retries`;
+  one hook's calls are sequential, different hooks run in parallel; logs at
+  `.afm/runs/<run-id>/hooks/<hook-id>.log`.
+- **Secrets (`env:`).** A hook's `env` map injects secrets by reference —
+  `file:PATH` or `env:NAME` (from `secrets.env` layers: project > global >
+  process env). Resolved once before the flow starts (fail-fast, error names the
+  hook/variable but never the value). By default the hook process gets a minimal
+  environment (`inherit_env: true` for the full one); resolved secret values are
+  `[REDACTED]` in logs/errors and never written to the payload, event log, or
+  command arguments.
+- **Docker.** Secrets are resolved on the host and passed into the container via
+  transient env vars (no secret-file mount, nothing in `docker run` argv);
+  in-container they're consumed and unset so agents don't inherit them.
+- **Delivery is live best-effort** (durable at-least-once redelivery after a
+  crash is planned but not yet shipped).
+
 ## 2026-09-17
 
 ### Change: the Feed/Log toggle is gone — the Feed is the only workspace view
