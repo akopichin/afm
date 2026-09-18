@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// parentDir — сегмент «..»: запрещён в id хука (path traversal).
+const parentDir = ".."
+
 // ValidateLayer проверяет слой хуков (config-слой, flow-слой или хуки одной
 // стадии). stageScoped=true — хуки конкретной стадии: flow-события в них
 // запрещены (stage hook физически не может получить событие всего флоу).
@@ -21,7 +24,7 @@ func ValidateLayer(defs []Hook, stageScoped bool) error {
 		// id становится именем файла лога (<LogDir>/<id>.log) — обязан быть
 		// безопасным одиночным компонентом пути, иначе `id: ../events.jsonl`
 		// допишет hook-лог в авторитетный events.jsonl (codex CRIT#1).
-		if h.ID == "." || h.ID == ".." || strings.ContainsAny(h.ID, "/\\\x00") {
+		if h.ID == "." || h.ID == parentDir || strings.ContainsAny(h.ID, "/\\\x00") {
 			return fmt.Errorf("hooks[%d]: id %q must be a single safe path component (no /, \\, NUL, dot segments)", i, h.ID)
 		}
 		if ids[h.ID] {

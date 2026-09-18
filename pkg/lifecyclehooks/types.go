@@ -4,6 +4,7 @@
 package lifecyclehooks
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -100,7 +101,7 @@ func (s *EventSelector) UnmarshalYAML(value *yaml.Node) error {
 		s.Events = evs
 		return nil
 	default:
-		return fmt.Errorf("events must be \"all\" or a list of event names")
+		return errors.New("events must be \"all\" or a list of event names")
 	}
 }
 
