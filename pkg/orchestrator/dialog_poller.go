@@ -106,6 +106,18 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 		if err != nil {
 			continue
 		}
+		// Serialize interactive dialogs: an agent's polling loop blocks on the
+		// FIRST question it wrote, so afm must process only the oldest unanswered
+		// question (by its immutable q<N> id) and hold the rest. Chosen from the
+		// SAME slice we just scanned — never a second FS read. Non-interactive
+		// stages are exempt (they auto-answer every question below).
+		var interactiveCurrent *mcp.QuestionFile
+		if stage != nil && stage.Interactive {
+			if cur, ok := mcp.SelectCurrentQuestion(questions); ok {
+				c := cur
+				interactiveCurrent = &c
+			}
+		}
 		// Forget any previously-processed key for this stage that is no longer
 		// in the current unanswered set — it must have been answered (dropped
 		// out of FindUnansweredQuestions once its answer.json appeared).
@@ -129,6 +141,14 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			}
 		}
 		for _, q := range questions {
+			// Hold back every interactive question that is not the current one. Not
+			// marked processed, so it is re-evaluated each tick and surfaced once it
+			// becomes current.
+			if interactiveCurrent != nil &&
+				(q.Phase != interactiveCurrent.Phase || q.ID != interactiveCurrent.ID) {
+				continue
+			}
+
 			key := stageID + "|" + q.Phase + "|" + q.ID
 
 			// Malformed question.json (unparseable even after jsonrepair):

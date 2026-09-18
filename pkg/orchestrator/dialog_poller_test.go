@@ -371,6 +371,51 @@ func TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce(t *testing.T)
 	}
 }
 
+func TestPollQuestions_InteractiveBatch_SurfacesOldestOnly(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, stage.ID)
+
+	// Agent wrote q1 and q2 at once (a batch); it polls q1.
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"A"})
+	writeQuestionFile(t, stageDir, "implementation", "q2", []string{"A"})
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	subID, events := o.ui.Subscribe(64)
+	defer o.ui.Unsubscribe(subID)
+
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+	o.pollQuestions(processed, malformed)
+
+	first := drainDialogQuestionEvents(events)
+	if len(first) != 1 || first[0].Data.(map[string]any)["id"] != "q1" {
+		t.Fatalf("expected only q1 surfaced first, got %+v", first)
+	}
+
+	// Answer q1 → next tick surfaces q2.
+	if err := os.WriteFile(filepath.Join(stageDir, "implementation.q1.answer.json"),
+		[]byte(`{"id":"q1","answer":"A","from_options":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusAwaitingUserInput, To: state.StatusRunning, Event: "user_answered"}); err != nil {
+		t.Fatal(err)
+	}
+	o.pollQuestions(processed, malformed)
+	second := drainDialogQuestionEvents(events)
+	if len(second) != 1 || second[0].Data.(map[string]any)["id"] != "q2" {
+		t.Fatalf("expected q2 surfaced after answering q1, got %+v", second)
+	}
+}
+
 // TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately is
 // the regression guard for F1 (task-fixB): before this fix,
 // giveUpOnMalformedQuestion persisted a valid stub and published EventAskUser
