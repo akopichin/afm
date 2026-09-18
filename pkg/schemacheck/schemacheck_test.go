@@ -148,8 +148,10 @@ func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, ty
 
 	// EventSelector has a deliberately different YAML shape from its Go struct:
 	// the scalar "all" or a list of event names — there is no object form to
-	// walk, and the property's presence was already checked by the caller.
+	// walk, but its schema's oneOf must still contain the array alternative
+	// (the property's presence was already checked by the caller).
 	if typ == eventSelectorType {
+		schemaForType(t, doc, node, "array", at)
 		return
 	}
 
