@@ -1,5 +1,21 @@
 # Lifecycle-хуки Phase 2 — Implementation Plan (durable-доставка)
 
+> **⛔ ОТЛОЖЕНО / НЕ РЕАЛИЗОВЫВАТЬ КАК ЕСТЬ (2026-09-18).** Ревью этого плана
+> через codex выявило 4 CRITICAL + 4 MAJOR: описанная здесь модель outbox
+> (envelope + deliveries + реконструкция обязательств из текущих `d.hooks`)
+> **не обеспечивает заявленную at-least-once** и требует существенного
+> редизайна (durable delivery-obligations по паре `event_id+hook_id` с payload и
+> seq, замороженные на emit; недропаемая доставка FSM-пар; дренаж недоставленного
+> на старте И перед нормальным завершением, включая завершённые раны; порядок по
+> `Transition.Seq`; ошибки outbox как явное состояние, а не молчаливая
+> деградация; reconcile/redeliver ДО live `flow_started` и до открытия HTTP API;
+> усечение torn-tail; реальный wiring-тест). Полный список — в
+> `.superpowers/sdd/2026-09-18-lifecycle-hooks-phase1/codex-phase2-plan-review.txt`
+> и в разделе «Phase 2 — открытые вопросы дизайна» спеки. Пользователь решил
+> **отложить Phase 2**; при возврате начинать с переработки плана под сильную
+> модель, затем повторное codex-ревью. Phase 1 (live best-effort) уже
+> реализована, замержена в ветку notify и проверена на реальном флоу.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Добавить durable at-least-once доставку lifecycle-хуков для **FSM-производных** событий: outbox (`hook_events.jsonl` + `hook_deliveries.jsonl` с fsync), реконсиляцию `events.jsonl`↔outbox по `seq` при старте и повтор недоставленных пар после рестарта. Phase 1 (live best-effort) остаётся рабочим при выключенном outbox.
