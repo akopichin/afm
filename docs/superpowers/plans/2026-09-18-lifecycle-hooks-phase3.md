@@ -545,7 +545,7 @@ func stripTransportVars(env []string) []string {
 }
 ```
 
-> Примечание: `stripTransportVars` (или эквивалент) нужен и в общей точке формирования окружения агентов/скриптов/verify (executor/runner_factory) — Task 5, codex #2. Здесь — только для hook при `inherit_env:true`; `minimalBaseEnv` (whitelist) transport не включает.
+> Примечание: `stripTransportVars` применяется ТОЛЬКО к окружению hook при `inherit_env:true` (чтобы хук не получил autoShim `AFM_SECRET_*`/`AFM_SYSPROMPT_*` и остаточные транспортные). Изоляция `AFM_HOOK_SECRET_*` для агентов/скриптов/verify обеспечивается ЕДИНОЙ точкой — глобальным `os.Unsetenv` после in-container резолва (Task 5), а не фильтрацией на каждом spawn-сайте. `minimalBaseEnv` (whitelist) transport не включает по построению.
 
 ```go
 func minimalBaseEnv() []string {
@@ -877,7 +877,7 @@ git commit -m "docs: секреты и env lifecycle-хуков (Phase 3) в AGE
 - **Spec coverage:** env со ссылками env:/file: (T2 валидация, T3 резолв); вынос pkg/secrets + рефактор docker (T1); secrets.env приоритеты project>global>env (T3); имя переменной + AFM_-резерв + fail-fast до flow_started (T2/T3); minimal-by-default + inherit_env (T4, ПО СПЕКЕ); [REDACTED] в логах/dashboard (T4); Docker-транспорт без монтирования + фильтрация (T5); секреты не в payload/journal/argv/логах (T3/T4/T5); докум. (T6).
 - **Внесённые фиксы codex:**
   - #1 CRIT (Docker имя не инъективно) → транспорт по индексам `AFM_HOOK_SECRET_<hookIdx>_<varIdx>`, не sanitize(id). T5.
-  - #2 CRIT (изоляция транспорта) → ВСЕГДА `os.Unsetenv` транспортных in-container + `stripTransportVars` в наследуемом окружении агентов/скриптов/verify/inherit-хука. T4/T5.
+  - #2 CRIT (изоляция транспорта) → ЕДИНАЯ точка: глобальный `os.Unsetenv` всех `AFM_HOOK_SECRET_*` после in-container резолва (до Run) — ни один дочерний процесс не наследует, spawn-сайты не перечисляем. `stripTransportVars` — только для inherit-хука (autoShim-префиксы). T4/T5.
   - #3 MAJOR (Combine до docker-ветки) → сборка слоёв+Combine ДО docker, в ReExec идут итоговые RegisteredHook. T5/T3.
   - #4 MAJOR (дефолт окружения) → принят spec-дефолт minimal-by-default (фича не релизнута → нет регрессии). T4, раздел «Контракт окружения».
   - #5 MAJOR (ошибка/finish мимо редактора) → finish и текст ошибки через редактор/`redactString`, ошибка санитизируется до OnError→notices.jsonl. T4.
