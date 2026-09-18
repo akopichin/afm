@@ -9,6 +9,73 @@ import (
 	"time"
 )
 
+func hasEnvKey(env []string, key string) bool {
+	for _, kv := range env {
+		if kv == key || strings.HasPrefix(kv, key+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(env []string, key, val string) bool {
+	for _, kv := range env {
+		if kv == key+"="+val {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildEnv_Modes(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("UNRELATED_KEY", "leak-me")
+	t.Setenv("AFM_HOOK_SECRET_0_0", "transport-secret") // должен вырезаться при inherit
+	cfg := DispatcherConfig{RunID: "r"}
+	p := BuildPayload(cfg, Event{Type: EventFlowStarted}, "id")
+
+	// spec-дефолт: без inherit_env → минимальное окружение (UNRELATED НЕ виден)
+	e1 := buildEnv(Hook{ID: "h"}, cfg, p)
+	if hasEnvKey(e1, "UNRELATED_KEY") {
+		t.Fatal("default must be minimal env (no ambient leakage)")
+	}
+	if !hasEnvKey(e1, "PATH") || !hasEnv(e1, "AFM_HOOK_EVENT", "flow_started") {
+		t.Fatalf("minimal must include PATH + AFM_*: %v", e1)
+	}
+	// с Env → минимальное + резолвнутый секрет
+	e2 := buildEnv(Hook{ID: "h", Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "secret"}}, cfg, p)
+	if hasEnvKey(e2, "UNRELATED_KEY") || !hasEnv(e2, "T", "secret") {
+		t.Fatalf("env-hook: minimal + resolved: %v", e2)
+	}
+	// inherit_env: true → наследование + resolved, но БЕЗ transport-переменных
+	e3 := buildEnv(Hook{ID: "h", InheritEnv: true, Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "secret"}}, cfg, p)
+	if !hasEnv(e3, "UNRELATED_KEY", "leak-me") || !hasEnv(e3, "T", "secret") {
+		t.Fatal("inherit_env:true must inherit AND include resolved")
+	}
+	if hasEnvKey(e3, "AFM_HOOK_SECRET_0_0") {
+		t.Fatal("inherit_env:true must still strip transport vars (codex #2)")
+	}
+}
+
+func TestRunCommand_RedactsSecretInLog(t *testing.T) {
+	dir := t.TempDir()
+	h := Hook{ID: "h", Command: "printf 'my token is s3cr3t\\n'", Timeout: 5 * time.Second,
+		Env: map[string]SecretRef{"T": "env:X"}, ResolvedEnv: map[string]string{"T": "s3cr3t"}}
+	cfg := DispatcherConfig{RunID: "r", RunDir: dir, RootDir: dir}
+	p := BuildPayload(cfg, Event{Type: EventFlowStarted, Time: time.Now()}, "id")
+	logPath := filepath.Join(dir, "h.log")
+	if err := runCommand(context.Background(), h, cfg, p, logPath); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if strings.Contains(string(raw), "s3cr3t") {
+		t.Fatalf("secret leaked into log: %s", raw)
+	}
+	if !strings.Contains(string(raw), "[REDACTED]") {
+		t.Fatalf("expected redaction: %s", raw)
+	}
+}
+
 func writeScript(t *testing.T, dir, name, body string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
