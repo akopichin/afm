@@ -1,8 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/accounting"
@@ -262,6 +264,64 @@ func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 	if byID["b"].Cost != nil {
 		t.Errorf("stage b: Cost = %+v, want nil (no bundle entry)", byID["b"].Cost)
 	}
+}
+
+// TestStageView_JSONShape_NoVerifyField locks the exact set of JSON keys
+// StageView serializes (V5b.4): AI-verify (flow.Stage.Verify becoming a
+// struct, V1-V5a) added NO field here — the dashboard renders verify
+// progress/results purely from feed events/notices (see feed-view-model.ts),
+// not from a DTO field. Any accidental future "verify"-ish addition to
+// StageView, and any accidental removal/rename of an existing field, fails
+// this test — it's the single guard for "the /api/status shape for a stage
+// is unchanged by AI-verify".
+func TestStageView_JSONShape_NoVerifyField(t *testing.T) {
+	view := StageView{
+		ID:          "a",
+		Name:        "A",
+		Status:      state.StatusPaused,
+		Interactive: true,
+		Autonomous:  true,
+		AutoApprove: true,
+		HasDialog:   true,
+		IsScript:    true,
+		PausedFrom:  state.StatusRunning,
+		ShowPlan:    true,
+		ShowDialog:  true,
+		PreNote:     "note",
+		Buttons:     []string{"Run linter"},
+		Cost:        &accounting.CostView{DisplayCost: "$0.01"},
+	}
+	data, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, ok := m["verify"]; ok {
+		t.Fatalf("StageView JSON must not carry a \"verify\" field, got keys: %v", sortedKeys(m))
+	}
+
+	want := []string{
+		"auto_approve", "autonomous", "buttons", "cost", "has_dialog", "id",
+		"interactive", "is_script", "name", "paused_from", "pre_note",
+		"show_dialog", "show_plan", "status", "updated_at",
+	}
+	got := sortedKeys(m)
+	if !equalSlices(got, want) {
+		t.Fatalf("StageView JSON keys changed:\n got  %v\n want %v", got, want)
+	}
+}
+
+func sortedKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 func equalSlices(a, b []string) bool {

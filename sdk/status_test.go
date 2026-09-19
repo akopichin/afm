@@ -75,6 +75,50 @@ func TestStatus_AllDoneAndFailedFlags(t *testing.T) {
 	}
 }
 
+// TestStatus_IgnoresUnknownVerifyRelatedFields is the SDK-side half of V5b.4:
+// the dashboard's AI-verify feature (V5a/V5b) never added a field to
+// GET /api/status's per-stage or run-level JSON (verify progress/results are
+// derived from feed events/notices, not a status DTO field) — but even if a
+// future afm version starts including verify-shaped noise here (or any other
+// field this SDK doesn't know about), statusWireStage/statusWire's narrow
+// field sets must keep decoding successfully via plain encoding/json
+// unknown-field tolerance, so an sdk consumer's Status() call never breaks
+// just because the server response grew new keys.
+func TestStatus_IgnoresUnknownVerifyRelatedFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+			"flow_name": "demo",
+			"run_cost": {"display_cost": "$0.01"},
+			"stages": [
+				{
+					"id": "build",
+					"status": "done",
+					"verify_step": 2,
+					"verify_verdict": "pass",
+					"verify_report_path": "/runs/x/build/verify/v-1/report.md"
+				}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	run := &Run{baseURL: srv.URL, httpClient: srv.Client()}
+	status, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.FlowName != "demo" {
+		t.Errorf("FlowName: got %q, want %q", status.FlowName, "demo")
+	}
+	if status.Stages["build"] != StageDone {
+		t.Errorf("stage build: got %q, want %q", status.Stages["build"], StageDone)
+	}
+	if !status.Done {
+		t.Error("Done: got false, want true")
+	}
+}
+
 func TestStatus_NonOKResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

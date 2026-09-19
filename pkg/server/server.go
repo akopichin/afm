@@ -384,6 +384,8 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleUploadAttachment(w, r)
 	case strings.Contains(path, "/artifacts/") && r.Method == http.MethodGet:
 		s.handleArtifact(w, r)
+	case strings.Contains(path, "/verify/") && strings.HasSuffix(path, "/report") && r.Method == http.MethodGet:
+		s.handleVerifyReport(w, r)
 	case strings.HasSuffix(path, "/dialog") && r.Method == http.MethodGet:
 		s.handleDialogGet(w, r)
 	case strings.HasSuffix(path, "/dialog/answer") && r.Method == http.MethodPost:

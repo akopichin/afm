@@ -271,6 +271,24 @@ func TestNewVerificationID_InjectableForTests(t *testing.T) {
 	}
 }
 
+// TestReportRelPath_MatchesWriteReportLocation закрывает контракт V5b.3:
+// путь, который ReportRelPath отдаёт pkg/server для резолва отчёта через
+// os.Root(runDir), должен указывать РОВНО туда, куда WriteReport реально
+// пишет report.md — иначе сервер искал бы отчёт не там, где он есть.
+func TestReportRelPath_MatchesWriteReportLocation(t *testing.T) {
+	stageDir := t.TempDir()
+	verID := "v-20260101-020304-abcd"
+
+	if err := WriteReport(stageDir, verID, sampleAcceptedResult(), "codex", 1); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+
+	got := filepath.Join(stageDir, ReportRelPath(verID))
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("ReportRelPath does not point at the file WriteReport created: %v", err)
+	}
+}
+
 func TestWriteManifest_RoundTrips(t *testing.T) {
 	stageDir := t.TempDir()
 	verID := "ver-1"

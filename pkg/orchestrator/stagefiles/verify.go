@@ -172,6 +172,16 @@ func WriteReport(stageDir, verID string, r verify.ModelResult, alias string, ste
 	return atomicWriteFile(path, []byte(renderReport(r, alias, stepIdx)))
 }
 
+// ReportRelPath возвращает путь к report.md одного прохода верификации
+// ОТНОСИТЕЛЬНО каталога стадии (<verify>/<verID>/report.md) — без stageDir.
+// Нужен pkg/server (V5b.3), чтобы резолвить отчёт через os.Root, закреплённый
+// на runDir (id стадии + verID приходят от клиента и уже провалидированы
+// как безопасные компоненты пути), не дублируя строковые литералы "verify"/
+// "report.md" в другом пакете.
+func ReportRelPath(verID string) string {
+	return filepath.Join(verifyDirName, verID, reportFileName)
+}
+
 func renderReport(r verify.ModelResult, alias string, stepIdx int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Отчёт проверки: %s, шаг %d\n\n", alias, stepIdx)
