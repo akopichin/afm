@@ -14,14 +14,20 @@ import (
 // реализуется только типами этого пакета (noopSemaphore, ChannelSemaphore).
 type Semaphore interface {
 	acquire()
+	// acquireCtx — отменяемый захват слота: возвращает ctx.Err(), если ctx
+	// отменился до того, как слот освободился, БЕЗ захвата слота и без
+	// утечки горутины. Нужен Lease (см. ниже) — пауза/отмена стадии должны
+	// уметь прервать ожидание слота при переходе автор→верификатор.
+	acquireCtx(ctx context.Context) error
 	release()
 }
 
 // noopSemaphore — семафор-заглушка для MaxParallel=0 (без ограничения).
 type noopSemaphore struct{}
 
-func (noopSemaphore) acquire() {}
-func (noopSemaphore) release() {}
+func (noopSemaphore) acquire()                             {}
+func (noopSemaphore) acquireCtx(ctx context.Context) error { return nil }
+func (noopSemaphore) release()                             {}
 
 // ChannelSemaphore — реальный семафор на буферизованном канале. Экспортирован,
 // чтобы тесты ядра (pkg/orchestrator) могли собрать блокирующий семафор для
@@ -30,6 +36,29 @@ func (noopSemaphore) release() {}
 type ChannelSemaphore chan struct{}
 
 func (s ChannelSemaphore) acquire() { s <- struct{}{} }
+
+// acquireCtx ждёт слот ИЛИ отмену ctx — что наступит раньше. При отмене
+// горутина не остаётся "приклеенной" к каналу: select с двумя ветками
+// завершается сразу, канал не читается и не пишется дальше.
+//
+// Отдельная проверка ctx.Done() ПЕРЕД основным select обязательна: если ctx
+// уже отменён В МОМЕНТ вызова, а в канале в это же время есть свободное
+// место, select между двумя готовыми ветками выбрал бы одну псевдослучайно —
+// вызов мог бы "успешно" занять слот несмотря на уже отменённый ctx.
+func (s ChannelSemaphore) acquireCtx(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	select {
+	case s <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s ChannelSemaphore) release() { <-s }
 
 // agentDrainTimeout — сколько ждём завершения агентских горутин на выходе

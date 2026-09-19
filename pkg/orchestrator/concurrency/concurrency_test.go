@@ -122,6 +122,69 @@ func TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore(t *testing.T) {
 	}
 }
 
+// TestChannelSemaphore_AcquireCtx_AlreadyCanceled — отменённый ДО вызова ctx
+// не должен захватывать слот: acquireCtx возвращает ctx.Err() немедленно, а
+// слот остаётся свободным для другого захватчика.
+func TestChannelSemaphore_AcquireCtx_AlreadyCanceled(t *testing.T) {
+	sem := ChannelSemaphore(make(chan struct{}, 1))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := sem.acquireCtx(ctx); err == nil {
+		t.Fatal("acquireCtx с уже отменённым ctx должен вернуть ошибку")
+	}
+	select {
+	case sem <- struct{}{}:
+		// слот свободен — acquireCtx не забрал его
+	default:
+		t.Fatal("acquireCtx не должен был занять слот при отменённом ctx")
+	}
+}
+
+// TestChannelSemaphore_AcquireCtx_CancelWhileWaiting — семафор занят,
+// acquireCtx блокируется в ожидании; отмена ctx во время ожидания должна
+// вернуть управление БЕЗ захвата слота и без утечки горутины — слот остаётся
+// доступным оригинальному держателю для release.
+func TestChannelSemaphore_AcquireCtx_CancelWhileWaiting(t *testing.T) {
+	sem := ChannelSemaphore(make(chan struct{}, 1))
+	sem <- struct{}{} // занимаем единственный слот
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sem.acquireCtx(ctx)
+	}()
+
+	// Даём горутине шанс встать в ожидание, затем отменяем.
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("acquireCtx должен вернуть ошибку после отмены ctx")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("acquireCtx не вернулся после отмены ctx — утечка горутины")
+	}
+
+	// Слот всё ещё занят оригинальным держателем и освобождается им.
+	select {
+	case <-sem:
+	default:
+		t.Fatal("оригинальный держатель должен иметь возможность освободить свой слот")
+	}
+}
+
+func TestNoopSemaphore_AcquireCtx_AlwaysNil(t *testing.T) {
+	var s noopSemaphore
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.acquireCtx(ctx); err != nil {
+		t.Fatalf("noopSemaphore.acquireCtx должен всегда возвращать nil, got %v", err)
+	}
+}
+
 func TestWakeEventLoop_PublishesToBus(t *testing.T) {
 	cb := bus.NewCriticalBus(1)
 	m := New(cb, nil, "", 0, nil)
