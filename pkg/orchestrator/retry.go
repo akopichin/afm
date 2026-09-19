@@ -171,8 +171,14 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventRetryScheduled), msg)
 				continue
 			}
-			// Missing artifact or second incomplete attempt — fail
-			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "missing artifact or incomplete")
+			// Missing artifact or second incomplete attempt — fail. Причина —
+			// текст самой ошибки completionCheck (IncompleteWorkError/
+			// MissingArtifactError/VerifyRejectedError/VerifyExecError.Error()),
+			// а не общая заглушка: только так диагностика AI-verify (номер
+			// шага, id отчёта — см. VerifyRejectedError.Error()/
+			// VerifyExecError.Error()) остаётся видна прямо в FSM-транзишне
+			// EvFail, а не только в файлах на диске (verify/<id>/report.md).
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, checkErr.Error())
 			o.failBlockedStages()
 			return
 		}

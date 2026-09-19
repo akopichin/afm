@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -42,4 +44,14 @@ func RetryStageForTest(o *Orchestrator, stageID string) {
 // проверкой статуса failed и CAS EvManualRetry (см. поле retryCASBarrier).
 func SetRetryCASBarrierForTest(o *Orchestrator, fn func(stageID string)) {
 	o.retryCASBarrier = fn
+}
+
+// SetVerifyAgentRunnerForTest инъектирует фейковый раннер agent-шагов
+// AI-verify (см. поле runVerifyAgent, verify.go) для тестов из внешнего
+// package orchestrator_test — тот же приём, что и остальные *ForTest выше.
+// Позволяет собрать полноценный *Orchestrator через New() (реальные FSM/
+// Store/раннеры основного агента) и при этом не запускать настоящий
+// verify-subprocess.
+func SetVerifyAgentRunnerForTest(o *Orchestrator, fn func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error)) {
+	o.runVerifyAgent = fn
 }

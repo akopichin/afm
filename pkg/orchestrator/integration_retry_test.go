@@ -363,24 +363,21 @@ func TestIntegration_VerifyPass(t *testing.T) {
 	}
 }
 
-// TestIntegration_VerifyDoesNotGateCompletionYet locks in the CURRENT,
-// mid-migration contract of the ai-verify feature (task V4a): CheckCompletion
-// is now a pure file-probe (.done + artifacts) and never executes
-// Stage.Verify — verify execution lives exclusively in the RunVerification
-// engine (verify.go), which is NOT yet called from any execution path
-// (agents.go/retry.go wiring is task V4b). Until that wiring lands, a stage
-// whose declared verify command would fail still completes as soon as
-// .done+artifacts are present — exactly like a stage with no Verify at all.
-// This test used to be named TestIntegration_VerifyFail and asserted the
-// OPPOSITE (verify overrides .done, one free retry, then fail) back when
-// CheckCompletion itself ran the shell command (V1). That exact rejection
-// semantics is preserved and covered at the engine level now, see
+// TestIntegration_VerifyShellRejectionFailsStageAfterOneFreeRetry — V4b wires
+// RunVerification into the real completion path (gateWithVerify), so a stage
+// whose declared verify command always fails now behaves like any other
+// incomplete-work rejection: baseCheck (.done + artifacts) passes, verify
+// then rejects, the author gets ONE free retry (attempt==0, no backoff), and
+// once the second attempt is ALSO rejected the stage fails — exactly the
+// existing incomplete-retry budget, just fed by verify's typed error instead
+// of a missing .done. Before V4b this test (named
+// TestIntegration_VerifyDoesNotGateCompletionYet) asserted the OPPOSITE
+// (verify wasn't wired into any execution path yet, task V4a); the shell
+// rejection semantics itself was already covered at the engine level, see
 // TestRunVerification_ShellRejectedCarriesLegacyTail (verify_test.go).
-// Once V4b wires RunVerification into the real completion path, this test
-// should be updated (or removed) to expect StatusFailed again.
-func TestIntegration_VerifyDoesNotGateCompletionYet(t *testing.T) {
+func TestIntegration_VerifyShellRejectionFailsStageAfterOneFreeRetry(t *testing.T) {
 	stages := []flow.Stage{
-		{ID: "unverified", Name: "Unverified", Description: "verify would fail, but nothing runs it yet",
+		{ID: "unverified", Name: "Unverified", Description: "verify always fails",
 			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
 			Verify: flow.NewShellVerify("echo 'VERIFY-BOOM: 63 tests failed'; exit 1")},
 	}
@@ -396,16 +393,24 @@ func TestIntegration_VerifyDoesNotGateCompletionYet(t *testing.T) {
 	}
 
 	final := loadStateJSON(t, stateFile)
-	if final.Stages["unverified"].Status != state.StatusDone {
-		t.Errorf("expected done (verify not wired into completion yet, see V4b), got %v", final.Stages["unverified"].Status)
+	if final.Stages["unverified"].Status != state.StatusFailed {
+		t.Errorf("expected failed after verify rejects both attempts, got %v", final.Stages["unverified"].Status)
 	}
 
 	runner.mu.Lock()
 	prompts := append([]string{}, runner.prompts...)
 	runner.mu.Unlock()
 
-	if len(prompts) != 1 {
-		t.Fatalf("expected exactly 1 RunAgent call (no incomplete-retry triggered by verify), got %d", len(prompts))
+	if len(prompts) != 2 {
+		t.Fatalf("expected exactly 2 RunAgent calls (one free incomplete-retry), got %d", len(prompts))
+	}
+
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(stateFile), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "VERIFY-BOOM") {
+		t.Error("EvFail reason should preserve the verify diagnosis (shell output tail), not a generic message")
 	}
 }
 

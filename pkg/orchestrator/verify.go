@@ -12,6 +12,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/prompts"
@@ -63,6 +64,23 @@ type verifyAgentRunner func(ctx context.Context, s flow.Stage, cmd, prompt, logF
 func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase string) error {
 	if s.Verify.IsEmpty() {
 		return nil
+	}
+
+	// lease — общий с раннером-автором слот командного семафора (V4b, см.
+	// Orchestrator.stageLeases): если стадия заспавнена обычным путём
+	// (spawnKind), lease сейчас удерживает слот Stage.Command. Каждый
+	// agent-шаг verify временно переводит его на свою команду
+	// (runVerifyAgentStep → Lease.SwapTo) и возвращает автору здесь, в defer —
+	// ПОСЛЕ ЛЮБОГО исхода (pass/reject/exec error/паника). Отсутствие lease
+	// (ok=false — путь резюма стадии в обход spawnKind, см. комментарий поля)
+	// — безопасная деградация: просто не участвуем в переносе слота.
+	if lease, ok := o.stageLeases.Load(s.ID); ok {
+		l := lease.(*concurrency.Lease)
+		defer func() {
+			if err := l.SwapTo(ctx, s.Command); err != nil {
+				log.Printf("WARN: verify: return lease to author command for stage %s: %v", s.ID, err)
+			}
+		}()
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -203,6 +221,16 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 // вызывающий код в этом случае просто возвращает err как есть. alias —
 // команда агента (для отчёта/manifest).
 func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st flow.VerifyStep, idx int, verID string, in prompts.VerifyInputs) (verify.ModelResult, string, error) {
+	// Перед запуском agent-шага переводим lease на его команду (см.
+	// RunVerification: тот же lease будет возвращён автору в defer, каким бы
+	// ни оказался исход). Тот же командный слот, той же семантики SwapTo:
+	// та же команда, что у автора, — no-op; другая — release-before-acquire.
+	if lease, ok := o.stageLeases.Load(s.ID); ok {
+		if err := lease.(*concurrency.Lease).SwapTo(ctx, st.Command); err != nil {
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify lease swap failed: " + err.Error(), Step: idx}
+		}
+	}
+
 	stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
 	agentLog := filepath.Join(stepDir, "agent.log")
 	rawResult := filepath.Join(stepDir, "raw-result.json")
@@ -328,6 +356,63 @@ func previousVerifyReport(stageDir string) string {
 		return ""
 	}
 	return string(data)
+}
+
+// verifyFeedbackHeading — заголовок блока, которым активный machine-feedback
+// AI-verify (verify/feedback.md) вклеивается в RetryContext автора (V4b.5).
+const verifyFeedbackHeading = "## Замечания автоматической проверки"
+
+// verifyFeedbackBlock читает АКТИВНЫЙ machine-feedback от AI-verify
+// (verify/feedback.md, см. stagefiles.LoadActiveFeedback/WriteActiveFeedback)
+// и оборачивает его в блок для RetryContext автора — "" если активного
+// feedback нет (обычное состояние стадии без отклонённого прохода). Текст
+// уже содержит вердикт, путь к полному report.md и блокирующие finding'и
+// (см. stagefiles.renderActiveFeedback), здесь только читаем и оформляем
+// заголовком — НИКОГДА не пишем через state.SaveFeedback/SaveFeedbackOnce:
+// человеческий feedback.md (agent_suggest/Revise) и машинный
+// verify/feedback.md — намеренно РАЗНЫЕ файлы, и оба должны остаться в
+// RetryContext рядом, не затирая друг друга. Вызывается заново на КАЖДОЙ
+// попытке (внутри closure agentFn, а не один раз до o.runWithRetry) — иначе
+// коррекционная попытка (attempt 1), написанная в ТОТ ЖЕ вызов runWithRetry,
+// не увидела бы feedback, который сам verify только что записал на attempt 0.
+func (o *Orchestrator) verifyFeedbackBlock(stageDir string) string {
+	text, _, ok := stagefiles.LoadActiveFeedback(stageDir)
+	if !ok {
+		return ""
+	}
+	return "\n\n" + verifyFeedbackHeading + "\n\n" + text
+}
+
+// gateWithVerify оборачивает существующий completionCheck (чистая file-проба
+// — CheckCompletion/CheckAutonomousCompletion) AI-verify проходом (V4b):
+// baseCheck выполняется ПЕРВЫМ, и если он не прошёл — его ошибка возвращается
+// как есть, verify вообще не запускается (GET/status/refresh не должны
+// триггерить AI — вызывающий completionCheck() код регулярно дёргает эту
+// функцию, в т.ч. из веток, не связанных с реальным завершением агента, см.
+// retry.go). Только когда проба прошла И у стадии есть непустой verify-
+// манифест И фаза — одна из исполнительских (implementation/review/
+// autonomous_execution), запускается RunVerification, чей typed error/nil
+// становится итоговым результатом completionCheck.
+//
+// Планировочные раннеры (runPlanningAgent/runPlanningWithFeedback) НИКОГДА
+// не оборачиваются этим хелпером — см. agents.go. Проверка phase здесь —
+// belt-and-suspenders: V1 уже запрещает verify на planning-only стадии на
+// этапе flow.ParseFile (см. flow.go's validate).
+func (o *Orchestrator) gateWithVerify(ctx context.Context, s flow.Stage, phase string, baseCheck func() error) func() error {
+	return func() error {
+		if err := baseCheck(); err != nil {
+			return err
+		}
+		if s.Verify.IsEmpty() {
+			return nil
+		}
+		switch phase {
+		case phaseImplementation, phaseReview, phaseAutonomous:
+			return o.RunVerification(ctx, s, phase)
+		default:
+			return nil
+		}
+	}
 }
 
 func verifyStepManifestKind(st flow.VerifyStep) string {

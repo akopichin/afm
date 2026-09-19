@@ -282,6 +282,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			artCtx += buf.String()
 		}
 
+		verifyNote := o.verifyFeedbackBlock(stageDir)
 		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
 		stageDirNote += verifyStageNote(s.Verify)
 		prompt := prompts.Build(prompts.Inputs{
@@ -293,7 +294,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			Plan:            string(planData),
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + stageDirNote + preNote,
+			RetryContext:    retryContext + stageDirNote + preNote + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 		})
@@ -305,6 +306,9 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		}
 
 		if s.HasAgent(flow.AgentReview) {
+			// Инлайн-ревью тоже должен видеть замечания AI-verify предыдущего
+			// прохода (владелец коррекции остаётся implementation — ревью здесь
+			// не гейтится отдельно, это просто дополнительный контекст).
 			reviewPrompt := prompts.Build(prompts.Inputs{
 				Template:        o.opts.Prompts.Review,
 				Stage:           s,
@@ -315,6 +319,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 				Interactive:     s.Interactive,
 				GlobalPrompt:    o.opts.GlobalPrompt,
 				MemoryBlock:     o.memoryBlockForStage(s),
+				RetryContext:    verifyNote,
 			})
 			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 			rr := o.runnerFor(s, phaseReview)
@@ -324,9 +329,9 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		}
 
 		return nil
-	}, func() error {
+	}, o.gateWithVerify(ctx, s, phaseImplementation, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback) })
+	}), func() { o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback) })
 }
 
 func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
@@ -348,6 +353,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 	}
 
 	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
+		verifyNote := o.verifyFeedbackBlock(stageDir)
 		reviewPrompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Review,
 			Stage:           s,
@@ -356,16 +362,16 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 			Artifacts:       artCtx,
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + preNote,
+			RetryContext:    retryContext + preNote + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 		})
 		reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 		rr := o.runnerFor(s, phaseReview)
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
-	}, func() error {
+	}, o.gateWithVerify(ctx, s, phaseReview, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
+	}), func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
 }
 
 // runAutonomousAgent выполняет стадию в автономном треке — без plan.md и approval.
@@ -382,6 +388,14 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 // активации). Без этого ручной retry такой стадии падал с
 // "open log file: ... no such file or directory" — фикс в единой точке
 // покрывает retry, resume-после-рестарта (recovery.go) и любой будущий caller.
+//
+// AI-verify (V4b): completionCheck обёрнут gateWithVerify, который запускает
+// RunVerification ПОСЛЕ того, как CheckAutonomousCompletion (проба на
+// execution_summary.md) реально прошла. Это НОВОЕ поведение — раньше
+// [auto]-стадия с непустым verify: агент-шаги verify молча игнорировались
+// (V1: только shell-шаги успевали исполняться внутри самого агента, см.
+// verifyStageNote), теперь [auto]+verify реально проверяется тем же
+// движком, что implementation/review.
 func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -402,6 +416,7 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 
+		verifyNote := o.verifyFeedbackBlock(stageDir)
 		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
 		prompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
@@ -414,14 +429,14 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + summaryNote + preNote,
+			RetryContext:    retryContext + summaryNote + preNote + verifyNote,
 		})
 		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseAutonomous))
 		r := o.runnerFor(s, phaseAutonomous)
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
-	}, func() error {
+	}, o.gateWithVerify(ctx, s, phaseAutonomous, func() error {
 		return stagefiles.CheckAutonomousCompletion(stageDir)
-	}, func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
+	}), func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
 }
 
 // runImplementationWithFeedback перезапускает implementation-фазу с фидбеком
@@ -475,6 +490,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 			artCtx += buf.String()
 		}
 
+		verifyNote := o.verifyFeedbackBlock(stageDir)
 		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
 		stageDirNote += verifyStageNote(s.Verify)
 		prompt := prompts.Build(prompts.Inputs{
@@ -486,7 +502,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 			Plan:            string(planData),
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + stageDirNote + feedbackNote,
+			RetryContext:    retryContext + stageDirNote + feedbackNote + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 		})
@@ -498,6 +514,8 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 		}
 
 		if s.HasAgent(flow.AgentReview) {
+			// См. runImplementationAgent: инлайн-ревью тоже видит замечания
+			// AI-verify предыдущего прохода.
 			reviewPrompt := prompts.Build(prompts.Inputs{
 				Template:        o.opts.Prompts.Review,
 				Stage:           s,
@@ -508,6 +526,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 				Interactive:     s.Interactive,
 				GlobalPrompt:    o.opts.GlobalPrompt,
 				MemoryBlock:     o.memoryBlockForStage(s),
+				RetryContext:    verifyNote,
 			})
 			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 			rr := o.runnerFor(s, phaseReview)
@@ -516,9 +535,9 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 			}
 		}
 		return nil
-	}, func() error {
+	}, o.gateWithVerify(ctx, s, phaseImplementation, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback) })
+	}), func() { o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback) })
 }
 
 // runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
@@ -543,6 +562,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	}
 
 	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
+		verifyNote := o.verifyFeedbackBlock(stageDir)
 		reviewPrompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Review,
 			Stage:           s,
@@ -551,16 +571,16 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 			Artifacts:       artCtx,
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + feedbackNote,
+			RetryContext:    retryContext + feedbackNote + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 		})
 		reviewLog := filepath.Join(stageDir, "review-feedback.log")
 		rr := o.runnerFor(s, phaseReview)
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
-	}, func() error {
+	}, o.gateWithVerify(ctx, s, phaseReview, func() error {
 		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}, func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
+	}), func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
 }
 
 // runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в
@@ -589,6 +609,7 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 		})
 
+		verifyNote := o.verifyFeedbackBlock(stageDir)
 		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
 		prompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
@@ -601,12 +622,12 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + summaryNote + feedbackNote,
+			RetryContext:    retryContext + summaryNote + feedbackNote + verifyNote,
 		})
 		logFile := filepath.Join(stageDir, "autonomous-feedback.log")
 		r := o.runnerFor(s, phaseAutonomous)
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
-	}, func() error {
+	}, o.gateWithVerify(ctx, s, phaseAutonomous, func() error {
 		return stagefiles.CheckAutonomousCompletion(stageDir)
-	}, func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
+	}), func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
 }
