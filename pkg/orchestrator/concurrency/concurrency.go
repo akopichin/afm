@@ -88,6 +88,16 @@ type Manager struct {
 // per-stage MaxParallel имеет приоритет над globalMaxParallel; MaxParallel<=0
 // означает отсутствие ограничения (noopSemaphore). shouldRun — см. поле
 // Manager.shouldRun; nil допустим.
+//
+// Команды агентских verify-шагов (Stage.VerifyAgentCommands, AI-verify задача
+// V3) включаются в множество команд наравне с Stage.Command — ИНАЧЕ у
+// верификатора, не встречающегося ни в одном Stage.Command, вообще не было
+// бы предсозданного семафора в m.sems, и Lease.AcquireLease/SwapTo молча
+// откатились бы на noopSemaphore (semForCmd) — то есть переход автор→
+// верификатор на такую команду не ограничивался бы max_parallel вовсе.
+// verify.max_parallel сознательно НЕ добавлен (см. бриф задачи V3) — у
+// verify-команды без собственного Stage.MaxParallel в другой стадии лимит
+// берётся из globalMaxParallel, как у любой прочей нелимитированной команды.
 func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, globalMaxParallel int, shouldRun func(stageID string) bool) *Manager {
 	limits := make(map[string]int)
 	cmds := make(map[string]bool)
@@ -97,11 +107,13 @@ func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, 
 			cmd = defaultCommand
 		}
 		cmds[cmd] = true
-		if s.MaxParallel <= 0 {
-			continue
+		if s.MaxParallel > 0 {
+			if cur, ok := limits[cmd]; !ok || s.MaxParallel < cur {
+				limits[cmd] = s.MaxParallel
+			}
 		}
-		if cur, ok := limits[cmd]; !ok || s.MaxParallel < cur {
-			limits[cmd] = s.MaxParallel
+		for _, vcmd := range s.VerifyAgentCommands() {
+			cmds[vcmd] = true
 		}
 	}
 	sems := make(map[string]Semaphore)
@@ -138,7 +150,16 @@ func (m *Manager) IsActive(stageID string) bool {
 }
 
 func (m *Manager) semFor(s flow.Stage) Semaphore {
-	cmd := s.Command
+	return m.semForCmd(s.Command)
+}
+
+// semForCmd резолвит семафор по имени команды напрямую (без flow.Stage) —
+// нужен Lease, у которого на момент SwapTo нет всей стадии, только имя
+// команды верификатора. Та же нормализация, что и semFor: "" → дефолтная
+// команда Manager'а; команда без собственного семафора (в т.ч. созданная в
+// обход New, напр. в тестах через NewWithSemaphores без этого ключа) —
+// noopSemaphore (без ограничения), а не паника или молчаливый nil-семафор.
+func (m *Manager) semForCmd(cmd string) Semaphore {
 	if cmd == "" {
 		cmd = m.defaultCmd
 	}
