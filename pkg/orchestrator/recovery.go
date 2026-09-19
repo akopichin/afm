@@ -198,10 +198,21 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				// resuming the pending before-hook decision via the second switch.
 			case state.StatusRetrying:
 				stageDir := filepath.Join(o.opts.RunDir, s.ID)
-				if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-					o.maybeRunAfterHook(ctx, s.ID)
-					continue
+				// AI-verify (V5a): .done — это заявление АВТОРА, не вердикт
+				// верификатора (см. RunVerification/gateWithVerify — verify
+				// решает поверх уже пройденного file-probe). Стадия могла упасть
+				// именно во время/до verify — .done уже на диске, а свежего
+				// прохода verify по НЕМУ ещё не было. Для стадий с непустым
+				// Verify эта короткая дорожка пропускается: EvReady ниже уводит
+				// стадию на обычный повторный запуск, чей completionCheck сам
+				// прогонит fresh-гейт (gateWithVerify) — как для любого другого
+				// незавершённого прохода.
+				if s.Verify.IsEmpty() {
+					if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
+						o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
+						o.maybeRunAfterHook(ctx, s.ID)
+						continue
+					}
 				}
 				o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
 			default:
@@ -352,8 +363,17 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 		// and gets routed into EvStartPlanning + runPlanningAgent, a real
 		// planning agent that has no plan.md to produce for a stage that's
 		// never supposed to have one.
+		// AI-verify (V5a): CheckAutonomousCompletion/CheckCompletion — чистый
+		// file-probe АВТОРА (execution_summary.md/.done), не вердикт
+		// верификатора. Крах мог случиться именно во время/до verify — probe
+		// уже проходит, а свежего прохода RunVerification по этому конкретному
+		// артефакту ещё не было. "&& s.Verify.IsEmpty()" — единственное
+		// изменение: для стадии без verify ничего не меняется, для стадии С
+		// verify recovery больше не признаёт файл автора готовым вердиктом
+		// сам по себе — переспавненный раннер прогонит СВЕЖИЙ gateWithVerify
+		// (как при любом другом незавершённом проходе).
 		if isAutonomousStage(stageDir) || s.IsAuto() {
-			if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
+			if stagefiles.CheckAutonomousCompletion(stageDir) == nil && s.Verify.IsEmpty() {
 				o.completeStage(ctx, s.ID, status, "recovered execution_summary.md")
 				return
 			}
@@ -361,7 +381,16 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 			return
 		}
 		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
-			o.completeStage(ctx, s.ID, status, "recovered .done")
+			if s.Verify.IsEmpty() {
+				o.completeStage(ctx, s.ID, status, "recovered .done")
+				return
+			}
+			// .done уже на диске — implementation точно уже отработал (иначе
+			// файла бы не было), так что резюмируем его напрямую, а не через
+			// нижнюю эвристику "plan.md есть -> считаем это planning-ретраем":
+			// та эвристика существует для случая, когда .done ЕЩЁ нет и
+			// неясно, на какой фазе застряла Retrying-стадия.
+			o.spawnKind(ctx, s, kindImplementation, o.runImplementationAgent)
 			return
 		}
 		if stagefiles.CheckPlanCompletion(stageDir) == nil && s.NeedsPlanning() {
@@ -391,15 +420,19 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 			o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
 			return
 		}
+		// AI-verify (V5a): та же "&& s.Verify.IsEmpty()" оговорка, что и в
+		// StatusRetrying выше — здесь else-ветка ОДНА и та же независимо от
+		// причины (probe не прошёл ИЛИ verify настроен), так что достаточно
+		// расширить условие, не меняя структуру.
 		if isAutonomousStage(stageDir) || s.IsAuto() {
-			if stagefiles.CheckAutonomousCompletion(stageDir) == nil {
+			if stagefiles.CheckAutonomousCompletion(stageDir) == nil && s.Verify.IsEmpty() {
 				o.completeStage(ctx, s.ID, status, "recovered execution_summary.md")
 				return
 			}
 			o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousAgent)
 			return
 		}
-		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil {
+		if err := stagefiles.CheckCompletion(stageDir, ".", s); err == nil && s.Verify.IsEmpty() {
 			o.completeStage(ctx, s.ID, status, "recovered .done")
 			return
 		}
