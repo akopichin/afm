@@ -201,7 +201,15 @@ func TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses(t *testing.T)
 	}
 	o, stageDir := newVerifyTestOrchestrator(t, stage)
 	o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
-		return verify.RunOutcome{ProcessOK: false}, nil
+		// Result is non-nil despite ProcessOK:false — the point of this test
+		// is that a non-OK process outcome rejects EVEN IF the model's text
+		// somehow decoded to a "pass" (the engine must check ProcessOK
+		// before ever looking at Result).
+		return verify.RunOutcome{ProcessOK: false, Result: &verify.ModelResult{
+			SchemaVersion: verify.SupportedSchemaVersion,
+			Verdict:       verify.VerdictPass,
+			Summary:       "claims pass but the process itself failed",
+		}}, nil
 	}
 
 	err := o.RunVerification(context.Background(), stage, phaseImplementation)
@@ -216,8 +224,15 @@ func TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses(t *testing.T)
 	if _, _, ok := stagefiles.LoadActiveFeedback(stageDir); ok {
 		t.Error("a failed process must never leave a defect feedback behind")
 	}
-	if _, statErr := os.Stat(filepath.Join(stagefiles.StepDir(stageDir, "whatever", 1), "result.json")); statErr == nil {
-		t.Error("no accepted result should have been persisted")
+	// Ищем ЛЮБОЙ accepted result.json под настоящим verify-каталогом стадии
+	// (verID у движка случайный — фиксированный "whatever" здесь заведомо не
+	// существовал бы независимо от корректности кода и ничего не проверял).
+	matches, globErr := filepath.Glob(filepath.Join(stagefiles.VerifyDir(stageDir), "*", "step-*", "result.json"))
+	if globErr != nil {
+		t.Fatalf("glob accepted results: %v", globErr)
+	}
+	if len(matches) != 0 {
+		t.Errorf("no accepted result should have been persisted, found: %v", matches)
 	}
 }
 
