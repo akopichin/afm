@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
 // usageHintFor returns a best-effort accounting.UsageHint for the given agent
@@ -125,6 +127,38 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Ru
 		UsageHint:      o.usageHintFor(s.Command),
 		OnUsage:        o.recordUsage(s.ID, phase, ""),
 	})
+}
+
+// runnerForVerify собирает *executor.Executor для ОДНОГО шага AI-verify.
+// В отличие от runnerFor: свежая сессия (SessionID/Resume не заданы —
+// верификатор не резюмирует диалог автора), StageDir не задан (верификатор
+// не участник file-based dialog протокола, читает только то, что дано в
+// промпте) и Phase — отдельная execution-purpose метка verifyExecutionLabel,
+// а не родительская фаза стадии (planning/implementation/review), чтобы
+// usage/логи verify не путались с фазой автора. cmd — команда КОНКРЕТНОГО
+// verify-шага (VerifyStep.Command), может отличаться от Stage.Command.
+func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Executor {
+	return executor.New(executor.Config{
+		Command:        cmd,
+		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
+		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
+		OnAction:       uiActionPublisher(o.ui, s.ID),
+		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Dir:            o.opts.RootDir,
+		Debug:          o.opts.Debug,
+		RunDir:         o.opts.RunDir,
+		StageID:        s.ID,
+		Phase:          verifyExecutionLabel,
+		UsageHint:      o.usageHintFor(cmd),
+		OnUsage:        o.recordUsage(s.ID, verifyExecutionLabel, ""),
+	})
+}
+
+// execVerifyAgent — продакшн-реализация seam'а o.runVerifyAgent (см.
+// Orchestrator.runVerifyAgent): строит свежий раннер под конкретную команду
+// verify-шага и делегирует его RunVerifyAgent.
+func (o *Orchestrator) execVerifyAgent(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
+	return o.runnerForVerify(s, cmd).RunVerifyAgent(ctx, cmd, s.Name, prompt, logFile, resultFile)
 }
 
 func uiActionPublisher(ui *bus.UIBus, stageID string) func(string, string) {

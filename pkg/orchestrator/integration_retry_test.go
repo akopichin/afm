@@ -363,12 +363,24 @@ func TestIntegration_VerifyPass(t *testing.T) {
 	}
 }
 
-// TestIntegration_VerifyFail verifies that a failing verify command overrides
-// the agent's .done: the stage is retried once with the verify output in the
-// prompt, then fails.
-func TestIntegration_VerifyFail(t *testing.T) {
+// TestIntegration_VerifyDoesNotGateCompletionYet locks in the CURRENT,
+// mid-migration contract of the ai-verify feature (task V4a): CheckCompletion
+// is now a pure file-probe (.done + artifacts) and never executes
+// Stage.Verify — verify execution lives exclusively in the RunVerification
+// engine (verify.go), which is NOT yet called from any execution path
+// (agents.go/retry.go wiring is task V4b). Until that wiring lands, a stage
+// whose declared verify command would fail still completes as soon as
+// .done+artifacts are present — exactly like a stage with no Verify at all.
+// This test used to be named TestIntegration_VerifyFail and asserted the
+// OPPOSITE (verify overrides .done, one free retry, then fail) back when
+// CheckCompletion itself ran the shell command (V1). That exact rejection
+// semantics is preserved and covered at the engine level now, see
+// TestRunVerification_ShellRejectedCarriesLegacyTail (verify_test.go).
+// Once V4b wires RunVerification into the real completion path, this test
+// should be updated (or removed) to expect StatusFailed again.
+func TestIntegration_VerifyDoesNotGateCompletionYet(t *testing.T) {
 	stages := []flow.Stage{
-		{ID: "unverified", Name: "Unverified", Description: "verify fails",
+		{ID: "unverified", Name: "Unverified", Description: "verify would fail, but nothing runs it yet",
 			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
 			Verify: flow.NewShellVerify("echo 'VERIFY-BOOM: 63 tests failed'; exit 1")},
 	}
@@ -384,19 +396,16 @@ func TestIntegration_VerifyFail(t *testing.T) {
 	}
 
 	final := loadStateJSON(t, stateFile)
-	if final.Stages["unverified"].Status != state.StatusFailed {
-		t.Errorf("expected failed when verify fails despite .done, got %v", final.Stages["unverified"].Status)
+	if final.Stages["unverified"].Status != state.StatusDone {
+		t.Errorf("expected done (verify not wired into completion yet, see V4b), got %v", final.Stages["unverified"].Status)
 	}
 
 	runner.mu.Lock()
 	prompts := append([]string{}, runner.prompts...)
 	runner.mu.Unlock()
 
-	if len(prompts) != 2 {
-		t.Fatalf("expected 2 RunAgent calls (initial + retry), got %d", len(prompts))
-	}
-	if !strings.Contains(prompts[1], "VERIFY-BOOM") {
-		t.Errorf("retry prompt should contain verify output, got:\n%s", prompts[1])
+	if len(prompts) != 1 {
+		t.Fatalf("expected exactly 1 RunAgent call (no incomplete-retry triggered by verify), got %d", len(prompts))
 	}
 }
 

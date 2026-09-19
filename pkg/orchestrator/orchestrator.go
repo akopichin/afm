@@ -49,6 +49,11 @@ type Prompts struct {
 	Aggregate      string
 	Prioritize     string
 	Update         string
+	// Verify — assets/prompts/verify.md, инструкция AI-verify агенту (см.
+	// pkg/prompts.BuildVerify, RunVerification). Отдельно от остальных фаз:
+	// verify не входит в flow.Phases(), это ортогональный проход ПОСЛЕ
+	// заявленного стадией завершения.
+	Verify string
 }
 
 // DefaultPrompts returns empty prompts (will be set from assets).
@@ -170,6 +175,14 @@ type Orchestrator struct {
 
 	// hooks — lifecycle dispatcher (observer-only; nil-safe).
 	hooks *lifecyclehooks.Dispatcher
+
+	// runVerifyAgent запускает один AI-verify шаг (см. RunVerification,
+	// verify.go) — инъектируемый seam, тот же приём, что o.spawnJSONFix/
+	// memorypipeline.AgentRunner: продакшн-реализация (execVerifyAgent)
+	// строит свежий *executor.Executor через runnerForVerify и зовёт его
+	// RunVerifyAgent; тесты подменяют этот field напрямую фейковой функцией,
+	// не поднимая реальный subprocess.
+	runVerifyAgent verifyAgentRunner
 
 	// terminalFlow — финальное flow-событие, установленное одним из выходов
 	// Run; эмитится finalizeLifecycle ПОСЛЕ остановки продюсеров (single
@@ -462,6 +475,7 @@ func New(opts Options) *Orchestrator {
 	}
 	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
+	o.runVerifyAgent = o.execVerifyAgent
 	o.mem = memorypipeline.New(memorypipeline.Prompts{
 		Reflect:    opts.Prompts.Reflect,
 		Aggregate:  opts.Prompts.Aggregate,
