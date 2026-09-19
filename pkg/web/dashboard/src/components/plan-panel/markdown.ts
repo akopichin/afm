@@ -64,6 +64,23 @@ const SPECIAL_SECTIONS: Record<string, SpecialSection> = {
   '## Acceptance Criteria': { css: 'plan-section-criteria', icon: '✓', label: 'Acceptance Criteria' },
 }
 
+// codeBlockLineRanges возвращает 0-based полуинтервалы [start, end) строк, которые
+// markdown-it классифицирует как КОД — как fenced (``` / ~~~, любой длины/отступа
+// ≤3), так и indented (отступ ≥4 пробелов). Потребитель (splitImageMarkers) по ним
+// решает, можно ли трактовать строку как маркер картинки: маркер внутри кода —
+// это текст примера, а не запрос картинки. Опираемся на разбор самого markdown-it
+// (а не на ручной line-scanner), чтобы совпадать с фактическим рендером во всех
+// краевых случаях (tilde-fence, indented code, вложенность).
+export function codeBlockLineRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  for (const token of md.parse(text, {})) {
+    if ((token.type === 'fence' || token.type === 'code_block') && token.map !== null) {
+      ranges.push([token.map[0], token.map[1]])
+    }
+  }
+  return ranges
+}
+
 // Блочный рендер markdown: спецсекции (## Assumptions / ## Acceptance Criteria) в
 // сворачиваемых обёртках + чекбоксы. Соответствует renderMarkdownHTML + decorate
 // в текущем app.js.

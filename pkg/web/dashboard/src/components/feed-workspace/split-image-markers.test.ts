@@ -63,6 +63,15 @@ describe('splitImageMarkers', () => {
     expect(imgNames(segs)).toEqual(['after.png'])
   })
 
+  test('маркер внутри indented (4 пробела) code-block → остаётся текстом', () => {
+    // markdown-it трактует блок с отступом ≥4 как код; маркер там — пример, не
+    // картинка (codex-ревью F1). Нужна пустая строка до блока, иначе markdown-it
+    // сделает это lazy-continuation параграфа, а не indented code.
+    const text = 'intro\n\n    [AFM image: nope.png]\n\noutro'
+    const segs = splitImageMarkers(text)
+    expect(imgNames(segs)).toEqual([])
+  })
+
   test('маркер посреди строки → остаётся текстом', () => {
     const segs = splitImageMarkers('see this [AFM image: mid.png] inline')
     expect(imgNames(segs)).toEqual([])

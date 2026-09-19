@@ -29,7 +29,7 @@ func TestServeIndex_SetsCSP(t *testing.T) {
 	}
 	for _, want := range []string{
 		"default-src 'self'",
-		"img-src 'self' data:",
+		"img-src 'self' data: blob:",
 		"connect-src 'self' ws: wss:",
 		"object-src 'none'",
 	} {

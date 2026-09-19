@@ -314,16 +314,17 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 
 // dashboardCSP — Content-Security-Policy для документа дашборда
 // (defense-in-depth). Ключевая директива для фичи «картинка в ленте» —
-// img-src 'self' data:: даже при регрессе renderer-глушилки внешних markdown-
-// картинок браузер не выполнит эксфильтрацию-запрос на чужой origin (data: —
-// для favicon-пульса use-favicon-pulse). script-src закреплён по sha256 инлайн-
+// img-src 'self' data: blob:: даже при регрессе renderer-глушилки внешних
+// markdown-картинок браузер не выполнит эксфильтрацию-запрос на чужой origin
+// (data: — favicon-пульс use-favicon-pulse; blob: — превью вставленной картинки
+// use-image-paste через URL.createObjectURL). script-src закреплён по sha256 инлайн-
 // скрипта темы в index.html (значение стабильно между пересборками — vite его
 // не трогает) + 'self' для хэш-бандла; style-src 'unsafe-inline' — React-инлайн-
 // стили style={{…}}; connect-src ws:/wss: — /ws (use-event-feed). Если инлайн-
 // скрипт темы в index.html поменяется — обновить хэш (иначе тема не применится
 // на первом кадре; CSP-нарушение видно в консоли).
 const dashboardCSP = "default-src 'self'; " +
-	"img-src 'self' data:; " +
+	"img-src 'self' data: blob:; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"script-src 'self' 'sha256-lZhgtiuhrcX+JCIbk+3Pi4xUGHjw107eJYKPorMPpdQ='; " +
 	"connect-src 'self' ws: wss:; " +
