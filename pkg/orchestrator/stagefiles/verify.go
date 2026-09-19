@@ -203,6 +203,14 @@ func renderFindingInto(b *strings.Builder, f verify.Finding) {
 		}
 		fmt.Fprintf(b, "- Путь: %s\n", loc)
 	}
+	renderFindingDetailsInto(b, f)
+}
+
+// renderFindingDetailsInto пишет общий для report.md и feedback.md блок
+// "Требование/Свидетельство/Минимальное исправление" одного finding —
+// вызывающая сторона сама решает, что писать до него (заголовок, статус,
+// путь), т.к. эта часть в report.md и feedback.md разная.
+func renderFindingDetailsInto(b *strings.Builder, f verify.Finding) {
 	fmt.Fprintf(b, "- Требование: %s\n", f.Requirement)
 	fmt.Fprintf(b, "- Свидетельство: %s\n", f.Evidence)
 	fmt.Fprintf(b, "- Минимальное исправление: %s\n\n", f.MinimalFix)
@@ -251,9 +259,7 @@ func renderActiveFeedback(stageDir, verID string, r verify.ModelResult, alias st
 	b.WriteString("## Блокирующие замечания\n\n")
 	for _, f := range blocking {
 		fmt.Fprintf(&b, "### %s\n\n", f.Title)
-		fmt.Fprintf(&b, "- Требование: %s\n", f.Requirement)
-		fmt.Fprintf(&b, "- Свидетельство: %s\n", f.Evidence)
-		fmt.Fprintf(&b, "- Минимальное исправление: %s\n\n", f.MinimalFix)
+		renderFindingDetailsInto(&b, f)
 	}
 	return b.String()
 }
