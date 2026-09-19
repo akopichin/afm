@@ -310,28 +310,18 @@
   overflow: visible;
 }
 
-/* Вопрос — чистая проза (sans), а не код с номерами строк: макет показывает
-   текст вопроса обычным шрифтом. Убираем колонку номеров и маркер, ставим
-   UI-шрифт и крупнее; блоки кода внутри остаются mono. Клик по строке для
-   комментария сохраняется (сам .plan-line остаётся кликабельным). */
-.workspace-body .dialog-question .plan-line {
-  grid-template-columns: 1fr;
-  gap: 0;
-  padding: 2px 0;
-  font-family: var(--font-ui);
-  font-size: 15px;
-  line-height: 1.65;
-}
-.workspace-body .dialog-question .line-num,
-.workspace-body .dialog-question .line-comment-marker { display: none; }
-.workspace-body .dialog-question .line-content {
+/* Вопрос — чистая проза (sans), а не код: макет показывает текст вопроса обычным
+   шрифтом. Текст рендерится блочным markdown (.md-блоки с data-line якорями);
+   ставим UI-шрифт и крупнее, блоки кода внутри остаются mono. Клик по строке
+   (якорю data-line) для комментария работает через delegated-хендлер. */
+.workspace-body .dialog-question .md {
   font-family: var(--font-ui);
   font-size: 15px;
   line-height: 1.65;
   color: var(--text-primary);
 }
-.workspace-body .dialog-question .line-content code,
-.workspace-body .dialog-question .line-content pre { font-family: var(--font-mono); }
+.workspace-body .dialog-question .md code,
+.workspace-body .dialog-question .md pre { font-family: var(--font-mono); }
 
 /* Убираем «коробку» вокруг вопроса — он живёт на канвасе воркспейса (макет):
    ни рамки, ни градиента, ни свечения. */
@@ -347,7 +337,6 @@
 
 /* Вопрос — крупная проза; первый абзац читается как заголовок. */
 .workspace-body .dialog-question { margin-bottom: 20px; }
-.workspace-body .dialog-question .line-content { font-size: 15px; }
 
 /* Options → карточки с радиокнопкой (○ + заголовок + описание), как в макете. */
 .workspace-body .dialog-pending .dialog-options {

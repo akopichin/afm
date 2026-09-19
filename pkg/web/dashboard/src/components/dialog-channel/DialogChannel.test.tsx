@@ -363,7 +363,7 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
     expect(container.querySelector('.line-comment-form')).toBeNull()
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
@@ -384,7 +384,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     // M3: поле кастомного ответа тоже имеет скрепку, поэтому до открытия
     // line-комментария она уже одна.
@@ -409,7 +409,7 @@ describe('DialogChannel', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />, false)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
@@ -470,7 +470,7 @@ describe('DialogChannel', () => {
     })
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
@@ -527,7 +527,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
     const line2 = container.querySelector('[data-line="3"]') as HTMLElement
@@ -541,8 +541,8 @@ describe('DialogChannel', () => {
     expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('in progress')
 
     fireEvent.click(line2)
-    expect(container.querySelector('[data-line="1"] .line-comment-form')).not.toBeNull()
-    expect(container.querySelector('[data-line="3"] .line-comment-form')).toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="3"]')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
     expect(container.querySelector('.line-comment-form')).toBeNull()
@@ -560,7 +560,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const sendBtn = screen.getByRole('button', { name: '▸ SEND' })
     expect(sendBtn).not.toBeDisabled()
@@ -589,14 +589,14 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
-    expect(container.querySelector('[data-line="1"] .line-comment-form')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).not.toBeNull()
 
     fireEvent.click(container.querySelector('[data-line="3"]') as HTMLElement)
-    expect(container.querySelector('[data-line="1"] .line-comment-form')).toBeNull()
-    expect(container.querySelector('[data-line="3"] .line-comment-form')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="3"]')).not.toBeNull()
   })
 
   test('adding a comment hides options+textarea and shows Send feedback; deleting the only comment restores them', async () => {
@@ -612,7 +612,7 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
     expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
     expect(container.querySelector('textarea.dialog-custom')).not.toBeNull()
 
@@ -647,7 +647,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
@@ -692,7 +692,7 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="3"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
@@ -735,7 +735,7 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement

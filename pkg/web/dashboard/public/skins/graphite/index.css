@@ -261,9 +261,9 @@
 .stage-item.active { background: rgba(var(--accent-primary-rgb), 0.08); }
 
 /* base/plan-panel.css (only hardcoded bg fills; border-left already on tokens) */
-.plan-line:hover { background: rgba(var(--accent-primary-rgb), 0.05); }
-.plan-line.has-comment { background: rgba(var(--attention-rgb), 0.09); }
-.plan-line.has-comment:hover { background: rgba(var(--attention-rgb), 0.14); }
+.line-commented [data-line].is-hover { background: rgba(var(--accent-primary-rgb), 0.05); }
+.line-commented [data-line].has-comment { background: rgba(var(--attention-rgb), 0.09); }
+.line-commented [data-line].has-comment.is-hover { background: rgba(var(--attention-rgb), 0.14); }
 .plan-section-wrapper { background: rgba(var(--accent-primary-rgb), 0.04); }
 .plan-section-wrapper.plan-section-assumptions { background: rgba(var(--accent-primary-rgb), 0.06); }
 .plan-section-wrapper.plan-section-criteria { background: rgba(var(--success-rgb), 0.06); }

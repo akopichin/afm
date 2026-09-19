@@ -1,18 +1,16 @@
 import { describe, expect, test } from 'vitest'
 import {
-  blockSpans,
   escapeHtml,
-  formatLine,
   isHeading2,
   isSpecialSection,
-  parseLineBlocks,
-  renderInline,
+  renderAnchoredSections,
   renderMarkdown,
   renderPlainMarkdown,
+  type Section,
 } from './markdown'
 
-// Покрытие поведенческого порта markdown-рендера из app.js (renderMarkdownHTML + decorate* +
-// formatLine/inlineFormat). Функции чистые — DOM/fetch не нужен.
+// Покрытие поведенческого порта markdown-рендера из app.js (renderMarkdownHTML + decorate*).
+// Функции чистые — DOM/fetch не нужен.
 
 // renderPlainMarkdown — нейтральный рендерер для ленты: тот же markdown-it, но БЕЗ
 // plan-специфики (спец-секции, decorateCheckboxes). Именно его использует нарратив
@@ -140,171 +138,314 @@ describe('renderMarkdown', () => {
   })
 })
 
-describe('renderInline', () => {
-  test('рендерит инлайн-разметку без блочных тегов', () => {
-    expect(renderInline('**bold**')).toContain('<strong>bold</strong>')
+// renderAnchoredSections — anchored-рендер (один парс, срезы токенов, аннотация
+// data-line на под-элементах). Главная гарантия — «не развалить markdown»:
+// структурная целостность списков/таблиц/цитат + УНИКАЛЬНАЯ стартовая строка у
+// каждого якоря (НЕ биекция со всеми строками).
+describe('renderAnchoredSections', () => {
+  // Собирает весь html всех блоков всех секций.
+  const allHtml = (sections: Section[]): string =>
+    sections.flatMap((s) => s.blocks).map((b) => b.html).join('\n')
+
+  // Все data-line-номера в порядке появления (и на под-элементах, и на fence-обёртке).
+  const dataLines = (html: string): number[] =>
+    [...html.matchAll(/data-line="(\d+)"/g)].map((m) => Number(m[1]))
+
+  test('пустой ввод → пустой массив секций (оба режима)', () => {
+    expect(renderAnchoredSections('', { specialSections: true })).toEqual([])
+    expect(renderAnchoredSections('   \n  ', { specialSections: false })).toEqual([])
   })
 
-  test('декорирует чекбоксы инлайн', () => {
-    expect(renderInline('[x]')).toContain('cb cb-done')
-  })
-})
+  // ── Структурная целостность markdown ──────────────────────────────────────
 
-describe('formatLine', () => {
-  test('форматирует заголовки по уровням', () => {
-    expect(formatLine('# Title')).toBe('<h1>Title</h1>')
-    expect(formatLine('## Section')).toBe('<h2>Section</h2>')
-    expect(formatLine('### Sub')).toBe('<h3>Sub</h3>')
+  test('<ol> продолжает нумерацию (start="2")', () => {
+    const html = allHtml(renderAnchoredSections('2. first\n3. second', { specialSections: false }))
+    expect(html).toContain('<ol start="2">')
+    expect(html).toContain('<li')
   })
 
-  test('форматирует элементы списка, срезая - и *', () => {
-    expect(formatLine('- item')).toBe('<li>item</li>')
-    expect(formatLine('* item')).toBe('<li>item</li>')
-  })
-
-  test('пустая строка становится неразрывным пробелом', () => {
-    expect(formatLine('')).toBe('&nbsp;')
-  })
-
-  test('обычные строки становятся параграфами', () => {
-    expect(formatLine('plain text')).toBe('<p>plain text</p>')
-  })
-})
-
-// parseLineBlocks — тонкий алиас над blockSpans (используется DialogChannel),
-// поэтому оба имени покрываются одним набором кейсов; часть тестов дублирует
-// вызов через оба имени, чтобы зафиксировать, что сигнатуры остаются идентичны.
-describe('blockSpans / parseLineBlocks — сегментация по markdown-it token.map', () => {
-  test('обёрнутый многострочный параграф — ОДИН <p>, заякоренный на первой строке', () => {
-    // До block-сегментации построчное сканирование резало это на 3 отдельных
-    // <p> — по CommonMark это один параграф (lazy continuation внутри абзаца).
-    const blocks = blockSpans('line one\nline two\nline three')
+  test('tight-список: один блок, якорь на каждом <li> внутри <ul>', () => {
+    const sections = renderAnchoredSections('- a\n- b', { specialSections: false })
+    expect(sections).toHaveLength(1)
+    const blocks = sections[0]!.blocks
     expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('line one')
-    expect(blocks[0]?.html).toContain('line two')
-    expect(blocks[0]?.html).toContain('line three')
-    expect((blocks[0]?.html.match(/<p>/g) ?? []).length).toBe(1)
+    expect(blocks[0]).toMatchObject({ startLine: 1, endLineExclusive: 3 })
+    expect(blocks[0]!.html).toContain('<ul>')
+    // Якоря именно на <li>, не на <ul> (списки/таблицы якорят под-элементы).
+    expect(blocks[0]!.html).toMatch(/<li data-line="1"/)
+    expect(blocks[0]!.html).toMatch(/<li data-line="2"/)
+    expect(dataLines(blocks[0]!.html)).toEqual([1, 2])
   })
 
-  test('нумерованный список (1./2.) — один <ol>, заякоренный на первой строке', () => {
-    const blocks = blockSpans('1. one\n2. two')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<ol>')
-    expect(blocks[0]?.html).toContain('<li>one</li>')
-    expect(blocks[0]?.html).toContain('<li>two</li>')
+  test('loose-список: 2-й пункт — свой якорь на своей строке', () => {
+    const html = allHtml(renderAnchoredSections('- a\n\n- b', { specialSections: false }))
+    expect(dataLines(html)).toEqual([1, 3])
   })
 
-  test('маркированный список (-) — один <ul>, заякоренный на первой строке', () => {
-    const blocks = parseLineBlocks('- a\n- b')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<ul>')
-    expect(blocks[0]?.html).toContain('<li>a</li>')
-    expect(blocks[0]?.html).toContain('<li>b</li>')
+  test('вложенный список: внешний + вложенный li + следующий — три якоря', () => {
+    const html = allHtml(
+      renderAnchoredSections('- a\n  - nested\n- b', { specialSections: false }),
+    )
+    expect(dataLines(html)).toEqual([1, 2, 3])
+    expect(html).toContain('nested')
+    // Ровно два <ul> — внешний и один вложенный (без повторного рендера).
+    expect((html.match(/<ul>/g) ?? []).length).toBe(2)
   })
 
-  test('вложенный список — один блок верхнего уровня, вложенный <ul> не дублируется', () => {
-    const blocks = blockSpans('- a\n  - nested\n- b')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    // Ровно два <ul> — внешний и один вложенный, без повторного рендера.
-    expect((blocks[0]?.html.match(/<ul>/g) ?? []).length).toBe(2)
-    expect(blocks[0]?.html).toContain('nested')
-  })
-
-  test('loose-список (пустая строка между пунктами) — один блок, оба пункта внутри', () => {
-    const blocks = blockSpans('- a\n\n- b')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<li>')
-    expect(blocks[0]?.html).toContain('a')
-    expect(blocks[0]?.html).toContain('b')
-  })
-
-  test('lazy continuation ("- a"⏎"b") — один пункт списка, вторая строка внутри него', () => {
-    const blocks = blockSpans('- a\nb')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<ul>')
-    expect(blocks[0]?.html).toContain('a')
-    expect(blocks[0]?.html).toContain('b')
-    expect((blocks[0]?.html.match(/<li>/g) ?? []).length).toBe(1)
-  })
-
-  test('параграф + "- item" — ДВА блока: параграф и список', () => {
-    const blocks = blockSpans('para\n- item')
+  test('смешанные блоки (список + список) — каждый свой блок', () => {
+    const sections = renderAnchoredSections('1. a\n2. b\n\n- c\n- d', { specialSections: false })
+    expect(sections).toHaveLength(1)
+    const blocks = sections[0]!.blocks
     expect(blocks).toHaveLength(2)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<p>para</p>')
-    expect(blocks[1]).toMatchObject({ line: 2 })
-    expect(blocks[1]?.html).toContain('<ul>')
-    expect(blocks[1]?.html).toContain('item')
+    expect(blocks[0]!.html).toContain('<ol')
+    expect(blocks[1]!.html).toContain('<ul>')
+    // Глобальные номера строк: второй список стартует на строке 4.
+    expect(dataLines(blocks[1]!.html)).toEqual([4, 5])
   })
 
-  test('параграф + "2. item" — ОДИН блок-параграф ("2." посреди параграфа — не начало списка)', () => {
-    const blocks = blockSpans('para\n2. item')
+  test('<li> только внутри ul/ol (заголовок/параграф якорится сам, не как li)', () => {
+    const html = allHtml(renderAnchoredSections('# Title\n\npara', { specialSections: false }))
+    expect(html).not.toContain('<li')
+    expect(html).toMatch(/<h1 data-line="1"/)
+    expect(html).toMatch(/<p data-line="3"/)
+  })
+
+  test('<tr> только внутри thead/tbody; якоря на header-tr и data-tr', () => {
+    const sections = renderAnchoredSections('| A | B |\n|---|---|\n| 1 | 2 |', {
+      specialSections: false,
+    })
+    const blocks = sections[0]!.blocks
     expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).not.toContain('<ol>')
-    expect(blocks[0]?.html).toContain('para')
-    expect(blocks[0]?.html).toContain('2. item')
+    const html = blocks[0]!.html
+    expect(html).toContain('<table>')
+    expect(html).toContain('<thead>')
+    expect(html).toContain('<tbody>')
+    expect(html).not.toContain('<li')
+    expect(html).toMatch(/<tr data-line="1"/) // header row
+    expect(html).toMatch(/<tr data-line="3"/) // data row
+    expect(dataLines(html)).toEqual([1, 3])
+    // Разделитель |---| (строка 2) якоря не имеет.
+    expect(html).not.toContain('data-line="2"')
   })
 
-  test('blockquote с продолжением на второй строке — один блок <blockquote>', () => {
-    const blocks = blockSpans('> quote\n> cont')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<blockquote>')
-    expect(blocks[0]?.html).toContain('quote')
-    expect(blocks[0]?.html).toContain('cont')
+  test('таблица без header-разделителя → параграф → якорь-параграф', () => {
+    const html = allHtml(renderAnchoredSections('value | with pipe', { specialSections: false }))
+    expect(html).not.toContain('<table>')
+    expect(html).toMatch(/<p data-line="1"/)
+    expect(dataLines(html)).toEqual([1])
   })
 
-  test('blockquote, затем параграф — ДВА блока', () => {
-    const blocks = blockSpans('> quote\n\npara')
-    expect(blocks).toHaveLength(2)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<blockquote>')
-    expect(blocks[1]).toMatchObject({ line: 3 }) // после пустой строки-разделителя
-    expect(blocks[1]?.html).toContain('<p>para</p>')
+  test('несколько параграфов в blockquote — каждый свой якорь на своей строке', () => {
+    const html = allHtml(renderAnchoredSections('> p1\n>\n> p2', { specialSections: false }))
+    expect(html).toContain('<blockquote')
+    // Первая строка — внешний blockquote (коллизия с 1-м абзацем → внешний);
+    // 2-й абзац на строке 3 — свой якорь.
+    expect(dataLines(html)).toEqual([1, 3])
   })
 
-  test('fenced-код схлопывается в один блок <pre>, заякоренный на строке ```', () => {
-    // Регресс #1: раньше в диалоге код-блок разваливался построчно (```diff как
-    // отдельный <p>), и yaml-контракт «резался». Теперь это один <pre>.
-    const blocks = parseLineBlocks('Before\n```diff\n-old\n+new\n```\nAfter')
-    expect(blocks).toHaveLength(3) // Before | код-блок | After
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[1]?.line).toBe(2) // блок заякорен на строке открывающего ```
-    expect(blocks[1]?.html).toContain('<pre>')
-    expect(blocks[1]?.html).toContain('-old')
-    expect(blocks[1]?.html).toContain('+new')
-    expect(blocks[2]).toMatchObject({ line: 6 }) // After — после закрывающего ```
-    expect(blocks[2]?.html).toContain('After')
+  test('fence: один якорь на <div class="md-fence-anchor"> вокруг <pre>', () => {
+    const html = allHtml(
+      renderAnchoredSections('```js\nconst x = 1\n```', { specialSections: false }),
+    )
+    expect(html).toContain('<div class="md-fence-anchor" data-line="1"')
+    expect(html).toContain('<pre>')
+    expect(html).toContain('const x = 1')
+    expect(dataLines(html)).toEqual([1])
   })
 
-  test('markdown-таблица схлопывается в один блок <table>', () => {
-    // Регресс #4: раньше таблица в review-плане рендерилась «мешаниной» — каждая
-    // |-строка отдельным <p>, разделитель |---| голым текстом.
-    const blocks = parseLineBlocks('| A | B |\n|---|---|\n| 1 | 2 |')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<table>')
-    expect(blocks[0]?.html).toContain('<td>1</td>')
+  test('indented code: один якорь на fence-обёртке', () => {
+    const html = allHtml(
+      renderAnchoredSections('    indented code\n    line two', { specialSections: false }),
+    )
+    expect(html).toContain('md-fence-anchor')
+    expect(html).toContain('<pre>')
+    expect(dataLines(html)).toEqual([1])
   })
 
-  test('одиночная |-строка без разделителя таблицей не считается', () => {
-    const blocks = parseLineBlocks('value | with pipe')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]?.html).not.toContain('<table>')
+  test('ссылки сохраняют target=_blank / rel=noopener', () => {
+    const html = allHtml(renderAnchoredSections('See [link](/path).', { specialSections: false }))
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener"')
+    expect(html).toContain('href="/path"')
   })
 
-  test('заголовок и пустая строка — один блок-заголовок', () => {
-    const blocks = blockSpans('## Heading\n')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]).toMatchObject({ line: 1 })
-    expect(blocks[0]?.html).toContain('<h2>Heading</h2>')
+  test('reference-def ВНЕ блока + ссылка ВНУТРИ — резолвится (один parse)', () => {
+    const sections = renderAnchoredSections('[ref]: /target\n\nSee [link][ref].', {
+      specialSections: false,
+    })
+    const html = allHtml(sections)
+    expect(html).toContain('href="/target"')
+    // Глобальные номера строк: reference-def токенов не даёт, параграф на строке 3.
+    expect(dataLines(html)).toEqual([3])
+  })
+
+  // ── Коллизии (несколько кандидатов на одной строке → самый внешний) ────────
+
+  test('коллизия "- # H" → один внешний якорь на <li>', () => {
+    const html = allHtml(renderAnchoredSections('- # H', { specialSections: false }))
+    expect(dataLines(html)).toEqual([1])
+    expect(html).toMatch(/<li data-line="1"/)
+    expect(html).toContain('<h1>H</h1>')
+  })
+
+  test('коллизия "1. # H" → один внешний якорь на <li> в <ol>', () => {
+    const html = allHtml(renderAnchoredSections('1. # H', { specialSections: false }))
+    expect(dataLines(html)).toEqual([1])
+    expect(html).toContain('<ol>')
+    expect(html).toMatch(/<li data-line="1"/)
+  })
+
+  test('коллизия "- > quote" → один внешний якорь на <li>', () => {
+    const html = allHtml(renderAnchoredSections('- > quote', { specialSections: false }))
+    expect(dataLines(html)).toEqual([1])
+    expect(html).toMatch(/<li data-line="1"/)
+    expect(html).toContain('<blockquote')
+  })
+
+  test('коллизия li+fence на одной строке → один внешний якорь (fence не оборачивается)', () => {
+    const html = allHtml(
+      renderAnchoredSections('- ```\n  code\n  ```', { specialSections: false }),
+    )
+    expect(dataLines(html)).toEqual([1])
+    expect(html).toMatch(/<li data-line="1"/)
+    // fence не выбран якорем → wrapper-обёртки нет.
+    expect(html).not.toContain('md-fence-anchor')
+  })
+
+  test('setext-заголовок → якорь на первой строке (подчёркивание якоря не имеет)', () => {
+    const html = allHtml(
+      renderAnchoredSections('Title\n=====\n\nbody', { specialSections: false }),
+    )
+    expect(html).toMatch(/<h1 data-line="1"/)
+    expect(dataLines(html)).toEqual([1, 4])
+  })
+
+  // ── Чекбоксы (token-aware, с сохранением экранирования) ────────────────────
+
+  test('чекбоксы декорируются в тексте', () => {
+    const html = allHtml(renderAnchoredSections('- [x] done\n- [ ] todo', { specialSections: false }))
+    expect(html).toContain('cb cb-done')
+    expect(html).toContain('cb cb-open')
+  })
+
+  test('чекбокс НЕ декорируется внутри fence', () => {
+    const html = allHtml(
+      renderAnchoredSections('```\n[x] not a checkbox\n```', { specialSections: false }),
+    )
+    expect(html).not.toContain('cb-done')
+    expect(html).toContain('[x]')
+  })
+
+  test('чекбокс НЕ декорируется внутри inline-code', () => {
+    const html = allHtml(renderAnchoredSections('text `[x]` more', { specialSections: false }))
+    expect(html).not.toContain('cb-done')
+    expect(html).toContain('<code>[x]</code>')
+  })
+
+  test('экранирование сохраняется: <b> экранируется, [x] рядом декорируется', () => {
+    const html = allHtml(renderAnchoredSections('use <b>bold</b> [x]', { specialSections: false }))
+    expect(html).toContain('&lt;b&gt;')
+    expect(html).not.toContain('<b>')
+    expect(html).toContain('cb cb-done')
+  })
+
+  test('\\[x] неотличимо от [x] (документированное ограничение) → декорируется', () => {
+    const html = allHtml(renderAnchoredSections('value \\[x] here', { specialSections: false }))
+    expect(html).toContain('cb cb-done')
+  })
+
+  // ── Спец-секции (режим Plan/Dialog) ────────────────────────────────────────
+
+  test('Plan-режим: спец-секция со списком — заголовок вырезан, блоки внутри секции', () => {
+    const sections = renderAnchoredSections('## Assumptions\n\n- a\n- b', { specialSections: true })
+    expect(sections).toHaveLength(1)
+    expect(sections[0]!.kind).toBe('special')
+    expect(sections[0]!.special?.label).toBe('Assumptions')
+    const html = allHtml(sections)
+    expect(html).not.toContain('Assumptions') // заголовок вырезан
+    expect(html).toContain('<ul>')
+    // Глобальные номера строк: список внутри секции стартует на строке 3.
+    expect(dataLines(html)).toEqual([3, 4])
+  })
+
+  test('Plan-режим: спец-секция с таблицей', () => {
+    const sections = renderAnchoredSections(
+      '## Acceptance Criteria\n\n| A | B |\n|---|---|\n| 1 | 2 |',
+      { specialSections: true },
+    )
+    expect(sections).toHaveLength(1)
+    expect(sections[0]!.kind).toBe('special')
+    expect(sections[0]!.special?.label).toBe('Acceptance Criteria')
+    const html = allHtml(sections)
+    expect(html).toContain('<table>')
+    // tr на строках 3 (header) и 5 (data).
+    expect(dataLines(html)).toEqual([3, 5])
+  })
+
+  test('Plan-режим: special → ## Other → content (## Other закрывает секцию и рендерится)', () => {
+    const sections = renderAnchoredSections(
+      '## Assumptions\n\n- a\n\n## Other\n\n- b',
+      { specialSections: true },
+    )
+    expect(sections).toHaveLength(2)
+    expect(sections[0]!.kind).toBe('special')
+    expect(sections[0]!.special?.label).toBe('Assumptions')
+    expect(sections[1]!.kind).toBe('plain')
+    const plainHtml = sections[1]!.blocks.map((b) => b.html).join('')
+    // ## Other рендерится нормально (не вырезан, не спец).
+    expect(plainHtml).toContain('Other')
+    expect(plainHtml).toContain('<h2')
+  })
+
+  test('Dialog-режим (specialSections:false): заголовок спец-секции НЕ вырезается', () => {
+    const sections = renderAnchoredSections('## Assumptions\n\n- a', { specialSections: false })
+    expect(sections).toHaveLength(1)
+    expect(sections[0]!.kind).toBe('plain')
+    const html = allHtml(sections)
+    expect(html).toContain('Assumptions') // заголовок на месте
+    expect(html).toContain('<h2')
+  })
+
+  // ── XSS / безопасность ──────────────────────────────────────────────────────
+
+  test('XSS: html:false — raw <img> экранируется', () => {
+    const html = allHtml(
+      renderAnchoredSections('<img src=x onerror=alert(1)>', { specialSections: false }),
+    )
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
+  })
+
+  test('XSS: опасный URL javascript: не становится href', () => {
+    const html = allHtml(
+      renderAnchoredSections('[click](javascript:alert(1))', { specialSections: false }),
+    )
+    expect(html).not.toContain('href="javascript:')
+  })
+
+  test('XSS: fence info не инъектится сырым HTML', () => {
+    const html = allHtml(
+      renderAnchoredSections('```<script>alert(1)</script>\ncode\n```', { specialSections: false }),
+    )
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('md-fence-anchor')
+  })
+
+  test('внешняя markdown-картинка глушится (только alt-текст, без <img>)', () => {
+    const html = allHtml(
+      renderAnchoredSections('![secret](http://evil/?leak)', { specialSections: false }),
+    )
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('evil')
+    expect(html).toContain('secret')
+  })
+
+  test('относительная same-origin картинка всё ещё рендерится', () => {
+    const html = allHtml(
+      renderAnchoredSections('![chart](/api/chart.png)', { specialSections: false }),
+    )
+    expect(html).toContain('<img')
+    expect(html).toContain('src="/api/chart.png"')
   })
 })
 

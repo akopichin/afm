@@ -158,9 +158,9 @@
 .stage-item.active::after { background: linear-gradient(90deg, transparent, rgba(255, 154, 52, 0.7), transparent); }
 
 /* base/plan-panel.css (перекраска только захардкоженных bg; border-left уже на токенах) */
-.plan-line:hover { background: rgba(255, 154, 52, 0.06); }
-.plan-line.has-comment { background: rgba(232, 178, 94, 0.09); }
-.plan-line.has-comment:hover { background: rgba(232, 178, 94, 0.14); }
+.line-commented [data-line].is-hover { background: rgba(255, 154, 52, 0.06); }
+.line-commented [data-line].has-comment { background: rgba(232, 178, 94, 0.09); }
+.line-commented [data-line].has-comment.is-hover { background: rgba(232, 178, 94, 0.14); }
 .plan-section-wrapper { background: rgba(255, 154, 52, 0.04); }
 .plan-section-wrapper.plan-section-assumptions { background: rgba(255, 154, 52, 0.06); }
 .plan-section-wrapper.plan-section-criteria { background: rgba(166, 193, 136, 0.06); }

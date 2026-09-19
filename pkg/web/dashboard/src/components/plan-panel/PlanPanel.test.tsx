@@ -63,27 +63,33 @@ describe('PlanPanel', () => {
     expect(container.querySelector('#plan-empty')).not.toHaveClass('hidden')
   })
 
-  test('awaiting_approval: renders review lines with line numbers and opens a comment form on click', async () => {
+  test('awaiting_approval: anchors each line and opens a comment form (sibling with data-comment-line) on click', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
-    expect(line1.querySelector('.line-num')?.textContent).toBe('1')
+    // No number gutter anymore; the "Line N" affordance is the anchor's title.
+    expect(line1.getAttribute('title')).toBe('Comment on line 1')
     expect(container.querySelector('.line-comment-form')).toBeNull()
 
     fireEvent.click(line1)
-    expect(container.querySelector('.line-comment-form')).not.toBeNull()
+    // The form is NOT a descendant of the anchor (can't nest a div in an h1/p);
+    // it is a sibling marked data-comment-ui + data-comment-line.
+    const form = container.querySelector('.line-comment-form[data-comment-line="1"]') as HTMLElement
+    expect(form).not.toBeNull()
+    expect(form.closest('[data-line]')).toBeNull()
+    // The anchor itself carries has-comment/is-active classes (applied imperatively).
+    expect(line1.classList.contains('is-active')).toBe(true)
   })
 
   test('awaiting_approval: a special section plus a list renders both correctly, and each stays commentable (block segmentation)', async () => {
-    // Регресс: построчный парсер рендерил список внутри спецсекции как голые
-    // <li> без <ul>-обёртки. Теперь parseReviewPlan сегментирует через
-    // blockSpans — список внутри секции и список после неё оба должны
-    // рендериться целыми <ul>-блоками, а не построчной мешаниной, и при этом
-    // якорение на первой строке блока (для клика/комментария) не ломается.
+    // Список внутри спецсекции и после неё рендерятся целыми <ul>-блоками (не
+    // построчной мешаниной), а КАЖДЫЙ пункт <li> заякорен на своей строке
+    // (data-line на под-элементе). Клик по пункту открывает форму-sibling ПОД
+    // блоком (компромисс: форма контейнера появляется под всем блоком).
     const plan = ['## Assumptions', '- risk one', '- risk two', '## Next', '- item a', '- item b'].join('\n')
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(plan))
 
@@ -91,32 +97,32 @@ describe('PlanPanel', () => {
 
     await waitFor(() => expect(container.querySelector('.plan-section-wrapper.plan-section-assumptions')).not.toBeNull())
 
-    // Секция Assumptions: заголовок из wrapper'а, список внутри — целый <ul>,
-    // заякоренный на строке 2 (первая строка списка, а не строка заголовка).
+    // Секция Assumptions: заголовок — настоящая кнопка; список внутри — целый
+    // <ul>; первый пункт заякорен на строке 2 (сам <li>, а не <ul>).
     const section = container.querySelector('.plan-section-wrapper.plan-section-assumptions') as HTMLElement
-    expect(section.querySelector('.section-header')?.textContent).toContain('Assumptions')
+    expect(section.querySelector('button.section-header')?.textContent).toContain('Assumptions')
+    expect(section.querySelector('.md ul')).not.toBeNull()
     const sectionLine = section.querySelector('[data-line="2"]') as HTMLElement
     expect(sectionLine).not.toBeNull()
-    expect(sectionLine.querySelector('ul')).not.toBeNull()
+    expect(sectionLine.tagName).toBe('LI')
     expect(sectionLine.textContent).toContain('risk one')
-    expect(sectionLine.textContent).toContain('risk two')
+    expect(section.querySelector('[data-line="3"]')?.textContent).toContain('risk two')
 
-    // Список внутри секции остаётся комментируемым.
+    // Список внутри секции остаётся комментируемым: форма — sibling внутри
+    // тела секции, помеченный data-comment-line.
     fireEvent.click(sectionLine)
-    expect(sectionLine.querySelector('.line-comment-form')).not.toBeNull()
+    expect(section.querySelector('.line-comment-form[data-comment-line="2"]')).not.toBeNull()
 
     // Список ПОСЛЕ секции (## Next закрывает Assumptions) — отдельный блок вне
-    // обёртки, заякоренный на строке 5, тоже целый <ul>.
+    // обёртки; первый пункт заякорен на строке 5.
     const outsideLine = container.querySelector('[data-line="5"]') as HTMLElement
     expect(outsideLine).not.toBeNull()
     expect(outsideLine.closest('.plan-section-wrapper')).toBeNull()
-    expect(outsideLine.querySelector('ul')).not.toBeNull()
+    expect(outsideLine.tagName).toBe('LI')
     expect(outsideLine.textContent).toContain('item a')
-    expect(outsideLine.textContent).toContain('item b')
 
-    // И он тоже комментируемый — якорение на первой строке блока не сломано.
     fireEvent.click(outsideLine)
-    expect(outsideLine.querySelector('.line-comment-form')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="5"]')).not.toBeNull()
   })
 
   test('approve(): posts to the approve endpoint and disables the button while in flight', async () => {
@@ -152,7 +158,7 @@ describe('PlanPanel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const approveBtn = screen.getByRole('button', { name: 'Approve' })
     expect(approveBtn).not.toBeDisabled()
@@ -174,7 +180,7 @@ describe('PlanPanel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const approveBtn = screen.getByRole('button', { name: 'Approve' })
     expect(approveBtn).not.toBeDisabled()
@@ -204,7 +210,7 @@ describe('PlanPanel', () => {
     })
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const reviseBtn = screen.getByRole('button', { name: 'Send revision' })
     expect(reviseBtn).toBeDisabled()
@@ -236,7 +242,7 @@ describe('PlanPanel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     // Add a comment on line 1.
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -260,7 +266,7 @@ describe('PlanPanel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
     const line2 = container.querySelector('[data-line="2"]') as HTMLElement
@@ -276,8 +282,8 @@ describe('PlanPanel', () => {
 
     // Clicking a different row must not switch away from the open draft either.
     fireEvent.click(line2)
-    expect(container.querySelector('[data-line="1"] .line-comment-form')).not.toBeNull()
-    expect(container.querySelector('[data-line="2"] .line-comment-form')).toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="2"]')).toBeNull()
 
     // Only the × discards it.
     fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
@@ -288,14 +294,14 @@ describe('PlanPanel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
-    expect(container.querySelector('[data-line="1"] .line-comment-form')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).not.toBeNull()
 
     fireEvent.click(container.querySelector('[data-line="2"]') as HTMLElement)
-    expect(container.querySelector('[data-line="1"] .line-comment-form')).toBeNull()
-    expect(container.querySelector('[data-line="2"] .line-comment-form')).not.toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).toBeNull()
+    expect(container.querySelector('.line-comment-form[data-comment-line="2"]')).not.toBeNull()
   })
 
   test('retry section is hidden unless the stage failed', async () => {
@@ -399,7 +405,7 @@ describe('PlanPanel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
@@ -417,7 +423,7 @@ describe('PlanPanel', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />, false)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
@@ -444,7 +450,7 @@ describe('PlanPanel', () => {
       .mockReturnValue(150)
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
-    await waitFor(() => expect(container.querySelectorAll('.plan-line').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement

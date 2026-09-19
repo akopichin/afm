@@ -5,7 +5,7 @@ import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { MarkdownRenderer } from '../plan-panel'
-import { parseLineBlocks, type LineBlock } from '../plan-panel/markdown'
+import { LineCommentedDocument, type LineCommentDocumentApi } from '../plan-panel/LineCommentedDocument'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 
@@ -72,12 +72,10 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const [customText, setCustomText] = useState('')
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
 
-  // Комментарии к строкам pending-вопроса — тот же паттерн, что у PlanPanel
-  // (comments/activeCommentLine/draft): клик по строке открывает форму
-  // add/update/delete, комментарии живут только до отправки feedback.
-  const [comments, setComments] = useState<Record<number, string>>({})
-  const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
-  const [draft, setDraft] = useState('')
+  // Построчные комментарии к pending-вопросу живут внутри keyed-владельца
+  // LineCommentedDocument (см. рендер ниже): смена (stage,phase,id,текст вопроса)
+  // размонтирует его и атомарно сбрасывает комментарии/черновик. Поэтому в самом
+  // DialogChannel этого state больше нет — комментарии читаются из render-prop.
   const [clickedSend, setClickedSend] = useState(false)
   // submitting/submitError гейтят двойную отправку и делают ошибку мутирующего
   // действия видимой (finding #8): без них кнопка SEND не блокировалась на время
@@ -135,8 +133,6 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
       lastPendingKeyRef.current = nextKey
       setSelectedOption(null)
       setCustomText('')
-      setComments({})
-      setActiveCommentLine(null)
     }
   }, [])
 
@@ -164,8 +160,6 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setEntries([])
     setSelectedOption(null)
     setCustomText('')
-    setComments({})
-    setActiveCommentLine(null)
 
     const refresh = (): void => {
       // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно
@@ -208,7 +202,6 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
   const jumpToBottom = feed.jumpToBottom
   const releaseStick = feed.release
-  const commentCount = Object.keys(comments).length
 
   // Прицельный скролл к конкретному Q&A (переход из ленты). Целится в
   // отдельный state (retainedTarget), а не напрямую в проп: /dialog грузится
@@ -411,7 +404,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   // единственное действие — отправить собранный feedback тем же эндпоинтом
   // /dialog/answer, что и обычный ответ (from_options всегда false — это не
   // выбор из options).
-  async function sendFeedback() {
+  async function sendFeedback(comments: Record<number, string>) {
     if (stage === null) return
     const question = pending
     if (question === null || question.id === undefined) return
@@ -437,46 +430,6 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }
 
-  function handleLineClick(line: number) {
-    if (activeCommentLine !== null && draft.trim() !== '') return
-
-    if (activeCommentLine === line) {
-      setActiveCommentLine(null)
-      return
-    }
-
-    setActiveCommentLine(line)
-    setDraft(comments[line] ?? '')
-  }
-
-  function closeCommentForm() {
-    setActiveCommentLine(null)
-    setDraft('')
-  }
-
-  function saveComment(line: number) {
-    const text = draft.trim()
-    setComments((prev) => {
-      const next = { ...prev }
-      if (text === '') {
-        delete next[line]
-      } else {
-        next[line] = text
-      }
-      return next
-    })
-    setActiveCommentLine(null)
-  }
-
-  function deleteComment(line: number) {
-    setComments((prev) => {
-      const next = { ...prev }
-      delete next[line]
-      return next
-    })
-    setActiveCommentLine(null)
-  }
-
   function cancel() {
     if (stage === null) return
     if (!window.confirm('Cancel stage?')) return
@@ -495,68 +448,105 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }
 
-  function renderCommentHeader(label: string, ariaLabel: string, title: string, onClick: () => void): ReactNode {
+  // renderPending — тело pending-вопроса, вызывается из render-prop
+  // LineCommentedDocument: doc.body — заякоренный вопрос (с формами построчных
+  // комментариев внутри), doc.commentCount переключает обычный UI ответа
+  // (опции + свободный текст + SEND) на «Send feedback», doc.hasOpenDraft гейтит SEND.
+  function renderPending(doc: LineCommentDocumentApi): ReactNode {
+    if (pending === null) return null
     return (
-      <div className="comment-display-header">
-        <span className="comment-title">{label}</span>
-        <button type="button" className="comment-remove" aria-label={ariaLabel} title={title} onClick={onClick}>
-          ✕
-        </button>
-      </div>
-    )
-  }
+      <>
+        {doc.body}
 
-  // Строка вопроса рендерится как строка ревью-плана (renderPlanLine в PlanPanel) —
-  // те же CSS-классы (plan-line/line-num/line-content/line-comment-*) ради
-  // визуальной консистентности между комментариями к плану и к вопросу.
-  function renderQuestionLine(item: LineBlock): ReactNode {
-    const hasComment = comments[item.line] !== undefined
+        {doc.commentCount === 0 && (
+          <>
+            <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
+              {(pending.options ?? []).map((option, index) => {
+                const selected = selectedOption === option
+                // Опция вида "Заголовок — описание" разбивается на жирный
+                // заголовок + описание (как в макете-карточке). Без
+                // разделителя — вся строка как заголовок.
+                const sep = option.indexOf(' — ')
+                const title = sep >= 0 ? option.slice(0, sep) : option
+                const desc = sep >= 0 ? option.slice(sep + 3) : ''
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    className={selected ? 'selected' : ''}
+                    aria-pressed={selected}
+                    disabled={submitting}
+                    style={{ animationDelay: `${index * 40}ms` }}
+                    onClick={() => selectOption(option)}
+                  >
+                    <span className="dialog-option-radio" aria-hidden="true" />
+                    <span className="dialog-option-body">
+                      <span className="dialog-option-title">{title}</span>
+                      {desc !== '' && <span className="dialog-option-desc">{desc}</span>}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
 
-    return (
-      <div
-        key={`q-line-${item.line}`}
-        className={`plan-line${hasComment ? ' has-comment' : ''}`}
-        data-line={item.line}
-        onClick={() => handleLineClick(item.line)}
-      >
-        <span className="line-num">{item.line}</span>
-        <span className="line-content" dangerouslySetInnerHTML={{ __html: item.html }} />
-        <span className="line-comment-marker">●</span>
-
-        {hasComment && (
-          <div className="line-comment-form line-comment-display" onClick={(event) => event.stopPropagation()}>
-            {renderCommentHeader(`Comment on line ${item.line}`, `Remove comment on line ${item.line}`, 'Remove comment', () => deleteComment(item.line))}
-            <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{comments[item.line]}</div>
-          </div>
-        )}
-
-        {activeCommentLine === item.line && (
-          <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
-            {renderCommentHeader(`Comment on line ${item.line}`, `Close comment on line ${item.line}`, 'Close', closeCommentForm)}
             <PasteableTextarea
               stageId={stageId}
-              placeholder={`Comment on line ${item.line}...`}
-              value={draft}
-              onChange={setDraft}
-              autoFocus
+              className="dialog-custom"
+              placeholder="Or type your own answer…"
+              value={customText}
+              disabled={pending.allow_custom !== true}
+              onChange={onCustomInput}
+              // M3: скрепка на основном поле ответа — прикрепить ссылку на
+              // файл проекта (Docker file browser) + вставленные скриншоты
+              // уже работают через use-image-paste. Гейтится capability
+              // внутри PasteableTextarea (showAttachButton), так что на
+              // host-прогоне без file browser кнопка не рендерится.
               allowFileReferences
-              onSubmit={() => saveComment(item.line)}
+              onSubmit={() => void sendAnswer()}
             />
-            <div className="comment-actions">
-              <button className="btn btn-send" type="button" onClick={() => saveComment(item.line)}>
-                {hasComment ? 'Update' : 'Add'}
-              </button>
-              {hasComment && (
-                <button className="btn btn-cancel" type="button" onClick={() => deleteComment(item.line)}>
-                  Delete
-                </button>
-              )}
-            </div>
+          </>
+        )}
+
+        <div className="dialog-actions">
+          {doc.commentCount === 0 ? (
+            <button
+              className={`btn btn-send${clickedSend ? ' ok' : ''}`}
+              type="button"
+              disabled={doc.hasOpenDraft || submitting}
+              onClick={sendAnswer}
+            >
+              <span className="btn-ripple" aria-hidden="true" />
+              <span className="btn-label">▸ SEND</span>
+              <span className="btn-done" aria-hidden="true">✓ Sent</span>
+            </button>
+          ) : (
+            <button
+              className={`btn btn-send${clickedSend ? ' ok' : ''}`}
+              type="button"
+              disabled={submitting}
+              onClick={() => void sendFeedback(doc.comments)}
+            >
+              <span className="btn-ripple" aria-hidden="true" />
+              <span className="btn-label">{`Send feedback (${doc.commentCount})`}</span>
+              <span className="btn-done" aria-hidden="true">✓ Sent</span>
+            </button>
+          )}
+          <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
+            CANCEL STAGE
+          </button>
+          <span className="typing-indicator">
+            AGENT IS WAITING <span className="blink" />
+          </span>
+        </div>
+        {submitError !== null && (
+          <div className="dialog-error" role="alert">
+            {`Failed to send: ${submitError}. Try again.`}
           </div>
         )}
-      </div>
+      </>
     )
   }
+
 
   return (
     <Maximizable id="dialog">
@@ -570,90 +560,16 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
             {pending !== null && (
               <div id="dialog-pending" className={`dialog-pending${flash ? ' dialog-flash' : ''}`}>
-                <div className="dialog-question">
-                  {parseLineBlocks(pending.question ?? '').map((item) => renderQuestionLine(item))}
-                </div>
-
-                {commentCount === 0 && (
-                  <>
-                    <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
-                      {(pending.options ?? []).map((option, index) => {
-                        const selected = selectedOption === option
-                        // Опция вида "Заголовок — описание" разбивается на жирный
-                        // заголовок + описание (как в макете-карточке). Без
-                        // разделителя — вся строка как заголовок.
-                        const sep = option.indexOf(' — ')
-                        const title = sep >= 0 ? option.slice(0, sep) : option
-                        const desc = sep >= 0 ? option.slice(sep + 3) : ''
-                        return (
-                          <button
-                            key={option}
-                            type="button"
-                            className={selected ? 'selected' : ''}
-                            aria-pressed={selected}
-                            disabled={submitting}
-                            style={{ animationDelay: `${index * 40}ms` }}
-                            onClick={() => selectOption(option)}
-                          >
-                            <span className="dialog-option-radio" aria-hidden="true" />
-                            <span className="dialog-option-body">
-                              <span className="dialog-option-title">{title}</span>
-                              {desc !== '' && <span className="dialog-option-desc">{desc}</span>}
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
-
-                    <PasteableTextarea
-                      stageId={stageId}
-                      className="dialog-custom"
-                      placeholder="Or type your own answer…"
-                      value={customText}
-                      disabled={pending.allow_custom !== true}
-                      onChange={onCustomInput}
-                      // M3: скрепка на основном поле ответа — прикрепить ссылку на
-                      // файл проекта (Docker file browser) + вставленные скриншоты
-                      // уже работают через use-image-paste. Гейтится capability
-                      // внутри PasteableTextarea (showAttachButton), так что на
-                      // host-прогоне без file browser кнопка не рендерится.
-                      allowFileReferences
-                      onSubmit={() => void sendAnswer()}
-                    />
-                  </>
-                )}
-
-                <div className="dialog-actions">
-                  {commentCount === 0 ? (
-                    <button
-                      className={`btn btn-send${clickedSend ? ' ok' : ''}`}
-                      type="button"
-                      disabled={(activeCommentLine !== null && draft.trim() !== '') || submitting}
-                      onClick={sendAnswer}
-                    >
-                      <span className="btn-ripple" aria-hidden="true" />
-                      <span className="btn-label">▸ SEND</span>
-                      <span className="btn-done" aria-hidden="true">✓ Sent</span>
-                    </button>
-                  ) : (
-                    <button className={`btn btn-send${clickedSend ? ' ok' : ''}`} type="button" disabled={submitting} onClick={sendFeedback}>
-                      <span className="btn-ripple" aria-hidden="true" />
-                      <span className="btn-label">{`Send feedback (${commentCount})`}</span>
-                      <span className="btn-done" aria-hidden="true">✓ Sent</span>
-                    </button>
-                  )}
-                  <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
-                    CANCEL STAGE
-                  </button>
-                  <span className="typing-indicator">
-                    AGENT IS WAITING <span className="blink" />
-                  </span>
-                </div>
-                {submitError !== null && (
-                  <div className="dialog-error" role="alert">
-                    {`Failed to send: ${submitError}. Try again.`}
-                  </div>
-                )}
+                <LineCommentedDocument
+                  key={`${stageId}::${pending.phase ?? ''}::${pending.id ?? ''}::${pending.question ?? ''}`}
+                  text={pending.question ?? ''}
+                  specialSections={false}
+                  stageId={stageId}
+                  beforeOpen={releaseStick}
+                  bodyClassName="dialog-question line-commented"
+                >
+                  {(doc) => renderPending(doc)}
+                </LineCommentedDocument>
               </div>
             )}
 
