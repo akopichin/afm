@@ -579,9 +579,6 @@ func (f *Flow) validate() error {
 		if err := s.Verify.validate(s.ID); err != nil {
 			return err
 		}
-		if s.IsScript() {
-			continue
-		}
 		isExecutionStage := s.HasAgent(AgentImplementation) || s.HasAgent(AgentReview) || s.IsAuto()
 		if !isExecutionStage {
 			return fmt.Errorf("stage %q: verify requires an execution stage (planning-only stage cannot have verify)", s.ID)
