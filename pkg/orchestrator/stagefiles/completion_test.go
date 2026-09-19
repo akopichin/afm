@@ -3,7 +3,6 @@ package stagefiles
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -135,44 +134,27 @@ func TestCheckCompletion(t *testing.T) {
 	})
 }
 
+// TestCheckCompletion_Verify — CheckCompletion теперь ЧИСТЫЙ file-probe
+// (.done + артефакты) и не запускает verify вообще, даже если Verify задан.
+// Раньше этот тест гонял shell-verify через CheckCompletion (V1); та
+// exec/exit-code/вывод-в-ошибке семантика ПЕРЕЕХАЛА в движок
+// (TestRunVerification_ShellRejectedCarriesLegacyTail/…, pkg/orchestrator/
+// verify_test.go), а не удалена — см. отчёт задачи V4a. Здесь остаётся
+// только проверка, что наличие Verify на стадии НИЧЕГО не меняет для
+// file-probe: .done+артефакты решают всё, verify не запускается ни разу.
 func TestCheckCompletion_Verify(t *testing.T) {
-	t.Run("verify passes", func(t *testing.T) {
+	t.Run("declared verify does not run from the probe", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
-		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("true")}
+		// Команда, которая упала бы, если бы CheckCompletion её выполнил —
+		// сам факт nil-результата доказывает, что verify не выполняется здесь.
+		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("exit 1")}
 		if err := CheckCompletion(dir, t.TempDir(), stage); err != nil {
-			t.Errorf("expected nil, got %v", err)
+			t.Errorf("probe must ignore Verify entirely, got %v", err)
 		}
 	})
 
-	t.Run("verify fails with output in reason", func(t *testing.T) {
-		dir := t.TempDir()
-		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
-		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("echo '3 tests failed'; exit 1")}
-		err := CheckCompletion(dir, t.TempDir(), stage)
-		if err == nil {
-			t.Fatal("expected error for failing verify command")
-		}
-		if !IsIncompleteWorkError(err) {
-			t.Errorf("verify failure should be incomplete work (one retry), got %v", err)
-		}
-		if !strings.Contains(err.Error(), "3 tests failed") {
-			t.Errorf("verify output should be in error, got %q", err.Error())
-		}
-	})
-
-	t.Run("verify runs in project dir", func(t *testing.T) {
-		dir := t.TempDir()
-		projectDir := t.TempDir()
-		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
-		writeFile(t, filepath.Join(projectDir, "marker.txt"), []byte("x"))
-		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("test -f marker.txt")}
-		if err := CheckCompletion(dir, projectDir, stage); err != nil {
-			t.Errorf("verify should run in project dir, got %v", err)
-		}
-	})
-
-	t.Run("verify skipped when missing done", func(t *testing.T) {
+	t.Run("missing done still incomplete regardless of verify", func(t *testing.T) {
 		dir := t.TempDir()
 		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("true")}
 		err := CheckCompletion(dir, t.TempDir(), stage)
