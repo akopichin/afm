@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -104,46 +103,28 @@ func CheckCompletion(stageDir, projectDir string, stage flow.Stage) error {
 
 	// CheckCompletion — чистый file-probe (.done + артефакты). Запуск verify
 	// (shell и/или agent-шагов) переехал в движок RunVerification
-	// (pkg/orchestrator, задача V4) — он единственное место, где verify
-	// реально исполняется. Раньше здесь же гонялись shell-шаги V1 — это
-	// значило "verify выполняется в двух местах", что и устраняет V4a.1.
+	// (pkg/orchestrator/verify.go, задача V4) — он единственное место, где
+	// verify реально исполняется (см. runVerifyShellCommand там же — своя,
+	// отменяемая через ctx реализация shell-шага, не переиспользующая ничего
+	// отсюда). Раньше здесь же гонялись shell-шаги V1 — это значило "verify
+	// выполняется в двух местах", что и устраняет V4a.1.
 	return nil
 }
 
-// VerifyOutputLimit caps how much verify command output goes into the error
-// reason/tail — общий лимит для legacy RunVerify И для shell-шагов движка
-// RunVerification (pkg/orchestrator), чтобы формат ошибки не разъезжался
-// между старым и новым путём.
+// VerifyOutputLimit caps how much verify shell-step output goes into the
+// error reason/tail. Shared with the engine's shell-step handling
+// (pkg/orchestrator/verify.go) so the error text format doesn't diverge
+// between the two.
 const VerifyOutputLimit = 2000
 
 // TailOutput обрезает output до последних limit байт (после TrimSpace),
 // добавляя многоточие спереди при обрезании. Общий формат хвоста вывода
-// команды verify — использует и legacy RunVerify ниже, и движок
-// RunVerification (pkg/orchestrator/verify.go) для shell-шагов.
+// verify-команды — использует движок RunVerification
+// (pkg/orchestrator/verify.go) для shell-шагов.
 func TailOutput(output string, limit int) string {
 	tail := strings.TrimSpace(output)
 	if len(tail) > limit {
 		tail = "…" + tail[len(tail)-limit:]
 	}
 	return tail
-}
-
-// RunVerify executes the stage verify command via sh in the project directory.
-// Non-zero exit returns IncompleteWorkError carrying the command output,
-// so the stage gets one retry with the failure details.
-//
-// Больше не вызывается из CheckCompletion (см. выше) — остаётся публичной
-// функцией, которую использует движок verify (pkg/orchestrator) для legacy
-// скалярной shell-формы verify.
-func RunVerify(projectDir, command string) error {
-	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir = projectDir
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	tail := TailOutput(string(out), VerifyOutputLimit)
-	return &IncompleteWorkError{
-		Reason: fmt.Sprintf("verify command failed (%v):\n%s", err, tail),
-	}
 }

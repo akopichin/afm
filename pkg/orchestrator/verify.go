@@ -24,9 +24,10 @@ import (
 // того как стадия уже заявила о завершении по file-probe.
 const verifyExecutionLabel = "verify"
 
-// verifyShellOutputLimit — тот же лимит хвоста вывода, что у legacy
-// stagefiles.RunVerify (stagefiles.VerifyOutputLimit), сохраняет прежний
-// текст ошибки shell-шага один в один.
+// verifyShellOutputLimit — тот же лимит хвоста вывода, что был у удалённого
+// legacy stagefiles.RunVerify (constant вынесена в stagefiles.VerifyOutputLimit
+// до его удаления и переиспользуется здесь), сохраняет прежний текст ошибки
+// shell-шага один в один.
 const verifyShellOutputLimit = stagefiles.VerifyOutputLimit
 
 // verifyOutcomePass/verifyOutcomeError — значения ManifestStep.Outcome для
