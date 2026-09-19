@@ -107,6 +107,94 @@ func TestRunVerifyAgent_FreshSessionNoResumeNoStageDir(t *testing.T) {
 	}
 }
 
+// TestRunVerifyAgent_SetsCodexVerifyEnv — регрессия на критическую находку
+// ревью: Config.VerifyMode сам по себе ничего не значит для дочернего
+// процесса, если run() не транслирует его в сигнал CODEX_VERIFY=1 в env.
+// Без этой связи codex verify-стадия реально исполнялась бы в обычном
+// danger-full-access режиме — полная противоположность фиче. Тест гоняет
+// RunVerifyAgent END-TO-END (не дёргает CODEX_VERIFY руками, как
+// codex_verify_test.go) и проверяет ПОЛНОЕ окружение дочернего процесса.
+func TestRunVerifyAgent_SetsCodexVerifyEnv(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "codex", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	if !envContainsLine(string(envData), "CODEX_VERIFY=1") {
+		t.Errorf("child env missing CODEX_VERIFY=1, RunVerifyAgent must propagate VerifyMode into the subprocess env: %q", envData)
+	}
+}
+
+// TestRunAgent_DoesNotSetCodexVerifyEnv — зеркало предыдущего теста: обычный
+// (не-verify) запуск через RunAgent НЕ должен видеть CODEX_VERIFY вовсе, ни
+// унаследованным из окружения процесса afm, ни выставленным по ошибке.
+func TestRunAgent_DoesNotSetCodexVerifyEnv(t *testing.T) {
+	t.Setenv("CODEX_VERIFY", "1") // симулируем утечку из окружения afm-процесса
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	if envContainsLine(string(envData), "CODEX_VERIFY=1") {
+		t.Errorf("non-verify RunAgent must not set/leak CODEX_VERIFY=1: %q", envData)
+	}
+}
+
+// envContainsLine проверяет наличие ТОЧНОЙ строки "key=value" в выводе `env`,
+// а не произвольную подстроку — иначе, например, "CODEX_VERIFY=10" ложно
+// засчитался бы как совпадение с "CODEX_VERIFY=1".
+func envContainsLine(env, line string) bool {
+	for _, l := range strings.Split(env, "\n") {
+		if strings.TrimSpace(l) == line {
+			return true
+		}
+	}
+	return false
+}
+
 // TestRunVerifyAgent_HappyPath проверяет, что валидный JSON, пришедший как
 // финальный ассистентский текстовый блок, декодируется в Result, а процесс
 // признаётся ProcessOK.

@@ -712,19 +712,29 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	// Strip CLAUDECODE to allow nested sessions, expose stage directory and
 	// wrapper-dir (prepended to PATH so generated wrapper scripts resolve).
 	env := os.Environ()
-	filtered := make([]string, 0, len(env)+2)
+	filtered := make([]string, 0, len(env)+3)
 	for _, kv := range env {
 		switch {
 		case strings.HasPrefix(kv, "CLAUDECODE="):
 			// always strip for nested sessions
 		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
 			// always strip inherited; re-added below only if cfg.StageDir != ""
+		case strings.HasPrefix(kv, "CODEX_VERIFY="):
+			// always strip inherited; re-added below only if cfg.VerifyMode
 		default:
 			filtered = append(filtered, kv)
 		}
 	}
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
+	}
+	if e.cfg.VerifyMode {
+		// Сигнал адаптеру (напр. scripts/codex-as-claude.sh), что это
+		// read-only AI-verify проход, а не обычный запуск автора — без
+		// него VerifyMode оставался бы мёртвым полем: RunVerifyAgent
+		// выставляет его в Config, но подпроцесс никогда бы не узнал об
+		// этом и исполнялся бы в обычном (небезопасном для verify) режиме.
+		filtered = append(filtered, "CODEX_VERIFY=1")
 	}
 	if e.cfg.WrapperDir != "" {
 		pathSet := false
