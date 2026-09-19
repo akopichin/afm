@@ -9,12 +9,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+// planningTrackingRunner wraps a Runner and counts RunPlanning invocations —
+// used to prove a resumed StatusRetrying stage routed straight to a fresh
+// implementation+verify pass, NOT through the CheckPlanCompletion/
+// NeedsPlanning "probably a stuck planning-retry" heuristic (which would
+// re-invoke planning).
+type planningTrackingRunner struct {
+	delegate       executor.Runner
+	planningCalled int32
+}
+
+func (r *planningTrackingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	atomic.AddInt32(&r.planningCalled, 1)
+	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
+}
+
+func (r *planningTrackingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
+}
+
+func (r *planningTrackingRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
+	return r.delegate.RunJSONQuery(ctx, prompt)
+}
+
+var _ executor.Runner = (*planningTrackingRunner)(nil)
 
 // TestIntegration_ResumeRunningWithDoneFile_RunsFreshVerifyGate is V5a.2's
 // core freshness regression [T17/T32/T33]: a stage recovered from a crash
@@ -295,5 +321,78 @@ func TestIntegration_ResumeDoneStage_NeverReVerifies(t *testing.T) {
 	}
 	if verifyCalled {
 		t.Error("a stage already durably done must never be re-verified on resume")
+	}
+}
+
+// TestIntegration_ResumeRetryingPlainWithDoneFile_RunsFreshVerifyGateNotPlanningHeuristic
+// closes a coverage gap flagged in code review: resumeStageAtStatus's
+// StatusRetrying branch for a PLAIN (non-autonomous, has-a-planning-agent)
+// stage has its own bespoke control flow — on ".done present AND Verify
+// non-empty" it must spawnKind(kindImplementation) and return IMMEDIATELY,
+// skipping the CheckPlanCompletion/NeedsPlanning "probably a stuck
+// planning-retry" heuristic right below it (that heuristic exists only for
+// the ambiguous case where .done does NOT yet exist). This branch is
+// reachable in practice: a has-planning-agent stage reaching StatusRetrying
+// during bootstrap recovery bypasses startPlanningForPending's FIRST switch
+// entirely (that switch only applies to !s.NeedsPlanning() stages) and falls
+// through to the SECOND switch, which calls resumeStageAtStatus directly —
+// exactly what this test drives. (Also reachable via Continue() after a
+// manual pause during Retrying backoff.)
+//
+// Asserts BOTH halves of the contract: (1) RunVerification actually runs
+// again (a fresh gate — the injected verify runner is invoked), and (2) the
+// planning agent is NEVER invoked (proving the early return skipped the
+// planning heuristic, not just that verify happened to run anyway).
+func TestIntegration_ResumeRetryingPlainWithDoneFile_RunsFreshVerifyGateNotPlanningHeuristic(t *testing.T) {
+	stages := []flow.Stage{{
+		ID: "impl1", Name: "Impl1",
+		Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
+		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}},
+	}}
+	tracker := &planningTrackingRunner{delegate: &doneCreatingRunner{delegate: mockRunner(t, mockImplementationScript)}}
+	orch, runDir, stateFile := setupOrchestratorWithRunner(t, stages, tracker)
+
+	stageDir := filepath.Join(runDir, "impl1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// plan.md already on disk (as a real post-approval crash would leave it)
+	// AND .done already on disk (the author already ran once) — status
+	// StatusRetrying (frozen mid-backoff by the crash). This is exactly the
+	// shape that used to fall into the CheckPlanCompletion heuristic below
+	// the (now-fixed) short-circuit.
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("## Tasks\n- [ ] x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, ".done"), []byte("completed work summary"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := orchestrator.StoreFromOrch(orch)
+	if err := store.Apply(&state.Transition{StageID: "impl1", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var verifyCalls int32
+	orchestrator.SetVerifyAgentRunnerForTest(orch, func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
+		atomic.AddInt32(&verifyCalls, 1)
+		return verify.RunOutcome{ProcessOK: true, Result: &verify.ModelResult{
+			SchemaVersion: verify.SupportedSchemaVersion, Verdict: verify.VerdictPass, Summary: "ok",
+		}}, nil
+	})
+
+	if err := orch.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final := loadStateJSON(t, stateFile)
+	if final.Stages["impl1"].Status != state.StatusDone {
+		t.Fatalf("expected done, got %v", final.Stages["impl1"].Status)
+	}
+	if atomic.LoadInt32(&verifyCalls) == 0 {
+		t.Error("expected a fresh verify gate to run on resume — a pre-existing .done must not be treated as an already-passed verdict")
+	}
+	if got := atomic.LoadInt32(&tracker.planningCalled); got != 0 {
+		t.Errorf("expected RunPlanning to never be invoked (the .done+Verify short-circuit must skip the CheckPlanCompletion/NeedsPlanning planning-retry heuristic entirely), got %d calls", got)
 	}
 }
