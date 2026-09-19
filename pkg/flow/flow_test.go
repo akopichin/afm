@@ -414,8 +414,8 @@ stages:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if f.Stages[0].Verify != ".venv/bin/python -m pytest tests/ -q" {
-		t.Errorf("verify command not parsed, got %q", f.Stages[0].Verify)
+	if len(f.Stages[0].Verify.Steps) != 1 || f.Stages[0].Verify.Steps[0].Run != ".venv/bin/python -m pytest tests/ -q" {
+		t.Errorf("verify command not parsed, got %+v", f.Stages[0].Verify.Steps)
 	}
 }
 
@@ -614,6 +614,89 @@ stages:
 	_, err := flow.ParseFile(writeTemp(t, yaml))
 	if err == nil || !strings.Contains(err.Error(), "script") {
 		t.Fatalf("expected script-combination error, got %v", err)
+	}
+}
+
+// TestValidateVerify_TableAtParseFileLevel покрывает V1.2 целиком: verify в
+// объектной и списочной форме на script-стадии (обе отклоняются той же
+// проверкой, что и скалярная — уже покрыта TestValidateScriptCannotCombineWithVerify
+// выше), verify на чисто планировочной стадии (нет
+// implementation/review/auto/script — проверять после "готово" нечего) и
+// обычная стадия с verify, которая должна успешно распарситься.
+func TestValidateVerify_TableAtParseFileLevel(t *testing.T) {
+	tests := []struct {
+		name      string
+		yaml      string
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name: "script with object verify rejected",
+			yaml: `
+name: f
+stages:
+  - id: s1
+    script: "echo hi"
+    verify:
+      run: "true"
+`,
+			wantErr:   true,
+			errSubstr: "script",
+		},
+		{
+			name: "script with list verify rejected",
+			yaml: `
+name: f
+stages:
+  - id: s1
+    script: "echo hi"
+    verify:
+      - run: "true"
+`,
+			wantErr:   true,
+			errSubstr: "script",
+		},
+		{
+			name: "planning-only stage with verify rejected",
+			yaml: `
+name: f
+stages:
+  - id: s1
+    agents: [planning]
+    verify: "true"
+`,
+			wantErr:   true,
+			errSubstr: "planning-only",
+		},
+		{
+			name: "normal stage with verify parses",
+			yaml: `
+name: f
+stages:
+  - id: s1
+    agents: [planning, implementation]
+    verify: "true"
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := flow.ParseFile(writeTemp(t, tt.yaml))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("error = %q, want it to contain %q", err.Error(), tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 

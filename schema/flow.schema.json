@@ -68,6 +68,27 @@
       "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
       "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
     },
+    "verifyRunStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run"],
+      "description": "A verify step that runs a shell command.",
+      "properties": {
+        "run": { "type": "string", "minLength": 1, "description": "Shell command for this verify step." },
+        "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }
+      }
+    },
+    "verifyCommandStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "description": "A verify step delegated to an agent (e.g. codex).",
+      "properties": {
+        "command": { "type": "string", "minLength": 1, "description": "Agent alias that performs this verify step (e.g. codex)." },
+        "prompt": { "type": "string", "description": "Extra criteria for the verify agent." },
+        "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }
+      }
+    },
     "memory": {
       "type": "object",
       "additionalProperties": false,
@@ -185,8 +206,23 @@
           "description": "Enable the file-based dialog protocol with the user via the dashboard."
         },
         "verify": {
-          "type": "string",
-          "description": "Shell command run after .done; a non-zero exit means the stage is not complete."
+          "description": "Stage-completion check(s) run after .done: a shell command (legacy scalar), one step object ({run: ...} or {command: ...}), or an ordered list of step objects. A non-zero shell exit means the stage is not actually complete.",
+          "oneOf": [
+            { "type": "string", "description": "Shell command (legacy form)." },
+            { "$ref": "#/definitions/verifyRunStep" },
+            { "$ref": "#/definitions/verifyCommandStep" },
+            {
+              "type": "array",
+              "description": "Several verify steps run in order.",
+              "minItems": 1,
+              "items": {
+                "oneOf": [
+                  { "$ref": "#/definitions/verifyRunStep" },
+                  { "$ref": "#/definitions/verifyCommandStep" }
+                ]
+              }
+            }
+          ]
         },
         "prompt": {
           "type": "string",
@@ -268,7 +304,7 @@
               "command": { "maxLength": 0 },
               "interactive": { "const": false },
               "plan": { "maxLength": 0 },
-              "verify": { "maxLength": 0 },
+              "verify": { "not": {} },
               "buttons": { "maxProperties": 0 }
             }
           }

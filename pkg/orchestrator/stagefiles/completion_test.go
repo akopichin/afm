@@ -139,7 +139,7 @@ func TestCheckCompletion_Verify(t *testing.T) {
 	t.Run("verify passes", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
-		stage := flow.Stage{ID: testStageID, Verify: "true"}
+		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("true")}
 		if err := CheckCompletion(dir, t.TempDir(), stage); err != nil {
 			t.Errorf("expected nil, got %v", err)
 		}
@@ -148,7 +148,7 @@ func TestCheckCompletion_Verify(t *testing.T) {
 	t.Run("verify fails with output in reason", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
-		stage := flow.Stage{ID: testStageID, Verify: "echo '3 tests failed'; exit 1"}
+		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("echo '3 tests failed'; exit 1")}
 		err := CheckCompletion(dir, t.TempDir(), stage)
 		if err == nil {
 			t.Fatal("expected error for failing verify command")
@@ -166,7 +166,7 @@ func TestCheckCompletion_Verify(t *testing.T) {
 		projectDir := t.TempDir()
 		writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
 		writeFile(t, filepath.Join(projectDir, "marker.txt"), []byte("x"))
-		stage := flow.Stage{ID: testStageID, Verify: "test -f marker.txt"}
+		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("test -f marker.txt")}
 		if err := CheckCompletion(dir, projectDir, stage); err != nil {
 			t.Errorf("verify should run in project dir, got %v", err)
 		}
@@ -174,7 +174,7 @@ func TestCheckCompletion_Verify(t *testing.T) {
 
 	t.Run("verify skipped when missing done", func(t *testing.T) {
 		dir := t.TempDir()
-		stage := flow.Stage{ID: testStageID, Verify: "true"}
+		stage := flow.Stage{ID: testStageID, Verify: flow.NewShellVerify("true")}
 		err := CheckCompletion(dir, t.TempDir(), stage)
 		if err == nil || !IsIncompleteWorkError(err) {
 			t.Errorf("missing .done should still be incomplete work, got %v", err)

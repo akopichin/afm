@@ -130,6 +130,7 @@ func schemaForType(t *testing.T, doc schemaDocument, node map[string]any, want, 
 var (
 	buttonsType       = reflect.TypeOf(flow.Buttons{})
 	eventSelectorType = reflect.TypeOf(lifecyclehooks.EventSelector{})
+	verifySpecType    = reflect.TypeOf(flow.VerifySpec{})
 )
 
 func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, typ reflect.Type, at string) {
@@ -152,6 +153,23 @@ func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, ty
 	// (the property's presence was already checked by the caller).
 	if typ == eventSelectorType {
 		schemaForType(t, doc, node, "array", at)
+		return
+	}
+
+	// VerifySpec (verify:) is a deliberate union, not a plain object: the
+	// schema is oneOf[string, run-step object, command-step object, array of
+	// step objects] (see task-V1-brief.md, "Ambiguity resolutions" #1). Forcing
+	// this field through the generic Struct case below would require the
+	// schema's `verify` node to itself be a plain `{"type":"object"}` with a
+	// "properties" map matching VerifySpec's Go fields (Steps/fromScalar) —
+	// which is exactly the shape we deliberately reject in favor of oneOf.
+	// The smallest targeted exception: just confirm an object alternative
+	// exists among the oneOf branches (same shallow check Buttons uses above),
+	// without walking VerifySpec's own fields — its real per-step contract
+	// (run xor command, optional prompt/timeout) is covered behaviorally by
+	// TestFlowSchemaMatchesParserEdgeCases instead.
+	if typ == verifySpecType {
+		schemaForType(t, doc, node, "object", at)
 		return
 	}
 
@@ -240,6 +258,15 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"script mixed with interactive", "name: f\nstages:\n  - id: s\n    script: echo ok\n    interactive: true\n", false},
 		{"script mixed with plan", "name: f\nstages:\n  - id: s\n    script: echo ok\n    plan: plan.md\n", false},
 		{"script mixed with verify", "name: f\nstages:\n  - id: s\n    script: echo ok\n    verify: go test ./...\n", false},
+		{"script mixed with object verify", "name: f\nstages:\n  - id: s\n    script: echo ok\n    verify:\n      run: go test ./...\n", false},
+		{"script mixed with list verify", "name: f\nstages:\n  - id: s\n    script: echo ok\n    verify:\n      - run: go test ./...\n", false},
+		{"verify run object", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      run: go test ./...\n", true},
+		{"verify command object", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      command: codex\n      prompt: check it\n", true},
+		{"verify list of steps", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      - run: go test ./...\n      - command: codex\n", true},
+		{"verify run and command together", "name: f\nstages:\n  - id: s\n    agents: [implementation]\n    verify:\n      run: go test ./...\n      command: codex\n", false},
+		{"verify unknown agent field", "name: f\nstages:\n  - id: s\n    agents: [implementation]\n    verify:\n      agent: codex\n", false},
+		{"verify empty object", "name: f\nstages:\n  - id: s\n    agents: [implementation]\n    verify: {}\n", false},
+		{"verify empty list", "name: f\nstages:\n  - id: s\n    agents: [implementation]\n    verify: []\n", false},
 		{"script mixed with buttons", "name: f\nstages:\n  - id: s\n    script: echo ok\n    buttons:\n      Retry: Try again\n", false},
 		{"empty button label", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      \"\": Try again\n", false},
 		{"empty button prompt", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      Retry: \"\"\n", false},

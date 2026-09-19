@@ -35,7 +35,7 @@ func TestAskStageDetails_StandardModePlanningAgentDefaults(t *testing.T) {
 	if !reflect.DeepEqual(stage.Agents, want) {
 		t.Errorf("Agents = %v, want %v", stage.Agents, want)
 	}
-	if stage.Verify != "" || stage.Interactive || len(stage.Artifacts) != 0 || stage.Plan != "" {
+	if !stage.Verify.IsEmpty() || stage.Interactive || len(stage.Artifacts) != 0 || stage.Plan != "" {
 		t.Errorf("unexpected fields set: %+v", stage)
 	}
 }
@@ -123,8 +123,8 @@ func TestAskStageDetails_ForceVerifyAsksRegardlessOfAdvanced(t *testing.T) {
 	d := stageDefaults{SuggestedID: "build", SuggestedName: "Build", ForceVerify: true}
 	stage := askStageDetails(scanner, &out, d, nil)
 
-	if stage.Verify != "go test ./..." {
-		t.Errorf("Verify = %q", stage.Verify)
+	if len(stage.Verify.Steps) != 1 || stage.Verify.Steps[0].Run != "go test ./..." {
+		t.Errorf("Verify = %+v", stage.Verify.Steps)
 	}
 }
 
@@ -199,8 +199,8 @@ func TestAskStageDetails_AdvancedBlockArtifactsInputsVerifyInteractiveCommand(t 
 	if !reflect.DeepEqual(stage.Inputs, []flow.Input{{Ref: "build.binary"}}) {
 		t.Errorf("Inputs = %+v", stage.Inputs)
 	}
-	if stage.Verify != "some check" {
-		t.Errorf("Verify = %q", stage.Verify)
+	if len(stage.Verify.Steps) != 1 || stage.Verify.Steps[0].Run != "some check" {
+		t.Errorf("Verify = %+v", stage.Verify.Steps)
 	}
 	if !stage.Interactive {
 		t.Error("Interactive = false, want true")

@@ -337,7 +337,7 @@ func TestIntegration_VerifyPass(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "verified", Name: "Verified", Description: "verify passes",
 			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
-			Verify: "true"},
+			Verify: flow.NewShellVerify("true")},
 	}
 
 	runner := &verifyCaptureRunner{delegate: mockRunner(t, mockPlanningScript)}
@@ -358,7 +358,7 @@ func TestIntegration_VerifyPass(t *testing.T) {
 	runner.mu.Lock()
 	prompts := append([]string{}, runner.prompts...)
 	runner.mu.Unlock()
-	if len(prompts) == 0 || !strings.Contains(prompts[0], stages[0].Verify) {
+	if len(prompts) == 0 || !strings.Contains(prompts[0], stages[0].Verify.Steps[0].Run) {
 		t.Error("implementation prompt should announce the verify command")
 	}
 }
@@ -370,7 +370,7 @@ func TestIntegration_VerifyFail(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "unverified", Name: "Unverified", Description: "verify fails",
 			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation},
-			Verify: "echo 'VERIFY-BOOM: 63 tests failed'; exit 1"},
+			Verify: flow.NewShellVerify("echo 'VERIFY-BOOM: 63 tests failed'; exit 1")},
 	}
 
 	runner := &verifyCaptureRunner{delegate: mockRunner(t, mockPlanningScript)}

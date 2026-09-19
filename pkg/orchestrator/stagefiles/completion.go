@@ -102,9 +102,12 @@ func CheckCompletion(stageDir, projectDir string, stage flow.Stage) error {
 		}
 	}
 
-	if stage.Verify != "" {
-		if err := RunVerify(projectDir, stage.Verify); err != nil {
-			return err
+	// V1: только shell-шаги; agent-шаги подключаются в V4.
+	for _, st := range stage.Verify.Steps {
+		if st.Kind == flow.VerifyShell {
+			if err := RunVerify(projectDir, st.Run); err != nil {
+				return err
+			}
 		}
 	}
 

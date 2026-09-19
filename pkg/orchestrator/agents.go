@@ -19,6 +19,25 @@ import (
 const planningContract = `## Output Contract (mandatory)
 The plan MUST contain sections: "## Tasks", "## Assumptions", "## Acceptance Criteria".`
 
+// verifyStageNote форматирует подсказку про verify-команду, добавляемую к
+// промпту реализации: перечисляет shell-шаги, которые агент должен прогнать
+// сам перед созданием .done. Agent-шаги (Kind==VerifyAgent) в V1 ничего сюда
+// не добавляют — они станут исполняемыми в V4 (см.
+// stagefiles.CheckCompletion, "V1: только shell-шаги").
+func verifyStageNote(v flow.VerifySpec) string {
+	var cmds []string
+	for _, st := range v.Steps {
+		if st.Kind == flow.VerifyShell {
+			cmds = append(cmds, st.Run)
+		}
+	}
+	if len(cmds) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\nVerify command (runs automatically after you finish; it MUST exit 0, "+
+		"so run it yourself before creating .done):\n%s", strings.Join(cmds, "\n"))
+}
+
 // preNoteBlock читает prenote.md стадии и возвращает блок для добавления в
 // контекст агента, либо "" если заметки нет. Вклеивается на ПЕРВОМ (свежем)
 // старте любой агентской стадии (planning/implementation/review/autonomous):
@@ -264,10 +283,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		}
 
 		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
-		if s.Verify != "" {
-			stageDirNote += fmt.Sprintf("\n\nVerify command (runs automatically after you finish; it MUST exit 0, "+
-				"so run it yourself before creating .done):\n%s", s.Verify)
-		}
+		stageDirNote += verifyStageNote(s.Verify)
 		prompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation,
 			Stage:           s,
@@ -460,10 +476,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 		}
 
 		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
-		if s.Verify != "" {
-			stageDirNote += fmt.Sprintf("\n\nVerify command (runs automatically after you finish; it MUST exit 0, "+
-				"so run it yourself before creating .done):\n%s", s.Verify)
-		}
+		stageDirNote += verifyStageNote(s.Verify)
 		prompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation,
 			Stage:           s,

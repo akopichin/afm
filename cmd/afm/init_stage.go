@@ -117,7 +117,7 @@ func askStageDetails(scanner *bufio.Scanner, w io.Writer, d stageDefaults, prior
 	}
 
 	if d.ForceVerify {
-		stage.Verify = promptLine(scanner, w, "Verify shell command (runs after the stage reports done; non-zero triggers one retry): ")
+		stage.Verify = flow.NewShellVerify(promptLine(scanner, w, "Verify shell command (runs after the stage reports done; non-zero triggers one retry): "))
 	}
 
 	if promptYesNo(scanner, w, "Advanced settings for this stage? (artifacts/inputs/verify/interactive/custom command) [y/N]: ", false) {
@@ -194,10 +194,10 @@ func askAdvanced(scanner *bufio.Scanner, w io.Writer, stage *flow.Stage, priorSt
 		}
 	}
 
-	if stage.Verify == "" {
+	if stage.Verify.IsEmpty() {
 		v := promptLine(scanner, w, "  Verify shell command (empty to skip): ")
 		if v != "" {
-			stage.Verify = v
+			stage.Verify = flow.NewShellVerify(v)
 		}
 	}
 

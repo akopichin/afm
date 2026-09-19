@@ -154,10 +154,12 @@ type Stage struct {
 	Artifacts   []Artifact `yaml:"artifacts,omitempty"`
 	Inputs      []Input    `yaml:"inputs,omitempty"`
 	Interactive bool       `yaml:"interactive,omitempty"`
-	// Verify is an optional shell command executed in the project directory
-	// after the stage reports completion. Non-zero exit means the stage is
-	// not actually done, regardless of what the agent claims.
-	Verify string `yaml:"verify,omitempty"`
+	// Verify описывает один или несколько шагов проверки завершённости стадии
+	// (shell-команда и/или делегирование агенту), выполняемых в проектной
+	// директории после того как стадия заявила о завершении. Провал шага
+	// означает, что стадия на самом деле не готова, что бы ни утверждал агент.
+	// См. pkg/flow/verify.go.
+	Verify VerifySpec `yaml:"verify,omitempty"`
 	// Prompt is an optional explicit instruction delivered to the agent
 	// after the <stage> context block.
 	Prompt string `yaml:"prompt,omitempty"`
@@ -559,8 +561,30 @@ func (f *Flow) validate() error {
 		if s.Plan != "" {
 			return fmt.Errorf("stage %q: \"script\" cannot be combined with plan", s.ID)
 		}
-		if s.Verify != "" {
+		if !s.Verify.IsEmpty() {
 			return fmt.Errorf("stage %q: \"script\" cannot be combined with verify", s.ID)
+		}
+	}
+
+	// verify: сами шаги (взаимоисключение run/command, обязательность одного
+	// из них, неотрицательный timeout — см. VerifySpec.validate) и требование
+	// исполняемой стадии. "script"+verify уже отклонён отдельно выше — сюда
+	// такая комбинация не доходит. Стадия без implementation/review/auto
+	// (только planning) не создаёт .done и никогда не "заявляет о
+	// завершении" — проверять там нечего.
+	for _, s := range f.Stages {
+		if s.Verify.IsEmpty() {
+			continue
+		}
+		if err := s.Verify.validate(s.ID); err != nil {
+			return err
+		}
+		if s.IsScript() {
+			continue
+		}
+		isExecutionStage := s.HasAgent(AgentImplementation) || s.HasAgent(AgentReview) || s.IsAuto()
+		if !isExecutionStage {
+			return fmt.Errorf("stage %q: verify requires an execution stage (planning-only stage cannot have verify)", s.ID)
 		}
 	}
 

@@ -66,8 +66,8 @@ func TestBuildVerifyLoopStages_CheckDefaultsToScriptAndIsValid(t *testing.T) {
 		t.Fatalf("got %d stages, want 2", len(stages))
 	}
 	build, check := stages[0], stages[1]
-	if build.Verify != "go test ./..." {
-		t.Errorf("build.Verify = %q", build.Verify)
+	if len(build.Verify.Steps) != 1 || build.Verify.Steps[0].Run != "go test ./..." {
+		t.Errorf("build.Verify = %+v", build.Verify.Steps)
 	}
 	if check.Script != "go vet ./..." {
 		t.Errorf("check.Script = %q, want the default script mode to be used", check.Script)
