@@ -154,6 +154,27 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(approveBtn).not.toBeDisabled())
   })
 
+  test('keeps Approve available when the plan fails to load (empty/non-OK)', async () => {
+    // Регресс (codex F2): fallback-панель действий должна остаться, даже если
+    // /plan вернул не-OK/пусто — иначе awaiting_approval-стадию нельзя одобрить.
+    const calls: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      calls.push(url)
+      if (url.endsWith('/approve')) return { ok: true } as Response
+      if (url.endsWith('/plan')) return { ok: false, status: 404, text: async () => '' } as unknown as Response
+      return textResponse('')
+    })
+
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+
+    // Approve появляется после оседания неудачного fetch плана.
+    const approveBtn = await screen.findByRole('button', { name: 'Approve' })
+    expect(approveBtn).not.toBeDisabled()
+    fireEvent.click(approveBtn)
+    await waitFor(() => expect(calls.some((c) => c.endsWith('/approve'))).toBe(true))
+  })
+
   test('Approve is disabled while a draft comment exists, and re-enables once it is removed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 

@@ -6,6 +6,18 @@ import { PanelFrame } from '../panel-frame/PanelFrame'
 import { renderMarkdown } from './markdown'
 import { LineCommentedDocument, type LineCommentDocumentApi } from './LineCommentedDocument'
 
+// EMPTY_DOC — zero-state владельца для случая «review, но плана нет»: панель
+// действий (Approve/Send revision) должна остаться доступной без комментариев.
+const EMPTY_DOC: LineCommentDocumentApi = {
+  body: null,
+  comments: {},
+  commentCount: 0,
+  activeCommentLine: null,
+  draft: '',
+  hasOpenDraft: false,
+  clearComments: () => {},
+}
+
 type PlanPanelProps = {
   stage: Stage | null
   attention?: boolean
@@ -24,6 +36,10 @@ type PlanPanelProps = {
 export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [planMarkdown, setPlanMarkdown] = useState('')
+  // planLoaded — попытка загрузки плана ЗАВЕРШИЛАСЬ (успех/ошибка/пусто), не «идёт».
+  // Нужен, чтобы fallback-панель действий (Approve при пустом плане) показывалась
+  // только ПОСЛЕ оседания fetch, а не мигала в окне загрузки нормального плана.
+  const [planLoaded, setPlanLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | 'continue' | null>(null)
 
@@ -54,22 +70,31 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
     let cancelled = false
 
     setPlanMarkdown('')
+    setPlanLoaded(false)
 
     async function loadPlan(stageId: string, stageDone: boolean) {
       let response: Response
       try {
         response = await fetch(`/api/stages/${encodeURIComponent(stageId)}/plan`)
       } catch {
+        // Сетевая ошибка — попытка завершена (план пуст), но review-действия
+        // должны остаться доступны (codex): помечаем loaded.
+        if (!cancelled) setPlanLoaded(true)
         return
       }
 
-      if (!response.ok || cancelled) return
+      if (cancelled) return
+      if (!response.ok) {
+        setPlanLoaded(true)
+        return
+      }
 
       const text = await response.text()
       if (cancelled) return
 
       const finalText = stageDone ? text.replace(/- \[ \]/g, '- [x]') : text
       setPlanMarkdown(finalText)
+      setPlanLoaded(true)
     }
 
     void loadPlan(current.id, current.status === 'done')
@@ -199,7 +224,7 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
             specialSections
             stageId={stageId}
             bodyId="plan-content"
-            bodyClassName="line-commented"
+            bodyClassName="markdown-body line-commented"
           >
             {(doc) => (
               <>
@@ -221,6 +246,14 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
               </div>
               {emptyHint}
             </div>
+
+            {/* Стадия в review, а план так и не загрузился (пустой/404/сетевая
+                ошибка — planLoaded после оседания fetch): всё равно показываем
+                Approve/Send revision — иначе стадию нельзя было бы одобрить из
+                панели до перезагрузки (регресс, codex). Гейт на planLoaded, чтобы
+                панель не мигала в окне загрузки НОРМАЛЬНОГО плана. Комментариев
+                нет — zero-state doc: Approve активен, Send revision заблокирован. */}
+            {commentable && planLoaded && renderActions(EMPTY_DOC)}
 
             {showAutoApprovedBadge && (
               <div id="auto-approved-section" className="section">

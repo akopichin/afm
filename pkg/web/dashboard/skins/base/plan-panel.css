@@ -313,6 +313,17 @@
   text-transform: uppercase;
   letter-spacing: 0.2em;
   color: var(--ink-hi);
+  /* Заголовок секции теперь <button> (aria-expanded) — сбрасываем нативную
+     отрисовку кнопки, иначе в тёмной теме появлялся светлый нативный контрол. */
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: none;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+  font-weight: 600;
 }
 .plan-section-wrapper.plan-section-assumptions .section-header { color: var(--amber); }
 .plan-section-wrapper.plan-section-criteria    .section-header { color: var(--mint); }
