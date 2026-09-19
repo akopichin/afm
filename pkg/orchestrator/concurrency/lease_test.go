@@ -128,6 +128,28 @@ func TestLease_Release_IsIdempotent(t *testing.T) {
 	}
 }
 
+// TestLease_SwapTo_EmptyCommandNormalizesToDefault_NoOp — стадия-автор без
+// явной Stage.Command (использует дефолтную команду Manager'а через "").
+// SwapTo с ЯВНЫМ именем той же дефолтной команды должен распознаться как
+// "та же команда" и остаться no-op — иначе сравнение НЕнормализованных строк
+// ("" != "claude") лишний раз дёрнуло бы release+acquire того же семафора.
+func TestLease_SwapTo_EmptyCommandNormalizesToDefault_NoOp(t *testing.T) {
+	var log []string
+	semA, _ := newOrderedSemaphores(&log)
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"a": semA}, "a")
+
+	lease, err := m.AcquireLease(context.Background(), "") // "" → дефолт "a"
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.SwapTo(context.Background(), "a"); err != nil {
+		t.Fatalf("SwapTo to the resolved default command must not fail: %v", err)
+	}
+	if want := []string{"acquire:a"}; !equalLogs(log, want) {
+		t.Errorf("SwapTo to the same resolved command must be a no-op, log = %v, want %v", log, want)
+	}
+}
+
 // TestNew_PreCreatesSemaphoreForVerifyOnlyCommand — codex НЕ является
 // Stage.Command ни одной стадии, только команда агентского verify-шага. New
 // должен предсоздать для него реальный семафор с лимитом globalMaxParallel

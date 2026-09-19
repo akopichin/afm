@@ -153,17 +153,26 @@ func (m *Manager) semFor(s flow.Stage) Semaphore {
 	return m.semForCmd(s.Command)
 }
 
+// resolveCmd нормализует имя команды к тому же виду, что использует New при
+// построении m.sems: "" → дефолтная команда Manager'а. Общая точка для
+// semForCmd и Lease — если бы Lease сравнивал НЕнормализованные имена (""
+// против явного имени дефолтной команды), SwapTo не распознал бы переход
+// "на самом деле в ту же команду" как no-op и лишний раз дёрнул бы
+// release+acquire того же семафора.
+func (m *Manager) resolveCmd(cmd string) string {
+	if cmd == "" {
+		return m.defaultCmd
+	}
+	return cmd
+}
+
 // semForCmd резолвит семафор по имени команды напрямую (без flow.Stage) —
 // нужен Lease, у которого на момент SwapTo нет всей стадии, только имя
-// команды верификатора. Та же нормализация, что и semFor: "" → дефолтная
-// команда Manager'а; команда без собственного семафора (в т.ч. созданная в
-// обход New, напр. в тестах через NewWithSemaphores без этого ключа) —
+// команды верификатора. Команда без собственного семафора (в т.ч. созданная
+// в обход New, напр. в тестах через NewWithSemaphores без этого ключа) —
 // noopSemaphore (без ограничения), а не паника или молчаливый nil-семафор.
 func (m *Manager) semForCmd(cmd string) Semaphore {
-	if cmd == "" {
-		cmd = m.defaultCmd
-	}
-	if sem, ok := m.sems[cmd]; ok {
+	if sem, ok := m.sems[m.resolveCmd(cmd)]; ok {
 		return sem
 	}
 	return noopSemaphore{}

@@ -17,11 +17,13 @@ type Lease struct {
 // AcquireLease захватывает слот для cmd (отменяемо через ctx). cmd
 // резолвится той же семантикой, что и Stage.Command в semFor: "" → дефолтная
 // команда Manager'а, неизвестная команда → общий noop-семафор (без лимита).
+// Lease хранит УЖЕ нормализованное имя — см. resolveCmd/SwapTo.
 func (m *Manager) AcquireLease(ctx context.Context, cmd string) (*Lease, error) {
-	if err := m.semForCmd(cmd).acquireCtx(ctx); err != nil {
+	resolved := m.resolveCmd(cmd)
+	if err := m.semForCmd(resolved).acquireCtx(ctx); err != nil {
 		return nil, err
 	}
-	return &Lease{m: m, cmd: cmd, held: true}, nil
+	return &Lease{m: m, cmd: resolved, held: true}, nil
 }
 
 // SwapTo переводит lease на другую команду. Та же команда — no-op: слот
@@ -34,14 +36,15 @@ func (m *Manager) AcquireLease(ctx context.Context, cmd string) (*Lease, error) 
 // старый") и возвращается ошибка — вызывающий не должен считать переход
 // частично успешным.
 func (l *Lease) SwapTo(ctx context.Context, cmd string) error {
-	if l.held && l.cmd == cmd {
+	resolved := l.m.resolveCmd(cmd)
+	if l.held && l.cmd == resolved {
 		return nil
 	}
 	l.Release()
-	if err := l.m.semForCmd(cmd).acquireCtx(ctx); err != nil {
+	if err := l.m.semForCmd(resolved).acquireCtx(ctx); err != nil {
 		return err
 	}
-	l.cmd = cmd
+	l.cmd = resolved
 	l.held = true
 	return nil
 }
