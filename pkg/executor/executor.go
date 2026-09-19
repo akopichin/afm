@@ -17,6 +17,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/progress"
 )
 
@@ -43,12 +44,24 @@ type Config struct {
 	// graceful, user-requested interrupt (agent_suggest), distinct from idle
 	// timeout / full-run shutdown. nil channel is safe (select never fires).
 	InterruptCh <-chan struct{}
+	// VerifyMode, if true, signals to the underlying adapter (e.g.
+	// scripts/codex-as-claude.sh via a narrow CODEX_VERIFY env var, see
+	// RunVerifyAgent) that this invocation is a read-only AI-verify pass, not
+	// a normal author/builder run — no bypass/full-access sandbox flags, no
+	// editing tools. Set only by RunVerifyAgent; never by RunPlanning/RunAgent.
+	VerifyMode bool
 }
 
 // ErrUserInterrupted signals that the agent process was stopped because the
 // user requested an interrupt (via Config.InterruptCh) — not a real failure.
 // Callers (runWithRetry) must distinguish this from retry/failure handling.
 var ErrUserInterrupted = errors.New("user interrupted")
+
+// ErrIdleTimeout — сигнальная ошибка простоя (за IdleTimeout не пришло ни
+// одной строки stdout). run() оборачивает ею свою текстовую ошибку через
+// %w, чтобы вызывающий код (RunVerifyAgent) мог отличить таймаут от прочих
+// ошибок процесса через errors.Is, не разбирая текст сообщения.
+var ErrIdleTimeout = errors.New("idle timeout")
 
 // interruptGracePeriod bounds how long we wait for the subprocess to exit
 // gracefully after SIGINT before force-killing it as a safety net against a
@@ -426,6 +439,143 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	return runErr
 }
 
+// RunVerifyAgent запускает один проход AI-verify: свежую read-only сессию
+// (без --resume/session-id, без AFM_STAGE_DIR — верификатор не участник
+// файлового диалогового протокола, §7.3 плана AI-verify) и захватывает
+// ФИНАЛЬНЫЙ ассистентский текстовый блок как машинный ответ модели, а не
+// весь лог. Переиспользует общий run() — не копирует тело RunPlanning/RunAgent.
+//
+// В отличие от них, успех/провал самого процесса
+// (ProcessOK/TimedOut/Interrupted) и вердикт модели (Result) — два
+// независимых поля возвращаемого verify.RunOutcome: ненулевой exit code
+// после "pass" НИКОГДА не считается пройденным, а пустой/битый ответ при
+// штатном exit 0 — это ProtocolErr, а не молчаливое решение afm о коде
+// (§5.4 плана). Текст модели никогда не решает cost/exit сам по себе.
+//
+// Возвращаемая error — только инфраструктурный сбой самого вызова (не
+// открылся лог, не записался resultFile); исход самой проверки — целиком в
+// RunOutcome, даже если error == nil.
+func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
+	lg, err := progress.NewLogger(logFile)
+	if err != nil {
+		return verify.RunOutcome{}, err
+	}
+	defer lg.Close()
+
+	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
+	jf, err := os.OpenFile(jsonlFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return verify.RunOutcome{}, fmt.Errorf("open jsonl file: %w", err)
+	}
+	defer jf.Close()
+
+	var stderr = io.Discard
+	if sf := openStderrLog(logFile); sf != nil {
+		stderr = sf
+		defer sf.Close()
+	}
+
+	lg.LogStart(agentType, stageName)
+
+	// Верификатор — всегда свежая сессия без диалогового протокола:
+	// принудительно обнуляем поля, которые могли бы просочиться из общего
+	// Config (--resume/session-id и AFM_STAGE_DIR автора), независимо от
+	// того, что несёт исходный e.cfg.
+	verifyCfg := e.cfg
+	verifyCfg.SessionID = ""
+	verifyCfg.Resume = false
+	verifyCfg.StageDir = ""
+	verifyCfg.VerifyMode = true
+	ve := &Executor{cfg: verifyCfg}
+
+	var finalText strings.Builder
+	var haveFinalText bool
+	var firstErr string
+	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	collector := accounting.NewCollector(ve.cfg.UsageHint)
+	runErr := ve.run(ctx, prompt, phase, stderr, func(line string) {
+		collector.Observe([]byte(line))
+		jf.WriteString(line + "\n") //nolint:errcheck
+		ev, ok := parseStreamEvent(line)
+		if !ok {
+			if isErrorLine(line) {
+				lg.LogAction("error", line)
+				if firstErr == "" {
+					firstErr = line
+				}
+			}
+			return
+		}
+		for _, c := range ev.Message.Content {
+			if c.Type == contentTypeText {
+				// Финальный ответ — последний ассистентский текстовый
+				// блок: каждый следующий ЗАМЕНЯЕТ предыдущий, а не
+				// дописывается к нему — промежуточные рассуждения не
+				// должны перемешаться с итоговым JSON.
+				finalText.Reset()
+				finalText.WriteString(c.Text)
+				haveFinalText = true
+			}
+			if tool, detail, actionOK := contentToAction(c, ve.cfg.TruncateOutput); actionOK {
+				lg.LogAction(tool, detail)
+				if ve.cfg.OnAction != nil {
+					ve.cfg.OnAction(tool, detail)
+				}
+			}
+		}
+	})
+
+	lg.LogEnd(runErr)
+	if ve.cfg.OnUsage != nil {
+		ve.cfg.OnUsage(collector.Finish(runErr))
+	}
+	if firstErr != "" {
+		lg.LogAction("verify-note", "process reported an error line; see log above: "+firstErr)
+	}
+
+	outcome := verify.RunOutcome{}
+	switch {
+	case errors.Is(runErr, ErrUserInterrupted):
+		outcome.Interrupted = true
+	case errors.Is(runErr, ErrIdleTimeout):
+		outcome.TimedOut = true
+	case runErr == nil:
+		outcome.ProcessOK = true
+	default:
+		// Прочая ошибка запуска (не таймаут, не прерывание) — процесс
+		// просто не отработал штатно; все три флага остаются false.
+	}
+
+	// Сохраняем сырой финальный текст, если он вообще появился, — даже если
+	// процесс потом упал ненулевым exit code (аудиторский след того, что
+	// модель успела написать, не более).
+	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
+		if werr := os.WriteFile(resultFile, []byte(finalText.String()), 0644); werr != nil {
+			return outcome, fmt.Errorf("write result file: %w", werr)
+		}
+	}
+
+	if !outcome.ProcessOK {
+		// Процесс не завершился штатно (таймаут/прерывание/иная ошибка) —
+		// что бы модель ни написала в текст, это не решение о коде: даже
+		// "pass" в финальном тексте не засчитывается (§5.4 плана).
+		return outcome, nil
+	}
+
+	if !haveFinalText || strings.TrimSpace(finalText.String()) == "" {
+		outcome.ProtocolErr = errors.New("verifier produced no final answer")
+		return outcome, nil
+	}
+
+	result, decErr := verify.DecodeModelResult([]byte(finalText.String()))
+	if decErr != nil {
+		outcome.ProtocolErr = decErr
+		return outcome, nil
+	}
+	outcome.Result = &result
+	return outcome, nil
+}
+
 // RunScript runs a plain shell script (no stream-json parsing, no session/
 // resume args) with a hard, non-resetting timeout — unlike RunAgent's
 // idle-timeout (reset per output line), timeout here bounds the whole run
@@ -624,7 +774,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		killProcessGroup(cmd, syscall.SIGKILL)
 		<-done // wait for stdout reader to finish
 		_ = cmd.Wait()
-		return fmt.Errorf("idle timeout after %v", e.cfg.IdleTimeout)
+		return fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
 	case <-ctx.Done():
 		killProcessGroup(cmd, syscall.SIGKILL)
 		<-done // wait for stdout reader to finish
