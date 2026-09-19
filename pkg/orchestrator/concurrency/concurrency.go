@@ -137,8 +137,8 @@ func NewWithSemaphores(critical *bus.CriticalBus, sems map[string]Semaphore, def
 	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand}
 }
 
-// markActive/markDone/semFor остаются приватными методами — вызываются только
-// изнутри SpawnAgent.
+// markActive/markDone остаются приватными методами — вызываются только
+// изнутри SpawnAgentLease.
 
 func (m *Manager) markActive(stageID string) { m.activeAgents.Store(stageID, struct{}{}) }
 func (m *Manager) markDone(stageID string)   { m.activeAgents.Delete(stageID) }
@@ -147,10 +147,6 @@ func (m *Manager) markDone(stageID string)   { m.activeAgents.Delete(stageID) }
 func (m *Manager) IsActive(stageID string) bool {
 	_, ok := m.activeAgents.Load(stageID)
 	return ok
-}
-
-func (m *Manager) semFor(s flow.Stage) Semaphore {
-	return m.semForCmd(s.Command)
 }
 
 // resolveCmd нормализует имя команды к тому же виду, что использует New при
@@ -178,20 +174,28 @@ func (m *Manager) semForCmd(cmd string) Semaphore {
 	return noopSemaphore{}
 }
 
-// SpawnAgent запускает агентскую горутину под семафором команды, помечает
-// стадию активной и учитывает горутину в WaitGroup. Единственная точка
-// запуска — заменяет ~10 копий одинакового boilerplate и гарантирует чистый
-// shutdown.
-func (m *Manager) SpawnAgent(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
+// SpawnAgentLease запускает агентскую горутину, вручая callback'у *Lease —
+// единственный слот командного семафора, который тот может переносить между
+// подпроцессами разного имени (SwapTo) в течение своего выполнения, никогда
+// не держа два слота одновременно (AI-verify, переход автор→верификатор).
+// Изначально lease держит слот Stage.Command. Захват отменяем через ctx: если
+// ctx отменяется, пока горутина ждёт своей очереди на семафоре, агент вовсе
+// не стартует (run не вызывается, ничего не помечается активным).
+//
+// SpawnAgent (ниже) — тонкая обёртка поверх этой функции с callback'ом,
+// игнорирующим lease: единственная реализация запуска, как и раньше.
+func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(ctx context.Context, s flow.Stage, lease *Lease)) {
 	m.agentWG.Add(1)
 	go func() {
 		defer m.agentWG.Done()
-		sem := m.semFor(s)
-		sem.acquire()
+		lease, err := m.AcquireLease(ctx, s.Command)
+		if err != nil {
+			return
+		}
 		m.markActive(s.ID)
 		defer func() {
 			m.markDone(s.ID)
-			sem.release()
+			lease.Release()
 		}()
 		// Re-check right before run: the goroutine may have queued on sem for
 		// an arbitrary amount of time, during which the stage could have been
@@ -200,8 +204,19 @@ func (m *Manager) SpawnAgent(ctx context.Context, s flow.Stage, run func(context
 		if m.shouldRun != nil && !m.shouldRun(s.ID) {
 			return
 		}
-		run(ctx, s)
+		run(ctx, s, lease)
 	}()
+}
+
+// SpawnAgent запускает агентскую горутину под семафором команды, помечает
+// стадию активной и учитывает горутину в WaitGroup. Единственная точка
+// запуска — заменяет ~10 копий одинакового boilerplate и гарантирует чистый
+// shutdown. Делегирует SpawnAgentLease с callback'ом, игнорирующим lease —
+// стадии без verify его никогда не видят, поведение не меняется.
+func (m *Manager) SpawnAgent(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
+	m.SpawnAgentLease(ctx, s, func(ctx context.Context, s flow.Stage, lease *Lease) {
+		run(ctx, s)
+	})
 }
 
 // SpawnDetached запускает вспомогательную агентскую горутину, которая
