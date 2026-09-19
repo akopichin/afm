@@ -75,20 +75,35 @@ func (o *Orchestrator) computeResumeKind(s flow.Stage, pausedFrom state.StageSta
 // for every kind, not just review. The runner's own first-line setRunnerKind
 // stays as a harmless idempotent backstop for any direct (non-SpawnAgent) path.
 //
-// SpawnAgentLease (не SpawnAgent) — единственная точка запуска исполнительских
-// раннеров (AI-verify, V4b): callback сохраняет выданный *concurrency.Lease в
-// o.stageLeases на время работы run(ctx,s) и убирает его в defer. RunVerification
-// достаёт lease отсюда, чтобы временно перевести командный слот на верификатора
-// (см. поле stageLeases). Планировочные раннеры тоже проходят через spawnKind и
+// spawnAgentLeased — ЕДИНАЯ точка запуска любого агента стадии (AI-verify,
+// V4b): оборачивает concurrency.SpawnAgentLease, сохраняя выданный
+// *concurrency.Lease в o.stageLeases на время работы run(ctx,s) и убирая его
+// в defer. RunVerification достаёт lease отсюда, чтобы временно перевести
+// командный слот на верификатора (см. поле stageLeases). Раннеры планирования
 // тоже получают lease, но никогда им не пользуются — RunVerification вызывают
 // только исполнительские раннеры (agents.go).
-func (o *Orchestrator) spawnKind(ctx context.Context, s flow.Stage, kind string, run func(context.Context, flow.Stage)) {
-	o.setRunnerKind(s.ID, kind)
+//
+// Централизация — не косметика: до неё spawnKind собирал этот же callback
+// инлайново, а resumeOwner/resumeInteractiveAgent звали "голый"
+// concurrency.SpawnAgent НАПРЯМУЮ — стадии, резюмируемые именно этими двумя
+// путями (review-pause resume; crash-recovery интерактивной стадии), не
+// регистрировали lease вовсе. RunVerification на них молча деградировал
+// (o.stageLeases.Load возвращал ok=false) — verify-подпроцесс запускался БЕЗ
+// учёта в командном семафоре, т.е. реальное превышение max_parallel для
+// команды верификатора. Единая точка вызова делает такую регрессию
+// структурно невозможной — новый спавн-сайт, забывший её вызвать, будет
+// бросаться в глаза при ревью (все остальные уже через неё).
+func (o *Orchestrator) spawnAgentLeased(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
 	o.concurrency.SpawnAgentLease(ctx, s, func(ctx context.Context, s flow.Stage, lease *concurrency.Lease) {
 		o.stageLeases.Store(s.ID, lease)
 		defer o.stageLeases.Delete(s.ID)
 		run(ctx, s)
 	})
+}
+
+func (o *Orchestrator) spawnKind(ctx context.Context, s flow.Stage, kind string, run func(context.Context, flow.Stage)) {
+	o.setRunnerKind(s.ID, kind)
+	o.spawnAgentLeased(ctx, s, run)
 }
 
 // PauseFlow puts the flow into best-effort review mode: it holds new stage
@@ -408,10 +423,10 @@ func (o *Orchestrator) resumeOwner(ctx context.Context, ow state.PauseOwner, isT
 				return false
 			}
 		}
-		o.concurrency.SpawnAgent(ctx, *stage, runner)
+		o.spawnAgentLeased(ctx, *stage, runner)
 		return true
 	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying:
-		o.concurrency.SpawnAgent(ctx, *stage, runner)
+		o.spawnAgentLeased(ctx, *stage, runner)
 		return true
 	default:
 		return true // terminal or already-resumed: nothing to spawn

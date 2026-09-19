@@ -246,7 +246,12 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused:
 			continue
 		case state.StatusAwaitingUserInput:
-			o.concurrency.SpawnAgent(ctx, s, o.resumeInteractiveAgent)
+			// spawnAgentLeased (не голый SpawnAgent) — resumeInteractiveAgent
+			// внутри себя запускает один из исполнительских раннеров
+			// (runPlanningAgent/runImplementationAgent, см. detectInterruptedPhase),
+			// который может вызвать RunVerification; без lease AI-verify молча
+			// деградировал бы на этом пути (см. spawnAgentLeased).
+			o.spawnAgentLeased(ctx, s, o.resumeInteractiveAgent)
 		case state.StatusHookFailed:
 			// Crashed while blocked on a before-hook retry/skip decision.
 			// Re-enter the wait (not a silent retry) — see resumeHookFailedWait.
