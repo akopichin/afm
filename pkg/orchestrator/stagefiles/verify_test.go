@@ -1,10 +1,12 @@
 package stagefiles
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
@@ -272,21 +274,44 @@ func TestNewVerificationID_InjectableForTests(t *testing.T) {
 func TestWriteManifest_RoundTrips(t *testing.T) {
 	stageDir := t.TempDir()
 	verID := "ver-1"
-	m := Manifest{
+	want := Manifest{
 		RunID:          "flow-20260101-abcd",
 		StageID:        "build",
 		Phase:          "implementation",
 		VerificationID: verID,
+		CreatedAt:      time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC),
 		Steps: []ManifestStep{
 			{Index: 1, Kind: "shell", Command: "go test ./...", Outcome: "pass"},
 			{Index: 2, Kind: "agent", Command: "codex", Outcome: "needs_changes"},
 		},
 	}
-	if err := WriteManifest(stageDir, verID, m); err != nil {
+	if err := WriteManifest(stageDir, verID, want); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
 	}
+
 	path := filepath.Join(VerifyDir(stageDir), verID, manifestFileName)
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("manifest.json not created: %v", err)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+	var got Manifest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal manifest.json: %v", err)
+	}
+
+	if got.RunID != want.RunID || got.StageID != want.StageID || got.Phase != want.Phase ||
+		got.VerificationID != want.VerificationID {
+		t.Fatalf("manifest metadata mismatch: got %+v, want %+v", got, want)
+	}
+	if !got.CreatedAt.Equal(want.CreatedAt) {
+		t.Fatalf("CreatedAt mismatch: got %v, want %v", got.CreatedAt, want.CreatedAt)
+	}
+	if len(got.Steps) != len(want.Steps) {
+		t.Fatalf("Steps length mismatch: got %d, want %d", len(got.Steps), len(want.Steps))
+	}
+	for i := range want.Steps {
+		if got.Steps[i] != want.Steps[i] {
+			t.Fatalf("Steps[%d] mismatch: got %+v, want %+v", i, got.Steps[i], want.Steps[i])
+		}
 	}
 }
