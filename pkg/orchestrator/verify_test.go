@@ -11,6 +11,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
@@ -30,6 +31,7 @@ func newVerifyTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrator, s
 	}
 	o := &Orchestrator{
 		opts: Options{RunDir: dir, Stages: []flow.Stage{stage}, RunID: "run1"},
+		ui:   bus.NewUIBus(),
 	}
 	return o, stageDir
 }

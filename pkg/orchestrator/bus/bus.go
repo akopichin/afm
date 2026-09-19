@@ -75,6 +75,29 @@ const (
 	// transition and never fails the stage/run. Data: map[string]string{
 	// "stage": ..., "message": ...}.
 	EventReflectFailed EventType = "reflect_failed"
+	// EventVerifyStarted fires right BEFORE one AI-verify step (agent or
+	// shell) actually runs, from inside Orchestrator.RunVerification (V5a) —
+	// same non-FSM observability contract as EventAutoAnswered: live via
+	// o.ui.Publish AND durable via stagefiles.AppendNotice into
+	// notices.jsonl, so a client connecting/reloading AFTER the event still
+	// sees it (server's reconstructNotices replays notices.jsonl). Never an
+	// FSM transition, never added to events.jsonl, never a flow.Phase — verify
+	// is an orthogonal pass over a stage that already claims completion via
+	// its own file-probe. Data: map[string]any{"verification_id","step"
+	// (1-based),"kind" ("agent"|"shell"),"command" (alias/command)}.
+	EventVerifyStarted EventType = "verify_started"
+	// EventVerifyResult fires right AFTER one AI-verify step's outcome is
+	// known — pass/needs_changes/inconclusive, or the step couldn't be
+	// evaluated at all (transport/protocol/timeout/interruption/storage
+	// failure/nonzero shell exit). Same non-FSM contract as
+	// EventVerifyStarted. Data: map[string]any{"verification_id","step",
+	// "kind","command","verdict" (verify.Verdict string, omitted when the
+	// step produced no verdict at all),"exec_error" (a short kind string,
+	// omitted when "verdict" is set),"reason" (short human text),
+	// "report_path" (absolute path to report.md, omitted when none was
+	// written for this outcome — e.g. a passing shell step or any exec
+	// error)}.
+	EventVerifyResult EventType = "verify_result"
 	// eventAgentDrained is an internal-only nudge published on the critical
 	// bus right after a script_after hook's goroutine finishes
 	// (maybeRunAfterHook, hooks.go), once pendingAfterHooks has already been

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
@@ -14,7 +15,7 @@ import (
 // verify_test.go (RunVerification не трогает FSM/store/UI).
 func newGateVerifyTestOrchestrator(t *testing.T, stages ...flow.Stage) *Orchestrator {
 	t.Helper()
-	return &Orchestrator{opts: Options{RunDir: t.TempDir(), Stages: stages, RunID: "run1"}}
+	return &Orchestrator{opts: Options{RunDir: t.TempDir(), Stages: stages, RunID: "run1"}, ui: bus.NewUIBus()}
 }
 
 // TestGateWithVerify_ProbeFailsSkipsVerify — файл-проба идёт ПЕРВОЙ: если она

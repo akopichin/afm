@@ -152,8 +152,34 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				checkErr = completionCheck()
 			}
 			if checkErr == nil {
+				// AI-verify (V5a): completionCheck (gateWithVerify->RunVerification)
+				// может занять сколько угодно времени ПОСЛЕ того, как автор уже
+				// вернулся, — за это время Pause() мог долговечно перевести стадию
+				// в paused. Trigger(EvComplete) внизу цепочки (onAgentCompleted ->
+				// completeStage) и так отклонит переход по CAS (paused не входит в
+				// From EvComplete) — этот ранний return дополнительно не даёт
+				// разослать вводящее в заблуждение уведомление "агент завершился"
+				// для стадии, которая на самом деле осталась на паузе (late pass).
+				if o.currentStatus(s.ID) == state.StatusPaused {
+					return
+				}
 				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
 				o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
+				return
+			}
+			// AI-verify (V5a): верификатор слушает тот же interruptChans, что и
+			// автор (runnerForVerify) — Pause()/Revise() во время verify всплывает
+			// сюда либо этим сентинелом (мягкий SIGINT verify-субпроцесса или
+			// прерванное ожидание слота верификатора, см. runVerifyAgentStep),
+			// либо просто уже долговечно paused-статусом. Обрабатываем СИММЕТРИЧНО
+			// прерыванию самого agentFn ниже: paused — восстанавливать нечего,
+			// иначе (Revise) — перезапускаем АВТОРА с фидбеком, а не верификатор
+			// (verify никогда не является kind'ом для резюма).
+			if o.currentStatus(s.ID) == state.StatusPaused {
+				return
+			}
+			if errors.Is(checkErr, executor.ErrUserInterrupted) {
+				onUserInterrupted()
 				return
 			}
 			// Incomplete work — retry once without backoff

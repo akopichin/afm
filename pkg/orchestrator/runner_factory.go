@@ -137,8 +137,15 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Ru
 // а не родительская фаза стадии (planning/implementation/review), чтобы
 // usage/логи verify не путались с фазой автора. cmd — команда КОНКРЕТНОГО
 // verify-шага (VerifyStep.Command), может отличаться от Stage.Command.
+//
+// InterruptCh (V5a) подключён к ТОМУ ЖЕ o.interruptChans[s.ID], что и у
+// авторского раннера (runnerFor выше): пока идёт verify, стадия всё ещё
+// StatusRunning (verify не заводит собственного FSM-статуса), и Pause()/
+// Revise() сигналят ровно этот канал. Без этого подключения SIGINT от паузы
+// никогда не доходил бы до самого verify-субпроцесса — он получал бы только
+// ctx.Done() (полная отмена рана), а не мягкую паузу одной стадии.
 func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Executor {
-	return executor.New(executor.Config{
+	cfg := executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
@@ -151,7 +158,11 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Execu
 		Phase:          verifyExecutionLabel,
 		UsageHint:      o.usageHintFor(cmd),
 		OnUsage:        o.recordUsage(s.ID, verifyExecutionLabel, ""),
-	})
+	}
+	if ch, ok := o.interruptChans.Load(s.ID); ok {
+		cfg.InterruptCh = ch.(chan struct{})
+	}
+	return executor.New(cfg)
 }
 
 // execVerifyAgent — продакшн-реализация seam'а o.runVerifyAgent (см.

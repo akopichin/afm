@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
@@ -39,6 +41,81 @@ const (
 	verifyOutcomePass  = "pass"
 	verifyOutcomeError = "error"
 )
+
+// Ключи payload'а observer-событий EventVerifyStarted/EventVerifyResult
+// (V5a.3) — единая точка вместо разбросанных строковых литералов.
+const (
+	keyVerificationID = "verification_id"
+	keyStep           = "step"
+	keyVerifyKind     = "kind"
+	keyVerifyCommand  = "command"
+	keyVerdict        = "verdict"
+	keyExecErrorKind  = "exec_error"
+	keyVerifyReason   = "reason"
+	keyReportPath     = "report_path"
+)
+
+// execErrorKindExecFailure/execErrorKindInterrupted — грубая классификация
+// "почему у шага нет вердикта" для payload'а EventVerifyResult: interrupted —
+// шаг прерван извне (Pause/Revise/отмена рана), exec_failure — любая другая
+// причина не получить вердикт (транспорт/протокол/таймаут/сбой сохранения/
+// ненулевой exit shell-команды уже нормализован в needs_changes и сюда не
+// попадает).
+const (
+	execErrorKindInterrupted = "interrupted"
+	execErrorKindExecFailure = "exec_failure"
+)
+
+// emitVerifyStarted публикует наблюдательное событие "шаг verify начал
+// выполняться" — ТОЧНО тот же паттерн, что EventAutoAnswered (см. AGENTS.md
+// "Auto-answering questions"): live через o.ui.Publish И durable через
+// stagefiles.AppendNotice в notices.jsonl, чтобы клиент, подключившийся или
+// перезагрузивший страницу ПОСЛЕ события, всё равно увидел его в ленте
+// (server's reconstructNotices реплеит notices.jsonl). НЕ FSM-событие: не
+// входит в events.jsonl и не входит в flow.Phases().
+func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, command string) {
+	data := map[string]any{
+		keyVerificationID: verID,
+		keyStep:           idx,
+		keyVerifyKind:     kind,
+		keyVerifyCommand:  command,
+	}
+	o.ui.Publish(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: data})
+	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventVerifyStarted), data)
+}
+
+// emitVerifyResult публикует наблюдательное событие "шаг verify завершился" —
+// см. emitVerifyStarted. Ровно один из (verdict, execErrorKind) непустой:
+// verdict — когда модель/shell-код реально произвели вердикт (pass/
+// needs_changes/inconclusive); execErrorKind — когда шаг вообще не удалось
+// оценить. reportPath — "" если для этого исхода report.md не пишется
+// (проходящий shell-шаг, любая exec-ошибка).
+func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, command string, verdict verify.Verdict, execErrorKind, reason, reportPath string) {
+	data := map[string]any{
+		keyVerificationID: verID,
+		keyStep:           idx,
+		keyVerifyKind:     kind,
+		keyVerifyCommand:  command,
+		keyVerifyReason:   reason,
+	}
+	if verdict != "" {
+		data[keyVerdict] = string(verdict)
+	}
+	if execErrorKind != "" {
+		data[keyExecErrorKind] = execErrorKind
+	}
+	if reportPath != "" {
+		data[keyReportPath] = reportPath
+	}
+	o.ui.Publish(bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data})
+	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventVerifyResult), data)
+}
+
+// verifyReportPath возвращает абсолютный путь report.md для данного прохода —
+// единая точка вместо дублирования filepath.Join в каждом call site'е.
+func verifyReportPath(stageDir, verID string) string {
+	return filepath.Join(stagefiles.VerifyDir(stageDir), verID, "report.md")
+}
 
 // verifyAgentRunner — сигнатура функции, реально исполняющей один agent-шаг
 // AI-verify. Инъектируемый seam (тот же приём, что o.spawnJSONFix и
@@ -118,6 +195,9 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 
 	for i, st := range s.Verify.Steps {
 		idx := i + 1
+		kind := verifyStepManifestKind(st)
+		command := verifyStepManifestCommand(st)
+		o.emitVerifyStarted(s.ID, verID, idx, kind, command)
 
 		if st.Kind == flow.VerifyAgent {
 			result, alias, err := o.runVerifyAgentStep(ctx, s, st, idx, verID, prompts.VerifyInputs{
@@ -135,6 +215,11 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			if err != nil {
 				manifestSteps[i].Outcome = verifyManifestErrorOutcome(err)
 				_ = persistManifest()
+				execKind := execErrorKindExecFailure
+				if errors.Is(err, executor.ErrUserInterrupted) {
+					execKind = execErrorKindInterrupted
+				}
+				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execKind, err.Error(), "")
 				return err
 			}
 
@@ -143,24 +228,30 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				if perr := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); perr != nil {
 					manifestSteps[i].Outcome = verifyOutcomeError
 					_ = persistManifest()
-					return &VerifyExecError{Reason: "verify storage failure: " + perr.Error(), Step: idx}
+					reason := "verify storage failure: " + perr.Error()
+					o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+					return &VerifyExecError{Reason: reason, Step: idx}
 				}
 				if perr := stagefiles.WriteReport(stageDir, verID, result, alias, idx); perr != nil {
 					manifestSteps[i].Outcome = verifyOutcomeError
 					_ = persistManifest()
-					return &VerifyExecError{Reason: "verify storage failure: " + perr.Error(), Step: idx}
+					reason := "verify storage failure: " + perr.Error()
+					o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+					return &VerifyExecError{Reason: reason, Step: idx}
 				}
 				manifestSteps[i].Outcome = string(result.Verdict)
 				fmt.Fprintf(&passedSteps, "Step %d (agent %s): "+verifyOutcomePass+" — %s\n", idx, alias, result.Summary)
+				o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictPass, "", result.Summary, verifyReportPath(stageDir, verID))
 
 			case verify.VerdictNeedsChanges:
 				manifestSteps[i].Outcome = string(result.Verdict)
 				reason := "verify needs changes (step " + fmt.Sprint(idx) + "): " + result.Summary
-				return o.persistVerifyRejection(stageDir, verID, idx, alias, reason, result, manifestSteps, s.ID, phase)
+				return o.persistVerifyRejection(stageDir, verID, idx, kind, alias, reason, result, manifestSteps, s.ID, phase)
 
 			case verify.VerdictInconclusive:
 				manifestSteps[i].Outcome = string(result.Verdict)
 				_ = persistManifest()
+				o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictInconclusive, "", result.Summary, "")
 				return &VerifyExecError{Reason: "verify inconclusive: " + result.Summary, Step: idx}
 			default:
 				// Недостижимо при исправном executor.RunVerifyAgent
@@ -169,7 +260,9 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				// раннера в тестах: неизвестный вердикт НИКОГДА не pass.
 				manifestSteps[i].Outcome = verifyOutcomeError
 				_ = persistManifest()
-				return &VerifyExecError{Reason: fmt.Sprintf("verify produced unknown verdict %q", result.Verdict), Step: idx}
+				reason := fmt.Sprintf("verify produced unknown verdict %q", result.Verdict)
+				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+				return &VerifyExecError{Reason: reason, Step: idx}
 			}
 			continue
 		}
@@ -182,12 +275,16 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		if mkErr := os.MkdirAll(stepDir, 0755); mkErr != nil {
 			manifestSteps[i].Outcome = verifyOutcomeError
 			_ = persistManifest()
-			return &VerifyExecError{Reason: "verify storage failure: " + mkErr.Error(), Step: idx}
+			reason := "verify storage failure: " + mkErr.Error()
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+			return &VerifyExecError{Reason: reason, Step: idx}
 		}
 		if werr := os.WriteFile(filepath.Join(stepDir, "command.log"), []byte(out), 0644); werr != nil {
 			manifestSteps[i].Outcome = verifyOutcomeError
 			_ = persistManifest()
-			return &VerifyExecError{Reason: "verify storage failure: " + werr.Error(), Step: idx}
+			reason := "verify storage failure: " + werr.Error()
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+			return &VerifyExecError{Reason: reason, Step: idx}
 		}
 		if runErr != nil {
 			// Ненулевой exit == needs-changes-эквивалент: нормализуем в тот
@@ -199,10 +296,11 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			legacyReason := fmt.Sprintf("verify command failed (%v):\n%s", runErr, tail)
 			result := shellRejectionResult(st.Run, tail)
 			manifestSteps[i].Outcome = string(result.Verdict)
-			return o.persistVerifyRejection(stageDir, verID, idx, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
+			return o.persistVerifyRejection(stageDir, verID, idx, kind, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
 		}
 		manifestSteps[i].Outcome = verifyOutcomePass
 		fmt.Fprintf(&passedSteps, "Step %d (shell): `%s` — passed\n", idx, st.Run)
+		o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictPass, "", "passed", "")
 	}
 
 	if err := persistManifest(); err != nil {
@@ -225,13 +323,44 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	// RunVerification: тот же lease будет возвращён автору в defer, каким бы
 	// ни оказался исход). Тот же командный слот, той же семантики SwapTo:
 	// та же команда, что у автора, — no-op; другая — release-before-acquire.
+	//
+	// Ожидание слота (если команда верификатора занята max_parallel'ом)
+	// обёрнуто o.pauseAwareVerifyCtx (V5a): ctx здесь — run-scoped ctx,
+	// который Pause() НЕ отменяет (см. control_api.go's Pause — он только
+	// долговечно переводит FSM и сигналит o.interruptChans, ctx не трогает).
+	// Без этого пауза во время ожидания busy-семафора верификатора не
+	// прерывала бы ожидание — стадия оставалась бы занятой этим ожиданием
+	// до тех пор, пока слот не освободится сам по себе.
 	if lease, ok := o.stageLeases.Load(s.ID); ok {
-		if err := lease.(*concurrency.Lease).SwapTo(ctx, st.Command); err != nil {
-			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify lease swap failed: " + err.Error(), Step: idx}
+		waitCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
+		swapErr := lease.(*concurrency.Lease).SwapTo(waitCtx, st.Command)
+		stop()
+		if swapErr != nil {
+			if ctx.Err() == nil {
+				// Родительский (run-scoped) ctx жив — ждать перестали именно
+				// из-за сигнала паузы/ревизии ЭТОЙ стадии (interruptChans), а
+				// не из-за отмены всего рана. Тот же сентинел, что и
+				// прерывание уже запущенного verify-субпроцесса ниже —
+				// runWithRetry (retry.go) обрабатывает оба источника
+				// прерывания одинаково.
+				return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
+			}
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify lease swap failed: " + swapErr.Error(), Step: idx}
 		}
 	}
 
 	stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
+	// Найдено этой задачей (V5a): в отличие от shell-шага чуть выше по файлу
+	// (который явно создаёт stepDir перед записью command.log), agent-шаг
+	// никогда не создавал stepDir сам — progress.NewLogger просто
+	// os.OpenFile'ит agentLog без MkdirAll родителя. В продакшне ЛЮБОЙ
+	// реальный agent-шаг verify падал бы с "open log file: ... no such file
+	// or directory" ещё до первого запуска verify-субпроцесса; это было
+	// незаметно во всех прежних тестах, потому что все они подменяют
+	// o.runVerifyAgent фейком, минуя реальную файловую систему.
+	if mkErr := os.MkdirAll(stepDir, 0755); mkErr != nil {
+		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify storage failure: " + mkErr.Error(), Step: idx}
+	}
 	agentLog := filepath.Join(stepDir, "agent.log")
 	rawResult := filepath.Join(stepDir, "raw-result.json")
 
@@ -263,17 +392,54 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	return *outcome.Result, st.Command, nil
 }
 
+// pauseAwareVerifyCtx возвращает ctx, отменяемый ЛИБО отменой родителя, ЛИБО
+// сигналом на o.interruptChans[stageID] (Pause()/Revise(), см. control_api.go)
+// — что наступит раньше, — и функцию stop, которую вызывающий код ОБЯЗАН
+// вызвать сразу после того, как перестал ждать (успешно или нет), ДО того как
+// канал снова понадобится реальному verify-субпроцессу (см. runnerForVerify).
+// stop синхронно дожидается выхода горутины-наблюдателя — без этого могла бы
+// возникнуть гонка, в которой наблюдатель, ещё не заметивший отмену, украл бы
+// ПОЗДНЕЙШИЙ сигнал паузы, адресованный уже запущенному verify-процессу.
+// Нет зарегистрированного канала для стадии (например, вызов вне
+// runWithRetry) — безопасная деградация: ctx прокидывается как есть, stop
+// — no-op.
+func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID string) (ctx context.Context, stop func()) {
+	ch, ok := o.interruptChans.Load(stageID)
+	if !ok {
+		return parent, func() {}
+	}
+	ic := ch.(chan struct{})
+	cctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ic:
+			cancel()
+		case <-cctx.Done():
+		}
+	}()
+	return cctx, func() {
+		cancel()
+		<-done
+	}
+}
+
 // persistVerifyRejection выполняет commit order для needs_changes-эквивалента
 // (V2a §6.3), общий для agent-шага и synthetic-результата shell-шага:
 //  1. вердикт уже готов и провалидирован (result);
 //  2. SaveAcceptedResult + WriteReport + WriteManifest;
 //  3. WriteActiveFeedback атомарно;
-//  4. ТОЛЬКО после успеха всех предыдущих — типизированный VerifyRejectedError.
+//  4. ТОЛЬКО после успеха всех предыдущих — emitVerifyResult (V5a.3) и
+//     типизированный VerifyRejectedError.
 //
 // Сбой ЛЮБОЙ персистентности на этом пути — VerifyExecError (fail closed):
 // стадия не должна быть ни молча принята, ни отклонена с недописанными на
-// диск файлами (частично записанный проход хуже отсутствующего).
-func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, alias, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
+// диск файлами (частично записанный проход хуже отсутствующего). kind —
+// "agent"|"shell", для payload'а observer-события EventVerifyResult; alias —
+// команда агента либо shell-строка (используется и как WriteReport'овский
+// alias, и как payload'овский command).
+func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, kind, alias, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
 	if err := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
 	}
@@ -293,6 +459,7 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, a
 	if err := stagefiles.WriteActiveFeedback(stageDir, verID, result, alias, idx); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
 	}
+	o.emitVerifyResult(stageID, verID, idx, kind, alias, result.Verdict, "", result.Summary, verifyReportPath(stageDir, verID))
 	return &VerifyRejectedError{
 		IncompleteWorkError: &stagefiles.IncompleteWorkError{Reason: reason},
 		ReportID:            verID,
@@ -304,7 +471,7 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, a
 // при ошибке agent-шага: "interrupted" для прерывания извне, иначе "error".
 func verifyManifestErrorOutcome(err error) string {
 	if err == executor.ErrUserInterrupted {
-		return "interrupted"
+		return execErrorKindInterrupted
 	}
 	return verifyOutcomeError
 }
@@ -415,11 +582,19 @@ func (o *Orchestrator) gateWithVerify(ctx context.Context, s flow.Stage, phase s
 	}
 }
 
+// verifyKindAgent/verifyKindShell — строковые значения ManifestStep.Kind и
+// payload'ового ключа "kind" в EventVerifyStarted/EventVerifyResult (V5a.3) —
+// единая точка вместо разбросанных строковых литералов "agent"/"shell" (goconst).
+const (
+	verifyKindAgent = "agent"
+	verifyKindShell = "shell"
+)
+
 func verifyStepManifestKind(st flow.VerifyStep) string {
 	if st.Kind == flow.VerifyAgent {
-		return "agent"
+		return verifyKindAgent
 	}
-	return "shell"
+	return verifyKindShell
 }
 
 func verifyStepManifestCommand(st flow.VerifyStep) string {
