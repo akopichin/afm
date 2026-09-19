@@ -72,6 +72,24 @@ func TestSupportedVerifyCommand(t *testing.T) {
 	}
 }
 
+// TestSupportedVerifyCommand_RecipeOverridesBareCodexName — регрессия на
+// находку код-ревью: голая проверка resolved == "codex" не должна затмевать
+// собой recipe, если кто-то переопределил ключ "codex" в docker.agents
+// ДРУГИМ типом (напр. openai). Recipe для резолвнутого имени обязан быть
+// решающим словом ПЕРЕД эвристикой "голое имя".
+func TestSupportedVerifyCommand_RecipeOverridesBareCodexName(t *testing.T) {
+	cfg := config.Config{
+		Docker: config.DockerConfig{
+			Agents: map[string]config.AgentRecipe{
+				"codex": {Type: config.RecipeTypeOpenAI, Model: "m", URL: "https://x", Auth: config.RecipeAuth{To: "env:OPENAI_API_KEY"}},
+			},
+		},
+	}
+	if got := config.SupportedVerifyCommand("codex", cfg); got {
+		t.Error("SupportedVerifyCommand(\"codex\") = true, want false when the \"codex\" key is overridden by a non-codex recipe")
+	}
+}
+
 func TestValidateVerifySpecs(t *testing.T) {
 	cfg := config.Config{
 		Docker: config.DockerConfig{
