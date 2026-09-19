@@ -93,6 +93,29 @@ line comments and "Send revision" (see [Inline plan comments](#inline-plan-comme
 > menu; that item was replaced by this Feed composer. The kebab still hosts stage
 > buttons, **Pause**, and the pre-note item for `pending` stages.
 
+## Images in the feed (agent → you)
+
+An agent can show you an image it produced — a chart, a rendered diagram, a
+screenshot, a downloaded picture — right in the **Feed**. It publishes the file as
+a stage artifact and references it by name; afm renders it inline.
+
+1. The agent writes the image **atomically** to `$AFM_STAGE_DIR/artifacts/<name>`
+   (a temp file, then `rename`), where `<name>` matches `[A-Za-z0-9._-]+` and ends
+   in `.png` / `.jpg` / `.jpeg` / `.gif`. This contract is part of the agent's
+   system prompt, so any agent can do it without extra configuration.
+2. It then prints the marker on its own line in its narrative: `[AFM image: <name>]`
+   (one marker per line; several images → several lines).
+3. The Feed renders each marker as an inline image; the surrounding text renders as
+   normal markdown.
+
+The image is served read-only from that stage's artifact directory over
+`GET /api/stages/<id>/artifacts/<name>` — addressed by stage + opaque name (never a
+client-supplied path), format-checked (PNG/JPEG/GIF only), size- and
+dimension-capped, and served with an `ETag` (revalidated, so an overwritten image
+is never shown stale). External markdown images in agent text
+(`![](https://…)`) are **not** loaded — a Content-Security-Policy and a renderer
+rule keep the feed from fetching off-origin URLs.
+
 ## Stage buttons
 
 A stage can declare named one-click actions in `flow.yaml`. Each button carries a

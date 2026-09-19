@@ -43,6 +43,26 @@ describe('splitImageMarkers', () => {
     expect(segs).toEqual([{ type: 'md', text }])
   })
 
+  test('маркер внутри ~~~ tilde-fenced-кода → остаётся текстом', () => {
+    const text = '~~~\n[AFM image: nope.png]\n~~~'
+    const segs = splitImageMarkers(text)
+    expect(imgNames(segs)).toEqual([])
+    expect(segs).toEqual([{ type: 'md', text }])
+  })
+
+  test('маркер в 4-backtick fence с вложенной ```-строкой → остаётся текстом', () => {
+    // Вложенная ```-строка (len 3 < 4) НЕ закрывает 4-backtick fence, поэтому
+    // маркер после неё всё ещё внутри кода — не должен стать картинкой.
+    const text = '````\n```\n[AFM image: nope.png]\n````'
+    const segs = splitImageMarkers(text)
+    expect(imgNames(segs)).toEqual([])
+  })
+
+  test('маркер ПОСЛЕ закрытого fence → распознаётся как картинка', () => {
+    const segs = splitImageMarkers('```\ncode\n```\n[AFM image: after.png]')
+    expect(imgNames(segs)).toEqual(['after.png'])
+  })
+
   test('маркер посреди строки → остаётся текстом', () => {
     const segs = splitImageMarkers('see this [AFM image: mid.png] inline')
     expect(imgNames(segs)).toEqual([])

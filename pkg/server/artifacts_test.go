@@ -90,7 +90,7 @@ func TestHandleArtifact_PNG(t *testing.T) {
 	if got := w.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("referrer-policy: got %q", got)
 	}
-	if got := w.Header().Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+	if got := w.Header().Get("Cache-Control"); got != "private, no-cache" {
 		t.Errorf("cache-control: got %q", got)
 	}
 	if et := w.Header().Get("ETag"); len(et) < 2 || et[0] != '"' || et[len(et)-1] != '"' {
@@ -210,6 +210,32 @@ func TestHandleArtifact_RejectsSymlinkEscape(t *testing.T) {
 	w := getArtifact(t, srv, "escape.png")
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404 (symlink escape must be rejected)", w.Code)
+	}
+}
+
+// TestHandleArtifact_RejectsSymlinkedArtifactsDir is the P1 regression: the
+// `artifacts` directory itself is a symlink pointing outside the run dir. The
+// root is pinned at runDir and the full path resolved through it, so os.Root
+// refuses to follow the escaping `artifacts` component.
+func TestHandleArtifact_RejectsSymlinkedArtifactsDir(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+
+	// A directory OUTSIDE the run dir holding a validly-named, real image.
+	outside := t.TempDir()
+	writePNG(t, filepath.Join(outside, "chart.png"), 4, 4)
+
+	// <runDir>/<stage>/artifacts -> outside (agent-planted symlink).
+	stageDir := filepath.Join(runDir, testStageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(stageDir, "artifacts")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	w := getArtifact(t, srv, "chart.png")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want 404 (symlinked artifacts dir escaping runDir must be rejected)", w.Code)
 	}
 }
 

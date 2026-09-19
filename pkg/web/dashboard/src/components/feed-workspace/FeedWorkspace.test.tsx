@@ -259,6 +259,24 @@ describe('FeedWorkspace', () => {
       expect(Number(m?.[1])).toBeLessThanOrEqual(3)
     })
 
+    it('сегменты (текст+картинка+текст) лежат в колоночной обёртке в исходном порядке', () => {
+      const detail = ['before', '[AFM image: chart.png]', 'after'].join('\n')
+      const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+
+      const wrap = container.querySelector('.feed-item-segments')
+      expect(wrap).not.toBeNull()
+      // Порядок детей обёртки: md(before) → img → md(after).
+      const kids = Array.from(wrap!.children)
+      expect(kids).toHaveLength(3)
+      expect(kids[0]?.tagName).toBe('DIV')
+      expect(kids[0]?.textContent).toContain('before')
+      expect(kids[1]?.tagName).toBe('IMG')
+      expect(kids[2]?.textContent).toContain('after')
+      // timestamp — отдельный элемент РЯДА, не внутри колонки сегментов.
+      expect(wrap!.querySelector('.feed-item-gap')).toBeNull()
+    })
+
     it('маркер внутри code-fence НЕ становится картинкой (остаётся текстом)', () => {
       const detail = ['```', '[AFM image: nope.png]', '```'].join('\n')
       const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]

@@ -16,11 +16,18 @@ export const MAX_FEED_IMAGES = 20
 // валидатора имени артефакта на бэкенде.
 const MARKER_RE = /^\[AFM image: ([A-Za-z0-9._-]+)\]$/
 
+// Открывающая fence-строка CommonMark: ≥3 подряд backtick ИЛИ tilde (после
+// необязательного отступа). Захватываем сам разделитель, чтобы закрытие считать
+// корректно: закрыть fence может только строка из ТОГО ЖЕ символа и длиной не
+// меньше открывающей (так markdown-it и трактует ```` ```` с вложенной ``` ```).
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
+
 export function splitImageMarkers(text: string): Segment[] {
   const lines = text.split('\n')
   const segments: Segment[] = []
   let buffer: string[] = []
-  let inCode = false
+  // fence !== null → мы внутри code-fence, открытого этим разделителем.
+  let fence: { char: string; len: number } | null = null
   let imageCount = 0
 
   const flush = () => {
@@ -33,13 +40,28 @@ export function splitImageMarkers(text: string): Segment[] {
   }
 
   for (const line of lines) {
-    if (line.trim().startsWith('```')) {
-      inCode = !inCode
+    const fenceMatch = FENCE_RE.exec(line)
+    if (fenceMatch !== null) {
+      const marker = fenceMatch[1]!
+      const char = marker[0]!
+      const len = marker.length
+      if (fence === null) {
+        // Открытие: info-string (` ```ts `) допустима только на открывающей строке.
+        fence = { char, len }
+      } else if (char === fence.char && len >= fence.len && line.trim() === marker) {
+        // Закрытие: тот же символ, длина ≥ открывающей, и БЕЗ info-string.
+        fence = null
+      }
       buffer.push(line)
       continue
     }
 
-    if (!inCode && imageCount < MAX_FEED_IMAGES) {
+    if (fence !== null) {
+      buffer.push(line)
+      continue
+    }
+
+    if (imageCount < MAX_FEED_IMAGES) {
       const m = MARKER_RE.exec(line.trim())
       if (m !== null) {
         flush()

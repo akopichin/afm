@@ -81,6 +81,24 @@ describe('renderPlainMarkdown', () => {
     expect(html).toContain('alt="chart"')
   })
 
+  // Относительные ссылки БЕЗ ведущего "/" (`rel/path`, `./x`, `../x`) — тоже
+  // same-origin, рендерились и раньше: глушим только схему и protocol-relative.
+  test.each([
+    ['relative path', '![c](images/chart.png)', 'images/chart.png'],
+    ['dot-slash', '![c](./chart.png)', './chart.png'],
+    ['dot-dot', '![c](../assets/chart.png)', '../assets/chart.png'],
+  ])('относительная %s рендерится', (_name, md, wantSrc) => {
+    const html = renderPlainMarkdown(md)
+    expect(html).toContain('<img')
+    expect(html).toContain(`src="${wantSrc}"`)
+  })
+
+  test('data:-картинка глушится (явная схема, не эмитим <img>)', () => {
+    const html = renderPlainMarkdown('![a](data:image/png;base64,AAAA)')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('base64')
+  })
+
   test('alt-текст внешней картинки экранируется (без инъекции)', () => {
     const html = renderPlainMarkdown('![<b>&x](http://evil/)')
     expect(html).not.toContain('<img')

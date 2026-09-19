@@ -312,6 +312,24 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	s.fileServer.ServeHTTP(w, r)
 }
 
+// dashboardCSP — Content-Security-Policy для документа дашборда
+// (defense-in-depth). Ключевая директива для фичи «картинка в ленте» —
+// img-src 'self' data:: даже при регрессе renderer-глушилки внешних markdown-
+// картинок браузер не выполнит эксфильтрацию-запрос на чужой origin (data: —
+// для favicon-пульса use-favicon-pulse). script-src закреплён по sha256 инлайн-
+// скрипта темы в index.html (значение стабильно между пересборками — vite его
+// не трогает) + 'self' для хэш-бандла; style-src 'unsafe-inline' — React-инлайн-
+// стили style={{…}}; connect-src ws:/wss: — /ws (use-event-feed). Если инлайн-
+// скрипт темы в index.html поменяется — обновить хэш (иначе тема не применится
+// на первом кадре; CSP-нарушение видно в консоли).
+const dashboardCSP = "default-src 'self'; " +
+	"img-src 'self' data:; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"script-src 'self' 'sha256-lZhgtiuhrcX+JCIbk+3Pi4xUGHjw107eJYKPorMPpdQ='; " +
+	"connect-src 'self' ws: wss:; " +
+	"font-src 'self' data:; " +
+	"base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+
 // serveIndex отдаёт предподготовленный index.html. Если embed-чтение не удалось
 // (indexBytes пуст), fallback на FileServer — защита от регрессии embed.
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +337,7 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 	// favicon) — не должен кэшироваться, иначе браузер отдаст старую ссылку на
 	// assets/skins после пересборки.
 	w.Header().Set("Cache-Control", "no-store, must-revalidate")
+	w.Header().Set("Content-Security-Policy", dashboardCSP)
 	if len(s.indexBytes) == 0 {
 		s.fileServer.ServeHTTP(w, r)
 		return

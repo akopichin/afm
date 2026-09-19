@@ -4,6 +4,34 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-19
+
+### Feature: agent-produced images in the feed
+
+An agent can now show you an image it made — a chart, rendered diagram, screenshot,
+or downloaded file — inline in the dashboard **Feed**. See
+[Images in the feed](https://akopichin.github.io/afm/dashboard/#images-in-the-feed-agent--you).
+
+- **Contract (in the system prompt).** The agent writes the image atomically to
+  `$AFM_STAGE_DIR/artifacts/<name>` (temp file → `rename`) and prints
+  `[AFM image: <name>]` on its own line. `<name>` matches `[A-Za-z0-9._-]+` and ends
+  in `.png`/`.jpg`/`.jpeg`/`.gif`. Any agent can do this — no per-flow config.
+- **Serving.** `GET /api/stages/<id>/artifacts/<name>` serves the file read-only from
+  that stage's artifact directory, addressed by stage + opaque name (never a
+  client-supplied path). Access is fd-sandboxed (`os.OpenRoot`, TOCTOU-free), the
+  format is confirmed by decoding the header (PNG/JPEG/GIF only — no SVG), size is
+  capped at 10 MiB and dimensions at 8192 px, and the response carries an `ETag`
+  with `Cache-Control: no-cache` so an overwritten name (retry/revision) is
+  revalidated rather than served stale.
+- **Frontend.** The Feed segments each message by standalone markers and renders a
+  same-origin `<img>` whose `src` it builds itself from the stage id + name (no agent
+  string reaches the attribute). A short backoff retry covers a live publish race.
+- **Exfiltration closed.** External markdown images in agent text
+  (`![](https://…)`) are no longer fetched: the shared markdown renderer drops
+  off-origin `<img>` (keeping the alt text), and the dashboard document now ships a
+  `Content-Security-Policy` (`img-src 'self' data:`, `connect-src 'self' ws: wss:`,
+  hashed inline script) as defense-in-depth.
+
 ## 2026-09-18
 
 ### Feature: lifecycle hooks — observer commands for flow/stage events

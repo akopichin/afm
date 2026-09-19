@@ -62,18 +62,25 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir := filepath.Join(s.runDir, id, "artifacts")
-	root, err := os.OpenRoot(dir)
+	// Pin the root at runDir (afm-owned, created before any agent runs), NOT at
+	// the artifacts directory: os.OpenRoot FOLLOWS symlinks in the directory NAME
+	// it opens, so pinning at `<runDir>/<id>/artifacts` would follow an agent-
+	// planted `artifacts` symlink out of the run dir. Opening the whole relative
+	// path `<id>/artifacts/<name>` THROUGH a root pinned at runDir makes os.Root
+	// resolve every component (incl. `<id>` and `artifacts`) and reject any that
+	// escapes runDir — a symlink `artifacts -> /etc` (or `../../…`) is refused.
+	// id and name are already validated (no `..`, safe charset).
+	root, err := os.OpenRoot(s.runDir)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	defer root.Close()
 
-	// root.Open resolves name relative to the pinned directory fd. Any symlink
+	// root.Open resolves the path relative to the pinned runDir fd. Any symlink
 	// component escaping the root is rejected by os.Root itself — there is no
 	// EvalSymlinks-then-check-prefix window (TOCTOU-free).
-	f, err := root.Open(name)
+	f, err := root.Open(filepath.Join(id, "artifacts", name))
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -117,9 +124,12 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	// Artifacts are immutable: a unique name + atomic publish means the bytes
-	// behind a given name never change, so an aggressive immutable cache is safe.
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	// NOT immutable: the same stage dir is reused across retry/revision and the
+	// prompt permits renaming over the same final name (e.g. chart.png), so the
+	// bytes behind a URL CAN change within a run. `no-cache` lets the browser
+	// store the response but forces revalidation against the ETag on every use —
+	// a 304 (cheap) when unchanged, fresh bytes when the file was overwritten.
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("ETag", artifactETag(name, fi.Size(), fi.ModTime().UnixNano()))
 
 	// ServeContent honors If-None-Match/If-Modified-Since (→ 304) and Range,

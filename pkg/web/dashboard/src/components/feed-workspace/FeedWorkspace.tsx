@@ -121,24 +121,28 @@ function FeedGroupView({ group, onOpenDialog }: FeedGroupViewProps): ReactElemen
             <>
               {isMd ? (
                 // Нарратив агента — markdown (заголовки/таблицы/жирный/код). Нейтральный
-                // рендерер (без plan-обёрток), html:false → без XSS. Класс feed-item-text
-                // сохранён ради flex-поведения (min-width:0), md — ради общих стилей .md.
-                // Текст сегментируется по standalone-маркерам [AFM image: <name>]:
-                // md-куски рендерятся как раньше, маркеры — настоящим <img> (FeedImage),
-                // src которого фронт строит сам из stageId+name (никакой строки агента
-                // в атрибуте). Без маркеров splitImageMarkers вернёт один md-сегмент —
-                // поведение идентично прежнему.
-                splitImageMarkers(item.text).map((seg, i) =>
-                  seg.type === 'md' ? (
-                    <div
-                      key={`seg${i}`}
-                      className="feed-item-text md"
-                      dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(seg.text) }}
-                    />
-                  ) : (
-                    <FeedImage key={`seg${i}`} stageId={item.stageId} name={seg.name} />
-                  ),
-                )
+                // рендерер (без plan-обёрток), html:false → без XSS. Текст сегментируется
+                // по standalone-маркерам [AFM image: <name>]: md-куски рендерятся как
+                // раньше, маркеры — настоящим <img> (FeedImage), src которого фронт строит
+                // сам из stageId+name (никакой строки агента в атрибуте).
+                // .feed-item — flex-РЯД (текст слева, timestamp справа), поэтому сегменты
+                // (несколько md/img) заворачиваем в колоночный контейнер, иначе при
+                // тексте вокруг картинки или нескольких картинках они встали бы в ряд и
+                // сжались/переполнились вместо вертикального порядка. Timestamp остаётся
+                // отдельным flex-элементом ряда.
+                <div className="feed-item-segments">
+                  {splitImageMarkers(item.text).map((seg, i) =>
+                    seg.type === 'md' ? (
+                      <div
+                        key={`seg${i}`}
+                        className="feed-item-text md"
+                        dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(seg.text) }}
+                      />
+                    ) : (
+                      <FeedImage key={`seg${i}`} stageId={item.stageId} name={seg.name} />
+                    ),
+                  )}
+                </div>
               ) : (
                 <span className="feed-item-text">{item.text}</span>
               )}
