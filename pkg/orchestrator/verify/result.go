@@ -61,40 +61,41 @@ const SupportedSchemaVersion = 1
 
 // DecodeModelResult строго разбирает сырой JSON-ответ верификатора и
 // проверяет его внутреннюю согласованность (версия схемы, допустимость
-// вердикта, соответствие findings вердикту). Возвращает ошибку на
-// русском языке, называющую конкретную причину отказа.
+// вердикта, соответствие findings вердикту). Возвращает ошибку, называющую
+// конкретную причину отказа (текст ошибки — на английском, по конвенции
+// пакета, см. pkg/orchestrator/stagefiles/completion.go).
 func DecodeModelResult(raw []byte) (ModelResult, error) {
 	if len(raw) > MaxResultBytes {
-		return ModelResult{}, fmt.Errorf("результат верификации превышает лимит %d байт (получено %d)", MaxResultBytes, len(raw))
+		return ModelResult{}, fmt.Errorf("verification result exceeds %d byte limit (got %d)", MaxResultBytes, len(raw))
 	}
 
 	trimmed := bytes.TrimSpace(raw)
 	if bytes.HasPrefix(trimmed, []byte("```")) {
-		return ModelResult{}, errors.New("результат обёрнут в markdown-код-блок (```); ожидается голый JSON без обрамления")
+		return ModelResult{}, errors.New("verification result is wrapped in a markdown code fence; expected bare JSON")
 	}
 
 	if err := detectDuplicateKeys(trimmed); err != nil {
-		return ModelResult{}, fmt.Errorf("дублирующийся ключ в JSON результата: %w", err)
+		return ModelResult{}, fmt.Errorf("duplicate key in verification result JSON: %w", err)
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
 	var r ModelResult
 	if err := dec.Decode(&r); err != nil {
-		return ModelResult{}, fmt.Errorf("не удалось разобрать JSON результата верификации: %w", err)
+		return ModelResult{}, fmt.Errorf("failed to parse verification result JSON: %w", err)
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return ModelResult{}, errors.New("в ответе верификации обнаружено содержимое после JSON-документа (лишние данные или несколько документов)")
+		return ModelResult{}, errors.New("trailing content after JSON document in verification result (extra data or multiple documents)")
 	}
 
 	if r.SchemaVersion != SupportedSchemaVersion {
-		return ModelResult{}, fmt.Errorf("неподдерживаемая schema_version %d (ожидается %d)", r.SchemaVersion, SupportedSchemaVersion)
+		return ModelResult{}, fmt.Errorf("unsupported schema_version %d (expected %d)", r.SchemaVersion, SupportedSchemaVersion)
 	}
 
 	switch r.Verdict {
 	case VerdictPass, VerdictNeedsChanges, VerdictInconclusive:
 	default:
-		return ModelResult{}, fmt.Errorf("недопустимое значение verdict %q", r.Verdict)
+		return ModelResult{}, fmt.Errorf("invalid verdict value %q", r.Verdict)
 	}
 
 	if err := validateVerdictConsistency(r); err != nil {
@@ -119,22 +120,22 @@ func validateVerdictConsistency(r ModelResult) error {
 	switch r.Verdict {
 	case VerdictPass:
 		if blocking > 0 {
-			return errors.New("verdict=pass не может сочетаться с блокирующими findings")
+			return errors.New("verdict=pass cannot have any blocking findings")
 		}
 	case VerdictNeedsChanges:
 		if blocking == 0 {
-			return errors.New("verdict=needs_changes требует хотя бы один блокирующий finding")
+			return errors.New("verdict=needs_changes requires at least one blocking finding")
 		}
 	case VerdictInconclusive:
 		if strings.TrimSpace(r.Summary) == "" {
-			return errors.New("summary обязателен при verdict=inconclusive — нужно объяснить причину")
+			return errors.New("summary is required for verdict=inconclusive to explain why")
 		}
 	default:
 		// недостижимо: вердикт уже проверен в DecodeModelResult до вызова этой функции.
 	}
 
 	if r.Verdict != VerdictInconclusive && strings.TrimSpace(r.Summary) == "" {
-		return fmt.Errorf("summary обязателен при verdict=%s", r.Verdict)
+		return fmt.Errorf("summary is required for verdict=%s", r.Verdict)
 	}
 
 	return nil
@@ -172,7 +173,7 @@ func checkDuplicateValue(dec *json.Decoder) error {
 			}
 			key, _ := keyTok.(string)
 			if _, dup := seen[key]; dup {
-				return fmt.Errorf("ключ %q встречается более одного раза в одном объекте", key)
+				return fmt.Errorf("key %q appears more than once in the same object", key)
 			}
 			seen[key] = struct{}{}
 			if err := checkDuplicateValue(dec); err != nil {

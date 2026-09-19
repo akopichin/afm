@@ -112,7 +112,7 @@ func TestDecodeModelResult_Rejections(t *testing.T) {
 		{
 			name:          "too large",
 			raw:           strings.Repeat("a", MaxResultBytes+1),
-			wantSubstring: "лимит",
+			wantSubstring: "limit",
 		},
 		{
 			name:          "markdown fence wrapper",
@@ -136,14 +136,14 @@ func TestDecodeModelResult_Rejections(t *testing.T) {
 		{
 			name:          "duplicate key top-level",
 			raw:           `{"schema_version":1,"schema_version":1,"verdict":"pass","summary":"ok","findings":[]}`,
-			wantSubstring: "дублир",
+			wantSubstring: "duplicate",
 		},
 		{
 			name: "duplicate key nested in finding",
 			raw: `{"schema_version":1,"verdict":"needs_changes","summary":"ok","findings":[` +
 				`{"blocking":true,"blocking":true,"title":"t","path":null,"line_start":null,"line_end":null,` +
 				`"requirement":"r","evidence":"e","minimal_fix":"f"}]}`,
-			wantSubstring: "дублир",
+			wantSubstring: "duplicate",
 		},
 		{
 			name:          "unknown schema_version",
