@@ -10,10 +10,20 @@
 #                    Falls back to bare "codex" when unset (local, non-Docker use).
 #   CODEX_MODEL    — codex model to use (default: codex's own default)
 #   CODEX_SANDBOX  — sandbox mode (default: danger-full-access — the container
-#                    is already isolated)
+#                    is already isolated); ignored when CODEX_VERIFY=1.
 #   CODEX_VERBOSE  — set to 1 to include command execution output (default: 0)
 #   CODEX_HOME     — codex config dir (default: ~/.codex), read-only, only to
 #                    resolve a fallback model id for the usage envelope below.
+#   CODEX_VERIFY   — set to 1 for a read-only AI-verify pass (set by
+#                    Executor.RunVerifyAgent, pkg/executor). Never passes the
+#                    bypass/full-access flags, always requests -s read-only,
+#                    and never escalates to broader access on error. Captures
+#                    exactly the final answer via --output-last-message when
+#                    the installed codex CLI supports it (probed via
+#                    `codex exec --help`, no network call), otherwise falls
+#                    back to the same aggregated agent_message text used for
+#                    a normal run. Unset (default 0) keeps prior behavior
+#                    byte-identical.
 #
 # codex's stderr flows through to this script's stderr (captured by afm's
 # executor into <phase>.stderr.log). If codex exits non-zero (e.g. not
@@ -61,8 +71,29 @@ fi
 
 CODEX_MODEL="${CODEX_MODEL:-}"
 CODEX_SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
+CODEX_VERIFY="${CODEX_VERIFY:-0}"
 
-codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox -s "$CODEX_SANDBOX")
+# supports_output_last_message probes whether the installed codex CLI accepts
+# --output-last-message (writes the agent's exact final message to a file).
+# A --help probe, not a real invocation — no network call, no auth needed.
+supports_output_last_message() {
+    "${CODEX_BIN:-codex}" exec --help 2>/dev/null | grep -q -- '--output-last-message'
+}
+
+# last_msg_file stays empty outside verify mode (or when unsupported) —
+# non-verify behavior must remain byte-identical to before this feature.
+last_msg_file=""
+if [[ "$CODEX_VERIFY" == "1" ]]; then
+    # Read-only verify mode: never the bypass/full-access flags, always an
+    # explicit supported read-only sandbox, never escalate on error.
+    codex_args=(exec --json -s read-only)
+    if supports_output_last_message; then
+        last_msg_file=$(mktemp)
+        codex_args+=(--output-last-message "$last_msg_file")
+    fi
+else
+    codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox -s "$CODEX_SANDBOX")
+fi
 [[ -n "$CODEX_MODEL" ]] && codex_args+=(-m "$CODEX_MODEL")
 
 # run codex with JSON output, accumulate agent messages, emit one assistant event.
@@ -88,7 +119,7 @@ fi
 # `set -e` process-substitution subshell can abort before $? is readable.
 # set -e is suspended around just this one invocation for the same reason.
 out_file=$(mktemp)
-trap 'rm -f "$out_file"' EXIT
+trap 'rm -f "$out_file" "$last_msg_file"' EXIT
 
 set +e
 printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" > "$out_file"
@@ -126,6 +157,13 @@ while IFS= read -r line; do
             ;;
     esac
 done < "$out_file"
+
+# When codex wrote an exact final message (verify mode, supported CLI),
+# it replaces the aggregated agent_message text wholesale — this is the
+# EXACT final answer, not a concatenation of intermediate turns.
+if [[ -n "$last_msg_file" && -s "$last_msg_file" ]]; then
+    final_text=$(cat "$last_msg_file")
+fi
 
 # resolve_codex_model: $CODEX_MODEL (explicit) -> safe top-level `model` key from
 # codex's own config.toml (text match only, no TOML eval, no rollout/session
