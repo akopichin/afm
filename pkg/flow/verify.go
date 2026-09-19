@@ -98,12 +98,12 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 
 	case yaml.SequenceNode:
 		if len(value.Content) == 0 {
-			return errors.New("verify: список шагов не может быть пустым")
+			return errors.New("verify: step list must not be empty")
 		}
 		steps := make([]VerifyStep, 0, len(value.Content))
 		for _, item := range value.Content {
 			if item.Kind != yaml.MappingNode {
-				return errors.New("verify: каждый элемент списка должен быть объектом ({run: ...} или {command: ...})")
+				return errors.New("verify: each list item must be an object ({run: ...} or {command: ...})")
 			}
 			step, err := verifyStepFromMapping(item)
 			if err != nil {
@@ -115,7 +115,7 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 		return nil
 
 	default:
-		return errors.New("verify: ожидалась строка, объект или список объектов")
+		return errors.New("verify: expected a string, an object, or a list of objects")
 	}
 }
 
@@ -136,15 +136,15 @@ func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 		case "timeout":
 			timeoutRaw = val.Value
 		case "agent":
-			return VerifyStep{}, errors.New(`verify: неизвестное поле "agent"; используйте "command"`)
+			return VerifyStep{}, errors.New(`verify: unknown field "agent"; use "command"`)
 		default:
-			return VerifyStep{}, fmt.Errorf("verify: неизвестное поле %q", key)
+			return VerifyStep{}, fmt.Errorf("verify: unknown field %q", key)
 		}
 	}
 	if timeoutRaw != "" {
 		d, err := time.ParseDuration(timeoutRaw)
 		if err != nil {
-			return VerifyStep{}, fmt.Errorf("verify: некорректный timeout %q: %w", timeoutRaw, err)
+			return VerifyStep{}, fmt.Errorf("verify: invalid timeout %q: %w", timeoutRaw, err)
 		}
 		step.Timeout = d
 	}
