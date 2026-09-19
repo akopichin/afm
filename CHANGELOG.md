@@ -6,6 +6,27 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-19
 
+### Feature: per-element line comments on plans and questions
+
+Plan (and dialog-question) review comments now anchor to the **sub-element** you
+click — an individual list item, table row, heading, paragraph, or code block —
+instead of only the whole top-level markdown block, while the markdown still renders
+correctly (lists/tables/blockquotes/code no longer flatten). See
+[Inline plan comments](https://akopichin.github.io/afm/dashboard/#inline-plan-comments).
+
+- **Anchored renderer.** A dedicated markdown-it instance parses the document once
+  (global `token.map`) and annotates sub-elements with `data-line`; collisions on one
+  source line resolve to the outermost element, and each anchored element gets a unique
+  start line. Fenced/indented code is wrapped so the whole block is one target.
+- **Interaction.** Hover highlights the element; click (or Enter on the focused
+  element) opens a comment form; a roving-tabindex keyboard model (↑/↓ + Enter) keeps
+  list/table semantics intact (no role overrides). The `## Assumptions` /
+  `## Acceptance Criteria` sections are collapsible via real `aria-expanded` buttons.
+- **State model.** Comment state lives in a keyed document-owner component, so a plan
+  revision (or a new question) resets it atomically; forms/indicators are ordinary
+  React nodes (siblings marked `data-comment-ui`), never invalid DOM nested inside a
+  `<p>`/`<tr>`. The agent contract is unchanged — feedback is still `Line N: <text>`.
+
 ### Feature: agent-produced images in the feed
 
 An agent can now show you an image it made — a chart, rendered diagram, screenshot,

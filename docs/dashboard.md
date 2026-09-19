@@ -64,9 +64,18 @@ full model (token semantics, `pricing:` overrides, coverage, and the display swi
 
 When a stage is in `awaiting_approval`:
 
-1. Click a plan line — a comment form opens.
-2. Write a remark — the line highlights yellow.
-3. Click "Send revision (N)" — all comments are sent to the agent with line numbers.
+1. Hover the plan — each commentable element (a list item, a table row, a heading,
+   a paragraph, a code block) highlights. Click it — a comment form opens right there.
+2. Write a remark — the target stays highlighted and shows a saved-comment indicator.
+3. Click "Send revision (N)" — all comments are sent to the agent, each tagged with
+   its source line (`Line N: …`).
+
+The plan renders as proper markdown (lists, tables, blockquotes and code stay intact),
+and comments anchor to the **sub-element** you clicked — an individual `<li>` or table
+row, not just the whole block. Keyboard: the plan body is navigable (↑/↓ move between
+commentable elements, Enter opens the form); the `## Assumptions` / `## Acceptance
+Criteria` sections are collapsible. The same per-element commenting works on an agent's
+**question** in the Communication channel.
 
 ## Sending a note to a running stage
 
