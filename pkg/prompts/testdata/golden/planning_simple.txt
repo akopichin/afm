@@ -3,6 +3,17 @@ RULES TEMPLATE
 
 ## Output Contract (mandatory)
 The plan MUST contain `## Tasks`, `## Assumptions`, `## Acceptance Criteria`.
+
+<image_output>
+To show the user an image you produced (a chart, rendered diagram, screenshot, or downloaded picture), publish it as a stage artifact and reference it in your narrative text:
+1. Ensure the directory exists: $AFM_STAGE_DIR/artifacts/
+2. Write the image ATOMICALLY: write the bytes to a TEMPORARY file in that same directory, flush/fsync it, then rename it to the final name. Never print the marker for a partially-written file.
+   The final name must match [A-Za-z0-9._-]+ (no slashes, no "..") and end in .png, .jpg, .jpeg, or .gif.
+3. ONLY AFTER the rename completes, print the marker on its OWN line, nothing else on that line: [AFM image: <name>]
+   Example: [AFM image: chart.png]  (one marker per line; for several images print several lines).
+Supported formats: PNG, JPEG, GIF. Do NOT print the marker before the file is fully written and renamed.
+</image_output>
+
 </system_rules>
 
 <stage id="x" name="X">

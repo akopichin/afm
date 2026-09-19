@@ -107,6 +107,25 @@ func Build(in Inputs) string {
 		sb.WriteString("  Note: afm accepts an answer only to the OLDEST unanswered question — any extra question files you write ahead of time are ignored until the earlier ones are answered, so writing a batch will stall you.\n")
 		sb.WriteString("</interactive_rules>\n")
 	}
+
+	// Контракт публикации картинки в ленту: агент может показать пользователю
+	// файл-изображение (график, отрендеренную диаграмму, скриншот, скачанный
+	// файл), атомарно опубликовав его как immutable-артефакт стадии и напечатав
+	// маркер отдельной строкой. Каталог артефактов — $AFM_STAGE_DIR/artifacts/
+	// (env-переменная задана всем агентским стадиям). Атомарность (temp→rename
+	// ПЕРЕД маркером) закрывает torn read: сервер отдаёт только целиком
+	// записанный файл, а маркер появляется в тексте лишь после того, как файл
+	// на месте под финальным именем.
+	sb.WriteString("\n\n<image_output>\n")
+	sb.WriteString("To show the user an image you produced (a chart, rendered diagram, screenshot, or downloaded picture), publish it as a stage artifact and reference it in your narrative text:\n")
+	sb.WriteString("1. Ensure the directory exists: $AFM_STAGE_DIR/artifacts/\n")
+	sb.WriteString("2. Write the image ATOMICALLY: write the bytes to a TEMPORARY file in that same directory, flush/fsync it, then rename it to the final name. Never print the marker for a partially-written file.\n")
+	sb.WriteString("   The final name must match [A-Za-z0-9._-]+ (no slashes, no \"..\") and end in .png, .jpg, .jpeg, or .gif.\n")
+	sb.WriteString("3. ONLY AFTER the rename completes, print the marker on its OWN line, nothing else on that line: [AFM image: <name>]\n")
+	sb.WriteString("   Example: [AFM image: chart.png]  (one marker per line; for several images print several lines).\n")
+	sb.WriteString("Supported formats: PNG, JPEG, GIF. Do NOT print the marker before the file is fully written and renamed.\n")
+	sb.WriteString("</image_output>\n")
+
 	sb.WriteString("\n</system_rules>\n\n")
 
 	if in.GlobalPrompt != "" {

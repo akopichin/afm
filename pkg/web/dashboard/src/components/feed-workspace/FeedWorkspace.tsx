@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useFeedScope } from '../../hooks/use-feed-scope'
@@ -6,6 +6,7 @@ import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './f
 import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
+import { splitImageMarkers } from './split-image-markers'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -122,10 +123,22 @@ function FeedGroupView({ group, onOpenDialog }: FeedGroupViewProps): ReactElemen
                 // Нарратив агента — markdown (заголовки/таблицы/жирный/код). Нейтральный
                 // рендерер (без plan-обёрток), html:false → без XSS. Класс feed-item-text
                 // сохранён ради flex-поведения (min-width:0), md — ради общих стилей .md.
-                <div
-                  className="feed-item-text md"
-                  dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(item.text) }}
-                />
+                // Текст сегментируется по standalone-маркерам [AFM image: <name>]:
+                // md-куски рендерятся как раньше, маркеры — настоящим <img> (FeedImage),
+                // src которого фронт строит сам из stageId+name (никакой строки агента
+                // в атрибуте). Без маркеров splitImageMarkers вернёт один md-сегмент —
+                // поведение идентично прежнему.
+                splitImageMarkers(item.text).map((seg, i) =>
+                  seg.type === 'md' ? (
+                    <div
+                      key={`seg${i}`}
+                      className="feed-item-text md"
+                      dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(seg.text) }}
+                    />
+                  ) : (
+                    <FeedImage key={`seg${i}`} stageId={item.stageId} name={seg.name} />
+                  ),
+                )
               ) : (
                 <span className="feed-item-text">{item.text}</span>
               )}
@@ -154,4 +167,46 @@ function FeedGroupView({ group, onOpenDialog }: FeedGroupViewProps): ReactElemen
       </div>
     </div>
   )
+}
+
+// Число ретраев + бэкофф загрузки картинки. Defense-in-depth поверх атомарного
+// контракта публикации артефакта (temp→rename→маркер): на случай live-гонки, когда
+// маркер прочитан на миг раньше, чем файл виден серверу, короткий бэкофф даёт файлу
+// «доехать». Контракт immutable → ретраить можно тем же URL.
+const MAX_IMAGE_RETRIES = 3
+const IMAGE_RETRY_BACKOFF_MS = 800
+
+type FeedImageProps = {
+  stageId: string
+  name: string
+}
+
+// FeedImage — настоящий <img> для маркера [AFM image: <name>]. src целиком строит
+// фронт из stageId+name через encodeURIComponent (никакой строки из данных агента в
+// атрибуте — инъекции нет). При ошибке загрузки — бэкофф-ретрай (до MAX_IMAGE_RETRIES)
+// с cache-busting-параметром ?retry=N, чтобы браузер перезапросил тот же артефакт.
+function FeedImage({ stageId, name }: FeedImageProps): ReactElement {
+  const [attempt, setAttempt] = useState(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current)
+    },
+    [],
+  )
+
+  const base = `/api/stages/${encodeURIComponent(stageId)}/artifacts/${encodeURIComponent(name)}`
+  const src = attempt === 0 ? base : `${base}?retry=${attempt}`
+
+  const handleError = () => {
+    // Исчерпали попытки или ретрай уже запланирован — ничего не делаем.
+    if (attempt >= MAX_IMAGE_RETRIES || timer.current !== null) return
+    timer.current = setTimeout(() => {
+      timer.current = null
+      setAttempt((a) => Math.min(a + 1, MAX_IMAGE_RETRIES))
+    }, IMAGE_RETRY_BACKOFF_MS)
+  }
+
+  return <img className="feed-image" src={src} loading="lazy" alt="agent image" onError={handleError} />
 }

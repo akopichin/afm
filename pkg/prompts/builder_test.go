@@ -39,6 +39,32 @@ func TestBuild_HasSystemRulesAndStageBlocks(t *testing.T) {
 	}
 }
 
+func TestBuild_IncludesImageOutputContract(t *testing.T) {
+	in := Inputs{
+		Template:   "RULES",
+		Stage:      flow.Stage{ID: "x", Name: "X", Description: "do thing"},
+		PhaseAgent: AgentPlanning,
+	}
+	out := Build(in)
+	for _, marker := range []string{
+		"<image_output>",
+		"</image_output>",
+		"$AFM_STAGE_DIR/artifacts/",
+		"[AFM image: <name>]",
+		"ATOMICALLY",
+	} {
+		if !strings.Contains(out, marker) {
+			t.Errorf("output missing image-output marker %q", marker)
+		}
+	}
+	// Контракт про картинки живёт внутри <system_rules>.
+	sysEnd := strings.Index(out, "</system_rules>")
+	imgStart := strings.Index(out, "<image_output>")
+	if sysEnd < 0 || imgStart < 0 || imgStart > sysEnd {
+		t.Errorf("<image_output> must appear inside <system_rules> (imgStart=%d, sysEnd=%d)", imgStart, sysEnd)
+	}
+}
+
 func TestBuild_Golden_PlanningSimple(t *testing.T) {
 	in := Inputs{
 		Template:         "RULES TEMPLATE",
@@ -47,7 +73,15 @@ func TestBuild_Golden_PlanningSimple(t *testing.T) {
 		PhaseAgent:       AgentPlanning,
 	}
 	got := Build(in)
-	want, err := os.ReadFile("testdata/golden/planning_simple.txt")
+	const goldenPath = "testdata/golden/planning_simple.txt"
+	// UPDATE_GOLDEN=1 go test ./pkg/prompts/ -run Golden — регенерирует эталон
+	// после осознанного изменения формата промпта.
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
+			t.Fatalf("update golden: %v", err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}

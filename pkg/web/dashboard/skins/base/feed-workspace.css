@@ -111,6 +111,14 @@
   border-color: transparent;
 }
 
+/* Картинка, произведённая агентом ([AFM image: <name>]) — вписывается в пузырь. */
+.feed-bubble img.feed-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
 /* --- Отдельная строка события --- */
 .feed-item {
   display: flex;

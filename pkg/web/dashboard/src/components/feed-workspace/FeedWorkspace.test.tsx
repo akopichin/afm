@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, within } from '@testing-library/react'
-import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, within, act } from '@testing-library/react'
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
 import { FeedWorkspace } from './FeedWorkspace'
 
@@ -188,6 +188,84 @@ describe('FeedWorkspace', () => {
     expect(() => render(<FeedWorkspace events={events} stageId="s1" />)).not.toThrow()
     expect(screen.queryByRole('button', { name: /what next\?/ })).not.toBeInTheDocument()
     expect(screen.getByText('what next?').closest('.feed-item')?.tagName).toBe('DIV')
+  })
+
+  // --- Картинки, произведённые агентом ([AFM image: <name>]) ---
+
+  describe('agent images', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('рендерит <img> с ожидаемым same-origin src, окружающий текст — markdown', () => {
+      const detail = ['before text', '[AFM image: chart.png]', '## after'].join('\n')
+      const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+
+      const img = container.querySelector('img.feed-image') as HTMLImageElement | null
+      expect(img).not.toBeNull()
+      expect(img?.getAttribute('src')).toBe('/api/stages/s1/artifacts/chart.png')
+      expect(img?.getAttribute('alt')).toBe('agent image')
+      expect(img?.getAttribute('loading')).toBe('lazy')
+      // Окружающий текст отрендерен как markdown.
+      expect(container.textContent).toContain('before text')
+      expect(container.querySelector('h2')?.textContent).toContain('after')
+    })
+
+    it('src строится через encodeURIComponent (имя/стадия не попадают сырыми)', () => {
+      const detail = '[AFM image: a.b-c_1.png]'
+      const events = [ev('agent_action', { tool: 'text', detail }, 'stage.1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="stage.1" />)
+      const img = container.querySelector('img.feed-image') as HTMLImageElement | null
+      expect(img?.getAttribute('src')).toBe('/api/stages/stage.1/artifacts/a.b-c_1.png')
+    })
+
+    it('onError выполняет backoff-ретрай: src получает retry-параметр', () => {
+      vi.useFakeTimers()
+      const detail = '[AFM image: chart.png]'
+      const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+
+      const img = container.querySelector('img.feed-image') as HTMLImageElement
+      expect(img.getAttribute('src')).toBe('/api/stages/s1/artifacts/chart.png')
+
+      act(() => {
+        fireEvent.error(img)
+        vi.advanceTimersByTime(2000)
+      })
+
+      const img2 = container.querySelector('img.feed-image') as HTMLImageElement
+      expect(img2.getAttribute('src')).toContain('retry=1')
+    })
+
+    it('ретрай ограничен: после исчерпания попыток src больше не меняется', () => {
+      vi.useFakeTimers()
+      const detail = '[AFM image: chart.png]'
+      const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+
+      const fail = () => {
+        const img = container.querySelector('img.feed-image') as HTMLImageElement
+        act(() => {
+          fireEvent.error(img)
+          vi.advanceTimersByTime(5000)
+        })
+      }
+      // Гоняем ошибки заведомо больше, чем максимум попыток.
+      for (let i = 0; i < 6; i++) fail()
+
+      const img = container.querySelector('img.feed-image') as HTMLImageElement
+      const src = img.getAttribute('src') ?? ''
+      const m = /retry=(\d+)/.exec(src)
+      expect(m).not.toBeNull()
+      expect(Number(m?.[1])).toBeLessThanOrEqual(3)
+    })
+
+    it('маркер внутри code-fence НЕ становится картинкой (остаётся текстом)', () => {
+      const detail = ['```', '[AFM image: nope.png]', '```'].join('\n')
+      const events = [ev('agent_action', { tool: 'text', detail }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      expect(container.querySelector('img.feed-image')).toBeNull()
+      expect(container.textContent).toContain('[AFM image: nope.png]')
+    })
   })
 
   describe('note composer', () => {

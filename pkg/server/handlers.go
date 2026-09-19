@@ -841,6 +841,20 @@ func isValidStageID(id string) bool {
 	return true
 }
 
+// safeArtifactNameRe restricts artifact filenames to a safe single component:
+// alphanumerics, dash, underscore, dot. Mirrors safeStageIDRe.
+var safeArtifactNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// isValidArtifactName gates the {name} segment of an artifact URL: non-empty,
+// safe charset, no path-traversal ".." sequence. A slash never reaches here as a
+// valid name because it is outside the charset.
+func isValidArtifactName(name string) bool {
+	if name == "" || strings.Contains(name, "..") {
+		return false
+	}
+	return safeArtifactNameRe.MatchString(name)
+}
+
 // isValidDialogID validates a question id that is embedded in question/answer
 // filenames (<phase>.<id>.{question,answer}.json). Same rules as a stage id:
 // safe filename component, no path traversal.
