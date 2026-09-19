@@ -212,9 +212,21 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 	if f != nil {
 		for _, s := range f.Stages {
 			addCmd(s.Command)
+			for _, cmd := range stageVerifyCommands(s) {
+				addCmd(cmd)
+			}
 		}
 	}
 	return mounts
+}
+
+// stageVerifyCommands — тонкая обёртка над flow.Stage.VerifyAgentCommands:
+// команда агентского verify-шага стадии должна попадать в discovery наравне
+// с Stage.Command, даже если нигде кроме verify не встречается (AI-verify,
+// задача V3) — иначе afm смонтирует/сгенерирует не всех агентов, которых
+// реально запустит.
+func stageVerifyCommands(s flow.Stage) []string {
+	return s.VerifyAgentCommands()
 }
 
 // UsedRecipeCommands returns the recipe keys that are actually referenced as a
@@ -233,6 +245,9 @@ func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]confi
 	if f != nil {
 		for _, s := range f.Stages {
 			check(s.Command)
+			for _, cmd := range stageVerifyCommands(s) {
+				check(cmd)
+			}
 		}
 	}
 	return used
@@ -278,6 +293,11 @@ func UsesCodex(f *flow.Flow, globalCmd string, usedRecipes map[string]config.Age
 		for _, s := range f.Stages {
 			if s.Command == codexAdapterCommand {
 				return true
+			}
+			for _, cmd := range stageVerifyCommands(s) {
+				if cmd == codexAdapterCommand {
+					return true
+				}
 			}
 		}
 	}

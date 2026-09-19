@@ -192,6 +192,29 @@ func verifyStepToMap(step VerifyStep) map[string]any {
 	return m
 }
 
+// VerifyAgentCommands возвращает команды всех агентских шагов verify стадии
+// (Kind == VerifyAgent), без дублей внутри стадии, в порядке появления.
+// Shell-шаги пропускаются — у них нет отдельного агента-исполнителя.
+// Нужен там, где команду агента нужно обнаружить ДАЖЕ если она встречается
+// только в verify, а не в Stage.Command: монтирование Docker-бинарников,
+// discovery recipe-ключей, командные семафоры Manager (см. пакет
+// pkg/orchestrator/concurrency, задача V3 фичи ai-verify).
+func (s Stage) VerifyAgentCommands() []string {
+	if s.Verify.IsEmpty() {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var cmds []string
+	for _, step := range s.Verify.Steps {
+		if step.Kind != VerifyAgent || step.Command == "" || seen[step.Command] {
+			continue
+		}
+		seen[step.Command] = true
+		cmds = append(cmds, step.Command)
+	}
+	return cmds
+}
+
 // validate проверяет бизнес-правила шагов verify: ровно один из run/command
 // на шаг, непустое значение выбранного поля, неотрицательный timeout.
 // Индексы в сообщениях — 1-based (как в остальных ошибках flow.go).

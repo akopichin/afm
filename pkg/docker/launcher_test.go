@@ -163,6 +163,131 @@ func TestScanCommands_NilFlow(t *testing.T) {
 	}
 }
 
+// TestScanCommands_VerifyOnlyCommandIsMounted — codex НЕ используется ни в
+// одном stages[].command, а только в verify-шаге агента: он всё равно должен
+// монтироваться, иначе verify-адаптер внутри контейнера не найдётся.
+func TestScanCommands_VerifyOnlyCommandIsMounted(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "codex")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "claude", Verify: flow.VerifySpec{
+				Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}},
+			}},
+		},
+	}
+	mounts := docker.ScanCommands(f, "claude", nil)
+	if len(mounts) != 1 || mounts[0].ContainerName != "codex" {
+		t.Fatalf("expected verify-only command codex to be mounted, got %v", mounts)
+	}
+}
+
+// TestScanCommands_ShellVerifyNoExtraCommand — shell-шаг verify не ссылается
+// на отдельного агента, поэтому не должен порождать дополнительный mount.
+func TestScanCommands_ShellVerifyNoExtraCommand(t *testing.T) {
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "claude", Verify: flow.NewShellVerify("echo ok")},
+		},
+	}
+	mounts := docker.ScanCommands(f, "claude", nil)
+	if len(mounts) != 0 {
+		t.Errorf("shell-only verify must not add mounts, got %v", mounts)
+	}
+}
+
+// TestScanCommands_VerifyStepsDedupeWithinStage — два verify-шага с одной и
+// той же командой агента не должны давать два одинаковых mount.
+func TestScanCommands_VerifyStepsDedupeWithinStage(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "codex")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "claude", Verify: flow.VerifySpec{
+				Steps: []flow.VerifyStep{
+					{Kind: flow.VerifyAgent, Command: "codex"},
+					{Kind: flow.VerifyAgent, Command: "codex"},
+				},
+			}},
+		},
+	}
+	mounts := docker.ScanCommands(f, "claude", nil)
+	if len(mounts) != 1 {
+		t.Errorf("expected 1 deduplicated mount, got %d: %v", len(mounts), mounts)
+	}
+}
+
+// TestUsedRecipeCommands_VerifyOnlyCommand — recipe-ключ "codex" встречается
+// только в verify-шаге агента, ни в одном stages[].command — discovery всё
+// равно должен его найти (иначе afm не сгенерирует враппер codex в контейнере).
+func TestUsedRecipeCommands_VerifyOnlyCommand(t *testing.T) {
+	recipes := map[string]config.AgentRecipe{
+		"codex": {Type: config.RecipeTypeCodex},
+	}
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "claude", Verify: flow.VerifySpec{
+				Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}},
+			}},
+		},
+	}
+	used := docker.UsedRecipeCommands(f, "claude", recipes)
+	if !used["codex"] {
+		t.Errorf("expected verify-only recipe command codex to be discovered, got %v", used)
+	}
+}
+
+// TestUsesCodex_VerifyOnlyDirectCommand — verify-шаг напрямую вызывает
+// codex-as-claude (без recipe) — тоже должно включать ~/.codex mount.
+func TestUsesCodex_VerifyOnlyDirectCommand(t *testing.T) {
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "claude", Verify: flow.VerifySpec{
+				Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex-as-claude"}},
+			}},
+		},
+	}
+	if !docker.UsesCodex(f, "claude", nil) {
+		t.Error("expected true for verify-only codex-as-claude command")
+	}
+}
+
+// TestUsesCodex_VerifyOnlyRecipeType — verify-шаг использует alias "codex" с
+// recipe type:codex, спроецированный через UsedRecipes (та же цепочка, что
+// используется для stages[].command).
+func TestUsesCodex_VerifyOnlyRecipeType(t *testing.T) {
+	all := map[string]config.AgentRecipe{
+		"codex": {Type: config.RecipeTypeCodex},
+	}
+	f := &flow.Flow{
+		Name: "test",
+		Stages: []flow.Stage{
+			{ID: "s1", Command: "claude", Verify: flow.VerifySpec{
+				Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}},
+			}},
+		},
+	}
+	usedRecipes := docker.UsedRecipes(f, "claude", all)
+	if !docker.UsesCodex(f, "claude", usedRecipes) {
+		t.Error("expected true when verify-only recipe has type codex")
+	}
+}
+
 // TestUsedRecipes_NilFlow — nil f + [globalCmd] должен спроецировать ТОЛЬКО
 // рецепт глобальной команды, без паники на f.Stages.
 func TestUsedRecipes_NilFlow(t *testing.T) {
