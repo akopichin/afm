@@ -73,6 +73,15 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("parse flow: %w", err)
 			}
 
+			// Preflight: каждый агентский verify-шаг (verify.command) должен
+			// резолвиться в поддерживаемый verify-адаптер ДО старта рана —
+			// иначе стадия провалила бы verify только на этапе выполнения,
+			// когда откатывать уже поздно. flow.Flow.validate() этого не
+			// делает сама — она ничего не знает про cfg.Docker.Agents.
+			if err := config.ValidateVerifySpecs(f, cfg); err != nil {
+				return fmt.Errorf("verify: %w", err)
+			}
+
 			// Lifecycle hooks (Phase 1-3): слои global+project (уже смёржены в
 			// cfg.Hooks, config.LoadFrom) + flow + per-stage, собранные в ИТОГОВЫЙ
 			// []RegisteredHook (Combine, с учётом override по id) ЗДЕСЬ, ДО
