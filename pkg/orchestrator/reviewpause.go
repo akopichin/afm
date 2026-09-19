@@ -17,6 +17,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -73,9 +74,21 @@ func (o *Orchestrator) computeResumeKind(s flow.Stage, pausedFrom state.StageSta
 // Stamping the kind before the active marker is ever published closes the window
 // for every kind, not just review. The runner's own first-line setRunnerKind
 // stays as a harmless idempotent backstop for any direct (non-SpawnAgent) path.
+//
+// SpawnAgentLease (не SpawnAgent) — единственная точка запуска исполнительских
+// раннеров (AI-verify, V4b): callback сохраняет выданный *concurrency.Lease в
+// o.stageLeases на время работы run(ctx,s) и убирает его в defer. RunVerification
+// достаёт lease отсюда, чтобы временно перевести командный слот на верификатора
+// (см. поле stageLeases). Планировочные раннеры тоже проходят через spawnKind и
+// тоже получают lease, но никогда им не пользуются — RunVerification вызывают
+// только исполнительские раннеры (agents.go).
 func (o *Orchestrator) spawnKind(ctx context.Context, s flow.Stage, kind string, run func(context.Context, flow.Stage)) {
 	o.setRunnerKind(s.ID, kind)
-	o.concurrency.SpawnAgent(ctx, s, run)
+	o.concurrency.SpawnAgentLease(ctx, s, func(ctx context.Context, s flow.Stage, lease *concurrency.Lease) {
+		o.stageLeases.Store(s.ID, lease)
+		defer o.stageLeases.Delete(s.ID)
+		run(ctx, s)
+	})
 }
 
 // PauseFlow puts the flow into best-effort review mode: it holds new stage

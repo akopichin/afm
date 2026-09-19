@@ -138,6 +138,20 @@ type Orchestrator struct {
 	// (agent_suggest) шлёт в этот канал, чтобы запросить graceful-прерывание
 	// текущего вызова агента через executor.Config.InterruptCh.
 	interruptChans sync.Map
+	// stageLeases хранит *concurrency.Lease текущего исполнительского раннера
+	// стадии (stageID → *concurrency.Lease) — на время его выполнения (см.
+	// spawnKind: Store сразу после SpawnAgentLease отдаёт lease, Delete в
+	// defer вокруг run(ctx,s)). AI-verify (RunVerification) достаёт lease
+	// отсюда, чтобы временно переключить единственный удерживаемый слот
+	// командного семафора на команду verify-агента (Lease.SwapTo) и вернуть
+	// его автору по завершении — afm никогда не держит два слота разом при
+	// переходе автор→верификатор. Раннеры планирования тоже получают lease
+	// (через тот же spawnKind), но никогда им не пользуются (планирование не
+	// вызывает RunVerification) — безвредно. Отсутствие записи (ok=false,
+	// напр. resumeInteractiveAgent — путь резюма интерактивной стадии в обход
+	// spawnKind) — безопасная деградация: verify просто не переносит слот,
+	// как было до V3/V4b.
+	stageLeases sync.Map
 	// preAskPhase хранит корректную фазу в момент EvAskUser (stageID → phase string).
 	// Используется при EvUserAnswered вместо фазы из имени файла вопроса:
 	// агент может написать неправильное имя фазы (напр. "review" вместо "planning"),

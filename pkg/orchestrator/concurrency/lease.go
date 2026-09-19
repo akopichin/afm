@@ -15,7 +15,7 @@ type Lease struct {
 }
 
 // AcquireLease захватывает слот для cmd (отменяемо через ctx). cmd
-// резолвится той же семантикой, что и Stage.Command в semFor: "" → дефолтная
+// резолвится той же семантикой, что и Stage.Command в semForCmd: "" → дефолтная
 // команда Manager'а, неизвестная команда → общий noop-семафор (без лимита).
 // Lease хранит УЖЕ нормализованное имя — см. resolveCmd/SwapTo.
 func (m *Manager) AcquireLease(ctx context.Context, cmd string) (*Lease, error) {
