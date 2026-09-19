@@ -19,10 +19,10 @@ const maxAttachmentBytes = 10 << 20
 // used when persisting the upload. afm only needs to accept clipboard
 // screenshots through this endpoint, not arbitrary file types.
 var allowedAttachmentTypes = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/webp": ".webp",
-	"image/gif":  ".gif",
+	mimePNG:  ".png",
+	mimeJPEG: ".jpg",
+	mimeWebP: ".webp",
+	mimeGIF:  ".gif",
 }
 
 // handleUploadAttachment saves a pasted clipboard image to

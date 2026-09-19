@@ -37,10 +37,20 @@ const skinTitleFile = "title.txt"
 // mimeSVG — MIME-тип favicon по умолчанию (favicon.svg и общий дефолт).
 const mimeSVG = "image/svg+xml"
 
+// MIME-типы растровых картинок, используемые в нескольких местах пакета
+// (faviconMIME, allowedAttachmentTypes, artifactContentTypes) — вынесены в
+// константы, чтобы литералы не дублировались (goconst).
+const (
+	mimePNG  = "image/png"
+	mimeJPEG = "image/jpeg"
+	mimeGIF  = "image/gif"
+	mimeWebP = "image/webp"
+)
+
 // faviconMIME возвращает MIME-тип favicon по имени файла (расширению).
 func faviconMIME(name string) string {
 	if strings.HasSuffix(name, ".png") {
-		return "image/png"
+		return mimePNG
 	}
 	return mimeSVG
 }

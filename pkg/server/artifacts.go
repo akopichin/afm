@@ -33,9 +33,9 @@ const maxArtifactDim = 8192
 // serve. The value comes from image.DecodeConfig, never from the file
 // extension, so a mislabeled ".png" that is really something else is rejected.
 var artifactContentTypes = map[string]string{
-	"png":  "image/png",
-	"jpeg": "image/jpeg",
-	"gif":  "image/gif",
+	"png":  mimePNG,
+	"jpeg": mimeJPEG,
+	"gif":  mimeGIF,
 }
 
 // handleArtifact serves an immutable image artifact a stage published under
