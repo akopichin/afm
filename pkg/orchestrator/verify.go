@@ -45,6 +45,13 @@ const (
 	verifyOutcomeError = "error"
 )
 
+// verifyTimedOutReason — единый текст VerifyExecError.Reason для истёкшего
+// per-step таймаута (C3 код-ревью, flow.VerifyStep.Timeout) — единая точка
+// вместо разбросанных строковых литералов "verify timed out" (goconst); та
+// же метка, что и раньше использовалась только для executor'ского
+// idle-timeout (см. runVerifyAgentStep).
+const verifyTimedOutReason = "verify timed out"
+
 // Ключи payload'а observer-событий EventVerifyStarted/EventVerifyResult
 // (V5a.3) — единая точка вместо разбросанных строковых литералов.
 const (
@@ -202,8 +209,25 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		command := verifyStepManifestCommand(st)
 		o.emitVerifyStarted(s.ID, verID, idx, kind, command)
 
+		// C3 код-ревью: flow.VerifyStep.Timeout парсился и валидировался, но
+		// никогда не применялся. Ограничивает И ожидание слота командного
+		// семафора (lease wait внутри runVerifyAgentStep), И само исполнение
+		// (shell/agent) — деривация ДО ветвления agent/shell, единая точка
+		// для обоих. Executor'ский idle-timeout продолжает действовать
+		// независимо (см. бриф §3.4 — кто раньше сработает). Timeout==0 —
+		// поведение не меняется (stepCtx==ctx). defer вместо явного вызова
+		// на каждом return: шагов в одном проходе мало, накопление defer'ов
+		// в цикле безопасно и проще, чем дублировать cancel() перед каждым
+		// из многих return этой функции.
+		stepCtx := ctx
+		if st.Timeout > 0 {
+			var cancelStep context.CancelFunc
+			stepCtx, cancelStep = context.WithTimeout(ctx, st.Timeout)
+			defer cancelStep() //nolint:revive // накопление на малое число шагов одного прохода безопасно; см. комментарий выше
+		}
+
 		if st.Kind == flow.VerifyAgent {
-			result, alias, err := o.runVerifyAgentStep(ctx, s, st, idx, verID, prompts.VerifyInputs{
+			result, alias, err := o.runVerifyAgentStep(stepCtx, s, st, idx, verID, prompts.VerifyInputs{
 				Template:       o.opts.Prompts.Verify,
 				Stage:          s,
 				GlobalPrompt:   o.opts.GlobalPrompt,
@@ -276,7 +300,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		// исполняется под ТЕМ ЖЕ pause-aware ctx, что и agent-шаг (см.
 		// pauseAwareVerifyCtx) — иначе Pause()/Revise() не могли бы прервать
 		// зависший shell-verify, а только полную отмену рана.
-		shellCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
+		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
 		out, runErr := runVerifyShellCommand(shellCtx, ".", st.Run)
 		interruptedByPause := stop()
 
@@ -307,6 +331,20 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			_ = persistManifest()
 			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
 			return executor.ErrUserInterrupted
+		}
+		if runErr != nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
+			// C3 код-ревью: у stepCtx (не shellCtx — тот всегда отменён
+			// после stop(), см. ниже) свой собственный дедлайн, отдельный от
+			// родительского ctx: DeadlineExceeded здесь означает ИМЕННО
+			// истечение st.Timeout, а не отмену всего рана или сигнал паузы
+			// (оба уже обработаны ветками выше). Таймаут НИКОГДА не
+			// проходит через persistVerifyRejection — иначе истекший
+			// timeout маскировался бы под needs_changes-эквивалент.
+			manifestSteps[i].Outcome = verifyOutcomeError
+			_ = persistManifest()
+			reason := verifyTimedOutReason
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+			return &VerifyExecError{Reason: reason, Step: idx}
 		}
 		if runErr != nil && ctx.Err() != nil {
 			// ВАЖНО: проверяем ИСХОДНЫЙ (родительский) ctx, а НЕ shellCtx —
@@ -385,6 +423,12 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 				// прерывания одинаково.
 				return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
 			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				// C3 код-ревью: истёк timeout шага, ещё ожидая слот
+				// командного семафора — тот же принцип, что и ниже (истёкший
+				// таймаут никогда не маскируется под другую причину).
+				return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+			}
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify lease swap failed: " + swapErr.Error(), Step: idx}
 		}
 		if interruptedDuringWait {
@@ -405,7 +449,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	// между "lease переведён" и "субпроцесс стартовал", в котором Pause()
 	// мог durable перевести стадию в paused уже ПОСЛЕ того, как мы перестали
 	// ждать lease.
-	if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID); aborted {
+	if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID, idx); aborted {
 		return verify.ModelResult{}, st.Command, abortErr
 	}
 
@@ -427,6 +471,9 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	prompt := prompts.BuildVerify(in)
 	outcome, err := o.runVerifyAgent(ctx, s, st.Command, prompt, agentLog, rawResult)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+		}
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify execution failed: " + err.Error(), Step: idx}
 	}
 
@@ -435,8 +482,21 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	}
 	if !outcome.ProcessOK {
 		reason := "verify execution failed"
-		if outcome.TimedOut {
-			reason = "verify timed out"
+		switch {
+		case outcome.TimedOut:
+			// executor'ский idle-timeout (независимая гарантия, см. §3.4
+			// брифа "кто раньше сработает") — та же текстовая метка.
+			reason = verifyTimedOutReason
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			// C3 код-ревью: наш собственный st.Timeout истёк — реальный
+			// executor.RunVerifyAgent в этом случае возвращает
+			// ProcessOK=false без ни одного из флагов TimedOut/Interrupted
+			// (ctx.Done() — "прочая ошибка запуска", см. executor.go), так
+			// что различать нужно ИМЕННО по ctx, а не по outcome.
+			reason = verifyTimedOutReason
+		default:
+			// Прочая инфраструктурная ошибка запуска (не idle-timeout, не
+			// наш step-timeout) — reason остаётся дефолтным.
 		}
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: reason, Step: idx}
 	}
@@ -510,12 +570,18 @@ func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID strin
 
 // verifyLaunchAborted — последняя проверка ПЕРЕД стартом verify-субпроцесса
 // (C5 код-ревью): true, если родительский ctx уже отменён (полная отмена
-// рана либо истёкший таймаут шага) ИЛИ (когда доступен Store) стадия уже
-// durable ушла в paused/revising. o.opts.Store может быть nil в модульных
-// тестах, строящих Orchestrator напрямую без полноценного Store (см.
-// newVerifyTestOrchestrator) — деградация: проверяем только ctx.
-func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string) (bool, error) {
-	if ctx.Err() != nil {
+// рана либо истёкший таймаут шага, C3 — различаются по errors.Is(...,
+// context.DeadlineExceeded), чтобы таймаут никогда не маскировался под
+// прерывание) ИЛИ (когда доступен Store) стадия уже durable ушла в
+// paused/revising. o.opts.Store может быть nil в модульных тестах, строящих
+// Orchestrator напрямую без полноценного Store (см. newVerifyTestOrchestrator)
+// — деградация: проверяем только ctx. idx — только для Step у VerifyExecError
+// в ветке таймаута.
+func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string, idx int) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return true, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+		}
 		return true, executor.ErrUserInterrupted
 	}
 	if o.opts.Store == nil {
