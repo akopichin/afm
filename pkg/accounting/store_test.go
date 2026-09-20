@@ -429,3 +429,39 @@ func TestStoreUnavailableAfterWriteFailureStopsWrites(t *testing.T) {
 		t.Fatal("no further writes should be applied to the ledger once unavailable")
 	}
 }
+
+// TestCostSnapshot_VerifyUsageAggregatesUnderParentStagePhaseWithoutDoubleCounting
+// is the accounting/cost-UI half of V5b.4. AI-verify invocations are recorded
+// under the STAGE that owns them (orchestrator's recordUsage(s.ID,
+// verifyExecutionLabel, ""), same stage id — no separate "verify stage"),
+// tagged with the "verify" phase. CostView.Phases is a plain map keyed by
+// whatever phase string a record carries (no fixed enum here or in the
+// dashboard's CostPanel, which renders every Phases entry generically) — so
+// "verify" usage surfaces under the parent stage's cost breakdown with no
+// code change needed on either side. The second half of the concern —
+// "never double-counts on reload" — is the pre-existing CostSnapshot
+// revision-cache contract (see TestCostSnapshot_RevisionCacheReusesBuild
+// above); this test exercises it specifically for a verify record: repeated
+// CostSnapshot calls (== repeated GET /api/status polls a dashboard reload
+// triggers) with no Append in between must keep returning the same count.
+func TestCostSnapshot_VerifyUsageAggregatesUnderParentStagePhaseWithoutDoubleCounting(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Append(obsGLM(), "build", "verify", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	view := s.CostSnapshot().Stages["build"]
+	if view == nil {
+		t.Fatal(`expected a CostView for stage "build"`)
+	}
+	if got := view.Phases["verify"]; got != 1 {
+		t.Fatalf(`Phases["verify"] = %d, want 1`, got)
+	}
+
+	for i := range 3 {
+		b := s.CostSnapshot()
+		if got := b.Stages["build"].Phases["verify"]; got != 1 {
+			t.Fatalf(`reload %d: Phases["verify"] = %d, want 1 (must not double-count)`, i, got)
+		}
+	}
+}
