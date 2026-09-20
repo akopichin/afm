@@ -6,13 +6,17 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// bareCodexCommand — имя бинарника/обёртки codex-as-claude, когда verify.command
-// указывает на него БЕЗ recipe в docker.agents. Отдельная константа от
-// RecipeTypeCodex ("codex"), хотя их значения сейчас совпадают: это два разных
-// понятия (имя команды vs тип recipe), которые случайно пишутся одинаково —
-// сравнение не должно молча полагаться на это совпадение (см. находку
-// код-ревью в SupportedVerifyCommand ниже).
-const bareCodexCommand = "codex"
+// codexAdapterCommand — имя РЕАЛЬНОГО read-only адаптера (scripts/codex-as-claude.sh,
+// устанавливается в образ как /usr/local/bin/codex-as-claude), когда
+// verify.command указывает на него БЕЗ recipe в docker.agents. НЕ "codex" —
+// голый бинарник codex сам по себе не понимает CODEX_VERIFY и не добавляет
+// -s read-only (это делает только обёртка codex-as-claude, см. C1 код-ревью):
+// на хосте (без Docker) runnerForVerify исполняет ИМЕННО это резолвнутое имя
+// напрямую через PATH, так что "поддерживаемый verify-адаптер" обязан
+// указывать на реальный read-only shim, а не на сырой codex CLI. Отдельная
+// константа от RecipeTypeCodex ("codex", тип recipe в docker.agents) — это
+// два разных понятия (конкретное имя команды vs тип recipe).
+const codexAdapterCommand = "codex-as-claude"
 
 // ResolveAgentCommand резолвит алиас команды агента в фактическую команду —
 // то же правило, что сейчас дублируется в pkg/docker/launcher.go и
@@ -54,9 +58,14 @@ func ResolveAgentCommand(cmd string, cfg Config) (resolved string, supported boo
 
 // SupportedVerifyCommand сообщает, поддерживается ли алиас как verify-адаптер
 // в V1. Единственный гарантированный verify-адаптер в V1 — codex-семейство:
-// голое имя "codex" (сам бинарник/обёртка codex-as-claude) либо recipe с
-// type: codex в docker.agents. "claude" здесь НЕ поддерживается: у него нет
-// настоящего read-only-режима — Config.VerifyMode эмитит только
+// голое имя "codex-as-claude" (реальный read-only shim, scripts/codex-as-claude.sh)
+// либо recipe с type: codex в docker.agents (docker autoShim генерирует
+// враппер, который сам вызывает codex-as-claude и честно слушает
+// CODEX_VERIFY). Голое имя "codex" (сырой бинарник) НЕ поддерживается — на
+// хосте (без Docker) он исполняется напрямую через PATH и не понимает ни
+// CODEX_VERIFY, ни stream-json протокол verify (C1 код-ревью): read-only
+// гарантия молча не соблюдалась бы. "claude" здесь тоже НЕ поддерживается: у
+// него нет настоящего read-only-режима — Config.VerifyMode эмитит только
 // CODEX_VERIFY=1 (executor.go), который claude игнорирует, так что
 // claude-верификатор запускался бы с --dangerously-skip-permissions и мог бы
 // редактировать тот самый артефакт, который должен проверять (I11/I12).
@@ -65,16 +74,16 @@ func ResolveAgentCommand(cmd string, cfg Config) (resolved string, supported boo
 // иметь verify-адаптера.
 //
 // Recipe для резолвнутого имени — решающее слово, проверяется ПЕРВЫМ: если
-// docker.agents переопределяет ключ "codex" recipe'ом другого типа (напр.
-// openai), это НЕ codex-адаптер, что бы ни говорило голое имя. Эвристика по
-// голому имени (bareCodexCommand) применяется только когда для резолвнутого
-// имени НЕТ recipe вовсе.
+// docker.agents переопределяет ключ "codex-as-claude" recipe'ом другого типа
+// (напр. openai), это НЕ codex-адаптер, что бы ни говорило голое имя.
+// Эвристика по голому имени (codexAdapterCommand) применяется только когда
+// для резолвнутого имени НЕТ recipe вовсе.
 func SupportedVerifyCommand(cmd string, cfg Config) bool {
 	resolved, _ := ResolveAgentCommand(cmd, cfg)
 	if recipe, ok := cfg.Docker.Agents[resolved]; ok {
 		return recipe.Type == RecipeTypeCodex
 	}
-	return resolved == bareCodexCommand
+	return resolved == codexAdapterCommand
 }
 
 // ValidateVerifySpecs проверяет ДО старта рана, что каждый агентский
@@ -91,7 +100,7 @@ func ValidateVerifySpecs(f *flow.Flow, cfg Config) error {
 				continue
 			}
 			if !SupportedVerifyCommand(step.Command, cfg) {
-				return fmt.Errorf("stage %q: verify[%d]: command %q is not a supported verify adapter (v1 supports codex only)", s.ID, i+1, step.Command)
+				return fmt.Errorf("stage %q: verify[%d]: command %q is not a supported verify adapter (v1 supports codex-as-claude only)", s.ID, i+1, step.Command)
 			}
 		}
 	}

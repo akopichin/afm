@@ -58,7 +58,8 @@ func TestSupportedVerifyCommand(t *testing.T) {
 		want bool
 	}{
 		{"claude is not a supported verify adapter (no read-only mode)", "claude", false},
-		{"bare codex is supported", "codex", true},
+		{"bare codex is not supported (raw binary has no read-only adapter)", "codex", false},
+		{"codex-as-claude shim is supported", "codex-as-claude", true},
 		{"custom codex-recipe alias is supported", "mycodex", true},
 		{"nonexistent alias is not supported", "frobnicator", false},
 		{"resolvable-but-unsupported-for-verify alias (openai recipe)", "glm51", false},
@@ -73,20 +74,20 @@ func TestSupportedVerifyCommand(t *testing.T) {
 }
 
 // TestSupportedVerifyCommand_RecipeOverridesBareCodexName — регрессия на
-// находку код-ревью: голая проверка resolved == "codex" не должна затмевать
-// собой recipe, если кто-то переопределил ключ "codex" в docker.agents
-// ДРУГИМ типом (напр. openai). Recipe для резолвнутого имени обязан быть
-// решающим словом ПЕРЕД эвристикой "голое имя".
+// находку код-ревью: голая проверка resolved == "codex-as-claude" не должна
+// затмевать собой recipe, если кто-то переопределил ключ "codex-as-claude" в
+// docker.agents ДРУГИМ типом (напр. openai). Recipe для резолвнутого имени
+// обязан быть решающим словом ПЕРЕД эвристикой "голое имя".
 func TestSupportedVerifyCommand_RecipeOverridesBareCodexName(t *testing.T) {
 	cfg := config.Config{
 		Docker: config.DockerConfig{
 			Agents: map[string]config.AgentRecipe{
-				"codex": {Type: config.RecipeTypeOpenAI, Model: "m", URL: "https://x", Auth: config.RecipeAuth{To: "env:OPENAI_API_KEY"}},
+				"codex-as-claude": {Type: config.RecipeTypeOpenAI, Model: "m", URL: "https://x", Auth: config.RecipeAuth{To: "env:OPENAI_API_KEY"}},
 			},
 		},
 	}
-	if got := config.SupportedVerifyCommand("codex", cfg); got {
-		t.Error("SupportedVerifyCommand(\"codex\") = true, want false when the \"codex\" key is overridden by a non-codex recipe")
+	if got := config.SupportedVerifyCommand("codex-as-claude", cfg); got {
+		t.Error(`SupportedVerifyCommand("codex-as-claude") = true, want false when the "codex-as-claude" key is overridden by a non-codex recipe`)
 	}
 }
 
@@ -111,10 +112,23 @@ func TestValidateVerifySpecs(t *testing.T) {
 
 	t.Run("supported agent verify command passes", func(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
-			{ID: "s1", Verify: agentVerify(t, "codex", "")},
+			{ID: "s1", Verify: agentVerify(t, "codex-as-claude", "")},
 		}}
 		if err := config.ValidateVerifySpecs(f, cfg); err != nil {
 			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("bare codex fails: no read-only adapter for the raw binary", func(t *testing.T) {
+		f := &flow.Flow{Stages: []flow.Stage{
+			{ID: "s1", Verify: agentVerify(t, "codex", "")},
+		}}
+		err := config.ValidateVerifySpecs(f, cfg)
+		if err == nil {
+			t.Fatal("expected error: bare codex has no read-only verify adapter, must not be supported")
+		}
+		if !strings.Contains(err.Error(), "s1") || !strings.Contains(err.Error(), "codex") {
+			t.Errorf("error = %q, want it to mention the stage and the command", err.Error())
 		}
 	})
 
