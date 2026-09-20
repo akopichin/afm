@@ -273,20 +273,26 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				return err
 			}
 
+			// F3 (4-е код-ревью): перепроверка дедлайна ОДИН РАЗ здесь, СРАЗУ
+			// после возврата из runVerifyAgentStep и ДО ветвления по вердикту —
+			// раньше stepCtx.Err() проверялся ТОЛЬКО внутри ветки VerdictPass
+			// (D3a код-ревью), так что needs_changes/inconclusive принимались
+			// как есть, даже если st.Timeout уже истёк к моменту получения
+			// результата (гоночный select "успешное завершение subprocess vs.
+			// истечение дедлайна" внутри executor.RunVerifyAgent может выбрать
+			// ветку успеха ПОСЛЕ истечения срока — err==nil сам по себе этого
+			// не исключает). Ненулевой вердикт НИКОГДА не принимается на веру
+			// без этой перепроверки, независимо от того, какой именно вердикт
+			// модель успела произвести.
+			if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
+				manifestSteps[i].Outcome = verifyOutcomeError
+				_ = persistManifest()
+				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
+				return raceErr
+			}
+
 			switch result.Verdict {
 			case verify.VerdictPass:
-				if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
-					// D3a код-ревью: тот же гоночный select (успешное завершение
-					// vs. истечение stepCtx.Timeout) существует и внутри
-					// executor.RunVerifyAgent/o.runVerifyAgent — успешный
-					// вердикт (err==nil, ProcessOK==true) НИКОГДА не принимается
-					// на веру без перепроверки stepCtx.Err() СРАЗУ после
-					// получения результата.
-					manifestSteps[i].Outcome = verifyOutcomeError
-					_ = persistManifest()
-					o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
-					return raceErr
-				}
 				if perr := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); perr != nil {
 					manifestSteps[i].Outcome = verifyOutcomeError
 					_ = persistManifest()
