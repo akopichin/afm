@@ -420,10 +420,23 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 	preNote := o.preNoteBlock(stageDir)
 
+	o.runAutonomousAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseAutonomous), "autonomous")
+}
+
+// runAutonomousAttempt — общее тело autonomous-попытки: собирает контекст,
+// строит промпт и запускает существующий runWithRetry. Общий и для fresh
+// (runAutonomousAgent), и для feedback (runAutonomousWithFeedback) раннеров —
+// они отличаются только setup ДО вызова (MkdirAll+autonomous.flag против
+// EvStartRun) и тремя параметрами: note — уже прочитанный до цикла блок
+// (preNoteBlock для fresh, feedbackNoteBlock для feedback); logFileName — имя
+// лога попытки; artifactsWarnLabel — текст WARN-сообщения при ошибке сбора
+// артефактов (сохраняет дословный текст исходных runAutonomousAgent/
+// runAutonomousWithFeedback).
+func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
 	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s autonomous: %v", s.ID, artErr)
+			log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, artifactsWarnLabel, artErr)
 		}
 		depCtx := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
 			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
@@ -443,9 +456,9 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + summaryNote + preNote + verifyNote,
+			RetryContext:    retryContext + summaryNote + note + verifyNote,
 		})
-		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseAutonomous))
+		logFile := filepath.Join(stageDir, logFileName)
 		r := o.runnerFor(s, phaseAutonomous)
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
 	}, o.gateWithVerify(ctx, s, phaseAutonomous, func() error {
@@ -601,35 +614,5 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
-	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
-		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s autonomous (feedback restart): %v", s.ID, artErr)
-		}
-		depCtx := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-		})
-
-		verifyNote := o.verifyFeedbackBlock(stageDir)
-		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
-		prompt := prompts.Build(prompts.Inputs{
-			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
-			Autonomous:      o.opts.Prompts.Autonomous,
-			Stage:           s,
-			PhaseAgent:      prompts.AgentAutonomous,
-			Interactive:     true, // dialog protocol — autonomous-скилл может спрашивать пользователя
-			Artifacts:       artCtx,
-			DependencyPlans: depCtx,
-			StageDir:        stageDir,
-			GlobalPrompt:    o.opts.GlobalPrompt,
-			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + summaryNote + feedbackNote + verifyNote,
-		})
-		logFile := filepath.Join(stageDir, "autonomous-feedback.log")
-		r := o.runnerFor(s, phaseAutonomous)
-		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
-	}, o.gateWithVerify(ctx, s, phaseAutonomous, func() error {
-		return stagefiles.CheckAutonomousCompletion(stageDir)
-	}), func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
+	o.runAutonomousAttempt(ctx, s, stageDir, feedbackNote, "autonomous-feedback.log", "autonomous (feedback restart)")
 }
