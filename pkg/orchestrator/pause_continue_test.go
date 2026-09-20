@@ -222,14 +222,20 @@ func TestContinue_FromRevising_ResumesWithFeedback(t *testing.T) {
 	cancel := autoApprove(orch)
 	defer cancel()
 
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Полный двухфазный resume (Continue → planning-with-feedback → approve →
+	// implementation → done) — самый тяжёлый сценарий в этом файле. Дедлайны
+	// намеренно щедрые: исход детерминирован, но под -race на загруженном CI
+	// цепочка агентских горутин/семафоров/fsync легко переваливает за прежние
+	// 8s (см. флейк-класс в AGENTS.md). Широкий дедлайн убирает ложное падение,
+	// не маскируя реальную ошибку.
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	runOrchestratorAsync(ctx, t, orch, ctxCancel)
 
 	if err := orch.Continue(ctx, "revise-stuck"); err != nil {
 		t.Fatalf("Continue: %v", err)
 	}
 
-	waitForStatus(t, stateFile, "revise-stuck", state.StatusDone, 8*time.Second)
+	waitForStatus(t, stateFile, "revise-stuck", state.StatusDone, 25*time.Second)
 
 	capture.mu.Lock()
 	prompts := append([]string{}, capture.prompts...)
