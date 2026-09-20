@@ -366,6 +366,20 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 		log.Printf("WARN: collect artifacts for %s review: %v", s.ID, artErr)
 	}
 
+	o.runReviewAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseReview), depPlans, artCtx)
+}
+
+// runReviewAttempt — общее тело review-попытки (standalone review): строит
+// промпт и запускает существующий runWithRetry. Общий и для fresh
+// (runReviewAgent), и для feedback (runReviewWithFeedback) раннеров.
+//
+// В отличие от implementation/autonomous, depPlans/artCtx для review
+// собираются ОДИН РАЗ ДО retry-цикла (а не заново на каждой попытке внутри
+// closure) — так было в исходных runReviewAgent/runReviewWithFeedback,
+// момент сбора сохранён: адаптер собирает их сам и передаёт сюда уже
+// готовыми. note — уже прочитанный до цикла блок (preNoteBlock для fresh,
+// feedbackNoteBlock для feedback); logFileName — имя лога попытки.
+func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, depPlans, artCtx string) {
 	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
 		verifyNote := o.verifyFeedbackBlock(stageDir)
 		reviewPrompt := prompts.Build(prompts.Inputs{
@@ -376,11 +390,11 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 			Artifacts:       artCtx,
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + preNote + verifyNote,
+			RetryContext:    retryContext + note + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 		})
-		reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
+		reviewLog := filepath.Join(stageDir, logFileName)
 		rr := o.runnerFor(s, phaseReview)
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 	}, o.gateWithVerify(ctx, s, phaseReview, func() error {
@@ -580,26 +594,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 		log.Printf("WARN: collect artifacts for %s review (feedback restart): %v", s.ID, artErr)
 	}
 
-	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
-		verifyNote := o.verifyFeedbackBlock(stageDir)
-		reviewPrompt := prompts.Build(prompts.Inputs{
-			Template:        o.opts.Prompts.Review,
-			Stage:           s,
-			PhaseAgent:      prompts.AgentReview,
-			DependencyPlans: depPlans,
-			Artifacts:       artCtx,
-			StageDir:        stageDir,
-			Interactive:     s.Interactive,
-			RetryContext:    retryContext + feedbackNote + verifyNote,
-			GlobalPrompt:    o.opts.GlobalPrompt,
-			MemoryBlock:     o.memoryBlockForStage(s),
-		})
-		reviewLog := filepath.Join(stageDir, "review-feedback.log")
-		rr := o.runnerFor(s, phaseReview)
-		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
-	}, o.gateWithVerify(ctx, s, phaseReview, func() error {
-		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}), func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
+	o.runReviewAttempt(ctx, s, stageDir, feedbackNote, "review-feedback.log", depPlans, artCtx)
 }
 
 // runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в
