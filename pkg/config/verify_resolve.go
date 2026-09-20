@@ -53,24 +53,28 @@ func ResolveAgentCommand(cmd string, cfg Config) (resolved string, supported boo
 }
 
 // SupportedVerifyCommand сообщает, поддерживается ли алиас как verify-адаптер
-// в V1 (сам агентский verify-раннер появится в V4 — здесь только проверка
-// "можно ли будет его запустить"). Консервативный список V1: голое имя
-// "claude" или "codex" (сам бинарник/обёртка codex-as-claude), либо recipe с
-// type: codex в docker.agents. Отдельно от ResolveAgentCommand: команда может
-// быть валидным агентом стадии (например recipe type: openai), но не иметь
-// verify-адаптера.
+// в V1. Единственный гарантированный verify-адаптер в V1 — codex-семейство:
+// голое имя "codex" (сам бинарник/обёртка codex-as-claude) либо recipe с
+// type: codex в docker.agents. "claude" здесь НЕ поддерживается: у него нет
+// настоящего read-only-режима — Config.VerifyMode эмитит только
+// CODEX_VERIFY=1 (executor.go), который claude игнорирует, так что
+// claude-верификатор запускался бы с --dangerously-skip-permissions и мог бы
+// редактировать тот самый артефакт, который должен проверять (I11/I12).
+// Отдельно от ResolveAgentCommand: команда может быть валидным агентом стадии
+// (например recipe type: openai, или сам claude как обычный агент), но не
+// иметь verify-адаптера.
 //
 // Recipe для резолвнутого имени — решающее слово, проверяется ПЕРВЫМ: если
 // docker.agents переопределяет ключ "codex" recipe'ом другого типа (напр.
 // openai), это НЕ codex-адаптер, что бы ни говорило голое имя. Эвристика по
-// голому имени (bareCodexCommand/ClaudeCommand) применяется только когда для
-// резолвнутого имени НЕТ recipe вовсе.
+// голому имени (bareCodexCommand) применяется только когда для резолвнутого
+// имени НЕТ recipe вовсе.
 func SupportedVerifyCommand(cmd string, cfg Config) bool {
 	resolved, _ := ResolveAgentCommand(cmd, cfg)
 	if recipe, ok := cfg.Docker.Agents[resolved]; ok {
 		return recipe.Type == RecipeTypeCodex
 	}
-	return resolved == ClaudeCommand || resolved == bareCodexCommand
+	return resolved == bareCodexCommand
 }
 
 // ValidateVerifySpecs проверяет ДО старта рана, что каждый агентский
@@ -87,7 +91,7 @@ func ValidateVerifySpecs(f *flow.Flow, cfg Config) error {
 				continue
 			}
 			if !SupportedVerifyCommand(step.Command, cfg) {
-				return fmt.Errorf("stage %q: verify[%d]: command %q is not a supported verify adapter", s.ID, i+1, step.Command)
+				return fmt.Errorf("stage %q: verify[%d]: command %q is not a supported verify adapter (v1 supports codex only)", s.ID, i+1, step.Command)
 			}
 		}
 	}

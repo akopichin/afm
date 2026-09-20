@@ -57,7 +57,7 @@ func TestSupportedVerifyCommand(t *testing.T) {
 		cmd  string
 		want bool
 	}{
-		{"claude is supported", "claude", true},
+		{"claude is not a supported verify adapter (no read-only mode)", "claude", false},
 		{"bare codex is supported", "codex", true},
 		{"custom codex-recipe alias is supported", "mycodex", true},
 		{"nonexistent alias is not supported", "frobnicator", false},
@@ -146,6 +146,19 @@ func TestValidateVerifySpecs(t *testing.T) {
 		}}
 		if err := config.ValidateVerifySpecs(f, cfg); err == nil {
 			t.Fatal("expected error: glm51 resolves as an agent but is not a supported verify adapter")
+		}
+	})
+
+	t.Run("claude verify command fails: no read-only verify mode", func(t *testing.T) {
+		f := &flow.Flow{Stages: []flow.Stage{
+			{ID: "s1", Verify: agentVerify(t, "claude", "")},
+		}}
+		err := config.ValidateVerifySpecs(f, cfg)
+		if err == nil {
+			t.Fatal("expected error: claude has no read-only verify mode, must not be a supported verify adapter")
+		}
+		if !strings.Contains(err.Error(), "s1") || !strings.Contains(err.Error(), "claude") {
+			t.Errorf("error = %q, want it to mention the stage and the command", err.Error())
 		}
 	})
 }
