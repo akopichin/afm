@@ -183,6 +183,97 @@ func TestRunAgent_DoesNotSetCodexVerifyEnv(t *testing.T) {
 	}
 }
 
+// TestRunVerifyAgent_StripsCrossAgentTransportSecrets — C2 код-ревью:
+// непроверенный верификатор (сторонняя модель, чей вывод afm ПЕРСИСТИТ как
+// raw-result/report) не должен унаследовать транспортные секреты ЧУЖИХ
+// агентов/хуков (AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_*) — иначе он
+// мог бы отразить их в своём JSON-ответе. Обычный (не-verify) агент по-прежнему
+// наследует их без изменений — см. зеркальный тест ниже.
+func TestRunVerifyAgent_StripsCrossAgentTransportSecrets(t *testing.T) {
+	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
+	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
+	t.Setenv("AFM_SYSPROMPT_GLM51", "leaked-system-prompt")
+	t.Setenv("ANTHROPIC_API_KEY", "own-legit-key") // обычный env верификатора — не трогаем
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "codex", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, leaked := range []string{"AFM_SECRET_GLM51=", "AFM_HOOK_SECRET_0_0=", "AFM_SYSPROMPT_GLM51="} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("verifier env must not contain %q, got:\n%s", leaked, got)
+		}
+	}
+	if !envContainsLine(got, "ANTHROPIC_API_KEY=own-legit-key") {
+		t.Errorf("verifier's own legitimate env must still be inherited: %q", got)
+	}
+}
+
+// TestRunAgent_KeepsCrossAgentTransportSecrets — зеркало предыдущего теста:
+// обычный (не-verify) запуск через RunAgent НЕ затрагивается C2-фильтром и
+// по-прежнему наследует все переменные процесса afm, как раньше.
+func TestRunAgent_KeepsCrossAgentTransportSecrets(t *testing.T) {
+	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
+	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
+	t.Setenv("AFM_SYSPROMPT_GLM51", "leaked-system-prompt")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, kept := range []string{"AFM_SECRET_GLM51=leaked-agent-token", "AFM_HOOK_SECRET_0_0=leaked-hook-token", "AFM_SYSPROMPT_GLM51=leaked-system-prompt"} {
+		if !envContainsLine(got, kept) {
+			t.Errorf("non-verify RunAgent must keep inheriting %q unchanged, got:\n%s", kept, got)
+		}
+	}
+}
+
 // envContainsLine проверяет наличие ТОЧНОЙ строки "key=value" в выводе `env`,
 // а не произвольную подстроку — иначе, например, "CODEX_VERIFY=10" ложно
 // засчитался бы как совпадение с "CODEX_VERIFY=1".

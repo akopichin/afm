@@ -17,9 +17,34 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/progress"
 )
+
+// afmSecretEnvPrefix/afmSyspromptEnvPrefix — те же транспортные префиксы, что
+// pkg/docker расставляет в окружении afm-процесса для autoShim-агентов
+// (AFM_SECRET_<CMD>/AFM_SYSPROMPT_<CMD>, см. docker/launcher.go). Третий
+// префикс, lifecyclehooks.HookSecretTransportPrefix, уже экспортирован из
+// pkg/lifecyclehooks — переиспользуем его вместо третьей копии той же строки.
+const (
+	afmSecretEnvPrefix    = "AFM_SECRET_"    //nolint:gosec // это имя переменной окружения, а не сам секрет
+	afmSyspromptEnvPrefix = "AFM_SYSPROMPT_" //nolint:gosec // аналогично
+)
+
+// isCrossAgentTransportSecret сообщает, что kv (строка "ИМЯ=значение" из
+// os.Environ()) — один из транспортных секретов, которыми afm передаёт
+// чужие авторизационные данные СВОИМ ЖЕ дочерним процессам (autoShim-агенты,
+// lifecycle-хуки): AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_*. Нужна
+// только для C2 (см. вызывающий код в run): непроверенный verify-верификатор
+// не должен унаследовать секреты ЧУЖИХ агентов/хуков, которые сам afm-процесс
+// держит в своём окружении только транзитом (см. AGENTS.md, "Docker Mode" /
+// "Phase 3: секреты и env lifecycle-хуков").
+func isCrossAgentTransportSecret(kv string) bool {
+	return strings.HasPrefix(kv, afmSecretEnvPrefix) ||
+		strings.HasPrefix(kv, afmSyspromptEnvPrefix) ||
+		strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix)
+}
 
 // Config configures the executor.
 type Config struct {
@@ -721,6 +746,12 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			// always strip inherited; re-added below only if cfg.StageDir != ""
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added below only if cfg.VerifyMode
+		case e.cfg.VerifyMode && isCrossAgentTransportSecret(kv):
+			// C2: непроверенный verify-верификатор не должен унаследовать
+			// транспортные секреты ЧУЖИХ агентов/хуков (см.
+			// isCrossAgentTransportSecret) — он мог бы отразить их в своём
+			// JSON-ответе, который afm персистит как raw-result/report.
+			// Обычный (не-verify) запуск это условие не задевает вовсе.
 		default:
 			filtered = append(filtered, kv)
 		}
