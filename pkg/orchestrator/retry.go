@@ -112,7 +112,18 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	// AFTER this point (an already-running agent).
 	interruptCh := make(chan struct{}, 1)
 	o.interruptChans.Store(s.ID, interruptCh)
-	defer o.interruptChans.Delete(s.ID)
+	// G3 (5-е код-ревью): CompareAndDelete, а не безусловный Delete — тот же
+	// приём, что E3 применил к stageLeases (см. spawnAgentLeased). На
+	// Revise-прерывании раннер-замена (generation B) может Store'ить свой
+	// interruptCh под тем же stageID ДО того, как ЭТОТ (generation A) вызов
+	// runWithRetry размотает свой defer (см. onUserInterrupted → respawn —
+	// новое поколение спавнится раньше, чем возвращается прерванный agentFn).
+	// Безусловный Delete стёр бы канал B, а не свой собственный —
+	// runnerForVerify для generation B тогда не подключил бы InterruptCh
+	// вовсе (~runner_factory.go:162), и Pause()/Revise() не смогли бы
+	// остановить этот верификатор. CompareAndDelete удаляет запись, только
+	// если она всё ещё РОВНО ТА, что сохранил этот вызов.
+	defer o.interruptChans.CompareAndDelete(s.ID, interruptCh)
 
 	// resumeCtx — однократный флаг, взведённый armResumeContext снаружи
 	// (Continue после паузы non-interactive стадии, Task 7 "review notes"):
