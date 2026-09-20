@@ -313,6 +313,25 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			continue
 		}
 
+		// E2 (третье код-ревью): синхронная проверка ДО того, как вообще
+		// создан pauseAwareVerifyCtx и стартован shell-процесс. shellCtx.Err()
+		// внутри runVerifyShellCommand — недостаточная гарантия сама по себе:
+		// его отмена по сигналу Pause()/Revise() происходит АСИНХРОННО, из
+		// горутины-наблюдателя pauseAwareVerifyCtx, которую RunVerification не
+		// дожидается ДО старта команды (stop() вызывается только ПОСЛЕ
+		// o.runVerifyShell — иначе длинная команда не успела бы прерваться
+		// серединой исполнения, см. комментарий ниже). Если сигнал паузы уже
+		// лежит в канале, а горутина-наблюдатель ещё не получила CPU,
+		// shellCtx.Err() к моменту cmd.Start() всё ещё nil — read-only
+		// верификатор всё равно стартовал бы. verifyShellInterruptPending
+		// закрывает именно уже-случившийся к МОМЕНТУ ВЫЗОВА случай.
+		if o.verifyShellInterruptPending(s.ID) {
+			manifestSteps[i].Outcome = execErrorKindInterrupted
+			_ = persistManifest()
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
+			return executor.ErrUserInterrupted
+		}
+
 		// Shell-шаг: отменяемый процесс (honor ctx) — CWD legacy "." (тот же
 		// literal, что CheckCompletion передавал в RunVerify до V4a.1 — см.
 		// CWD note брифа: не "чинить" контракт здесь). C4 код-ревью: команда
@@ -622,6 +641,51 @@ func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string, 
 		return true, executor.ErrUserInterrupted
 	default:
 		return false, nil
+	}
+}
+
+// verifyShellInterruptPending — E2 (третье код-ревью): синхронная,
+// неблокирующая проверка ИМЕННО канала прерывания (а не производного ctx)
+// ПЕРЕД тем, как вообще создавать pauseAwareVerifyCtx и стартовать
+// shell-verify процесс.
+//
+// У agent-шага (executor.RunVerifyAgent) та же гарантия обеспечена ВНУТРИ
+// самого executor'а: e.cfg.InterruptCh — тот же канал o.interruptChans[id],
+// подключённый напрямую (см. runner_factory.go), без промежуточного ctx —
+// executor.run делает синхронный неблокирующий select на этом канале
+// НЕПОСРЕДСТВЕННО перед cmd.Start() (D4 код-ревью). У shell-шага такого
+// прямого канала нет: единственный способ прервать его — производный
+// shellCtx, чью отмену выполняет ОТДЕЛЬНАЯ горутина-наблюдатель
+// (pauseAwareVerifyCtx), а RunVerification намеренно НЕ дожидается её ДО
+// старта команды (stop() вызывается только ПОСЛЕ o.runVerifyShell — иначе
+// длинная команда не успела бы прерваться серединой исполнения, ей ещё
+// предстоит слушать shellCtx.Done() всё время своей работы). Значит уже
+// буферизованный к МОМЕНТУ ВЫЗОВА сигнал Pause()/Revise() мог бы остаться
+// незамеченным shellCtx.Err(), если горутина-наблюдатель ещё не получила
+// CPU, — и read-only-верификатор всё равно стартовал бы.
+//
+// Вызывается ДО pauseAwareVerifyCtx, пока горутина-наблюдатель для этого шага
+// ещё не создана — неблокирующий receive здесь никогда не конкурирует с ней
+// за один и тот же буферизованный сигнал: либо мы забираем сигнал здесь и
+// вообще не создаём shellCtx/не стартуем shell, либо канал пуст и всё идёт
+// как раньше (последующую гонку ВНУТРИ самого исполнения по-прежнему
+// закрывает pauseAwareVerifyCtx).
+func (o *Orchestrator) verifyShellInterruptPending(stageID string) bool {
+	if ch, ok := o.interruptChans.Load(stageID); ok {
+		select {
+		case <-ch.(chan struct{}):
+			return true
+		default:
+		}
+	}
+	if o.opts.Store == nil {
+		return false
+	}
+	switch o.currentStatus(stageID) {
+	case state.StatusPaused, state.StatusRevising:
+		return true
+	default:
+		return false
 	}
 }
 
