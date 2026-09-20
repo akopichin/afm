@@ -96,7 +96,16 @@ func (o *Orchestrator) computeResumeKind(s flow.Stage, pausedFrom state.StageSta
 func (o *Orchestrator) spawnAgentLeased(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
 	o.concurrency.SpawnAgentLease(ctx, s, func(ctx context.Context, s flow.Stage, lease *concurrency.Lease) {
 		o.stageLeases.Store(s.ID, lease)
-		defer o.stageLeases.Delete(s.ID)
+		// E3 (третье код-ревью): CompareAndDelete, а не безусловный Delete —
+		// на Revise-прерывании раннер-замена (generation B) может Store'ить
+		// свой lease под тем же stageID ДО того, как ЭТОТ (generation A)
+		// callback размотает свой defer (см. retry.go — замена спавнится
+		// раньше, чем возвращается прерванный agentFn). Безусловный Delete
+		// стёр бы lease B, а не свой собственный — RunVerification generation
+		// B молча деградировал бы (o.stageLeases.Load вернул бы ok=false).
+		// CompareAndDelete удаляет запись, только если она всё ещё РОВНО ТА,
+		// что сохранил этот вызов — чужую (более новую) не трогает.
+		defer o.stageLeases.CompareAndDelete(s.ID, lease)
 		run(ctx, s)
 	})
 }
