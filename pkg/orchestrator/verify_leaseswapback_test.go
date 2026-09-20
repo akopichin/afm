@@ -31,6 +31,15 @@ import (
 // неблокирующую проверку в его горутине-наблюдателе), никакой гонки с
 // реальным временем не остаётся. Промптность возврата проверяется через
 // select с таймаутом (channel-based), а не подсчётом прошедшего времени.
+// G1 (5-е код-ревью) примечание: для PASS-исхода (единственный, который эта
+// функция проверяет) дефер больше вообще не пытается своп обратно на автора —
+// просто Release()ит слот верификатора немедленно (см. verify.go). Тест
+// по-прежнему валиден как регрессия промптности возврата и того, что lease
+// ничего не захватывает лишнего, но теперь проходит по более простой причине.
+// Более узкие регрессии именно нового поведения (release вместо swap-back на
+// pass/exec-error/timeout/interrupt, swap-back только на needs_changes) — см.
+// TestRunVerification_NonRetryOutcomesReleaseLeasePromptly/
+// TestRunVerification_NeedsChangesReacquiresAuthorLease (verify_lease_release_test.go).
 func TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly(t *testing.T) {
 	claudeSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	codexSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))

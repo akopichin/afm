@@ -14,9 +14,13 @@ import (
 // lease exists for the stage (the normal path after spawnKind), RunVerification
 // must temporarily move the single held command-semaphore slot to the verify
 // agent step's command (SwapTo, release-before-acquire — never two slots at
-// once) and return it to the author's command when it returns, regardless of
-// outcome (pass here; VerifyRejectedError/VerifyExecError are checked by the
-// deferred-swap code path itself, not by the verdict).
+// once) while the step actually runs. G1 (5-е код-ревью) changed what happens
+// AFTER the step returns: a PASS outcome no longer swaps the lease back to the
+// author's command (see verify.go's defer) — run(ctx,s) is about to return
+// (the stage is finishing), so the lease is simply released, same as any other
+// non-needs_changes outcome. Only VerifyRejectedError (needs_changes)
+// reacquires the author slot — covered separately by
+// TestRunVerification_NeedsChangesReacquiresAuthorLease.
 func TestRunVerification_SwapsLeaseToVerifierCommandAndBackToAuthor(t *testing.T) {
 	claudeSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	codexSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
@@ -57,8 +61,8 @@ func TestRunVerification_SwapsLeaseToVerifierCommandAndBackToAuthor(t *testing.T
 	if !sawAuthorSlotReleased {
 		t.Error("expected the claude slot to be released while the verify agent step runs (never two slots at once)")
 	}
-	if len(claudeSem) != 1 {
-		t.Errorf("expected the author slot to be re-acquired after RunVerification returns, len=%d", len(claudeSem))
+	if len(claudeSem) != 0 {
+		t.Errorf("G1: a pass outcome must NOT reacquire the author slot (no in-loop retry is coming), len=%d", len(claudeSem))
 	}
 	if len(codexSem) != 0 {
 		t.Errorf("expected the verifier slot to be released after RunVerification returns, len=%d", len(codexSem))
@@ -66,10 +70,13 @@ func TestRunVerification_SwapsLeaseToVerifierCommandAndBackToAuthor(t *testing.T
 }
 
 // TestRunVerification_SameCommandAsAuthorNeverReleasesLease — the author and
-// the verify agent step share the same command: SwapTo must be a no-op (the
-// slot stays held throughout, never released-then-reacquired) — a real
-// release+reacquire on max_parallel=1 could self-deadlock racing another
-// waiter for the very slot the lease already owns.
+// the verify agent step share the same command: SwapTo must be a no-op WHILE
+// THE STEP RUNS (the slot stays held throughout, never released-then-
+// reacquired) — a real release+reacquire on max_parallel=1 could self-deadlock
+// racing another waiter for the very slot the lease already owns. G1 (5-е
+// код-ревью): after the step returns with a pass outcome, the lease is still
+// released like any other non-needs_changes outcome (run(ctx,s) is finishing)
+// — same-command only matters for the no-op fast path DURING the step.
 func TestRunVerification_SameCommandAsAuthorNeverReleasesLease(t *testing.T) {
 	sem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	mgr := concurrency.NewWithSemaphores(bus.NewCriticalBus(1), map[string]concurrency.Semaphore{"claude": sem}, "claude")
@@ -97,8 +104,8 @@ func TestRunVerification_SameCommandAsAuthorNeverReleasesLease(t *testing.T) {
 	if !heldDuringStep {
 		t.Error("same-command swap must be a no-op — the slot should stay held throughout the agent step")
 	}
-	if len(sem) != 1 {
-		t.Errorf("author slot should remain held after RunVerification returns, len=%d", len(sem))
+	if len(sem) != 0 {
+		t.Errorf("G1: a pass outcome must release the slot after RunVerification returns (no in-loop retry is coming), len=%d", len(sem))
 	}
 }
 

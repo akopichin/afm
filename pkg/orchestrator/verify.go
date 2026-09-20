@@ -155,7 +155,7 @@ type verifyShellRunner func(ctx context.Context, dir, command string) (string, e
 //   - *VerifyExecError     — шаг не удалось оценить (транспорт/протокол/
 //     таймаут/inconclusive/сбой сохранения/ненулевой exit верификатора);
 //   - executor.ErrUserInterrupted — проход прерван извне (см. вызывающий код).
-func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase string) error {
+func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase string) (err error) {
 	if s.Verify.IsEmpty() {
 		return nil
 	}
@@ -164,31 +164,40 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	// Orchestrator.stageLeases): если стадия заспавнена обычным путём
 	// (spawnKind), lease сейчас удерживает слот Stage.Command. Каждый
 	// agent-шаг verify временно переводит его на свою команду
-	// (runVerifyAgentStep → Lease.SwapTo) и возвращает автору здесь, в defer —
-	// ПОСЛЕ ЛЮБОГО исхода (pass/reject/exec error/паника). Отсутствие lease
-	// (ok=false — путь резюма стадии в обход spawnKind, см. комментарий поля)
-	// — безопасная деградация: просто не участвуем в переносе слота.
+	// (runVerifyAgentStep → Lease.SwapTo). Отсутствие lease (ok=false — путь
+	// резюма стадии в обход spawnKind, см. комментарий поля) — безопасная
+	// деградация: просто не участвуем в переносе слота.
 	if lease, ok := o.stageLeases.Load(s.ID); ok {
 		l := lease.(*concurrency.Lease)
 		defer func() {
-			// F2 (4-е код-ревью): своп обратно на команду автора выполняется
-			// под pause-aware ctx (тот же pauseAwareVerifyCtx, что и ожидание
-			// слота ПЕРЕД agent-шагом, см. runVerifyAgentStep) — иначе
-			// SwapTo(ctx, ...) блокировался бы под run-scoped ctx, который
-			// Pause() НЕ отменяет, и не мог бы вернуть управление вызывающему
-			// коду, пока слот автора занят другой стадией: пауза/таймаут шага
-			// переставали быть отзывчивыми ровно в тот момент, когда verify
-			// уже готов завершиться. Обычный (без прерывания) путь по-прежнему
-			// блокируется на занятом слоте — это корректный backpressure перед
-			// следующей попыткой. При аборте SwapTo уже успел release'нуть
-			// старый (верификаторский) слот ДО попытки занять новый (see
-			// Lease.SwapTo: release-before-acquire) — lease остаётся ни с чем,
-			// а не "зависает" в промежуточном состоянии.
+			// G1 (5-е код-ревью): своп ОБРАТНО на команду автора нужен ТОЛЬКО
+			// на исходе needs_changes — единственном, после которого
+			// runWithRetry перезапустит АВТОРА в ТОМ ЖЕ вызове, на ЭТОМ ЖЕ
+			// lease (без нового spawnAgentLeased/acquire, см. retry.go's
+			// incomplete-retry continue). На любом другом исходе (pass/
+			// exec-error/inconclusive/timeout/прерывание) run(ctx,s) вот-вот
+			// вернётся, и SpawnAgentLease сам release'нет ЧТО БЫ lease ни
+			// держал (Release идемпотентен) — блокирующий swap-обратно здесь
+			// был бы ошибкой: к моменту, когда шаг вернулся, ОДНОРАЗОВЫЙ
+			// interrupt УЖЕ поглощён исполнителем самого шага (executor'ом
+			// для agent-шага, ~executor.go's InterruptCh select; shell-
+			// наблюдателем pauseAwareVerifyCtx для shell-шага) — свежий
+			// pauseAwareVerifyCtx, построенный здесь заново, никогда не
+			// получит повторный сигнал; а таймаут шага (stepCtx) отменяет
+			// только сам шаг, не run-scoped ctx. SwapTo(ctx, author),
+			// ожидающий занятый ДРУГОЙ стадией слот автора, мог бы зависнуть
+			// НАВСЕГДА — именно это и было 5-м код-ревью найдено. Освобождаем
+			// слот верификатора немедленно вместо этого.
+			var rejected *VerifyRejectedError
+			if !errors.As(err, &rejected) {
+				l.Release()
+				return
+			}
 			swapCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
-			err := l.SwapTo(swapCtx, s.Command)
+			swapErr := l.SwapTo(swapCtx, s.Command)
 			stop()
-			if err != nil {
-				log.Printf("WARN: verify: return lease to author command for stage %s: %v", s.ID, err)
+			if swapErr != nil {
+				log.Printf("WARN: verify: reacquire author lease for retry, stage %s: %v", s.ID, swapErr)
 			}
 		}()
 	}

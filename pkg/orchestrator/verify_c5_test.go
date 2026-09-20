@@ -55,7 +55,14 @@ func TestRunVerification_PreSignalledInterrupt_NoopSemaphore_VerifierNeverStarts
 
 // TestRunVerification_PreSignalledInterrupt_SameCommandAsAuthor_VerifierNeverStarts —
 // та же гонка, что и выше, для второго fast path'а Lease.SwapTo: author ==
-// verifier command (та же команда — no-op, не трогает семафор вовсе).
+// verifier command (та же команда — no-op, не трогает семафор вовсе), пока
+// верификатор вообще не стартовал. G1 (5-е код-ревью): исход этого вызова —
+// executor.ErrUserInterrupted, НЕ *VerifyRejectedError, так что деферренная
+// очистка (verify.go) безусловно Release()ит lease (run(ctx,s) вот-вот
+// вернётся, в этом же вызове повторного запуска автора НЕ будет — см.
+// runWithRetry's onUserInterrupted, которая спавнит НОВОЕ поколение со своим
+// собственным lease) — слот освобождается немедленно, а не остаётся висеть
+// held до финального Release() в SpawnAgentLease.
 func TestRunVerification_PreSignalledInterrupt_SameCommandAsAuthor_VerifierNeverStarts(t *testing.T) {
 	sem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	mgr := concurrency.NewWithSemaphores(bus.NewCriticalBus(1), map[string]concurrency.Semaphore{"claude": sem}, "claude")
@@ -88,7 +95,7 @@ func TestRunVerification_PreSignalledInterrupt_SameCommandAsAuthor_VerifierNever
 	if calls != 0 {
 		t.Errorf("verify runner must never be invoked, got %d calls", calls)
 	}
-	if len(sem) != 1 {
-		t.Errorf("author slot must remain held (same-command fast path never touches the semaphore), len=%d", len(sem))
+	if len(sem) != 0 {
+		t.Errorf("G1: an interrupted outcome must release the lease promptly (no in-loop retry is coming), len=%d", len(sem))
 	}
 }
