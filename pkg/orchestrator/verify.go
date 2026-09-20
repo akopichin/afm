@@ -171,7 +171,23 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	if lease, ok := o.stageLeases.Load(s.ID); ok {
 		l := lease.(*concurrency.Lease)
 		defer func() {
-			if err := l.SwapTo(ctx, s.Command); err != nil {
+			// F2 (4-е код-ревью): своп обратно на команду автора выполняется
+			// под pause-aware ctx (тот же pauseAwareVerifyCtx, что и ожидание
+			// слота ПЕРЕД agent-шагом, см. runVerifyAgentStep) — иначе
+			// SwapTo(ctx, ...) блокировался бы под run-scoped ctx, который
+			// Pause() НЕ отменяет, и не мог бы вернуть управление вызывающему
+			// коду, пока слот автора занят другой стадией: пауза/таймаут шага
+			// переставали быть отзывчивыми ровно в тот момент, когда verify
+			// уже готов завершиться. Обычный (без прерывания) путь по-прежнему
+			// блокируется на занятом слоте — это корректный backpressure перед
+			// следующей попыткой. При аборте SwapTo уже успел release'нуть
+			// старый (верификаторский) слот ДО попытки занять новый (see
+			// Lease.SwapTo: release-before-acquire) — lease остаётся ни с чем,
+			// а не "зависает" в промежуточном состоянии.
+			swapCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
+			err := l.SwapTo(swapCtx, s.Command)
+			stop()
+			if err != nil {
 				log.Printf("WARN: verify: return lease to author command for stage %s: %v", s.ID, err)
 			}
 		}()
