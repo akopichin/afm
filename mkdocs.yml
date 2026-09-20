@@ -52,6 +52,7 @@ nav:
       - Configuration: config-reference.md
       - Stage lifecycle: stage-lifecycle.md
       - Autonomous track: autonomous-track.md
+      - AI-verify: verify.md
       - Script stages & hooks: script-stages.md
       - Lifecycle hooks: lifecycle-hooks.md
       - Interactive stages: interactive-stages.md

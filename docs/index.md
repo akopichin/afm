@@ -45,6 +45,7 @@ or the **[flow.yaml reference](flow-reference.md)** for every field.
 | `config.yaml`, `--dir`, `--debug` | [Configuration](config-reference.md) |
 | Statuses and resume | [Stage lifecycle](stage-lifecycle.md) |
 | `agents: [auto]` | [Autonomous track](autonomous-track.md) |
+| Independent AI/shell verification gate | [AI-verify](verify.md) |
 | `script:` stages and hooks | [Script stages & hooks](script-stages.md) |
 | File-based dialog | [Interactive stages](interactive-stages.md) |
 | Passing data between stages | [Artifacts & inputs](artifacts.md) |

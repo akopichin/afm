@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+# Example flow.yaml — AI-verify: an independent verification gate after a stage
+# completes, before it's actually marked done.
+#
+# Usage:
+#   afm run examples/verify/flow.yaml   # approve the plan in the dashboard
+#
+# The `codex-as-claude` step below requires a codex CLI on PATH (host) or,
+# in Docker, a `type: codex` autoShim recipe — see README.md in this directory
+# and https://akopichin.github.io/afm/verify/ for the full contract.
+
+name: verify-demo
+description: "Demo: a shell test gate followed by a read-only AI code review"
+
+stages:
+  - id: implement
+    name: "Implement a small function"
+    description: |
+      Implement a function IsPalindrome(s string) bool in ./palindrome.go
+      (case-insensitive, ignore non-alphanumeric characters) and a table-driven
+      test in ./palindrome_test.go covering at least: empty string, a single
+      character, "A man a plan a canal Panama", and an ordinary non-palindrome.
+    agents: [planning, implementation]
+
+    # verify: a list of steps, run in order, fail-fast. After a rejection the
+    # WHOLE list re-runs on the next attempt — a step that already passed
+    # is not cached across attempts.
+    verify:
+      # Step 1 — shell gate: a non-zero exit is treated the same as an AI
+      # needs_changes verdict (one corrective author retry, then failed).
+      - run: "go test ./..."
+        timeout: 5m
+
+      # Step 2 — AI reviewer: only runs if step 1 passed. codex-as-claude is
+      # the only verify adapter supported in v1 — it enforces a real read-only
+      # sandbox (no edits, fresh session, structured JSON verdict).
+      - command: codex-as-claude
+        timeout: 15m
+        prompt: |
+          Check IsPalindrome against the stage's requirements: correct handling
+          of case, non-alphanumeric characters, and the empty string. Block only
+          provable bugs or missing required test cases — don't require additional
+          abstractions or unrelated refactoring.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# In Docker with autoShim, use a `type: codex` recipe alias instead of the bare
+# command (config.yaml, not this file):
+#
+#   docker:
+#     autoShim: true
+#     agents:
+#       codex:
+#         type: codex
+#         model: gpt-5-codex   # optional
+#
+# and reference it here as `command: codex` instead of `codex-as-claude`.
+#
+# Example of an autonomous (agents: [auto]) stage with verify — note this is a
+# real behavior change: before this feature, verify on an [auto] stage never
+# ran at all.
+#
+#   - id: cleanup
+#     agents: [auto]
+#     description: "Remove the unused legacy helper and update its callers"
+#     verify: "go build ./..."
+# ──────────────────────────────────────────────────────────────────────────────

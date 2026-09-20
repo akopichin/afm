@@ -158,6 +158,203 @@ hooks:
 - **Секреты никогда не попадают в payload/журнал/`argv`/лог хука** (за вычетом best-effort редакции, см. выше): `Hook.ResolvedEnv` — только в памяти (`yaml:"-"`, не сериализуется в `events.jsonl`/снапшот), не входит в JSON stdin-payload хука (`BuildPayload` его не читает); на докер-транспорте значение идёт bare env-переменной, а не аргументом команды; сам секрет попадает в лог хука/ошибку только если СКРИПТ хука сам его туда выведет — и тогда его перехватывает редактор.
 - **Ключевые точки кода (Phase 3):** `pkg/secrets/secrets.go` (`ResolveRef`/`LoadSecrets`/`ExpandHome`); `pkg/lifecyclehooks/env.go` (`ResolveHookEnv`/`ResolveHookEnvFromTransport`/`TransportName`/`SortedEnvKeys`/`UnsetTransportVars`/`HookSecretTransportPrefix`); `pkg/lifecyclehooks/redact.go` (`newRedactingWriter`/`redactAll`/`redactMarker`/`redactString`/`secretValues`); `pkg/lifecyclehooks/runner.go` (`buildEnv`/`minimalBaseEnv`/`stripTransportVars`, редактор в `execOne`); `pkg/lifecyclehooks/validate.go` (имя переменной, резерв `AFM_`); `cmd/afm/run.go` (сборка `combinedHooks` до докер-ветки, host-резолв/in-container резолв, `UnsetTransportVars` перед `Orchestrator.Run`); `cmd/afm/agent_environment.go` (`loadHookSecretLayers`); `pkg/docker/launcher.go` (`UsesLifecycleSecrets`, транспорт `-e AFM_HOOK_SECRET_<hookIdx>_<varIdx>` в `ReExec`).
 
+## AI-verify: independent verification gate
+
+`verify` on a stage is a **stage-completion gate**, not a new FSM status, not a
+new `agents` phase, and not a rename of `review`: after a stage's agent finishes
+and the existing file-probe passes (`.done`/artifacts, or `execution_summary.md`
+for `agents:[auto]`), afm runs the declared verify steps — shell and/or a
+dedicated read-only AI reviewer — before the stage is actually accepted as done.
+Spec: `tmp/AFM_AI_VERIFY_IMPLEMENTATION_PLAN_v2.md` (design doc, not literally
+mirrored by the shipped code in every detail — read the code, not the doc, for
+exact symbol names).
+
+- **`flow.VerifySpec`/`flow.VerifyStep`** (`pkg/flow/verify.go`) normalizes all
+  three YAML forms (scalar string, one object, a list of objects) into
+  `Steps []VerifyStep`, each either `Kind: VerifyShell` (`Run`) or
+  `Kind: VerifyAgent` (`Command`+optional `Prompt`), plus an optional `Timeout`.
+  `UnmarshalYAML` only rejects structural problems (unknown fields, nested
+  lists, bad duration, empty list); `VerifySpec.validate(stageID)` — called from
+  `Stage.validate()` in `pkg/flow/flow.go` — enforces the business rules with
+  1-based step indices in the error text (`stage %q: verify[%d]: run and command
+  are mutually exclusive`, etc.). `agent` is explicitly rejected as an unknown
+  field with a hint to use `command` — it's not a second synonym.
+  `Stage.validate()` also rejects `verify` on a `script:` stage (pre-existing
+  rule, unchanged) and on a planning-only stage (new: verify gates *execution*
+  results, so a stage with no implementation/review/autonomous phase can't
+  declare one). `Stage.VerifyAgentCommands()` returns the de-duplicated list of
+  agent aliases used by a stage's verify steps — used by Docker
+  mounting/wrapper-generation discovery so a verifier-only command (e.g. author
+  is `claude`, verifier is `codex`) still gets its binary mounted/shimmed even
+  though it never appears in `Stage.Command`.
+- **`config.SupportedVerifyCommand`/`ValidateVerifySpecs`** (`pkg/config/verify_resolve.go`)
+  gate v1 to **codex only**, checked at preflight (`cmd/afm/run.go`, before
+  `flow_started`/any stage runs) — not deferred to first use. A bare
+  `codex-as-claude` (the real read-only shim) is accepted directly; a
+  `docker.agents` recipe is accepted only if its `Type == RecipeTypeCodex` **and**
+  `codexRecipesShimmed` is true (i.e. this run will actually generate the
+  autoShim wrapper — Docker mode with `autoShim: true`). A bare `codex` binary
+  (no recipe) is explicitly **not** supported — on the host it would run directly
+  through `PATH` and doesn't understand `CODEX_VERIFY`/read-only mode at all, so
+  the read-only guarantee would silently not hold (this was C1 in code review).
+  `claude` is not supported either — it has no real read-only mode; `VerifyMode`
+  only sets `CODEX_VERIFY=1`, which claude ignores, so it would run with
+  `--dangerously-skip-permissions` and could edit the very artifact it's
+  supposed to review.
+- **`(*Orchestrator).RunVerification`** (`pkg/orchestrator/verify.go`) runs ONE
+  fail-fast pass over `s.Verify.Steps` for a stage that already passed its file
+  probe — no internal correction loop, no recursive re-invocation of the author;
+  correction is entirely the caller's job via the pre-existing incomplete-retry
+  path. It's wired in via **`gateWithVerify`**, which wraps an existing
+  `completionCheck` (`CheckCompletion`/`CheckAutonomousCompletion`) so that
+  `RunVerification` only fires when the base file-probe already passed AND
+  `phase` is one of `phaseImplementation`/`phaseReview`/`phaseAutonomous` — never
+  for planning (belt-and-suspenders on top of the parse-time rejection above).
+  GET/status/refresh calls into `completionCheck()` from other code paths (see
+  `retry.go`) never accidentally trigger a paid AI run, because `RunVerification`
+  only runs once per real invocation of the gate, not on every probe.
+- **Machine result contract — `pkg/orchestrator/verify` package (`result.go`).**
+  `DecodeModelResult` is a strict, side-effect-free JSON decoder (`ModelResult`
+  with `SchemaVersion`/`Verdict`/`Summary`/`Findings`): rejects markdown code
+  fences, duplicate JSON keys at any nesting depth, unknown fields
+  (`DisallowUnknownFields`), trailing content after the document, an
+  unsupported `SchemaVersion` (only `SupportedSchemaVersion = 1`), an invalid
+  `Verdict` enum value, and verdict/findings inconsistency
+  (`validateVerdictConsistency`: `pass` can't carry a blocking finding,
+  `needs_changes` requires ≥1, `inconclusive` requires a non-empty `Summary`).
+  Capped at `MaxResultBytes = 256 * 1024`, checked on the FULL input before
+  parsing (a truncated-but-valid-looking prefix must never be silently
+  accepted). `Finding.Path`/`LineStart`/`LineEnd` are pointers — a finding is
+  allowed to not be anchored to a specific file/line (e.g. "a required artifact
+  is missing entirely").
+- **File namespace — `pkg/orchestrator/stagefiles/verify.go`.** Under
+  `<stageDir>/verify/`: `feedback.md` (active machine feedback, capped at
+  `feedbackBudgetBytes = 12 * 1024` via `truncateUTF8` — a UTF-8-safe cut, never
+  splitting a rune, with an explicit truncation marker; the on-disk `report.md`
+  is NEVER truncated) and, per pass, `<verification-id>/{manifest.json,report.md,
+  step-NN/{...}}`. `NewVerificationID()` mints a fresh id per pass (`v-<ts>-<hex>`,
+  a package-var seed swappable in tests) — distinct from the retry `attempt`
+  counter, which resets on every new agent invocation; the verification id only
+  changes when the stage restarts verification from scratch. `SaveRawResult`
+  (pre-validation) vs `SaveAcceptedResult` (post-validation, step-NN/result.json)
+  distinguishes "the verifier answered something" from "AFM accepted it" — a step
+  can have a raw result without an accepted one (parse/consistency failure).
+  `WriteActiveFeedback`/`LoadActiveFeedback` round-trip a provenance HTML comment
+  (`<!-- afm-verify verification_id=... step=... -->`) so callers can check
+  whether cached feedback is still fresh; `ClearActiveFeedback` removes only the
+  pointer file after a full pass — the per-pass history under
+  `verify/<id>/` is never deleted. `ReportRelPath(verID)` is the ONLY function
+  that knows the on-disk report path shape, reused by both the writer
+  (`WriteReport`) and the HTTP reader (`pkg/server/verify_report.go`'s
+  `handleVerifyReport`, `GET /api/stages/{id}/verify/{verID}/report`) — the
+  server resolves it through `os.OpenRoot(runDir)` so a client-supplied
+  `verID`/stage id can never escape the run directory via `..`/symlink; the
+  `report_path` carried in the `verify_result` event/notice is for display only,
+  never fed back to the server as a literal filesystem path.
+- **Read-only Codex adapter — `scripts/codex-as-claude.sh`.** A dedicated
+  `CODEX_VERIFY=1` mode (set only by `executor.RunVerifyAgent`, never by
+  `RunPlanning`/`RunAgent`): never passes
+  `--dangerously-bypass-approvals-and-sandbox` or any full-access flag, always
+  requests the CLI's own `-s read-only` sandbox (ignores `CODEX_SANDBOX` in this
+  mode), never escalates on error, and captures the exact final answer via
+  `--output-last-message` (detected via `codex exec --help` at script run
+  time — the flag exists on newer codex CLI releases) instead of aggregating
+  intermediate `agent_message` events the way the normal (non-verify) path does.
+- **`executor.Config.VerifyMode`/`RunVerifyAgent`** (`pkg/executor/executor.go`):
+  a fresh session (no `--resume`), no `AFM_STAGE_DIR` (the verifier is not a
+  dialog participant). Environment is filtered, not just extended: strips any
+  inherited `CODEX_VERIFY` before re-adding it (`CODEX_VERIFY=1` only under
+  `VerifyMode`), strips `IsCrossAgentTransportSecret` matches (lifecycle-hook/
+  other-agent transport secrets riding in the afm process's own env, see
+  Lifecycle Hooks Phase 3 above — a verifier must not be able to reflect a
+  DIFFERENT agent's or hook's secret in its report), and strips
+  `isClaudeAuthorCredential` matches (the AUTHOR's own claude auth must not leak
+  into a differently-authenticated verifier invocation) while explicitly keeping
+  the verifier's OWN resolved secret (`isVerifierOwnSecret(kv, e.cfg.Command)`).
+  The equivalent filter for the shell-step path is
+  `sanitizedShellVerifyEnv()`/`executor.IsCrossAgentTransportSecret` in
+  `pkg/orchestrator/verify.go` — same filter function, reused rather than
+  duplicated, applied to `cmd.Env` for the shell subprocess (shell verify has no
+  recipe secret of its own to preserve, unlike the agent path).
+- **Command-slot lease swap — `pkg/orchestrator/concurrency/lease.go`.** A stage
+  spawned normally holds a `*Lease` on its author's command semaphore slot
+  (`o.stageLeases`, populated by the spawn path). Each AI verify step calls
+  `Lease.SwapTo(ctx, st.Command)`: same command → no-op fast path (never
+  release+reacquire the sole slot on `max_parallel:1`, which would otherwise
+  self-deadlock against a waiter for that exact slot); different command →
+  release-before-acquire, cancelable via `ctx`. This is the single mechanism
+  that prevents the AB-BA deadlock two stages could otherwise hit swapping
+  author↔verifier command slots concurrently — afm never holds two command
+  slots at once for one stage. `RunVerification`'s `defer` swaps the lease back
+  to the author's command **only** on a `*VerifyRejectedError` outcome (the one
+  case where `runWithRetry` immediately relaunches the author on the SAME
+  lease, in the SAME call) — on every other outcome (pass/exec-error/
+  inconclusive/timeout/interruption) `run(ctx,s)` is about to return anyway and
+  `SpawnAgentLease` releases whatever the lease holds, so a blocking swap-back
+  there would risk hanging forever waiting on a slot some OTHER stage holds
+  (found in the 5th code-review round). `pauseAwareVerifyCtx` layers a
+  Pause()/Revise() `interruptChans` signal on top of a context deadline so
+  waiting for a busy verifier slot, or the verify subprocess itself, is
+  interruptible the same way a normal agent run is.
+- **FSM — `bus.EvVerifyFail`** (`pkg/orchestrator/bus/fsm.go`): an atomic
+  sibling of `EvFail`, added specifically because a bare `Trigger(EvFail)` after
+  a **read-then-act** status check (`verifyOutcomeStillOwned`,
+  `pkg/orchestrator/retry.go`) left a TOCTOU window — `EvFail`'s `From == nil`
+  accepts any non-terminal status, so a concurrent Pause()/Revise() that
+  committed in that exact window would be silently overwritten by a stale verify
+  outcome. `EvVerifyFail`'s `From` is deliberately restricted to
+  `{Running, AwaitingApproval, Retrying, AwaitingUserInput}` — the same set
+  `EvComplete` uses — so the store's CAS itself atomically rejects a stale
+  transition instead of relying on the earlier read. It deliberately does
+  **not** include `StatusPlanning`: planning never runs verify (see
+  `gateWithVerify` above), so a verify-driven fail must never even attempt this
+  transition against a planning stage — `commitVerifyFailure` is only called via
+  `isVerifyDrivenError` (`pkg/orchestrator/errors.go`), which checks
+  `errors.As` against `*VerifyRejectedError`/`*VerifyExecError` specifically, so
+  a generic (non-verify) terminal completion error still goes through the
+  ordinary `EvFail` path.
+- **Typed errors — `pkg/orchestrator/errors.go`.** `VerifyRejectedError` embeds
+  `*stagefiles.IncompleteWorkError` (via `Unwrap`) so it flows through the
+  EXISTING incomplete-retry classification (`Classify` → `ClassIncomplete`) with
+  no new retry path — `ReportID`/`Step` are metadata for the error text and the
+  UI, not part of the classification. `VerifyExecError` is a distinct
+  classification (`ClassVerifyFailed`), checked via `errors.As` **before** the
+  substring-based `Classify` heuristics — a verifier's free-text summary
+  containing something like "rate limit" must never be mistaken for a
+  transport-retryable error.
+- **Observability — non-FSM, live + durable, not in `flow.Phases()`.**
+  `emitVerifyStarted`/`emitVerifyResult` (`pkg/orchestrator/verify.go`) publish
+  `bus.EventVerifyStarted`/`bus.EventVerifyResult` (`"verify_started"`/
+  `"verify_result"`) live via `o.ui.Publish` AND durably via
+  `stagefiles.AppendNotice` into `notices.jsonl` — same pattern as
+  `EventAutoAnswered` (see "Auto-answering questions" above) — so a client that
+  reloads after the event still sees it via `notices.jsonl` replay. Usage/cost
+  accounting for a verify agent call is tagged with the execution-purpose label
+  `verifyExecutionLabel = "verify"` — deliberately NOT added to `flow.Phases()`
+  (that list is the general runtime-phase vocabulary used for resume/recovery
+  routing; verify is an orthogonal pass that only runs after a phase's own
+  completion, not a phase itself). Dashboard: `feed-view-model.ts`'s
+  `mapVerifyEvent` renders `Verify step N · <alias>` on start, then the outcome
+  (pass=success tone, needs_changes/inconclusive=warning, any exec/interrupt
+  error=danger tone) with a report link when `report_path` was non-empty.
+- **Invariants worth re-checking before touching this code:** (1) verify never
+  calls `Trigger(EvComplete)`/activates dependent stages itself — only the
+  owning execution path's normal completion does, after `RunVerification`
+  returns nil; (2) a stale/expired step timeout (`flow.VerifyStep.Timeout`) must
+  never be silently accepted as a pass merely because the underlying `select`
+  raced a done-channel against `<-ctx.Done()` in the verifier's favor —
+  `verifyStepDeadlineRace` re-checks `stepCtx.Err()` immediately after ANY
+  reported success, for both the shell and agent paths; (3) an interruption
+  (Pause/Revise/full run cancellation) must never be recorded as a
+  `needs_changes` verdict — `runVerifyShellCommand`'s and the agent path's
+  interrupted/timeout branches are checked and returned BEFORE the "non-zero
+  exit ⇒ synthetic needs_changes" branch, in that order; (4) a storage failure
+  while persisting a result/report/feedback is `*VerifyExecError` (fail-closed),
+  never a silently-accepted pass and never a silently-dropped rejection —
+  `persistVerifyRejection` is the single ordered commit path (result → report →
+  manifest → active feedback → THEN emit+return) for both the shell-derived
+  synthetic rejection (`shellRejectionResult`) and a real agent `needs_changes`.
+
 ## File-Based Dialog Protocol (Interactive Stages)
 
 The interactive dialog system was refactored from an MCP HTTP server to a file-based protocol starting with the planning-depends-on-ref branch. This enables agents to ask users questions and receive answers through simple file I/O instead of HTTP.

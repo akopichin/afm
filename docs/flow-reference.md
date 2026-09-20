@@ -74,7 +74,7 @@ stages:
 | `auto_run` | no | `false` — pause the stage the instant it's first eligible to start (`depends_on` satisfied), instead of starting immediately; it sits in `paused` until you hit **Continue** on the dashboard. Default `true` (starts on its own). Works on any stage type — regular, `agents: [auto]`, or `script`. Only gates the very first activation, not retries |
 | `artifacts` | no | Files the stage produces for other stages (see [Artifacts & inputs](artifacts.md)) |
 | `inputs` | no | Artifacts from dependency stages (`stage.artifact`, see [Artifacts & inputs](artifacts.md)) |
-| `verify` | no | Shell command run after `.done`. Exit ≠ 0 — the stage is not counted as complete: one retry with the command's output in the prompt, then `failed`. Guards against a false "done" |
+| `verify` | no | Stage-completion check(s), run after `.done` (or `execution_summary.md` for `agents: [auto]`): a shell command string (legacy), one step object (`{run: ...}` shell or `{command: ..., prompt: ...}` AI reviewer), or an ordered list of steps, fail-fast. A failing step gives the author one corrective retry with the report injected into its prompt, then `failed`. See [AI-verify](verify.md) |
 | `script` | no | Makes this a [script-only stage](script-stages.md): runs the given shell script (`sh -c`) instead of any AI agent — no planning, no approval. Mutually exclusive with `agents`/`command`/`interactive`/`plan`/`verify` |
 | `script_timeout` | no | Hard timeout for `script` (default `5m`) |
 | `script_before` | no | Shell script run immediately before this stage's own content (agent, autonomous track, interactive dialog, or another script). Works on any stage type |

@@ -12,6 +12,7 @@ them write into these sources (e.g. the `basic` flow implements a JWT backend/fr
 | [`interactive/`](interactive/) | An interactive stage that asks the user a question through the file-based dialog protocol. |
 | [`cursor-agent/`](cursor-agent/) | Using a non-Claude agent (`type: cursor`, the Cursor Cloud Agents API) via Docker autoShim. |
 | [`buttons/`](buttons/) | Predefined one-click stage actions in the dashboard kebab menu. |
+| [`verify/`](verify/) | AI-verify: a shell test gate followed by a read-only AI code review before a stage is marked done. |
 
 Copy one into a scratch project and run it there:
 

@@ -4,6 +4,52 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-20
+
+### Feature: AI-verify — an independent verification gate
+
+A stage can now declare `verify:` as an object or an ordered list, not just the
+legacy shell-command string: a step is either a plain shell command (unchanged
+behavior) or a dedicated **read-only AI reviewer** that checks the stage's result
+and returns a strict `pass`/`needs_changes`/`inconclusive` verdict with concrete
+findings, instead of freeform text. See [AI-verify](https://akopichin.github.io/afm/verify/).
+
+- **Three YAML forms.** `verify: "cmd"` (scalar, unchanged), `verify: {run: ...}` /
+  `verify: {command: ..., prompt: ...}` (one step), or an ordered list of steps
+  run fail-fast — the first failing step stops the sequence, and after a
+  correction the whole list re-runs from the start.
+- **Codex-only in v1.** An AI step's `command` resolves through the same
+  command/recipe mechanism as `stage.command`, but only a **codex** adapter is a
+  supported verify agent — it's the only one with a real, enforced read-only mode
+  (host: `command: codex-as-claude`; Docker autoShim: a `type: codex` recipe).
+  Any other alias is rejected at preflight, before the flow starts.
+- **Outcomes.** `pass` moves on; `needs_changes` (≥1 blocking finding) gives the
+  author one corrective retry (same shared `attempt == 0` budget shell-verify
+  already used) with the report injected into its prompt; `inconclusive`/a
+  protocol error/timeout/non-zero exit is a diagnosable "verify execution
+  failed" that does **not** re-run the author automatically.
+- **Reports** persist under `<stageDir>/verify/<verification-id>/` (manifest,
+  full `report.md`, per-step logs/results); active machine feedback lives in a
+  separate `verify/feedback.md`, never mixed with the human `feedback.md`. The
+  dashboard Feed shows each step's start/outcome with a "Show full report" link
+  and cost — no new stage status, no new progress bar.
+
+**Behavior change — `agents: [auto]` stages now actually run `verify`.** Before
+this release, a declared `verify` on an autonomous stage silently never ran
+(autonomous completion only checked for `execution_summary.md`). An existing
+`[auto]` + `verify` flow can start failing after upgrading, where it previously
+never checked anything — review such stages before upgrading. Rolling back to an
+older afm binary while `flow.yaml` still uses the new object/list `verify` form
+**fails to parse**, it does not silently fall back to the old scalar-only
+behavior; existing `verify/` report directories on disk are untouched by a
+rollback.
+
+**v1 limitations:** only the codex adapter is supported for AI verify; shell
+verify still runs with CWD `"."` (the afm-root), not `flow.root_dir` (a
+compatibility gap for split Docker deployments, tracked as a follow-up); the
+correction budget is the existing shared retry counter, not an independently
+guaranteed "one review round" per stage.
+
 ## 2026-09-19
 
 ### Feature: per-element line comments on plans and questions
