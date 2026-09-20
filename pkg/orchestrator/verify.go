@@ -470,7 +470,7 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, k
 // verifyManifestErrorOutcome сообщает, каким текстом пометить ManifestStep
 // при ошибке agent-шага: "interrupted" для прерывания извне, иначе "error".
 func verifyManifestErrorOutcome(err error) string {
-	if err == executor.ErrUserInterrupted {
+	if errors.Is(err, executor.ErrUserInterrupted) {
 		return execErrorKindInterrupted
 	}
 	return verifyOutcomeError
