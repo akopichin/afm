@@ -160,7 +160,25 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				// From EvComplete) — этот ранний return дополнительно не даёт
 				// разослать вводящее в заблуждение уведомление "агент завершился"
 				// для стадии, которая на самом деле осталась на паузе (late pass).
-				if o.currentStatus(s.ID) == state.StatusPaused {
+				//
+				// E4 (третье код-ревью): та же самая гонка, но с revising —
+				// конкурентный Revise() мог успеть перевести стадию в revising,
+				// пока completionCheck ещё работал. Для implementation/autonomous
+				// EvComplete тоже отклонился бы по CAS, но onAgentCompleted
+				// (orchestrator.go) отдельно ловит именно этот случай и сама
+				// перезапускает автора с фидбеком — здесь же, для STANDALONE
+				// review-стадии, у onAgentCompleted такой ветки нет:
+				// completeStage молча отклоняет revising (не входит в её
+				// From-набор) и стадия зависла бы в revising без единого
+				// работающего раннера до перезапуска afm. Симметрично ветке
+				// errors.Is(err, executor.ErrUserInterrupted) ниже: не
+				// публикуем "агент завершился" для стадии, ушедшей на Revise, а
+				// зовём тот же respawn-with-feedback callback.
+				switch o.currentStatus(s.ID) {
+				case state.StatusPaused:
+					return
+				case state.StatusRevising:
+					onUserInterrupted()
 					return
 				}
 				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)

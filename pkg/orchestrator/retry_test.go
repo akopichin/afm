@@ -188,3 +188,56 @@ func TestRunWithRetry_ScheduleRetryTransitionCarriesReason(t *testing.T) {
 		t.Fatal("не найдено ни одной schedule_retry-transition в events.jsonl")
 	}
 }
+
+// TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage — E4 (третье
+// код-ревью): раньше runWithRetry реконсилировал ТОЛЬКО paused перед
+// публикацией EventAgentCompleted — если конкурентный Revise() успевал
+// перевести стадию в revising, пока completionCheck (verify) ещё выполнялся,
+// completion всё равно публиковался. Для implementation/autonomous это
+// маскировалось отдельной веткой в onAgentCompleted (спавнит раннер с
+// фидбеком сама, см. orchestrator.go), но для STANDALONE review-стадии
+// completeStage тихо отклоняет переход из revising (revising не входит в её
+// From-набор EvComplete) — стадия зависала в revising без единого работающего
+// раннера до перезапуска afm.
+//
+// Тест воспроизводит гонку детерминированно: agentFn симулирует конкурентный
+// Revise(), реально переводящий стадию running->revising ЧЕРЕЗ FSM, ПРЯМО
+// перед тем как вернуть nil (агент "успел" естественно завершиться). phase —
+// phaseReview (та самая standalone review-ветка), completionCheck — nil
+// (сразу checkErr==nil, как после успешного verify-прохода).
+func TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	s := flow.Stage{ID: "s1"}
+
+	var interruptedCalled bool
+	o.runWithRetry(context.Background(), s, phaseReview,
+		func(string) error {
+			if _, ok := o.Trigger(s.ID, bus.EvRevise, bus.GuardCtx{}, "concurrent revise"); !ok {
+				t.Fatal("EvRevise: CAS rejected — running->revising must be legal here")
+			}
+			return nil // агент "успел" вернуться естественно, уже после Revise()
+		},
+		nil, // completionCheck==nil → checkErr==nil сразу, как после успешного verify
+		func() { interruptedCalled = true },
+	)
+
+	if !interruptedCalled {
+		t.Fatal("expected onUserInterrupted to be invoked for a stage that moved to revising during completion — the standalone respawn-with-feedback path")
+	}
+	if got := o.opts.Store.Get(s.ID); got != state.StatusRevising {
+		t.Fatalf("status = %v, want revising (untouched — the respawn callback owns the next transition)", got)
+	}
+	// Trigger(EvRevise) itself legitimately wakes the event loop with a
+	// stage_status_changed critical event — drain that and assert
+	// specifically that EventAgentCompleted was never published alongside it.
+	for {
+		select {
+		case ev := <-o.critical.Recv():
+			if ev.Type == bus.EventAgentCompleted {
+				t.Fatalf("EventAgentCompleted must not be published for a stage that left running for revising, got %+v", ev)
+			}
+		default:
+			return
+		}
+	}
+}
