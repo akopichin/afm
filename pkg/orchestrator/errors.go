@@ -113,6 +113,36 @@ func (e *VerifyExecError) Error() string {
 // выше.
 type StorageError = bus.StorageError
 
+// isVerifyDrivenError сообщает, что checkErr — настоящий verify-исход
+// (needs_changes-исчерпание ИЛИ exec-ошибка самого верификатора), а не
+// обычная ошибка completion-проверки (missing/empty plan.md, missing
+// artifact, missing plan sections, любой прочий generic fatal). ТОЛЬКО для
+// такой ошибки уместен атомарный EvVerifyFail/commitVerifyFailure (retry.go)
+// — H2 (7-е код-ревью) нашёл, что после H1 (см. EvVerifyFail, bus/fsm.go)
+// commitVerifyFailure вызывался БЕЗУСЛОВНО для ЛЮБОЙ терминальной ошибки
+// completionCheck, включая планировочные — а planning вообще не проходит
+// verify (verify.go's gateWithVerify никогда не оборачивает planning-
+// completionCheck) и потому никогда не бывает *VerifyRejectedError/
+// *VerifyExecError. EvVerifyFail's From намеренно не включает
+// StatusPlanning (см. bus/fsm.go) — CAS отбрасывал переход, стадия
+// зависала в "planning" НАВСЕГДА.
+//
+// *VerifyRejectedError включён наравне с *VerifyExecError — это тоже
+// verify-исход (второе подряд needs_changes после исчерпания бесплатного
+// retry), просто Classify группирует его как ClassIncomplete ради ПОЛИТИКИ
+// ретраев (тот же путь, что у обычного IncompleteWorkError — см. doc-
+// комментарий VerifyRejectedError выше); эта группировка не про то, какое
+// FSM-событие атомарно фиксирует финальный fail, поэтому здесь проверка
+// идёт напрямую по типу ошибки (errors.As), а не через Classify().
+func isVerifyDrivenError(err error) bool {
+	var rejected *VerifyRejectedError
+	if errors.As(err, &rejected) {
+		return true
+	}
+	var execErr *VerifyExecError
+	return errors.As(err, &execErr)
+}
+
 func Classify(err error) Classification {
 	if err == nil {
 		return ClassNone

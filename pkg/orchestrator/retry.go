@@ -335,15 +335,39 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// VerifyExecError.Error()) остаётся видна прямо в FSM-транзишне,
 			// а не только в файлах на диске (verify/<id>/report.md).
 			//
-			// H1 (6-е код-ревью): фиксация исхода — через commitVerifyFailure
-			// (EvVerifyFail с ограниченным From, атомарный CAS), а не голый
-			// Trigger(EvFail) — иначе поздний verify exec-error (или второй
-			// needs_changes, тоже попадающий сюда, раз attempt != 0) мог бы
-			// затереть уже случившийся конкурентный Pause()/Revise() в
-			// TOCTOU-зазоре между чтением статуса и коммитом перехода. См.
-			// commitVerifyFailure.
-			if !o.commitVerifyFailure(s.ID, checkErr.Error(), onUserInterrupted) {
-				return
+			// H1 (6-е код-ревью): verify-driven исход (needs_changes-
+			// исчерпание/exec-ошибка верификатора) фиксируется через
+			// commitVerifyFailure (EvVerifyFail с ограниченным From,
+			// атомарный CAS) — иначе поздний verify-исход мог бы затереть
+			// уже случившийся конкурентный Pause()/Revise() в TOCTOU-зазоре
+			// между чтением статуса и коммитом перехода. См. commitVerifyFailure.
+			//
+			// H2 (7-е код-ревью): commitVerifyFailure раньше вызывался
+			// БЕЗУСЛОВНО для ЛЮБОЙ ошибки, дошедшей до этой точки — но сюда
+			// попадают и планировочные ошибки (missing/empty plan.md,
+			// вторая неполная секция плана — CheckPlanCompletionFor,
+			// agents.go's runPlanningAgent/runPlanningWithFeedback), которые
+			// НИКОГДА не проходят verify (planning вообще не оборачивается
+			// gateWithVerify, см. verify.go). EvVerifyFail's From сознательно
+			// не включает StatusPlanning (см. bus/fsm.go) — CAS проигрывал,
+			// commitVerifyFailure возвращал false, и planning-стадия
+			// зависала в "planning" НАВСЕГДА без единого Trigger(EvFail).
+			// Та же ловушка ждала любую другую не-verify ошибку (missing
+			// artifact/missing sections/generic fatal) исполнительской
+			// стадии — просто EvVerifyFail's From для неё совпадает с
+			// обычными активными статусами, поэтому регрессия там незаметна
+			// (но CAS-защита там и не нужна — см. isVerifyDrivenError).
+			//
+			// Фикс: атомарный EvVerifyFail применяется ТОЛЬКО к настоящим
+			// verify-исходам (isVerifyDrivenError — *VerifyRejectedError/
+			// *VerifyExecError); для всего остального — обычный
+			// Trigger(EvFail) (From: nil), ровно как до появления AI-verify.
+			if isVerifyDrivenError(checkErr) {
+				if !o.commitVerifyFailure(s.ID, checkErr.Error(), onUserInterrupted) {
+					return
+				}
+			} else {
+				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, checkErr.Error())
 			}
 			o.failBlockedStages()
 			return
