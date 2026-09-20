@@ -77,9 +77,13 @@ func (s *Server) handleVerifyReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	// report.md for a given verification id never changes once written
-	// (a fresh verify pass gets a fresh verID) — safe to let the browser
-	// cache it, but keep it private (never a shared/CDN cache).
+	// report.md at this path is NOT guaranteed immutable: a multi-step verify
+	// pass (several agent steps, all passing) rewrites report.md at the same
+	// verID mid-pass, once per step. This is just a short bounded cache of
+	// whatever was last written — a client can briefly see a stale (earlier
+	// step's) report during an in-progress pass — kept private (never a
+	// shared/CDN cache). See "storing report.md per-step instead of
+	// per-pass" in the AI-verify plan for the real fix (deferred follow-up).
 	w.Header().Set("Cache-Control", "private, max-age=60")
 	_ = json.NewEncoder(w).Encode(map[string]string{"content": string(data)})
 }
