@@ -52,6 +52,20 @@ func (o *Orchestrator) preNoteBlock(stageDir string) string {
 	return "\n\n## User note (added before this stage started)\n\n" + note
 }
 
+// feedbackNoteBlock читает feedback.md стадии и возвращает блок для добавления
+// в контекст агента, либо "" если файла нет или он пуст. Зеркалит
+// preNoteBlock, но для уже ЗАПУЩЕННОЙ стадии — вызывается в *WithFeedback-
+// раннерах ДО retry-цикла (agent_suggest перезапускает агента с этой
+// заметкой как поправкой по ходу работы, в отличие от preNoteBlock, где
+// заметка — часть исходного задания на первом старте).
+func (o *Orchestrator) feedbackNoteBlock(stageDir string) string {
+	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
+	if len(feedbackData) == 0 {
+		return ""
+	}
+	return "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
+}
+
 // phaseScript identifies a script-stage's own log namespace (script.log),
 // distinct from the before/after hook logs.
 const phaseScript = "script"
@@ -452,11 +466,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	// EvComplete не увидели бы подходящий статус, и стадия зависла бы в
 	// Revising даже после успешного завершения агента.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
-	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
-	feedbackNote := ""
-	if len(feedbackData) > 0 {
-		feedbackNote = "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
-	}
+	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
 		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
@@ -546,11 +556,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
-	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
-	feedbackNote := ""
-	if len(feedbackData) > 0 {
-		feedbackNote = "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
-	}
+	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
 		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
@@ -593,11 +599,7 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
-	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
-	feedbackNote := ""
-	if len(feedbackData) > 0 {
-		feedbackNote = "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
-	}
+	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)

@@ -28,6 +28,38 @@ func TestDialogPhases_IncludesAutonomousWhenFlagPresent(t *testing.T) {
 	}
 }
 
+func TestFeedbackNoteBlock_PresentReturnsWrappedBlock(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "feedback.md"), []byte("please fix X"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var o *Orchestrator
+	got := o.feedbackNoteBlock(dir)
+	want := "\n\n## User note (added while this stage was running)\n\nplease fix X"
+	if got != want {
+		t.Errorf("feedbackNoteBlock() = %q, want %q", got, want)
+	}
+}
+
+func TestFeedbackNoteBlock_AbsentReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	var o *Orchestrator
+	if got := o.feedbackNoteBlock(dir); got != "" {
+		t.Errorf("feedbackNoteBlock() (no file) = %q, want empty", got)
+	}
+}
+
+func TestFeedbackNoteBlock_EmptyFileReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "feedback.md"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	var o *Orchestrator
+	if got := o.feedbackNoteBlock(dir); got != "" {
+		t.Errorf("feedbackNoteBlock() (empty file) = %q, want empty", got)
+	}
+}
+
 func TestClearInteractiveSessions_ClearsAutonomousArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	// Стадия в автономном треке.
