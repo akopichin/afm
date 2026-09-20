@@ -1127,6 +1127,88 @@ func TestAgentRecipe_ClaudeType(t *testing.T) {
 	}
 }
 
+// TestAgentRecipe_RejectsReservedAuthTargets — E1 (третье код-ревью
+// AI-verify): auth.to не должен позволять рецепту перезаписать
+// control/transport-переменную окружения враппера. Конкретный сценарий —
+// auth.to: env:CODEX_VERIFY: сгенерированный враппер экспортирует секрет
+// ПОСЛЕ того, как CODEX_VERIFY=1 уже стоит в окружении процесса
+// (pkg/docker/wrapper.go), затирая контрольный флаг значением секрета — а
+// scripts/codex-as-claude.sh трактует любое значение != "1" как полный,
+// небезопасный доступ (--dangerously-bypass-approvals-and-sandbox) вместо
+// read-only verify-режима.
+func TestAgentRecipe_RejectsReservedAuthTargets(t *testing.T) {
+	cases := []struct {
+		name   string
+		recipe config.AgentRecipe
+		errSub string // пустая строка → ожидаем PASS
+	}{
+		{
+			name:   "codex: auth.to targeting CODEX_VERIFY is rejected",
+			recipe: config.AgentRecipe{Type: "codex", Auth: config.RecipeAuth{From: "env:X", To: "env:CODEX_VERIFY"}},
+			errSub: "reserved",
+		},
+		{
+			name:   "codex: auth.to targeting CODEX_VERIFY is rejected regardless of case",
+			recipe: config.AgentRecipe{Type: "codex", Auth: config.RecipeAuth{From: "env:X", To: "env:codex_verify"}},
+			errSub: "reserved",
+		},
+		{
+			name:   "codex: auth.to targeting AFM_* is rejected",
+			recipe: config.AgentRecipe{Type: "codex", Auth: config.RecipeAuth{From: "env:X", To: "env:AFM_FOO"}},
+			errSub: "reserved",
+		},
+		{
+			name:   "codex: normal auth.to still passes",
+			recipe: config.AgentRecipe{Type: "codex", Auth: config.RecipeAuth{From: "env:X", To: "env:OPENAI_API_KEY"}},
+		},
+		{
+			name: "openai: auth.to targeting AFM_* is rejected",
+			recipe: config.AgentRecipe{
+				Type: "openai", Model: "gpt-4o", URL: "https://api.openai.com/v1",
+				Auth: config.RecipeAuth{From: "env:KEY", To: "env:AFM_SECRET_FOO"},
+			},
+			errSub: "reserved",
+		},
+		{
+			name: "openai: normal auth.to still passes",
+			recipe: config.AgentRecipe{
+				Type: "openai", Model: "gpt-4o", URL: "https://api.openai.com/v1",
+				Auth: config.RecipeAuth{From: "env:KEY", To: "env:OPENAI_API_KEY"},
+			},
+		},
+		{
+			name: "cursor: auth.to targeting CODEX_VERIFY is rejected",
+			recipe: config.AgentRecipe{
+				Type: "cursor", Model: "auto", URL: "https://api.cursor.com/v1",
+				Auth: config.RecipeAuth{From: "env:KEY", To: "env:CODEX_VERIFY"},
+			},
+			errSub: "reserved",
+		},
+		{
+			name: "claude: auth.to targeting AFM_* is rejected before the ClaudeAuthEnvVars allow-list check",
+			recipe: config.AgentRecipe{
+				Type: config.ClaudeCommand, Model: "claude-sonnet-4-5",
+				Auth: config.RecipeAuth{From: "env:KEY", To: "env:AFM_RUN_ID"},
+			},
+			errSub: "reserved",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.recipe.Validate()
+			if tc.errSub == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.errSub) {
+				t.Errorf("Validate() = %v, want error containing %q", err, tc.errSub)
+			}
+		})
+	}
+}
+
 func TestDockerAutoShim_ParseOpenAIType(t *testing.T) {
 	dir := t.TempDir()
 	cfgYAML := `

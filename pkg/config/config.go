@@ -155,6 +155,41 @@ func isClaudeAuthEnvVar(name string) bool {
 	return false
 }
 
+// reservedRecipeAuthVars — execution-control переменные генерируемых
+// врапперов (pkg/docker/wrapper.go), которые НИКОГДА не должны быть целью
+// auth.to ни у одного рецепта (E1, третье код-ревью AI-verify). CODEX_VERIFY
+// переключает scripts/codex-as-claude.sh между read-only verify-режимом и
+// полным доступом (--dangerously-bypass-approvals-and-sandbox) — рецепт с
+// auth.to: env:CODEX_VERIFY заставил бы враппер экспортировать секрет ПОСЛЕ
+// того, как CODEX_VERIFY=1 уже стоит в окружении процесса (см. wrapper.go),
+// затирая контрольный флаг значением секрета: адаптер трактует любое
+// значение != "1" как полный доступ, так что AI-verify тихо перестал бы быть
+// read-only.
+var reservedRecipeAuthVars = []string{
+	"CODEX_VERIFY",
+}
+
+// isReservedAuthVarName сообщает, что имя переменной окружения зарезервировано
+// афм-инфраструктурой (транспорт секретов/системного промпта — AFM_*, см.
+// AGENTS.md "Phase 3" — или control-флаг адаптера, см. reservedRecipeAuthVars)
+// и не может быть целью auth.to ни одного рецепта — иначе сгенерированный
+// враппер экспортировал бы в неё секрет вместо ожидаемого значения. Сравнение
+// регистронезависимое: окружение Windows само по себе регистронезависимо, а
+// case-sensitive проверка позволила бы обойти запрет вариантом типа
+// env:codex_verify.
+func isReservedAuthVarName(name string) bool {
+	up := strings.ToUpper(name)
+	if strings.HasPrefix(up, "AFM_") {
+		return true
+	}
+	for _, v := range reservedRecipeAuthVars {
+		if up == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate returns an error if the recipe is malformed.
 func (r AgentRecipe) Validate() error {
 	// type — allow-list; неизвестное значение (напр. опечатка "openapi") молча
@@ -176,6 +211,9 @@ func (r AgentRecipe) Validate() error {
 		if !strings.HasPrefix(r.Auth.To, "env:") {
 			return errors.New("recipe: auth.to must be an env: reference (e.g. env:OPENAI_API_KEY)")
 		}
+		if isReservedAuthVarName(r.Auth.EnvVarName()) {
+			return fmt.Errorf("recipe: auth.to env var %q is reserved for afm control/transport, cannot be used for auth", r.Auth.EnvVarName())
+		}
 		return nil
 	}
 	if r.Model == "" {
@@ -183,6 +221,9 @@ func (r AgentRecipe) Validate() error {
 	}
 	if !strings.HasPrefix(r.Auth.To, "env:") {
 		return errors.New("recipe: auth.to must be an env: reference (e.g. env:OPENAI_API_KEY)")
+	}
+	if isReservedAuthVarName(r.Auth.EnvVarName()) {
+		return fmt.Errorf("recipe: auth.to env var %q is reserved for afm control/transport, cannot be used for auth", r.Auth.EnvVarName())
 	}
 	// openai, openai-agent и cursor — внешние шлюзы: url обязателен, auth.to не
 	// ограничен ClaudeAuthEnvVars (используют свои env vars: OPENAI_API_KEY, CURSOR_API_KEY и т.д.).
