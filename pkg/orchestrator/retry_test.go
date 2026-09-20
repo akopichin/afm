@@ -241,3 +241,72 @@ func TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage(t *testing.T) {
 		}
 	}
 }
+
+// TestRunWithRetry_ConcurrentReviseWinsOverNeedsChangesVerifyOutcome — F1
+// (4-е код-ревью): реконсиляция конкурентного Revise() (running->revising)
+// должна покрывать ЛЮБОЙ исход completionCheck, а не только успешный (pass).
+// agentFn симулирует конкурентный Revise() ПРЯМО перед тем как вернуть nil
+// (агент "успел" завершиться естественно); completionCheck возвращает
+// *VerifyRejectedError (needs_changes-эквивалент AI-verify) — стадия должна
+// уйти по пути respawn-with-feedback (onUserInterrupted), а НЕ начать
+// коррекцию СТАРОГО поколения (incomplete-retry ветка ниже в runWithRetry).
+func TestRunWithRetry_ConcurrentReviseWinsOverNeedsChangesVerifyOutcome(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	s := flow.Stage{ID: "s1"}
+
+	rejected := &VerifyRejectedError{
+		IncompleteWorkError: &stagefiles.IncompleteWorkError{Reason: "verify needs changes"},
+		ReportID:            "ver1",
+		Step:                1,
+	}
+
+	var interruptedCalled bool
+	o.runWithRetry(context.Background(), s, phaseReview,
+		func(string) error {
+			if _, ok := o.Trigger(s.ID, bus.EvRevise, bus.GuardCtx{}, "concurrent revise"); !ok {
+				t.Fatal("EvRevise: CAS rejected — running->revising must be legal here")
+			}
+			return nil // агент "успел" вернуться естественно, уже после Revise()
+		},
+		func() error { return rejected }, // stale needs_changes verify outcome
+		func() { interruptedCalled = true },
+	)
+
+	if !interruptedCalled {
+		t.Fatal("expected onUserInterrupted for a stale needs_changes verify outcome on a stage that moved to revising")
+	}
+	if got := o.opts.Store.Get(s.ID); got != state.StatusRevising {
+		t.Fatalf("status = %v, want revising (untouched — the respawn callback owns the next transition, not an old-generation retry)", got)
+	}
+}
+
+// TestRunWithRetry_ConcurrentReviseWinsOverVerifyExecError — F1 (4-е
+// код-ревью), зеркало предыдущего теста для exec-ошибки verify
+// (транспорт/протокол/таймаут/inconclusive/сбой сохранения). Раньше такой
+// исход шёл прямиком в EvFail (FSM разрешает EvFail даже из revising, см.
+// bus/fsm.go), затирая уже случившийся человеческий Revise.
+func TestRunWithRetry_ConcurrentReviseWinsOverVerifyExecError(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	s := flow.Stage{ID: "s1"}
+
+	execErr := &VerifyExecError{Reason: "verify timed out", Step: 1}
+
+	var interruptedCalled bool
+	o.runWithRetry(context.Background(), s, phaseReview,
+		func(string) error {
+			if _, ok := o.Trigger(s.ID, bus.EvRevise, bus.GuardCtx{}, "concurrent revise"); !ok {
+				t.Fatal("EvRevise: CAS rejected — running->revising must be legal here")
+			}
+			return nil
+		},
+		func() error { return execErr }, // stale verify exec-error
+		func() { interruptedCalled = true },
+	)
+
+	if !interruptedCalled {
+		t.Fatal("expected onUserInterrupted for a stale verify exec-error on a stage that moved to revising")
+	}
+	if got := o.opts.Store.Get(s.ID); got != state.StatusRevising {
+		t.Fatalf("status = %v, want revising (untouched) — EvFail must not override a concurrent revise", got)
+	}
+}

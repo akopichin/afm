@@ -151,36 +151,33 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			if completionCheck != nil {
 				checkErr = completionCheck()
 			}
+			// F1 (4-е код-ревью): completionCheck (gateWithVerify->RunVerification)
+			// может занять сколько угодно времени ПОСЛЕ того, как автор уже
+			// вернулся, — за это время Pause()/Revise() мог долговечно перевести
+			// стадию в paused/revising. Раньше эта реконсиляция стояла ТОЛЬКО в
+			// ветке checkErr==nil (успешный verify/completion) — needs_changes
+			// уходил в коррекцию СТАРОГО поколения (см. ветку incomplete-retry
+			// ниже), а exec/inconclusive/timeout/storage-ошибка — прямиком в
+			// EvFail, который FSM разрешает даже из revising (From: nil у EvFail в
+			// bus/fsm.go, см. ruleAllowsFrom — "любой нетерминальный статус"),
+			// молча затирая уже случившийся Revise/Pause человека. Проверяем ЗДЕСЬ,
+			// один раз, ДО того как ветвиться на pass/needs_changes/exec-ошибку —
+			// так реконсиляция покрывает ЛЮБОЙ исход completionCheck одинаково.
+			//
+			// paused — восстанавливать нечего (Pause() уже сделал долговечный
+			// переход). revising — перезапускаем АВТОРА с фидбеком тем же
+			// respawn-callback'ом, каким обрабатывается ErrUserInterrupted из
+			// самого agentFn ниже (verify никогда не является kind'ом для
+			// резюма) — симметрично E4 (третье код-ревью), но теперь для ВСЕХ
+			// исходов, а не только pass.
+			switch o.currentStatus(s.ID) {
+			case state.StatusPaused:
+				return
+			case state.StatusRevising:
+				onUserInterrupted()
+				return
+			}
 			if checkErr == nil {
-				// AI-verify (V5a): completionCheck (gateWithVerify->RunVerification)
-				// может занять сколько угодно времени ПОСЛЕ того, как автор уже
-				// вернулся, — за это время Pause() мог долговечно перевести стадию
-				// в paused. Trigger(EvComplete) внизу цепочки (onAgentCompleted ->
-				// completeStage) и так отклонит переход по CAS (paused не входит в
-				// From EvComplete) — этот ранний return дополнительно не даёт
-				// разослать вводящее в заблуждение уведомление "агент завершился"
-				// для стадии, которая на самом деле осталась на паузе (late pass).
-				//
-				// E4 (третье код-ревью): та же самая гонка, но с revising —
-				// конкурентный Revise() мог успеть перевести стадию в revising,
-				// пока completionCheck ещё работал. Для implementation/autonomous
-				// EvComplete тоже отклонился бы по CAS, но onAgentCompleted
-				// (orchestrator.go) отдельно ловит именно этот случай и сама
-				// перезапускает автора с фидбеком — здесь же, для STANDALONE
-				// review-стадии, у onAgentCompleted такой ветки нет:
-				// completeStage молча отклоняет revising (не входит в её
-				// From-набор) и стадия зависла бы в revising без единого
-				// работающего раннера до перезапуска afm. Симметрично ветке
-				// errors.Is(err, executor.ErrUserInterrupted) ниже: не
-				// публикуем "агент завершился" для стадии, ушедшей на Revise, а
-				// зовём тот же respawn-with-feedback callback.
-				switch o.currentStatus(s.ID) {
-				case state.StatusPaused:
-					return
-				case state.StatusRevising:
-					onUserInterrupted()
-					return
-				}
 				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
 				o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
 				return
@@ -189,13 +186,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// автор (runnerForVerify) — Pause()/Revise() во время verify всплывает
 			// сюда либо этим сентинелом (мягкий SIGINT verify-субпроцесса или
 			// прерванное ожидание слота верификатора, см. runVerifyAgentStep),
-			// либо просто уже долговечно paused-статусом. Обрабатываем СИММЕТРИЧНО
-			// прерыванию самого agentFn ниже: paused — восстанавливать нечего,
-			// иначе (Revise) — перезапускаем АВТОРА с фидбеком, а не верификатор
-			// (verify никогда не является kind'ом для резюма).
-			if o.currentStatus(s.ID) == state.StatusPaused {
-				return
-			}
+			// либо (см. switch выше) уже долговечным paused/revising-статусом.
 			if errors.Is(checkErr, executor.ErrUserInterrupted) {
 				onUserInterrupted()
 				return
