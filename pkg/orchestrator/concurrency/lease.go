@@ -38,7 +38,14 @@ func (m *Manager) AcquireLease(ctx context.Context, cmd string) (*Lease, error) 
 func (l *Lease) SwapTo(ctx context.Context, cmd string) error {
 	resolved := l.m.resolveCmd(cmd)
 	if l.held && l.cmd == resolved {
-		return nil
+		// C5 код-ревью: fast path ничего не захватывает и не освобождает, но
+		// обязан уважать УЖЕ отменённый ctx — иначе вызывающий код (verify.go)
+		// увидел бы nil-успех даже когда Pause/Revise отменили ctx до вызова
+		// (author == verifier command — самый частый случай для этого пути),
+		// и запустил бы верификатор на стадии, уже ушедшей в paused/revising.
+		// ctx.Err() сам по себе nil для живого ctx — совпадает с прежним
+		// поведением "нет ошибки" без отдельной ветки.
+		return ctx.Err()
 	}
 	l.Release()
 	if err := l.m.semForCmd(resolved).acquireCtx(ctx); err != nil {

@@ -25,9 +25,23 @@ type Semaphore interface {
 // noopSemaphore — семафор-заглушка для MaxParallel=0 (без ограничения).
 type noopSemaphore struct{}
 
-func (noopSemaphore) acquire()                             {}
-func (noopSemaphore) acquireCtx(ctx context.Context) error { return nil }
-func (noopSemaphore) release()                             {}
+func (noopSemaphore) acquire() {}
+
+// acquireCtx не блокируется (лимита нет), но обязан уважать УЖЕ отменённый
+// ctx — иначе (C5 код-ревью) Lease.SwapTo на команду без лимита молча
+// репортовал бы успех, даже если Pause/Revise отменили ctx до самого вызова:
+// вызывающий код (verify.go) считал бы переход на команду верификатора
+// состоявшимся и запускал бы его на стадии, которая уже должна была
+// остановиться.
+func (noopSemaphore) acquireCtx(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+func (noopSemaphore) release() {}
 
 // ChannelSemaphore — реальный семафор на буферизованном канале. Экспортирован,
 // чтобы тесты ядра (pkg/orchestrator) могли собрать блокирующий семафор для

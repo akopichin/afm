@@ -88,6 +88,36 @@ func TestLease_SwapTo_SameCommand_NoReacquireNoRelease(t *testing.T) {
 	}
 }
 
+// TestLease_SwapTo_SameCommand_AlreadyCancelledCtxReturnsErr — C5 код-ревью:
+// быстрый путь "та же команда" раньше возвращал nil безусловно, не глядя на
+// ctx — Pause/Revise, отменившие ctx ДО вызова SwapTo (например author ==
+// verifier command), теряли сигнал: слот оставался held, а вызывающий код
+// (verify.go) считал переход успешным и запускал верификатор на стадии,
+// которая уже должна была остановиться. Слот при этом должен остаться held
+// (fast path сам ничего не освобождает).
+func TestLease_SwapTo_SameCommand_AlreadyCancelledCtxReturnsErr(t *testing.T) {
+	var log []string
+	semA, _ := newOrderedSemaphores(&log)
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"a": semA}, "")
+
+	lease, err := m.AcquireLease(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := lease.SwapTo(ctx, "a"); err == nil {
+		t.Fatal("same-command SwapTo с уже отменённым ctx должен вернуть ошибку, got nil")
+	}
+	if want := []string{"acquire:a"}; !equalLogs(log, want) {
+		t.Errorf("same-command SwapTo не должен трогать семафор даже при отменённом ctx, log = %v, want %v", log, want)
+	}
+	if !lease.held || lease.cmd != "a" {
+		t.Fatalf("слот должен остаться held после отклонённого same-command SwapTo, got held=%v cmd=%q", lease.held, lease.cmd)
+	}
+}
+
 func TestLease_SwapTo_DifferentCommand_ReleasesBeforeAcquiring(t *testing.T) {
 	var log []string
 	semA, semB := newOrderedSemaphores(&log)

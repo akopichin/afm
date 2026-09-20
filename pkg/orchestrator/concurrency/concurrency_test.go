@@ -176,12 +176,28 @@ func TestChannelSemaphore_AcquireCtx_CancelWhileWaiting(t *testing.T) {
 	}
 }
 
-func TestNoopSemaphore_AcquireCtx_AlwaysNil(t *testing.T) {
+// TestNoopSemaphore_AcquireCtx_LiveCtxReturnsNil — noop-семафор (без лимита)
+// по-прежнему никогда не блокирует захват слота при живом ctx.
+func TestNoopSemaphore_AcquireCtx_LiveCtxReturnsNil(t *testing.T) {
+	var s noopSemaphore
+	if err := s.acquireCtx(context.Background()); err != nil {
+		t.Fatalf("noopSemaphore.acquireCtx с живым ctx должен вернуть nil, got %v", err)
+	}
+}
+
+// TestNoopSemaphore_AcquireCtx_AlreadyCancelledReturnsErr — C5 код-ревью:
+// noop-семафор (max_parallel не задан — Lease.SwapTo/AcquireLease на такую
+// команду не блокируются вовсе) должен всё равно уважать уже отменённый ctx,
+// а не молча "успевать" захватить несуществующий слот. Раньше acquireCtx
+// возвращал nil безусловно — Pause/Revise, отменившие ctx ДО вызова SwapTo,
+// теряли сигнал: переход lease на команду верификатора репортовал успех, хотя
+// стадия уже должна была остановиться (см. verify.go's C5-фикс).
+func TestNoopSemaphore_AcquireCtx_AlreadyCancelledReturnsErr(t *testing.T) {
 	var s noopSemaphore
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := s.acquireCtx(ctx); err != nil {
-		t.Fatalf("noopSemaphore.acquireCtx должен всегда возвращать nil, got %v", err)
+	if err := s.acquireCtx(ctx); err == nil {
+		t.Fatal("noopSemaphore.acquireCtx с уже отменённым ctx должен вернуть ошибку, got nil")
 	}
 }
 

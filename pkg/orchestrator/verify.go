@@ -18,6 +18,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/prompts"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // verifyExecutionLabel — execution-purpose метка AI-verify для логов/usage
@@ -334,7 +335,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	if lease, ok := o.stageLeases.Load(s.ID); ok {
 		waitCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
 		swapErr := lease.(*concurrency.Lease).SwapTo(waitCtx, st.Command)
-		stop()
+		interruptedDuringWait := stop()
 		if swapErr != nil {
 			if ctx.Err() == nil {
 				// Родительский (run-scoped) ctx жив — ждать перестали именно
@@ -347,6 +348,26 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 			}
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify lease swap failed: " + swapErr.Error(), Step: idx}
 		}
+		if interruptedDuringWait {
+			// C5 код-ревью: SwapTo вернул nil (noop-семафор/одинаковая
+			// команда — их fast path не блокируется и потому сам по себе не
+			// видит отмену), но за время ожидания сигнал паузы/ревизии
+			// РЕАЛЬНО пришёл и был поглощён именно этим ожиданием — не даём
+			// верификатору стартовать на стадии, которая уже считается
+			// прерванной, даже если формально lease "успешно" переведён.
+			return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
+		}
+	}
+
+	// C5 код-ревью: последняя точка ПЕРЕД стартом verify-субпроцесса — даже
+	// если lease вообще не участвовал (safe no-op деградация выше) или своп
+	// прошёл гладко без единого сигнала во время ожидания, отдельно
+	// перепроверяем ctx/статус стадии прямо перед запуском. Закрывает окно
+	// между "lease переведён" и "субпроцесс стартовал", в котором Pause()
+	// мог durable перевести стадию в paused уже ПОСЛЕ того, как мы перестали
+	// ждать lease.
+	if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID); aborted {
+		return verify.ModelResult{}, st.Command, abortErr
 	}
 
 	stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
@@ -397,31 +418,75 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 // — что наступит раньше, — и функцию stop, которую вызывающий код ОБЯЗАН
 // вызвать сразу после того, как перестал ждать (успешно или нет), ДО того как
 // канал снова понадобится реальному verify-субпроцессу (см. runnerForVerify).
-// stop синхронно дожидается выхода горутины-наблюдателя — без этого могла бы
+// stop синхронно дожидается выхода горутины-наблюдателя (без этого могла бы
 // возникнуть гонка, в которой наблюдатель, ещё не заметивший отмену, украл бы
-// ПОЗДНЕЙШИЙ сигнал паузы, адресованный уже запущенному verify-процессу.
-// Нет зарегистрированного канала для стадии (например, вызов вне
-// runWithRetry) — безопасная деградация: ctx прокидывается как есть, stop
-// — no-op.
-func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID string) (ctx context.Context, stop func()) {
+// ПОЗДНЕЙШИЙ сигнал паузы, адресованный уже запущенному verify-процессу) и
+// возвращает true, если ctx был отменён ИМЕННО сигналом на ic (а не тем, что
+// вызывающий код сам прекратил ждать) — см. C5: SwapTo для noop-семафора/
+// одинаковой команды не проверяет ctx во время самого ожидания (там нечего
+// ждать), так что только этот флаг говорит вызывающему коду "сигнал реально
+// пришёл, даже хотя SwapTo этого не заметил". Нет зарегистрированного канала
+// для стадии (например, вызов вне runWithRetry) — безопасная деградация: ctx
+// прокидывается как есть, stop всегда возвращает false.
+func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID string) (ctx context.Context, stop func() bool) {
 	ch, ok := o.interruptChans.Load(stageID)
 	if !ok {
-		return parent, func() {}
+		return parent, func() bool { return false }
 	}
 	ic := ch.(chan struct{})
 	cctx, cancel := context.WithCancel(parent)
+	interrupted := make(chan bool, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// Приоритетная неблокирующая проверка ПЕРЕД основным select: если
+		// сигнал паузы уже лежит в канале (буферизован) к моменту, когда эта
+		// горутина реально получает CPU, он ДОЛЖЕН быть замечен — иначе
+		// возможен ложноотрицательный результат: если вызывающий код к этому
+		// моменту уже вызвал stop() (который сам делает cancel()), основной
+		// select ниже увидел бы ОБА case'а одновременно готовыми (<-ic И
+		// <-cctx.Done()) и мог бы псевдослучайно выбрать cctx.Done(),
+		// потеряв реальный, уже пришедший сигнал паузы.
 		select {
 		case <-ic:
+			interrupted <- true
+			cancel()
+			return
+		default:
+		}
+		select {
+		case <-ic:
+			interrupted <- true
 			cancel()
 		case <-cctx.Done():
+			interrupted <- false
 		}
 	}()
-	return cctx, func() {
+	return cctx, func() bool {
 		cancel()
 		<-done
+		return <-interrupted
+	}
+}
+
+// verifyLaunchAborted — последняя проверка ПЕРЕД стартом verify-субпроцесса
+// (C5 код-ревью): true, если родительский ctx уже отменён (полная отмена
+// рана либо истёкший таймаут шага) ИЛИ (когда доступен Store) стадия уже
+// durable ушла в paused/revising. o.opts.Store может быть nil в модульных
+// тестах, строящих Orchestrator напрямую без полноценного Store (см.
+// newVerifyTestOrchestrator) — деградация: проверяем только ctx.
+func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string) (bool, error) {
+	if ctx.Err() != nil {
+		return true, executor.ErrUserInterrupted
+	}
+	if o.opts.Store == nil {
+		return false, nil
+	}
+	switch o.currentStatus(stageID) {
+	case state.StatusPaused, state.StatusRevising:
+		return true, executor.ErrUserInterrupted
+	default:
+		return false, nil
 	}
 }
 
