@@ -46,6 +46,18 @@ const (
 	// приостановлена (ctx.PausedFrom) — реальный перезапуск агента делает
 	// вызывающий код (Orchestrator.Continue), а не сама FSM-таблица.
 	EvContinue FSMEvent = "continue"
+	// EvVerifyFail — H1 (6-е код-ревью): АТОМАРНЫЙ аналог EvFail для
+	// verify-driven исходов (needs_changes-исчерпание/exec-ошибка
+	// верификатора, retry.go's runWithRetry). В отличие от EvFail (From: nil,
+	// разрешает любой нетерминальный статус — так и должно оставаться для
+	// остальных call site'ов: "cancelled during retry", "retries exhausted"),
+	// у EvVerifyFail ограниченный From (см. NewFSM ниже) — CAS store.Apply
+	// атомарно отбрасывает переход, если конкурентный Pause()/Revise() успел
+	// закоммититься МЕЖДУ verify-driven кодом, читающим статус, и этим
+	// событием (TOCTOU-зазор, который read-then-act не мог закрыть в
+	// принципе). Не трогает существующий From:nil у EvFail — другие call
+	// site'ы EvFail сознательно должны срабатывать из любого статуса.
+	EvVerifyFail FSMEvent = "verify_fail"
 )
 
 type GuardCtx struct {
@@ -118,6 +130,14 @@ func NewFSM(store *state.Store) *FSM {
 			// процесса больше нет, чтобы вернуться и попробовать снова.
 			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusDone)},
 			EvFail:     {From: nil, To: to(state.StatusFailed)},
+			// EvVerifyFail — намеренно ЗЕРКАЛИТ From-набор EvComplete (те же
+			// "активные" статусы, из которых verify-driven исход вообще может
+			// легитимно случиться), но НЕ включает Paused/Revising: если
+			// стадия уже там, её владеет конкурентный Pause()/Revise(), а не
+			// устаревший verify-исход. CAS отбрасывает переход (ok=false) —
+			// вызывающий код (retry.go's commitVerifyFailure) обязан ничего
+			// больше не коммитить.
+			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusFailed)},
 			// EvAskUser must be reachable from any state the question poller scans
 			// (planning, running, plus the retry/revision cycles where an agent can
 			// ask mid-flight). Without retrying/revising here the transition is

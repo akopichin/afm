@@ -16,31 +16,32 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// verifyOutcomeStillOwned — G2 (5-е код-ревью): повторная проверка статуса
-// НЕПОСРЕДСТВЕННО перед verify-driven переходом (needs_changes
-// incomplete-retry на attempt 0 ИЛИ финальный EvFail от исхода
-// completionCheck) — конкурентный Pause()/Revise() мог долговечно перевести
-// стадию в paused/revising уже ПОСЛЕ единственной F1-проверки статуса (тот
-// switch срабатывает один раз, сразу после completionCheck(), см. выше), но
-// ДО того, как этот код успевает зафиксировать свой собственный исход —
-// completionCheck (gateWithVerify->RunVerification) может занять сколько
-// угодно времени, и раз он уже вернулся, свежий Pause/Revise может
-// проскочить именно в этом узком окне.
+// verifyOutcomeStillOwned — дешёвый, НЕ атомарный fast-path ПЕРЕД
+// verify-driven исходом (needs_changes incomplete-retry на attempt 0 ИЛИ
+// финальный verify-driven fail от исхода completionCheck) — конкурентный
+// Pause()/Revise() мог долговечно перевести стадию в paused/revising уже
+// ПОСЛЕ единственной F1-проверки статуса (тот switch срабатывает один раз,
+// сразу после completionCheck(), см. выше), но ДО того, как этот код
+// успевает зафиксировать свой собственный исход — completionCheck
+// (gateWithVerify->RunVerification) может занять сколько угодно времени, и
+// раз он уже вернулся, свежий Pause/Revise может проскочить именно в этом
+// узком окне.
 //
-// EvFail's rule.From == nil (разрешает любой нетерминальный статус —
-// намеренно: остальные call site'ы этого события, "cancelled during retry"/
-// "retries exhausted", ДОЛЖНЫ срабатывать из любого статуса), так что сама
-// FSM не отбрасывает устаревший verify-driven fail — guard нужен именно
-// здесь, локально в этих двух call site'ах, не трогая глобальный From-набор
-// EvFail. Возвращает false, если стадия больше не принадлежит этому исходу
+// ВАЖНО (H1, 6-е код-ревью): это ЧТЕНИЕ, а не CAS — между этим return и
+// последующим коммитом (обычный `continue` цикла ИЛИ Trigger(EvVerifyFail) в
+// commitVerifyFailure ниже) остаётся точно такой же TOCTOU-зазор, только
+// уже сдвинутый на несколько строк, а не устранённый. Как fast-path
+// (избежать лишней работы, когда уже точно видно, что стадию увели) это
+// нормально и намеренно оставлено — но КОРРЕКТНОСТЬ финального
+// verify-driven fail обеспечивает исключительно атомарный CAS
+// Trigger(EvVerifyFail) в commitVerifyFailure (его ограниченный From-набор,
+// см. bus/fsm.go), а не это чтение. Возвращает false, если стадия по
+// состоянию НА МОМЕНТ ЭТОГО ЧТЕНИЯ уже не принадлежит текущему исходу
 // (paused/revising) — вызывающий код обязан ничего не коммитить и просто
 // вернуться (для revising — через onUserInterrupted, симметрично уже
 // существующей F1-ветке выше: тот же самый Pause/Revise уже владеет
 // стадией, повторный respawn делает именно onUserInterrupted).
 func (o *Orchestrator) verifyOutcomeStillOwned(stageID string, onUserInterrupted func()) bool {
-	if o.verifyOutcomeGuardHook != nil {
-		o.verifyOutcomeGuardHook(stageID)
-	}
 	switch o.currentStatus(stageID) {
 	case state.StatusPaused:
 		return false
@@ -50,6 +51,47 @@ func (o *Orchestrator) verifyOutcomeStillOwned(stageID string, onUserInterrupted
 	default:
 		return true
 	}
+}
+
+// commitVerifyFailure — H1 (6-е код-ревью): атомарная фиксация
+// verify-driven fail (needs_changes-исчерпание/exec-ошибка верификатора).
+// Раньше (G2, 5-е ревью) единственной защитой от устаревшего исхода было
+// повторное ЧТЕНИЕ статуса (verifyOutcomeStillOwned) перед голым
+// Trigger(EvFail) — но EvFail's rule.From == nil разрешает ЛЮБОЙ
+// нетерминальный статус, так что если конкурентный Pause()/Revise()
+// коммитился ПОСЛЕ этого чтения и ДО самого Trigger (тот же TOCTOU-зазор,
+// просто сдвинутый), устаревший verify-исход всё равно молча затирал
+// paused/revising. Здесь вместо EvFail используется EvVerifyFail — его
+// ограниченный From-набор (см. bus/fsm.go) заставляет саму FSM атомарно
+// (внутри store CAS) отбросить переход, если стадия уже не в одном из
+// "активных" статусов, а не полагаться на чтение снаружи.
+//
+// verifyOutcomeStillOwned вызывается здесь ПЕРЕД Trigger как дешёвый
+// fast-path (см. его комментарий) — просто чтобы не публиковать
+// verify-диагностику, когда уже заведомо видно, что стадию увели; сам факт
+// "гонка произошла именно в узком зазоре между этим чтением и Trigger"
+// проверяется ТОЛЬКО через ok, возвращённый Trigger.
+func (o *Orchestrator) commitVerifyFailure(stageID, reason string, onUserInterrupted func()) bool {
+	if !o.verifyOutcomeStillOwned(stageID, onUserInterrupted) {
+		return false
+	}
+	if o.verifyOutcomeGuardHook != nil {
+		o.verifyOutcomeGuardHook(stageID)
+	}
+	if _, ok := o.Trigger(stageID, bus.EvVerifyFail, bus.GuardCtx{}, reason); ok {
+		return true
+	}
+	// CAS проиграл гонку: конкурентный Pause()/Revise() успел закоммититься
+	// МЕЖДУ fast-path чтением выше и этим Trigger — сама FSM (ограниченный
+	// From EvVerifyFail) атомарно отбросила переход, стадия больше не наша.
+	// Читаем статус ЗДЕСЬ только чтобы выбрать корректный cleanup-колбэк
+	// (revising требует respawn с фидбеком через onUserInterrupted, paused —
+	// ничего) — факт "не наша" уже установлен через ok=false, а не через это
+	// чтение.
+	if o.currentStatus(stageID) == state.StatusRevising {
+		onUserInterrupted()
+	}
+	return false
 }
 
 // isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
@@ -240,8 +282,35 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			}
 			// Incomplete work — retry once without backoff
 			if stagefiles.IsIncompleteWorkError(checkErr) && attempt == 0 {
-				// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД commit'ом
-				// этого incomplete-retry — см. verifyOutcomeStillOwned.
+				// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД
+				// incompleteReason/continue — см. verifyOutcomeStillOwned.
+				//
+				// H1 (6-е код-ревью) рассмотрел этот call site отдельно: в
+				// отличие от финального verify-driven fail (см.
+				// commitVerifyFailure), здесь НЕТ FSM-перехода, который можно
+				// было бы затереть — `continue` ниже лишь возвращает цикл к
+				// его же top-of-loop проверке (currentStatus == Paused) и
+				// повторному вызову agentFn. Остаточный TOCTOU-зазор между
+				// этим чтением и `continue` не может ничего разрушить: любой
+				// Pause()/Revise(), закоммитившийся именно в этом зазоре, уже
+				// оставил СИГНАЛ на interruptCh (тот же канал, что
+				// зарегистрирован для ВСЕЙ этой горутины, см. Store у входа в
+				// runWithRetry) — следующий agentFn() у этой же стадии
+				// проходит через runnerFor(...).RunAgent -> executor.run,
+				// который делает неблокирующую проверку InterruptCh ПРЯМО
+				// ПЕРЕД cmd.Start() (см. pkg/executor: "D4 код-ревью") и,
+				// если сигнал уже есть, возвращает ErrUserInterrupted, ДАЖЕ
+				// НЕ ЗАПУСКАЯ subprocess. Этот err уже обрабатывается веткой
+				// errors.Is(err, executor.ErrUserInterrupted) выше в этом же
+				// цикле — paused и revising различаются ТАМ ЖЕ, тем же
+				// способом, что и everywhere else. Поэтому здесь достаточно
+				// дешёвого fast-path чтения (экономит incompleteReason/
+				// EventRetryScheduled на заведомо чужой стадии) — атомарная
+				// защита от клобберинга не нужна, потому что клобберить
+				// нечего.
+				if o.verifyOutcomeGuardHook != nil {
+					o.verifyOutcomeGuardHook(s.ID)
+				}
 				if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
 					return
 				}
@@ -263,19 +332,19 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// MissingArtifactError/VerifyRejectedError/VerifyExecError.Error()),
 			// а не общая заглушка: только так диагностика AI-verify (номер
 			// шага, id отчёта — см. VerifyRejectedError.Error()/
-			// VerifyExecError.Error()) остаётся видна прямо в FSM-транзишне
-			// EvFail, а не только в файлах на диске (verify/<id>/report.md).
+			// VerifyExecError.Error()) остаётся видна прямо в FSM-транзишне,
+			// а не только в файлах на диске (verify/<id>/report.md).
 			//
-			// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД commit'ом
-			// EvFail — см. verifyOutcomeStillOwned. Без неё поздний verify
-			// exec-error (или второй needs_changes, тоже попадающий сюда,
-			// раз attempt != 0) мог бы затереть уже случившийся конкурентный
-			// Pause()/Revise(), т.к. EvFail's rule.From == nil разрешает ЛЮБОЙ
-			// нетерминальный статус, включая paused/revising.
-			if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
+			// H1 (6-е код-ревью): фиксация исхода — через commitVerifyFailure
+			// (EvVerifyFail с ограниченным From, атомарный CAS), а не голый
+			// Trigger(EvFail) — иначе поздний verify exec-error (или второй
+			// needs_changes, тоже попадающий сюда, раз attempt != 0) мог бы
+			// затереть уже случившийся конкурентный Pause()/Revise() в
+			// TOCTOU-зазоре между чтением статуса и коммитом перехода. См.
+			// commitVerifyFailure.
+			if !o.commitVerifyFailure(s.ID, checkErr.Error(), onUserInterrupted) {
 				return
 			}
-			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, checkErr.Error())
 			o.failBlockedStages()
 			return
 		}

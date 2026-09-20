@@ -46,12 +46,11 @@ func SetRetryCASBarrierForTest(o *Orchestrator, fn func(stageID string)) {
 	o.retryCASBarrier = fn
 }
 
-// SetVerifyOutcomeGuardHookForTest инъектирует хук, вызываемый в runWithRetry
-// НЕПОСРЕДСТВЕННО перед verify-driven переходами (needs_changes
-// incomplete-retry / финальный EvFail, см. поле verifyOutcomeGuardHook,
-// retry.go's verifyOutcomeStillOwned) — тест может внутри него смоделировать
-// конкурентный Pause()/Revise(), приземлившийся в узком окне между F1-
-// проверкой статуса и этим переходом.
+// SetVerifyOutcomeGuardHookForTest инъектирует хук, вызываемый в
+// retry.go's commitVerifyFailure НЕПОСРЕДСТВЕННО перед атомарным
+// Trigger(EvVerifyFail) (см. поле verifyOutcomeGuardHook) — тест может
+// внутри него смоделировать конкурентный Pause()/Revise(), приземлившийся в
+// TOCTOU-зазоре между fast-path чтением и этим CAS.
 func SetVerifyOutcomeGuardHookForTest(o *Orchestrator, fn func(stageID string)) {
 	o.verifyOutcomeGuardHook = fn
 }

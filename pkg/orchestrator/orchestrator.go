@@ -314,13 +314,14 @@ type Orchestrator struct {
 	retryCASBarrier func(stageID string)
 
 	// verifyOutcomeGuardHook — тест-сейм (nil в проде): вызывается в
-	// runWithRetry (retry.go's verifyOutcomeStillOwned) НЕПОСРЕДСТВЕННО перед
-	// каждым verify-driven переходом — needs_changes incomplete-retry
-	// (attempt 0) и финальным EvFail от исхода completionCheck — позволяя
-	// тесту детерминированно смоделировать позднюю гонку Pause()/Revise(),
-	// приземлившуюся МЕЖДУ F1-проверкой статуса (сразу после
-	// completionCheck()) и фактическим срабатыванием этого перехода.
-	// Инъектируется через SetVerifyOutcomeGuardHookForTest.
+	// retry.go's commitVerifyFailure НЕПОСРЕДСТВЕННО ПЕРЕД атомарным
+	// Trigger(EvVerifyFail) — т.е. ПОСЛЕ дешёвого fast-path чтения
+	// (verifyOutcomeStillOwned), но ДО самого CAS. Это позволяет тесту
+	// детерминированно закоммитить позднюю гонку Pause()/Revise() ИМЕННО в
+	// TOCTOU-зазоре между чтением и коммитом (H1, 6-е код-ревью) и проверить,
+	// что EvVerifyFail's ограниченный From атомарно отбрасывает переход
+	// (ok=false), а не полагается на повторное чтение статуса. Инъектируется
+	// через SetVerifyOutcomeGuardHookForTest.
 	verifyOutcomeGuardHook func(stageID string)
 
 	// flowPauseMu защищает составные решения PauseFlow (и последующей задачи
@@ -585,15 +586,15 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		o.critical.TryPublish(pubEv)
 		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)
 		// runnerKind больше не актуален: стадия завершилась (EvComplete),
-		// провалилась (EvFail) или ушла ждать пользователя (EvAskUser) — во
-		// всех трёх случаях раннер, который её вёл, для неё закончил работу.
-		// Единая точка вместо ~15 разрозненных call site'ов Trigger(EvFail)/
-		// Trigger(EvAskUser) по всему пакету: Trigger/triggerWithSeq — общий
-		// funnel для всех переходов FSM (см. комментарий выше), так что
-		// проверка здесь не пропустит ни один существующий или будущий call
-		// site. EvScheduleRetry (retrying) сюда намеренно не входит — значение
-		// должно пережить backoff.
-		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvAskUser {
+		// провалилась (EvFail/EvVerifyFail) или ушла ждать пользователя
+		// (EvAskUser) — во всех случаях раннер, который её вёл, для неё
+		// закончил работу. Единая точка вместо ~15 разрозненных call site'ов
+		// Trigger(EvFail)/Trigger(EvAskUser) по всему пакету: Trigger/
+		// triggerWithSeq — общий funnel для всех переходов FSM (см. комментарий
+		// выше), так что проверка здесь не пропустит ни один существующий или
+		// будущий call site. EvScheduleRetry (retrying) сюда намеренно не
+		// входит — значение должно пережить backoff.
+		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail || ev == bus.EvAskUser {
 			o.clearRunnerKind(stageID)
 		}
 	}

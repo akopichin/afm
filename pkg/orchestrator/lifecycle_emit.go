@@ -29,6 +29,10 @@ var fsmLifecycleEvents = map[bus.FSMEvent]lifecyclehooks.EventType{
 	bus.EvContinue:         lifecyclehooks.EventStageResumed,
 	bus.EvComplete:         lifecyclehooks.EventStageFinished,
 	bus.EvFail:             lifecyclehooks.EventStageFailed,
+	// EvVerifyFail — атомарный verify-driven аналог EvFail (H1, 6-е
+	// код-ревью, см. bus/fsm.go): тот же публичный исход stage_failed для
+	// потребителей lifecycle-хуков, просто с другим FSM-событием внутри.
+	bus.EvVerifyFail: lifecyclehooks.EventStageFailed,
 }
 
 // emitLifecycle — точка отправки; nil-safe (хуки не настроены — обычный путь

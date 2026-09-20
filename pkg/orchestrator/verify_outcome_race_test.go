@@ -13,15 +13,27 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// G2 (5-е код-ревью): a concurrent Pause()/Revise() landing AFTER the
-// outcome-independent F1 status check (retry.go ~:150) but BEFORE the
-// verify-driven EvFail (~:216) or the needs_changes incomplete-retry
-// transition must NOT be overridden by a stale verify outcome — EvFail's
-// rule.From == nil accepts any non-terminal status (including paused/
-// revising), so without a local guard the stale transition would silently
-// win. o.verifyOutcomeGuardHook (test-only seam) fires exactly at the point
-// verifyOutcomeStillOwned re-checks the status, letting these tests inject
-// the race deterministically instead of relying on real goroutine timing.
+// G2/H1 (5-е и 6-е код-ревью): a concurrent Pause()/Revise() landing AFTER
+// the outcome-independent F1 status check (retry.go ~:262) but BEFORE the
+// verify-driven failure commits must NOT be overridden by a stale verify
+// outcome.
+//
+// H1 (6-е ревью) found that G2's original fix (a plain re-read of the status
+// right before Trigger(EvFail)) was itself a TOCTOU: EvFail's rule.From ==
+// nil accepts ANY non-terminal status, so a race landing strictly BETWEEN
+// that re-read and the Trigger call would still silently clobber a
+// concurrent pause/revise — the read only ever caught races that happened
+// no later than the read itself. The fix: the final verify-driven failure
+// now goes through commitVerifyFailure (retry.go), which uses a NEW event,
+// EvVerifyFail (bus/fsm.go), whose From-set excludes paused/revising — the
+// FSM's own store CAS atomically drops the transition (ok=false) if the
+// stage moved, regardless of exactly when the concurrent transition landed.
+//
+// o.verifyOutcomeGuardHook (test-only seam) now fires INSIDE
+// commitVerifyFailure, AFTER its cheap fast-path read (verifyOutcomeStillOwned)
+// but BEFORE the atomic Trigger(EvVerifyFail) call — i.e. exactly in the
+// TOCTOU gap H1 identifies, so these tests exercise the real atomic
+// guarantee rather than the (necessarily racy) read-based fast-path.
 
 // TestRunWithRetry_VerifyExecError_LateRevise_DoesNotOverrideRevising —
 // "a late verify exec-error" scenario from the finding: reaches the FINAL

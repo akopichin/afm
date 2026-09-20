@@ -346,3 +346,50 @@ func TestFSM_Apply_Continue_IllegalFromRunning(t *testing.T) {
 		t.Error("continue from running (not paused): ok = true, want false")
 	}
 }
+
+// TestFSM_Apply_VerifyFail_LegalFromActiveStatuses — H1 (6-е код-ревью):
+// EvVerifyFail mirrors EvComplete's From-set (the same "active execution"
+// statuses a verify outcome can legitimately land from), and DOES transition
+// to failed from all of them — unlike EvFail's From:nil, this is a real
+// restriction, not a no-op allow-all.
+func TestFSM_Apply_VerifyFail_LegalFromActiveStatuses(t *testing.T) {
+	for _, from := range []state.StageStatus{
+		state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput,
+	} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		_, to, _, ok, err := fsm.Apply("a", EvVerifyFail, GuardCtx{}, "verify diagnosis")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if !ok || to != state.StatusFailed {
+			t.Errorf("%s->failed: got (%v, %v), want (failed, true)", from, to, ok)
+		}
+	}
+}
+
+// TestFSM_Apply_VerifyFail_IllegalFromPausedOrRevising — the crux of H1: a
+// stale verify-driven failure must NOT be able to override a stage a
+// concurrent Pause()/Revise() already durably moved to paused/revising.
+// Unlike EvFail (rule.From == nil, accepts any non-terminal status), this
+// must be rejected by the FSM's own CAS — no read-then-act guard needed.
+func TestFSM_Apply_VerifyFail_IllegalFromPausedOrRevising(t *testing.T) {
+	for _, from := range []state.StageStatus{state.StatusPaused, state.StatusRevising} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		_, to, _, ok, err := fsm.Apply("a", EvVerifyFail, GuardCtx{}, "stale verify diagnosis")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if ok {
+			t.Errorf("verify_fail from %s: ok = true, want false (a concurrent pause/revise must win)", from)
+		}
+		if to != from {
+			t.Errorf("verify_fail from %s: to = %v, want unchanged %v (rejected transition must not report a new status)", from, to, from)
+		}
+	}
+}
