@@ -473,3 +473,37 @@ retry/completion, FSM, recovery и review-pause. Не добавляй AI-verify
 | [S32] | `pkg/flow/flow.go` | Stage и AgentType как неизменяемый внешний контракт |
 
 При расхождении описаний в `AGENTS.md`, комментариев и выполняемого кода не менять код по тексту автоматически. Зафиксировать расхождение и сначала определить фактический контракт через реализацию и тест. Документация — помощь для навигации, не замена проверке поведения.
+
+---
+
+## 11. Реконсиляция с пост-verify кодом (addendum, 2026-09-20)
+
+**Этот план написан ДО фичи AI-verify, которая уже вмержена в `main` и трогает ровно те же файлы, что Фаза 1.** Ветка исполнения — `phazzer` (от `main`, baseline SHA `47114f9`). Ниже — что изменилось и как это влияет на задачи; сами задачи 1.1–1.11 остаются в силе, но с поправками ниже. Карта снята свежим обзором кода на этом SHA.
+
+### 11.1. Что AI-verify УЖЕ извлёк в общие хелперы — НЕ переизвлекать (правит Задачу 1.5/1.7)
+
+- `(*Orchestrator).preNoteBlock(stageDir) string` (`agents.go:47`) — блок «## User note (added before this stage started)». Уже общий, вызывается before-loop в fresh-runner'ах 1/3/4/5.
+- `(*Orchestrator).verifyFeedbackBlock(stageDir) string` (`verify.go:931`) — блок «## Замечания автоматической проверки», читается **внутри closure (per-attempt)** во всех 6 impl/review/auto runner'ах. НЕ трогать момент чтения (иначе коррекция после verify-rejection не увидит свежий feedback).
+- `(*Orchestrator).gateWithVerify(ctx, s, phase, baseCheck) func() error` (`verify.go:954`) — обёртка completionCheck для 6 execution-runner'ов (planning НЕ оборачивается). Общий runWithRetry получает УЖЕ обёрнутый completionCheck. Рефактор обязан сохранить это оборачивание: тонкий адаптер каждой фазы строит свой `gateWithVerify(...)`-completionCheck и передаёт в неизменный `runWithRetry`.
+- Прочие уже общие: `verifyStageNote(v) string` (`agents.go:27`), `rePromptMissingSections` (`agents.go:162`), `memoryBlockForStage`, `runnerFor`, `setRunnerKind`, `spawnKind`, `spawnAgentLeased`.
+
+### 11.2. Остаточные цели извлечения (Задача 1.5/1.7 — это и делаем)
+
+- **`feedbackNote`** («## User note (added while this stage was running)») сейчас инлайнится в каждом `*WithFeedback`-runner'е (читается before-loop). Это симметричный близнец `preNoteBlock` — извлечь в общий хелпер (напр. `feedbackNoteBlock(stageDir) string`), как preNoteBlock.
+- **Inline-review блок дублируется ДОСЛОВНО** между `runImplementationAgent` (**agents.go:308-329**) и `runImplementationWithFeedback` (**agents.go:516-536**): тот же `if s.HasAgent(flow.AgentReview)`, тот же `prompts.Build(PhaseAgent: prompts.AgentReview, RetryContext: verifyNote)`, тот же `rr := o.runnerFor(s, phaseReview)` + `rr.RunAgent(ctx, phaseReview, ...)`. Извлечь в общий helper запуска embedded-review, **вызываемый последовательно внутри implementation-попытки** (Задача 1.7 — без нового spawnKind/семафора/transition). Совпадение имени лога review внутри impl с standalone-review логом сохранить как есть.
+- **Порядок конкатенации RetryContext и момент чтения** (снято по коду, СОХРАНИТЬ побайтово):
+  - runImplementationAgent: `retryContext + stageDirNote + preNote + verifyNote` (preNote before-loop; stageDirNote/verifyNote внутри closure).
+  - runImplementationWithFeedback: `retryContext + stageDirNote + feedbackNote + verifyNote`.
+  - runReviewAgent: `retryContext + preNote + verifyNote`; runReviewWithFeedback: `retryContext + feedbackNote + verifyNote`.
+  - runAutonomousAgent: `retryContext + summaryNote + preNote + verifyNote`; runAutonomousWithFeedback: `retryContext + summaryNote + feedbackNote + verifyNote`.
+  - Универсальная дельта fresh↔feedback: (i) `preNote`↔`feedbackNote`; (ii) feedback impl/review/auto шлёт `EvStartRun`, planning-feedback — `EvStartPlanning`; (iii) fresh лог `PhaseLogFile(...)`, feedback — хардкод `*-feedback.log`/`planning-revision.log`; (iv) fresh impl/review/auto имеет `MkdirAll`/`autonomous.flag`/`clearStaleAutonomousFlag`, feedback — нет. Planning (1↔2) структурно иной: feedback читает `feedback.md`+`LatestPlanVersion` и кладёт в поля `Feedback`/`PreviousPlan`, НЕ в RetryContext — не сливать (уже отмечено в Задаче 1.2/1.6).
+
+### 11.3. Задача 1.9 усилена — `retry.go` теперь ВЛАДЕЕТ и verify-логикой (НЕ рефакторить его)
+
+`runWithRetry` (`retry.go:148`) после verify дополнительно содержит: verify-outcome reconciliation, `commitVerifyFailure` (`retry.go:74`, атомарный `EvVerifyFail` — `bus/fsm.go`), обработку `revising`/`paused` для всех verify-исходов, и получает `gateWithVerify`-обёрнутый completionCheck. **Фаза 1 схлопывает ТОЛЬКО тела 8 entrypoint'ов в `agents.go`; `retry.go`, `gateWithVerify`, `RunVerification`, `commitVerifyFailure`, `EvVerifyFail`, `runnerForVerify`, `spawnAgentLeased`, `concurrency.Lease` НЕ трогаются.** completionCheck (включая его gateWithVerify-обёртку) конструируется тонким адаптером и передаётся в неизменный runWithRetry.
+
+### 11.4. Baseline и §1.G
+
+- Задача 1.1 baseline: ветка `phazzer` @ `47114f9` (не старый SHA плана). Пере-снять инвентаризацию `rg` на этом SHA (номера строк в §1.G/этом addendum — по нему).
+- §1.G карта 8 entrypoint'ов верна по составу; строки сместились (см. свежие: runPlanningAgent 92, runPlanningWithFeedback 185, runImplementationAgent 247, runReviewAgent 337, runAutonomousAgent 399, runImplementationWithFeedback 447, runReviewWithFeedback 544, runAutonomousWithFeedback 591).
+- Дополнительный regression-набор для §1.F (verify-контракты, которые рефактор не должен сломать): существующие verify/gate/pause-revise тесты в `pkg/orchestrator` (`*verify*_test.go`, `pause_continue_test.go`) — прогонять в целевом gate наравне с retry/recovery.
