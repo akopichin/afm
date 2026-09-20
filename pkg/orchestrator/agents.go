@@ -103,6 +103,31 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 // секций для валидации плана теперь живёт в stagefiles, см. RequiredPlanSections).
 const sectionAssumptions = "Assumptions"
 
+// collectDependencyPlansNoticing — тонкая обёртка над
+// stagefiles.CollectDependencyPlans: колбэк дублирует предупреждение о
+// недостающей зависимости и live (o.ui.Publish), и durable
+// (stagefiles.AppendNotice). Этот колбэк был дословно продублирован в
+// каждом attempt-теле (planning/implementation/autonomous/review) —
+// вынесен сюда одной точкой (Задача 1.6/1.4, финальный дедуп).
+func (o *Orchestrator) collectDependencyPlansNoticing(s flow.Stage) string {
+	return stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
+		o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+	})
+}
+
+// collectArtifactsNoticing — тонкая обёртка над stagefiles.CollectArtifacts:
+// ошибка сбора не фатальна, только WARN в лог afm (не стадии). label —
+// текст, идентифицирующий вызывающую попытку в сообщении (сохраняет
+// дословный текст исходных WARN-сообщений каждого раннера).
+func (o *Orchestrator) collectArtifactsNoticing(s flow.Stage, label string) string {
+	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+	if artErr != nil {
+		log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, label, artErr)
+	}
+	return artCtx
+}
+
 func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindPlanning)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -122,55 +147,16 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	// the stage to "planning" (e.g. startPlanningForUnblocked).
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
 
+	// preNote читается ДО retry-цикла — это часть исходного задания на первом
+	// старте стадии, а не поправка "по месту" на каждой попытке (в отличие от
+	// feedback.md в runPlanningWithFeedback, см. runPlanningAttempt).
 	preNote := o.preNoteBlock(stageDir)
 
-	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
-		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+	o.runPlanningAttempt(ctx, s, stageDir, flow.PhaseLogFile(flow.PhasePlanning), "planning",
+		func(retryContext string, in *prompts.Inputs) error {
+			in.RetryContext = retryContext + preNote
+			return nil
 		})
-		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s planning: %v", s.ID, artErr)
-		}
-		prompt := prompts.Build(prompts.Inputs{
-			Template:         o.opts.Prompts.Planning,
-			Stage:            s,
-			PhaseAgent:       prompts.AgentPlanning,
-			DependencyPlans:  depPlans,
-			Artifacts:        artCtx,
-			StageDir:         stageDir,
-			Interactive:      s.Interactive,
-			OutputContractMD: planningContract,
-			RetryContext:     retryContext + preNote,
-			GlobalPrompt:     o.opts.GlobalPrompt,
-			MemoryBlock:      o.memoryBlockForStage(s),
-		})
-		outFile := filepath.Join(stageDir, "plan.md")
-		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhasePlanning))
-
-		r := o.runnerFor(s, phasePlanning)
-		if err := r.RunPlanning(ctx, s.Name, prompt, outFile, logFile); err != nil {
-			return err
-		}
-
-		planMD, _ := os.ReadFile(outFile)
-		issues := prompts.ValidatePlan(string(planMD), stagefiles.RequiredPlanSections)
-		if !issues.IsClean() {
-			if stagefiles.AdoptWrittenPlan(logFile, outFile) {
-				return nil
-			}
-			if s.Interactive {
-				return nil
-			}
-			if err := o.rePromptMissingSections(ctx, s, string(planMD), issues.MissingSections, outFile); err != nil {
-				return err
-			}
-		}
-		return nil
-	}, func() error {
-		return stagefiles.CheckPlanCompletionFor(stageDir, s.Interactive)
-	}, func() { o.spawnKind(ctx, s, kindPlanning, o.runPlanningWithFeedback) })
 }
 
 func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage, prevPlan string, missing []string, outFile string) error {
@@ -196,49 +182,52 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 	return nil
 }
 
-func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
-	o.setRunnerKind(s.ID, kindPlanning)
-	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-
-	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
-
+// runPlanningAttempt — общее тело попытки планирования: собирает контекст
+// зависимостей и артефактов, делегирует fillInputs заполнение
+// специфичных для fresh/feedback полей prompts.Inputs (RetryContext/
+// Feedback/PreviousPlan), строит промпт, запускает RunPlanning и
+// валидирует результат (ValidatePlan → AdoptWrittenPlan / interactive
+// short-circuit / rePromptMissingSections) — байт-в-байт хвост, общий для
+// runPlanningAgent (fresh) и runPlanningWithFeedback (feedback).
+//
+// fillInputs вызывается на КАЖДОЙ попытке ДО сбора depPlans/artCtx — это
+// сохраняет момент чтения feedback.md/LatestPlanVersion "по месту" ровно
+// там, где он был в исходном runPlanningWithFeedback (до сбора контекста:
+// ошибка LatestPlanVersion возвращалась раньше, чем depPlans/artCtx вообще
+// собирались — CollectDependencyPlans иначе успел бы опубликовать лишние
+// EventContextWarning перед бесполезной попыткой). preNote для fresh уже
+// прочитан ДО retry-цикла (см. runPlanningAgent) и просто дописывается в
+// RetryContext внутри fillInputs — сам fillInputs побочных эффектов не
+// имеет и порядка не меняет.
+func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, stageDir, logFileName, artifactsWarnLabel string, fillInputs func(retryContext string, in *prompts.Inputs) error) {
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
-		feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
-		_, prevPlan, err := state.LatestPlanVersion(stageDir)
-		if err != nil {
-			return fmt.Errorf("read previous plan: %w", err)
-		}
-
-		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-		})
-		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s revise: %v", s.ID, artErr)
-		}
-		prompt := prompts.Build(prompts.Inputs{
+		in := prompts.Inputs{
 			Template:         o.opts.Prompts.Planning,
 			Stage:            s,
 			PhaseAgent:       prompts.AgentPlanning,
-			DependencyPlans:  depPlans,
-			Artifacts:        artCtx,
-			PreviousPlan:     prevPlan,
-			Feedback:         string(feedbackData),
 			StageDir:         stageDir,
 			Interactive:      s.Interactive,
 			OutputContractMD: planningContract,
 			RetryContext:     retryContext,
 			GlobalPrompt:     o.opts.GlobalPrompt,
 			MemoryBlock:      o.memoryBlockForStage(s),
-		})
+		}
+		if err := fillInputs(retryContext, &in); err != nil {
+			return err
+		}
+
+		in.DependencyPlans = o.collectDependencyPlansNoticing(s)
+		in.Artifacts = o.collectArtifactsNoticing(s, artifactsWarnLabel)
+
+		prompt := prompts.Build(in)
 		outFile := filepath.Join(stageDir, "plan.md")
-		logFile := filepath.Join(stageDir, "planning-revision.log")
+		logFile := filepath.Join(stageDir, logFileName)
 
 		r := o.runnerFor(s, phasePlanning)
 		if err := r.RunPlanning(ctx, s.Name, prompt, outFile, logFile); err != nil {
 			return err
 		}
+
 		planMD, _ := os.ReadFile(outFile)
 		issues := prompts.ValidatePlan(string(planMD), stagefiles.RequiredPlanSections)
 		if !issues.IsClean() {
@@ -256,6 +245,29 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 	}, func() error {
 		return stagefiles.CheckPlanCompletionFor(stageDir, s.Interactive)
 	}, func() { o.spawnKind(ctx, s, kindPlanning, o.runPlanningWithFeedback) })
+}
+
+func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
+	o.setRunnerKind(s.ID, kindPlanning)
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+
+	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
+
+	o.runPlanningAttempt(ctx, s, stageDir, "planning-revision.log", "revise",
+		func(_ string, in *prompts.Inputs) error {
+			// feedback.md и LatestPlanVersion читаются ЗАНОВО на КАЖДОЙ
+			// попытке (а не один раз до цикла, как preNote у fresh) — так
+			// было в исходном runPlanningWithFeedback, момент чтения
+			// сохранён дословно.
+			feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
+			_, prevPlan, err := state.LatestPlanVersion(stageDir)
+			if err != nil {
+				return fmt.Errorf("read previous plan: %w", err)
+			}
+			in.PreviousPlan = prevPlan
+			in.Feedback = string(feedbackData)
+			return nil
+		})
 }
 
 func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage) {
@@ -310,14 +322,8 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			return err
 		}
 
-		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-		})
-		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, artifactsWarnLabel, artErr)
-		}
+		depPlans := o.collectDependencyPlansNoticing(s)
+		artCtx := o.collectArtifactsNoticing(s, artifactsWarnLabel)
 
 		// Format output artifact requirements
 		if len(s.Artifacts) > 0 {
@@ -381,14 +387,8 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 	}
 	preNote := o.preNoteBlock(stageDir)
 
-	depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-		o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-	})
-	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-	if artErr != nil {
-		log.Printf("WARN: collect artifacts for %s review: %v", s.ID, artErr)
-	}
+	depPlans := o.collectDependencyPlansNoticing(s)
+	artCtx := o.collectArtifactsNoticing(s, "review")
 
 	o.runReviewAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseReview), depPlans, artCtx)
 }
@@ -472,14 +472,8 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 // runAutonomousWithFeedback).
 func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
 	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
-		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, artifactsWarnLabel, artErr)
-		}
-		depCtx := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-		})
+		artCtx := o.collectArtifactsNoticing(s, artifactsWarnLabel)
+		depCtx := o.collectDependencyPlansNoticing(s)
 
 		verifyNote := o.verifyFeedbackBlock(stageDir)
 		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
@@ -530,14 +524,8 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
-	depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-		o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-	})
-	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-	if artErr != nil {
-		log.Printf("WARN: collect artifacts for %s review (feedback restart): %v", s.ID, artErr)
-	}
+	depPlans := o.collectDependencyPlansNoticing(s)
+	artCtx := o.collectArtifactsNoticing(s, "review (feedback restart)")
 
 	o.runReviewAttempt(ctx, s, stageDir, feedbackNote, "review-feedback.log", depPlans, artCtx)
 }
