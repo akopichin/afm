@@ -193,7 +193,12 @@ func TestRunVerifyAgent_StripsCrossAgentTransportSecrets(t *testing.T) {
 	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
 	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
 	t.Setenv("AFM_SYSPROMPT_GLM51", "leaked-system-prompt")
-	t.Setenv("ANTHROPIC_API_KEY", "own-legit-key") // обычный env верификатора — не трогаем
+	// Обычный env верификатора, не относящийся ни к транспортным секретам,
+	// ни к Claude-авторизации автора (см. отдельный тест F4 ниже,
+	// TestRunVerifyAgent_StripsClaudeAuthorCredentials, — ANTHROPIC_API_KEY и
+	// его соседи теперь тоже стрипаются в VerifyMode, так что здесь для
+	// "обычного, не трогаемого" env нужна переменная вне обоих списков).
+	t.Setenv("MY_OWN_TOOL_VAR", "own-legit-value")
 
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "verify.log")
@@ -228,8 +233,155 @@ func TestRunVerifyAgent_StripsCrossAgentTransportSecrets(t *testing.T) {
 			t.Errorf("verifier env must not contain %q, got:\n%s", leaked, got)
 		}
 	}
-	if !envContainsLine(got, "ANTHROPIC_API_KEY=own-legit-key") {
+	if !envContainsLine(got, "MY_OWN_TOOL_VAR=own-legit-value") {
 		t.Errorf("verifier's own legitimate env must still be inherited: %q", got)
+	}
+}
+
+// TestRunVerifyAgent_StripsClaudeAuthorCredentials — F4 (4-е код-ревью):
+// verify-mode env-санитизация раньше вырезала только AFM_SECRET_*/
+// AFM_HOOK_SECRET_*/AFM_SYSPROMPT_*, но оставляла Claude-авторизацию
+// АВТОРА, которую Docker forwards внутрь контейнера (CLAUDE_CODE_OAUTH_TOKEN/
+// ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL, см.
+// config.ClaudeAuthEnvVars + dockerForwardEnvVars в pkg/docker/launcher.go).
+// Read-only codex-верификатор в них не нуждается — своей аутентификации у
+// него нет (для codex — через смонтированный ~/.codex; для autoShim-recipe —
+// собственный AFM_SECRET_<CMD>, см. следующий тест) — и не должен иметь
+// возможность отразить чужие credentials автора в своём персистируемом
+// JSON-ответе.
+func TestRunVerifyAgent_StripsClaudeAuthorCredentials(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "leaked-oauth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "leaked-api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "leaked-auth-token")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://leaked.example.com")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "codex", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, leaked := range []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=", "ANTHROPIC_API_KEY=", "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_BASE_URL=",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("verifier env must not contain Claude author credential %q, got:\n%s", leaked, got)
+		}
+	}
+}
+
+// TestRunVerifyAgent_KeepsOwnSecretButStripsClaudeAuthorCredentials — F4:
+// собственный recipe-секрет верификатора (D2b) должен выжить наравне со
+// стрипом Claude-авторизации автора — эти два фильтра независимы и не должны
+// друг другу мешать.
+func TestRunVerifyAgent_KeepsOwnSecretButStripsClaudeAuthorCredentials(t *testing.T) {
+	t.Setenv("AFM_SECRET_MYCODEX", "own-verifier-token")
+	t.Setenv("ANTHROPIC_API_KEY", "leaked-api-key")
+
+	wrapDir := t.TempDir()
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(wrapDir, "mycodex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     "mycodex",
+		WrapperDir:  wrapDir,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "mycodex", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	if !envContainsLine(got, "AFM_SECRET_MYCODEX=own-verifier-token") {
+		t.Errorf("verifier's own recipe secret must survive, got:\n%s", got)
+	}
+	if strings.Contains(got, "ANTHROPIC_API_KEY=") {
+		t.Errorf("verifier env must not contain the Claude author credential ANTHROPIC_API_KEY, got:\n%s", got)
+	}
+}
+
+// TestRunAgent_KeepsClaudeAuthorCredentials — зеркало предыдущих тестов:
+// обычный (не-verify) запуск через RunAgent НЕ затрагивается F4-фильтром —
+// автор по-прежнему получает свои собственные credentials без изменений.
+func TestRunAgent_KeepsClaudeAuthorCredentials(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "own-oauth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "own-api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "own-auth-token")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://own.example.com")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "impl.log")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, kept := range []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=own-oauth-token",
+		"ANTHROPIC_API_KEY=own-api-key",
+		"ANTHROPIC_AUTH_TOKEN=own-auth-token",
+		"ANTHROPIC_BASE_URL=https://own.example.com",
+	} {
+		if !envContainsLine(got, kept) {
+			t.Errorf("non-verify RunAgent must keep inheriting %q unchanged, got:\n%s", kept, got)
+		}
 	}
 }
 

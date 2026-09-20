@@ -82,6 +82,30 @@ func isVerifierOwnSecret(kv, verifyCommand string) bool {
 	return strings.HasPrefix(kv, afmSecretEnvPrefix+afmSecretEnvName(verifyCommand)+"=")
 }
 
+// isClaudeAuthorCredential сообщает, что kv — одна из переменных окружения,
+// которыми Docker forwards Claude-авторизацию АВТОРА внутрь контейнера
+// (F4 код-ревью): config.ClaudeAuthEnvVars (CLAUDE_CODE_OAUTH_TOKEN/
+// ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN) плюс ANTHROPIC_BASE_URL — тот же
+// список, что pkg/docker/launcher.go's dockerForwardEnvVars форвардит в
+// контейнер. Read-only codex-верификатор в них не нуждается: своя
+// авторизация — либо смонтированный ~/.codex (type: codex), либо собственный
+// AFM_SECRET_<CMD> recipe-секрет (см. isVerifierOwnSecret выше, D2b) — и не
+// должен иметь возможность отразить ЧУЖИЕ (авторские) credentials в своём
+// персистируемом JSON-ответе. Сравнение по точному имени переменной
+// (name+"="), а не по префиксу — те же четыре имени целиком, без
+// вариативности вроде AFM_SECRET_*.
+func isClaudeAuthorCredential(kv string) bool {
+	if strings.HasPrefix(kv, "ANTHROPIC_BASE_URL=") {
+		return true
+	}
+	for _, name := range config.ClaudeAuthEnvVars {
+		if strings.HasPrefix(kv, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 // Config configures the executor.
 type Config struct {
 	Command        string
@@ -798,6 +822,15 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			// транспортные секреты ЧУЖИХ агентов/хуков (см.
 			// IsCrossAgentTransportSecret) — он мог бы отразить их в своём
 			// JSON-ответе, который afm персистит как raw-result/report.
+			// Обычный (не-verify) запуск это условие не задевает вовсе.
+		case e.cfg.VerifyMode && isClaudeAuthorCredential(kv):
+			// F4 (4-е код-ревью): Docker forwards Claude-авторизацию АВТОРА
+			// (CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/
+			// ANTHROPIC_BASE_URL) в окружение afm-процесса — эти четыре имени
+			// не покрывались ни isVerifierOwnSecret (другой namespace,
+			// AFM_SECRET_<CMD>), ни IsCrossAgentTransportSecret выше (другие
+			// префиксы). Read-only верификатору чужая авторизация автора не
+			// нужна и не должна попасть в его персистируемый JSON-ответ.
 			// Обычный (не-verify) запуск это условие не задевает вовсе.
 		default:
 			filtered = append(filtered, kv)
