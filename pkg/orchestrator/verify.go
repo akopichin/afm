@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/akopichin/afm/pkg/executor"
@@ -268,10 +270,16 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			continue
 		}
 
-		// Shell-шаг: отменяемый процесс (honor ctx), CWD — legacy "." (тот же
-		// literal, что CheckCompletion передавал в RunVerify до V4a.1 —
-		// см. CWD note брифа: не "чинить" контракт здесь).
-		out, runErr := runVerifyShellCommand(ctx, ".", st.Run)
+		// Shell-шаг: отменяемый процесс (honor ctx) — CWD legacy "." (тот же
+		// literal, что CheckCompletion передавал в RunVerify до V4a.1 — см.
+		// CWD note брифа: не "чинить" контракт здесь). C4 код-ревью: команда
+		// исполняется под ТЕМ ЖЕ pause-aware ctx, что и agent-шаг (см.
+		// pauseAwareVerifyCtx) — иначе Pause()/Revise() не могли бы прервать
+		// зависший shell-verify, а только полную отмену рана.
+		shellCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
+		out, runErr := runVerifyShellCommand(shellCtx, ".", st.Run)
+		interruptedByPause := stop()
+
 		stepDir := stagefiles.StepDir(stageDir, verID, idx)
 		if mkErr := os.MkdirAll(stepDir, 0755); mkErr != nil {
 			manifestSteps[i].Outcome = verifyOutcomeError
@@ -284,6 +292,37 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			manifestSteps[i].Outcome = verifyOutcomeError
 			_ = persistManifest()
 			reason := "verify storage failure: " + werr.Error()
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+			return &VerifyExecError{Reason: reason, Step: idx}
+		}
+		if interruptedByPause {
+			// Сигнал Pause()/Revise() пришёл во время исполнения shell-шага —
+			// процесс уже убит (killProcessGroup, см. runVerifyShellCommand);
+			// ненулевой exit в этом случае — следствие прерывания, а НЕ
+			// needs-changes-эквивалент, и не должен пройти через
+			// persistVerifyRejection (см. агентскую ветку выше — тот же
+			// принцип: прерывание извне никогда не превращается в отказ
+			// автора).
+			manifestSteps[i].Outcome = execErrorKindInterrupted
+			_ = persistManifest()
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
+			return executor.ErrUserInterrupted
+		}
+		if runErr != nil && ctx.Err() != nil {
+			// ВАЖНО: проверяем ИСХОДНЫЙ (родительский) ctx, а НЕ shellCtx —
+			// stop() САМ безусловно отменяет производный shellCtx как часть
+			// своей очистки (см. pauseAwareVerifyCtx), так что shellCtx.Err()
+			// здесь был бы non-nil ВСЕГДА, когда для стадии зарегистрирован
+			// interrupt-канал, независимо от того, было ли реальное
+			// прерывание — ложно превращая обычный отказ shell-команды в
+			// exec-ошибку (найдено интеграционным тестом free-retry). ctx —
+			// родительский (run-scoped) ctx: отменён здесь — значит, это
+			// отмена ВСЕГО рана (сигнал паузы ЭТОЙ стадии уже обработан
+			// веткой interruptedByPause выше), и ненулевой exit — следствие
+			// убитого процесса, а не needs-changes-эквивалент.
+			manifestSteps[i].Outcome = verifyOutcomeError
+			_ = persistManifest()
+			reason := "verify execution failed: " + ctx.Err().Error()
 			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
 			return &VerifyExecError{Reason: reason, Step: idx}
 		}
@@ -562,15 +601,49 @@ func shellRejectionResult(command, tail string) verify.ModelResult {
 
 // runVerifyShellCommand запускает shell-verify команду отменяемо (honor
 // ctx) — в отличие от legacy stagefiles.RunVerify (exec.Command без ctx),
-// движок обязан уметь прервать зависшую команду по отмене контекста рана.
-// НЕ переиспользует runScriptWithRetry (hooks.go) — у того своя, независимая
-// retry-политика, которая не должна применяться здесь (ОДИН проход, без
-// внутреннего цикла коррекции).
+// движок обязан уметь прервать зависшую команду по отмене контекста рана
+// (полная отмена, pause-aware сигнал стадии — см. вызывающий код в
+// RunVerification — или таймаут шага). НЕ переиспользует runScriptWithRetry
+// (hooks.go) — у того своя, независимая retry-политика, которая не должна
+// применяться здесь (ОДИН проход, без внутреннего цикла коррекции).
+//
+// C4 код-ревью: НАРОЧНО не exec.CommandContext+cmd.Cancel (как
+// pkg/lifecyclehooks) — тот способ не помогает именно в целевом сценарии
+// "command порождает неexec'нутого потомка (`sleep N &`) и САМ завершается
+// быстро": Go's ctx-watcher вызывает Cancel только если ctx истёк ДО того,
+// как os/exec посчитал прямой процесс завершённым (Process.Wait()) — если
+// "sh" уже вышел раньше дедлайна, Cancel никогда не вызывается, а
+// CombinedOutput() всё равно висит на внутреннем io-копировании из
+// stdout/stderr-пайпа, который держит открытым осиротевший потомок
+// (проверено экспериментально). Поэтому здесь — тот же ручной паттерн, что
+// pkg/executor.run(): Start + Wait в отдельной горутине + явный select на
+// ctx.Done(), с БЕЗУСЛОВНЫМ killProcessGroup по отрицательному PID —
+// работает независимо от того, успел ли прямой процесс уже завершиться:
+// группа (pgid) переживает лидера, пока жив хоть один её член.
 func runVerifyShellCommand(ctx context.Context, dir, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	setProcessGroup(cmd)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		return out.String(), err
+	case <-ctx.Done():
+		killProcessGroup(cmd, syscall.SIGKILL)
+		<-done // дождаться закрытия io-пайпов после килла всей группы
+		return out.String(), ctx.Err()
+	}
 }
 
 // previousVerifyReport читает report.md прохода, чей feedback ещё активен
