@@ -1,7 +1,8 @@
-import { render, screen, fireEvent, within, act } from '@testing-library/react'
+import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react'
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
 import { FeedWorkspace } from './FeedWorkspace'
+import * as verifyReportClient from '../../api/verify-report-client'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string): AfmEvent =>
   ({ type, payload, stageId, timestamp }) as AfmEvent
@@ -283,6 +284,63 @@ describe('FeedWorkspace', () => {
       const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
       expect(container.querySelector('img.feed-image')).toBeNull()
       expect(container.textContent).toContain('[AFM image: nope.png]')
+    })
+  })
+
+  describe('verify report link (V5b.1/V5b.3)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('renders a report link for a verify_result with a report, and shows the fetched markdown on click', async () => {
+      const spy = vi.spyOn(verifyReportClient, 'getVerifyReport').mockResolvedValue('# Отчёт\n\nВердикт: pass')
+      const events = [
+        ev(
+          'verify_result',
+          { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'pass', reason: 'ok', report_path: '/runs/x/s1/verify/v-1/report.md' },
+          's1',
+          '2026-07-10T10:00:00Z',
+        ),
+      ]
+      render(<FeedWorkspace events={events} stageId={null} />)
+
+      const link = screen.getByRole('button', { name: /show full report/i })
+      fireEvent.click(link)
+
+      expect(spy).toHaveBeenCalledWith('s1', 'v-1')
+      await waitFor(() => expect(screen.getByText('Отчёт')).toBeInTheDocument())
+    })
+
+    it('does not render a report link when the event carries no report_path', () => {
+      const events = [
+        ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'inconclusive', reason: 'unclear' }, 's1', '2026-07-10T10:00:00Z'),
+      ]
+      render(<FeedWorkspace events={events} stageId={null} />)
+      expect(screen.queryByRole('button', { name: /show full report/i })).not.toBeInTheDocument()
+    })
+
+    it('toggling the link twice collapses the report and does not re-fetch', async () => {
+      const spy = vi.spyOn(verifyReportClient, 'getVerifyReport').mockResolvedValue('report body')
+      const events = [
+        ev(
+          'verify_result',
+          { verification_id: 'v-1', step: 1, kind: 'shell', command: './check.sh', verdict: 'needs_changes', reason: 'x', report_path: '/runs/x/s1/verify/v-1/report.md' },
+          's1',
+          '2026-07-10T10:00:00Z',
+        ),
+      ]
+      render(<FeedWorkspace events={events} stageId={null} />)
+
+      const link = screen.getByRole('button', { name: /show full report/i })
+      fireEvent.click(link)
+      await waitFor(() => expect(screen.getByText('report body')).toBeInTheDocument())
+
+      fireEvent.click(screen.getByRole('button', { name: /hide report/i }))
+      expect(screen.queryByText('report body')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /show full report/i }))
+      await waitFor(() => expect(screen.getByText('report body')).toBeInTheDocument())
+      expect(spy).toHaveBeenCalledTimes(1)
     })
   })
 

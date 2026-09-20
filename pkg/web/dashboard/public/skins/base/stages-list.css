@@ -270,6 +270,25 @@
   opacity: 0.75;
 }
 
+/* AI-verify компактный индикатор (V5b.2) — один нейтральный глиф, цвет несёт
+   data-phase (полный текст — в title). 'running' пульсирует как approval-badge
+   (проверка идёт прямо сейчас), остальные фазы статичны. */
+.verify-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.verify-badge[data-phase="running"] {
+  color: var(--c-awaiting);
+  animation: approvalPulse 1.8s ease-in-out infinite;
+}
+.verify-badge[data-phase="pass"] { color: var(--success); }
+.verify-badge[data-phase="needs_changes"],
+.verify-badge[data-phase="inconclusive"] { color: var(--attention); }
+.verify-badge[data-phase="error"] { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) {
+  .verify-badge[data-phase="running"] { animation: none; }
+}
+
 /* Per-stage cost figure (cost-ui increment2, task-10): a quiet mono span,
    never opacity — intensifies via COLOR on row hover/active so the digits
    stay fully legible even at rest (see --cost-rail token doc in tokens.css). */

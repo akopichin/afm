@@ -31,6 +31,14 @@ export type FeedItem = {
   // источник события знает его семантику. User-текст (заметки/ответы) остаётся plain,
   // чтобы введённые `*`/`#`/URL не меняли вид сообщения.
   markdown?: boolean
+  // reportVerificationId — id verify-прохода (verification_id), только у
+  // verify_result-строк, для которых событие несло непустой report_path
+  // (см. V5a EventVerifyResult). Присутствие report_path — лишь СИГНАЛ "у
+  // этого исхода есть report.md"; сам путь никогда не используется как URL —
+  // ссылка на полный отчёт строится из stageId (уже известен) + этот id и
+  // резолвится сервером (GET /api/stages/{id}/verify/{verificationId}/report,
+  // V5b.3) — клиентский filesystem-путь никогда не доверяется.
+  reportVerificationId?: string
 }
 
 // FeedGroup — последовательные items одной стороны и стадии, слитые визуально в
@@ -88,6 +96,12 @@ type Mapped = {
   id?: string
   navigable?: boolean
   markdown?: boolean
+  reportVerificationId?: string
+  // dedupeId — переопределяет стандартный ключ дедупликации (seq или
+  // timestamp|type|stageId) там, где событие несёт свой собственный
+  // стабильный идентификатор надёжнее timestamp (verify_started/
+  // verify_result — verification_id+step, см. mapVerifyEvent).
+  dedupeId?: string
 }
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
@@ -125,6 +139,13 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // предупреждение: FSM/стадию/ран оно не трогает (см. bus.go), поэтому
       // tone 'warning', а не 'danger', как у блокирующего hook_failed выше.
       return { actor: 'system', tone: 'warning', kind: 'status', text: `lifecycle hook ${str(obj.hook_id)} failed: ${str(obj.error)}`, mono: false }
+    case 'verify_started':
+    case 'verify_result':
+      // AI-verify наблюдательные события (V5a): никогда не FSM-переход, стадия
+      // продолжает жить своим статусом независимо от исхода verify — см.
+      // mapVerifyEvent для разбора тонов (pass/needs_changes/inconclusive/
+      // exec_error) и report_path → reportVerificationId.
+      return mapVerifyEvent(event.type, obj)
     case 'approved':
       return { actor: 'user', tone: 'success', kind: 'message', text: 'approved', mono: false }
     case 'revised':
@@ -182,6 +203,95 @@ function mapEvent(event: AfmEvent): Mapped | null {
   }
 }
 
+// mapVerifyEvent — презентация AI-verify наблюдательных событий (V5a). Ни
+// verify_started, ни verify_result НИКОГДА не меняют статус стадии — это
+// ортогональный проход поверх уже "заявившей о готовности" стадии, поэтому
+// тон здесь читается только как информационный сигнал, не как индикатор
+// состояния FSM. Различаем три исхода verify_result:
+//   - verdict: pass          → success (проверка прошла)
+//   - verdict: needs_changes/inconclusive → warning (РЕЙТИНГ кода — агенту
+//     есть что поправить/проверка не смогла решить; это ожидаемая, не
+//     аварийная часть цикла, как и retry_scheduled выше)
+//   - exec_error: *          → danger (ИСПОЛНЕНИЕ проверки не удалось —
+//     таймаут/прерывание/сбой транспорта — качественно другая проблема,
+//     чем "код не прошёл проверку", поэтому свой, более тревожный тон)
+// reportVerificationId выставляется только когда payload нёс непустой
+// report_path — это ЛИШЬ сигнал "у этого исхода есть report.md", сам путь
+// никогда не используется как URL (см. FeedItem.reportVerificationId).
+function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<string, unknown>): Mapped {
+  const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
+  const command = str(obj.command)
+  const verificationId = str(obj.verification_id)
+  const dedupeId = `verify:${verificationId}:${step}:${type}`
+
+  if (type === 'verify_started') {
+    return { actor: 'system', tone: 'neutral', kind: 'status', text: `Verify step ${step} · ${command}`, mono: false, dedupeId }
+  }
+
+  const reason = str(obj.reason)
+  const verdict = str(obj.verdict)
+  const execError = str(obj.exec_error)
+  const reportVerificationId = str(obj.report_path) !== '' ? verificationId : undefined
+
+  if (verdict === 'pass') {
+    return { actor: 'system', tone: 'success', kind: 'success', text: `Verify passed (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
+  }
+  if (verdict === 'needs_changes') {
+    return { actor: 'system', tone: 'warning', kind: 'status', text: `Verify needs changes (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
+  }
+  if (verdict === 'inconclusive') {
+    return { actor: 'system', tone: 'warning', kind: 'status', text: `Verify inconclusive (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+  }
+  if (execError === 'interrupted') {
+    return { actor: 'system', tone: 'danger', kind: 'status', text: `Verify interrupted (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+  }
+  // "exec_failure" или неизвестное значение — тоже ошибка ИСПОЛНЕНИЯ, не
+  // рейтинг кода: тот же тон, тот же текстовый регистр.
+  return { actor: 'system', tone: 'danger', kind: 'status', text: `Verify execution error (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+}
+
+export type VerifyIndicatorPhase = 'running' | 'pass' | 'needs_changes' | 'inconclusive' | 'error'
+
+// VerifyIndicator — компактное текущее состояние AI-verify одной стадии
+// (V5b.2, StagesList's stage card). Никакой отдельной подписки/DTO-поля:
+// вычисляется чисто из уже загруженной ленты событий (см.
+// computeVerifyIndicators), тем же способом, каким feed-view-model уже
+// презентует verify_started/verify_result построчно.
+export type VerifyIndicator = {
+  step: number
+  command: string
+  phase: VerifyIndicatorPhase
+}
+
+// computeVerifyIndicators сканирует events (в хронологическом порядке — как
+// их и отдаёт /api/events + live WS) и оставляет для каждой стадии ТОЛЬКО
+// последнее verify-событие: verify_started → 'running' (проверка идёт прямо
+// сейчас), verify_result → исход (pass/needs_changes/inconclusive/error).
+// Новый verify_started ПОСЛЕ уже завершённого прохода (повторная проверка
+// после correction-попытки) снова переводит индикатор в 'running' — это
+// осознанно: карточка стадии показывает ТЕКУЩЕЕ состояние, а не последний
+// когда-либо виденный исход.
+export function computeVerifyIndicators(events: AfmEvent[]): Record<string, VerifyIndicator> {
+  const out: Record<string, VerifyIndicator> = {}
+  for (const event of events) {
+    if (event.type !== 'verify_started' && event.type !== 'verify_result') continue
+    const obj = isRecord(event.payload) ? event.payload : {}
+    const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
+    const command = str(obj.command)
+
+    if (event.type === 'verify_started') {
+      out[event.stageId] = { step, command, phase: 'running' }
+      continue
+    }
+
+    const verdict = str(obj.verdict)
+    const phase: VerifyIndicatorPhase =
+      verdict === 'pass' || verdict === 'needs_changes' || verdict === 'inconclusive' ? verdict : 'error'
+    out[event.stageId] = { step, command, phase }
+  }
+  return out
+}
+
 // Статичная длительность строки: разница между этим событием и предыдущим в
 // ленте по порядку отображения (не per-стадийно). Нет предыдущего или
 // невалидный timestamp — em dash. (Перенесено 1:1 из EventFeedPanel.)
@@ -205,7 +315,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
     const m = mapEvent(event)
     if (m === null) return // ask_user/user_answered — не рендерим (см. mapEvent)
 
-    const base = event.seq !== undefined ? `seq:${event.seq}` : `${event.timestamp}|${event.type}|${event.stageId}`
+    const base = event.seq !== undefined ? `seq:${event.seq}` : (m.dedupeId ?? `${event.timestamp}|${event.type}|${event.stageId}`)
     const n = counts.get(base) ?? 0
     counts.set(base, n + 1)
     const key = n === 0 ? base : `${base}#${n}`
@@ -226,6 +336,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       id: m.id,
       navigable: m.navigable,
       markdown: m.markdown,
+      reportVerificationId: m.reportVerificationId,
     })
   })
 

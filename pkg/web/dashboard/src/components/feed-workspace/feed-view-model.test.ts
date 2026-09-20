@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AfmEvent } from '../../types'
-import { toFeedItems, groupFeedItems, formatEventGap } from './feed-view-model'
+import { toFeedItems, groupFeedItems, formatEventGap, computeVerifyIndicators } from './feed-view-model'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string, seq?: number): AfmEvent =>
   ({ type, payload, stageId, timestamp, ...(seq !== undefined ? { seq } : {}) }) as AfmEvent
@@ -88,6 +88,149 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
   it('prefers seq for the key when present', () => {
     const items = toFeedItems([ev('approved', {}, 's1', '2026-07-10T10:00:00Z', 42)])
     expect(items[0]?.key).toBe('seq:42')
+  })
+})
+
+describe('verify_started/verify_result — наблюдательные события AI-verify (V5b.1)', () => {
+  it('verify_started renders as a neutral system status row naming the step and command', () => {
+    const items = toFeedItems([
+      ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'neutral', kind: 'status' })
+    expect(items[0]?.text).toContain('2')
+    expect(items[0]?.text).toContain('codex')
+  })
+
+  it('verify_result verdict=pass renders as a success row and carries a report link when report_path is present', () => {
+    const items = toFeedItems([
+      ev(
+        'verify_result',
+        { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', verdict: 'pass', reason: 'всё хорошо', report_path: '/runs/x/s1/verify/v-1/report.md' },
+        's1',
+        '2026-07-10T10:00:01Z',
+      ),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', tone: 'success', kind: 'success' })
+    expect(items[0]?.text).toContain('codex')
+    expect(items[0]?.text).toContain('всё хорошо')
+    // Ссылка на полный отчёт строится из id стадии + verification_id, а не из
+    // абсолютного report_path (сервер отдаёт report.md только по этим id, см.
+    // V5b.3) — присутствие report_path в payload лишь СИГНАЛ "отчёт есть".
+    expect(items[0]?.reportVerificationId).toBe('v-1')
+  })
+
+  it('verify_result verdict=needs_changes (code rejection) renders warning, without a status change implication', () => {
+    const items = toFeedItems([
+      ev(
+        'verify_result',
+        { verification_id: 'v-1', step: 1, kind: 'shell', command: 'go test ./...', verdict: 'needs_changes', reason: 'тест упал', report_path: '/runs/x/s1/verify/v-1/report.md' },
+        's1',
+        '2026-07-10T10:00:02Z',
+      ),
+    ])
+    expect(items[0]).toMatchObject({ tone: 'warning' })
+    expect(items[0]?.kind).not.toBe('success')
+  })
+
+  it('verify_result verdict=inconclusive renders warning, distinct from a pass', () => {
+    const items = toFeedItems([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'inconclusive', reason: 'не удалось проверить' }, 's1', '2026-07-10T10:00:03Z'),
+    ])
+    expect(items[0]).toMatchObject({ tone: 'warning' })
+    expect(items[0]?.reportVerificationId).toBeUndefined() // inconclusive никогда не пишет report.md
+  })
+
+  it('verify_result exec_error renders a tone DISTINCT from a needs_changes rejection (execution error vs code rejection)', () => {
+    const rejection = toFeedItems([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'needs_changes', reason: 'x' }, 's1', '2026-07-10T10:00:00Z'),
+    ])[0]
+    const execError = toFeedItems([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', exec_error: 'exec_failure', reason: 'timeout talking to the model' }, 's1', '2026-07-10T10:00:01Z'),
+    ])[0]
+    expect(execError?.tone).not.toBe(rejection?.tone)
+    expect(execError?.tone).toBe('danger')
+    expect(execError?.reportVerificationId).toBeUndefined()
+  })
+
+  it('interrupted exec_error also renders as danger and mentions interruption', () => {
+    const items = toFeedItems([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'shell', command: './check.sh', exec_error: 'interrupted', reason: 'user interrupted' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items[0]).toMatchObject({ tone: 'danger' })
+  })
+
+  it('keys verify_started/verify_result by verification_id+step so a reload replay never duplicates a row', () => {
+    const started = ev('verify_started', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex' }, 's1', '2026-07-10T10:00:00Z')
+    const result = ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'pass', reason: 'ok' }, 's1', '2026-07-10T10:00:00Z')
+    // Одинаковый timestamp (реалистично при replay из notices.jsonl с грубой
+    // гранулярностью) не должен схлопнуть два РАЗНЫХ события в один ключ.
+    const items = toFeedItems([started, result])
+    expect(items).toHaveLength(2)
+    expect(new Set(items.map((i) => i.key)).size).toBe(2)
+
+    // Тот же список, прогнанный дважды (имитация повторного рендера той же
+    // истории после reload) — ключи стабильны и не плодят occurrence-суффиксы,
+    // если внутри одного toFeedItems-вызова verification_id+step не повторяется.
+    const again = toFeedItems([started, result])
+    expect(again.map((i) => i.key)).toEqual(items.map((i) => i.key))
+  })
+})
+
+describe('computeVerifyIndicators — компактный индикатор verify в карточке стадии (V5b.2)', () => {
+  it('a stage with no verify events gets no entry', () => {
+    const indicators = computeVerifyIndicators([ev('agent_action', { tool: 'a' }, 's1', '2026-07-10T10:00:00Z')])
+    expect(indicators.s1).toBeUndefined()
+  })
+
+  it('verify_started alone marks the stage as running (in progress)', () => {
+    const indicators = computeVerifyIndicators([
+      ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(indicators.s1).toEqual({ step: 2, command: 'codex', phase: 'running' })
+  })
+
+  it('a later verify_result replaces the running indicator with the outcome', () => {
+    const indicators = computeVerifyIndicators([
+      ev('verify_started', { verification_id: 'v-1', step: 1, kind: 'shell', command: './check.sh' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'shell', command: './check.sh', verdict: 'pass', reason: 'ok' }, 's1', '2026-07-10T10:00:01Z'),
+    ])
+    expect(indicators.s1).toEqual({ step: 1, command: './check.sh', phase: 'pass' })
+  })
+
+  it('classifies needs_changes/inconclusive/exec_error into distinct phases', () => {
+    const rejected = computeVerifyIndicators([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'needs_changes', reason: 'x' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(rejected.s1?.phase).toBe('needs_changes')
+
+    const inconclusive = computeVerifyIndicators([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'inconclusive', reason: 'x' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(inconclusive.s1?.phase).toBe('inconclusive')
+
+    const errored = computeVerifyIndicators([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', exec_error: 'exec_failure', reason: 'x' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(errored.s1?.phase).toBe('error')
+  })
+
+  it('a new verify_started for the same stage after a finished result goes back to running (a retried correction pass)', () => {
+    const indicators = computeVerifyIndicators([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'needs_changes', reason: 'x' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_started', { verification_id: 'v-2', step: 1, kind: 'agent', command: 'codex' }, 's1', '2026-07-10T10:05:00Z'),
+    ])
+    expect(indicators.s1).toEqual({ step: 1, command: 'codex', phase: 'running' })
+  })
+
+  it('tracks multiple stages independently', () => {
+    const indicators = computeVerifyIndicators([
+      ev('verify_started', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_result', { verification_id: 'v-2', step: 1, kind: 'shell', command: './check.sh', verdict: 'pass', reason: 'ok' }, 's2', '2026-07-10T10:00:00Z'),
+    ])
+    expect(indicators.s1?.phase).toBe('running')
+    expect(indicators.s2?.phase).toBe('pass')
   })
 })
 

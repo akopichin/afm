@@ -246,6 +246,39 @@
 
 .empty-hint.hidden { display: none; }
 
+/* --- Verify report link (V5b.1/V5b.3) ---
+   Раскрывающаяся ссылка "Show full report" под verify_result-строкой; сам
+   item остаётся flex-РЯДом (текст + gap), отчёт — отдельный блок ПОД ним,
+   поэтому оборачиваем оба в колоночный .feed-item-with-report (тот же
+   приём, что feed-item-segments у markdown-нарратива). */
+.feed-item-with-report { display: flex; flex-direction: column; gap: 4px; }
+.verify-report { align-self: flex-start; }
+.verify-report-toggle {
+  border: none;
+  background: transparent;
+  color: var(--accent-primary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.verify-report-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.verify-report-loading,
+.verify-report-error { color: var(--text-muted); font-size: 12.5px; margin-top: 2px; }
+.verify-report-error { color: var(--danger); }
+.verify-report-body {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-canvas);
+  border: 1px solid var(--separator-subtle);
+  max-width: 100%;
+  overflow-x: auto;
+}
+.verify-report-body :where(h1, h2, h3) { margin: 6px 0 4px; line-height: 1.25; }
+.verify-report-body code { font-family: var(--font-mono); font-size: 12.5px; }
+
 /* --- Messenger-поле заметки живому агенту (FeedComposer) ---
    Прибито к низу ленты (flex-shrink:0 под .feed-scroll{flex:1}). Показывается
    только для running-стадии (см. FeedWorkspace/App). */

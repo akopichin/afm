@@ -7,6 +7,7 @@ import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
+import { getVerifyReport } from '../../api/verify-report-client'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -162,13 +163,68 @@ function FeedGroupView({ group, onOpenDialog }: FeedGroupViewProps): ReactElemen
               </button>
             )
           }
+          // reportVerificationId — только verify_result-строки с отчётом
+          // (см. feed-view-model.ts): рендерим ссылку "Show full report" ПОД
+          // самим item, а не внутри него (item — flex-РЯД, отчёт — блок
+          // произвольной высоты) — тот же приём, что и feed-item-segments.
           return (
-            <div key={item.key} className={className}>
-              {content}
+            <div key={item.key} className="feed-item-with-report">
+              <div className={className}>{content}</div>
+              {item.reportVerificationId !== undefined && (
+                <VerifyReportLink stageId={item.stageId} verificationId={item.reportVerificationId} />
+              )}
             </div>
           )
         })}
       </div>
+    </div>
+  )
+}
+
+type VerifyReportLinkProps = {
+  stageId: string
+  verificationId: string
+}
+
+// VerifyReportLink — раскрывающаяся ссылка "Show full report" под строкой
+// verify_result (V5b.1). Отчёт запрашивается ЛЕНИВО, по первому клику (не при
+// монтировании ленты — desятки verify-результатов не должны бить по сети
+// сразу), и кэшируется в локальном состоянии: повторное сворачивание/
+// разворачивание не перезапрашивает (см. requested-ref). Адресация —
+// ТОЛЬКО stageId + verificationId (оба уже известны фронту из самого
+// события) — сервер сам резолвит их в report.md (V5b.3); клиентский
+// filesystem-путь из payload'а (report_path) сюда никогда не попадает.
+// Контент untrusted (текст модели) — рендерится ТЕМ ЖЕ санитайзером, что и
+// агентская проза (renderPlainMarkdown, markdown-it html:false → без XSS).
+function VerifyReportLink({ stageId, verificationId }: VerifyReportLinkProps): ReactElement {
+  const [open, setOpen] = useState(false)
+  const [content, setContent] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const requested = useRef(false)
+
+  const toggle = () => {
+    if (!open && !requested.current) {
+      requested.current = true
+      getVerifyReport(stageId, verificationId)
+        .then((text) => setContent(text))
+        .catch(() => setFailed(true))
+    }
+    setOpen((v) => !v)
+  }
+
+  return (
+    <div className="verify-report">
+      <button type="button" className="verify-report-toggle" onClick={toggle}>
+        {open ? 'Hide report' : 'Show full report'}
+      </button>
+      {open &&
+        (failed ? (
+          <div className="verify-report-error">Failed to load report</div>
+        ) : content === null ? (
+          <div className="verify-report-loading">Loading…</div>
+        ) : (
+          <div className="verify-report-body md" dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(content) }} />
+        ))}
     </div>
   )
 }
