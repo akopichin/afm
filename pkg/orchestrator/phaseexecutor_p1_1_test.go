@@ -41,15 +41,37 @@ package orchestrator
 //     - verifyNote читается ДО implementation и тем же значением
 //       переиспользуется для inline-review (не перечитывается) → ПРОБЕЛ →
 //       закрыт здесь: TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedVerifyNote.
+//     - depPlans/artCtx собираются ОДИН РАЗ за попытку и переиспользуются для
+//       inline-review (не пересобираются — иначе задублировался бы
+//       bus.EventContextWarning) → ПРОБЕЛ → закрыт здесь:
+//       TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedDepPlans
+//       (artCtx отдельным тестом не покрыт — тот же код-путь, что depPlans,
+//       но требует более тяжёлой YAML-обвязки Inputs/Artifacts; depPlans уже
+//       демонстрирует инвариант "захвачено один раз, не пересобирается").
 //     - gateWithVerify(phaseImplementation, CheckCompletion) →
 //       УЖЕ наблюдается: TestIntegration_VerifyFeedbackInjectedIntoCorrectionPrompt
 //       (verify_wiring_integration_test.go).
+//     - IMPORTANT: точное имя файла лога (fresh vs feedback vs embedded-review)
+//       не наблюдалось НИ ОДНИМ тестом (ни старым, ни новым до этой правки) →
+//       закрыто общим TestP11_LogFileNames_PinnedPerVariant (см. ниже, единая
+//       табличная проверка по ВСЕМ 8 entrypoint'ам + embedded review).
 //
 //   runImplementationWithFeedback:
 //     - RetryContext = retryContext + stageDirNote + feedbackNote + verifyNote
 //       → присутствие уже наблюдается TestRunImplementationWithFeedback_InjectsVerifyFeedbackAlongsideHumanNote
 //       (verify_feedback_inject_test.go), порядок — ПРОБЕЛ → закрыт здесь:
 //       TestP11_RunImplementationWithFeedback_NoteOrder.
+//     - CRITICAL (найдено ревью коллег): embedded-review блок agents.go:516-536
+//       — байт-в-байт дубликат agents.go:308-329 (тот самый primary collapse
+//       target плана) — был ПОЛНОСТЬЮ ненаблюдаем ни одним тестом (старым или
+//       новым). Закрыто здесь тремя тестами, зеркалящими fresh-версию: порядок
+//       вызовов + отсутствие note в review-промпте —
+//       TestP11_RunImplementationWithFeedback_EmbeddedReview_OrderAndNoNoteInReviewPrompt;
+//       review пропускается при падении feedback-implementation —
+//       TestP11_RunImplementationWithFeedback_EmbeddedReviewSkippedOnImplementationFailure;
+//       verifyNote/depPlans захватываются ДО implementation и переиспользуются
+//       для review без повторного чтения/сбора —
+//       TestP11_RunImplementationWithFeedback_EmbeddedReview_ReusesCapturedContext.
 //
 //   runReviewAgent (standalone, fresh):
 //     - RetryContext = retryContext + preNote + verifyNote, порядок → ПРОБЕЛ
@@ -135,11 +157,18 @@ func newP11Orch(t *testing.T, stageID string, initialStatus state.StageStatus, r
 	return o, runDir
 }
 
-// p11Call — одно наблюдённое обращение к RunAgent: тип агента (используется
-// как метка фазы: phaseImplementation/phaseReview/…) и итоговый промпт.
+// p11Call — одно наблюдённое обращение к RunAgent/RunPlanning: тип агента
+// (используется как метка фазы: phaseImplementation/phaseReview/… для
+// RunAgent; постоянная "planning" для RunPlanning, где типа нет в сигнатуре),
+// итоговый промпт и logFile — имя файла лога пиновать отдельно важно: план
+// фиксирует его как byte-identity инвариант (fresh → flow.PhaseLogFile(...),
+// feedback → хардкод "*-feedback.log"/"planning-revision.log", embedded
+// review → ТОТ ЖЕ flow.PhaseLogFile(flow.PhaseReview), что и standalone
+// review — см. TestP11_LogFileNames_PinnedPerVariant).
 type p11Call struct {
 	agentType string
 	prompt    string
+	logFile   string
 }
 
 // p11CapturingRunner — минимальная реализация executor.Runner (без реального
@@ -164,13 +193,22 @@ type p11CapturingRunner struct {
 // calls в тестах ниже без всякой пользы).
 const planningStub = "## Tasks\n- t\n\n## Assumptions\n- a\n\n## Acceptance Criteria\n- c\n"
 
+// p11PlanningAgentType — синтетическая метка agentType для p11Call-записей,
+// рождённых RunPlanning (у RunPlanning в сигнатуре executor.Runner нет
+// собственного agentType, в отличие от RunAgent) — используется только там,
+// где тест сверяет agentType, а не только logFile.
+const p11PlanningAgentType = "planning"
+
 func (r *p11CapturingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	r.mu.Lock()
+	r.calls = append(r.calls, p11Call{agentType: p11PlanningAgentType, prompt: prompt, logFile: logFile})
+	r.mu.Unlock()
 	return os.WriteFile(outFile, []byte(planningStub), 0644)
 }
 
 func (r *p11CapturingRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
 	r.mu.Lock()
-	r.calls = append(r.calls, p11Call{agentType: agentType, prompt: prompt})
+	r.calls = append(r.calls, p11Call{agentType: agentType, prompt: prompt, logFile: logFile})
 	r.mu.Unlock()
 	if r.onCall != nil {
 		r.onCall(agentType)
@@ -218,6 +256,30 @@ func assertNoMarker(t *testing.T, prompt, marker string) {
 	t.Helper()
 	if strings.Contains(prompt, marker) {
 		t.Errorf("expected marker %q to be ABSENT from prompt, but found it:\n%s", marker, prompt)
+	}
+}
+
+// countContextWarnings подписывается на o.ui, выполняет fn и считает, сколько
+// раз за время fn был опубликован bus.EventContextWarning — используется,
+// чтобы доказать, что depPlans собирается РОВНО ОДИН РАЗ за попытку и
+// переиспользуется для embedded review, а не пересобирается: у тестовой
+// стадии есть зависимость (DependsOn) БЕЗ plan.md, поэтому каждый вызов
+// stagefiles.CollectDependencyPlans публикует ровно одно предупреждение —
+// повторный сбор внутри той же попытки удвоил бы счётчик.
+func countContextWarnings(o *Orchestrator, fn func()) int {
+	subID, events := o.ui.Subscribe(64)
+	defer o.ui.Unsubscribe(subID)
+	fn()
+	n := 0
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == bus.EventContextWarning {
+				n++
+			}
+		default:
+			return n
+		}
 	}
 }
 
@@ -383,6 +445,41 @@ func TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedVerifyNote(t *t
 	}
 }
 
+// TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedDepPlans пинит
+// то же самое (addendum §11.5: "depPlans/artCtx переиспользуются, не
+// пересобираются после implementation"), но для depPlans, а не verifyNote:
+// stage зависит от dep1, у которого НЕТ plan.md — stagefiles.CollectDependencyPlans
+// публикует bus.EventContextWarning РОВНО ОДИН РАЗ за сбор. Если бы embedded
+// review пересобирал depPlans самостоятельно, тот же missing-dependency warning
+// вышел бы ещё раз — итого 2 вместо 1.
+func TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedDepPlans(t *testing.T) {
+	stageID := "implreusedeps"
+	runner := &p11CapturingRunner{}
+	o, runDir := newP11Orch(t, stageID, state.StatusPending, runner)
+	stageDir := filepath.Join(runDir, stageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentImplementation, flow.AgentReview}, DependsOn: []string{"dep1"}}
+	o.opts.Stages = append(o.opts.Stages, flow.Stage{ID: "dep1", Name: "Dep1"})
+
+	warnings := countContextWarnings(o, func() {
+		o.runImplementationAgent(context.Background(), s)
+	})
+	if warnings != 1 {
+		t.Errorf("expected exactly 1 EventContextWarning (depPlans collected ONCE and reused for embedded review), got %d — embedded review likely re-collected depPlans", warnings)
+	}
+
+	calls := runner.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("expected implementation + embedded review (2 calls), got %d: %+v", len(calls), calls)
+	}
+}
+
 // TestP11_RunImplementationAgent_EmbeddedReviewSkippedOnImplementationFailure
 // пинит "review остаётся частью этой же попытки" (§1.2 таблицы) с обратной
 // стороны: если сама implementation вернула ошибку, embedded review вообще
@@ -445,6 +542,141 @@ func TestP11_RunImplementationWithFeedback_NoteOrder(t *testing.T) {
 		verifyFeedbackHeading,
 	)
 	assertNoMarker(t, calls[0].prompt, "added before this stage started")
+}
+
+// TestP11_RunImplementationWithFeedback_EmbeddedReview_OrderAndNoNoteInReviewPrompt
+// — CRITICAL gap closed: agents.go:516-536 (runImplementationWithFeedback's
+// inline-review block) is a byte-for-byte duplicate of agents.go:308-329
+// (runImplementationAgent's), explicitly named by the plan as the primary
+// collapse target — yet no test (old or new) ever exercised it before this
+// addition. Mirrors TestP11_RunImplementationAgent_EmbeddedReview_OrderAndNoPreNoteInReviewPrompt:
+// with AgentReview present, the feedback-implementation attempt makes a
+// SECOND RunAgent call (embedded review), right after the first, in the same
+// attempt; its RetryContext is the bare verifyNote (agents.go:529) — NEITHER
+// preNote NOR feedbackNote leak into it.
+func TestP11_RunImplementationWithFeedback_EmbeddedReview_OrderAndNoNoteInReviewPrompt(t *testing.T) {
+	stageID := "implrevfb"
+	runner := &p11CapturingRunner{}
+	o, runDir := newP11Orch(t, stageID, state.StatusRevising, runner)
+	stageDir := filepath.Join(runDir, stageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("FEEDBACK-MARKER"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	seedActiveVerifyFeedback(t, stageDir, "ver1", "verify-marker")
+
+	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentImplementation, flow.AgentReview}}
+	o.runImplementationWithFeedback(context.Background(), s)
+
+	calls := runner.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("expected feedback-implementation + embedded review (2 calls), got %d: %+v", len(calls), calls)
+	}
+	if calls[0].agentType != phaseImplementation {
+		t.Errorf("expected call 0 to be implementation, got %q", calls[0].agentType)
+	}
+	if calls[1].agentType != phaseReview {
+		t.Errorf("expected call 1 (embedded review) to be phaseReview, got %q", calls[1].agentType)
+	}
+	if !strings.Contains(calls[1].prompt, verifyFeedbackHeading) {
+		t.Errorf("expected embedded review prompt to carry verifyNote, got:\n%s", calls[1].prompt)
+	}
+	assertNoMarker(t, calls[1].prompt, "added before this stage started")
+	assertNoMarker(t, calls[1].prompt, "added while this stage was running")
+}
+
+// TestP11_RunImplementationWithFeedback_EmbeddedReviewSkippedOnImplementationFailure
+// mirrors TestP11_RunImplementationAgent_EmbeddedReviewSkippedOnImplementationFailure
+// for the feedback-restart path: if the feedback-implementation call itself
+// fails, the embedded review is never reached (agents.go:512-514's early
+// `return err`, BEFORE the `if s.HasAgent(flow.AgentReview)` block).
+func TestP11_RunImplementationWithFeedback_EmbeddedReviewSkippedOnImplementationFailure(t *testing.T) {
+	stageID := "implfailfb"
+	runner := &p11CapturingRunner{failOn: phaseImplementation}
+	o, runDir := newP11Orch(t, stageID, state.StatusRevising, runner)
+	stageDir := filepath.Join(runDir, stageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("FEEDBACK-MARKER"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentImplementation, flow.AgentReview}}
+	o.runImplementationWithFeedback(context.Background(), s)
+
+	calls := runner.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("expected embedded review to be SKIPPED when feedback-implementation itself fails, got %d calls: %+v", len(calls), calls)
+	}
+	if calls[0].agentType != phaseImplementation {
+		t.Errorf("expected the single recorded call to be the failed implementation attempt, got %q", calls[0].agentType)
+	}
+}
+
+// TestP11_RunImplementationWithFeedback_EmbeddedReview_ReusesCapturedContext
+// mirrors TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedVerifyNote
+// + TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedDepPlans for
+// the feedback-restart path, combined: (1) verifyNote is captured BEFORE the
+// feedback-implementation call and reused unmodified for the embedded review
+// (the runner mutates verify/feedback.md mid-attempt via onCall — a
+// re-reading review would see "AFTER-marker" instead of the captured
+// "BEFORE-marker"); (2) depPlans is collected exactly ONCE per attempt (a
+// missing dep1/plan.md makes stagefiles.CollectDependencyPlans warn exactly
+// once per collection — re-collecting for the embedded review would double
+// the bus.EventContextWarning count).
+func TestP11_RunImplementationWithFeedback_EmbeddedReview_ReusesCapturedContext(t *testing.T) {
+	stageID := "implreusefb"
+	var stageDir string
+	runner := &p11CapturingRunner{
+		onCall: func(agentType string) {
+			if agentType == phaseImplementation {
+				seedActiveVerifyFeedback(t, stageDir, "ver2", "AFTER-marker")
+			}
+		},
+	}
+	o, runDir := newP11Orch(t, stageID, state.StatusRevising, runner)
+	stageDir = filepath.Join(runDir, stageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("FEEDBACK-MARKER"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	seedActiveVerifyFeedback(t, stageDir, "ver1", "BEFORE-marker")
+
+	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentImplementation, flow.AgentReview}, DependsOn: []string{"dep1"}}
+	o.opts.Stages = append(o.opts.Stages, flow.Stage{ID: "dep1", Name: "Dep1"})
+
+	warnings := countContextWarnings(o, func() {
+		o.runImplementationWithFeedback(context.Background(), s)
+	})
+	if warnings != 1 {
+		t.Errorf("expected exactly 1 EventContextWarning (depPlans collected ONCE and reused for embedded review), got %d — embedded review likely re-collected depPlans", warnings)
+	}
+
+	calls := runner.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("expected feedback-implementation + embedded review (2 calls), got %d: %+v", len(calls), calls)
+	}
+	reviewPrompt := calls[1].prompt
+	if !strings.Contains(reviewPrompt, "BEFORE-marker") {
+		t.Errorf("expected embedded review to reuse the verifyNote captured BEFORE the feedback-implementation attempt ran (BEFORE-marker), got:\n%s", reviewPrompt)
+	}
+	if strings.Contains(reviewPrompt, "AFTER-marker") {
+		t.Errorf("embedded review (feedback variant) must NOT re-read verify/feedback.md after implementation — it reused a stale AFTER-marker:\n%s", reviewPrompt)
+	}
 }
 
 // --- runReviewAgent (standalone, fresh) -----------------------------------
@@ -606,5 +838,209 @@ func TestP11_RunAutonomousWithFeedback_NoteOrder(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(stageDir, "autonomous.flag")); !os.IsNotExist(err) {
 		t.Errorf("expected runAutonomousWithFeedback NOT to write autonomous.flag itself, stat err = %v", err)
+	}
+}
+
+// --- Log filename identity (IMPORTANT gap) ---------------------------------
+
+// TestP11_LogFileNames_PinnedPerVariant pins the exact log filename each
+// entrypoint passes to RunAgent/RunPlanning — a byte-identity invariant the
+// plan calls out explicitly (addendum §11.2's "универсальная дельта
+// fresh↔feedback"): fresh runners use flow.PhaseLogFile(...) (the canonical
+// per-phase name), feedback/*WithFeedback runners use a HARDCODED
+// "*-feedback.log"/"planning-revision.log" name, and the embedded review log
+// (both impl variants) is the SAME flow.PhaseLogFile(flow.PhaseReview) as
+// standalone runReviewAgent's own log — a deliberate, documented collision
+// (agents.go's runImplementationAgent doc comment: "Совпадение имени лога
+// review внутри impl с standalone-review логом сохранить как есть"). A
+// refactor that genericizes log-file naming (e.g. derives it purely from
+// "fresh vs feedback" without per-adapter overrides) must fail at least one
+// of these cases.
+func TestP11_LogFileNames_PinnedPerVariant(t *testing.T) {
+	cases := []struct {
+		name     string
+		stageID  string
+		status   state.StageStatus
+		agents   []flow.AgentType
+		setup    func(t *testing.T, stageDir string)
+		call     func(o *Orchestrator, s flow.Stage)
+		wantLogs []string // expected p11Call.logFile per call, in order
+	}{
+		{
+			name:    "planning fresh",
+			stageID: "logs-plan-fresh",
+			status:  state.StatusPending,
+			agents:  []flow.AgentType{flow.AgentPlanning},
+			setup:   func(t *testing.T, stageDir string) {},
+			call:    func(o *Orchestrator, s flow.Stage) { o.runPlanningAgent(context.Background(), s) },
+			wantLogs: []string{
+				flow.PhaseLogFile(flow.PhasePlanning), // "planning.log"
+			},
+		},
+		{
+			name:    "planning feedback (revision)",
+			stageID: "logs-plan-fb",
+			status:  state.StatusRevising,
+			agents:  []flow.AgentType{flow.AgentPlanning},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call:     func(o *Orchestrator, s flow.Stage) { o.runPlanningWithFeedback(context.Background(), s) },
+			wantLogs: []string{"planning-revision.log"},
+		},
+		{
+			name:    "implementation fresh (no review)",
+			stageID: "logs-impl-fresh",
+			status:  state.StatusPending,
+			agents:  []flow.AgentType{flow.AgentImplementation},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call: func(o *Orchestrator, s flow.Stage) { o.runImplementationAgent(context.Background(), s) },
+			wantLogs: []string{
+				flow.PhaseLogFile(flow.PhaseImplementation), // "implementation.log"
+			},
+		},
+		{
+			name:    "implementation feedback (no review)",
+			stageID: "logs-impl-fb",
+			status:  state.StatusRevising,
+			agents:  []flow.AgentType{flow.AgentImplementation},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call:     func(o *Orchestrator, s flow.Stage) { o.runImplementationWithFeedback(context.Background(), s) },
+			wantLogs: []string{"implementation-feedback.log"},
+		},
+		{
+			// Embedded review, fresh implementation: the review log is the
+			// SAME name as standalone runReviewAgent's own log — see below.
+			name:    "implementation fresh + embedded review",
+			stageID: "logs-impl-fresh-rev",
+			status:  state.StatusPending,
+			agents:  []flow.AgentType{flow.AgentImplementation, flow.AgentReview},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call: func(o *Orchestrator, s flow.Stage) { o.runImplementationAgent(context.Background(), s) },
+			wantLogs: []string{
+				flow.PhaseLogFile(flow.PhaseImplementation),
+				flow.PhaseLogFile(flow.PhaseReview), // "review.log" — SAME as standalone
+			},
+		},
+		{
+			// Embedded review, feedback-restart implementation: the outer
+			// log is the "-feedback" variant, but the INNER embedded review
+			// log is still the plain flow.PhaseLogFile(flow.PhaseReview) —
+			// NOT "review-feedback.log" (that name belongs only to
+			// standalone runReviewWithFeedback, a different entrypoint).
+			name:    "implementation feedback + embedded review",
+			stageID: "logs-impl-fb-rev",
+			status:  state.StatusRevising,
+			agents:  []flow.AgentType{flow.AgentImplementation, flow.AgentReview},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call: func(o *Orchestrator, s flow.Stage) { o.runImplementationWithFeedback(context.Background(), s) },
+			wantLogs: []string{
+				"implementation-feedback.log",
+				flow.PhaseLogFile(flow.PhaseReview), // "review.log" — NOT "review-feedback.log"
+			},
+		},
+		{
+			name:     "review fresh (standalone)",
+			stageID:  "logs-rev-fresh",
+			status:   state.StatusPending,
+			agents:   []flow.AgentType{flow.AgentReview},
+			setup:    func(t *testing.T, stageDir string) {},
+			call:     func(o *Orchestrator, s flow.Stage) { o.runReviewAgent(context.Background(), s) },
+			wantLogs: []string{flow.PhaseLogFile(flow.PhaseReview)}, // "review.log"
+		},
+		{
+			name:    "review feedback (standalone)",
+			stageID: "logs-rev-fb",
+			status:  state.StatusRevising,
+			agents:  []flow.AgentType{flow.AgentReview},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("FEEDBACK-MARKER"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call:     func(o *Orchestrator, s flow.Stage) { o.runReviewWithFeedback(context.Background(), s) },
+			wantLogs: []string{"review-feedback.log"},
+		},
+		{
+			name:     "autonomous fresh",
+			stageID:  "logs-auto-fresh",
+			status:   state.StatusPending,
+			agents:   []flow.AgentType{flow.AgentAuto},
+			setup:    func(t *testing.T, stageDir string) {},
+			call:     func(o *Orchestrator, s flow.Stage) { o.runAutonomousAgent(context.Background(), s) },
+			wantLogs: []string{flow.PhaseLogFile(flow.PhaseAutonomous)}, // "autonomous.log"
+		},
+		{
+			name:    "autonomous feedback",
+			stageID: "logs-auto-fb",
+			status:  state.StatusRevising,
+			agents:  []flow.AgentType{flow.AgentAuto},
+			setup: func(t *testing.T, stageDir string) {
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "feedback.md"), []byte("FEEDBACK-MARKER"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			call:     func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(context.Background(), s) },
+			wantLogs: []string{"autonomous-feedback.log"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &p11CapturingRunner{}
+			o, runDir := newP11Orch(t, tc.stageID, tc.status, runner)
+			stageDir := filepath.Join(runDir, tc.stageID)
+			tc.setup(t, stageDir)
+
+			s := flow.Stage{ID: tc.stageID, Agents: tc.agents}
+			tc.call(o, s)
+
+			calls := runner.snapshot()
+			if len(calls) != len(tc.wantLogs) {
+				t.Fatalf("expected %d call(s), got %d: %+v", len(tc.wantLogs), len(calls), calls)
+			}
+			for i, want := range tc.wantLogs {
+				gotBase := filepath.Base(calls[i].logFile)
+				if gotBase != want {
+					t.Errorf("call %d: logFile base = %q, want %q (full: %q)", i, gotBase, want, calls[i].logFile)
+				}
+			}
+		})
 	}
 }
