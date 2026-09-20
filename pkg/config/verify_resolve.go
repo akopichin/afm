@@ -93,7 +93,20 @@ func SupportedVerifyCommand(cmd string, cfg Config) bool {
 // pkg/config, поэтому вызывается явно на старте (cmd/afm/run.go), как только
 // и флоу, и конфиг уже загружены — раньше эмиссии flow_started/запуска
 // какой-либо стадии. Shell-шаги (Kind==VerifyShell) не резолвятся вовсе.
-func ValidateVerifySpecs(f *flow.Flow, cfg Config) error {
+//
+// codexRecipesShimmed (D1 второй раунд код-ревью): true, только когда этот
+// ран РЕАЛЬНО сгенерирует read-only враппер для type:codex recipe (Docker-режим
+// С включённым autoShim — см. вызывающий код cmd/afm/run.go). Без этого
+// сигнала SupportedVerifyCommand сам по себе принимал бы ЛЮБОЙ recipe с
+// Type==RecipeTypeCodex, даже когда на хосте (или с выключенным autoShim)
+// afm просто исполнил бы голый бинарник командой из PATH — тот не понимает ни
+// CODEX_VERIFY, ни read-only режим, и read-only гарантия молча не
+// соблюдалась бы. Когда codexRecipesShimmed==false, единственный
+// поддерживаемый verify-адаптер — буквальное имя реального шима
+// codex-as-claude (голое имя без recipe уже отфильтровано
+// SupportedVerifyCommand выше); recipe-алиас type:codex в этом режиме —
+// ошибка преflight'а, а не тихий запуск небезопасного bare-codex.
+func ValidateVerifySpecs(f *flow.Flow, cfg Config, codexRecipesShimmed bool) error {
 	for _, s := range f.Stages {
 		for i, step := range s.Verify.Steps {
 			if step.Kind != flow.VerifyAgent {
@@ -101,6 +114,10 @@ func ValidateVerifySpecs(f *flow.Flow, cfg Config) error {
 			}
 			if !SupportedVerifyCommand(step.Command, cfg) {
 				return fmt.Errorf("stage %q: verify[%d]: command %q is not a supported verify adapter (v1 supports codex-as-claude only)", s.ID, i+1, step.Command)
+			}
+			resolved, _ := ResolveAgentCommand(step.Command, cfg)
+			if recipe, ok := cfg.Docker.Agents[resolved]; ok && recipe.Type == RecipeTypeCodex && !codexRecipesShimmed {
+				return fmt.Errorf("stage %q: verify[%d]: command %q: codex recipe requires docker autoShim to enforce read-only; use codex-as-claude on host", s.ID, i+1, step.Command)
 			}
 		}
 	}

@@ -105,7 +105,7 @@ func TestValidateVerifySpecs(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: flow.NewShellVerify("go test ./...")},
 		}}
-		if err := config.ValidateVerifySpecs(f, cfg); err != nil {
+		if err := config.ValidateVerifySpecs(f, cfg, false); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
@@ -114,7 +114,10 @@ func TestValidateVerifySpecs(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: agentVerify(t, "codex-as-claude", "")},
 		}}
-		if err := config.ValidateVerifySpecs(f, cfg); err != nil {
+		if err := config.ValidateVerifySpecs(f, cfg, false); err != nil {
+			t.Errorf("unexpected error (codex-as-claude is the real read-only shim regardless of docker/autoShim): %v", err)
+		}
+		if err := config.ValidateVerifySpecs(f, cfg, true); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
@@ -123,7 +126,7 @@ func TestValidateVerifySpecs(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: agentVerify(t, "codex", "")},
 		}}
-		err := config.ValidateVerifySpecs(f, cfg)
+		err := config.ValidateVerifySpecs(f, cfg, false)
 		if err == nil {
 			t.Fatal("expected error: bare codex has no read-only verify adapter, must not be supported")
 		}
@@ -132,11 +135,26 @@ func TestValidateVerifySpecs(t *testing.T) {
 		}
 	})
 
-	t.Run("supported custom codex-recipe verify command passes", func(t *testing.T) {
+	// D1 (второй раунд код-ревью): recipe type:codex поддерживается verify
+	// ТОЛЬКО когда ран реально сгенерирует read-only враппер (docker+autoShim).
+	t.Run("custom codex-recipe verify command fails on host/non-autoShim (no read-only wrapper generated)", func(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: agentVerify(t, "mycodex", "")},
 		}}
-		if err := config.ValidateVerifySpecs(f, cfg); err != nil {
+		err := config.ValidateVerifySpecs(f, cfg, false)
+		if err == nil {
+			t.Fatal("expected error: type:codex recipe on host/non-autoShim must not pass preflight (bare codex would run, no read-only)")
+		}
+		if !strings.Contains(err.Error(), "s1") || !strings.Contains(err.Error(), "mycodex") {
+			t.Errorf("error = %q, want it to mention the stage and the command", err.Error())
+		}
+	})
+
+	t.Run("custom codex-recipe verify command passes when docker autoShim is active", func(t *testing.T) {
+		f := &flow.Flow{Stages: []flow.Stage{
+			{ID: "s1", Verify: agentVerify(t, "mycodex", "")},
+		}}
+		if err := config.ValidateVerifySpecs(f, cfg, true); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
@@ -145,7 +163,7 @@ func TestValidateVerifySpecs(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: agentVerify(t, "frobnicator", "")},
 		}}
-		err := config.ValidateVerifySpecs(f, cfg)
+		err := config.ValidateVerifySpecs(f, cfg, false)
 		if err == nil {
 			t.Fatal("expected error for a nonexistent verify command alias")
 		}
@@ -158,7 +176,7 @@ func TestValidateVerifySpecs(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: agentVerify(t, "glm51", "")},
 		}}
-		if err := config.ValidateVerifySpecs(f, cfg); err == nil {
+		if err := config.ValidateVerifySpecs(f, cfg, false); err == nil {
 			t.Fatal("expected error: glm51 resolves as an agent but is not a supported verify adapter")
 		}
 	})
@@ -167,7 +185,7 @@ func TestValidateVerifySpecs(t *testing.T) {
 		f := &flow.Flow{Stages: []flow.Stage{
 			{ID: "s1", Verify: agentVerify(t, "claude", "")},
 		}}
-		err := config.ValidateVerifySpecs(f, cfg)
+		err := config.ValidateVerifySpecs(f, cfg, false)
 		if err == nil {
 			t.Fatal("expected error: claude has no read-only verify mode, must not be a supported verify adapter")
 		}

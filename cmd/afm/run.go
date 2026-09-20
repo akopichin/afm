@@ -78,7 +78,19 @@ func newRunCmd() *cobra.Command {
 			// иначе стадия провалила бы verify только на этапе выполнения,
 			// когда откатывать уже поздно. flow.Flow.validate() этого не
 			// делает сама — она ничего не знает про cfg.Docker.Agents.
-			if err := config.ValidateVerifySpecs(f, cfg); err != nil {
+			//
+			// D1 (второй раунд код-ревью): type:codex recipe считается
+			// поддерживаемым verify-адаптером ТОЛЬКО когда этот ран реально
+			// сгенерирует read-only враппер — Docker-режим С включённым
+			// autoShim. AFM_IN_DOCKER=1 учитываем отдельно от
+			// cfg.Docker.IsDockerEnabled() (та явно возвращает false внутри
+			// контейнера — см. её doc comment), иначе preflight внутри
+			// контейнера (после re-exec, тот же RunE выполняется заново)
+			// ложно решил бы, что шим не активен, хотя на самом деле он уже
+			// применяется этим же процессом.
+			inDockerPreflight := os.Getenv("AFM_IN_DOCKER") == "1"
+			codexRecipesShimmed := cfg.Docker.IsAutoShim() && (inDockerPreflight || cfg.Docker.IsDockerEnabled())
+			if err := config.ValidateVerifySpecs(f, cfg, codexRecipesShimmed); err != nil {
 				return fmt.Errorf("verify: %w", err)
 			}
 
