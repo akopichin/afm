@@ -263,6 +263,47 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	preNote := o.preNoteBlock(stageDir)
 
+	o.runImplementationAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseImplementation), "impl")
+}
+
+// runEmbeddedReview — review-шаг, встроенный в implementation-попытку
+// (Задача 1.7). Это НЕ отдельная scheduler-фаза: ошибка возвращается как
+// есть в объемлющий implementation-runWithRetry — нет собственного
+// spawnKind/семафора/transition/lease/completion-gate/независимого retry.
+// Переиспользует уже собранные текущей implementation-попыткой
+// depPlans/artCtx/verifyNote (не пересобирает их); memoryBlockForStage
+// пересчитывается отдельно для review-промпта. runnerFor вызывается здесь,
+// внутри вызывающей per-attempt closure — не хоистится наружу.
+func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stageDir, depPlans, artCtx, verifyNote string) error {
+	// Инлайн-ревью тоже должен видеть замечания AI-verify предыдущего
+	// прохода (владелец коррекции остаётся implementation — ревью здесь
+	// не гейтится отдельно, это просто дополнительный контекст).
+	reviewPrompt := prompts.Build(prompts.Inputs{
+		Template:        o.opts.Prompts.Review,
+		Stage:           s,
+		PhaseAgent:      prompts.AgentReview,
+		DependencyPlans: depPlans,
+		Artifacts:       artCtx,
+		StageDir:        stageDir,
+		Interactive:     s.Interactive,
+		GlobalPrompt:    o.opts.GlobalPrompt,
+		MemoryBlock:     o.memoryBlockForStage(s),
+		RetryContext:    verifyNote,
+	})
+	reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
+	rr := o.runnerFor(s, phaseReview)
+	return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
+}
+
+// runImplementationAttempt — общее тело implementation-попытки: читает
+// plan.md, собирает контекст, строит промпт, запускает implementation-агента
+// и (если стадия объявляет AgentReview) встроенный review сразу после
+// успешного implementation-запуска. Общий и для fresh (runImplementationAgent),
+// и для feedback (runImplementationWithFeedback) раннеров. note — уже
+// прочитанный до цикла блок (preNoteBlock для fresh, feedbackNoteBlock для
+// feedback); logFileName — имя лога implementation-попытки;
+// artifactsWarnLabel — текст WARN-сообщения при ошибке сбора артефактов.
+func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
 	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
 		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 		if err != nil {
@@ -275,7 +316,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		})
 		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s impl: %v", s.ID, artErr)
+			log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, artifactsWarnLabel, artErr)
 		}
 
 		// Format output artifact requirements
@@ -308,11 +349,11 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 			Plan:            string(planData),
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + stageDirNote + preNote + verifyNote,
+			RetryContext:    retryContext + stageDirNote + note + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 		})
-		logFile := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseImplementation))
+		logFile := filepath.Join(stageDir, logFileName)
 
 		r := o.runnerFor(s, phaseImplementation)
 		if err := r.RunAgent(ctx, string(s.ImplAgent()), s.Name, prompt, logFile); err != nil {
@@ -320,24 +361,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 		}
 
 		if s.HasAgent(flow.AgentReview) {
-			// Инлайн-ревью тоже должен видеть замечания AI-verify предыдущего
-			// прохода (владелец коррекции остаётся implementation — ревью здесь
-			// не гейтится отдельно, это просто дополнительный контекст).
-			reviewPrompt := prompts.Build(prompts.Inputs{
-				Template:        o.opts.Prompts.Review,
-				Stage:           s,
-				PhaseAgent:      prompts.AgentReview,
-				DependencyPlans: depPlans,
-				Artifacts:       artCtx,
-				StageDir:        stageDir,
-				Interactive:     s.Interactive,
-				GlobalPrompt:    o.opts.GlobalPrompt,
-				MemoryBlock:     o.memoryBlockForStage(s),
-				RetryContext:    verifyNote,
-			})
-			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
-			rr := o.runnerFor(s, phaseReview)
-			if err := rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog); err != nil {
+			if err := o.runEmbeddedReview(ctx, s, stageDir, depPlans, artCtx, verifyNote); err != nil {
 				return err
 			}
 		}
@@ -495,86 +519,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
-	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
-		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
-		if err != nil {
-			return err
-		}
-
-		depPlans := stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-			o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
-		})
-		artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
-		if artErr != nil {
-			log.Printf("WARN: collect artifacts for %s impl (feedback restart): %v", s.ID, artErr)
-		}
-
-		if len(s.Artifacts) > 0 {
-			var buf strings.Builder
-			buf.WriteString("\n\nRequired output artifacts (MUST exist at these paths when stage finishes):\n\n")
-			for _, art := range s.Artifacts {
-				dst := art.Path
-				if strings.HasPrefix(art.Path, "./") {
-					dst = filepath.Join(stageDir, art.Path[2:])
-				}
-				desc := ""
-				if art.Description != "" {
-					desc = " — " + art.Description
-				}
-				fmt.Fprintf(&buf, "- %s%s → %s\n", art.Name, desc, dst)
-			}
-			artCtx += buf.String()
-		}
-
-		verifyNote := o.verifyFeedbackBlock(stageDir)
-		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
-		stageDirNote += verifyStageNote(s.Verify)
-		prompt := prompts.Build(prompts.Inputs{
-			Template:        o.opts.Prompts.Implementation,
-			Stage:           s,
-			PhaseAgent:      prompts.AgentImplementation,
-			DependencyPlans: depPlans,
-			Artifacts:       artCtx,
-			Plan:            string(planData),
-			StageDir:        stageDir,
-			Interactive:     s.Interactive,
-			RetryContext:    retryContext + stageDirNote + feedbackNote + verifyNote,
-			GlobalPrompt:    o.opts.GlobalPrompt,
-			MemoryBlock:     o.memoryBlockForStage(s),
-		})
-		logFile := filepath.Join(stageDir, "implementation-feedback.log")
-
-		r := o.runnerFor(s, phaseImplementation)
-		if err := r.RunAgent(ctx, string(s.ImplAgent()), s.Name, prompt, logFile); err != nil {
-			return err
-		}
-
-		if s.HasAgent(flow.AgentReview) {
-			// См. runImplementationAgent: инлайн-ревью тоже видит замечания
-			// AI-verify предыдущего прохода.
-			reviewPrompt := prompts.Build(prompts.Inputs{
-				Template:        o.opts.Prompts.Review,
-				Stage:           s,
-				PhaseAgent:      prompts.AgentReview,
-				DependencyPlans: depPlans,
-				Artifacts:       artCtx,
-				StageDir:        stageDir,
-				Interactive:     s.Interactive,
-				GlobalPrompt:    o.opts.GlobalPrompt,
-				MemoryBlock:     o.memoryBlockForStage(s),
-				RetryContext:    verifyNote,
-			})
-			reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
-			rr := o.runnerFor(s, phaseReview)
-			if err := rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog); err != nil {
-				return err
-			}
-		}
-		return nil
-	}, o.gateWithVerify(ctx, s, phaseImplementation, func() error {
-		return stagefiles.CheckCompletion(stageDir, ".", s)
-	}), func() { o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback) })
+	o.runImplementationAttempt(ctx, s, stageDir, feedbackNote, "implementation-feedback.log", "impl (feedback restart)")
 }
 
 // runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
