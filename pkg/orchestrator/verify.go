@@ -133,6 +133,13 @@ func verifyReportPath(stageDir, verID string) string {
 // тесты подменяют o.runVerifyAgent напрямую, без реального subprocess.
 type verifyAgentRunner func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error)
 
+// verifyShellRunner — сигнатура функции, реально исполняющей один shell-шаг
+// AI-verify. Инъектируемый seam, тот же приём, что verifyAgentRunner выше:
+// продакшн — runVerifyShellCommand, тесты (D3a/D4 гоночные сценарии)
+// подменяют o.runVerifyShell фейком, управляющим таймингом детерминированно,
+// без завязки на реальный OS-уровневый race в select.
+type verifyShellRunner func(ctx context.Context, dir, command string) (string, error)
+
 // RunVerification выполняет ОДИН последовательный fail-fast проход по
 // s.Verify.Steps для стадии, уже прошедшей file-probe (CheckCompletion/
 // CheckAutonomousCompletion). Первый непройденный шаг ОСТАНАВЛИВАЕТ проход —
@@ -252,6 +259,18 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 
 			switch result.Verdict {
 			case verify.VerdictPass:
+				if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
+					// D3a код-ревью: тот же гоночный select (успешное завершение
+					// vs. истечение stepCtx.Timeout) существует и внутри
+					// executor.RunVerifyAgent/o.runVerifyAgent — успешный
+					// вердикт (err==nil, ProcessOK==true) НИКОГДА не принимается
+					// на веру без перепроверки stepCtx.Err() СРАЗУ после
+					// получения результата.
+					manifestSteps[i].Outcome = verifyOutcomeError
+					_ = persistManifest()
+					o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
+					return raceErr
+				}
 				if perr := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); perr != nil {
 					manifestSteps[i].Outcome = verifyOutcomeError
 					_ = persistManifest()
@@ -301,7 +320,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		// pauseAwareVerifyCtx) — иначе Pause()/Revise() не могли бы прервать
 		// зависший shell-verify, а только полную отмену рана.
 		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
-		out, runErr := runVerifyShellCommand(shellCtx, ".", st.Run)
+		out, runErr := o.runVerifyShell(shellCtx, ".", st.Run)
 		interruptedByPause := stop()
 
 		stepDir := stagefiles.StepDir(stageDir, verID, idx)
@@ -375,6 +394,17 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			result := shellRejectionResult(st.Run, tail)
 			manifestSteps[i].Outcome = string(result.Verdict)
 			return o.persistVerifyRejection(stageDir, verID, idx, kind, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
+		}
+		if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
+			// D3a код-ревью: select между done-каналом исполнения и
+			// <-stepCtx.Done() внутри runVerifyShellCommand, когда оба готовы
+			// одновременно, может выбрать ветку успеха ДАЖЕ ПОСЛЕ истечения
+			// собственного дедлайна шага — runErr==nil здесь НЕ означает "успели
+			// в срок", нужна отдельная перепроверка ПОСЛЕ получения результата.
+			manifestSteps[i].Outcome = verifyOutcomeError
+			_ = persistManifest()
+			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
+			return raceErr
 		}
 		manifestSteps[i].Outcome = verifyOutcomePass
 		fmt.Fprintf(&passedSteps, "Step %d (shell): `%s` — passed\n", idx, st.Run)
@@ -637,6 +667,24 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, k
 	}
 }
 
+// verifyStepDeadlineRace — D3a код-ревью: перепроверка ПОСЛЕ того, как шаг
+// (shell или agent) вернул успешный исход (нулевой exit / вердикт pass), на
+// предмет гонки между этим успехом и истечением СОБСТВЕННОГО дедлайна шага
+// (flow.VerifyStep.Timeout → stepCtx). select между done-каналом исполнения
+// и <-stepCtx.Done() (внутри runVerifyShellCommand для shell-шага; внутри
+// executor.RunVerifyAgent для agent-шага), когда оба готовы одновременно,
+// может выбрать ветку успеха, ДАЖЕ ЕСЛИ дедлайн уже истёк — err==nil от
+// исполнения сам по себе НЕ доказывает, что уложились в срок. Возвращает nil,
+// если дедлайн ещё не истёк (успеху можно доверять); иначе — типизированный
+// *VerifyExecError с той же меткой таймаута, что и остальные timeout-ветки
+// этого файла (единая точка вместо разбросанного текста).
+func verifyStepDeadlineRace(stepCtx context.Context, idx int) error {
+	if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
+		return &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+	}
+	return nil
+}
+
 // verifyManifestErrorOutcome сообщает, каким текстом пометить ManifestStep
 // при ошибке agent-шага: "interrupted" для прерывания извне, иначе "error".
 func verifyManifestErrorOutcome(err error) string {
@@ -665,6 +713,23 @@ func shellRejectionResult(command, tail string) verify.ModelResult {
 	}
 }
 
+// sanitizedShellVerifyEnv возвращает окружение процесса afm БЕЗ транспортных
+// секретов ЧУЖИХ агентов/хуков (D2a код-ревью) — та же функция-фильтр, что
+// pkg/executor использует в VerifyMode (executor.IsCrossAgentTransportSecret),
+// единая точка вместо второй копии списка префиксов AFM_SECRET_*/
+// AFM_HOOK_SECRET_*/AFM_SYSPROMPT_*.
+func sanitizedShellVerifyEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, kv := range env {
+		if executor.IsCrossAgentTransportSecret(kv) {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	return filtered
+}
+
 // runVerifyShellCommand запускает shell-verify команду отменяемо (honor
 // ctx) — в отличие от legacy stagefiles.RunVerify (exec.Command без ctx),
 // движок обязан уметь прервать зависшую команду по отмене контекста рана
@@ -689,11 +754,33 @@ func shellRejectionResult(command, tail string) verify.ModelResult {
 func runVerifyShellCommand(ctx context.Context, dir, command string) (string, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
+	// D2a код-ревью: shell-verify раньше исполнялся с cmd.Env==nil, что для
+	// exec.Cmd означает "унаследовать os.Environ() целиком" — включая
+	// AFM_SECRET_*/AFM_HOOK_SECRET_*/AFM_SYSPROMPT_* транспортные секреты
+	// ЧУЖИХ агентов/хуков, живущие в окружении самого afm-процесса только
+	// транзитом. Они попадали бы в command.log и (при needs_changes) в
+	// evidence отчёта. Переиспользуем ТОТ ЖЕ фильтр, что VerifyMode-путь
+	// executor'а (executor.IsCrossAgentTransportSecret) — единая точка
+	// вместо второй копии списка префиксов; в отличие от executor'а, у
+	// shell-шага нет собственного recipe-секрета, который надо было бы
+	// сохранить (D2b касается только agent-верификаторов).
+	cmd.Env = sanitizedShellVerifyEnv()
 	setProcessGroup(cmd)
 
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+
+	// D4 код-ревью: последняя неблокирующая проверка ПЕРЕД стартом процесса —
+	// если ctx уже отменён (полная отмена рана, истёкший таймаут шага или
+	// сигнал Pause()/Revise(), уже долетевший до pause-aware ctx до того, как
+	// мы сюда дошли), НИКОГДА не запускаем subprocess. Полная TOCTOU-
+	// атомарность невозможна (сигнал может прийти на долю секунды позже), но
+	// закрыть уже-случившийся случай дёшево и правильно для read-only
+	// верификатора.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	if err := cmd.Start(); err != nil {
 		return "", err

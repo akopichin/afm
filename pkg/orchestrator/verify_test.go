@@ -30,8 +30,9 @@ func newVerifyTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrator, s
 		t.Fatal(err)
 	}
 	o := &Orchestrator{
-		opts: Options{RunDir: dir, Stages: []flow.Stage{stage}, RunID: "run1"},
-		ui:   bus.NewUIBus(),
+		opts:           Options{RunDir: dir, Stages: []flow.Stage{stage}, RunID: "run1"},
+		ui:             bus.NewUIBus(),
+		runVerifyShell: runVerifyShellCommand,
 	}
 	return o, stageDir
 }

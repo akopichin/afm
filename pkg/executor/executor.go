@@ -32,18 +32,54 @@ const (
 	afmSyspromptEnvPrefix = "AFM_SYSPROMPT_" //nolint:gosec // аналогично
 )
 
-// isCrossAgentTransportSecret сообщает, что kv (строка "ИМЯ=значение" из
+// IsCrossAgentTransportSecret сообщает, что kv (строка "ИМЯ=значение" из
 // os.Environ()) — один из транспортных секретов, которыми afm передаёт
 // чужие авторизационные данные СВОИМ ЖЕ дочерним процессам (autoShim-агенты,
 // lifecycle-хуки): AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_*. Нужна
 // только для C2 (см. вызывающий код в run): непроверенный verify-верификатор
 // не должен унаследовать секреты ЧУЖИХ агентов/хуков, которые сам afm-процесс
 // держит в своём окружении только транзитом (см. AGENTS.md, "Docker Mode" /
-// "Phase 3: секреты и env lifecycle-хуков").
-func isCrossAgentTransportSecret(kv string) bool {
+// "Phase 3: секреты и env lifecycle-хуков"). Экспортирована (D2a второй раунд
+// код-ревью): pkg/orchestrator/verify.go переиспользует ЭТУ ЖЕ функцию для
+// санитизации окружения shell-verify шагов — единая точка вместо второй копии
+// списка префиксов.
+func IsCrossAgentTransportSecret(kv string) bool {
 	return strings.HasPrefix(kv, afmSecretEnvPrefix) ||
 		strings.HasPrefix(kv, afmSyspromptEnvPrefix) ||
 		strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix)
+}
+
+// afmSecretEnvName воспроизводит ТОТ ЖЕ transform, что pkg/docker/wrapper.go's
+// envName делает над именем враппер-команды при построении переменной
+// AFM_SECRET_<NAME> (uppercase; всё, кроме [A-Z0-9], → '_'). Дублируется
+// здесь (а не импортируется из pkg/docker), чтобы не тянуть в pkg/executor
+// докер-специфичный пакет ради одной маленькой чистой функции — держите оба
+// места в синхроне, если правило санитизации когда-нибудь изменится.
+func afmSecretEnvName(cmd string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(cmd) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// isVerifierOwnSecret сообщает, что kv — ИМЕННО собственный транспортный
+// секрет верификатора (AFM_SECRET_<envName(verifyCommand)>), который его же
+// сгенерированный autoShim-враппер (pkg/docker/wrapper.go) читает для
+// авторизации (D2b код-ревью): голый VerifyMode-strip удалял ВСЕ AFM_SECRET_*
+// без разбора, включая секрет самого верификатора — аутентифицированный
+// codex-recipe верификатор стартовал бы без своего же токена. Сравнение по
+// точному имени переменной (префикс + "="), а не просто по префиксу —
+// иначе AFM_SECRET_MYCODEX2 ложно совпал бы с verifyCommand="mycodex".
+func isVerifierOwnSecret(kv, verifyCommand string) bool {
+	if verifyCommand == "" {
+		return false
+	}
+	return strings.HasPrefix(kv, afmSecretEnvPrefix+afmSecretEnvName(verifyCommand)+"=")
 }
 
 // Config configures the executor.
@@ -746,10 +782,21 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			// always strip inherited; re-added below only if cfg.StageDir != ""
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added below only if cfg.VerifyMode
-		case e.cfg.VerifyMode && isCrossAgentTransportSecret(kv):
+		case e.cfg.VerifyMode && isVerifierOwnSecret(kv, e.cfg.Command):
+			// D2b код-ревью: собственный секрет ЭТОГО ЖЕ верификатора
+			// (AFM_SECRET_<verifyCommand>) — исключение из ветки ниже.
+			// e.cfg.Command здесь — алиас/recipe-ключ verify-шага
+			// (RunVerifyAgent зовёт RunVerifyAgent(..., cmd, ...) с cmd,
+			// оставляя verifyCfg.Command исходным), ТОЧНО тот же ключ, что
+			// pkg/docker/wrapper.go использовал при генерации имени
+			// переменной для враппера — без этого исключения
+			// аутентифицированный codex-recipe верификатор стартовал бы без
+			// своего же токена.
+			filtered = append(filtered, kv)
+		case e.cfg.VerifyMode && IsCrossAgentTransportSecret(kv):
 			// C2: непроверенный verify-верификатор не должен унаследовать
 			// транспортные секреты ЧУЖИХ агентов/хуков (см.
-			// isCrossAgentTransportSecret) — он мог бы отразить их в своём
+			// IsCrossAgentTransportSecret) — он мог бы отразить их в своём
 			// JSON-ответе, который afm персистит как raw-result/report.
 			// Обычный (не-verify) запуск это условие не задевает вовсе.
 		default:
@@ -787,6 +834,23 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = stderr
+
+	// D4 код-ревью: последняя неблокирующая проверка ПЕРЕД стартом процесса —
+	// если ctx уже отменён (полная отмена рана) или сигнал на InterruptCh уже
+	// пришёл (напр. Pause() успел durable зафиксировать переход и
+	// просигналить ДО того, как мы дошли сюда), НИКОГДА не запускаем
+	// subprocess. Полная TOCTOU-атомарность невозможна (сигнал может прийти
+	// на долю секунды позже этой проверки), но закрыть уже-случившийся случай
+	// дёшево и правильно — особенно для read-only verify-верификатора,
+	// которому вообще не должно быть позволено начать работу над уже
+	// приостановленной/отменённой стадией.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.cfg.InterruptCh:
+		return ErrUserInterrupted
+	default:
+	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", e.cfg.Command, err)

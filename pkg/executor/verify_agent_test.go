@@ -233,6 +233,60 @@ func TestRunVerifyAgent_StripsCrossAgentTransportSecrets(t *testing.T) {
 	}
 }
 
+// TestRunVerifyAgent_KeepsOwnRecipeSecretButStripsOthers — D2b код-ревью:
+// голый VerifyMode-strip (см. предыдущий тест) удалял ВСЕ AFM_SECRET_*
+// подряд, включая собственный секрет ЭТОГО ЖЕ верификатора, который его
+// сгенерированный autoShim-враппер (pkg/docker/wrapper.go) читает для
+// авторизации — аутентифицированный codex-recipe верификатор стартовал бы
+// без своего же токена. Command="mycodex" (алиас/recipe-ключ, резолвится
+// через WrapperDir — тот же приём, что TestRunAgentResolvesWrapperCommand) —
+// AFM_SECRET_MYCODEX должен выжить, а AFM_SECRET_OTHER/AFM_HOOK_SECRET_* —
+// по-прежнему нет.
+func TestRunVerifyAgent_KeepsOwnRecipeSecretButStripsOthers(t *testing.T) {
+	t.Setenv("AFM_SECRET_MYCODEX", "own-verifier-token")
+	t.Setenv("AFM_SECRET_OTHER", "someone-elses-token")
+	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
+
+	wrapDir := t.TempDir()
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(wrapDir, "mycodex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     "mycodex", // алиас — резолвится через WrapperDir, не абсолютный путь
+		WrapperDir:  wrapDir,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "mycodex", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	if !envContainsLine(got, "AFM_SECRET_MYCODEX=own-verifier-token") {
+		t.Errorf("verifier's own recipe secret AFM_SECRET_MYCODEX must survive VerifyMode strip, got:\n%s", got)
+	}
+	for _, leaked := range []string{"AFM_SECRET_OTHER=", "AFM_HOOK_SECRET_0_0="} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("verifier env must not contain %q, got:\n%s", leaked, got)
+		}
+	}
+}
+
 // TestRunAgent_KeepsCrossAgentTransportSecrets — зеркало предыдущего теста:
 // обычный (не-verify) запуск через RunAgent НЕ затрагивается C2-фильтром и
 // по-прежнему наследует все переменные процесса afm, как раньше.

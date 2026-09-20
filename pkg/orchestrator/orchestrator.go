@@ -198,6 +198,13 @@ type Orchestrator struct {
 	// не поднимая реальный subprocess.
 	runVerifyAgent verifyAgentRunner
 
+	// runVerifyShell исполняет один shell-шаг AI-verify (см. RunVerification,
+	// verify.go) — инъектируемый seam, тот же приём, что runVerifyAgent выше:
+	// продакшн-реализация — package-level runVerifyShellCommand; тесты
+	// подменяют этот field фейком для детерминированного воспроизведения
+	// тайминговых гонок (D3a/D4), не завязываясь на реальный OS-уровневый race.
+	runVerifyShell verifyShellRunner
+
 	// terminalFlow — финальное flow-событие, установленное одним из выходов
 	// Run; эмитится finalizeLifecycle ПОСЛЕ остановки продюсеров (single
 	// writer — горутина Run, отдельная синхронизация не нужна).
@@ -490,6 +497,7 @@ func New(opts Options) *Orchestrator {
 	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
 	o.runVerifyAgent = o.execVerifyAgent
+	o.runVerifyShell = runVerifyShellCommand
 	o.mem = memorypipeline.New(memorypipeline.Prompts{
 		Reflect:    opts.Prompts.Reflect,
 		Aggregate:  opts.Prompts.Aggregate,

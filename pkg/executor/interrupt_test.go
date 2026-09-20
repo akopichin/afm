@@ -86,3 +86,65 @@ func TestRunAgent_InterruptSendsSIGINTNotKill(t *testing.T) {
 		t.Errorf("script did not receive SIGINT (marker file missing): %v", err)
 	}
 }
+
+// TestRunAgent_PreFiredInterruptNeverStartsProcess — D4 код-ревью: пре-Start
+// неблокирующая проверка InterruptCh. Pause() коммитит EvPause в лог ДО
+// сигнала на interrupt-канал (durable-переход раньше эффекта) — если сигнал
+// уже лежит в буферизованном канале К МОМЕНТУ, когда мы доходим до
+// cmd.Start(), процесс НЕ должен запускаться вовсе (стадия уже durable
+// paused/revising). Маркер-файл — первая строка скрипта — должен остаться
+// отсутствующим, что доказывает: subprocess не стартовал.
+func TestRunAgent_PreFiredInterruptNeverStartsProcess(t *testing.T) {
+	dir := t.TempDir()
+	marker := dir + "/started"
+	scriptPath := dir + "/agent.sh"
+	script := "#!/bin/bash\ntouch " + marker + "\necho '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	interruptCh := make(chan struct{}, 1)
+	interruptCh <- struct{}{} // сигнал уже пришёл ДО запуска
+
+	e := New(Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+		InterruptCh: interruptCh,
+	})
+
+	err := e.RunAgent(context.Background(), "test", "s1", "prompt", dir+"/run.log")
+	if !errors.Is(err, ErrUserInterrupted) {
+		t.Fatalf("RunAgent error = %v, want errors.Is(err, ErrUserInterrupted)", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("process must never have started — marker file exists")
+	}
+}
+
+// TestRunAgent_PreCancelledCtxNeverStartsProcess — зеркало предыдущего теста
+// для отмены родительского ctx (полная отмена рана), а не сигнала паузы.
+func TestRunAgent_PreCancelledCtxNeverStartsProcess(t *testing.T) {
+	dir := t.TempDir()
+	marker := dir + "/started"
+	scriptPath := dir + "/agent.sh"
+	script := "#!/bin/bash\ntouch " + marker + "\necho '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // уже отменён до вызова
+
+	e := New(Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	err := e.RunAgent(ctx, "test", "s1", "prompt", dir+"/run.log")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunAgent error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("process must never have started — marker file exists")
+	}
+}
