@@ -266,7 +266,13 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusHookFailed:
 			// Crashed while blocked on a before-hook retry/skip decision.
 			// Re-enter the wait (not a silent retry) — see resumeHookFailedWait.
-			o.concurrency.SpawnAgent(ctx, s, o.resumeHookFailedWait)
+			// spawnAgentLeased (не голый SpawnAgent) — once the hook resolves,
+			// resumeHookFailedWait dispatches via dispatchMainAfterBeforeHook
+			// into runImplementationAgent/runAutonomousAgent, which may call
+			// RunVerification; without a lease AI-verify would run its verifier
+			// subprocess with no command-slot accounting on this recovery path
+			// (see the same reasoning at the StatusAwaitingUserInput case above).
+			o.spawnAgentLeased(ctx, s, o.resumeHookFailedWait)
 		case state.StatusRetrying:
 			if o.activationBlocked() {
 				continue // review mode: hold new activations; the stage stays pending/ready
