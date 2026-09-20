@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestVerifyManifestErrorOutcome_BareInterrupted(t *testing.T) {
 }
 
 func TestVerifyManifestErrorOutcome_OtherError(t *testing.T) {
-	if got := verifyManifestErrorOutcome(fmt.Errorf("boom")); got != verifyOutcomeError {
+	if got := verifyManifestErrorOutcome(errors.New("boom")); got != verifyOutcomeError {
 		t.Errorf("verifyManifestErrorOutcome(other) = %q, want %q", got, verifyOutcomeError)
 	}
 }
