@@ -16,6 +16,42 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// verifyOutcomeStillOwned — G2 (5-е код-ревью): повторная проверка статуса
+// НЕПОСРЕДСТВЕННО перед verify-driven переходом (needs_changes
+// incomplete-retry на attempt 0 ИЛИ финальный EvFail от исхода
+// completionCheck) — конкурентный Pause()/Revise() мог долговечно перевести
+// стадию в paused/revising уже ПОСЛЕ единственной F1-проверки статуса (тот
+// switch срабатывает один раз, сразу после completionCheck(), см. выше), но
+// ДО того, как этот код успевает зафиксировать свой собственный исход —
+// completionCheck (gateWithVerify->RunVerification) может занять сколько
+// угодно времени, и раз он уже вернулся, свежий Pause/Revise может
+// проскочить именно в этом узком окне.
+//
+// EvFail's rule.From == nil (разрешает любой нетерминальный статус —
+// намеренно: остальные call site'ы этого события, "cancelled during retry"/
+// "retries exhausted", ДОЛЖНЫ срабатывать из любого статуса), так что сама
+// FSM не отбрасывает устаревший verify-driven fail — guard нужен именно
+// здесь, локально в этих двух call site'ах, не трогая глобальный From-набор
+// EvFail. Возвращает false, если стадия больше не принадлежит этому исходу
+// (paused/revising) — вызывающий код обязан ничего не коммитить и просто
+// вернуться (для revising — через onUserInterrupted, симметрично уже
+// существующей F1-ветке выше: тот же самый Pause/Revise уже владеет
+// стадией, повторный respawn делает именно onUserInterrupted).
+func (o *Orchestrator) verifyOutcomeStillOwned(stageID string, onUserInterrupted func()) bool {
+	if o.verifyOutcomeGuardHook != nil {
+		o.verifyOutcomeGuardHook(stageID)
+	}
+	switch o.currentStatus(stageID) {
+	case state.StatusPaused:
+		return false
+	case state.StatusRevising:
+		onUserInterrupted()
+		return false
+	default:
+		return true
+	}
+}
+
 // isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
 func isRetryableError(err error) bool {
 	return Classify(err) == ClassRetryable
@@ -193,6 +229,11 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			}
 			// Incomplete work — retry once without backoff
 			if stagefiles.IsIncompleteWorkError(checkErr) && attempt == 0 {
+				// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД commit'ом
+				// этого incomplete-retry — см. verifyOutcomeStillOwned.
+				if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
+					return
+				}
 				incompleteReason = checkErr.Error()
 				// Раньше публиковалось как EventStageStatusChanged с Data-
 				// сообщением (а не статусом) — фронт (extractStatusString)
@@ -213,6 +254,16 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// шага, id отчёта — см. VerifyRejectedError.Error()/
 			// VerifyExecError.Error()) остаётся видна прямо в FSM-транзишне
 			// EvFail, а не только в файлах на диске (verify/<id>/report.md).
+			//
+			// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД commit'ом
+			// EvFail — см. verifyOutcomeStillOwned. Без неё поздний verify
+			// exec-error (или второй needs_changes, тоже попадающий сюда,
+			// раз attempt != 0) мог бы затереть уже случившийся конкурентный
+			// Pause()/Revise(), т.к. EvFail's rule.From == nil разрешает ЛЮБОЙ
+			// нетерминальный статус, включая paused/revising.
+			if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
+				return
+			}
 			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, checkErr.Error())
 			o.failBlockedStages()
 			return

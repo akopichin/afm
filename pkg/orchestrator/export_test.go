@@ -46,6 +46,16 @@ func SetRetryCASBarrierForTest(o *Orchestrator, fn func(stageID string)) {
 	o.retryCASBarrier = fn
 }
 
+// SetVerifyOutcomeGuardHookForTest инъектирует хук, вызываемый в runWithRetry
+// НЕПОСРЕДСТВЕННО перед verify-driven переходами (needs_changes
+// incomplete-retry / финальный EvFail, см. поле verifyOutcomeGuardHook,
+// retry.go's verifyOutcomeStillOwned) — тест может внутри него смоделировать
+// конкурентный Pause()/Revise(), приземлившийся в узком окне между F1-
+// проверкой статуса и этим переходом.
+func SetVerifyOutcomeGuardHookForTest(o *Orchestrator, fn func(stageID string)) {
+	o.verifyOutcomeGuardHook = fn
+}
+
 // SetVerifyAgentRunnerForTest инъектирует фейковый раннер agent-шагов
 // AI-verify (см. поле runVerifyAgent, verify.go) для тестов из внешнего
 // package orchestrator_test — тот же приём, что и остальные *ForTest выше.

@@ -313,6 +313,16 @@ type Orchestrator struct {
 	// session/jsonl победителя. Инъектируется через SetRetryCASBarrierForTest.
 	retryCASBarrier func(stageID string)
 
+	// verifyOutcomeGuardHook — тест-сейм (nil в проде): вызывается в
+	// runWithRetry (retry.go's verifyOutcomeStillOwned) НЕПОСРЕДСТВЕННО перед
+	// каждым verify-driven переходом — needs_changes incomplete-retry
+	// (attempt 0) и финальным EvFail от исхода completionCheck — позволяя
+	// тесту детерминированно смоделировать позднюю гонку Pause()/Revise(),
+	// приземлившуюся МЕЖДУ F1-проверкой статуса (сразу после
+	// completionCheck()) и фактическим срабатыванием этого перехода.
+	// Инъектируется через SetVerifyOutcomeGuardHookForTest.
+	verifyOutcomeGuardHook func(stageID string)
+
 	// flowPauseMu защищает составные решения PauseFlow (и последующей задачи
 	// финализации ревью-паузы) от гонок между конкурентными HTTP-вызовами —
 	// сами поля activationHeld/finalizing/reviewMarker читаются lock-free
