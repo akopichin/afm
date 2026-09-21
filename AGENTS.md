@@ -557,16 +557,25 @@ AFM_USE_DOCKER=1 afm run flow.yaml
 2. The launcher automatically forwards `CLAUDE_CODE_OAUTH_TOKEN` into the container (if set in env).
    `ANTHROPIC_API_KEY` (API key) and `ANTHROPIC_AUTH_TOKEN` are also supported.
 
-**Dashboard:** the port from `server.port` is forwarded to the host via `-p <port>:<port>`, otherwise the UI is inaccessible outside the container. **Browser:** by default (`server.open_browser` absent/`false`) it is NOT opened — the dashboard URL is printed to the log with the hint `→ open this URL in your browser to follow the run`. With `server.open_browser: true` the browser is opened by a host-side opener: afm inside the Linux container can't open a browser on the macOS host itself (`runtime.GOOS=linux` → `xdg-open` without a display), so a separate helper process is launched on the host BEFORE re-exec, polls the forwarded port and calls `open`/`xdg-open`. Inside the container the `openBrowser` call is skipped (`AFM_IN_DOCKER=1`).
+**Dashboard:** the port from `server.port` is forwarded to the host via `-p <port>:<port>`, otherwise the UI is inaccessible outside the container. **Browser:** by default (`server.open_browser` absent/`false`) it is NOT opened — the dashboard URL is printed to the log with the hint `→ open this URL in your browser to follow the run`. With `server.open_browser: true` the browser is opened by a host-side opener: afm inside the Linux container can't open a browser on the macOS host itself (`runtime.GOOS=linux` → `xdg-open` without a display), so a separate helper process is launched on the host BEFORE re-exec, polls the forwarded port and calls `open`/`xdg-open`. Inside any container the `openBrowser` call is skipped (`config.InContainer()` — see "Container auto-detection" below; catches both afm's own re-exec via `AFM_IN_DOCKER=1` and a foreign container by marker file, where `xdg-open` is equally useless).
 
 **Privileges (important):** the container starts as root, but the entrypoint (`docker-entrypoint.sh` + `gosu`) immediately drops privileges to the host uid/gid (`AFM_HOST_UID/GID`, passed from `os.Getuid/Getgid`) and sets `HOME=/home/afm`. So afm and the agents run as the same user as on the host — all writes to `~/.claude`, `~/.afm`, the project directory and `extra_mounts` belong to the host user, not root (no root-owned files and no permission conflicts with the host's claude). Under a non-root user, claude allows `--dangerously-skip-permissions` without `IS_SANDBOX`.
+
+### Container auto-detection (`InContainer` vs `ReExecedIntoContainer`)
+
+afm decides "am I in a container?" from **two** signals, deliberately split into two predicates in `pkg/config/config.go` because the old single `AFM_IN_DOCKER=1` check was conflating two different jobs:
+
+- **`config.InContainer()`** — generic "running inside ANY container?" It is true if `AFM_IN_DOCKER=1` (afm's own re-exec) **OR** a conventional container marker file exists: `/.dockerenv` (Docker) or `/run/.containerenv` (Podman). This governs the **recursion guard** (`IsDockerEnabled()` returns `false` in any container) and the **browser-open skip**. So if someone drops afm into their OWN container (no `AFM_IN_DOCKER`) with Docker mode configured, afm now detects the marker and runs natively instead of attempting a nested docker re-exec — **auto-detect wins even over an explicit `docker.enabled: true` / `AFM_USE_DOCKER=1`** (same effect `AFM_IN_DOCKER=1` always had).
+- **`config.ReExecedIntoContainer()`** — strict "is THIS process afm's own Docker re-exec?" It is the literal `AFM_IN_DOCKER=1` and nothing else. ONLY the transport consumers may key off it — autoShim wrapper generation, lifecycle-hook transport secrets (`AFM_HOOK_SECRET_*`), the `AFM_DOCKER_FILE_ROOTS` manifest decode, and the verify autoShim preflight — because those read env/state that only `docker.ReExec` produces. A foreign container has the marker but NONE of that transport, so feeding it generic containment would be wrong.
+
+Consequence for **autoShim in a foreign container**: wrappers are NOT generated there (that path stays on `ReExecedIntoContainer()`), so a recipe-agent stage expects its binary already installed in that container. This combination is exotic and was already broken before (it attempted docker-in-docker); afm now runs natively rather than re-exec'ing. The launcher's `-e AFM_IN_DOCKER=1` (the *producer* of the transport protocol) is unchanged. Marker detection uses the injectable `containerMarkerPresent`/`containerMarkerPaths` seam so tests never consult the real `/.dockerenv` (a CI run inside a container would otherwise flip results).
 
 ### Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `AFM_USE_DOCKER=1` | Enable Docker mode without editing the config |
-| `AFM_IN_DOCKER=1` | Set inside the container — prevents recursion (don't touch) |
+| `AFM_USE_DOCKER=1` | Enable Docker mode without editing the config (overridden by container auto-detection: ignored inside any container) |
+| `AFM_IN_DOCKER=1` | Set by afm's OWN re-exec inside the container — prevents recursion AND marks the transport protocol as available (don't touch). A foreign container that never sets this is still detected by marker file — see "Container auto-detection" below |
 | `AFM_HOST_UID` / `AFM_HOST_GID` | Passed inside; the entrypoint drops root to this uid/gid (`gosu`), so writes to volumes belong to the host user |
 | `AFM_DOCKER_IMAGE` | Override the image (e.g. for a local build) |
 | `AFM_DEBUG` | Forwarded into the container by value (`-e AFM_DEBUG=…`, not a secret), so the re-exec inside also logs the agent input; on the host it's set by the `--debug` flag in `PersistentPreRunE` |

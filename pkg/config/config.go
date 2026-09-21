@@ -346,10 +346,64 @@ func (d DockerConfig) ValidateAgents() error {
 	return nil
 }
 
-// IsDockerEnabled returns true if Docker mode should be used.
-// AFM_IN_DOCKER=1 always returns false (already inside container).
+// containerMarkerPresent reports whether a conventional container marker file
+// exists on disk: /.dockerenv (Docker) or /run/.containerenv (Podman). It is a
+// package var so tests can substitute it without touching the real host paths
+// (a test running inside a CI container would otherwise see the real markers).
+var containerMarkerPresent = defaultContainerMarkerPresent
+
+// containerMarkerPaths are the well-known marker files a container runtime
+// leaves behind: /.dockerenv (Docker), /run/.containerenv (Podman). A package
+// var so a focused test can point defaultContainerMarkerPresent at a temp path.
+var containerMarkerPaths = []string{"/.dockerenv", "/run/.containerenv"}
+
+func defaultContainerMarkerPresent() bool {
+	// Any existing marker path counts — file or directory. These are
+	// well-known conventions written by the container runtime, not guarantees:
+	// a runtime that omits them yields a false negative, a manually-created
+	// file a false positive. That's an accepted limit of marker-based
+	// detection (см. дизайн: только Docker+Podman маркеры).
+	for _, p := range containerMarkerPaths {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// InContainer reports whether afm is running inside ANY container — either
+// because afm re-exec'd itself into its own managed container (AFM_IN_DOCKER=1,
+// see ReExecedIntoContainer) or because it was placed into a foreign container
+// that leaves a conventional marker file. This is the generic "am I
+// containerized?" predicate: it governs the re-exec recursion guard
+// (IsDockerEnabled) and the browser-open skip. It must NOT gate the transport
+// consumers — those need ReExecedIntoContainer instead (a foreign container has
+// none of afm's own transport env).
+func InContainer() bool {
+	if ReExecedIntoContainer() {
+		return true
+	}
+	return containerMarkerPresent()
+}
+
+// ReExecedIntoContainer reports whether THIS process is afm's own Docker
+// re-exec — i.e. docker.ReExec launched it and set AFM_IN_DOCKER=1 together
+// with the transport env (autoShim secrets, hook secrets, the file-root
+// manifest). ONLY those transport consumers may key off it; generic containment
+// (InContainer) is deliberately insufficient, because a foreign container sets
+// the marker file but none of that transport.
+func ReExecedIntoContainer() bool {
+	return os.Getenv("AFM_IN_DOCKER") == "1"
+}
+
+// IsDockerEnabled returns true if Docker mode should be used. It returns false
+// whenever afm is already inside any container (InContainer) — afm's own
+// re-exec OR a foreign container — so a marker-detected foreign container never
+// triggers a nested Docker re-exec, even with an explicit docker.enabled: true
+// or AFM_USE_DOCKER=1 (auto-detect wins, matching the long-standing
+// AFM_IN_DOCKER=1 behavior).
 func (d DockerConfig) IsDockerEnabled() bool {
-	if os.Getenv("AFM_IN_DOCKER") == "1" {
+	if InContainer() {
 		return false
 	}
 	if d.Enabled != nil {

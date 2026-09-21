@@ -22,9 +22,12 @@ Notes on the flags:
 
 - `-p 127.0.0.1:9876:9876` maps the dashboard port so `http://localhost:9876` works
   from the host (use the same port as `server.port`).
-- `-e AFM_IN_DOCKER=1` tells afm it is already inside a container, so it configures
-  in-container behavior and does **not** try to launch another container — important
-  if a mounted `~/.afm/config.yaml` has `docker.enabled: true`.
+- `-e AFM_IN_DOCKER=1` tells afm it is already inside a container, so it does **not**
+  try to launch another container even if a mounted `~/.afm/config.yaml` has
+  `docker.enabled: true`. Since afm now also **auto-detects** a container by its
+  marker file (`/.dockerenv` / `/run/.containerenv`), this flag is optional for
+  recursion prevention in a manual `docker run` like this — afm won't re-exec either
+  way. Keep it anyway when using afm's official image, which sets it for you.
 - For a Claude Pro/Max subscription, replace `-e ANTHROPIC_API_KEY` with
   `-e CLAUDE_CODE_OAUTH_TOKEN` (see [Authentication](#authentication-in-docker-mode)
   below).

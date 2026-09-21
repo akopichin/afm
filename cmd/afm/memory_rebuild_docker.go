@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,15 +20,20 @@ import (
 // быть взят уже ВНУТРИ контейнера тем же процессом, что его реально
 // держит.
 //
-// Возвращает nil сразу, если Docker выключен или мы уже внутри контейнера
-// (AFM_IN_DOCKER=1) — самый частый путь. Иначе либо возвращает ошибку
+// Возвращает nil сразу, если Docker выключен или мы уже внутри любого
+// контейнера (IsDockerEnabled → config.InContainer: собственный re-exec с
+// AFM_IN_DOCKER=1 ИЛИ чужой контейнер по marker-файлу) — самый частый путь.
+// Иначе либо возвращает ошибку
 // (auth/preflight не прошли), либо делегирует docker.ReExec, которая либо
 // не возвращает управление вовсе (успешный re-exec), либо возвращает
 // *docker.SubprocessExitError (код завершения контейнера) — пробрасываем
 // её вызывающей стороне как есть, main.go уже умеет транслировать такую
 // ошибку в правильный os.Exit (см. main.go).
 func rebuildDockerReExec(cfg config.Config, o rebuildOptions, absFlowPath, agentRoot, memDir, runDir string) error {
-	if !cfg.Docker.IsDockerEnabled() || os.Getenv("AFM_IN_DOCKER") == "1" {
+	// IsDockerEnabled() уже возвращает false внутри любого контейнера
+	// (config.InContainer, включая AFM_IN_DOCKER=1) — отдельная проверка env
+	// здесь была бы избыточной.
+	if !cfg.Docker.IsDockerEnabled() {
 		return nil
 	}
 

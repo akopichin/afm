@@ -88,7 +88,7 @@ func newRunCmd() *cobra.Command {
 			// контейнера (после re-exec, тот же RunE выполняется заново)
 			// ложно решил бы, что шим не активен, хотя на самом деле он уже
 			// применяется этим же процессом.
-			inDockerPreflight := os.Getenv("AFM_IN_DOCKER") == "1"
+			inDockerPreflight := config.ReExecedIntoContainer()
 			codexRecipesShimmed := cfg.Docker.IsAutoShim() && (inDockerPreflight || cfg.Docker.IsDockerEnabled())
 			if err := config.ValidateVerifySpecs(f, cfg, codexRecipesShimmed); err != nil {
 				return fmt.Errorf("verify: %w", err)
@@ -240,7 +240,15 @@ func newRunCmd() *cobra.Command {
 			// используются напрямую.
 			var wrapperSpecs []docker.WrapperSpec
 			generatedAgents := map[string]bool{}
-			if os.Getenv("AFM_IN_DOCKER") == "1" && cfg.Docker.IsAutoShim() {
+			// Job A: autoShim-врапперы генерируются ТОЛЬКО когда мы — собственный
+			// re-exec afm (ReExecedIntoContainer), т.к. они зависят от секретов и
+			// system-prompt'ов, переданных docker.ReExec транспортом. В ЧУЖОМ
+			// контейнере (InContainer по marker-файлу, но без AFM_IN_DOCKER) этого
+			// транспорта нет — врапперы намеренно не генерируются, agent-бинарники
+			// ожидаются установленными в самом контейнере (сценарий autoShim в
+			// чужом контейнере экзотичен и заведомо не работал: раньше приводил к
+			// попытке docker-in-docker).
+			if config.ReExecedIntoContainer() && cfg.Docker.IsAutoShim() {
 				if err := cfg.Docker.ValidateAgents(); err != nil {
 					return err
 				}
@@ -285,7 +293,7 @@ func newRunCmd() *cobra.Command {
 			resumed := store.Snapshot().LastSeq > 0
 			var hooksDisp *lifecyclehooks.Dispatcher
 			var orchRef *orchestrator.Orchestrator
-			inDocker := os.Getenv("AFM_IN_DOCKER") == "1"
+			inDocker := config.ReExecedIntoContainer()
 			if inDocker {
 				// In-container: секреты хуков УЖЕ резолвнуты хостом (docker.ReExec)
 				// и переданы transient bare `-e` env-переменными (см.
@@ -384,7 +392,7 @@ func newRunCmd() *cobra.Command {
 			// Options остаются незаданными).
 			var ws workspace.FS
 			if cfg.Server.GetPort() > 0 {
-				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && os.Getenv("AFM_IN_DOCKER") == "1" {
+				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && config.ReExecedIntoContainer() {
 					man, err := docker.DecodeFileRootManifest(raw)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "warning: file browser disabled: decode file root manifest: %v\n", err)
@@ -521,9 +529,11 @@ func newRunCmd() *cobra.Command {
 				orch.SetDashboardURL(dashURL)
 				fmt.Printf("  dashboard: %s\n", dashURL)
 				if cfg.Server.IsOpenBrowser() {
-					// Локально — openBrowser; в Docker — хост-side opener уже запущен
-					// (launchHostBrowserOpener, run.go:78), в контейнере xdg-open нет.
-					if os.Getenv("AFM_IN_DOCKER") != "1" {
+					// Локально — openBrowser; в контейнере xdg-open нет. Это Job B
+					// ("я в каком-либо контейнере?") — InContainer ловит и наш
+					// собственный re-exec, и чужой контейнер (где хост-opener не
+					// запускался, но открывать браузер изнутри всё равно нельзя).
+					if !config.InContainer() {
 						openBrowser(dashURL)
 					}
 				} else {

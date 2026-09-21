@@ -163,12 +163,15 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	}
 
 	// Единый wrapper-dir: generated-врапперы (autoShim) существуют только
-	// ВНУТРИ контейнера — зеркалит блок run.go (cmd/afm/run.go). rebuild не
+	// ВНУТРИ собственного re-exec-контейнера afm (ReExecedIntoContainer), не в
+	// чужом контейнере — зеркалит блок run.go (cmd/afm/run.go). rebuild не
 	// выполняет стадий флоу, поэтому единственная релевантная команда —
 	// глобальный cfg.Client.Command (UsedRecipeCommands(nil, ...) — Task 13).
 	var wrapperSpecs []docker.WrapperSpec
 	generatedAgents := map[string]bool{}
-	if os.Getenv("AFM_IN_DOCKER") == "1" && cfg.Docker.IsAutoShim() {
+	// Job A: врапперы зависят от транспорта docker.ReExec — только собственный
+	// re-exec afm, не чужой контейнер (см. run.go).
+	if config.ReExecedIntoContainer() && cfg.Docker.IsAutoShim() {
 		if err := cfg.Docker.ValidateAgents(); err != nil {
 			return err
 		}

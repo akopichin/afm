@@ -324,25 +324,85 @@ func TestDockerConfig_IsDockerEnabled(t *testing.T) {
 		cfg          config.DockerConfig
 		envUseDocker string
 		envInDocker  string
+		marker       bool // foreign-container marker file present on disk
 		want         bool
 	}{
-		{"enabled=true", config.DockerConfig{Enabled: &trueVal}, "", "", true},
-		{"enabled=false", config.DockerConfig{Enabled: &falseVal}, "", "", false},
-		{"nil+env=1", config.DockerConfig{}, "1", "", true},
-		{"nil+env=true", config.DockerConfig{}, "true", "", true},
-		{"nil+env=", config.DockerConfig{}, "", "", false},
-		{"in_docker overrides", config.DockerConfig{Enabled: &trueVal}, "", "1", false},
-		{"explicit=true wins over AFM_IN_DOCKER=1 not", config.DockerConfig{Enabled: &trueVal}, "", "1", false},
+		{"enabled=true", config.DockerConfig{Enabled: &trueVal}, "", "", false, true},
+		{"enabled=false", config.DockerConfig{Enabled: &falseVal}, "", "", false, false},
+		{"nil+env=1", config.DockerConfig{}, "1", "", false, true},
+		{"nil+env=true", config.DockerConfig{}, "true", "", false, true},
+		{"nil+env=", config.DockerConfig{}, "", "", false, false},
+		{"in_docker overrides", config.DockerConfig{Enabled: &trueVal}, "", "1", false, false},
+		{"explicit=true wins over AFM_IN_DOCKER=1 not", config.DockerConfig{Enabled: &trueVal}, "", "1", false, false},
+		// Foreign container: marker file present, no AFM_IN_DOCKER. Auto-detect
+		// wins even over an explicit docker.enabled: true / AFM_USE_DOCKER=1 —
+		// afm must not attempt a nested re-exec.
+		{"marker overrides enabled=true", config.DockerConfig{Enabled: &trueVal}, "", "", true, false},
+		{"marker overrides env=1", config.DockerConfig{}, "1", "", true, false},
+		{"no marker, enabled=true → enabled", config.DockerConfig{Enabled: &trueVal}, "", "", false, true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AFM_USE_DOCKER", tc.envUseDocker)
 			t.Setenv("AFM_IN_DOCKER", tc.envInDocker)
+			config.SetContainerMarkerPresentForTest(t, tc.marker)
 			if got := tc.cfg.IsDockerEnabled(); got != tc.want {
 				t.Errorf("IsDockerEnabled()=%v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestInContainer(t *testing.T) {
+	t.Run("AFM_IN_DOCKER=1 wins without touching marker", func(t *testing.T) {
+		t.Setenv("AFM_IN_DOCKER", "1")
+		// Marker stub returns false — env alone must be enough, proving
+		// InContainer short-circuits before the disk check.
+		config.SetContainerMarkerPresentForTest(t, false)
+		if !config.InContainer() {
+			t.Fatal("InContainer()=false, want true when AFM_IN_DOCKER=1")
+		}
+		if !config.ReExecedIntoContainer() {
+			t.Fatal("ReExecedIntoContainer()=false, want true when AFM_IN_DOCKER=1")
+		}
+	})
+	t.Run("foreign container: marker present, no env", func(t *testing.T) {
+		t.Setenv("AFM_IN_DOCKER", "")
+		config.SetContainerMarkerPresentForTest(t, true)
+		if !config.InContainer() {
+			t.Fatal("InContainer()=false, want true when marker present")
+		}
+		// A foreign container is NOT afm's own re-exec — transport is absent.
+		if config.ReExecedIntoContainer() {
+			t.Fatal("ReExecedIntoContainer()=true, want false in a foreign container")
+		}
+	})
+	t.Run("host: no env, no marker", func(t *testing.T) {
+		t.Setenv("AFM_IN_DOCKER", "")
+		config.SetContainerMarkerPresentForTest(t, false)
+		if config.InContainer() {
+			t.Fatal("InContainer()=true, want false on a bare host")
+		}
+	})
+}
+
+// TestDefaultContainerMarkerPresent exercises the real os.Stat-based detector
+// against temp paths, so the filesystem logic itself is covered (not only the
+// injected seam used elsewhere).
+func TestDefaultContainerMarkerPresent(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "dockerenv")
+	config.SetContainerMarkerPathsForTest(t, []string{filepath.Join(dir, "absent"), marker})
+
+	if config.ProbeContainerMarkersForTest() {
+		t.Fatal("want false: no marker path exists yet")
+	}
+	if err := os.WriteFile(marker, nil, 0o644); err != nil {
+		t.Fatalf("create marker: %v", err)
+	}
+	if !config.ProbeContainerMarkersForTest() {
+		t.Fatal("want true: a marker path now exists")
 	}
 }
 
