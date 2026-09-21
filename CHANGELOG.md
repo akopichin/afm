@@ -4,6 +4,35 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-21
+
+### Improvement: automatic container detection (no `AFM_IN_DOCKER` required)
+
+afm previously knew it was running inside a container **only** from the
+`AFM_IN_DOCKER=1` env var it sets on its own re-exec. If someone dropped afm into
+their **own** container without that variable, afm didn't realize it was
+containerized and — with Docker mode configured — would try to launch a nested
+Docker container. It now auto-detects containment by the conventional marker
+files `/.dockerenv` (Docker) and `/run/.containerenv` (Podman) and runs natively
+instead. See [Docker mode](https://akopichin.github.io/afm/docker/).
+
+- **Auto-detect wins over config.** Inside any detected container the Docker
+  re-exec is suppressed even with an explicit `docker.enabled: true` /
+  `AFM_USE_DOCKER=1` — the same effect `AFM_IN_DOCKER=1` always had, now extended
+  to foreign containers. Browser auto-open is likewise skipped in any container.
+- **Two distinct signals, not one.** The generic "am I in a container?" check
+  (marker file or env) governs only the re-exec guard and browser skip. The
+  transport-dependent features that exist only in afm's **own** managed container
+  — autoShim wrappers, lifecycle-hook transport secrets, the file-root manifest,
+  the verify preflight — stay keyed strictly to `AFM_IN_DOCKER=1`, because a
+  foreign container has none of that transport. autoShim recipes therefore do
+  **not** generate wrappers in a foreign container (that combination was already
+  broken — it attempted docker-in-docker); install the agent binaries in your own
+  image instead.
+- In a manual `docker run`, passing `-e AFM_IN_DOCKER=1` is now optional for
+  recursion prevention (afm detects the marker either way); afm's official image
+  still sets it.
+
 ## 2026-09-20
 
 ### Feature: AI-verify — an independent verification gate
