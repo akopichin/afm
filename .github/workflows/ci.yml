@@ -24,7 +24,10 @@ jobs:
         run: make build
 
       - name: Test
-        run: make test
+        # -p 1: сериализуем race-бинари пакетов на 2-ядерном раннере, иначе
+        # переподписка CPU роняет wall-clock ожидания в pkg/orchestrator по
+        # таймауту (см. комментарий у цели test в Makefile).
+        run: make test TESTFLAGS="-p 1"
 
       - name: UI unit tests
         run: make web-test

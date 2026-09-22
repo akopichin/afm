@@ -35,8 +35,15 @@ web:
 build: web
 	$(GOENV) CGO_ENABLED=0 go build -v -ldflags "-X main.version=$(VERSION)" -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/afm
 
+# TESTFLAGS — дополнительные флаги go test (по умолчанию пусто, локально ничего
+# не меняется). CI передаёт `-p 1`: на 2-ядерном ubuntu-latest дефолтный -p=2
+# гоняет до двух race-инструментированных бинарей пакетов одновременно, и они
+# переподписывают 2 физических ядра. Горутино-тяжёлые тесты pkg/orchestrator при
+# этом голодают по CPU, а их wall-clock ожидания (waitForStatus) ложно падают по
+# таймауту. `-p 1` отдаёт весь раннер одному пакету за раз и убирает этот класс
+# флейков, не замедляя локальную разработку.
 test:
-	$(GOENV) go test ./... -v -race
+	$(GOENV) go test ./... -v -race $(TESTFLAGS)
 
 # schema-check — compiles the hand-written JSON Schemas (schema/*.json), checks
 # exact field paths and parser edge cases, and validates repository examples.
