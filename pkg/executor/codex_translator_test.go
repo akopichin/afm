@@ -347,3 +347,57 @@ func TestCodexAsClaude_FailureStillEmitsGatheredUsage(t *testing.T) {
 		t.Errorf("usage gathered before a graceful failure must still be metered: %+v", obs)
 	}
 }
+
+// TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows asserts that, without
+// CODEX_VERIFY, each codex item.completed is emitted as its OWN assistant line
+// (not aggregated into one; a command_execution may emit one or more lines), and
+// command_execution becomes a Bash tool_use row — matching how claude/openai-agent
+// appear in the afm feed. (Ordering/shape only; liveness is a separate test.)
+func TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	// Two narrations around one shell command, then usage.
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"first thought"}}
+{"type":"item.started","item":{"type":"command_execution","command":"echo hi","status":"in_progress"}}
+{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"second thought"}}
+{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
+
+	out, err := runCodexScript(t, fakeCodex, "do work")
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	// Collect assistant lines in order.
+	var assistantLines []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(l, `"type":"assistant"`) {
+			assistantLines = append(assistantLines, strings.TrimSpace(l))
+		}
+	}
+	if len(assistantLines) != 3 {
+		t.Fatalf("want 3 assistant lines (2 text + 1 Bash tool_use), got %d:\n%s", len(assistantLines), out)
+	}
+	if !strings.Contains(assistantLines[0], "first thought") {
+		t.Errorf("line 0 should carry the first narration: %s", assistantLines[0])
+	}
+	if !strings.Contains(assistantLines[1], `"type":"tool_use"`) ||
+		!strings.Contains(assistantLines[1], `"name":"Bash"`) ||
+		!strings.Contains(assistantLines[1], "echo hi") {
+		t.Errorf("line 1 should be a Bash tool_use for the command: %s", assistantLines[1])
+	}
+	if !strings.Contains(assistantLines[2], "second thought") {
+		t.Errorf("line 2 should carry the second narration: %s", assistantLines[2])
+	}
+
+	// The terminal usage result line is still present and well-formed.
+	rl := extractResultLine(t, out)
+	if !strings.Contains(rl, `"channel":"codex"`) || !strings.Contains(rl, `"input_tokens":5`) {
+		t.Errorf("result line must still carry the usage envelope: %s", rl)
+	}
+}
