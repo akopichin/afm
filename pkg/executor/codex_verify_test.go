@@ -245,11 +245,14 @@ func TestCodexAsClaude_VerifyMode_AggregatesNoToolRows(t *testing.T) {
 		t.Skip("jq not available")
 	}
 	// Help output WITHOUT --output-last-message forces the aggregation fallback,
-	// keeping this test independent of that flag's presence.
+	// keeping this test independent of that flag's presence. Two agent_messages:
+	// if verify ever streamed per-item, assistantCount would catch it (>=2) even
+	// independently of the tool_use check.
 	fakeCodex := writeFakeCodexWithHelp(t, filepath.Join(t.TempDir(), "argv.txt"),
 		"  -s, --sandbox <SANDBOX_MODE>", "",
 		`{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
 {"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"pass\"}"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"tail"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))

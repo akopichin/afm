@@ -522,7 +522,10 @@ func TestCodexAsClaude_NonVerify_ReasoningBecomesText(t *testing.T) {
 }
 
 // TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput: CODEX_VERBOSE=1
-// additionally emits the command's aggregated output as text.
+// additionally emits the command's aggregated output as text. The command
+// deliberately does NOT contain the marker — only the verbose output block can
+// produce it, so the assertion discriminates a verbose regression from the
+// always-emitted Bash tool row (which carries just the command string).
 func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -530,7 +533,7 @@ func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not available")
 	}
-	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"command_execution","command":"emit-verbose-marker","aggregated_output":"VERBOSE_OUTPUT_MARKER_9Z\n","exit_code":0,"status":"completed"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
 	out, err := runCodexScript(t, fakeCodex, "go", "CODEX_VERBOSE=1")
 	if err != nil {
@@ -539,7 +542,7 @@ func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
 	if !strings.Contains(out, `"name":"Bash"`) {
 		t.Errorf("verbose still emits the Bash tool row: %s", out)
 	}
-	if !strings.Contains(out, "hi") {
+	if !strings.Contains(out, "VERBOSE_OUTPUT_MARKER_9Z") {
 		t.Errorf("verbose must also emit the command output: %s", out)
 	}
 }
