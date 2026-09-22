@@ -8,6 +8,17 @@ By default afm stores runs, flows, and config under `.afm/` in the working direc
 
 **Attributing `agent_action` to a stage.** Agent tool-action events get their `stageID` from the `OnAction` closure of the per-stage runner (`runnerFor`, `runner_factory.go`). The injected `o.runner` (tests, empty stageID) is used ONLY when `opts.Runner != nil` and the stage has no `command` of its own; in production every stage always gets a per-stage runner with the correct `s.ID` — otherwise the stage badge in the dashboard's event feed disappeared (`EventFeedPanel.tsx` renders the badge only when `stageId` is non-empty).
 
+## CHANGELOG conventions
+
+- **Entries in `CHANGELOG.md` are written in English.** Commit messages stay in
+  Russian (a separate rule) — the changelog file itself does not mix languages.
+  Match the existing style: a dated `## YYYY-MM-DD` section (newest at the top)
+  with `### Improvement:` / `### Fix:` subsections and prose/bullet bodies like
+  the neighboring entries.
+- **No "Keep a Changelog" references.** Don't add links to (or mentions of)
+  keepachangelog.com — the intro deliberately describes the format without
+  naming it.
+
 ## State persistence & run lifecycle (reliability core)
 
 The event log `.afm/runs/<run_id>/events.jsonl` is the **single trusted source of truth**. `state.json` is a derived cache (it carries `last_seq`); read paths (`afm check`, run lookup) read state from the log via `state.LoadRunState` (no flock), not trusting the snapshot.

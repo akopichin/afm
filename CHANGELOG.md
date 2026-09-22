@@ -1,23 +1,27 @@
 # Changelog
 
-All notable changes to afm are documented here. The format is loosely based on
-[Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
+All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-22
 
 ### Improvement: codex adapter streams live into the dashboard feed
 
-- codex-адаптер (`scripts/codex-as-claude.sh`) в обычном режиме теперь стримит
-  свои мысли (`agent_message`/`reasoning` → текст) и Bash tool-строки live, по
-  одному Claude-событию на каждый `item.completed` — лента дашборда показывает
-  работу codex по ходу дела, а не одним пакетом в самом конце.
-- Файловые правки кода codex делает через bash-команды, поэтому в ленте они
-  видны как Bash-строки (отдельных Edit-строк нет). При `CODEX_VERBOSE=1` за
-  Bash-строкой следует текстовый блок с выводом команды.
-- Verify-режим (`CODEX_VERIFY=1`) без изменений: всё агрегируется в один
-  финальный ответ — строгий JSON-декодер (`DecodeModelResult`) ожидает единый
-  документ, а не поток фраз и tool-строк.
+`scripts/codex-as-claude.sh` (the bundled codex→claude adapter) now streams in
+its normal mode: every codex `item.completed` becomes its own Claude event the
+moment it arrives — thoughts (`agent_message`/`reasoning` → text) and Bash tool
+rows — so the dashboard feed shows codex working as it goes, instead of one
+aggregate blob at the very end.
+
+- **File edits surface as Bash rows.** codex edits files through bash commands,
+  so they appear as Bash rows in the feed (there are no separate Edit rows).
+  With `CODEX_VERBOSE=1` a Bash row is followed by a text block carrying the
+  command's output.
+- **Verify mode (`CODEX_VERIFY=1`) is unchanged.** Everything still aggregates
+  into one final answer — the strict JSON decoder (`DecodeModelResult`) expects
+  a single document, not a stream of phrases and tool rows.
+- Usage accounting, exit-code propagation, and model resolution are untouched
+  (the terminal `result` line keeps the same contract).
 
 ## 2026-09-21
 
