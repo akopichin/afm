@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
 )
@@ -426,5 +429,143 @@ func TestCodexAsClaude_NonVerify_NullUsageLastTurnStillEmitsResult(t *testing.T)
 	}
 	if !strings.Contains(rl, `"subtype":"success"`) {
 		t.Errorf("still expects a plain success result: %s", rl)
+	}
+}
+
+// writeSlowFakeCodex writes a fake codex that prints firstLine, flushes, sleeps
+// sleepSecs, then prints restLines, then exits 0. Used to prove live streaming.
+func writeSlowFakeCodex(t *testing.T, firstLine, restLines string, sleepSecs int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slow-fake-codex")
+	content := "#!/usr/bin/env bash\n" +
+		"printf '%s\\n' " + strconv.Quote(firstLine) + "\n" +
+		"sleep " + strconv.Itoa(sleepSecs) + "\n" +
+		"printf '%s\\n' " + strconv.Quote(restLines) + "\n" +
+		"exit 0\n"
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write slow fake codex: %v", err)
+	}
+	return path
+}
+
+// TestCodexAsClaude_NonVerify_StreamsLive proves the first translated assistant
+// line is emitted BEFORE codex exits (i.e. output is not buffered until the end).
+func TestCodexAsClaude_NonVerify_StreamsLive(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	slow := writeSlowFakeCodex(t,
+		`{"type":"item.completed","item":{"type":"agent_message","text":"early thought"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`,
+		3)
+
+	cmd := exec.Command("bash", codexScriptPath(t))
+	cmd.Env = append(os.Environ(), "CODEX_BIN="+slow, "HOME="+t.TempDir())
+	cmd.Stdin = strings.NewReader("go")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Read the first line; it must arrive well before the 3s sleep elapses.
+	type res struct {
+		line string
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		r := bufio.NewReader(stdout)
+		l, e := r.ReadString('\n')
+		ch <- res{l, e}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("reading first line: %v", got.err)
+		}
+		if !strings.Contains(got.line, "early thought") {
+			t.Fatalf("first streamed line should carry the early narration, got: %q", got.line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no output within 2s — adapter is buffering instead of streaming live")
+	}
+	_ = cmd.Wait()
+}
+
+// TestCodexAsClaude_NonVerify_ReasoningBecomesText: reasoning items surface as
+// agent prose.
+func TestCodexAsClaude_NonVerify_ReasoningBecomesText(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"reasoning","text":"weighing options"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
+	out, err := runCodexScript(t, fakeCodex, "go")
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "weighing options") {
+		t.Errorf("reasoning text must reach the feed: %s", out)
+	}
+}
+
+// TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput: CODEX_VERBOSE=1
+// additionally emits the command's aggregated output as text.
+func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
+	out, err := runCodexScript(t, fakeCodex, "go", "CODEX_VERBOSE=1")
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `"name":"Bash"`) {
+		t.Errorf("verbose still emits the Bash tool row: %s", out)
+	}
+	if !strings.Contains(out, "hi") {
+		t.Errorf("verbose must also emit the command output: %s", out)
+	}
+}
+
+// TestCodexAsClaude_NonVerify_PropagatesExitCode: a non-zero codex exit
+// propagates even though items streamed first.
+func TestCodexAsClaude_NonVerify_PropagatesExitCode(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"partial"}}`, 3)
+	out, err := runCodexScript(t, fakeCodex, "go")
+	if err == nil {
+		t.Fatalf("expected non-zero exit, got success:\n%s", out)
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 3 {
+		t.Fatalf("want exit code 3, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "partial") {
+		t.Errorf("streamed items must still appear before failure: %s", out)
+	}
+	if !strings.Contains(out, `"subtype":"error_during_execution"`) {
+		t.Errorf("failure must still emit the error result line: %s", out)
 	}
 }

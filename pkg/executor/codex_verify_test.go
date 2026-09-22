@@ -232,3 +232,45 @@ func TestCodexAsClaude_NonVerifyMode_UnchangedByDefault(t *testing.T) {
 		t.Errorf("non-verify argv must not use --output-last-message even if supported: %q", got)
 	}
 }
+
+// TestCodexAsClaude_VerifyMode_AggregatesNoToolRows — verify mode must NOT
+// stream per-item and must NOT emit tool_use rows: the whole answer is ONE
+// aggregated assistant text (DecodeModelResult needs a clean JSON buffer).
+// Guards against a future refactor accidentally streaming verify.
+func TestCodexAsClaude_VerifyMode_AggregatesNoToolRows(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	// Help output WITHOUT --output-last-message forces the aggregation fallback,
+	// keeping this test independent of that flag's presence.
+	fakeCodex := writeFakeCodexWithHelp(t, filepath.Join(t.TempDir(), "argv.txt"),
+		"  -s, --sandbox <SANDBOX_MODE>", "",
+		`{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\"verdict\":\"pass\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
+
+	cmd := exec.Command("bash", codexScriptPath(t))
+	cmd.Env = append(os.Environ(), "CODEX_BIN="+fakeCodex, "HOME="+t.TempDir(), "CODEX_VERIFY=1")
+	cmd.Stdin = strings.NewReader("review")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+
+	got := string(out)
+	if strings.Contains(got, `"type":"tool_use"`) {
+		t.Errorf("verify mode must not emit tool_use rows: %s", got)
+	}
+	var assistantCount int
+	for _, l := range strings.Split(strings.TrimSpace(got), "\n") {
+		if strings.Contains(l, `"type":"assistant"`) {
+			assistantCount++
+		}
+	}
+	if assistantCount != 1 {
+		t.Errorf("verify mode must emit exactly ONE aggregated assistant line, got %d:\n%s", assistantCount, got)
+	}
+}
