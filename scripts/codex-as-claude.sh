@@ -96,75 +96,6 @@ else
 fi
 [[ -n "$CODEX_MODEL" ]] && codex_args+=(-m "$CODEX_MODEL")
 
-# run codex with JSON output, accumulate agent messages, emit one assistant event.
-# only agent messages are accumulated by default — command executions and file
-# reads produce excessive noise; set CODEX_VERBOSE=1 to include them.
-#
-# event flow:
-#   Parse all item.completed events and accumulate:
-#     + agent_message        -> accumulate text
-#     + command_execution    -> accumulate if CODEX_VERBOSE=1
-#     + other types          -> skip
-#   When all events are processed, emit one aggregated "assistant" event
-#   (matches openai-as-claude.sh / cursor-as-claude.sh pattern;
-#   pkg/executor/executor.go parseStreamEvent only accepts "assistant"-typed events).
-CODEX_VERBOSE="${CODEX_VERBOSE:-0}"
-if [[ "$CODEX_VERBOSE" != "0" && "$CODEX_VERBOSE" != "1" ]]; then
-    echo "warning: CODEX_VERBOSE must be 0 or 1, got '$CODEX_VERBOSE', defaulting to 0" >&2
-    CODEX_VERBOSE=0
-fi
-
-# codex's raw JSONL output goes to a temp file (not a process substitution)
-# so we can reliably capture its exit status: a failing pipeline inside a
-# `set -e` process-substitution subshell can abort before $? is readable.
-# set -e is suspended around just this one invocation for the same reason.
-out_file=$(mktemp)
-trap 'rm -f "$out_file" "$last_msg_file"' EXIT
-
-set +e
-printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" > "$out_file"
-codex_exit=$?
-set -e
-
-final_text=""
-usage_json=""
-while IFS= read -r line; do
-    ev_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
-    case "$ev_type" in
-        item.completed)
-            item_type=$(printf '%s' "$line" | jq -r '.item.type // empty' 2>/dev/null) || continue
-            case "$item_type" in
-                agent_message)
-                    text=$(printf '%s' "$line" | jq -r '.item.text // empty' 2>/dev/null) || continue
-                    final_text="${final_text}${text}"$'\n'
-                    ;;
-                command_execution)
-                    if [[ "$CODEX_VERBOSE" == "1" ]]; then
-                        cmd=$(printf '%s' "$line" | jq -r '.item.command // empty' 2>/dev/null) || continue
-                        out=$(printf '%s' "$line" | jq -r '.item.aggregated_output // empty' 2>/dev/null) || continue
-                        final_text="${final_text}\$ ${cmd}"$'\n'"${out}"$'\n'
-                    fi
-                    ;;
-            esac
-            ;;
-        turn.completed)
-            # .usage is numeric-only (input/output/cached/reasoning token counts) —
-            # never prompt/response text or secrets — safe to forward verbatim.
-            # Keeps the LAST usage object seen, in case a run somehow reports more
-            # than one turn.completed (a normal `codex exec` reports exactly one).
-            u=$(printf '%s' "$line" | jq -c '.usage // empty' 2>/dev/null) || continue
-            [[ -n "$u" && "$u" != "null" ]] && usage_json="$u"
-            ;;
-    esac
-done < "$out_file"
-
-# When codex wrote an exact final message (verify mode, supported CLI),
-# it replaces the aggregated agent_message text wholesale — this is the
-# EXACT final answer, not a concatenation of intermediate turns.
-if [[ -n "$last_msg_file" && -s "$last_msg_file" ]]; then
-    final_text=$(cat "$last_msg_file")
-fi
-
 # resolve_codex_model: $CODEX_MODEL (explicit) -> safe top-level `model` key from
 # codex's own config.toml (text match only, no TOML eval, no rollout/session
 # files) -> empty (omitted from the envelope below; the collector falls back to
@@ -184,7 +115,6 @@ resolve_codex_model() {
         /^[[:space:]]*model[[:space:]]*=/ { print; exit }
     ' "$config_file" 2>/dev/null | sed -E 's/^[[:space:]]*model[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/'
 }
-resolved_model=$(resolve_codex_model)
 
 # build_result_line <subtype> — emits the terminal result line. When no usage was
 # ever captured (process killed before any turn.completed, or a garbled stream),
@@ -202,18 +132,146 @@ build_result_line() {
          + (if $model != "" then {model:$model} else {} end)'
 }
 
+# run codex with JSON output.
+#
+# Two modes:
+#   * CODEX_VERIFY=1 — aggregation path (UNCHANGED): codex runs to completion,
+#     all agent_message text is concatenated into ONE assistant envelope (or the
+#     exact --output-last-message final answer), because afm strictly JSON-decodes
+#     the verify agent's text buffer (DecodeModelResult) — streamed narration or
+#     tool rows would corrupt it.
+#   * otherwise — streaming path: each codex item.completed is translated to its
+#     OWN Claude assistant line the moment it arrives, so the dashboard feed shows
+#     codex's thoughts and actions live (agent_message/reasoning -> text,
+#     command_execution -> Bash tool_use). afm's executor.parseStreamEvent accepts
+#     only type=="assistant" lines. (codex does file edits via command_execution,
+#     so they already surface as Bash rows — no separate file_change mapping.)
+CODEX_VERBOSE="${CODEX_VERBOSE:-0}"
+if [[ "$CODEX_VERBOSE" != "0" && "$CODEX_VERBOSE" != "1" ]]; then
+    echo "warning: CODEX_VERBOSE must be 0 or 1, got '$CODEX_VERBOSE', defaulting to 0" >&2
+    CODEX_VERBOSE=0
+fi
+
+# codex's raw JSONL always goes to a temp file so we can (a) capture usage from
+# turn.completed after the stream, (b) read the verify final message, and (c) in
+# verify mode aggregate the full answer. Streaming mode ALSO tees each line to
+# this file while translating live.
+out_file=$(mktemp)
+trap 'rm -f "$out_file" "$last_msg_file"' EXIT
+
+# XLATE: per-line jq program (streaming path). One assistant/tool_use line per
+# codex item.completed. Kept per-line (printf | jq) so a single malformed line
+# can't abort the whole stream — same robustness the aggregation loop relies on.
+XLATE='
+    def asst($t): {type:"assistant",message:{content:[{type:"text",text:$t}]}};
+    def tool($n;$inp): {type:"assistant",message:{content:[{type:"tool_use",name:$n,input:$inp}]}};
+    if .type == "item.completed" then
+        (.item.type) as $it
+        | if $it == "agent_message" then
+            ((.item.text // "")) as $m
+            | if ($m | length) > 0 then asst($m + "\n") else empty end
+        elif $it == "reasoning" then
+            ((.item.text // .item.summary // "")) as $r
+            | if ($r | length) > 0 then asst($r + "\n") else empty end
+        elif $it == "command_execution" then
+            tool("Bash"; {command: (.item.command // "")}),
+            (if $verbose == 1 and ((.item.aggregated_output // "") | length) > 0
+             then asst((.item.aggregated_output) + "\n") else empty end)
+        else empty
+        end
+    else empty
+    end
+'
+
+# extract_usage <file> — sets the global usage_json from the LAST turn.completed
+# .usage seen in the raw codex stream (numeric-only, safe to forward verbatim).
+usage_json=""
+extract_usage() {
+    local f="$1" line t u
+    while IFS= read -r line; do
+        t=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
+        if [[ "$t" == "turn.completed" ]]; then
+            u=$(printf '%s' "$line" | jq -c '.usage // empty' 2>/dev/null) || continue
+            [[ -n "$u" && "$u" != "null" ]] && usage_json="$u"
+        fi
+    done < "$f"
+}
+
+if [[ "$CODEX_VERIFY" == "1" ]]; then
+    # --- verify mode: UNCHANGED aggregation path ---
+    set +e
+    printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" > "$out_file"
+    codex_exit=$?
+    set -e
+
+    final_text=""
+    while IFS= read -r line; do
+        ev_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
+        case "$ev_type" in
+            item.completed)
+                item_type=$(printf '%s' "$line" | jq -r '.item.type // empty' 2>/dev/null) || continue
+                case "$item_type" in
+                    agent_message)
+                        text=$(printf '%s' "$line" | jq -r '.item.text // empty' 2>/dev/null) || continue
+                        final_text="${final_text}${text}"$'\n'
+                        ;;
+                    command_execution)
+                        if [[ "$CODEX_VERBOSE" == "1" ]]; then
+                            cmd=$(printf '%s' "$line" | jq -r '.item.command // empty' 2>/dev/null) || continue
+                            out=$(printf '%s' "$line" | jq -r '.item.aggregated_output // empty' 2>/dev/null) || continue
+                            final_text="${final_text}\$ ${cmd}"$'\n'"${out}"$'\n'
+                        fi
+                        ;;
+                esac
+                ;;
+            turn.completed)
+                u=$(printf '%s' "$line" | jq -c '.usage // empty' 2>/dev/null) || continue
+                [[ -n "$u" && "$u" != "null" ]] && usage_json="$u"
+                ;;
+        esac
+    done < "$out_file"
+
+    if [[ -n "$last_msg_file" && -s "$last_msg_file" ]]; then
+        final_text=$(cat "$last_msg_file")
+    fi
+
+    resolved_model=$(resolve_codex_model)
+
+    if [[ "$codex_exit" -ne 0 ]]; then
+        echo "error: codex exited with status $codex_exit" >&2
+        jq -nc --arg t "$final_text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+        build_result_line "error_during_execution"
+        exit "$codex_exit"
+    fi
+
+    jq -nc --arg t "$final_text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+    build_result_line "success"
+    exit 0
+fi
+
+# --- streaming mode (default) ---
+# Each raw line is appended to out_file AND translated live. codex is the 2nd
+# stage of the pipeline, so its exit status is ${PIPESTATUS[1]} (printf=0,
+# codex=1, subshell=2). set -e is suspended so a non-zero codex exit is captured
+# rather than aborting the script before we read PIPESTATUS.
+set +e
+printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" | {
+    while IFS= read -r line; do
+        printf '%s\n' "$line" >> "$out_file"
+        printf '%s' "$line" | jq -c --argjson verbose "$CODEX_VERBOSE" "$XLATE" 2>/dev/null || true
+    done
+}
+codex_exit=${PIPESTATUS[1]}
+set -e
+
+extract_usage "$out_file"
+resolved_model=$(resolve_codex_model)
+
 if [[ "$codex_exit" -ne 0 ]]; then
     echo "error: codex exited with status $codex_exit" >&2
-    # still print whatever text/usage were gathered before the failure — a
-    # process killed before any output at all just leaves both empty, which
-    # Collector.Finish degrades to its own unmetered observation.
-    jq -nc --arg t "$final_text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+    # Items already streamed live; just emit the terminal result and propagate.
     build_result_line "error_during_execution"
     exit "$codex_exit"
 fi
 
-# assistant-конверт: агрегированный текст всего ответа (matches openai-as-claude.sh /
-# cursor-as-claude.sh pattern — afm's executor only accepts "assistant"-typed events,
-# see pkg/executor/executor.go parseStreamEvent).
-jq -nc --arg t "$final_text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
 build_result_line "success"
