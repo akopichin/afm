@@ -600,6 +600,8 @@ func TestCodexAsClaude_NonVerify_WhitespaceAndSummaryArray(t *testing.T) {
 			summaryLine = l
 		case strings.Contains(l, "real answer"):
 			answerLine = l
+		default:
+			// Лишняя строка отсекается проверкой len(assistantLines) выше.
 		}
 	}
 	if summaryLine == "" {
