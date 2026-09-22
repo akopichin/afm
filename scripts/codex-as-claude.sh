@@ -164,17 +164,31 @@ trap 'rm -f "$out_file" "$last_msg_file"' EXIT
 # XLATE: per-line jq program (streaming path). One assistant/tool_use line per
 # codex item.completed. Kept per-line (printf | jq) so a single malformed line
 # can't abort the whole stream — same robustness the aggregation loop relies on.
+# Narration (agent_message/reasoning) emits nothing unless the text has at least
+# one non-whitespace character (test("\S") — no blank feed bubbles), keeping the
+# ORIGINAL text (no trimming). reasoning resolves its source by shape: .item.text
+# (string) wins, else a summary ARRAY (codex's RawResponseItemCompletedNotification
+# shape) is normalized via map(.text // "") | join("\n"), else a plain-string
+# summary, else "" — an array must never reach the string concat (jq would error
+# and || true would silently drop the event).
 XLATE='
     def asst($t): {type:"assistant",message:{content:[{type:"text",text:$t}]}};
     def tool($n;$inp): {type:"assistant",message:{content:[{type:"tool_use",name:$n,input:$inp}]}};
+    def narrated($t): if ($t | test("\\S")) then asst($t + "\n") else empty end;
+    def reasoning_text:
+        if (.item.text | type) == "string" then .item.text
+        elif (.item.summary | type) == "array" then (.item.summary | map(.text // "") | join("\n"))
+        elif (.item.summary | type) == "string" then .item.summary
+        else ""
+        end;
     if .type == "item.completed" then
         (.item.type) as $it
         | if $it == "agent_message" then
             ((.item.text // "")) as $m
-            | if ($m | length) > 0 then asst($m + "\n") else empty end
+            | narrated($m)
         elif $it == "reasoning" then
-            ((.item.text // .item.summary // "")) as $r
-            | if ($r | length) > 0 then asst($r + "\n") else empty end
+            reasoning_text as $r
+            | narrated($r)
         elif $it == "command_execution" then
             tool("Bash"; {command: (.item.command // "")}),
             (if $verbose == 1 and ((.item.aggregated_output // "") | length) > 0

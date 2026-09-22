@@ -547,6 +547,87 @@ func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
 	}
 }
 
+// TestCodexAsClaude_NonVerify_WhitespaceAndSummaryArray guards two XLATE
+// contracts from the codex-adapter review: (1) whitespace-only
+// agent_message/reasoning text (spaces/tabs/newlines) emits NOTHING — a
+// length>0 check alone would still create a blank feed bubble; (2) a reasoning
+// item carrying codex's summary ARRAY shape
+// (summary:[{"type":"summary_text","text":"..."}], per
+// RawResponseItemCompletedNotification) is normalized into joined text instead
+// of failing jq's array+string addition — an error the streaming loop's || true
+// used to swallow, silently dropping the whole reasoning event.
+func TestCodexAsClaude_NonVerify_WhitespaceAndSummaryArray(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	// Raw string literals keep \t and \n as the two-character JSON escapes —
+	// the stream itself must contain tab/newline ESCAPES, which decode to
+	// whitespace-only item text inside jq.
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"   "}}
+{"type":"item.completed","item":{"type":"reasoning","text":"\t\n"}}
+{"type":"item.completed","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"first summary line"},{"type":"summary_text","text":"second line"}]}}
+{"type":"item.completed","item":{"type":"agent_message","text":"real answer"}}
+{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":2}}`, 0)
+
+	out, err := runCodexScript(t, fakeCodex, "go")
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	var assistantLines []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(l, `"type":"assistant"`) {
+			assistantLines = append(assistantLines, strings.TrimSpace(l))
+		}
+	}
+	if len(assistantLines) != 2 {
+		t.Fatalf("want exactly 2 assistant lines (joined summary + real answer; no Bash rows in this stream), got %d:\n%s", len(assistantLines), out)
+	}
+	for _, l := range assistantLines {
+		if !strings.Contains(l, `"type":"text"`) {
+			t.Errorf("every assistant line here must be a text narration, got: %s", l)
+		}
+	}
+
+	var summaryLine, answerLine string
+	for _, l := range assistantLines {
+		switch {
+		case strings.Contains(l, "first summary line"):
+			summaryLine = l
+		case strings.Contains(l, "real answer"):
+			answerLine = l
+		}
+	}
+	if summaryLine == "" {
+		t.Fatalf("no assistant line carries the summary-array reasoning text:\n%s", out)
+	}
+	// jq -c encodes the newline inside the joined text as the two characters \n.
+	if !strings.Contains(summaryLine, "first summary line\\nsecond line") {
+		t.Errorf("summary array must join its entries with a newline into ONE line: %s", summaryLine)
+	}
+	if answerLine == "" {
+		t.Fatalf("no assistant line carries the real answer:\n%s", out)
+	}
+
+	// Whitespace-only narrations must not survive as standalone bubbles (jq -c
+	// keeps spaces literal and encodes tab/newline as \t/\n escapes).
+	if strings.Count(out, `"text":"   `) != 0 {
+		t.Errorf("whitespace-only agent_message must not emit a bubble:\n%s", out)
+	}
+	if strings.Contains(out, `"text":"\t\n`) {
+		t.Errorf("whitespace-only reasoning must not emit a bubble:\n%s", out)
+	}
+
+	rl := extractResultLine(t, out)
+	if !strings.Contains(rl, `"input_tokens":3`) {
+		t.Errorf("result line must still carry the usage envelope: %s", rl)
+	}
+}
+
 // TestCodexAsClaude_NonVerify_PropagatesExitCode: a non-zero codex exit
 // propagates even though items streamed first.
 func TestCodexAsClaude_NonVerify_PropagatesExitCode(t *testing.T) {
