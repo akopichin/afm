@@ -4,6 +4,21 @@ All notable changes to afm are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/); newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-22
+
+### Improvement: codex adapter streams live into the dashboard feed
+
+- codex-адаптер (`scripts/codex-as-claude.sh`) в обычном режиме теперь стримит
+  свои мысли (`agent_message`/`reasoning` → текст) и Bash tool-строки live, по
+  одному Claude-событию на каждый `item.completed` — лента дашборда показывает
+  работу codex по ходу дела, а не одним пакетом в самом конце.
+- Файловые правки кода codex делает через bash-команды, поэтому в ленте они
+  видны как Bash-строки (отдельных Edit-строк нет). При `CODEX_VERBOSE=1` за
+  Bash-строкой следует текстовый блок с выводом команды.
+- Verify-режим (`CODEX_VERIFY=1`) без изменений: всё агрегируется в один
+  финальный ответ — строгий JSON-декодер (`DecodeModelResult`) ожидает единый
+  документ, а не поток фраз и tool-строк.
+
 ## 2026-09-21
 
 ### Improvement: automatic container detection (no `AFM_IN_DOCKER` required)

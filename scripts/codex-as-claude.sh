@@ -21,9 +21,11 @@
 #                    exactly the final answer via --output-last-message when
 #                    the installed codex CLI supports it (probed via
 #                    `codex exec --help`, no network call), otherwise falls
-#                    back to the same aggregated agent_message text used for
-#                    a normal run. Unset (default 0) keeps prior behavior
-#                    byte-identical.
+#                    back to aggregated agent_message text. Unset (default 0)
+#                    STREAMS each item.completed live: agent_message/reasoning
+#                    -> text, command_execution -> Bash tool_use (+ output
+#                    text when CODEX_VERBOSE=1); CODEX_VERIFY=1 aggregates
+#                    into ONE final answer for strict JSON decoding.
 #
 # codex's stderr flows through to this script's stderr (captured by afm's
 # executor into <phase>.stderr.log). If codex exits non-zero (e.g. not
