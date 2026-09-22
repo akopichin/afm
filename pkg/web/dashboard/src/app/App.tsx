@@ -228,8 +228,9 @@ export function App(): ReactElement {
   }, [wsState.view, attnItem?.stageId])
 
   // Клик по стадии в рейле (или по desktop-уведомлению): выбираем её и открываем
-  // подходящий вид — attention, если стадия ждёт действия; иначе read-only
-  // историю плана/диалога, если есть; иначе Feed. openAttention/openHistory/
+  // подходящий вид — attention, если стадия ждёт действия; иначе Feed для
+  // завершённых/ещё не начавшихся стадий; историю живой стадии — если есть.
+  // openAttention/openHistory/
   // openFeed — действия того же редьюсера, поэтому ручной выбор и авто-очередь
   // не расходятся (единая state machine, без параллельной вкладочной).
   function handleSelectStage(stageId: string): void {
@@ -241,6 +242,7 @@ export function App(): ReactElement {
     const stage = stages.find((s) => s.id === stageId) ?? null
     const kind = stage === null ? null : attentionKindForStatus(stage.status)
     if (kind !== null) openAttention(stageId)
+    else if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
     else if (stage?.showDialog === true) openHistory('dialog-history')
     else if (stage?.showPlan === true) openHistory('plan-history')
     else openFeed()
@@ -474,7 +476,7 @@ export function App(): ReactElement {
         count: countByKind(attnItems, contextKind),
         glow: true,
       })
-    } else if (!isGlobalView || (wsState.view === 'feed' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
+    } else if (!isGlobalView || (wsState.view === 'feed' && workspaceStage.status !== 'done' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
       // Тело показывает историю/детали выбранной стадии — вкладка это и отражает.
       // Не рисуем detail-таб в трёх случаях:
       //   • wsState.view === 'cost' — глобальный отчёт, не привязан ни к какой

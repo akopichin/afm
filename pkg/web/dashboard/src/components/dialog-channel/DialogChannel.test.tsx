@@ -132,6 +132,35 @@ describe('DialogChannel', () => {
     expect(textarea).not.toBeDisabled()
   })
 
+  test('collapses answered dialog history while an active question is visible', async () => {
+    const entries = [
+      { id: 'q0', phase: 'p1', question: 'Earlier question', answer: 'Earlier answer' },
+      { id: 'q1', phase: 'p1', question: 'Current question', answer: null, options: ['A'], allow_custom: true },
+    ]
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(entries))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+
+    await screen.findByText('Current question')
+    expect(container.querySelector('#dialog-history')).toHaveClass('collapsed')
+    expect(screen.getByRole('button', { name: '▾ EXPAND HISTORY' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '▾ EXPAND HISTORY' }))
+    expect(container.querySelector('#dialog-history')).not.toHaveClass('collapsed')
+  })
+
+  test('shows the full dialog history when there is no active question', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([
+      { id: 'q0', phase: 'p1', question: 'Earlier question', answer: 'Earlier answer' },
+    ]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage({ status: 'done', hasDialog: true })} />)
+
+    await screen.findByText('Earlier question')
+    expect(container.querySelector('#dialog-history')).not.toHaveClass('collapsed')
+    expect(screen.queryByRole('button', { name: /EXPAND HISTORY/ })).not.toBeInTheDocument()
+  })
+
   test('новый pending-вопрос даёт one-shot класс dialog-flash', async () => {
     const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))

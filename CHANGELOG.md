@@ -5,6 +5,18 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-22
 
+### Fix: pending stages no longer open an empty plan in the dashboard
+
+Clicking a stage that has not started yet now keeps the workspace on Feed instead
+of opening a detail tab with `No plan yet`. Script stages likewise do not expose a
+plan panel while running or finished; failed and paused stages still show the
+panel when it contains Retry or Continue actions.
+
+Completed stages also stay on Feed when clicked; their read-only history is not
+opened automatically. Dialog history is collapsed by default while an active
+question is present, leaving the current question visible; with no active
+question, the full history remains expanded.
+
 ### Improvement: codex adapter streams live into the dashboard feed
 
 `scripts/codex-as-claude.sh` (the bundled codex→claude adapter) now streams in

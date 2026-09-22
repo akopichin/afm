@@ -12,14 +12,19 @@ right (there is no three-column layout or bottom progress bar).
   slide-over drawer (open with the ☰ toggle next to the tabs). Run metrics (Started /
   Elapsed / Idle / Backoff) live in the header, center.
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the real event
-  log across all stages) plus one contextual tab for the selected stage. When a stage
-  needs action the contextual tab is labelled by kind (**Approval / Question / Paused
-  / Failed / Hook failed**) with a count and a glow, and the workspace auto-opens it —
-  one active view at a time, filling the whole area. When several stages await action,
-  prev/next navigation steps through the queue.
+  log across all stages) plus one contextual tab for the selected live/actionable
+  stage. Clicking a `pending` or `done` stage stays on Feed; read-only history is
+  not opened automatically. When a stage needs action the contextual tab is labelled
+  by kind (**Approval / Question / Paused / Failed / Hook failed**) with a count and
+  a glow, and the workspace auto-opens it — one active view at a time, filling the
+  whole area. When several stages await action, prev/next navigation steps through
+  the queue.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.
+- **Dialog history** — while a question is active, answered history is collapsed by
+  default so the current question stays in view. Expand it with **EXPAND HISTORY**;
+  when there is no active question, the full history is shown automatically.
 - **Folder icon (Docker mode only)** — opens the [project file browser](docker.md#project-file-browser).
 - **Est. cost tile & Cost tab** — the header's fifth metric shows the run's estimated
   cost and opens a **Cost** tab with a per-stage/overhead/total breakdown; the stage

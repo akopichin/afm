@@ -70,6 +70,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   const [entries, setEntries] = useState<DialogEntry[]>([])
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
   const [customText, setCustomText] = useState('')
+  // Пока есть активный вопрос, сначала показываем только его. Если вопрос
+  // исчез (ответили/история открыта), история раскрывается автоматически.
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
 
   // Построчные комментарии к pending-вопросу живут внутри keyed-владельца
@@ -133,6 +135,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
       lastPendingKeyRef.current = nextKey
       setSelectedOption(null)
       setCustomText('')
+      setHistoryCollapsed(nextKey !== undefined)
     }
   }, [])
 
@@ -554,7 +557,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
         <div id="dialog-section" className="section">
           <div id="dialog-scroll" className="dialog-scroll" ref={feed.ref}>
             {banner}
-            <div id="dialog-history" className={`dialog-history${historyCollapsed ? ' collapsed' : ''}`}>
+            <div id="dialog-history" className={`dialog-history${pending !== null && historyCollapsed ? ' collapsed' : ''}`}>
               {renderHistory(entries)}
             </div>
 

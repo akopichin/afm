@@ -74,11 +74,16 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 		autonomous := stageIsAutonomous(runDir, id)
 		hasDialog := stageHasDialog(runDir, id)
 		interactive := stageInteractive[id]
+		isScript := stageIsScript[id]
 		// autonomous-стадии обычно вообще не имеют plan.md и никогда не доходят
 		// до статусов, для которых нужна панель плана — кроме failed (retry) и
 		// paused (Continue): обе требуют кнопки действия, которая живёт в
-		// PlanPanel, а не в DialogChannel.
-		showPlan := !autonomous || st.Status == state.StatusFailed || st.Status == state.StatusPaused
+		// PlanPanel, а не в DialogChannel. Pending ещё не начиналась и не имеет
+		// пользовательского артефакта для просмотра; script-стадии не имеют
+		// plan.md вообще. Для failed/paused PlanPanel всё равно нужен ради Retry/
+		// Continue, включая autonomous и script-треки.
+		showPlan := (st.Status != state.StatusPending && !isScript && !autonomous) ||
+			st.Status == state.StatusFailed || st.Status == state.StatusPaused
 		// ShowDialog резервирует строку под DialogChannel в лейауте. Условие ДОЛЖНО
 		// совпадать с внутренним гейтом hasContent самого DialogChannel.tsx
 		// (entries>0 || awaiting_user_input || hasDialog) — иначе для стадии, где
@@ -106,7 +111,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			Autonomous:  autonomous,
 			AutoApprove: stageAutoApprove[id],
 			HasDialog:   hasDialog,
-			IsScript:    stageIsScript[id],
+			IsScript:    isScript,
 			PausedFrom:  pausedFrom,
 			ShowPlan:    showPlan,
 			ShowDialog:  showDialog,

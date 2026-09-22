@@ -1,5 +1,15 @@
 # Release Notes — afm dashboard
 
+## 2026-09-22
+
+- **Feed remains the default for non-actionable stages.** Clicking a `pending` or
+  `done` stage no longer opens an empty plan or read-only history tab. Actionable
+  states (`awaiting_approval`, `awaiting_user_input`, `failed`, and `paused`) keep
+  their existing Attention and recovery controls.
+- **Active dialog questions take priority over history.** While a question is
+  waiting for an answer, answered dialog history is collapsed by default and can be
+  expanded explicitly. Once there is no active question, the full history is shown.
+
 ## 2026-09-17
 
 - **Убран переключатель Feed/Log — лента теперь единственный вид воркспейса.** Раньше

@@ -47,8 +47,8 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 	if a.Name != "Stage A" || !a.Interactive || !a.AutoApprove {
 		t.Errorf("stage a view wrong: %+v", a)
 	}
-	if !a.ShowPlan {
-		t.Errorf("stage a (not autonomous): ShowPlan should be true, got %+v", a)
+	if a.ShowPlan {
+		t.Errorf("stage a (pending): ShowPlan should be false, got %+v", a)
 	}
 	// interactive:true, но pending и без диалоговой истории → строку под диалог
 	// НЕ резервируем (иначе пустая дыра). Панель появится, когда стадия реально
@@ -66,6 +66,48 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 	// autonomous, но failed и без диалоговой истории → тоже не резервируем.
 	if b.ShowDialog {
 		t.Errorf("stage b (autonomous, failed, no dialog): ShowDialog should be false, got %+v", b)
+	}
+}
+
+func TestBuildStageViews_HidesPlanForPendingAndScriptStages(t *testing.T) {
+	runDir := t.TempDir()
+	for _, id := range []string{"pending", "script-running", "script-done", "script-failed", "script-paused"} {
+		if err := os.MkdirAll(filepath.Join(runDir, id), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rs := state.RunState{
+		StageOrder: []string{"pending", "script-running", "script-done", "script-failed", "script-paused"},
+		Stages: map[string]state.StageState{
+			"pending":        {Status: state.StatusPending},
+			"script-running": {Status: state.StatusRunning},
+			"script-done":    {Status: state.StatusDone},
+			"script-failed":  {Status: state.StatusFailed},
+			"script-paused":  {Status: state.StatusPaused},
+		},
+	}
+
+	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{
+		"script-running": true,
+		"script-done":    true,
+		"script-failed":  true,
+		"script-paused":  true,
+	}, nil, nil, nil)
+	byID := make(map[string]StageView, len(views))
+	for _, view := range views {
+		byID[view.ID] = view
+	}
+
+	for _, id := range []string{"pending", "script-running", "script-done"} {
+		if byID[id].ShowPlan {
+			t.Errorf("%s: ShowPlan = true, want false", id)
+		}
+	}
+	for _, id := range []string{"script-failed", "script-paused"} {
+		if !byID[id].ShowPlan {
+			t.Errorf("%s: ShowPlan = false, want true for recovery action", id)
+		}
 	}
 }
 
