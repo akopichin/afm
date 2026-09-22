@@ -401,3 +401,30 @@ func TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows(t *testing.T) {
 		t.Errorf("result line must still carry the usage envelope: %s", rl)
 	}
 }
+
+// TestCodexAsClaude_NonVerify_NullUsageLastTurnStillEmitsResult guards the
+// set -e foot-gun where extract_usage's loop ends on a conditionally-failing
+// [[ ]]&& list: a stream whose LAST line is a turn.completed with null usage
+// must still emit the result line and exit 0 (no silent errexit abort).
+func TestCodexAsClaude_NonVerify_NullUsageLastTurnStillEmitsResult(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"more"}}
+{"type":"turn.completed","usage":null}`, 0)
+	out, err := runCodexScript(t, fakeCodex, "go")
+	if err != nil {
+		t.Fatalf("script must exit 0 even when the last turn.completed carries null usage: %v\n%s", err, out)
+	}
+	rl := extractResultLine(t, out)
+	if strings.Contains(rl, "usage_contract_version") {
+		t.Errorf("null usage must not fabricate an envelope: %s", rl)
+	}
+	if !strings.Contains(rl, `"subtype":"success"`) {
+		t.Errorf("still expects a plain success result: %s", rl)
+	}
+}

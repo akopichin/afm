@@ -192,7 +192,9 @@ extract_usage() {
         t=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
         if [[ "$t" == "turn.completed" ]]; then
             u=$(printf '%s' "$line" | jq -c '.usage // empty' 2>/dev/null) || continue
-            [[ -n "$u" && "$u" != "null" ]] && usage_json="$u"
+            if [[ -n "$u" && "$u" != "null" ]]; then
+                usage_json="$u"
+            fi
         fi
     done < "$f"
 }
