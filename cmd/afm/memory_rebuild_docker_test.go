@@ -118,6 +118,14 @@ func TestRebuildDockerReExec_OnlyGlobalCommandFeedsMounts(t *testing.T) {
 // TestRebuildDockerReExec_ClaudeCommandRequiresAuth — CheckClaudeDockerAuth
 // is invoked for the (default) "claude" client command, same as run.go.
 func TestRebuildDockerReExec_ClaudeCommandRequiresAuth(t *testing.T) {
+	// Герметичность: preflight считает «auth есть» по любому непустому
+	// CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_* из окружения. В интерактивном shell
+	// гонщика эти переменные экспортированы — без зачистки тест ложно падал
+	// («execFunc must not be called»). Пустое значение для проверки
+	// os.Getenv(key) != "" эквивалентно отсутствию переменной.
+	for _, key := range config.ClaudeAuthEnvVars {
+		t.Setenv(key, "")
+	}
 	docker.SetExecFunc(func(string, []string, []string) error {
 		t.Fatal("execFunc must not be called when auth preflight fails")
 		return nil
