@@ -24,7 +24,10 @@ export type LineCommentDocumentApi = {
   commentCount: number
   activeCommentLine: number | null
   draft: string
-  // hasOpenDraft — открыта форма с непустым черновиком (кнопки действий гейтятся).
+  // hasOpenDraft — открыта форма с НЕПУСТЫМ черновиком. Submit-кнопки
+  // (Approve/Send revision/Send feedback/answer SEND) гейтятся по activeCommentLine
+  // (форма открыта, даже пустая), а не по hasOpenDraft — иначе пустая открытая
+  // форма пропускала бы сабмит по ошибке.
   hasOpenDraft: boolean
   clearComments: () => void
 }
