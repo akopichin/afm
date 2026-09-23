@@ -71,7 +71,7 @@ describe('FileViewer', () => {
     render(<FileViewer content={makeContent({ content: 'a\nb' })} loading={false} error={null} root="project" addNote={vi.fn()} />)
     fireEvent.click(screen.getByTestId('file-line-2'))
     expect(screen.queryByRole('textbox')).toBeNull()
-    expect(screen.queryByText(/поставить флоу на паузу/i)).toBeNull()
+    expect(screen.queryByText(/pausing the flow/i)).toBeNull()
   })
 
   test('a line is not annotatable without an addNote/root (flowPauseState alone is not enough)', () => {
@@ -277,10 +277,10 @@ describe('FileViewer', () => {
       <FileViewer content={sampleFile} loading={false} error={null} root="project" addNote={vi.fn()} flowPauseState="none" pauseFlow={pauseFlow} />,
     )
     fireEvent.click(screen.getByTestId('file-line-2'))
-    expect(screen.getByText(/поставить флоу на паузу/i)).toBeInTheDocument()
+    expect(screen.getByText(/pausing the flow/i)).toBeInTheDocument()
     // The confirm blocks the editor from opening on this same click.
     expect(screen.queryByRole('textbox')).toBeNull()
-    fireEvent.click(screen.getByText('Да'))
+    fireEvent.click(screen.getByText('Pause'))
     await waitFor(() => expect(pauseFlow).toHaveBeenCalled())
   })
 
@@ -299,10 +299,10 @@ describe('FileViewer', () => {
     )
 
     fireEvent.click(screen.getByTestId('file-line-2'))
-    expect(screen.getByText(/поставить флоу на паузу/i)).toBeInTheDocument()
+    expect(screen.getByText(/pausing the flow/i)).toBeInTheDocument()
 
-    fireEvent.click(screen.getByText('Нет'))
-    expect(screen.queryByText(/поставить флоу на паузу/i)).toBeNull()
+    fireEvent.click(screen.getByText('Cancel'))
+    expect(screen.queryByText(/pausing the flow/i)).toBeNull()
     expect(pauseFlow).not.toHaveBeenCalled()
   })
 
@@ -321,7 +321,7 @@ describe('FileViewer', () => {
     )
 
     fireEvent.click(screen.getByTestId('file-line-2'))
-    fireEvent.click(screen.getByText('Да'))
+    fireEvent.click(screen.getByText('Pause'))
 
     // The caller's poll picks up the new status and re-renders with 'paused'.
     rerender(
@@ -336,7 +336,7 @@ describe('FileViewer', () => {
       />,
     )
 
-    expect(screen.queryByText(/поставить флоу на паузу/i)).toBeNull()
+    expect(screen.queryByText(/pausing the flow/i)).toBeNull()
     expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 })

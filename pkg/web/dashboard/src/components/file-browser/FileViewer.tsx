@@ -279,13 +279,13 @@ export function FileViewer({
 
         {confirmingPause && (
           <div className="review-pause-confirm" onClick={(event) => event.stopPropagation()}>
-            <p>Чтобы писать заметки, нужно поставить флоу на паузу. Поставить?</p>
+            <p>Writing notes requires pausing the flow. Pause it?</p>
             <div className="comment-actions">
               <button className="btn btn-send" type="button" onClick={confirmPause}>
-                Да
+                Pause
               </button>
               <button className="btn btn-cancel" type="button" onClick={declinePause}>
-                Нет
+                Cancel
               </button>
             </div>
           </div>

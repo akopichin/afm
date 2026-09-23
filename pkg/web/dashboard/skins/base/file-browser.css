@@ -507,6 +507,13 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+/* The pause-confirm reuses .comment-actions but sits outside .line-comment-form,
+   so plan-panel.css's `.line-comment-form .comment-actions { gap }` doesn't reach
+   it — give it its own flex+gap so the buttons don't touch. */
+.file-line .review-pause-confirm .comment-actions {
+  display: flex;
+  gap: 8px;
+}
 
 /* === Дифф === */
 .diff-viewer {
