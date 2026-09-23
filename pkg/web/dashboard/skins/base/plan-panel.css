@@ -258,8 +258,8 @@
   background: rgba(111, 212, 204, 0.08);
 }
 .line-commented [data-line].is-active {
-  background: rgba(229, 212, 66, 0.10);
-  box-shadow: inset 2px 0 0 var(--amber), 0 0 0 1px var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 .line-commented [data-line]:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -271,9 +271,9 @@
    header-th, и чётную data-row. Порядок has-comment → is-hover → is-active. */
 .line-commented .md tr.has-comment > :is(th, td) { background: rgba(229, 212, 66, 0.12); }
 .line-commented .md tr.is-hover > :is(th, td) { background: rgba(111, 212, 204, 0.10); }
+.line-commented .md tr.is-active { box-shadow: none; }
 .line-commented .md tr.is-active > :is(th, td) {
-  background: rgba(229, 212, 66, 0.16);
-  box-shadow: inset 0 0 0 1px var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
 
 /* hr как цель: <hr> почти нулевой высоты — даём реальную область попадания и
@@ -284,7 +284,7 @@
 }
 .line-commented hr[data-line].is-hover { box-shadow: 0 0 0 1px var(--mint-soft); }
 .line-commented hr[data-line].has-comment { box-shadow: inset 2px 0 0 var(--amber); }
-.line-commented hr[data-line].is-active { box-shadow: 0 0 0 1px var(--accent-primary); }
+.line-commented hr[data-line].is-active { box-shadow: inset 3px 0 0 var(--accent-primary); }
 
 /* === Special plan sections === */
 .plan-section-wrapper {
