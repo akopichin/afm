@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1054,5 +1056,87 @@ func TestRunScript_OnActionCalledPerLine(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != "line1" || got[1] != "line2" {
 		t.Errorf("OnAction lines = %v, want [line1 line2]", got)
+	}
+}
+
+func TestRunScript_StreamsStderrToOnAction(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	var mu sync.Mutex
+	var stdout, stderr []string
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, "echo out; echo err 1>&2"},
+		IdleTimeout: time.Minute,
+		OnAction: func(stream, line string) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch stream {
+			case "stdout":
+				stdout = append(stdout, line)
+			case "stderr":
+				stderr = append(stderr, line)
+			default:
+				t.Errorf("unexpected OnAction stream %q", stream)
+			}
+		},
+	})
+
+	if err := ex.RunScript(context.Background(), time.Minute, logFile); err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(stdout, "out") {
+		t.Fatalf("stdout not streamed via OnAction: %v", stdout)
+	}
+	if !slices.Contains(stderr, "err") {
+		t.Fatalf("stderr not streamed via OnAction: %v", stderr)
+	}
+
+	// stderr must also be persisted to the durable .stderr.log file.
+	data, err := os.ReadFile(filepath.Join(dir, "script.stderr.log"))
+	if err != nil {
+		t.Fatalf("read stderr.log: %v", err)
+	}
+	if !strings.Contains(string(data), "err") {
+		t.Errorf("stderr.log missing content: %q", data)
+	}
+}
+
+// TestRunScript_TimeoutStillFlushesPartialStderrLine verifies that a trailing
+// partial stderr line (no terminating '\n') still reaches OnAction after a
+// hard ScriptTimeout kills the subprocess — lineWriter.Flush() runs after
+// e.run returns regardless of why it returned (success, timeout, or
+// interruption).
+func TestRunScript_TimeoutStillFlushesPartialStderrLine(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	var mu sync.Mutex
+	var stderr []string
+	ex := executor.New(executor.Config{
+		Command:   testCmdShell,
+		ExtraArgs: []string{testFlagC, "printf 'partial-no-newline' 1>&2; sleep 10"},
+		OnAction: func(stream, line string) {
+			mu.Lock()
+			defer mu.Unlock()
+			if stream == "stderr" {
+				stderr = append(stderr, line)
+			}
+		},
+	})
+
+	err := ex.RunScript(context.Background(), 200*time.Millisecond, logFile)
+	if err == nil || !strings.Contains(err.Error(), "script timeout") {
+		t.Fatalf("expected script timeout error, got %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(stderr, "partial-no-newline") {
+		t.Fatalf("partial trailing stderr line not flushed after timeout: %v", stderr)
 	}
 }

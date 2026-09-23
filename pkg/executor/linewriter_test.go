@@ -94,6 +94,31 @@ func TestReadStderrTail_LargeFile_MemoryBounded(t *testing.T) {
 	}
 }
 
+// TestReadStderrTail_MultiByteRuneAtCut_NeverSplitsRune builds a final line
+// whose byte-cap cut point lands in the middle of a real multi-byte UTF-8
+// character (Cyrillic + emoji) and asserts the returned tail never splits a
+// rune — the cut backs up to the nearest rune boundary instead of slicing
+// mid-character.
+func TestReadStderrTail_MultiByteRuneAtCut_NeverSplitsRune(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+
+	// ASCII padding + Cyrillic text + an emoji (4-byte UTF-8), so that a
+	// small maxBytes cut is very likely to fall inside one of the
+	// multi-byte characters rather than exactly on a boundary.
+	line := strings.Repeat("x", 10) + "привет мир 🎉 конец"
+	if err := os.WriteFile(filepath.Join(dir, "script.stderr.log"), []byte(line+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for maxBytes := 1; maxBytes <= len(line); maxBytes++ {
+		tail := ReadStderrTail(logFile, 20, maxBytes)
+		if !utf8.ValidString(tail) {
+			t.Fatalf("maxBytes=%d: cut split a multi-byte rune: %q", maxBytes, tail)
+		}
+	}
+}
+
 func TestLineWriter_HugeLineNoNewline_TruncatesNotUnbounded(t *testing.T) {
 	var got []string
 	lw := newLineWriter(func(s string) { got = append(got, s) })

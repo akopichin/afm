@@ -674,10 +674,21 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 	}
 	defer lg.Close()
 
-	var stderr = io.Discard
+	// Durable stderr sink (the .stderr.log file) and, independently, the live
+	// feed sink (lineWriter → OnAction("stderr", ...)). Built so that
+	// streaming to OnAction survives even if the log file failed to open —
+	// fileSink degrades to io.Discard, but stderrWriter still carries stderr
+	// to lw via io.MultiWriter.
+	fileSink := io.Writer(io.Discard)
 	if sf := openStderrLog(logFile); sf != nil {
-		stderr = sf
+		fileSink = sf
 		defer sf.Close()
+	}
+	var lw *lineWriter
+	stderrWriter := fileSink
+	if e.cfg.OnAction != nil {
+		lw = newLineWriter(func(line string) { e.cfg.OnAction("stderr", line) })
+		stderrWriter = io.MultiWriter(fileSink, lw)
 	}
 
 	lg.LogStart("script", strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile)))
@@ -689,7 +700,7 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 		defer cancel()
 	}
 
-	runErr := e.run(runCtx, "", "script", stderr, func(line string) {
+	runErr := e.run(runCtx, "", "script", stderrWriter, func(line string) {
 		// "text" (не "stdout") — тип строки, который use-stage-log.ts's
 		// TEXT_LINE_PATTERN на дашборде распознаёт как отображаемый в Log
 		// panel; тот же тип, что и обычный текстовый вывод агента.
@@ -698,6 +709,13 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 			e.cfg.OnAction("stdout", line)
 		}
 	})
+	if lw != nil {
+		// Emit any trailing partial stderr line (no terminating '\n' yet) —
+		// covers both the normal-exit case and timeout/interruption, where
+		// e.run already returned (killProcessGroup + cmd.Wait joined the
+		// internal stderr-copy goroutine) but the last line never saw a '\n'.
+		lw.Flush()
+	}
 	if errors.Is(runErr, context.DeadlineExceeded) {
 		runErr = fmt.Errorf("script timeout after %v", timeout)
 	}
