@@ -56,8 +56,11 @@ const (
 	// CAS) and never triggers an FSM transition itself — Revise already did.
 	EventAgentNote      EventType = "agent_note"
 	EventContextWarning EventType = "context_warning"
-	// EventScriptOutput carries one line of stdout from a script/hook run.
-	// Data: map[string]string{"hook": "before"|"script"|"after", "line": "..."}.
+	// EventScriptOutput carries one line of output (stdout or stderr) from a
+	// script/hook run. Data: map[string]string{"hook": "before"|"script"|
+	// "after", "line": "...", "stream": "stdout"|"stderr"}. "stream" is
+	// absent on pre-upgrade notices.jsonl lines — treat a missing/empty
+	// value as "stdout".
 	EventScriptOutput EventType = "script_output"
 	// EventHookFailed fires when a before/after hook exhausts its 3x/1-2-3s
 	// retries. Data: map[string]string{"hook": ..., "error": "..."}.

@@ -176,8 +176,8 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 		IdleTimeout: 24 * time.Hour, // effectively disabled; timeout below is the real bound
 		Dir:         o.opts.RootDir,
 		StageDir:    filepath.Join(o.opts.RunDir, s.ID),
-		OnAction: func(_, line string) {
-			data := map[string]string{"hook": hook, "line": line}
+		OnAction: func(stream, line string) {
+			data := map[string]string{"hook": hook, "line": line, "stream": stream}
 			o.ui.Publish(bus.Event{Type: bus.EventScriptOutput, StageID: s.ID, Data: data})
 			// stagefiles.AppendNotice — тот же механизм, которым EventAgentCompleted/
 			// EventContextWarning уже становятся durable+реплеиваемыми через

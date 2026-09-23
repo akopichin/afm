@@ -225,6 +225,98 @@ func TestExecScript_PersistsOutputToNotices(t *testing.T) {
 	}
 }
 
+// TestExecScript_PublishesStreamForStderrOutput verifies a script_output
+// notice for a line written to stderr carries "stream":"stderr" (and a
+// stdout line carries "stream":"stdout") — Task 2's RunScript already tags
+// OnAction calls with the stream; execScript must thread it through into the
+// published/persisted data, not drop it as it did before.
+func TestExecScript_PublishesStreamForStderrOutput(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ui := bus.NewUIBus()
+	o := &Orchestrator{opts: Options{RootDir: rootDir, RunDir: runDir}, ui: ui}
+
+	s := flow.Stage{ID: "s1"}
+	logFile := filepath.Join(stageDir, "before.log")
+	err := o.execScript(context.Background(), s, "before", "echo out-line; echo err-line >&2", 5*time.Second, logFile)
+	if err != nil {
+		t.Fatalf("execScript: %v", err)
+	}
+
+	noticesData, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		t.Fatalf("read notices.jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(noticesData)), "\n")
+
+	type scriptOutputData struct {
+		Hook   string `json:"hook"`
+		Line   string `json:"line"`
+		Stream string `json:"stream"`
+	}
+	var sawStdout, sawStderr bool
+	for _, l := range lines {
+		var entry struct {
+			Type string           `json:"type"`
+			Data scriptOutputData `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(l), &entry); err != nil {
+			t.Fatalf("unmarshal notice %q: %v", l, err)
+		}
+		switch {
+		case entry.Data.Line == "out-line" && entry.Data.Stream == "stdout":
+			sawStdout = true
+		case entry.Data.Line == "err-line" && entry.Data.Stream == "stderr":
+			sawStderr = true
+		default:
+			// other lines (if any) are irrelevant to this assertion
+		}
+	}
+	if !sawStdout {
+		t.Errorf("expected a script_output notice with stream=stdout line=out-line, got %q", string(noticesData))
+	}
+	if !sawStderr {
+		t.Errorf("expected a script_output notice with stream=stderr line=err-line, got %q", string(noticesData))
+	}
+}
+
+// TestScriptOutputNotice_LegacyLineWithoutStreamDefaultsToStdout verifies a
+// pre-upgrade notices.jsonl line (written before the "stream" field
+// existed) still decodes cleanly, and that a reader treats an absent
+// "stream" as "stdout" — backward compatibility for old run logs.
+func TestScriptOutputNotice_LegacyLineWithoutStreamDefaultsToStdout(t *testing.T) {
+	line := `{"time":"2026-09-23T10:00:00Z","type":"script_output","stage_id":"s1","data":{"hook":"before","line":"legacy output"}}`
+
+	type scriptOutputData struct {
+		Hook   string `json:"hook"`
+		Line   string `json:"line"`
+		Stream string `json:"stream"`
+	}
+	var entry struct {
+		Type string           `json:"type"`
+		Data scriptOutputData `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		t.Fatalf("unmarshal legacy notice: %v", err)
+	}
+
+	stream := entry.Data.Stream
+	if stream == "" {
+		stream = "stdout" // absent stream (pre-upgrade line) defaults to stdout
+	}
+	if stream != "stdout" {
+		t.Errorf("stream = %q, want stdout (legacy default)", stream)
+	}
+	if entry.Data.Line != "legacy output" {
+		t.Errorf("line = %q, want %q", entry.Data.Line, "legacy output")
+	}
+}
+
 func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
 	t.Helper()
 	rootDir := t.TempDir()
