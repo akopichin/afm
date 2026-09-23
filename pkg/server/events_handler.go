@@ -15,10 +15,17 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// maxReplayEvents ограничивает историю, отдаваемую /api/events, последними
-// 200 записями — совпадает с MAX_EVENTS во фронте (use-event-feed.ts):
-// отдавать больше бессмысленно, клиент всё равно обрежет.
-const maxReplayEvents = 200
+// maxReplayEvents bounds the GLOBAL /api/events history (Full feed + the WS
+// status-refresh trigger). Raised from 200 to 1000 so the whole-flow feed is
+// deep enough on long runs. (The AI-verify badge no longer reads this — it's a
+// durable per-stage field on /api/status, see Task 7.)
+const maxReplayEvents = 1000
+
+// maxStageReplayEvents bounds the PER-STAGE /api/events?stage=<id> history
+// (the Feed tab). Independent of maxReplayEvents so a completed stage always
+// shows its own last 200 events regardless of global recency — the whole point
+// of the fix.
+const maxStageReplayEvents = 200
 
 // Названия FSM-событий (Transition.Event) и производных feed-типов, которые
 // из них выводятся, текстуально совпадают — общие константы вместо
@@ -45,13 +52,17 @@ type feedEvent struct {
 	Seq       uint64    `json:"seq,omitempty"`
 }
 
-func (s *Server) handleEvents(w http.ResponseWriter, _ *http.Request) {
-	events := s.reconstructEventHistory()
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	stage := r.URL.Query().Get("stage")
+	events := s.reconstructEventHistory(stage)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(events)
 }
 
-func (s *Server) reconstructEventHistory() []feedEvent {
+// reconstructEventHistory reconstructs the feed. When stageID is non-empty it
+// returns only that stage's events, capped at maxStageReplayEvents; otherwise
+// the whole flow, capped at maxReplayEvents.
+func (s *Server) reconstructEventHistory(stageID string) []feedEvent {
 	var out []feedEvent
 
 	history, _ := s.store.History()
@@ -60,15 +71,24 @@ func (s *Server) reconstructEventHistory() []feedEvent {
 	}
 
 	snap := s.store.Snapshot()
-	for stageID := range snap.Stages {
-		out = append(out, reconstructAgentActions(s.runDir, stageID)...)
+	for id := range snap.Stages {
+		if stageID != "" && id != stageID {
+			continue // per-stage: skip other stages' agent-action reconstruction
+		}
+		out = append(out, reconstructAgentActions(s.runDir, id)...)
 	}
 
-	out = append(out, reconstructNotices(s.runDir)...)
+	out = append(out, reconstructNotices(s.runDir, stageID)...) // stage-aware (Step 3b)
+
+	limit := maxReplayEvents
+	if stageID != "" {
+		out = slices.DeleteFunc(out, func(e feedEvent) bool { return e.StageID != stageID })
+		limit = maxStageReplayEvents
+	}
 
 	slices.SortFunc(out, func(a, b feedEvent) int { return a.Timestamp.Compare(b.Timestamp) })
-	if len(out) > maxReplayEvents {
-		out = out[len(out)-maxReplayEvents:]
+	if len(out) > limit {
+		out = out[len(out)-limit:]
 	}
 	return out
 }
@@ -145,12 +165,21 @@ func reconstructAgentActions(runDir, stageID string) []feedEvent {
 }
 
 // maxLinesPerLog bounds how many trailing lines readLines keeps per file —
-// only the last maxReplayEvents (200) events survive the final cap across
+// only the last maxReplayEvents (1000) events survive the final cap across
 // ALL sources anyway, so reading an unbounded number of lines per phase log
 // (agent stream-json logs routinely run multi-MB) wastes memory/CPU on every
-// request without ever being used. 500 gives generous headroom above 200
-// while bounding worst case regardless of total log size.
-const maxLinesPerLog = 500
+// request without ever being used. 1200 gives comfortable headroom above the
+// 1000 global cap while bounding worst case regardless of total log size.
+//
+// Approximation caveat: this window counts RAW lines, not parseable actions —
+// a phase log with many non-assistant/unparseable lines yields fewer than
+// 1200 reconstructed events, so the global feed (and, symmetrically, the
+// per-stage 200) can be under-filled for a log that is mostly noise. Accepted
+// approximation (agent stream-json logs are overwhelmingly assistant events
+// in practice, and the durable per-stage feed is always >= what the old
+// flow-wide-200 gave); do not add a scan-until-N-valid loop (YAGNI unless a
+// real under-fill is observed).
+const maxLinesPerLog = 1200
 
 // readLines reads path and keeps only the last maxLinesPerLog lines (a
 // sliding window, not the whole file) — bounds memory even for very large
@@ -188,23 +217,49 @@ var dialogDedupTypes = map[string]bool{
 	string(bus.EventDialogAnswer):   true,
 }
 
-// reconstructNotices читает run-level notices.jsonl (Task 3, appendNotice).
-// dialog_question/dialog_answer записи дедуплицируются по содержимому
-// (type+stage_id+phase+id+title) — первое вхождение побеждает, порядок и
-// timestamp остальных записей не меняются (см. dialogDedupTypes).
-func reconstructNotices(runDir string) []feedEvent {
+// reconstructNotices reads the shared notices.jsonl. When stageID != "" it
+// keeps only that stage's notices (last maxStageReplayEvents of them);
+// otherwise it keeps the last maxReplayEvents across all stages. Retention is
+// applied PER SCOPE while scanning (a ring buffer bounded by the cap), NOT a
+// flow-wide line truncation first — otherwise an early stage's notices vanish
+// under newer other-stage lines (the exact bug this feature fixes). O(file)
+// time, O(cap) memory; only invoked on an /api/events request, not a hot path.
+//
+// dialog_question/dialog_answer records are deduplicated by content
+// (type+stage_id+phase+id+title) — first occurrence wins, order/timestamp of
+// the rest is untouched (see dialogDedupTypes). The dedup `seen` set spans the
+// whole file (not bounded by the ring), so total memory is O(cap + distinct
+// dialog-notice keys) — a correctness improvement (dialog notices now dedup
+// across the entire run) at bounded, small extra memory.
+func reconstructNotices(runDir, stageID string) []feedEvent {
 	path := filepath.Join(runDir, "notices.jsonl")
-	var out []feedEvent
-	seen := map[string]bool{}
-	for _, line := range readLines(path) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	ringCap := maxReplayEvents
+	if stageID != "" {
+		ringCap = maxStageReplayEvents
+	}
+	ring := make([]feedEvent, 0, ringCap)
+	seen := map[string]bool{} // dialog_question/dialog_answer content dedup (unchanged intent)
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
 		var e struct {
 			Time    time.Time `json:"time"`
 			Type    string    `json:"type"`
 			StageID string    `json:"stage_id"`
 			Data    any       `json:"data,omitempty"`
 		}
-		if json.Unmarshal([]byte(line), &e) != nil {
+		if json.Unmarshal(sc.Bytes(), &e) != nil {
 			continue
+		}
+		if stageID != "" && e.StageID != stageID {
+			continue // per-stage: only this stage's notices enter the ring
 		}
 		if dialogDedupTypes[e.Type] {
 			key := dialogNoticeDedupKey(e.Type, e.StageID, e.Data)
@@ -213,9 +268,12 @@ func reconstructNotices(runDir string) []feedEvent {
 			}
 			seen[key] = true
 		}
-		out = append(out, feedEvent{Type: e.Type, StageID: e.StageID, Data: e.Data, Timestamp: e.Time})
+		ring = append(ring, feedEvent{Type: e.Type, StageID: e.StageID, Data: e.Data, Timestamp: e.Time})
+		if len(ring) > ringCap {
+			ring = ring[1:]
+		}
 	}
-	return out
+	return ring
 }
 
 // dialogNoticeDedupKey builds the content dedup key for a dialog_question/

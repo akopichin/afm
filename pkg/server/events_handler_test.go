@@ -5,8 +5,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -67,7 +71,11 @@ func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 	}
 }
 
-func TestHandleEvents_CapsAt200(t *testing.T) {
+// TestHandleEvents_TransitionsNeverExceedGlobalCap is a basic sanity check
+// that the global response never exceeds maxReplayEvents (raised from 200 to
+// 1000 — see TestHandleEvents_GlobalCapRaisedTo1000 for the actual boundary
+// test, which exercises the cap via notices rather than transitions).
+func TestHandleEvents_TransitionsNeverExceedGlobalCap(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	for i := 0; i < 250; i++ {
 		from := state.StatusAwaitingApproval
@@ -94,8 +102,8 @@ func TestHandleEvents_CapsAt200(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &events); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if len(events) > 200 {
-		t.Errorf("got %d events, want <= 200", len(events))
+	if len(events) > maxReplayEvents {
+		t.Errorf("got %d events, want <= %d", len(events), maxReplayEvents)
 	}
 }
 
@@ -128,7 +136,7 @@ func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T)
 		t.Fatal(err)
 	}
 
-	out := reconstructNotices(runDir)
+	out := reconstructNotices(runDir, "")
 
 	var dialogQuestions, dialogAnswers, scriptOutputs int
 	for _, e := range out {
@@ -182,5 +190,126 @@ func TestReconstructAgentActions_CoversAllPhasesIncludingAutonomous(t *testing.T
 	}
 	if !tools["Bash"] || !tools["Write"] {
 		t.Errorf("expected actions from both planning.jsonl (Bash) and autonomous.jsonl (Write), got tools: %v", tools)
+	}
+}
+
+// mustDecode decodes rr's JSON body into v, failing the test on error.
+func mustDecode(t *testing.T, rr *httptest.ResponseRecorder, v any) {
+	t.Helper()
+	if err := json.Unmarshal(rr.Body.Bytes(), v); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+}
+
+// writeNotices appends n script_output notices for stageID into runDir's
+// notices.jsonl via stagefiles.AppendNotice — the exact call execScript makes
+// for real script-stage output (pkg/orchestrator/hooks.go's execScript).
+func writeNotices(t *testing.T, runDir, stageID string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		data := map[string]string{"hook": "", "line": "line " + strconv.Itoa(i)}
+		stagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptOutput), data)
+	}
+}
+
+// newTestServerForRunDir opens a Server around an already-prepared run dir
+// (e.g. one whose notices.jsonl was written directly by the test) for the
+// given stage IDs. Unlike setupTestServer it doesn't seed plan.md/an initial
+// transition — callers that need those write them themselves.
+func newTestServerForRunDir(t *testing.T, runDir string, stageIDs []string) *Server {
+	t.Helper()
+	store, err := state.Open(runDir, stageIDs)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return New(Config{
+		Port:    0,
+		RunDir:  runDir,
+		Store:   store,
+		UIBus:   bus.NewUIBus(),
+		Actions: fakeStageActions{},
+	})
+}
+
+// newTestServerWithStages builds a Server backed by a fresh temp run dir,
+// seeding each stage in counts with that many script_output notices (via
+// writeNotices) — the shared fixture for the stage-filter/cap tests.
+func newTestServerWithStages(t *testing.T, counts map[string]int) *Server {
+	t.Helper()
+	runDir := t.TempDir()
+	stageIDs := make([]string, 0, len(counts))
+	for id := range counts {
+		stageIDs = append(stageIDs, id)
+	}
+	slices.Sort(stageIDs) // deterministic write order across stages
+	for _, id := range stageIDs {
+		writeNotices(t, runDir, id, counts[id])
+	}
+	return newTestServerForRunDir(t, runDir, stageIDs)
+}
+
+func TestHandleEvents_StageFilterReturnsOnlyThatStage(t *testing.T) {
+	// Build a run with two stages; assert ?stage=early returns only 'early' events.
+	srv := newTestServerWithStages(t, map[string]int{"early": 3, "noise": 50})
+	req := httptest.NewRequest("GET", "/api/events?stage=early", nil)
+	rr := httptest.NewRecorder()
+	srv.handleEvents(rr, req)
+	var got []feedEvent
+	mustDecode(t, rr, &got)
+	for _, e := range got {
+		if e.StageID != "early" {
+			t.Fatalf("stage filter leaked stage %q", e.StageID)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("expected 'early' events, got none")
+	}
+}
+
+func TestHandleEvents_StageFilterCapsAt200(t *testing.T) {
+	// 'noise' has > 200 reconstructable events; ?stage=noise must cap at 200.
+	srv := newTestServerWithStages(t, map[string]int{"noise": 300})
+	req := httptest.NewRequest("GET", "/api/events?stage=noise", nil)
+	rr := httptest.NewRecorder()
+	srv.handleEvents(rr, req)
+	var got []feedEvent
+	mustDecode(t, rr, &got)
+	if len(got) != 200 {
+		t.Fatalf("per-stage cap: want 200, got %d", len(got))
+	}
+}
+
+func TestHandleEvents_GlobalCapRaisedTo1000(t *testing.T) {
+	// > 1000 events flow-wide; global response caps at 1000 (was 200).
+	srv := newTestServerWithStages(t, map[string]int{"noise": 1100})
+	req := httptest.NewRequest("GET", "/api/events", nil)
+	rr := httptest.NewRecorder()
+	srv.handleEvents(rr, req)
+	var got []feedEvent
+	mustDecode(t, rr, &got)
+	if len(got) != 1000 {
+		t.Fatalf("global cap: want 1000, got %d", len(got))
+	}
+}
+
+// TestHandleEvents_StageFilterSurvivesFlowWideNoticeNoise is the blocker
+// regression (codex review): an early stage's notices must survive even when
+// buried under thousands of NEWER other-stage notice lines in the shared
+// notices.jsonl. This is the real-world reproduction of the original bug.
+func TestHandleEvents_StageFilterSurvivesFlowWideNoticeNoise(t *testing.T) {
+	runDir := t.TempDir()
+	// early: 5 notices written FIRST.
+	writeNotices(t, runDir, "early", 5)
+	// noise: 2000 notices written AFTER (dominate any flow-wide tail window).
+	writeNotices(t, runDir, "noise", 2000)
+	srv := newTestServerForRunDir(t, runDir, []string{"early", "noise"})
+	req := httptest.NewRequest("GET", "/api/events?stage=early", nil)
+	rr := httptest.NewRecorder()
+	srv.handleEvents(rr, req)
+	var got []feedEvent
+	mustDecode(t, rr, &got)
+	if len(got) < 5 {
+		t.Fatalf("early notices truncated by flow-wide noise: got %d, want >= 5", len(got))
 	}
 }
