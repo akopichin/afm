@@ -15,7 +15,7 @@ describe('FeedWorkspace', () => {
       ev('agent_action', { tool: 'read_file', detail: 'x.ts' }, 's1', '2026-07-10T10:00:00Z'),
       ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'reply to user' }, 's1', '2026-07-10T10:00:01Z'),
     ]
-    const { container } = render(<FeedWorkspace events={events} stageId={null} />)
+    const { container } = render(<FeedWorkspace events={events} stageId={null} showStageBadges />)
     const groups = container.querySelectorAll('.feed-group')
     expect(groups).toHaveLength(2)
     expect(groups[0]).toHaveClass('feed-left')
@@ -82,61 +82,26 @@ describe('FeedWorkspace', () => {
     expect(container.textContent).toContain('**literal**')
   })
 
-  // --- Фильтрация по стадии (scope This stage | All) ---
+  // --- FeedWorkspace — тупой рендерер: рендерит переданные events как есть ---
 
-  // События двух стадий, для проверки фильтра.
-  const twoStagesEvents = (): AfmEvent[] => [
-    ev('agent_action', { tool: 'read_file', detail: 'a.ts' }, 's1', '2026-07-10T10:00:00Z'),
-    ev('agent_action', { tool: 'read_file', detail: 'b.ts' }, 's2', '2026-07-10T10:00:01Z'),
-  ]
-
-  it('по умолчанию (scope=stage) показывает события только переданного stageId', () => {
-    const { container } = render(<FeedWorkspace events={twoStagesEvents()} stageId="s1" />)
-    expect(container.textContent).toContain('read_file: a.ts')
-    expect(container.textContent).not.toContain('read_file: b.ts')
-  })
-
-  it('flow-level событие (stageId==="") видно при выбранной стадии', () => {
+  it('renders exactly the events it is given (no internal filtering)', () => {
     const events = [
-      ev('agent_action', { tool: 'read_file', detail: 'a.ts' }, 's1', '2026-07-10T10:00:00Z'),
-      ev('stage_status_changed', 'running', '', '2026-07-10T10:00:01Z'),
-      ev('agent_action', { tool: 'read_file', detail: 'b.ts' }, 's2', '2026-07-10T10:00:02Z'),
+      ev('agent_action', { tool: 'read_file', detail: 'early' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('agent_action', { tool: 'read_file', detail: 'noise' }, 's2', '2026-07-10T10:00:01Z'),
     ]
-    const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
-    expect(container.textContent).toContain('read_file: a.ts')
-    expect(container.textContent).toContain('→ running') // flow-level всегда видно
-    expect(container.textContent).not.toContain('read_file: b.ts')
+    render(<FeedWorkspace events={events} stageId="early" />)
+    // both rows present — FeedWorkspace does not filter by stageId anymore
+    expect(screen.getByText(/early/)).toBeInTheDocument()
+    expect(screen.getByText(/noise/)).toBeInTheDocument()
   })
 
-  it('переключение на All показывает события всех стадий, обратно на This stage — снова фильтрует', () => {
-    const { container } = render(<FeedWorkspace events={twoStagesEvents()} stageId="s1" />)
-    // По умолчанию — только s1.
-    expect(container.textContent).not.toContain('read_file: b.ts')
-
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
-    expect(container.textContent).toContain('read_file: a.ts')
-    expect(container.textContent).toContain('read_file: b.ts')
-
-    fireEvent.click(screen.getByRole('button', { name: 'This stage' }))
-    expect(container.textContent).toContain('read_file: a.ts')
-    expect(container.textContent).not.toContain('read_file: b.ts')
-  })
-
-  it('stageId===null → тумблер скрыт и показываются все события', () => {
-    const { container } = render(<FeedWorkspace events={twoStagesEvents()} stageId={null} />)
-    expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument()
-    expect(container.textContent).toContain('read_file: a.ts')
-    expect(container.textContent).toContain('read_file: b.ts')
-  })
-
-  it('empty-state зависит от эффективного scope', () => {
-    // scope=stage, stageId есть, но событий этой стадии нет → «for this stage».
-    const other = [ev('agent_action', { tool: 'read_file', detail: 'b.ts' }, 's2', '2026-07-10T10:00:00Z')]
-    const { rerender } = render(<FeedWorkspace events={other} stageId="s1" />)
+  it('shows the empty hint when given no events', () => {
+    render(<FeedWorkspace events={[]} stageId="early" emptyHint="No events for this stage yet" />)
     expect(screen.getByText('No events for this stage yet')).toBeInTheDocument()
+  })
 
-    // scope=stage, но stageId=null → эффективный scope false → общий empty-state.
-    rerender(<FeedWorkspace events={[]} stageId={null} />)
+  it('shows the default empty hint when no emptyHint is given', () => {
+    render(<FeedWorkspace events={[]} stageId={null} />)
     expect(screen.getByText('No events yet')).toBeInTheDocument()
   })
 
@@ -144,8 +109,22 @@ describe('FeedWorkspace', () => {
     const events = [ev('stage_status_changed', 'running', '', '2026-07-10T10:00:00Z')]
     const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
     expect(container.querySelectorAll('.feed-group')).toHaveLength(1)
-    expect(screen.queryByText('No events for this stage yet')).not.toBeInTheDocument()
     expect(container.textContent).toContain('→ running')
+  })
+
+  describe('showStageBadges', () => {
+    const events = (): AfmEvent[] => [ev('agent_action', { tool: 'read_file', detail: 'a.ts' }, 's1', '2026-07-10T10:00:00Z')]
+
+    it('по умолчанию (Feed для одной стадии) бейдж стадии не рендерится', () => {
+      const { container } = render(<FeedWorkspace events={events()} stageId="s1" />)
+      expect(container.querySelector('.feed-stage-badge')).toBeNull()
+    })
+
+    it('showStageBadges=true (Full feed) рендерит бейдж стадии', () => {
+      const { container } = render(<FeedWorkspace events={events()} stageId={null} showStageBadges />)
+      expect(container.querySelector('.feed-stage-badge')).not.toBeNull()
+      expect(container.querySelector('.feed-stage-badge')?.textContent).toBe('s1')
+    })
   })
 
   // --- Навигация по diалог-элементам (dialog_question/dialog_answer) ---
