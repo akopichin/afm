@@ -8,8 +8,11 @@ import type { AfmEvent } from '../../types'
 // TCP-таймаута. Heartbeat от сервера в ленту событий НЕ попадает (liveness only).
 const INITIAL_RECONNECT_DELAY_MS = 1000
 const MAX_RECONNECT_DELAY_MS = 10000
-// Лента событий ограничена (как $feedContent в app.js обрезается до 200 записей).
-const MAX_EVENTS = 200
+// Лента событий ограничена (как $feedContent в app.js обрезалась до 200
+// записей). Поднято 200 → 1000 — full feed depth: старый кап слишком быстро
+// отрезал начало долгого рана из глобальной ленты; per-stage лента (Task 3,
+// useStageEvents) переиспользует mergeCapped со своим, отдельным капом.
+const MAX_EVENTS = 1000
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
 // Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ (см. onmessage
@@ -42,7 +45,7 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
         .then((raw: unknown) => {
           if (cancelledFetch || !Array.isArray(raw)) return
           const history = raw.map(toEvent)
-          setEvents((prev) => mergeHistory(history, prev))
+          setEvents((prev) => mergeCapped(history, prev, MAX_EVENTS))
         })
         .catch(() => {
           // /api/events недоступен (старая сборка сервера, сетевая ошибка) —
@@ -175,7 +178,7 @@ function dedupeKey(e: AfmEvent): string {
   return `${e.type}|${e.stageId}|${JSON.stringify(e.payload)}`
 }
 
-// mergeHistory сливает историю из /api/events (history) с уже накопленными
+// mergeCapped сливает историю из /api/events (history) с уже накопленными
 // live-событиями (live). history — авторитетна и уже отсортирована сервером по
 // времени (reconstructEventHistory, slices.SortFunc по Timestamp), поэтому она
 // и есть база; из live дописываются в КОНЕЦ только те события, которых ещё нет в
@@ -184,12 +187,15 @@ function dedupeKey(e: AfmEvent): string {
 // Раньше было наоборот — [...deduped, ...live], где deduped = history без
 // live-ключей. На реконнекте (или в гонке «WS обогнал /api/events») события,
 // случившиеся, пока их не было в live, попадали в deduped и уезжали в НАЧАЛО
-// ленты, ломая хронологию; а при полном буфере отсекались slice(-MAX_EVENTS)
-// первыми и пропадали вовсе. См. тест «Finding #4».
-function mergeHistory(history: AfmEvent[], live: AfmEvent[]): AfmEvent[] {
+// ленты, ломая хронологию; а при полном буфере отсекались slice(-cap) первыми
+// и пропадали вовсе. См. тест «Finding #4».
+//
+// cap вынесен параметром (был жёстко MAX_EVENTS) — переиспользуется per-stage
+// лентой (Task 3, useStageEvents) со своим, отдельным капом.
+export function mergeCapped(history: AfmEvent[], live: AfmEvent[], cap: number): AfmEvent[] {
   const historyKeys = new Set(history.map(dedupeKey))
   const liveOnly = live.filter((e) => !historyKeys.has(dedupeKey(e)))
-  return [...history, ...liveOnly].slice(-MAX_EVENTS)
+  return [...history, ...liveOnly].slice(-cap)
 }
 
 function statusOf(event: AfmEvent): string {
@@ -220,3 +226,8 @@ function toEvent(raw: unknown): AfmEvent {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
+
+// dedupeKey/toEvent переиспользуются per-stage лентой (Task 3, useStageEvents)
+// при разборе своего собственного фетча — единая точка приведения типа и
+// дедуп-ключа для истории и live-потока, не дублируется.
+export { dedupeKey, toEvent }

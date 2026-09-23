@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { useEventFeed } from './use-event-feed'
+import { mergeCapped, useEventFeed } from './use-event-feed'
+import type { AfmEvent } from '../../types'
 
 // Минимальный fake WebSocket для тестирования подписки и backoff-реконнекта.
 class FakeWebSocket {
@@ -212,7 +213,7 @@ describe('useEventFeed', () => {
     expect(result.current.events).toHaveLength(0)
   })
 
-  test('caps the event feed at 200 entries, keeping the most recent', () => {
+  test('caps the global feed at 1000 events', () => {
     const { result } = renderHook(() => useEventFeed('/ws'))
 
     act(() => {
@@ -220,14 +221,33 @@ describe('useEventFeed', () => {
     })
 
     act(() => {
-      for (let i = 0; i < 205; i += 1) {
+      for (let i = 0; i < 1200; i += 1) {
         FakeWebSocket.last().emitMessage({ type: 'agent_action', data: i, stage_id: `s${i}` })
       }
     })
 
-    expect(result.current.events).toHaveLength(200)
-    expect(result.current.events[0]?.stageId).toBe('s5')
-    expect(result.current.events[199]?.stageId).toBe('s204')
+    expect(result.current.events).toHaveLength(1000)
+    expect(result.current.events[0]?.stageId).toBe('s200')
+    expect(result.current.events[999]?.stageId).toBe('s1199')
+  })
+
+  // mergeCapped — генерализация mergeHistory с явным cap-параметром (Task 3
+  // переиспользует её для per-stage ленты с другим, меньшим капом).
+  test('mergeCapped keeps history as base and appends only live-only, capped', () => {
+    const ev = (id: string): AfmEvent => ({
+      type: 'agent_action',
+      payload: id,
+      stageId: id,
+      timestamp: '2026-09-23T10:00:00.000Z',
+      seq: undefined,
+    })
+    const k = (e: AfmEvent): string => e.stageId
+
+    const history = [ev('a'), ev('b')]
+    const live = [ev('b'), ev('c')] // 'b' — дубликат по dedupeKey
+
+    expect(mergeCapped(history, live, 10).map(k)).toEqual(['a', 'b', 'c'])
+    expect(mergeCapped(history, live, 2).map(k)).toEqual(['b', 'c']) // last-N
   })
 
   test('backoff climbs to and stays at the 10000ms ceiling across repeated reconnects', () => {
