@@ -62,6 +62,18 @@ const (
 	// absent on pre-upgrade notices.jsonl lines — treat a missing/empty
 	// value as "stdout".
 	EventScriptOutput EventType = "script_output"
+	// EventScriptFailed fires once a script: stage exhausts runScriptWithRetry
+	// and the stage is about to transition to failed (runScriptStage,
+	// agents.go). This is a durable DASHBOARD FEED notice — distinct from the
+	// lifecycle-only lifecyclehooks.EventStageScriptFailed ("stage_script_failed",
+	// delivered only to observer hook commands, never reaches the UI): without
+	// this event the feed showed a bare stage_status_changed→failed row with no
+	// reason. Data: map[string]string{"error": <the exhausted script's error
+	// text>, "stderr_tail": <executor.ReadStderrTail of the script's log,
+	// possibly empty if nothing was written to stderr>}. Never triggers an FSM
+	// transition itself — Trigger(EvFail) already committed that durably
+	// before this is published.
+	EventScriptFailed EventType = "script_failed"
 	// EventHookFailed fires when a before/after hook exhausts its 3x/1-2-3s
 	// retries. Data: map[string]string{"hook": ..., "error": "..."}.
 	EventHookFailed EventType = "hook_failed"

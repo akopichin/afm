@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -89,6 +90,17 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	if err != nil {
 		o.emitStageEvent(lifecyclehooks.EventStageScriptFailed, s.ID, err.Error())
 		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
+		// script_failed — a durable dashboard-feed notice (distinct from the
+		// lifecycle-only stage_script_failed above, which only reaches
+		// observer hook commands). Published AFTER Trigger: the durable FSM
+		// transition to failed is already committed, this only adds context
+		// (the exit error + a stderr tail) for the feed — never threaded back
+		// into the FSM transition itself.
+		const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
+		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
+		data := map[string]string{keyError: err.Error(), "stderr_tail": tail}
+		o.ui.Publish(bus.Event{Type: bus.EventScriptFailed, StageID: s.ID, Data: data})
+		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventScriptFailed), data)
 		o.failBlockedStages()
 		return
 	}

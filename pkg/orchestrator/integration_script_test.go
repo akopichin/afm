@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -127,4 +129,83 @@ func TestIntegration_RetryFailedScriptStage(t *testing.T) {
 	}
 
 	cancel()
+}
+
+// TestRunScriptStage_Failure_PublishesScriptFailedNotice (Task 4): a
+// script: stage whose script always exits non-zero and writes to stderr
+// exhausts runScriptWithRetry, transitions to failed (unchanged FSM path),
+// AND publishes a durable script_failed notice carrying the exit error plus
+// a stderr tail — so the dashboard feed shows a reason instead of a bare
+// "→ failed" row. Before this task no such notice existed.
+func TestRunScriptStage_Failure_PublishesScriptFailedNotice(t *testing.T) {
+	rootDir := t.TempDir()
+	runDir := t.TempDir()
+
+	stages := []flow.Stage{{
+		ID:     "notify",
+		Name:   "Notify",
+		Script: "echo boom >&2; exit 1",
+	}}
+
+	store, err := state.Open(runDir, []string{"notify"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir:  runDir,
+		RootDir: rootDir,
+		Stages:  stages,
+		Store:   store,
+		Config:  config.Default(),
+		Prompts: orchestrator.DefaultPrompts(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := orch.Run(ctx); err != nil && err != context.DeadlineExceeded {
+		t.Fatalf("orch.Run: %v", err)
+	}
+
+	if st := orchestrator.StoreFromOrch(orch).Get("notify"); st != state.StatusFailed {
+		t.Fatalf("expected status failed, got %s", st)
+	}
+
+	noticesData, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		t.Fatalf("read notices.jsonl: %v", err)
+	}
+
+	type scriptFailedData struct {
+		Error      string `json:"error"`
+		StderrTail string `json:"stderr_tail"`
+	}
+	var found *scriptFailedData
+	for _, line := range strings.Split(strings.TrimSpace(string(noticesData)), "\n") {
+		var entry struct {
+			Type    string           `json:"type"`
+			StageID string           `json:"stage_id"`
+			Data    scriptFailedData `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("invalid notices.jsonl line: %v (%s)", err, line)
+		}
+		if entry.Type == string(bus.EventScriptFailed) {
+			if entry.StageID != "notify" {
+				t.Errorf("script_failed notice stage_id = %q, want notify", entry.StageID)
+			}
+			data := entry.Data
+			found = &data
+		}
+	}
+	if found == nil {
+		t.Fatalf("notices.jsonl missing a %q entry: %s", bus.EventScriptFailed, string(noticesData))
+	}
+	if found.Error == "" {
+		t.Error("script_failed notice data.error is empty, want the exit error text")
+	}
+	if !strings.Contains(found.StderrTail, "boom") {
+		t.Errorf("script_failed notice data.stderr_tail = %q, want it to contain %q", found.StderrTail, "boom")
+	}
 }

@@ -25,6 +25,16 @@ const hookMaxRetries = 3
 
 var hookRetryBackoff = []time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second}
 
+// stderrTailMaxLines/stderrTailMaxBytes bound the stderr excerpt attached to
+// a script_failed notice (agents.go's runScriptStage) and, later, the
+// analogous notice for a failed script_before/script_after hook — a single
+// shared cap so both paths show the same amount of context, passed straight
+// into executor.ReadStderrTail.
+const (
+	stderrTailMaxLines = 20
+	stderrTailMaxBytes = 4096
+)
+
 // runScriptWithRetry runs fn up to hookMaxRetries+1 times (1 initial attempt
 // + up to 3 retries), waiting hookRetryBackoff[attempt] between attempts.
 // Returns the last error if every attempt fails, or ctx.Err() if cancelled
