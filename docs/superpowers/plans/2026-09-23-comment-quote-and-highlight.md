@@ -10,11 +10,12 @@ Both land in the plan panel AND the dialog automatically (shared component/CSS).
 
 ## Global Constraints
 - Frontend gate = `npm run typecheck` + `npx vitest run` (dashboard has **no ESLint** — don't run/expect `npm run lint`).
-- **Cross-skin safety:** use theme tokens, NOT hardcoded hex or `--accent-primary-rgb`. `--accent-primary-rgb` defaults to blue (95,120,255) in `base/tokens.css` while `--accent-primary` bridges to the skin's amber on coffee/goga/novacorps — they MISMATCH. Derive translucent accent fills with `color-mix(in srgb, var(--accent-primary) N%, transparent)` (already used in `plan-panel.css`) so glyph, bar, and fill always agree per skin (graphite/coffee/goga/novacorps × light/dark).
+- **Cross-skin safety:** use theme tokens, NOT hardcoded hex or `--accent-primary-rgb`. `--accent-primary-rgb` defaults to blue (95,120,255) in `base/tokens.css` while `--accent-primary` bridges to the skin's amber on coffee/goga/novacorps — they MISMATCH. Derive translucent accent fills with `color-mix(in srgb, var(--accent-primary) N%, transparent)` so glyph, bar, and fill always agree per skin (graphite/coffee/goga/novacorps × light/dark). (`color-mix` is already used in `plan-panel.css` — with `currentColor`, per codex; the `var(--accent-primary)` form is valid, supported CSS.)
 - Commit messages Russian; no `Co-Authored-By`.
 
 ## Key facts (verified)
-- `data-line` values are **1-based** (`markdown.ts:405` `startLine = token.map[0] + 1`). The raw source line for a 1-based line number `L` is `text.split('\n')[L - 1]` (precedent: `markdown.ts:429` `lines[range.map[0]]`).
+- `data-line` values are **1-based** (`markdown.ts` `annotateAnchors`: each anchor = its element's `token.map[0] + 1`). The raw source line for a 1-based line number `L` is `text.split('\n')[L - 1]` (precedent: `markdown.ts:429` `lines[range.map[0]]`).
+- **Anchor semantics (codex BLOCKER → reframed, NOT a code change).** Each `<li>`, `<tr>`, paragraph, heading, `hr`, and fenced-code block gets its OWN anchor at its START line (documented uniqueness guarantee in `annotateAnchors`). So the quote shows the source line the comment is **anchored to** — for list items, table rows, and headings (the overwhelming majority of plan/answer content) that IS the clicked line. For a **multi-line paragraph** it's the paragraph's first line; for a **fenced code block** it's the opening ` ``` ` line (the anchor), not an interior code line. This is correct behavior for a block-anchored comment model — the feature promises "the line you're commenting on" (= the anchor), not "an arbitrary interior line." Frame the UI/tests accordingly; do NOT promise the exact visual line for multi-line blocks.
 - `LineCommentedDocument` already receives the raw markdown as its `text` prop and owns `activeCommentLine`. `LineCommentForm` currently gets `line` (number) but NOT the source text.
 - Current active-line CSS to change (`skins/base/plan-panel.css`): `[data-line].is-active` (≈260), `.md tr.is-active > :is(th,td)` (≈276), `hr[data-line].is-active` (≈287).
 
@@ -69,7 +70,7 @@ Both land in the plan panel AND the dialog automatically (shared component/CSS).
 }
 ```
 
-- [ ] **Step 1: Failing tests.** In the line-comment-form test suite: (a) open a comment on a known content line → the form shows `.line-comment-quote-src` containing that line's source text (verify the 1-based→0-based mapping: commenting on data-line N shows `text.split('\n')[N-1]`); (b) opening a comment on a blank line or an `hr` (`---`) line → NO `.line-comment-quote` element. Reuse the existing harness for clicking a line to open the form (PlanPanel/LineCommentedDocument tests already do this). Provide a `text` prop with distinct, identifiable lines so the assertion is unambiguous.
+- [ ] **Step 1: Failing tests.** In the line-comment-form test suite, with a `text` prop containing distinct, identifiable lines: (a) **list item** → open a comment on an `<li>` line → the quote shows that item's source (`- Task two: …`); (b) **table row** → open a comment on a `<tr>` → the quote shows that row's source; (c) **heading/paragraph** → its source line; (d) **fenced code** (codex) → the quote shows the opening fence line (documents the anchor semantics — assert it equals the ` ``` ` line, NOT an interior line); (e) **hr / blank** → NO `.line-comment-quote` element. All assert the 1-based→0-based mapping (`text.split('\n')[N-1]`). Reuse the existing harness for clicking a line to open the form.
 - [ ] **Step 2:** Run → RED (`npx vitest run src/components/plan-panel`).
 - [ ] **Step 3:** Implement the `quotedLine` computation + prop threading + `LineCommentForm` render + the CSS above.
 - [ ] **Step 4:** Run → GREEN + `npm run typecheck`.
@@ -90,7 +91,10 @@ Replace the three `.is-active` rules (drop every `0 0 0 1px var(--accent-primary
   box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
-/* table row: soft accent fill only (a per-cell left bar would repeat on every cell) */
+/* table row: soft accent fill only. The general `[data-line].is-active` rule
+   ALSO matches the tr (a tr carries data-line), so its `inset 3px` bar would
+   apply per-cell — explicitly clear it on the row (codex MAJOR). */
+.line-commented .md tr.is-active { box-shadow: none; }
 .line-commented .md tr.is-active > :is(th, td) {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
@@ -114,6 +118,7 @@ Leave `.has-comment` (amber left bar) and `.is-hover` (mint tint) and their tabl
 - [ ] `cd pkg/web/dashboard && npx vitest run` (full suite green) + `npm run typecheck`.
 - [ ] `npm run build`; commit the bundle.
 - [ ] Live (reuse the mock planning-agent flow → `awaiting_approval`): open the dashboard, click a plan line → confirm (a) the selected line shows the soft accent fill + left bar (NO 1px frame), and (b) the comment box shows the big faint quote glyph + the quoted source line above the textarea. Same in a dialog question's line comment. Screenshot for the user.
+- [ ] **Light-theme contrast check (codex MINOR):** switch to a light skin (coffee/novacorps light `--text-muted` is intentionally below AA) and confirm the 12.5px quoted text and the 0.30-opacity glyph are still legible. If they look weak, bump the glyph to `opacity: 0.4` and/or the src text to a slightly stronger token — decide from the live look.
 
 ## Self-Review
 - Quote preview: correct 1-based→0-based source lookup; hidden for blank/hr; big faint accent glyph (Variant 1, opacity 0.30); shared → plan + dialog. ✓
