@@ -98,15 +98,18 @@ describe('useDesktopNotifications', () => {
   })
 
   it('уведомляет заново, если стадия вышла из attention и зашла снова', () => {
+    // Считаем только attention-нотификации (исключаем flow-finished, которая
+    // независимо срабатывает на завершении флоу с failed-стадией).
+    const attn = () => MockNotification.instances.filter((n) => !/flow/i.test(n.title))
     const onFocusStage = vi.fn()
     const { rerender } = renderHook(({ stages }) => useDesktopNotifications(stages, onFocusStage), {
       initialProps: { stages: [stage('failed')] },
     })
-    expect(MockNotification.instances).toHaveLength(1)
+    expect(attn()).toHaveLength(1)
 
     rerender({ stages: [stage('retrying')] })
     rerender({ stages: [stage('failed')] })
-    expect(MockNotification.instances).toHaveLength(2)
+    expect(attn()).toHaveLength(2)
   })
 
   it('не уведомляет, если enabled=false (флаг не выставлен в localStorage)', () => {
@@ -150,5 +153,79 @@ describe('useDesktopNotifications', () => {
     expect(onFocusStage).toHaveBeenCalledWith('xyz')
     expect(n.close).toHaveBeenCalled()
     focusSpy.mockRestore()
+  })
+
+  describe('flow-finished notification', () => {
+    const render = (stages: Stage[], flowName = 'MyFlow') =>
+      renderHook(({ s }) => useDesktopNotifications(s, vi.fn(), flowName), { initialProps: { s: stages } })
+
+    it('notifies once when the flow finishes (all stages terminal) — "Flow completed" on success', () => {
+      const { rerender } = render([stage('running', 'a'), stage('pending', 'b')])
+      expect(MockNotification.instances).toHaveLength(0)
+      rerender({ s: [stage('done', 'a'), stage('done', 'b')] })
+      const flow = MockNotification.instances.filter((n) => /flow/i.test(n.title))
+      expect(flow).toHaveLength(1)
+      expect(flow[0]!.title).toBe('Flow completed')
+      expect(flow[0]!.options?.body).toContain('MyFlow')
+    })
+
+    it('title is "Flow finished with failures" when any stage failed', () => {
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('done', 'a'), stage('failed', 'b')] })
+      const flow = MockNotification.instances.filter((n) => /flow/i.test(n.title))
+      expect(flow).toHaveLength(1)
+      expect(flow[0]!.title).toBe('Flow finished with failures')
+    })
+
+    it('fires regardless of tab visibility (tab visible)', () => {
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('done', 'a')] })
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(1)
+    })
+
+    it('does not notify while any stage is still active/pending/paused/awaiting', () => {
+      const { rerender } = render([stage('running', 'a')])
+      for (const st of ['pending', 'planning', 'running', 'awaiting_user_input', 'paused', 'retrying'] as Stage['status'][]) {
+        rerender({ s: [stage('done', 'a'), stage(st, 'b')] })
+      }
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
+    })
+
+    it('fires once, not on every rerender while still finished', () => {
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('done', 'a')] })
+      rerender({ s: [stage('done', 'a')] })
+      rerender({ s: [stage('done', 'a')] })
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(1)
+    })
+
+    it('re-notifies after a retry re-activates and the flow finishes again', () => {
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('failed', 'a')] }) // finished (with failure) → notif 1
+      rerender({ s: [stage('running', 'a')] }) // manual retry re-activates → reset
+      rerender({ s: [stage('done', 'a')] }) // finished again → notif 2
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(2)
+    })
+
+    it('does not notify when disabled', () => {
+      window.localStorage.removeItem('afm-notifications-enabled')
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('done', 'a')] })
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
+    })
+
+    it('does not notify for an empty stage list', () => {
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [] })
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
+    })
+
+    it('does not notify on initial mount when the flow is ALREADY finished (opened a done run)', () => {
+      // First observed snapshot is already terminal → the run finished before the
+      // tab was opened → no "flow finished" notification (it's a transition event).
+      render([stage('done', 'a'), stage('failed', 'b')])
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
+    })
   })
 })

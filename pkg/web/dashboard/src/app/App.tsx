@@ -289,7 +289,7 @@ export function App(): ReactElement {
     permission: notificationsPermission,
     requestEnable: onRequestEnableNotifications,
     disable: onDisableNotifications,
-  } = useDesktopNotifications(stages, handleSelectStage)
+  } = useDesktopNotifications(stages, handleSelectStage, flowName)
 
   // Заголовок вкладки берём из description флоу (из flow.yaml), иначе имя флоу,
   // иначе дефолт. useTitleFlash мигает вокруг текущего title и восстанавливает

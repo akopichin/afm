@@ -21,26 +21,37 @@ function readInitialEnabled(): boolean {
   return window.localStorage.getItem(STORAGE_KEY) === '1'
 }
 
-function fireNotification(entry: AttentionEntry, onFocusStage: (stageId: string) => void): void {
+// showNotification — единая точка создания браузерной нотификации: best-effort
+// (new Notification может кинуть синхронно, если разрешения на ОС-уровне нет —
+// не роняем UI), иконка из favicon, клик фокусирует окно + опциональный колбэк.
+function showNotification(title: string, body: string, tag: string, onClick?: () => void): void {
   const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href
-  const time = new Date().toLocaleTimeString()
   let n: Notification
   try {
-    n = new Notification(TITLES[entry.kind], {
-      body: `${entry.stage.name} — click to view\n${time}`,
-      icon,
-      tag: `afm-stage-${entry.stage.id}`,
-    })
+    n = new Notification(title, { body, icon, tag })
   } catch {
-    // best-effort — некоторые окружения кидают синхронно (например нет
-    // разрешения на ОС-уровне); не роняем остальной UI из-за нотификации.
     return
   }
   n.onclick = () => {
     window.focus()
-    onFocusStage(entry.stage.id)
+    onClick?.()
     n.close()
   }
+}
+
+function fireNotification(entry: AttentionEntry, onFocusStage: (stageId: string) => void): void {
+  const time = new Date().toLocaleTimeString()
+  showNotification(TITLES[entry.kind], `${entry.stage.name} — click to view\n${time}`, `afm-stage-${entry.stage.id}`, () =>
+    onFocusStage(entry.stage.id),
+  )
+}
+
+// Терминальные статусы стадии: работы больше не будет. Флоу «закончился», когда
+// ВСЕ стадии терминальны (нет running/planning/pending/awaiting/paused/…).
+const TERMINAL_STATUSES: ReadonlySet<Stage['status']> = new Set(['done', 'failed'])
+
+function flowFinished(stages: Stage[]): boolean {
+  return stages.length > 0 && stages.every((s) => TERMINAL_STATUSES.has(s.status))
 }
 
 // Десктоп-уведомления о стадиях, которым нужно действие (approve/question/fail),
@@ -54,6 +65,7 @@ function fireNotification(entry: AttentionEntry, onFocusStage: (stageId: string)
 export function useDesktopNotifications(
   stages: Stage[],
   onFocusStage: (stageId: string) => void,
+  flowName = 'Flow',
 ): {
   enabled: boolean
   permission: NotificationPermissionState
@@ -118,6 +130,38 @@ export function useDesktopNotifications(
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [reconcile])
+
+  // Нотификация о завершении флоу: когда ВСЕ стадии стали терминальными
+  // (done/failed) — т.е. ран дошёл до конца, прямо перед выходом afm. В отличие
+  // от attention-нотификаций выше, эта шлётся НЕЗАВИСИМО от видимости вкладки
+  // (одноразовое терминальное событие «ран закончился» полезно и когда смотришь,
+  // и когда ушёл). flowEndedNotified — гард «уже уведомили об этом завершении»:
+  // сбрасывается, как только флоу СНОВА не-финишный (напр. ручной retry оживил
+  // стадию), чтобы повторное завершение уведомило заново.
+  // sawActive — видели ли мы флоу В РАБОТЕ (не-финишным) в этой сессии. Нужен,
+  // чтобы уведомлять о ПЕРЕХОДЕ в завершение, а не при открытии дашборда уже
+  // завершённого рана: если первый же наблюдаемый снимок финишный, значит ран
+  // закончился ДО того, как вкладку открыли — уведомлять не о чем.
+  const sawActive = useRef(false)
+  const flowEndedNotified = useRef(false)
+  const flowNameRef = useRef(flowName)
+  useEffect(() => {
+    flowNameRef.current = flowName
+  }, [flowName])
+  useEffect(() => {
+    if (!flowFinished(stages)) {
+      sawActive.current = true
+      flowEndedNotified.current = false
+      return
+    }
+    // Финишный снимок: шлём, только если РАНЬШЕ видели ран в работе (реальный
+    // переход в работе → завершение), один раз, и включены уведомления.
+    if (!sawActive.current || flowEndedNotified.current || !enabledRef.current) return
+    flowEndedNotified.current = true
+    const failed = stages.some((s) => s.status === 'failed')
+    const title = failed ? 'Flow finished with failures' : 'Flow completed'
+    showNotification(title, `${flowNameRef.current}\n${new Date().toLocaleTimeString()}`, 'afm-flow-finished')
+  }, [stages, enabled])
 
   const requestEnable = useCallback(() => {
     if (!('Notification' in window)) return
