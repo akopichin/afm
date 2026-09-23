@@ -3,6 +3,28 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-23
+
+### Fix: per-stage Feed no longer goes empty on old completed stages
+
+The Feed tab used to be backed by a single flow-wide list capped at the last
+200 events. On a long run with many stages, later activity would push an
+earlier stage's events entirely out of that window, so clicking back into an
+already-completed stage showed an empty feed. Feed is now scoped to the
+selected stage (`GET /api/events?stage=<id>`), each stage keeping its own
+last-200 window reconstructed regardless of what else has happened in the
+flow — a completed stage always shows its own history.
+
+- **The `This stage | All` toggle is gone.** It existed to work around the old
+  flat cap; Feed always shows the selected stage now, with nothing to switch.
+- **New `Full feed` tab**, pinned to the far right of the tab row, shows the
+  whole flow's last 1000 events across every stage — for the cross-stage view
+  the removed toggle used to provide.
+- **The AI-verify stage badge is now durable.** It used to be derived from the
+  same capped event window and could quietly age out along with everything
+  else; it's computed server-side from `notices.jsonl` and served as a field
+  on `/api/status`, so it stays visible for the life of the stage.
+
 ## 2026-09-22
 
 ### Fix: pending stages no longer open an empty plan in the dashboard

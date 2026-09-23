@@ -1,5 +1,17 @@
 # Release Notes — afm dashboard
 
+## 2026-09-23
+
+- **Feed is scoped to the selected stage, so old completed stages no longer show
+  up empty.** Each stage now keeps its own capped history (last 200 events)
+  instead of sharing one flow-wide 200-event window. The `This stage | All`
+  toggle is gone; a new **Full feed** tab, pinned to the far right of the tab
+  row, shows the whole flow's last 1000 events when you want the cross-stage
+  view.
+- **The AI-verify stage badge is durable.** It's now computed server-side from
+  the stage's own notices and served on `/api/status`, so it no longer ages out
+  as feed activity grows.
+
 ## 2026-09-22
 
 - **Feed remains the default for non-actionable stages.** Clicking a `pending` or

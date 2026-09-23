@@ -8,17 +8,26 @@ right (there is no three-column layout or bottom progress bar).
 
 - **Stage rail** — a vertical timeline of the run: numbered status nodes, each
   stage's `name` (or `id`), a human-readable status line, and, in the rail head, the
-  run progress (`done / total`). On narrow viewports the rail collapses into a
-  slide-over drawer (open with the ☰ toggle next to the tabs). Run metrics (Started /
-  Elapsed / Idle / Backoff) live in the header, center.
-- **Workspace** — a permanent **Feed** tab (a messenger-style view of the real event
-  log across all stages) plus one contextual tab for the selected live/actionable
-  stage. Clicking a `pending` or `done` stage stays on Feed; read-only history is
-  not opened automatically. When a stage needs action the contextual tab is labelled
-  by kind (**Approval / Question / Paused / Failed / Hook failed**) with a count and
-  a glow, and the workspace auto-opens it — one active view at a time, filling the
-  whole area. When several stages await action, prev/next navigation steps through
-  the queue.
+  run progress (`done / total`). A stage using [AI-verify](verify.md) shows a small
+  verify-status badge next to its status line; it's a durable field computed
+  server-side from the stage's own notices, so — unlike the feed it used to be
+  derived from — it stays visible for as long as the stage exists, regardless of
+  how much other event activity has happened since. On narrow viewports the rail
+  collapses into a slide-over drawer (open with the ☰ toggle next to the tabs).
+  Run metrics (Started / Elapsed / Idle / Backoff) live in the header, center.
+- **Workspace** — a permanent **Feed** tab (a messenger-style view of the
+  *selected stage's own* event history, capped at its last 200 events) plus one
+  contextual tab for the selected live/actionable stage, plus a permanent
+  **Full feed** tab pinned to the far right of the tab row, showing the whole
+  flow's last 1000 events across every stage. Feed always reflects whichever
+  stage is selected — including an old, already-completed one, which used to
+  show up empty once enough later activity had pushed it out of a single
+  flow-wide window. Clicking a `pending` or `done` stage stays on Feed; read-only
+  history is not opened automatically. When a stage needs action the contextual
+  tab is labelled by kind (**Approval / Question / Paused / Failed / Hook
+  failed**) with a count and a glow, and the workspace auto-opens it — one
+  active view at a time, filling the whole area. When several stages await
+  action, prev/next navigation steps through the queue.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.
