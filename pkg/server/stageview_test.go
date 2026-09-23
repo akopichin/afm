@@ -492,3 +492,55 @@ func TestBuildStageViews_NoVerifyNotices_NilVerify(t *testing.T) {
 		t.Fatalf("verify view = %+v, want nil", v)
 	}
 }
+
+// TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon is the regression
+// test for the exact bug class this whole task exists to kill:
+// latestVerifyForStage MUST stay correct even when a stage's verify_result is
+// followed by far more than maxStageReplayEvents=200 later same-stage
+// notices — the horizon a per-stage reconstructNotices ring would evict it
+// past. If a future "helpful" refactor delegated latestVerifyForStage to
+// reconstructNotices for code reuse (that function IS capped at 200), this
+// test would FAIL; it passes only because latestVerifyForStage does its own
+// dedicated unbounded scan. Uses the real stagefiles.AppendNotice (via the
+// writeNotices helper from events_handler_test.go, same package) for both the
+// verify notice and the 250 filler notices, so the fixture matches the exact
+// on-disk shape production code writes. Checked for two independent stages so
+// the horizon-survival property isn't a coincidence of a single stage.
+func TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon(t *testing.T) {
+	runDir := t.TempDir()
+	for _, id := range []string{"build", "other"} {
+		if err := os.MkdirAll(filepath.Join(runDir, id), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The ONLY verify notice for each stage — written FIRST, before the
+	// 200-notice horizon that a capped per-stage scan would enforce.
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 1, "command": "codex", "verdict": "pass"})
+	appendVerifyNotice(t, runDir, "other", string(bus.EventVerifyResult), map[string]any{"step": 3, "command": "codex", "verdict": "needs_changes"})
+
+	// 250 later notices for EACH stage — comfortably past
+	// maxStageReplayEvents=200 — so a per-stage reconstructNotices ring would
+	// have evicted the verify_result above from its window by now.
+	writeNotices(t, runDir, "build", 250)
+	writeNotices(t, runDir, "other", 250)
+
+	rs := state.RunState{
+		StageOrder: []string{"build", "other"},
+		Stages: map[string]state.StageState{
+			"build": {Status: state.StatusDone},
+			"other": {Status: state.StatusFailed},
+		},
+	}
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+
+	v := findStage(views, "build").Verify
+	if v == nil || v.Phase != "pass" || v.Step != 1 || v.Command != "codex" {
+		t.Fatalf("build verify view = %+v, want {1 codex pass} — must survive 250 later notices past the 200-notice horizon", v)
+	}
+
+	other := findStage(views, "other").Verify
+	if other == nil || other.Phase != "needs_changes" || other.Step != 3 || other.Command != "codex" {
+		t.Fatalf("other verify view = %+v, want {3 codex needs_changes} — must survive 250 later notices past the 200-notice horizon", other)
+	}
+}
