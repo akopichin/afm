@@ -1,1 +1,1 @@
-export { useEventFeed } from './use-event-feed'
+export { dedupeKey, mergeCapped, toEvent, useEventFeed } from './use-event-feed'
