@@ -75,7 +75,9 @@ const (
 	// before this is published.
 	EventScriptFailed EventType = "script_failed"
 	// EventHookFailed fires when a before/after hook exhausts its 3x/1-2-3s
-	// retries. Data: map[string]string{"hook": ..., "error": "..."}.
+	// retries. Data: map[string]string{"hook": ..., "error": "...",
+	// "stderr_tail": <executor.ReadStderrTail of the hook's before.log/
+	// after.log, possibly empty if nothing was written to stderr>}.
 	EventHookFailed EventType = "hook_failed"
 	// EventHookResolved fires when the user retries or skips a failed hook.
 	// Data: map[string]string{"hook": ..., "resolution": "retried"|"skipped"}.

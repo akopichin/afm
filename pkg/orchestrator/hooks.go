@@ -35,6 +35,12 @@ const (
 	stderrTailMaxBytes = 4096
 )
 
+// dataKeyStderrTail is the shared notice-data key for a stderr excerpt,
+// reused by runScriptStage's script_failed (agents.go) and runBeforeHook/
+// runAfterHook's hook_failed (this file) — a single constant, not a string
+// literal at each of the 3 call sites (golangci-lint's goconst).
+const dataKeyStderrTail = "stderr_tail"
+
 // runScriptWithRetry runs fn up to hookMaxRetries+1 times (1 initial attempt
 // + up to 3 retries), waiting hookRetryBackoff[attempt] between attempts.
 // Returns the last error if every attempt fails, or ctx.Err() if cancelled
@@ -220,6 +226,14 @@ func (o *Orchestrator) publishHookNotice(stageID string, evType bus.EventType, s
 // Returns true once the stage should proceed to its main content (hook
 // succeeded or was skipped), false if ctx was cancelled while waiting for a
 // decision (full-run shutdown — recovery.go resumes the wait on next start).
+//
+// Retry-tail semantics: before.log is opened O_APPEND (execScript/RunScript)
+// and a hook retries up to hookMaxRetries times into the SAME file, so the
+// stderr_tail attached to the eventual hook_failed notice is the last N lines
+// ACROSS ALL attempts of this series, not just the final one — in practice
+// this means the tail shows the final (fatal) attempt's stderr, which is
+// exactly what's wanted. Intentionally cumulative; no per-attempt log
+// segmentation.
 func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// Best-effort: runBeforeHook is the first thing to touch the stage
@@ -259,7 +273,8 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		// handleEvent's switch doesn't handle EventHookFailed, so publishing
 		// it there silently discarded it. publishHookNotice also mirrors it to
 		// notices.jsonl so the error text survives reload (see its comment).
-		o.publishHookNotice(s.ID, bus.EventHookFailed, seq, map[string]string{"hook": hookBefore, "error": err.Error()})
+		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
+		o.publishHookNotice(s.ID, bus.EventHookFailed, seq, map[string]string{"hook": hookBefore, "error": err.Error(), dataKeyStderrTail: tail})
 
 		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
 		if !ok {
@@ -281,6 +296,12 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 // only surfaces a dismissable EventHookFailed notice with a retry/skip
 // decision, mirroring runBeforeHook's UI but never blocking the stage's
 // status.
+//
+// Retry-tail semantics: same as runBeforeHook's — after.log is O_APPEND and
+// a hook retries up to hookMaxRetries times into the SAME file, so the
+// stderr_tail attached to hook_failed is the last N lines ACROSS ALL attempts
+// of this series (the final/fatal attempt's stderr lands at the tail).
+// Intentionally cumulative; no per-attempt log segmentation.
 func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// Best-effort, mirrors runBeforeHook: the stage directory may not exist
@@ -316,7 +337,8 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 			// рестарта (finding #11), поэтому логируем явно.
 			log.Printf("WARN: persist hook_pending (after) for %s: %v", s.ID, werr)
 		}
-		o.publishHookNotice(s.ID, bus.EventHookFailed, 0, map[string]string{"hook": hookAfter, "error": err.Error()})
+		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
+		o.publishHookNotice(s.ID, bus.EventHookFailed, 0, map[string]string{"hook": hookAfter, "error": err.Error(), dataKeyStderrTail: tail})
 
 		decision, ok := o.waitOnHookChan(ctx, s.ID, waitCh)
 		if !ok {

@@ -98,7 +98,7 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 		// into the FSM transition itself.
 		const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
 		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
-		data := map[string]string{keyError: err.Error(), "stderr_tail": tail}
+		data := map[string]string{keyError: err.Error(), dataKeyStderrTail: tail}
 		o.ui.Publish(bus.Event{Type: bus.EventScriptFailed, StageID: s.ID, Data: data})
 		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventScriptFailed), data)
 		o.failBlockedStages()

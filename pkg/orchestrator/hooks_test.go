@@ -566,6 +566,55 @@ func TestRunBeforeHook_PersistsHookEventsToNotices(t *testing.T) {
 	}
 }
 
+// TestRunBeforeHook_PublishesStderrTailOnFail closes the same gap Task 4
+// (agents.go's runScriptStage) already closed for script: stages: a failed
+// script_before wrote no stderr excerpt into its hook_failed notice, so the
+// user could see THAT the hook failed but not WHY.
+func TestRunBeforeHook_PublishesStderrTailOnFail(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptBefore: "echo boom-before-stderr >&2; exit 1"}
+
+	subID, ch := o.ui.Subscribe(16)
+	defer o.ui.Unsubscribe(subID)
+
+	done := make(chan bool, 1)
+	go func() { done <- o.runBeforeHook(context.Background(), s) }()
+
+	found := false
+	deadline := time.After(15 * time.Second)
+	for !found {
+		select {
+		case ev := <-ch:
+			if ev.Type != bus.EventHookFailed {
+				continue
+			}
+			data, ok := ev.Data.(map[string]string)
+			if !ok {
+				t.Fatalf("EventHookFailed data has unexpected type: %+v", ev.Data)
+			}
+			if !strings.Contains(data["stderr_tail"], "boom-before-stderr") {
+				t.Fatalf("stderr_tail = %q, want it to contain %q", data["stderr_tail"], "boom-before-stderr")
+			}
+			found = true
+		case <-deadline:
+			t.Fatal("EventHookFailed never reached a UI bus subscriber")
+		}
+	}
+
+	if !o.resolveHook("s1", hookDecisionSkip) {
+		t.Fatal("resolveHook returned false")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runBeforeHook to return")
+	}
+}
+
 func TestRunAfterHook_SucceedsFirstTry_NoEvents(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
@@ -623,6 +672,59 @@ func TestRunAfterHook_FailsThenSkip_StageStaysDone(t *testing.T) {
 	}
 	if got := o.opts.Store.Get("s1"); got != state.StatusDone {
 		t.Errorf("status = %v, want done after skip", got)
+	}
+}
+
+// TestRunAfterHook_PublishesStderrTailOnFail is the after-hook sibling of
+// TestRunBeforeHook_PublishesStderrTailOnFail — same gap, different hook.
+func TestRunAfterHook_PublishesStderrTailOnFail(t *testing.T) {
+	o, runDir := setupHookOrch(t, "s1")
+	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusDone, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := flow.Stage{ID: "s1", ScriptAfter: "echo boom-after-stderr >&2; exit 1"}
+
+	subID, ch := o.ui.Subscribe(16)
+	defer o.ui.Unsubscribe(subID)
+
+	done := make(chan struct{})
+	go func() {
+		o.runAfterHook(context.Background(), s)
+		close(done)
+	}()
+
+	found := false
+	deadline := time.After(15 * time.Second)
+	for !found {
+		select {
+		case ev := <-ch:
+			if ev.Type != bus.EventHookFailed {
+				continue
+			}
+			data, ok := ev.Data.(map[string]string)
+			if !ok {
+				t.Fatalf("EventHookFailed data has unexpected type: %+v", ev.Data)
+			}
+			if !strings.Contains(data["stderr_tail"], "boom-after-stderr") {
+				t.Fatalf("stderr_tail = %q, want it to contain %q", data["stderr_tail"], "boom-after-stderr")
+			}
+			found = true
+		case <-deadline:
+			t.Fatal("EventHookFailed never reached a UI bus subscriber")
+		}
+	}
+
+	if !o.resolveHook("s1", hookDecisionSkip) {
+		t.Fatal("resolveHook returned false")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out")
 	}
 }
 
