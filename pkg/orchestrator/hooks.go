@@ -41,6 +41,12 @@ const (
 // literal at each of the 3 call sites (golangci-lint's goconst).
 const dataKeyStderrTail = "stderr_tail"
 
+// dataKeySeq is the notice-data key runScriptStage (agents.go) uses to embed
+// the applied EvFail transition's seq into the script_failed payload — a
+// per-occurrence discriminator for the frontend's content-based ingest dedup
+// (see the CONTENT_DEDUPE_ON_INGEST comment in use-event-feed.ts).
+const dataKeySeq = "seq"
+
 // runScriptWithRetry runs fn up to hookMaxRetries+1 times (1 initial attempt
 // + up to 3 retries), waiting hookRetryBackoff[attempt] between attempts.
 // Returns the last error if every attempt fails, or ctx.Err() if cancelled

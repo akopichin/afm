@@ -180,6 +180,7 @@ func TestRunScriptStage_Failure_PublishesScriptFailedNotice(t *testing.T) {
 	type scriptFailedData struct {
 		Error      string `json:"error"`
 		StderrTail string `json:"stderr_tail"`
+		Seq        string `json:"seq"`
 	}
 	var found *scriptFailedData
 	for _, line := range strings.Split(strings.TrimSpace(string(noticesData)), "\n") {
@@ -207,5 +208,8 @@ func TestRunScriptStage_Failure_PublishesScriptFailedNotice(t *testing.T) {
 	}
 	if !strings.Contains(found.StderrTail, "boom") {
 		t.Errorf("script_failed notice data.stderr_tail = %q, want it to contain %q", found.StderrTail, "boom")
+	}
+	if found.Seq == "" || found.Seq == "0" {
+		t.Errorf("script_failed notice data.seq = %q, want a non-empty, non-zero applied-transition seq", found.Seq)
 	}
 }

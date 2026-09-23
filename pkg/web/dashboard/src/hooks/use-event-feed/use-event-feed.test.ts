@@ -575,23 +575,25 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'agent_note')).toHaveLength(2)
   })
 
-  // Task 7: script_failed (нет seq, не FSM-transition само по себе, но
-  // публикуется live И персистится в notices.jsonl) НЕ входит в
-  // CONTENT_DEDUPE_ON_INGEST (см. комментарий у константы) — dedup на
-  // history/live слиянии всё равно даёт одну строку, потому что mergeCapped
-  // дедупит ПО СОДЕРЖИМОМУ безусловно для любого seq-less события (dedupeKey
-  // падает на type+stageId+payload), а не только для типов из allow-list.
+  // Task 7: script_failed (нет собственного bus.Event.Seq, не FSM-transition
+  // само по себе, но публикуется live И персистится в notices.jsonl) НЕ
+  // входит в CONTENT_DEDUPE_ON_INGEST по seq — dedup на history/live слиянии
+  // всё равно даёт одну строку, потому что mergeCapped дедупит ПО
+  // СОДЕРЖИМОМУ (dedupeKey падает на type+stageId+payload), а payload теперь
+  // несёт data.seq (applied EvFail transition seq) как дискриминатор ОДНОГО
+  // И ТОГО ЖЕ occurrence — обе копии (history+live) одного occurrence несут
+  // одинаковый seq, поэтому по-прежнему схлопываются в одну строку.
   test('a script_failed present in both history and live resolves to one row via mergeCapped', () => {
     const scriptFailed = (): AfmEvent => ({
       type: 'script_failed',
-      payload: { error: 'exit status 1', stderr_tail: 'boom' },
+      payload: { error: 'exit status 1', stderr_tail: 'boom', seq: '1' },
       stageId: 's1',
       timestamp: '2026-09-23T10:00:00.000Z',
       seq: undefined,
     })
 
     const history = [scriptFailed()]
-    const live = [scriptFailed()] // тот же контент — дубликат по dedupeKey
+    const live = [scriptFailed()] // тот же контент (тот же seq) — дубликат по dedupeKey
 
     const merged = mergeCapped(history, live, 10)
     expect(merged.filter((e) => e.type === 'script_failed')).toHaveLength(1)
@@ -601,9 +603,11 @@ describe('useEventFeed', () => {
   // именно ингест-путь onmessage (не только mergeCapped выше), тем же
   // сценарием, что и dialog_question ("already in history, then live"): без
   // ингест-дедупа onmessage слепо аппендил бы вторую строку поверх уже
-  // засинканной истории.
+  // засинканной истории. Обе копии несут ОДИН И ТОТ ЖЕ data.seq (тот же
+  // occurrence, доставленный дважды — history да live), поэтому дедуп по
+  // содержимому должен схлопнуть их в одну строку.
   test('script_failed already in history, then the same script_failed arrives live — dedup keeps one row', async () => {
-    const scriptFailedPayload = { error: 'exit status 1', stderr_tail: 'boom' }
+    const scriptFailedPayload = { error: 'exit status 1', stderr_tail: 'boom', seq: '1' }
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -631,6 +635,35 @@ describe('useEventFeed', () => {
     })
 
     expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(1)
+  })
+
+  // Regression for the dedup-collapses-distinct-failures bug: two genuinely
+  // DIFFERENT script_failed occurrences for the same stage (e.g. a manual
+  // Retry that fails identically — same error/stderr_tail text) must NOT
+  // collapse into one row. Each occurrence carries the applied EvFail
+  // transition's own seq in data.seq, so even though error/stderr_tail are
+  // byte-identical, the payloads differ and dedupeKey's content-based key
+  // (type|stageId|JSON(payload)) tells them apart.
+  test('two script_failed for the same stage with different seq are both kept (distinct occurrences)', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({
+        type: 'script_failed',
+        stage_id: 's1',
+        data: { error: 'exit status 1', stderr_tail: 'boom', seq: '1' },
+      })
+      FakeWebSocket.last().emitMessage({
+        type: 'script_failed',
+        stage_id: 's1',
+        data: { error: 'exit status 1', stderr_tail: 'boom', seq: '2' },
+      })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(2)
   })
 
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {

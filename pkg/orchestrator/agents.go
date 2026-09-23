@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/executor"
@@ -89,16 +90,24 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	})
 	if err != nil {
 		o.emitStageEvent(lifecyclehooks.EventStageScriptFailed, s.ID, err.Error())
-		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
+		_, failSeq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
 		// script_failed — a durable dashboard-feed notice (distinct from the
 		// lifecycle-only stage_script_failed above, which only reaches
-		// observer hook commands). Published AFTER Trigger: the durable FSM
-		// transition to failed is already committed, this only adds context
+		// observer hook commands). Published AFTER the transition: the durable
+		// FSM transition to failed is already committed, this only adds context
 		// (the exit error + a stderr tail) for the feed — never threaded back
-		// into the FSM transition itself.
+		// into the FSM transition itself. dataKeySeq carries the applied
+		// transition's seq as a per-occurrence discriminator: script_failed is
+		// content-deduped on ingest (see CONTENT_DEDUPE_ON_INGEST in
+		// use-event-feed.ts) because it's published both live and via
+		// AppendNotice without its own bus.Event.Seq — without a discriminator
+		// in the payload, two genuinely distinct failures with the same
+		// error/stderr_tail (e.g. a manual Retry failing identically) would
+		// collapse into one row. Same seq in both live+notice for the SAME
+		// occurrence keeps the intended dedup working.
 		const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
 		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
-		data := map[string]string{keyError: err.Error(), dataKeyStderrTail: tail}
+		data := map[string]string{keyError: err.Error(), dataKeyStderrTail: tail, dataKeySeq: strconv.FormatUint(failSeq, 10)}
 		o.ui.Publish(bus.Event{Type: bus.EventScriptFailed, StageID: s.ID, Data: data})
 		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventScriptFailed), data)
 		o.failBlockedStages()
