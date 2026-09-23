@@ -16,15 +16,20 @@ const MAX_EVENTS = 1000
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
 // Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ (см. onmessage
-// выше). Только эти два — они публикуются live И персистятся в notices.jsonl
-// без seq, так что реплей истории после live-сообщения (или наоборот) может
-// дать дубль контента. agent_action/script_output намеренно исключены —
+// выше). Эти события публикуются live И персистятся в notices.jsonl без seq,
+// так что реплей истории после live-сообщения (или наоборот) может дать
+// дубль контента. agent_action/script_output намеренно исключены —
 // легитимные одинаковые повторы не должны схлопываться.
 // agent_note добавлен по той же причине: он публикуется live И персистится в
 // notices.jsonl без seq, так что live+replay могут дать дубль. Его payload
 // несёт уникальный id (seq перехода), поэтому контент-ключ различает две
 // РАЗНЫЕ заметки с одинаковым текстом и схлопывает только один и тот же note.
-const CONTENT_DEDUPE_ON_INGEST = new Set(['dialog_question', 'dialog_answer', 'agent_note'])
+// script_failed добавлен по той же причине (Fix 3): это ОДНОКРАТНОЕ терминальное
+// событие script-стадии (в отличие от script_output, чьи одинаковые строки
+// легитимно повторяются), публикуется live И персистится в notices.jsonl без
+// seq — без ингест-дедупа реконнект/гонка history-vs-live даёт вторую строку
+// в ленте с тем же error/stderr_tail.
+const CONTENT_DEDUPE_ON_INGEST = new Set(['dialog_question', 'dialog_answer', 'agent_note', 'script_failed'])
 
 export function useEventFeed(url: string): { events: AfmEvent[]; connected: boolean } {
   const [events, setEvents] = useState<AfmEvent[]>([])
@@ -105,14 +110,15 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
           const last = prev[prev.length - 1]
           if (last !== undefined && isSameStatusEvent(last, event)) return prev
 
-          // dialog_question/dialog_answer публикуются И live, И в
-          // notices.jsonl (реплеятся через /api/events) — без seq (не
-          // FSM-transition), поэтому mergeHistory их обычную дедуп-гонку не
-          // ловит, когда история приходит РАНЬШЕ этого live-сообщения (а не
-          // наоборот): тогда запись уже в prev, а onmessage раньше слепо
-          // аппендил ещё одну. Дедупим по контенту ТОЛЬКО эти два типа —
-          // бланковый контент-дедуп всех seq-less событий схлопнул бы
-          // легитимные повторы agent_action/script_output.
+          // dialog_question/dialog_answer/agent_note/script_failed публикуются
+          // И live, И в notices.jsonl (реплеятся через /api/events) — без seq
+          // (не FSM-transition), поэтому mergeHistory их обычную дедуп-гонку
+          // не ловит, когда история приходит РАНЬШЕ этого live-сообщения (а
+          // не наоборот): тогда запись уже в prev, а onmessage раньше слепо
+          // аппендил ещё одну. Дедупим по контенту ТОЛЬКО типы из
+          // CONTENT_DEDUPE_ON_INGEST (см. константу выше) — бланковый
+          // контент-дедуп всех seq-less событий схлопнул бы легитимные
+          // повторы agent_action/script_output.
           if (CONTENT_DEDUPE_ON_INGEST.has(event.type)) {
             const key = dedupeKey(event)
             if (prev.some((e) => dedupeKey(e) === key)) return prev

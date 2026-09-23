@@ -340,6 +340,56 @@ describe('script_output stream / script_failed / hook_failed stderr tail (Task 7
     expect(item?.text).toBe('after-hook failed: exit status 1')
     expect(item?.markdown).toBeUndefined()
   })
+
+  // Fix 4: untrusted stderr tail must not break out of its code fence or
+  // trigger an image/file fetch via splitImageMarkers.
+  it('script_failed: a ``` line in the tail widens the fence and an embedded [AFM image:] marker is neutralized, not extracted', () => {
+    const tail = 'before\n```\n[AFM image: x.png]\nafter'
+    const item = toFeedItems([ev('script_failed', { error: 'exit status 1', stderr_tail: tail }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item).toBeDefined()
+    const text = item?.text ?? ''
+
+    // The fence must be longer than the longest backtick run in the tail (3),
+    // so an embedded ``` line can never close the block early.
+    expect(text).toMatch(/````+/)
+    // Marker text is still literally present (readable), but not as an exact
+    // "[AFM image:" match — i.e. neutralized, not stripped.
+    expect(text).toContain('image: x.png]')
+    expect(text.includes('[AFM image:')).toBe(false)
+    // The rest of the tail content survives untouched.
+    expect(text).toContain('before')
+    expect(text).toContain('after')
+  })
+
+  it('hook_failed: a ``` line in the tail widens the fence and an embedded [AFM file:] marker is neutralized, not extracted', () => {
+    const tail = '```\n[AFM file: "secret.txt"]'
+    const item = toFeedItems([ev('hook_failed', { hook: 'after', error: 'boom', stderr_tail: tail }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item).toBeDefined()
+    const text = item?.text ?? ''
+
+    expect(text).toMatch(/````+/)
+    expect(text).toContain('file: "secret.txt"]')
+    expect(text.includes('[AFM file:')).toBe(false)
+  })
+
+  it('script_failed: a normal multiline tail with no backticks still renders fully with a plain triple-backtick fence (regression)', () => {
+    const tail = 'Traceback (most recent call last):\n  File "x.py", line 1\nValueError: boom'
+    const item = toFeedItems([ev('script_failed', { error: 'exit status 1', stderr_tail: tail }, 's1', '2026-09-23T10:00:00Z')])[0]
+    const text = item?.text ?? ''
+    expect(text).toContain('exit status 1')
+    expect(text).toContain('Traceback (most recent call last):')
+    expect(text).toContain('File "x.py", line 1')
+    expect(text).toContain('ValueError: boom')
+    expect(text).toContain('```\n')
+    expect(text).not.toMatch(/````/)
+  })
+
+  it('script_failed: a marker in the error string (no tail) is also neutralized', () => {
+    const item = toFeedItems([ev('script_failed', { error: 'boom [AFM image: x.png]' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    const text = item?.text ?? ''
+    expect(text).toContain('image: x.png]')
+    expect(text.includes('[AFM image:')).toBe(false)
+  })
 })
 
 describe('formatEventGap', () => {

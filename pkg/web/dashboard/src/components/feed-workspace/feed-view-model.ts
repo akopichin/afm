@@ -86,6 +86,28 @@ function extractStatusString(data: unknown): string {
   return ''
 }
 
+// codeFence computes a fence of backticks long enough that no run of
+// backticks embedded in `content` (untrusted script/hook stderr) can
+// prematurely close the block: CommonMark requires a closing fence to be AT
+// LEAST as long as the opening one, so a stray ``` line in the middle of the
+// tail must never be allowed to equal or exceed our chosen fence length.
+// N = max(3, longestBacktickRun + 1).
+function codeFence(content: string): string {
+  const runs = content.match(/`+/g)
+  const longest = runs === null ? 0 : Math.max(...runs.map((r) => r.length))
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
+// neutralizeMarkers breaks `[AFM image: ...]` / `[AFM file: ...]` marker
+// syntax in untrusted script/hook output (error text and stderr tail) so
+// splitImageMarkers (feed-workspace) and the file-reference picker never
+// treat attacker-controlled stderr as a real marker and fetch an image/file
+// on the user's behalf. A zero-width space right after "[AFM" keeps the text
+// readable while breaking the exact-match regexes the marker parsers use.
+function neutralizeMarkers(s: string): string {
+  return s.replaceAll('[AFM image:', '[AFM​ image:').replaceAll('[AFM file:', '[AFM​ file:')
+}
+
 type Mapped = {
   actor: FeedActor
   tone: FeedTone
@@ -146,33 +168,44 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // диагностики. Тело рендерим как markdown с fenced code block —
       // сырой '\n' в plain-тексте схлопывается HTML-рендерингом, а
       // многострочный traceback обязан сохранить разбивку по строкам.
-      const tail = str(obj.stderr_tail)
+      //
+      // error и tail — НЕДОВЕРЕННЫЙ вывод скрипта: neutralizeMarkers режет
+      // [AFM image:]/[AFM file:] маркеры (иначе untrusted stderr мог бы
+      // триггернуть фетч картинки/файла), а codeFence — динамический фенс
+      // (N бэктиков > самого длинного забега бэктиков в tail), чтобы строка
+      // ``` внутри хвоста не закрывала блок кода раньше времени.
+      const error = neutralizeMarkers(str(obj.error))
+      const tail = neutralizeMarkers(str(obj.stderr_tail))
+      const fence = codeFence(tail)
       return {
         actor: 'system',
         tone: 'danger',
         kind: 'status',
         markdown: true,
         mono: false,
-        text: tail !== '' ? `**script failed:** ${str(obj.error)}\n\n\`\`\`\n${tail}\n\`\`\`` : `**script failed:** ${str(obj.error)}`,
+        text: tail !== '' ? `**script failed:** ${error}\n\n${fence}\n${tail}\n${fence}` : `**script failed:** ${error}`,
       }
     }
     case 'hook_failed': {
       // stderr_tail (опционален, Task 3-5, backend): фенс-код-блок только
       // когда хвост реально есть (markdown:true, как у script_failed выше);
       // без хвоста — прежняя plain-строка БЕЗ markdown-рендера (сегодняшнее
-      // поведение не меняется, markdown вообще не выставляется).
-      const tail = str(obj.stderr_tail)
-      const base = `${str(obj.hook)}-hook failed: ${str(obj.error)}`
+      // поведение не меняется, markdown вообще не выставляется). error/tail
+      // неблагонадёжны так же, как у script_failed выше — см. комментарий там.
+      const error = neutralizeMarkers(str(obj.error))
+      const tail = neutralizeMarkers(str(obj.stderr_tail))
+      const base = `${str(obj.hook)}-hook failed: ${error}`
       if (tail === '') {
         return { actor: 'system', tone: 'danger', kind: 'status', text: base, mono: false }
       }
+      const fence = codeFence(tail)
       return {
         actor: 'system',
         tone: 'danger',
         kind: 'status',
         markdown: true,
         mono: false,
-        text: `${base}\n\n\`\`\`\n${tail}\n\`\`\``,
+        text: `${base}\n\n${fence}\n${tail}\n${fence}`,
       }
     }
     case 'hook_resolved':

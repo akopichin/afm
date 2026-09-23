@@ -597,6 +597,42 @@ describe('useEventFeed', () => {
     expect(merged.filter((e) => e.type === 'script_failed')).toHaveLength(1)
   })
 
+  // Fix 3: script_failed теперь входит в CONTENT_DEDUPE_ON_INGEST — проверяем
+  // именно ингест-путь onmessage (не только mergeCapped выше), тем же
+  // сценарием, что и dialog_question ("already in history, then live"): без
+  // ингест-дедупа onmessage слепо аппендил бы вторую строку поверх уже
+  // засинканной истории.
+  test('script_failed already in history, then the same script_failed arrives live — dedup keeps one row', async () => {
+    const scriptFailedPayload = { error: 'exit status 1', stderr_tail: 'boom' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { type: 'script_failed', stage_id: 's1', data: scriptFailedPayload, timestamp: '2026-09-23T10:00:00.000Z' },
+          ]),
+      }),
+    )
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(1)
+    })
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    // Тот же script_failed, что уже вошёл из истории, теперь долетает по WS
+    // (был в полёте на момент фетча) — без фикса onmessage добавил бы вторую строку.
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'script_failed', stage_id: 's1', data: scriptFailedPayload })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(1)
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })
