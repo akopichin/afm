@@ -190,6 +190,10 @@ func ResolveArgs(extra []string) []string {
 // Executor spawns AI client subprocesses.
 type Executor struct {
 	cfg Config
+	// stderrSinkOverride — test-only seam (see scriptStderrSink). nil in
+	// production: New never sets it, so RunScript always opens the real
+	// .stderr.log file.
+	stderrSinkOverride func(logFile string) (io.Writer, func())
 }
 
 // New creates an Executor.
@@ -341,6 +345,42 @@ func openStderrLog(logFile string) *os.File {
 		return nil
 	}
 	return f
+}
+
+// dualWriter always writes to BOTH stream (the live line-streamer feeding
+// Config.OnAction, which never errors) and file (the durable .stderr.log
+// diagnostic sink, best-effort) — and always reports success to its caller
+// (os/exec's stderr-copier). This is deliberately NOT io.MultiWriter: that
+// helper stops at the FIRST writer that returns an error, so a full-disk (or
+// otherwise failing) .stderr.log write would silently stop the live stream
+// too — killing stderr visibility exactly when the disk is full and the
+// build is failing. A file-sink error here is swallowed (diagnostic only,
+// same trade-off openStderrLog itself already makes by degrading to nil on
+// open failure).
+type dualWriter struct {
+	stream io.Writer
+	file   io.Writer
+}
+
+func (d *dualWriter) Write(p []byte) (int, error) {
+	_, _ = d.stream.Write(p) // lineWriter.Write never returns an error
+	_, _ = d.file.Write(p)   // best-effort: a log-write failure must not stop streaming
+	return len(p), nil
+}
+
+// scriptStderrSink opens the durable stderr sink for RunScript and returns it
+// together with a closer. Overridable per-Executor via stderrSinkOverride
+// (test-only, unexported) so tests in this package can simulate a file-write
+// failure (e.g. ENOSPC) without depending on an OS-specific always-full
+// device like /dev/full (absent on macOS).
+func (e *Executor) scriptStderrSink(logFile string) (io.Writer, func()) {
+	if e.stderrSinkOverride != nil {
+		return e.stderrSinkOverride(logFile)
+	}
+	if sf := openStderrLog(logFile); sf != nil {
+		return sf, func() { sf.Close() }
+	}
+	return io.Discard, func() {}
 }
 
 // RunPlanning runs the AI client with prompt via stdin, collects text output
@@ -676,19 +716,17 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 
 	// Durable stderr sink (the .stderr.log file) and, independently, the live
 	// feed sink (lineWriter → OnAction("stderr", ...)). Built so that
-	// streaming to OnAction survives even if the log file failed to open —
-	// fileSink degrades to io.Discard, but stderrWriter still carries stderr
-	// to lw via io.MultiWriter.
-	fileSink := io.Writer(io.Discard)
-	if sf := openStderrLog(logFile); sf != nil {
-		fileSink = sf
-		defer sf.Close()
-	}
+	// streaming to OnAction survives even if the log file failed to open OR
+	// a write to it fails mid-run (e.g. ENOSPC) — dualWriter (not
+	// io.MultiWriter, which would stop at the first erroring writer) always
+	// forwards to the live stream regardless of the file sink's outcome.
+	fileSink, closeFileSink := e.scriptStderrSink(logFile)
+	defer closeFileSink()
 	var lw *lineWriter
 	stderrWriter := fileSink
 	if e.cfg.OnAction != nil {
 		lw = newLineWriter(func(line string) { e.cfg.OnAction("stderr", line) })
-		stderrWriter = io.MultiWriter(fileSink, lw)
+		stderrWriter = &dualWriter{stream: lw, file: fileSink}
 	}
 
 	lg.LogStart("script", strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile)))

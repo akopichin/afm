@@ -119,6 +119,36 @@ func TestReadStderrTail_MultiByteRuneAtCut_NeverSplitsRune(t *testing.T) {
 	}
 }
 
+// TestReadStderrTail_HugeNewlineFreeLine_NonEmptyCapped is a regression test
+// for a bug where a stderr log larger than the seek window, whose window
+// contains NO '\n' at all (a single huge line with no newline), returned "".
+// The "drop the leading partial line" step dropped the ENTIRE window because
+// it unconditionally treated "no newline found" the same as "drop
+// everything" — but with no newline, the window IS the (still ongoing) line,
+// not a partial fragment to discard.
+func TestReadStderrTail_HugeNewlineFreeLine_NonEmptyCapped(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "script.log")
+	// 200KB single character, no trailing newline — file size (200KB) exceeds
+	// the seek window (maxBytes*4 + 64KiB) for a small maxBytes, and the
+	// window itself contains no '\n' anywhere.
+	if err := os.WriteFile(filepath.Join(dir, "script.stderr.log"), []byte(strings.Repeat("x", 200*1024)), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const maxBytes = 4096
+	tail := ReadStderrTail(logFile, 20, maxBytes)
+	if tail == "" {
+		t.Fatal("expected a non-empty tail for a huge newline-free line, got empty string")
+	}
+	if len(tail) > maxBytes {
+		t.Fatalf("byte cap violated: %d bytes", len(tail))
+	}
+	if !utf8.ValidString(tail) {
+		t.Fatal("tail is not valid UTF-8")
+	}
+}
+
 func TestLineWriter_HugeLineNoNewline_TruncatesNotUnbounded(t *testing.T) {
 	var got []string
 	lw := newLineWriter(func(s string) { got = append(got, s) })

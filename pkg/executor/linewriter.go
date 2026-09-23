@@ -142,11 +142,12 @@ func ReadStderrTail(logFile string, maxLines, maxBytes int) string {
 		}
 		// The seek almost certainly landed inside a line; drop that partial
 		// leading line so we don't report a truncated first line as if it
-		// were complete.
+		// were complete. But only when the window actually CONTAINS a '\n' —
+		// a single huge line with no newline at all (e.g. a >80KiB stderr
+		// line) would otherwise have its entire window dropped, producing an
+		// empty tail instead of a capped excerpt of that same line.
 		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
 			data = data[idx+1:]
-		} else {
-			data = nil
 		}
 	} else {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
