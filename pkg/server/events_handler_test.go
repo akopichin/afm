@@ -161,6 +161,72 @@ func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T)
 	}
 }
 
+// TestHandleEvents_ScriptFailedAndStderrScriptOutputReplay is the regression
+// guard for the script-stderr-visibility feature (Tasks 3-5): script_failed
+// (data {error, stderr_tail}, agents.go's runScriptStage) and script_output
+// enriched with a stream field (data {hook, line, stream}, hooks.go's
+// execScript) must replay through GET /api/events unchanged — reconstructNotices
+// is generic over notice type and doesn't allowlist/filter either shape, so
+// this proves that with no code change needed (only dialog_question/
+// dialog_answer are content-deduped, see dialogDedupTypes above).
+func TestHandleEvents_ScriptFailedAndStderrScriptOutputReplay(t *testing.T) {
+	runDir := t.TempDir()
+	stageID := "build"
+
+	stagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptFailed), map[string]string{
+		"error":       "exit status 1",
+		"stderr_tail": "line1\nline2\n",
+	})
+	stagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptOutput), map[string]string{
+		"hook":   "",
+		"line":   "boom",
+		"stream": "stderr",
+	})
+
+	srv := newTestServerForRunDir(t, runDir, []string{stageID})
+	req := httptest.NewRequest("GET", "/api/events?stage="+stageID, nil)
+	rr := httptest.NewRecorder()
+	srv.handleEvents(rr, req)
+
+	var events []feedEvent
+	mustDecode(t, rr, &events)
+
+	var sawScriptFailed, sawStderrScriptOutput bool
+	for _, e := range events {
+		if e.StageID != stageID {
+			t.Fatalf("stage filter leaked stage %q", e.StageID)
+		}
+		data, ok := e.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch e.Type {
+		case "script_failed":
+			sawScriptFailed = true
+			if data["error"] != "exit status 1" {
+				t.Errorf("script_failed error = %v, want %q", data["error"], "exit status 1")
+			}
+			if data["stderr_tail"] != "line1\nline2\n" {
+				t.Errorf("script_failed stderr_tail = %v, want %q", data["stderr_tail"], "line1\nline2\n")
+			}
+		case "script_output":
+			if data["stream"] == "stderr" {
+				sawStderrScriptOutput = true
+				if data["line"] != "boom" {
+					t.Errorf("script_output line = %v, want %q", data["line"], "boom")
+				}
+			}
+		default:
+		}
+	}
+	if !sawScriptFailed {
+		t.Error("expected a script_failed event with error/stderr_tail intact")
+	}
+	if !sawStderrScriptOutput {
+		t.Error("expected a script_output event with stream=stderr intact")
+	}
+}
+
 func TestReconstructAgentActions_CoversAllPhasesIncludingAutonomous(t *testing.T) {
 	stageDir := t.TempDir()
 
