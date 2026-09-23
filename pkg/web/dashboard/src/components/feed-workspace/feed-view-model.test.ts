@@ -290,6 +290,58 @@ describe('groupFeedItems', () => {
   })
 })
 
+describe('script_output stream / script_failed / hook_failed stderr tail (Task 7)', () => {
+  it('renders a stderr script_output line distinctly', () => {
+    const item = toFeedItems([ev('script_output', { hook: 'script', line: 'Traceback...', stream: 'stderr' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.tone).toBe('warning')
+    expect(item?.text).toContain('stderr')
+    expect(item?.text).toContain('Traceback...')
+  })
+
+  it('renders a stdout script_output line as before (neutral)', () => {
+    const item = toFeedItems([ev('script_output', { hook: 'script', line: 'building', stream: 'stdout' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.tone).toBe('neutral')
+    expect(item?.text).toBe('[script] building')
+  })
+
+  it('renders a script_output line with no stream field as stdout (backward compat with old notices)', () => {
+    const item = toFeedItems([ev('script_output', { hook: 'script', line: 'building' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.tone).toBe('neutral')
+    expect(item?.text).toBe('[script] building')
+  })
+
+  it('renders script_failed as a danger row with the error and a real multiline traceback preserved', () => {
+    const tail = 'Traceback (most recent call last):\n  File "x.py", line 1\nValueError: boom'
+    const item = toFeedItems([ev('script_failed', { error: 'exit status 1', stderr_tail: tail }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.tone).toBe('danger')
+    expect(item?.text).toContain('exit status 1')
+    expect(item?.text).toContain('Traceback (most recent call last):')
+    expect(item?.text).toContain('File "x.py", line 1')
+    expect(item?.text).toContain('ValueError: boom')
+    expect(item?.markdown).toBe(true)
+  })
+
+  it('renders script_failed without a tail as a plain danger row', () => {
+    const item = toFeedItems([ev('script_failed', { error: 'exit status 1' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.tone).toBe('danger')
+    expect(item?.text).toContain('exit status 1')
+    expect(item?.text).not.toContain('```')
+  })
+
+  it('appends stderr_tail to hook_failed when present, as a fenced code block', () => {
+    const item = toFeedItems([ev('hook_failed', { hook: 'after', error: 'exit status 1', stderr_tail: 'boom' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.text).toContain('exit status 1')
+    expect(item?.text).toContain('boom')
+    expect(item?.markdown).toBe(true)
+  })
+
+  it('keeps hook_failed as today\'s plain row when stderr_tail is absent', () => {
+    const item = toFeedItems([ev('hook_failed', { hook: 'after', error: 'exit status 1' }, 's1', '2026-09-23T10:00:00Z')])[0]
+    expect(item?.text).toBe('after-hook failed: exit status 1')
+    expect(item?.markdown).toBeUndefined()
+  })
+})
+
 describe('formatEventGap', () => {
   it('formats seconds/minutes/hours/days and em-dash for invalid', () => {
     expect(formatEventGap(5000, 0)).toBe('5s')

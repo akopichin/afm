@@ -575,6 +575,28 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'agent_note')).toHaveLength(2)
   })
 
+  // Task 7: script_failed (нет seq, не FSM-transition само по себе, но
+  // публикуется live И персистится в notices.jsonl) НЕ входит в
+  // CONTENT_DEDUPE_ON_INGEST (см. комментарий у константы) — dedup на
+  // history/live слиянии всё равно даёт одну строку, потому что mergeCapped
+  // дедупит ПО СОДЕРЖИМОМУ безусловно для любого seq-less события (dedupeKey
+  // падает на type+stageId+payload), а не только для типов из allow-list.
+  test('a script_failed present in both history and live resolves to one row via mergeCapped', () => {
+    const scriptFailed = (): AfmEvent => ({
+      type: 'script_failed',
+      payload: { error: 'exit status 1', stderr_tail: 'boom' },
+      stageId: 's1',
+      timestamp: '2026-09-23T10:00:00.000Z',
+      seq: undefined,
+    })
+
+    const history = [scriptFailed()]
+    const live = [scriptFailed()] // тот же контент — дубликат по dedupeKey
+
+    const merged = mergeCapped(history, live, 10)
+    expect(merged.filter((e) => e.type === 'script_failed')).toHaveLength(1)
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })

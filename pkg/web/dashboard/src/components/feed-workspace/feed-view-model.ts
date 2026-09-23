@@ -128,10 +128,53 @@ function mapEvent(event: AfmEvent): Mapped | null {
       }
       return { actor: 'agent', tone: 'neutral', kind: 'tool', text: `${tool}${detail !== '' ? `: ${detail}` : ''}`, mono: true }
     }
-    case 'script_output':
+    case 'script_output': {
+      // stream различает stdout/stderr (Task 3-5, backend): stderr — тревожная
+      // mono-строка (warning), как и обычный tool-вызов, но с явной пометкой
+      // ":stderr", чтобы отличить от stdout в общей ленте script-стадии.
+      // Отсутствующий stream (старые notices, записанные ДО этой правки) —
+      // backward-compat трактуется как stdout, текст не меняется вовсе.
+      const stream = str(obj.stream)
+      if (stream === 'stderr') {
+        return { actor: 'agent', tone: 'warning', kind: 'script', text: `[${str(obj.hook)}:stderr] ${str(obj.line)}`, mono: true }
+      }
       return { actor: 'agent', tone: 'neutral', kind: 'script', text: `[${str(obj.hook)}] ${str(obj.line)}`, mono: true }
-    case 'hook_failed':
-      return { actor: 'system', tone: 'danger', kind: 'status', text: `${str(obj.hook)}-hook failed: ${str(obj.error)}`, mono: false }
+    }
+    case 'script_failed': {
+      // Итоговый сбой script-стадии (Task 3-5, backend): error — короткая
+      // причина (напр. "exit status 1"), stderr_tail — хвост stderr для
+      // диагностики. Тело рендерим как markdown с fenced code block —
+      // сырой '\n' в plain-тексте схлопывается HTML-рендерингом, а
+      // многострочный traceback обязан сохранить разбивку по строкам.
+      const tail = str(obj.stderr_tail)
+      return {
+        actor: 'system',
+        tone: 'danger',
+        kind: 'status',
+        markdown: true,
+        mono: false,
+        text: tail !== '' ? `**script failed:** ${str(obj.error)}\n\n\`\`\`\n${tail}\n\`\`\`` : `**script failed:** ${str(obj.error)}`,
+      }
+    }
+    case 'hook_failed': {
+      // stderr_tail (опционален, Task 3-5, backend): фенс-код-блок только
+      // когда хвост реально есть (markdown:true, как у script_failed выше);
+      // без хвоста — прежняя plain-строка БЕЗ markdown-рендера (сегодняшнее
+      // поведение не меняется, markdown вообще не выставляется).
+      const tail = str(obj.stderr_tail)
+      const base = `${str(obj.hook)}-hook failed: ${str(obj.error)}`
+      if (tail === '') {
+        return { actor: 'system', tone: 'danger', kind: 'status', text: base, mono: false }
+      }
+      return {
+        actor: 'system',
+        tone: 'danger',
+        kind: 'status',
+        markdown: true,
+        mono: false,
+        text: `${base}\n\n\`\`\`\n${tail}\n\`\`\``,
+      }
+    }
     case 'hook_resolved':
       return { actor: 'system', tone: 'success', kind: 'status', text: `${str(obj.hook)}-hook ${str(obj.resolution)}`, mono: false }
     case 'lifecycle_hook_failed':
