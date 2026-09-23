@@ -15,6 +15,7 @@ import { FileBrowserProvider } from '../components/file-browser'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useEventFeed } from '../hooks/use-event-feed'
+import { useStageEvents } from '../hooks/use-stage-events'
 import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
@@ -184,7 +185,7 @@ export function App(): ReactElement {
   const [filesOpen, setFilesOpen] = useState(false)
   const anyModalOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
   const editing = useIsEditing() || anyModalOpen
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openAttention, openHistory } = useWorkspaceView(stages, editing)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
 
   // FIX 3 (round-5 #6 спеки): активация Cost из поповера «⋯» шапки должна
   // довести фокус до САМОЙ вкладки Cost воркспейса, а не оставлять его на
@@ -217,6 +218,11 @@ export function App(): ReactElement {
   // иначе — выбранная в рейле стадия.
   const workspaceStageId = wsState.view === 'attention' && attnItem !== null ? attnItem.stageId : selectedStageId
   const workspaceStage = stages.find((stage) => stage.id === workspaceStageId) ?? null
+
+  // stageEvents — лента вкладки Feed: только события ТЕКУЩЕЙ стадии воркспейса
+  // (история + live-хвост, см. useStageEvents), а не весь событийный поток
+  // флоу. Full feed (глобальный вид) продолжает читать сырые `events` напрямую.
+  const stageEvents = useStageEvents(workspaceStage?.id ?? null, events)
 
   // Держим selectedStageId в согласии с авто-фокусом attention: когда редьюсер
   // сам открыл/продвинул ожидание, рейл-выбор следует за ним, чтобы после
@@ -449,7 +455,7 @@ export function App(): ReactElement {
   // и duplicatesBeacon, и ветка ниже гейтятся ИМ, а не одним только 'feed'
   // (баг: Cost раньше вместе с маяком показывал ещё и detail-таб той же
   // стадии — два таба на одно и то же ожидание).
-  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost'
+  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed'
   // В глобальном виде (Feed/Cost) detail-таб выбранной стадии дублирует
   // glow-маяк, если оба ведут в ОДНО и то же ожидание — т.е. у стадии есть своё
   // ожидание (contextKind) и маяк указывает на неё же. Тогда detail-таб
@@ -513,10 +519,16 @@ export function App(): ReactElement {
   if (accounting.supported) {
     tabs.push({ id: 'cost', label: 'Cost' })
   }
-  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : 'detail'
+  // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка (increment: per-stage feed cap),
+  // читает весь событийный поток флоу (все стадии вперемешку, с бейджами
+  // стадии). Всегда ПОСЛЕДНЯЯ в списке — правее Cost, а не второй сразу после
+  // Feed (тот же порядок, что и у Cost выше).
+  tabs.push({ id: 'full-feed', label: 'Full feed' })
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
     if (id === 'cost') { openCost(); return }
+    if (id === 'full-feed') { openFullFeed(); return }
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
       if (attentionTabItem !== null) {
@@ -613,7 +625,7 @@ export function App(): ReactElement {
                     лентой). Cost — глобальный отчёт, не привязанный к стадии:
                     оставлять над ним имя/статус последней выбранной стадии
                     подразумевало бы несуществующий пер-стейдж фильтр. */}
-                {workspaceStage !== null && wsState.view !== 'cost' && (
+                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'full-feed' && (
                   <WorkspaceHeader
                     stage={workspaceStage}
                     connected={connected}
@@ -632,8 +644,23 @@ export function App(): ReactElement {
                     coverageIssues={coverageIssues}
                     accounting={accounting}
                   />
+                ) : wsState.view === 'full-feed' ? (
+                  <FeedWorkspace
+                    events={events}
+                    stageId={null}
+                    showStageBadges
+                    onOpenDialog={handleOpenDialogFromFeed}
+                    emptyHint="No events yet"
+                  />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
-                  <FeedWorkspace events={events} stageId={workspaceStage?.id ?? null} onOpenDialog={handleOpenDialogFromFeed} noteTarget={noteTarget} onSendNote={handleSendNote} />
+                  <FeedWorkspace
+                    events={stageEvents}
+                    stageId={workspaceStage?.id ?? null}
+                    emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
+                    onOpenDialog={handleOpenDialogFromFeed}
+                    noteTarget={noteTarget}
+                    onSendNote={handleSendNote}
+                  />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

@@ -185,7 +185,7 @@ describe('App', () => {
     expect(statusCalls).toBe(2)
   })
 
-  test('CRITICAL: WS refresh survives past the 200-event feed cap (Finding #2)', async () => {
+  test('CRITICAL: WS refresh survives past the 1000-event feed cap (Finding #2)', async () => {
     let statusCalls = 0
     mockFetchForStatus(
       () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }),
@@ -199,17 +199,18 @@ describe('App', () => {
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
 
-    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=200) незначимыми agent_action —
-    // сами по себе refresh они не вызывают, но насыщают длину массива в 200.
+    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=1000, use-event-feed) незначимыми
+    // agent_action — сами по себе refresh они не вызывают, но насыщают длину
+    // массива до кэпа.
     act(() => {
-      for (let i = 0; i < 205; i += 1) {
+      for (let i = 0; i < 1005; i += 1) {
         ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { n: i }, stage_id: 's1' }) })
       }
     })
     expect(statusCalls).toBe(1)
 
     // Значимое событие ПОСЛЕ насыщения кэпа обязано снова триггерить refresh.
-    // При старой length-based проверке (200 === 200) этот вызов молча
+    // При старой length-based проверке (N === N) этот вызов молча
     // проглатывался — WS-канал обновления был мёртв до конца сессии.
     act(() => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
@@ -311,9 +312,9 @@ describe('App', () => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(labels.some((l) => /Approval/.test(l))).toBe(true) // маяк остался
       expect(labels.some((l) => l === 'Gamma')).toBe(false) // блёклый дубль скрыт
-      // Feed + постоянная Cost-вкладка (Task 11) + маяк — никакого блёклого
-      // дубля-detail сверх этих трёх.
-      expect(labels.length).toBe(3)
+      // Feed + постоянная Cost-вкладка (Task 11) + маяк + постоянная Full feed
+      // (Task 6) — никакого блёклого дубля-detail сверх этих четырёх.
+      expect(labels.length).toBe(4)
     })
   })
 
@@ -332,8 +333,9 @@ describe('App', () => {
 
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
-      // Feed + постоянная Cost-вкладка (Task 11); ни detail-таба, ни маяка.
-      expect(labels).toEqual(['Feed', 'Cost'])
+      // Feed + постоянная Cost-вкладка (Task 11) + постоянная Full feed
+      // (Task 6); ни detail-таба, ни маяка.
+      expect(labels).toEqual(['Feed', 'Cost', 'Full feed'])
     })
   })
 
@@ -826,9 +828,24 @@ describe('App', () => {
     })
   })
 
-  test('Feed scope: FeedWorkspace получает stageId выбранной стадии и фильтрует ленту', async () => {
-    // Интеграция проброса stageId: выбрана s1, лента по умолчанию (This stage)
-    // показывает события только s1; flow-level и прочие стадии — по кнопке All.
+  test('renders a Full feed tab as the last tab', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'running')],
+      accounting: { health: 'ok', has_data: false },
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs[tabs.length - 1]).toHaveTextContent('Full feed')
+  })
+
+  test('Feed tab shows only the selected stage; Full feed shows all', async () => {
+    // Feed (per-stage) больше не фильтрует общий поток через тумблер — она
+    // читает уже отфильтрованную стадией ленту (useStageEvents). Full feed —
+    // отдельная постоянная вкладка, читающая весь поток событий флоу.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'pending')],
@@ -844,20 +861,39 @@ describe('App', () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { tool: 'read_file', detail: 'b.ts' }, stage_id: 's2' }) })
     })
 
-    // Тумблер scope виден (стадия выбрана); по умолчанию видно только s1.
-    expect(screen.getByRole('button', { name: 'This stage' })).toBeInTheDocument()
+    // Default view — Feed для выбранной s1: только её событие видно.
     await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file: a.ts'))
     expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file: b.ts')
 
-    // All → показываются события всех стадий.
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
-    expect(document.getElementById('feed-content')?.textContent).toContain('read_file: b.ts')
+    // Full feed → видны события ВСЕХ стадий.
+    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file: b.ts'))
+    expect(document.getElementById('feed-content')?.textContent).toContain('read_file: a.ts')
   })
 
-  test('Feed scope: устаревший выбор вне stages → тумблер scope скрыт (глобальная лента)', async () => {
+  test('no This stage / All toggle exists', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'pending')],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+
+    expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument()
+
+    // Тумблер не появляется и в Full feed — там его тоже никогда не было.
+    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+    expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument()
+  })
+
+  test('a stale selection outside current stages falls back to the global Feed empty hint', async () => {
     // После смены набора стадий выбранная s1 исчезает, а активных/failed стадий
     // нет → selectedStageId устаревает, workspaceStage=null → FeedWorkspace
-    // получает stageId=null, тумблер This stage|All скрыт, лента глобальная.
+    // получает stageId=null и показывает нейтральный empty hint (нет тумблера,
+    // который раньше скрывался в этом случае — он просто больше не существует).
     let swapped = false
     mockFetchForStatus(() =>
       swapped
@@ -867,7 +903,6 @@ describe('App', () => {
 
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
-    expect(screen.getByRole('button', { name: 'This stage' })).toBeInTheDocument()
 
     swapped = true
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
@@ -875,7 +910,9 @@ describe('App', () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
     })
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument())
+    await waitFor(() => {
+      expect(document.getElementById('feed-content')?.textContent).toContain('Select a stage to see its feed')
+    })
   })
 
   test('Cost tab: opening it hides the stage-scoped WorkspaceHeader and shows the cost report', async () => {
@@ -918,12 +955,13 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
   })
 
-  test('Cost tab is always the LAST tab, after the contextual detail/beacon tabs', async () => {
+  test('Cost tab is always right before the trailing Full feed tab, after the contextual detail/beacon tabs', async () => {
     // Живой ревью-баг: Cost был второй вкладкой сразу после Feed, поэтому
     // detail-таб выбранной стадии и attention-маяк оказывались ПОСЛЕ Cost —
-    // Cost «застревала» посередине списка. Cost должна всегда идти последней.
+    // Cost «застревала» посередине списка. Cost должна всегда идти предпоследней
+    // (Full feed, Task 6, теперь всегда самая последняя).
     // s1 done с планом — клик по ней оставляет Feed; s2 ждёт аппрув — отдельный
-    // маяк Approval. Порядок: Feed, Approval (маяк), Cost.
+    // маяк Approval. Порядок: Feed, Approval (маяк), Cost, Full feed.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [
@@ -942,12 +980,13 @@ describe('App', () => {
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(labels[0]).toBe('Feed')
-      expect(labels[labels.length - 1]).toBe('Cost')
+      expect(labels[labels.length - 1]).toBe('Full feed')
+      expect(labels[labels.length - 2]).toBe('Cost')
       expect(labels).not.toContain('Greet')
       expect(labels.some((l) => /Approval/.test(l))).toBe(true)
     })
 
-    // Клик по Cost по-прежнему активирует вкладку отчёта, даже будучи последней.
+    // Клик по Cost по-прежнему активирует вкладку отчёта, даже будучи предпоследней.
     fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Cost' })).toHaveAttribute('aria-selected', 'true'))
   })
@@ -958,7 +997,7 @@ describe('App', () => {
     // AND the attention beacon for that same stage — two tabs pointing at
     // the same thing. s1 is awaiting approval (its own attention); it's also
     // the selected/workspace stage while we're on Cost. Expected order:
-    // Feed | Approval·1 | Cost — no third "Propose" detail tab.
+    // Feed | Approval·1 | Cost | Full feed — no third "Propose" detail tab.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'awaiting_approval')],
@@ -971,7 +1010,7 @@ describe('App', () => {
 
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
-      expect(labels).toEqual(['Feed', expect.stringMatching(/Approval/), 'Cost'])
+      expect(labels).toEqual(['Feed', expect.stringMatching(/Approval/), 'Cost', 'Full feed'])
     })
   })
 
@@ -1132,9 +1171,9 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
     expect(document.getElementById('dialog-section')).toBeNull()
 
-    // s2 не выбрана → тумблер scope виден для s1; переключаемся на All, чтобы
-    // увидеть событие s2 в ленте.
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    // s2 не выбрана → per-stage Feed (s1) не покажет её событие; переключаемся
+    // на Full feed, чтобы увидеть событие s2 в ленте.
+    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {

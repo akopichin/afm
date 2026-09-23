@@ -9,42 +9,6 @@
   height: 100%;
 }
 
-/* --- Сегмент-переключатели: Feed/Log + (This stage/All) в одну строку --- */
-.feed-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-self: flex-start;
-  margin: 0 0 12px;
-}
-.feed-switch {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-md);
-}
-.feed-switch-btn {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 13px;
-  padding: 4px 14px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: color var(--motion-fast, 120ms) ease, background var(--motion-fast, 120ms) ease;
-}
-.feed-switch-btn:hover { color: var(--text-secondary); }
-.feed-switch-btn.active {
-  color: var(--text-primary);
-  background: var(--surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-}
-.feed-switch-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-
 /* --- Скролл-контейнер --- */
 .feed-scroll {
   position: relative;
