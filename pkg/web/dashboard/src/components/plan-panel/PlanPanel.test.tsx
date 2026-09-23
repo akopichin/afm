@@ -218,6 +218,54 @@ describe('PlanPanel', () => {
     expect(approveBtn).not.toBeDisabled()
   })
 
+  test('Send revision is disabled while a new, empty comment form is open (even with an already-submitted comment), and re-enables once it is closed', async () => {
+    // Bug repro: opening a comment form (even empty) on ANOTHER line while a
+    // comment is already submitted must still gate Send revision — the old
+    // `hasOpenDraft` (open AND non-empty) let an open-but-empty form through.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
+
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+
+    // Submit a comment on line 1 so commentCount > 0.
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: 'please fix' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    const reviseBtn = screen.getByRole('button', { name: 'Send revision (1)' })
+    expect(reviseBtn).not.toBeDisabled()
+
+    // Open a NEW, empty comment form on line 2.
+    fireEvent.click(container.querySelector('[data-line="2"]') as HTMLElement)
+    expect(container.querySelector('.line-comment-form[data-comment-line="2"]')).not.toBeNull()
+    expect(reviseBtn).toBeDisabled()
+
+    // Close it without saving: Send revision re-enables.
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 2' }))
+    expect(reviseBtn).not.toBeDisabled()
+  })
+
+  test('Approve is disabled while an empty comment form is open with no submitted comments, and re-enables once it is closed', async () => {
+    // Bug repro: opening a fresh, empty comment form on a plan with zero
+    // submitted comments must still gate Approve.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
+
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+
+    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    expect(approveBtn).not.toBeDisabled()
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).not.toBeNull()
+    expect(approveBtn).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
+    expect(approveBtn).not.toBeDisabled()
+  })
+
   test('sendRevision(): no-op without comments; posts feedback and clears comments once one exists', async () => {
     const calls: { url: string; body?: string }[] = []
 

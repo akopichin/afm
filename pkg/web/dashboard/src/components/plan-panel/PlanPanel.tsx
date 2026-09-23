@@ -190,7 +190,7 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
             id="btn-approve"
             className={`btn btn-approve${clicked === 'approve' ? ' ok' : ''}`}
             type="button"
-            disabled={busy || doc.commentCount > 0 || doc.hasOpenDraft}
+            disabled={busy || doc.commentCount > 0 || doc.activeCommentLine !== null}
             onClick={approve}
           >
             <span className="btn-ripple" aria-hidden="true" />
@@ -201,7 +201,7 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
             id="btn-revise"
             className={`btn btn-revise${clicked === 'revise' ? ' ok' : ''}`}
             type="button"
-            disabled={busy || doc.commentCount === 0}
+            disabled={busy || doc.commentCount === 0 || doc.activeCommentLine !== null}
             onClick={() => void sendRevision(doc.comments, doc.clearComments)}
           >
             <span className="btn-ripple" aria-hidden="true" />
