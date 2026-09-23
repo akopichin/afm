@@ -46,7 +46,11 @@ export function useStageEvents(stageId: string | null, globalEvents: AfmEvent[])
       .then((r) => (r.ok ? r.json() : []))
       .then((raw: unknown) => {
         if (gen.current !== myGen || !Array.isArray(raw)) return
-        setHistory({ stageId, events: raw.map(toEvent) })
+        // Оборонительный фильтр: сервер ДОЛЖЕН уважать ?stage=<id> и вернуть
+        // только события этой стадии, но если старый/сломанный сервер вернул
+        // общую ленту как есть, чужие события не должны просочиться в историю
+        // ЭТОЙ стадии — отфильтровываем на клиенте, а не доверяем ответу вслепую.
+        setHistory({ stageId, events: raw.map(toEvent).filter((e) => e.stageId === stageId) })
       })
       .catch(() => {
         // Сеть/старый сервер — деградируем к чистому live-хвосту (см. ниже).

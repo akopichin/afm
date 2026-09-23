@@ -139,6 +139,23 @@ describe('useStageEvents', () => {
   // поэтому здесь мы трекаем ЛЮБОЙ рендер через обёртку-хук useTracked,
   // которая пушит в captured каждый вызов (включая тот самый промежуточный,
   // ДО того как эффект успел среагировать), а не только последний.
+  // P2 defensive fix: even if the server ignores ?stage=<id> and returns the
+  // global/mixed feed, the hook must not tag other stages' events as this
+  // stage's own — it filters the fetched history client-side before storing it.
+  it('filters out events for a different stage from a mixed fetch response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          { type: 'agent_action', stage_id: 'early', seq: 1, timestamp: '2026-01-01T00:00:00.001Z' },
+          { type: 'agent_action', stage_id: 'other', seq: 2, timestamp: '2026-01-01T00:00:00.002Z' },
+        ]),
+      ),
+    )
+    const { result } = renderHook(() => useStageEvents('early', []))
+    await waitFor(() => expect(result.current.length).toBe(1))
+    expect(result.current.every((e) => e.stageId === 'early')).toBe(true)
+  })
+
   it('does not stitch the previous stage history onto the new stage during the switch (review round 1, Important)', async () => {
     const captured: AfmEvent[][] = []
     function useTracked(stageId: string | null, globalEvents: AfmEvent[]): AfmEvent[] {

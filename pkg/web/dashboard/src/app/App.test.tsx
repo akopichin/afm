@@ -1137,7 +1137,7 @@ describe('App', () => {
 
     // Клик по Feed вернул выбор в attention-эпизод s2 (см. useEffect,
     // синхронизирующий selectedStageId с активным attention-элементом) —
-    // лента по умолчанию (scope "This stage") уже показывает события s2.
+    // Feed выбранной стадии (useStageEvents) уже показывает события s2.
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {
       ws?.onmessage?.({
