@@ -290,4 +290,18 @@ describe('workspaceReducer — cost view + returnView contract', () => {
     const resolved = sync(second, [])
     expect(resolved.view).toBe('cost')
   })
+
+  it('openFullFeed switches to full-feed and records it as returnView', () => {
+    const s = workspaceReducer(initialWorkspaceState, { type: 'openFullFeed' })
+    expect(s.view).toBe('full-feed')
+    expect(s.returnView).toBe('full-feed')
+  })
+
+  it('attention opened over full-feed returns to full-feed when the queue drains', () => {
+    let s = workspaceReducer(initialWorkspaceState, { type: 'openFullFeed' })
+    s = sync(s, [item('s1', 'question')]) // auto-open attention
+    expect(s.view).toBe('attention')
+    s = sync(s, []) // drains
+    expect(s.view).toBe('full-feed')
+  })
 })

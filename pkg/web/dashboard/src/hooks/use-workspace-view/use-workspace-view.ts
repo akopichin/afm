@@ -22,6 +22,7 @@ export interface UseWorkspaceView {
   activeItem: ReturnType<typeof activeItem>
   openFeed: () => void
   openCost: () => void
+  openFullFeed: () => void
   openAttention: (stageId?: string) => void
   openHistory: (view: 'plan-history' | 'dialog-history') => void
 }
@@ -41,13 +42,14 @@ export function useWorkspaceView(stages: Stage[], suppressed: boolean): UseWorks
 
   const openFeed = useCallback(() => dispatch({ type: 'openFeed' }), [])
   const openCost = useCallback(() => dispatch({ type: 'openCost' }), [])
+  const openFullFeed = useCallback(() => dispatch({ type: 'openFullFeed' }), [])
   const openAttention = useCallback((stageId?: string) => dispatch({ type: 'openAttention', stageId }), [])
   const openHistory = useCallback(
     (view: 'plan-history' | 'dialog-history') => dispatch({ type: 'openHistory', view }),
     [],
   )
 
-  return { state, activeItem: activeItem(state), openFeed, openCost, openAttention, openHistory }
+  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory }
 }
 
 export type { WorkspaceState, WorkspaceView }

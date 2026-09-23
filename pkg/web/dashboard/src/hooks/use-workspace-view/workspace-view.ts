@@ -2,11 +2,13 @@ import type { Stage, StageStatus } from '../../types'
 
 // WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла
 // стадий (плана §4). 'feed' — постоянный дефолт; 'cost' — постоянный вид учёта
-// токенов/стоимости (increment 2); 'attention' — контекстный воркспейс текущего
-// элемента, требующего действия (approval/question/failed/hook_failed/paused);
-// 'plan-history'/'dialog-history' — read-only просмотр завершённого плана/диалога
-// (rule 13: они НЕ считаются attention и не светятся).
-export type WorkspaceView = 'feed' | 'cost' | 'attention' | 'plan-history' | 'dialog-history'
+// токенов/стоимости (increment 2); 'full-feed' — постоянный вид ленты всего
+// флоу целиком (не привязан к выбранной стадии); 'attention' — контекстный
+// воркспейс текущего элемента, требующего действия
+// (approval/question/failed/hook_failed/paused); 'plan-history'/'dialog-history'
+// — read-only просмотр завершённого плана/диалога (rule 13: они НЕ считаются
+// attention и не светятся).
+export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history'
 
 // AttentionKind — вид элемента, требующего действия пользователя. В отличие от
 // use-attention (которое схлопывает failed/hook_failed в один 'failed' для
@@ -77,12 +79,13 @@ export interface WorkspaceState {
   // забыванию отвеченных вопросов в pollQuestions на бэкенде).
   autoOpenedSignatures: string[]
   // returnView — куда вернуться, когда закроется/разрешится attention.
-  // Ограничен двумя ГЛОБАЛЬНЫМИ видами ('feed'/'cost') — history-виды
+  // Ограничен ГЛОБАЛЬНЫМИ видами ('feed'/'cost'/'full-feed') — history-виды
   // (plan-history/dialog-history) не подлежат восстановлению: они привязаны к
   // конкретной выбранной стадии, а не к постоянному воркспейсу. Записывается
   // ровно на переходе non-attention → attention (см. reduceSync) и обновляется
-  // явной ручной навигацией (openFeed/openCost), в том числе во время attention.
-  returnView: 'feed' | 'cost'
+  // явной ручной навигацией (openFeed/openCost/openFullFeed), в том числе во
+  // время attention.
+  returnView: 'feed' | 'cost' | 'full-feed'
 }
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -104,6 +107,8 @@ export type WorkspaceAction =
   | { type: 'openFeed' }
   // openCost — пользователь открыл постоянный вид учёта стоимости (increment 2).
   | { type: 'openCost' }
+  // openFullFeed — пользователь открыл ленту всего флоу целиком.
+  | { type: 'openFullFeed' }
   // openHistory — read-only просмотр плана/диалога завершённой стадии (rule 13).
   | { type: 'openHistory'; view: 'plan-history' | 'dialog-history' }
 
@@ -118,6 +123,14 @@ export function activeItem(state: WorkspaceState): AttentionItem | null {
 // на контекстной вкладке).
 export function countByKind(items: AttentionItem[], kind: AttentionKind): number {
   return items.reduce((n, it) => (it.kind === kind ? n + 1 : n), 0)
+}
+
+// globalReturnView — маппинг текущего вида на returnView при входе в attention.
+// ГЛОБАЛЬНЫЕ виды ('cost'/'full-feed') сохраняются как есть — именно туда и
+// нужно вернуться; любой НЕ глобальный вид (history) падает на 'feed', потому
+// что history привязана к конкретной стадии, а не к постоянному воркспейсу.
+function globalReturnView(view: WorkspaceView): 'feed' | 'cost' | 'full-feed' {
+  return view === 'cost' || view === 'full-feed' ? view : 'feed'
 }
 
 function reduceSync(state: WorkspaceState, items: AttentionItem[], suppressed: boolean): WorkspaceState {
@@ -159,7 +172,7 @@ function reduceSync(state: WorkspaceState, items: AttentionItem[], suppressed: b
     if (!suppressed && view !== 'attention') {
       // Переход non-attention → attention: запоминаем returnView. History-виды
       // (plan-history/dialog-history) не восстанавливаемы — падаем на 'feed'.
-      returnView = view === 'cost' ? 'cost' : 'feed'
+      returnView = globalReturnView(view)
       view = 'attention'
       activeStageId = firstArrival.stageId
     }
@@ -187,6 +200,8 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: 'feed', returnView: 'feed' }
     case 'openCost':
       return { ...state, view: 'cost', returnView: 'cost' }
+    case 'openFullFeed':
+      return { ...state, view: 'full-feed', returnView: 'full-feed' }
     case 'openHistory':
       return { ...state, view: action.view }
     default:
