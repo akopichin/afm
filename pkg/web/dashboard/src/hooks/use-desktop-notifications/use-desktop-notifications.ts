@@ -138,26 +138,35 @@ export function useDesktopNotifications(
   // и когда ушёл). flowEndedNotified — гард «уже уведомили об этом завершении»:
   // сбрасывается, как только флоу СНОВА не-финишный (напр. ручной retry оживил
   // стадию), чтобы повторное завершение уведомило заново.
-  // sawActive — видели ли мы флоу В РАБОТЕ (не-финишным) в этой сессии. Нужен,
-  // чтобы уведомлять о ПЕРЕХОДЕ в завершение, а не при открытии дашборда уже
-  // завершённого рана: если первый же наблюдаемый снимок финишный, значит ран
-  // закончился ДО того, как вкладку открыли — уведомлять не о чем.
+  // sawActive — видели ли мы флоу В РАБОТЕ (непустой не-финишный снимок) в этой
+  // сессии. Нужен, чтобы уведомлять о ПЕРЕХОДЕ в завершение, а не при открытии
+  // дашборда уже завершённого рана. ПУСТОЙ снимок stages:[] (первый рендер до
+  // ответа /api/status) — это «данных ещё нет», НЕ «в работе»: его нельзя
+  // засчитывать как активность, иначе первый же финишный снимок уведомит.
   const sawActive = useRef(false)
-  const flowEndedNotified = useRef(false)
+  // lastFinishSig — подпись последнего ОБРАБОТАННОГО (уведомлённого ИЛИ просто
+  // консумнутого) завершения. Подпись включает updatedAt стадий, поэтому повторное
+  // завершение после ретрая (даже если промежуточный active-снимок не застали
+  // опросом) даёт НОВУЮ подпись → уведомляем снова; стабильный тот же снимок —
+  // ту же подпись → не дублируем. Консумим подпись ДАЖЕ когда уведомления
+  // выключены — тогда включение уведомлений ПОЗЖЕ не выстрелит задним числом по
+  // уже прошедшему завершению.
+  const lastFinishSig = useRef('')
   const flowNameRef = useRef(flowName)
   useEffect(() => {
     flowNameRef.current = flowName
   }, [flowName])
   useEffect(() => {
+    if (stages.length === 0) return // данных ещё нет — ни активно, ни финишно
     if (!flowFinished(stages)) {
       sawActive.current = true
-      flowEndedNotified.current = false
       return
     }
-    // Финишный снимок: шлём, только если РАНЬШЕ видели ран в работе (реальный
-    // переход в работе → завершение), один раз, и включены уведомления.
-    if (!sawActive.current || flowEndedNotified.current || !enabledRef.current) return
-    flowEndedNotified.current = true
+    const sig = stages.map((s) => `${s.id}:${s.status}:${s.updatedAt}`).join('|')
+    if (sig === lastFinishSig.current) return // это завершение уже обработано
+    const shouldFire = sawActive.current && enabled
+    lastFinishSig.current = sig // консумим независимо от enabled/sawActive
+    if (!shouldFire) return
     const failed = stages.some((s) => s.status === 'failed')
     const title = failed ? 'Flow finished with failures' : 'Flow completed'
     showNotification(title, `${flowNameRef.current}\n${new Date().toLocaleTimeString()}`, 'afm-flow-finished')

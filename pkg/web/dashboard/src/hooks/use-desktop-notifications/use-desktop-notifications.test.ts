@@ -221,10 +221,32 @@ describe('useDesktopNotifications', () => {
       expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
     })
 
-    it('does not notify on initial mount when the flow is ALREADY finished (opened a done run)', () => {
-      // First observed snapshot is already terminal → the run finished before the
-      // tab was opened → no "flow finished" notification (it's a transition event).
-      render([stage('done', 'a'), stage('failed', 'b')])
+    it('does not notify when opening an already-finished run (useStatus starts as [] then a finished snapshot)', () => {
+      // Real app path: useStatus's first render is stages:[] (no data yet), then
+      // the first /api/status snapshot is already terminal. Must NOT notify — the
+      // run finished before the tab was opened.
+      const { rerender } = render([])
+      rerender({ s: [stage('done', 'a'), stage('failed', 'b')] })
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
+    })
+
+    it('re-notifies on a second finish even if the active snapshot was skipped between polls', () => {
+      // A retried stage's updatedAt changes, so the finish signature differs — we
+      // notify again even if the intermediate running snapshot was never observed.
+      const { rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('done', 'a', 'u1')] }) // finish #1
+      rerender({ s: [stage('done', 'a', 'u2')] }) // retried+re-finished, active skipped
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(2)
+    })
+
+    it('enabling notifications AFTER the flow already finished does not fire retroactively', async () => {
+      window.localStorage.removeItem('afm-notifications-enabled') // start disabled
+      const { result, rerender } = render([stage('running', 'a')])
+      rerender({ s: [stage('done', 'a')] }) // finished while disabled → no notif, signature consumed
+      expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
+      await act(async () => {
+        result.current.requestEnable() // user enables later → must NOT fire the past finish
+      })
       expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)
     })
   })
