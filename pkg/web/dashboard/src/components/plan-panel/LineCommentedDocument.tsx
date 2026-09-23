@@ -12,6 +12,22 @@ import { PasteableTextarea } from '../pasteable-textarea'
 import { renderAnchoredSections, type Block, type Section } from './markdown'
 import { useLineComments } from './use-line-comments'
 
+// Горизонтальное правило (---, ***, ___, с любыми пробелами между символами и
+// по краям) — как и пустая строка, не показывается как quote-превью: цитировать
+// разделитель бессмысленно.
+const HR_LINE_RE = /^\s*([-*_])(\s*\1){2,}\s*$/
+
+// quotedSourceLine — чистая функция вычисления quote-превью для формы
+// комментария. line — 1-based (как activeCommentLine/data-line); raw берётся
+// из sourceLines[line-1] (с защитным '' на выход за границы). Пустая/hr-строка
+// → '' (нет quote).
+export function quotedSourceLine(sourceLines: string[], line: number): string {
+  const raw = sourceLines[line - 1] ?? ''
+  const trimmed = raw.trim()
+  if (trimmed === '' || HR_LINE_RE.test(trimmed)) return ''
+  return trimmed
+}
+
 // API, который владелец отдаёт потребителю через render-prop. Панель действий
 // (Approve/Send revision / Send feedback) и commentCount читают state ОТСЮДА
 // напрямую — зеркала state в родителе нет, поэтому смена documentIdentity (key на
@@ -66,6 +82,7 @@ export function LineCommentedDocument({
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set())
 
   const sections = useMemo(() => renderAnchoredSections(text, { specialSections }), [text, specialSections])
+  const sourceLines = useMemo(() => text.split('\n'), [text])
 
   const commentCount = Object.keys(comments).length
   const hasOpenDraft = activeCommentLine !== null && draft.trim() !== ''
@@ -219,6 +236,7 @@ export function LineCommentedDocument({
             stageId={stageId}
             allowFileReferences={allowFileReferences}
             hasComment={comments[activeCommentLine] !== undefined}
+            quotedLine={quotedSourceLine(sourceLines, activeCommentLine)}
             draft={draft}
             onDraftChange={setDraft}
             onSave={() => saveComment(activeCommentLine)}
@@ -318,6 +336,7 @@ function LineCommentForm({
   stageId,
   allowFileReferences,
   hasComment,
+  quotedLine,
   draft,
   onDraftChange,
   onSave,
@@ -328,6 +347,7 @@ function LineCommentForm({
   stageId: string
   allowFileReferences: boolean
   hasComment: boolean
+  quotedLine: string
   draft: string
   onDraftChange: (value: string) => void
   onSave: () => void
@@ -353,6 +373,11 @@ function LineCommentForm({
           ✕
         </button>
       </div>
+      {quotedLine !== '' && (
+        <div className="line-comment-quote">
+          <span className="line-comment-quote-src">{quotedLine}</span>
+        </div>
+      )}
       <PasteableTextarea
         stageId={stageId}
         placeholder={`Comment on line ${line}...`}

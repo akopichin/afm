@@ -373,6 +373,37 @@
   gap: 8px;
 }
 
+/* Quote preview above the textarea — messenger-style, big faint accent glyph. */
+.line-comment-quote {
+  position: relative;
+  padding: 4px 10px 4px 40px;
+  margin-bottom: 8px;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+}
+.line-comment-quote::before {
+  content: "\201C";                 /* " */
+  position: absolute;
+  left: 6px;
+  top: -6px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 44px;
+  line-height: 1;
+  color: var(--accent-primary);
+  opacity: 0.30;                    /* faint, per approved mockup */
+  pointer-events: none;
+}
+.line-comment-quote-src {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;            /* clamp long lines to 2 lines */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .line-comment-display {
   border-color: var(--mint-soft);
   background: var(--bg-elev);

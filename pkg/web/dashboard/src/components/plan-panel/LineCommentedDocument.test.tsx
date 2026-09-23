@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { StrictMode, type ReactElement } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { FileBrowserProvider } from '../file-browser'
-import { LineCommentedDocument, type LineCommentDocumentApi } from './LineCommentedDocument'
+import { LineCommentedDocument, quotedSourceLine, type LineCommentDocumentApi } from './LineCommentedDocument'
 
 // Тесты слоя ВЗАИМОДЕЙСТВИЯ (useLineComments) через реальный DOM владельца
 // LineCommentedDocument: клик/hover/keyboard/выделение, императивные классы
@@ -349,5 +349,93 @@ describe('LineCommentedDocument render-prop api', () => {
     })
     expect(screen.getByTestId('open-draft').textContent).toBe('false')
     expect(docRef.current?.commentCount).toBe(1)
+  })
+})
+
+// Quote preview above the comment textarea (messenger-style, big faint accent
+// quotation mark). Anchor semantics (see task brief): data-line — 1-based,
+// каждый li/tr/paragraph/heading/hr/fence якорится на СВОЕЙ стартовой строке —
+// поэтому quotedLine всегда равен именно этой строке, а не «содержательной»
+// внутренней строке блока (см. кейс fence ниже).
+describe('LineCommentedDocument quote preview', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // Один текст с явно узнаваемыми, различимыми строками для каждого типа блока:
+  //  1: paragraph
+  //  2: (blank — separator)
+  //  3: list item one
+  //  4: list item two   ← (a)
+  //  5: (blank)
+  //  6: table header row
+  //  7: table delimiter (no anchor)
+  //  8: table data row  ← (b)
+  //  9: (blank)
+  // 10: fence opening ``` ← (d)
+  // 11: fence interior line (must NOT be the quote)
+  // 12: fence closing ```
+  // 13: (blank)
+  // 14: hr             ← (e)
+  const quoteText = [
+    'Paragraph one here',
+    '',
+    '- Item one',
+    '- Task two: do the thing',
+    '',
+    '| Name | Value |',
+    '|---|---|',
+    '| Row two data | 2 |',
+    '',
+    '```js',
+    'const anchorLine = 42',
+    '```',
+    '',
+    '---',
+  ].join('\n')
+
+  function openFormAt(container: HTMLElement, line: number): HTMLElement {
+    fireEvent.click(anchor(container, line))
+    return container.querySelector(`.line-comment-form[data-comment-line="${line}"]`) as HTMLElement
+  }
+
+  test('(a) list item: quote shows that item source line', () => {
+    const { container } = render(<Harness text={quoteText} specialSections={false} />)
+    const form = openFormAt(container, 4)
+    expect(form.querySelector('.line-comment-quote-src')?.textContent).toBe('- Task two: do the thing')
+  })
+
+  test('(b) table row: quote shows that row source line', () => {
+    const { container } = render(<Harness text={quoteText} specialSections={false} />)
+    const form = openFormAt(container, 8)
+    expect(form.querySelector('.line-comment-quote-src')?.textContent).toBe('| Row two data | 2 |')
+  })
+
+  test('(c) paragraph: quote shows its own source line', () => {
+    const { container } = render(<Harness text={quoteText} specialSections={false} />)
+    const form = openFormAt(container, 1)
+    expect(form.querySelector('.line-comment-quote-src')?.textContent).toBe('Paragraph one here')
+  })
+
+  test('(d) fenced code: quote shows the OPENING fence line, not an interior line (anchor semantics)', () => {
+    const { container } = render(<Harness text={quoteText} specialSections={false} />)
+    const form = openFormAt(container, 10)
+    expect(form.querySelector('.line-comment-quote-src')?.textContent).toBe('```js')
+  })
+
+  test('(e) hr: no .line-comment-quote element at all', () => {
+    const { container } = render(<Harness text={quoteText} specialSections={false} />)
+    const form = openFormAt(container, 14)
+    expect(form.querySelector('.line-comment-quote')).toBeNull()
+  })
+
+  // blank line — не достижимо через клик (пустая строка никогда не получает
+  // якорь в renderAnchoredSections), поэтому проверяем чистую функцию напрямую.
+  test('quotedSourceLine: blank line and hr both resolve to empty string', () => {
+    expect(quotedSourceLine(['a', '', 'b'], 2)).toBe('')
+    expect(quotedSourceLine(['a', '   ', 'b'], 2)).toBe('')
+    expect(quotedSourceLine(['a', '---', 'b'], 2)).toBe('')
+    expect(quotedSourceLine(['a', '***', 'b'], 2)).toBe('')
+    expect(quotedSourceLine(['a', '  text  ', 'b'], 2)).toBe('text')
+    // out-of-range index → '' (defensive fallback, same as `?? ''`).
+    expect(quotedSourceLine(['only one line'], 5)).toBe('')
   })
 })
