@@ -775,6 +775,112 @@ describe('DialogChannel', () => {
     expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
   })
 
+  // Task 2: opening a comment form (add or edit) — regardless of whether the
+  // draft text is empty — must gate answer SEND/Send feedback via
+  // doc.activeCommentLine, not just doc.hasOpenDraft (which only covers a
+  // NON-empty draft). Otherwise clicking a question line to start a comment,
+  // then immediately hitting SEND/Send feedback before typing anything,
+  // discards the in-progress comment form.
+  test('▸ SEND is disabled while an empty comment form is open, and re-enables once closed', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\n\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+
+    const sendBtn = screen.getByRole('button', { name: '▸ SEND' })
+    expect(sendBtn).not.toBeDisabled()
+
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    expect(container.querySelector('.line-comment-form')).not.toBeNull()
+    expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('')
+    expect(sendBtn).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
+    expect(sendBtn).not.toBeDisabled()
+  })
+
+  test('Send feedback is disabled while a new empty comment form is open alongside an existing comment, and re-enables once closed', async () => {
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\n\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+
+    // Save one comment on line 1 — the answer UI switches to "Send feedback".
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: 'please clarify' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    const feedbackBtn = screen.getByRole('button', { name: 'Send feedback (1)' })
+    expect(feedbackBtn).not.toBeDisabled()
+
+    // Open a SECOND, still-empty comment form on a different line.
+    fireEvent.click(container.querySelector('[data-line="3"]') as HTMLElement)
+    expect(container.querySelector('.line-comment-form[data-comment-line="3"]')).not.toBeNull()
+    expect(feedbackBtn).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 3' }))
+    expect(feedbackBtn).not.toBeDisabled()
+  })
+
+  // codex MEDIUM: the answer textarea's Ctrl/Cmd+Enter is a keyboard-submit
+  // path that a disabled SEND button does not intercept — it must be gated
+  // separately.
+  test('Ctrl+Enter in the answer textarea does not send while a comment form is open', async () => {
+    const calls: FetchCall[] = []
+    const pending: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\n\nSecond line',
+      answer: null,
+      options: ['Alpha'],
+      allow_custom: true,
+    }
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body as string | undefined })
+
+      if (url.endsWith('/dialog/answer')) return { ok: true } as Response
+      if (url.endsWith('/dialog')) return jsonResponse([pending])
+      return jsonResponse([])
+    })
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+
+    // Open an (empty) comment form — nothing saved yet, so the options/free-text
+    // answer UI stays mounted alongside it.
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    expect(container.querySelector('.line-comment-form')).not.toBeNull()
+
+    const answerTextarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    fireEvent.change(answerTextarea, { target: { value: 'should not send' } })
+    fireEvent.keyDown(answerTextarea, { key: 'Enter', ctrlKey: true })
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(false)
+  })
+
   test('cancel(): confirmed cancellation posts to the cancel endpoint', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = { id: 'q1', phase: 'p1', question: 'Pick one', answer: null, options: [], allow_custom: true }

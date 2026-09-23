@@ -454,7 +454,10 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   // renderPending — тело pending-вопроса, вызывается из render-prop
   // LineCommentedDocument: doc.body — заякоренный вопрос (с формами построчных
   // комментариев внутри), doc.commentCount переключает обычный UI ответа
-  // (опции + свободный текст + SEND) на «Send feedback», doc.hasOpenDraft гейтит SEND.
+  // (опции + свободный текст + SEND) на «Send feedback», doc.activeCommentLine
+  // гейтит SEND/Send feedback — форма комментария ОТКРЫТА (add или edit),
+  // независимо от того, есть ли уже в ней текст (клик по строке вопроса, затем
+  // сразу SEND/Send feedback, иначе стирал бы начатый комментарий).
   function renderPending(doc: LineCommentDocumentApi): ReactNode {
     if (pending === null) return null
     return (
@@ -505,7 +508,12 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               // внутри PasteableTextarea (showAttachButton), так что на
               // host-прогоне без file browser кнопка не рендерится.
               allowFileReferences
-              onSubmit={() => void sendAnswer()}
+              onSubmit={() => {
+                // codex MEDIUM: Ctrl/Cmd+Enter is a keyboard-submit path that a
+                // disabled SEND button does not intercept — guard it separately.
+                if (doc.activeCommentLine !== null) return
+                void sendAnswer()
+              }}
             />
           </>
         )}
@@ -515,7 +523,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
             <button
               className={`btn btn-send${clickedSend ? ' ok' : ''}`}
               type="button"
-              disabled={doc.hasOpenDraft || submitting}
+              disabled={doc.activeCommentLine !== null || submitting}
               onClick={sendAnswer}
             >
               <span className="btn-ripple" aria-hidden="true" />
@@ -526,7 +534,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
             <button
               className={`btn btn-send${clickedSend ? ' ok' : ''}`}
               type="button"
-              disabled={submitting}
+              disabled={submitting || doc.activeCommentLine !== null}
               onClick={() => void sendFeedback(doc.comments)}
             >
               <span className="btn-ripple" aria-hidden="true" />
