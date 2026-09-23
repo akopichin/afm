@@ -25,6 +25,22 @@ flow — a completed stage always shows its own history.
   else; it's computed server-side from `notices.jsonl` and served as a field
   on `/api/status`, so it stays visible for the life of the stage.
 
+### Improvement: script/hook stderr and failure reasons are visible in the feed
+
+`script:` stages and `script_before`/`script_after` hooks used to only stream
+stdout to the dashboard feed — stderr was captured to disk but invisible
+live, and a failure showed only as a bare `→ failed` status transition with no
+indication of why.
+
+- **stderr now streams to the feed too**, rendered distinctly from stdout —
+  each stderr line is a warning-toned `[hook:stderr] <line>` row.
+- **A failed `script:` stage now gets a dedicated `script failed: <reason>`
+  row** (red), with a fenced tail of its stderr attached, right in the feed.
+- **A failed `script_before`/`script_after` hook's existing `hook_failed`
+  notice now carries a stderr tail** alongside the error, the same way.
+- The tail is bounded (last 20 lines / 4 KiB); the full stderr output still
+  lives on disk at `<stage>/<phase>.stderr.log`.
+
 ## 2026-09-22
 
 ### Fix: pending stages no longer open an empty plan in the dashboard

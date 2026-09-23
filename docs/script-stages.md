@@ -36,5 +36,23 @@ stages:
 - If `script_after` still fails, it does **not** revert the stage — it's already
   `done`. You get the same Retry/Skip notice, but the stage's status is unaffected
   either way.
-- Output from `script`/`script_before`/`script_after` streams to the dashboard's
-  event feed and log panel just like an agent's.
+
+## Output & failure visibility
+
+- Output from `script`/`script_before`/`script_after` streams live to the
+  dashboard's event feed, just like an agent's — **both stdout and stderr**.
+  stderr lines are rendered distinctly from stdout: each one shows up as a
+  warning-toned `[hook:stderr] <line>` row, so you can tell noisy-but-harmless
+  stderr chatter (progress output, warnings) apart from stdout without losing
+  it from the feed entirely.
+- **When a `script:` stage fails**, the feed shows a red
+  `script failed: <reason>` row (e.g. `script failed: exit status 1`) with a
+  fenced tail of its stderr attached — the reason is visible right in the feed,
+  no need to open the raw log to see what went wrong.
+- **When `script_before`/`script_after` fails** after exhausting its 3
+  retries, the existing `hook_failed` notice now carries the same kind of
+  stderr tail alongside the error.
+- The tail shown in the feed is bounded (last 20 lines / 4 KiB) so a runaway
+  script can't flood the feed. The **full** stderr always lives on disk at
+  `<stage>/<phase>.stderr.log` (`<phase>` is `script`, `before`, or `after`),
+  regardless of how much of it made it into the tail.

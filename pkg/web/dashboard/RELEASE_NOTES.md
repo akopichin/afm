@@ -11,6 +11,12 @@
 - **The AI-verify stage badge is durable.** It's now computed server-side from
   the stage's own notices and served on `/api/status`, so it no longer ages out
   as feed activity grows.
+- **Script/hook errors are visible in the feed.** `script:` stages and
+  `script_before`/`script_after` hooks now stream stderr to the feed (a
+  distinct warning-toned `[hook:stderr] …` row), and a failure shows a red
+  `script failed: <reason>` row (or a stderr tail on `hook_failed`) instead of
+  a bare status change — no more digging through log files to see why a
+  script step failed.
 
 ## 2026-09-22
 
