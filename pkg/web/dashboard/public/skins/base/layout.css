@@ -192,6 +192,15 @@
 .workspace-tab-label {
   white-space: nowrap;
 }
+
+/* Full feed is pushed to the far RIGHT edge of the tab strip; every other tab
+   (Feed / detail / beacon / Cost) stays left-packed. .workspace-tabs is already
+   display:flex, so margin-left:auto on this one tab does it — no component change
+   (WorkspaceTabs already renders data-tab-id on each button). */
+.workspace-tab[data-tab-id="full-feed"] {
+  margin-left: auto;
+}
+
 .attn-count {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
