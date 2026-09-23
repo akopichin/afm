@@ -513,7 +513,7 @@ describe('StagesList', () => {
     expect(screen.getByRole('button', { name: /^a/ })).not.toHaveAttribute('aria-describedby')
   })
 
-  describe('verify badge (V5b.2)', () => {
+  describe('verify badge (V5b.2, now durable stage.verify — Task 7)', () => {
     const stage: Stage = { id: 'a', name: 'Build', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] }
 
     test('a stage with no verify entry shows no badge', () => {
@@ -522,14 +522,9 @@ describe('StagesList', () => {
     })
 
     test('an in-progress verify shows a "running" badge naming the step and command in its title', () => {
+      const running: Stage = { ...stage, verify: { step: 2, command: 'codex', phase: 'running' } }
       const { container } = render(
-        <StagesList
-          stages={[stage]}
-          selectedStageId={null}
-          onSelect={() => {}}
-          accounting={ACCOUNTING_OK}
-          verifyByStage={{ a: { step: 2, command: 'codex', phase: 'running' } }}
-        />,
+        <StagesList stages={[running]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
       )
       const badge = container.querySelector('.verify-badge')
       expect(badge).not.toBeNull()
@@ -539,13 +534,15 @@ describe('StagesList', () => {
     })
 
     test('a finished verify (pass/needs_changes/error) reflects the outcome via data-phase, not a new status', () => {
+      const passing: Stage = { ...stage, verify: { step: 1, command: 'codex', phase: 'pass' } }
       const { container, rerender } = render(
-        <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} verifyByStage={{ a: { step: 1, command: 'codex', phase: 'pass' } }} />,
+        <StagesList stages={[passing]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
       )
       expect(container.querySelector('.verify-badge')).toHaveAttribute('data-phase', 'pass')
 
+      const needsChanges: Stage = { ...stage, verify: { step: 1, command: 'codex', phase: 'needs_changes' } }
       rerender(
-        <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} verifyByStage={{ a: { step: 1, command: 'codex', phase: 'needs_changes' } }} />,
+        <StagesList stages={[needsChanges]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
       )
       expect(container.querySelector('.verify-badge')).toHaveAttribute('data-phase', 'needs_changes')
 
@@ -554,7 +551,7 @@ describe('StagesList', () => {
     })
 
     test('pause/kebab actions remain available on a stage with a verify badge', () => {
-      const running: Stage = { ...stage, status: 'running' }
+      const running: Stage = { ...stage, status: 'running', verify: { step: 1, command: 'codex', phase: 'running' } }
       const onPause = vi.fn()
       render(
         <StagesList
@@ -563,7 +560,6 @@ describe('StagesList', () => {
           onSelect={() => {}}
           onPause={onPause}
           accounting={ACCOUNTING_OK}
-          verifyByStage={{ a: { step: 1, command: 'codex', phase: 'running' } }}
         />,
       )
       fireEvent.click(screen.getByRole('button', { name: 'More actions' }))

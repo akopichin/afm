@@ -46,6 +46,22 @@ export type Stage = {
   buttons: string[]
   // cost — сводка по затратам стадии (omitempty, если нет записи использования).
   cost?: CostSummary
+  // verify — durable-индикатор последнего AI-verify прохода стадии (см. Go
+  // StageView.Verify, pkg/server/stageview.go). Сервер вычисляет его через
+  // необрезанное сканирование notices.jsonl — раньше это вычислялось на
+  // клиенте из капнутой глобальной ленты событий и на долгих ранах могло
+  // "состариться" из окна. undefined — у стадии ни разу не было
+  // verify_started/verify_result.
+  verify?: StageVerify
+}
+
+// StageVerify — компактное текущее состояние AI-verify одной стадии:
+// verify_started → 'running', verify_result → его verdict
+// (pass/needs_changes/inconclusive), иначе — 'error'.
+export type StageVerify = {
+  step: number
+  command: string
+  phase: 'running' | 'pass' | 'needs_changes' | 'inconclusive' | 'error'
 }
 
 // Человекочитаемые подписи статусов для списка стадий и панели деталей.

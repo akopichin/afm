@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Stage, StageStatus } from '../../types'
+import type { Stage, StageStatus, StageVerify } from '../../types'
 import { STAGE_STATUSES } from '../../types'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 
@@ -213,6 +213,8 @@ function toStage(raw: unknown): Stage | null {
   const costResult = isRecord(obj.cost) ? toCostSummary(obj.cost) : null
   const cost = costResult === null ? undefined : costResult
 
+  const verify = toVerifyView(obj.verify)
+
   return {
     id: obj.id,
     name,
@@ -229,7 +231,27 @@ function toStage(raw: unknown): Stage | null {
     preNote: typeof obj.pre_note === 'string' ? obj.pre_note : '',
     buttons: Array.isArray(obj.buttons) ? obj.buttons.filter((x): x is string => typeof x === 'string') : [],
     cost,
+    verify,
   }
+}
+
+// toVerifyView normalizes GET /api/status's stage.verify (Go StageView.Verify,
+// pkg/server/stageview.go) defensively — the server shape isn't blindly
+// trusted: an unrecognized/missing phase or a wrong-typed step/command falls
+// back rather than producing a malformed StageVerify.
+const VERIFY_PHASES = new Set(['running', 'pass', 'needs_changes', 'inconclusive', 'error'])
+
+function toVerifyView(raw: unknown): StageVerify | undefined {
+  const obj = isRecord(raw) ? raw : null
+  if (obj === null) return undefined
+
+  const phase = typeof obj.phase === 'string' && VERIFY_PHASES.has(obj.phase) ? (obj.phase as StageVerify['phase']) : null
+  if (phase === null) return undefined
+
+  const step = typeof obj.step === 'number' ? obj.step : 0
+  const command = typeof obj.command === 'string' ? obj.command : ''
+
+  return { step, command, phase }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -250,48 +250,6 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<st
   return { actor: 'system', tone: 'danger', kind: 'status', text: `Verify execution error (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
 }
 
-export type VerifyIndicatorPhase = 'running' | 'pass' | 'needs_changes' | 'inconclusive' | 'error'
-
-// VerifyIndicator — компактное текущее состояние AI-verify одной стадии
-// (V5b.2, StagesList's stage card). Никакой отдельной подписки/DTO-поля:
-// вычисляется чисто из уже загруженной ленты событий (см.
-// computeVerifyIndicators), тем же способом, каким feed-view-model уже
-// презентует verify_started/verify_result построчно.
-export type VerifyIndicator = {
-  step: number
-  command: string
-  phase: VerifyIndicatorPhase
-}
-
-// computeVerifyIndicators сканирует events (в хронологическом порядке — как
-// их и отдаёт /api/events + live WS) и оставляет для каждой стадии ТОЛЬКО
-// последнее verify-событие: verify_started → 'running' (проверка идёт прямо
-// сейчас), verify_result → исход (pass/needs_changes/inconclusive/error).
-// Новый verify_started ПОСЛЕ уже завершённого прохода (повторная проверка
-// после correction-попытки) снова переводит индикатор в 'running' — это
-// осознанно: карточка стадии показывает ТЕКУЩЕЕ состояние, а не последний
-// когда-либо виденный исход.
-export function computeVerifyIndicators(events: AfmEvent[]): Record<string, VerifyIndicator> {
-  const out: Record<string, VerifyIndicator> = {}
-  for (const event of events) {
-    if (event.type !== 'verify_started' && event.type !== 'verify_result') continue
-    const obj = isRecord(event.payload) ? event.payload : {}
-    const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
-    const command = str(obj.command)
-
-    if (event.type === 'verify_started') {
-      out[event.stageId] = { step, command, phase: 'running' }
-      continue
-    }
-
-    const verdict = str(obj.verdict)
-    const phase: VerifyIndicatorPhase =
-      verdict === 'pass' || verdict === 'needs_changes' || verdict === 'inconclusive' ? verdict : 'error'
-    out[event.stageId] = { step, command, phase }
-  }
-  return out
-}
-
 // Статичная длительность строки: разница между этим событием и предыдущим в
 // ленте по порядку отображения (не per-стадийно). Нет предыдущего или
 // невалидный timestamp — em dash. (Перенесено 1:1 из EventFeedPanel.)

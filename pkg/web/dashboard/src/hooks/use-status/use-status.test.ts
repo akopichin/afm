@@ -70,6 +70,27 @@ describe('useStatus', () => {
     expect(byId.get('s4')?.buttons).toEqual(['ok'])
   })
 
+  test('парсит verify (Task 7): валидный объект → StageVerify, отсутствие/битая фаза/мусор → undefined', () => {
+    const raw = {
+      flow_name: 'demo',
+      stages: [
+        { id: 's1', status: 'running', verify: { step: 2, command: 'codex', phase: 'needs_changes' } },
+        { id: 's2', status: 'running' },
+        { id: 's3', status: 'running', verify: { step: 1, command: 'codex', phase: 'not-a-real-phase' } },
+        { id: 's4', status: 'running', verify: 'not-an-object' },
+        { id: 's5', status: 'running', verify: { step: 'not-a-number', command: 42, phase: 'running' } },
+      ],
+    }
+    const { stages } = normalizeStatus(raw)
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('s1')?.verify).toEqual({ step: 2, command: 'codex', phase: 'needs_changes' })
+    expect(byId.get('s2')?.verify).toBeUndefined()
+    expect(byId.get('s3')?.verify).toBeUndefined()
+    expect(byId.get('s4')?.verify).toBeUndefined()
+    // step/command защитно коэрсятся (0/''), но валидная phase всё равно даёт запись.
+    expect(byId.get('s5')?.verify).toEqual({ step: 0, command: '', phase: 'running' })
+  })
+
   test('парсит is_script/paused_from/pre_note', () => {
     const raw = {
       flow_name: 'demo',

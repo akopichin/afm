@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -308,16 +310,17 @@ func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 	}
 }
 
-// TestStageView_JSONShape_NoVerifyField locks the exact set of JSON keys
-// StageView serializes (V5b.4): AI-verify (flow.Stage.Verify becoming a
-// struct, V1-V5a) added NO field here — the dashboard renders verify
-// progress/results purely from feed events/notices (see feed-view-model.ts),
-// not from a DTO field. Any accidental future "verify"-ish addition to
-// StageView, and any accidental removal/rename of an existing field, fails
-// this test — it's the single guard for "the /api/status shape for a stage
-// is unchanged by AI-verify".
-func TestStageView_JSONShape_NoVerifyField(t *testing.T) {
-	view := StageView{
+// TestStageView_JSONShape_VerifyFieldOmittedOrPresent locks the exact set of
+// JSON keys StageView serializes (V5b.4 + Task 7 of the per-stage-feed plan):
+// "verify" is now a real field (Task 7 — a durable per-stage AI-verify
+// indicator computed server-side from notices.jsonl, see latestVerifyForStage
+// in stageview.go), but it stays omitempty — a stage with no verify activity
+// (nil Verify) must still omit the key entirely, and a stage that has one
+// serializes it as {step,command,phase}. Any accidental removal/rename of an
+// existing field, or a change to this contract, fails this test — it's the
+// single guard for "the /api/status shape for a stage" including AI-verify.
+func TestStageView_JSONShape_VerifyFieldOmittedOrPresent(t *testing.T) {
+	base := StageView{
 		ID:          "a",
 		Name:        "A",
 		Status:      state.StatusPaused,
@@ -333,28 +336,57 @@ func TestStageView_JSONShape_NoVerifyField(t *testing.T) {
 		Buttons:     []string{"Run linter"},
 		Cost:        &accounting.CostView{DisplayCost: "$0.01"},
 	}
-	data, err := json.Marshal(view)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(data, &m); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
 
-	if _, ok := m["verify"]; ok {
-		t.Fatalf("StageView JSON must not carry a \"verify\" field, got keys: %v", sortedKeys(m))
-	}
+	t.Run("nil Verify omits the key", func(t *testing.T) {
+		data, err := json.Marshal(base)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 
-	want := []string{
-		"auto_approve", "autonomous", "buttons", "cost", "has_dialog", "id",
-		"interactive", "is_script", "name", "paused_from", "pre_note",
-		"show_dialog", "show_plan", "status", "updated_at",
-	}
-	got := sortedKeys(m)
-	if !equalSlices(got, want) {
-		t.Fatalf("StageView JSON keys changed:\n got  %v\n want %v", got, want)
-	}
+		if _, ok := m["verify"]; ok {
+			t.Fatalf("StageView JSON must omit \"verify\" when nil, got keys: %v", sortedKeys(m))
+		}
+
+		want := []string{
+			"auto_approve", "autonomous", "buttons", "cost", "has_dialog", "id",
+			"interactive", "is_script", "name", "paused_from", "pre_note",
+			"show_dialog", "show_plan", "status", "updated_at",
+		}
+		got := sortedKeys(m)
+		if !equalSlices(got, want) {
+			t.Fatalf("StageView JSON keys changed:\n got  %v\n want %v", got, want)
+		}
+	})
+
+	t.Run("set Verify serializes as step/command/phase", func(t *testing.T) {
+		view := base
+		view.Verify = &VerifyView{Step: 2, Command: "codex", Phase: "needs_changes"}
+		data, err := json.Marshal(view)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+
+		raw, ok := m["verify"]
+		if !ok {
+			t.Fatalf("StageView JSON must carry \"verify\" when set, got keys: %v", sortedKeys(m))
+		}
+		var got VerifyView
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal verify: %v", err)
+		}
+		want := VerifyView{Step: 2, Command: "codex", Phase: "needs_changes"}
+		if got != want {
+			t.Fatalf("verify = %+v, want %+v", got, want)
+		}
+	})
 }
 
 func sortedKeys(m map[string]json.RawMessage) []string {
@@ -376,4 +408,87 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// appendVerifyNotice writes one verify_started/verify_result line to
+// <runDir>/notices.jsonl via the exact production call
+// (Orchestrator.emitVerifyStarted/emitVerifyResult), so the test fixture
+// matches the real on-disk shape byte-for-byte.
+func appendVerifyNotice(t *testing.T, runDir, stageID, eventType string, data map[string]any) {
+	t.Helper()
+	stagefiles.AppendNotice(runDir, stageID, eventType, data)
+}
+
+func findStage(views []StageView, id string) *StageView {
+	for i := range views {
+		if views[i].ID == id {
+			return &views[i]
+		}
+	}
+	return nil
+}
+
+func TestBuildStageViews_VerifyIndicatorFromNotices(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "build"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyStarted), map[string]any{"step": 1, "command": "codex"})
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 1, "command": "codex", "verdict": "needs_changes"})
+
+	rs := state.RunState{
+		StageOrder: []string{"build"},
+		Stages: map[string]state.StageState{
+			"build": {Status: state.StatusFailed},
+		},
+	}
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	v := findStage(views, "build").Verify
+	if v == nil || v.Phase != "needs_changes" || v.Step != 1 || v.Command != "codex" {
+		t.Fatalf("verify view = %+v, want {1 codex needs_changes}", v)
+	}
+}
+
+// TestBuildStageViews_VerifyReRunReturnsRunning: started → result(pass) →
+// started(step2) ⇒ phase "running" — a new verify pass after a completed one
+// re-enters "running" (current state, not the last-ever outcome).
+func TestBuildStageViews_VerifyReRunReturnsRunning(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "build"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyStarted), map[string]any{"step": 1, "command": "codex"})
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 1, "command": "codex", "verdict": "pass"})
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyStarted), map[string]any{"step": 2, "command": "codex"})
+
+	rs := state.RunState{
+		StageOrder: []string{"build"},
+		Stages: map[string]state.StageState{
+			"build": {Status: state.StatusRunning},
+		},
+	}
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	v := findStage(views, "build").Verify
+	if v == nil || v.Phase != "running" || v.Step != 2 || v.Command != "codex" {
+		t.Fatalf("verify view = %+v, want {2 codex running}", v)
+	}
+}
+
+// TestBuildStageViews_NoVerifyNotices_NilVerify: a stage with no verify
+// notices ⇒ Verify == nil (omitempty on the wire, see the JSON-shape test).
+func TestBuildStageViews_NoVerifyNotices_NilVerify(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "build"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	rs := state.RunState{
+		StageOrder: []string{"build"},
+		Stages: map[string]state.StageState{
+			"build": {Status: state.StatusDone},
+		},
+	}
+	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	if v := findStage(views, "build").Verify; v != nil {
+		t.Fatalf("verify view = %+v, want nil", v)
+	}
 }

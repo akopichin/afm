@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, listNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
@@ -6,7 +6,7 @@ import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { FeedWorkspace, computeVerifyIndicators } from '../components/feed-workspace'
+import { FeedWorkspace } from '../components/feed-workspace'
 import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
@@ -159,12 +159,6 @@ export function App(): ReactElement {
 
   const wsUrl = buildWebSocketUrl()
   const { events, connected } = useEventFeed(wsUrl)
-
-  // verifyByStage (V5b.2) — компактный текущий AI-verify индикатор в
-  // StagesList, вычисленный чисто из ленты событий (verify_started/
-  // verify_result — см. computeVerifyIndicators), а не из отдельного
-  // DTO-поля StageView: /api/status для флоу без verify не меняется.
-  const verifyByStage = useMemo(() => computeVerifyIndicators(events), [events])
 
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null)
 
@@ -614,7 +608,6 @@ export function App(): ReactElement {
                 progressDone={stages.filter((s) => s.status === 'done').length}
                 progressTotal={stages.length}
                 accounting={accounting}
-                verifyByStage={verifyByStage}
               />
             }
             tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}

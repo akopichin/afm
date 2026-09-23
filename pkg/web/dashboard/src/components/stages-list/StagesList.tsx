@@ -1,9 +1,8 @@
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
-import { STAGE_STATUS_LABELS, type Stage } from '../../types'
+import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
 import { ATTENTION_STATUSES } from '../../hooks/use-attention'
-import type { VerifyIndicator } from '../feed-workspace'
 
 // Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
 // иначе right-выравнивание относительно кнопки съедет.
@@ -32,19 +31,12 @@ type StagesListProps = {
   // оценённой (cost==null) активной стадии — сама по себе стадия не знает,
   // включён ли учёт затрат и жив ли прайсер.
   accounting: AccountingState
-  // verifyByStage — компактный текущий AI-verify индикатор на стадию (V5b.2),
-  // вычисленный App'ом из ленты событий (computeVerifyIndicators,
-  // feed-view-model.ts) — НЕ отдельное поле StageView/DTO (см. AGENTS.md,
-  // "Prefer deriving from notices/feed if it avoids a DTO change"). undefined
-  // означает "verify в этом флоу не используется/индикатор не посчитан" —
-  // бейдж просто не рендерится, поведение стадии без verify не меняется.
-  verifyByStage?: Record<string, VerifyIndicator>
 }
 
 // verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора:
 // один нейтральный глиф "AI verify", цвет несёт data-phase (CSS), полный
 // текст — в title (доступен и мышке, и скринридеру через это же title на span).
-function verifyPhaseLabel(phase: VerifyIndicator['phase']): string {
+function verifyPhaseLabel(phase: StageVerify['phase']): string {
   switch (phase) {
     case 'running':
       return 'in progress'
@@ -135,7 +127,7 @@ function hasKebab(stage: Stage): boolean {
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting, verifyByStage }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting }: StagesListProps): ReactElement {
   // useId() нельзя звать внутри stages.map (правила хуков запрещают хук в
   // цикле) — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -309,11 +301,11 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
               </span>
             )}
             {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
-            {verifyByStage?.[stage.id] !== undefined && (
+            {stage.verify !== undefined && (
               <span
                 className="verify-badge"
-                data-phase={verifyByStage[stage.id]?.phase}
-                title={`AI verify step ${verifyByStage[stage.id]?.step} · ${verifyByStage[stage.id]?.command}: ${verifyPhaseLabel(verifyByStage[stage.id]?.phase ?? 'running')}`}
+                data-phase={stage.verify.phase}
+                title={`AI verify step ${stage.verify.step} · ${stage.verify.command}: ${verifyPhaseLabel(stage.verify.phase)}`}
               >
                 🔎
               </span>

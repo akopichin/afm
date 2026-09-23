@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -54,6 +57,29 @@ type StageView struct {
 	// Stages[id]). nil, если у стадии нет ни одной записи в usage.jsonl или
 	// accounting вообще не подключён к серверу (см. Server.accounting).
 	Cost *accounting.CostView `json:"cost,omitempty"`
+	// Verify — durable-индикатор последнего AI-verify прохода этой стадии
+	// (Task 7 плана per-stage-feed-full-feed): раньше бейдж вычислялся на
+	// клиенте из (капнутой) глобальной ленты событий (computeVerifyIndicators)
+	// и на долгих ранах мог "состариться" из окна — тот же класс проблемы, что
+	// и вся эта фича лечит. Теперь это поле сервер считает через
+	// latestVerifyForStage — необрезанное сканирование ВСЕГО notices.jsonl,
+	// а не reconstructNotices (тот капнут maxStageReplayEvents=200). nil, если
+	// у стадии ни разу не было verify_started/verify_result.
+	Verify *VerifyView `json:"verify,omitempty"`
+}
+
+// VerifyView — снимок текущего состояния последнего AI-verify прохода стадии,
+// зеркалит семантику удалённого клиентского computeVerifyIndicators
+// (feed-view-model.ts): verify_started переводит в "running", verify_result —
+// в свой verdict (pass/needs_changes/inconclusive), иначе — "error". Новый
+// verify_started ПОСЛЕ уже завершённого прохода снова переводит в "running"
+// (текущее состояние, а не финальный исход последнего прохода — так же, как
+// вело себя клиентское вычисление).
+type VerifyView struct {
+	Step    int    `json:"step"`
+	Command string `json:"command"`
+	// Phase ∈ {"running","pass","needs_changes","inconclusive","error"}.
+	Phase string `json:"phase"`
 }
 
 // buildStageViews joins rs.Stages (event-log state) with the flow's static
@@ -118,6 +144,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
 			Buttons:     stageButtons[id],
 			Cost:        stageCosts[id],
+			Verify:      latestVerifyForStage(runDir, id),
 		})
 	}
 	return views
@@ -193,4 +220,102 @@ func stageHasDialog(runDir, stageID string) bool {
 		}
 	}
 	return false
+}
+
+// verifyNotice is the on-disk shape of one notices.jsonl line, decoded just
+// enough to pick out verify_started/verify_result entries (mirrors
+// stagefiles.AppendNotice's noticeEntry — "time"/"type"/"stage_id"/"data").
+type verifyNotice struct {
+	Time    time.Time      `json:"time"`
+	Type    string         `json:"type"`
+	StageID string         `json:"stage_id"`
+	Data    map[string]any `json:"data"`
+}
+
+// latestVerifyForStage scans the WHOLE notices.jsonl for a stage's
+// verify_started/verify_result notices and returns only the single latest one
+// (O(1) memory, unbounded lookback) — a DEDICATED scan, deliberately not
+// reconstructNotices, which is capped at maxStageReplayEvents=200 and would
+// let the badge age out on a long run after 200+ later same-stage notices
+// (the exact eviction class this whole feature exists to kill).
+//
+// "Latest" is selected by timestamp, with file order as the tie-break:
+// stagefiles.AppendNotice stamps time.Now() right before writing, so
+// concurrent writers can land slightly out of timestamp order in the file —
+// picking max-by-timestamp (ties won by whichever is scanned later) keeps
+// parity with reconstructEventHistory's own timestamp sort.
+func latestVerifyForStage(runDir, stageID string) *VerifyView {
+	f, err := os.Open(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var best *verifyNotice
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		var n verifyNotice
+		if json.Unmarshal(sc.Bytes(), &n) != nil {
+			continue
+		}
+		if n.StageID != stageID {
+			continue
+		}
+		if n.Type != string(bus.EventVerifyStarted) && n.Type != string(bus.EventVerifyResult) {
+			continue
+		}
+		if best == nil || !n.Time.Before(best.Time) {
+			entry := n
+			best = &entry
+		}
+	}
+
+	if best == nil {
+		return nil
+	}
+	view := &VerifyView{
+		Step:    noticeIntField(best.Data, "step"),
+		Command: noticeStringField(best.Data, "command"),
+	}
+	if best.Type == string(bus.EventVerifyStarted) {
+		view.Phase = VerifyPhaseRunning
+		return view
+	}
+	switch verdict := noticeStringField(best.Data, "verdict"); verdict {
+	case VerifyPhasePass, VerifyPhaseNeedsChanges, VerifyPhaseInconclusive:
+		view.Phase = verdict
+	default:
+		view.Phase = VerifyPhaseError
+	}
+	return view
+}
+
+// VerifyView.Phase values — named constants (instead of raw string literals
+// repeated between the implementation and its tests within this package,
+// which golangci-lint's goconst would otherwise flag) for the same vocabulary
+// as the deleted client VerifyIndicatorPhase.
+const (
+	VerifyPhaseRunning      = "running"
+	VerifyPhasePass         = "pass"
+	VerifyPhaseNeedsChanges = "needs_changes"
+	VerifyPhaseInconclusive = "inconclusive"
+	VerifyPhaseError        = "error"
+)
+
+// noticeIntField/noticeStringField defensively read a notice's data map —
+// json.Unmarshal decodes numbers as float64, so an int field must be
+// converted, and a missing/wrong-typed key must not panic.
+func noticeIntField(data map[string]any, key string) int {
+	if n, ok := data[key].(float64); ok {
+		return int(n)
+	}
+	return 0
+}
+
+func noticeStringField(data map[string]any, key string) string {
+	if s, ok := data[key].(string); ok {
+		return s
+	}
+	return ""
 }
