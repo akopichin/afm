@@ -62,9 +62,10 @@ type StageView struct {
 	// клиенте из (капнутой) глобальной ленты событий (computeVerifyIndicators)
 	// и на долгих ранах мог "состариться" из окна — тот же класс проблемы, что
 	// и вся эта фича лечит. Теперь это поле сервер считает через
-	// latestVerifyForStage — необрезанное сканирование ВСЕГО notices.jsonl,
-	// а не reconstructNotices (тот капнут maxStageReplayEvents=200). nil, если
-	// у стадии ни разу не было verify_started/verify_result.
+	// latestVerifyByStage — ОДНО необрезанное сканирование ВСЕГО notices.jsonl
+	// на весь /api/status (а не на стадию), а не reconstructNotices (тот
+	// капнут maxStageReplayEvents=200). nil, если у стадии ни разу не было
+	// verify_started/verify_result.
 	Verify *VerifyView `json:"verify,omitempty"`
 }
 
@@ -95,6 +96,7 @@ type VerifyView struct {
 func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string, stageButtons map[string][]string, stageCosts map[string]*accounting.CostView) []StageView {
 	order := topoOrder(rs.StageOrder, dependsOn)
 	views := make([]StageView, 0, len(order))
+	verifyByStage := latestVerifyByStage(runDir)
 	for _, id := range order {
 		st := rs.Stages[id]
 		autonomous := stageIsAutonomous(runDir, id)
@@ -144,7 +146,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
 			Buttons:     stageButtons[id],
 			Cost:        stageCosts[id],
-			Verify:      latestVerifyForStage(runDir, id),
+			Verify:      verifyByStage[id],
 		})
 	}
 	return views
@@ -232,26 +234,30 @@ type verifyNotice struct {
 	Data    map[string]any `json:"data"`
 }
 
-// latestVerifyForStage scans the WHOLE notices.jsonl for a stage's
-// verify_started/verify_result notices and returns only the single latest one
-// (O(1) memory, unbounded lookback) — a DEDICATED scan, deliberately not
-// reconstructNotices, which is capped at maxStageReplayEvents=200 and would
-// let the badge age out on a long run after 200+ later same-stage notices
-// (the exact eviction class this whole feature exists to kill).
+// latestVerifyByStage scans the WHOLE notices.jsonl ONCE and returns, per
+// stage id, only its single latest verify_started/verify_result notice
+// (O(distinct stages) memory, unbounded lookback) — a DEDICATED single-pass
+// scan, deliberately not reconstructNotices, which is capped at
+// maxStageReplayEvents=200 and would let the badge age out on a long run
+// after 200+ later same-stage notices (the exact eviction class this whole
+// feature exists to kill). Prior to this, buildStageViews called a per-stage
+// scan (latestVerifyForStage) once per stage, making /api/status rescan the
+// entire file O(stages) times per poll — this collapses it to one scan
+// regardless of stage count.
 //
-// "Latest" is selected by timestamp, with file order as the tie-break:
-// stagefiles.AppendNotice stamps time.Now() right before writing, so
-// concurrent writers can land slightly out of timestamp order in the file —
-// picking max-by-timestamp (ties won by whichever is scanned later) keeps
-// parity with reconstructEventHistory's own timestamp sort.
-func latestVerifyForStage(runDir, stageID string) *VerifyView {
+// "Latest" (per stage) is selected by timestamp, with file order as the
+// tie-break: stagefiles.AppendNotice stamps time.Now() right before writing,
+// so concurrent writers can land slightly out of timestamp order in the
+// file — picking max-by-timestamp (ties won by whichever is scanned later)
+// keeps parity with reconstructEventHistory's own timestamp sort.
+func latestVerifyByStage(runDir string) map[string]*VerifyView {
 	f, err := os.Open(filepath.Join(runDir, "notices.jsonl"))
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
 
-	var best *verifyNotice
+	best := make(map[string]*verifyNotice)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -259,30 +265,36 @@ func latestVerifyForStage(runDir, stageID string) *VerifyView {
 		if json.Unmarshal(sc.Bytes(), &n) != nil {
 			continue
 		}
-		if n.StageID != stageID {
-			continue
-		}
 		if n.Type != string(bus.EventVerifyStarted) && n.Type != string(bus.EventVerifyResult) {
 			continue
 		}
-		if best == nil || !n.Time.Before(best.Time) {
+		if cur := best[n.StageID]; cur == nil || !n.Time.Before(cur.Time) {
 			entry := n
-			best = &entry
+			best[n.StageID] = &entry
 		}
 	}
 
-	if best == nil {
-		return nil
+	views := make(map[string]*VerifyView, len(best))
+	for stageID, notice := range best {
+		views[stageID] = verifyViewFromNotice(notice)
 	}
+	return views
+}
+
+// verifyViewFromNotice reduces one selected verify_started/verify_result
+// notice into the VerifyView the dashboard renders: verify_started ⇒
+// "running"; verify_result ⇒ its verdict (pass/needs_changes/inconclusive),
+// or "error" for anything else.
+func verifyViewFromNotice(n *verifyNotice) *VerifyView {
 	view := &VerifyView{
-		Step:    noticeIntField(best.Data, "step"),
-		Command: noticeStringField(best.Data, "command"),
+		Step:    noticeIntField(n.Data, "step"),
+		Command: noticeStringField(n.Data, "command"),
 	}
-	if best.Type == string(bus.EventVerifyStarted) {
+	if n.Type == string(bus.EventVerifyStarted) {
 		view.Phase = VerifyPhaseRunning
 		return view
 	}
-	switch verdict := noticeStringField(best.Data, "verdict"); verdict {
+	switch verdict := noticeStringField(n.Data, "verdict"); verdict {
 	case VerifyPhasePass, VerifyPhaseNeedsChanges, VerifyPhaseInconclusive:
 		view.Phase = verdict
 	default:

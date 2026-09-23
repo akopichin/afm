@@ -313,7 +313,7 @@ func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 // TestStageView_JSONShape_VerifyFieldOmittedOrPresent locks the exact set of
 // JSON keys StageView serializes (V5b.4 + Task 7 of the per-stage-feed plan):
 // "verify" is now a real field (Task 7 — a durable per-stage AI-verify
-// indicator computed server-side from notices.jsonl, see latestVerifyForStage
+// indicator computed server-side from notices.jsonl, see latestVerifyByStage
 // in stageview.go), but it stays omitempty — a stage with no verify activity
 // (nil Verify) must still omit the key entirely, and a stage that has one
 // serializes it as {step,command,phase}. Any accidental removal/rename of an
@@ -495,12 +495,12 @@ func TestBuildStageViews_NoVerifyNotices_NilVerify(t *testing.T) {
 
 // TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon is the regression
 // test for the exact bug class this whole task exists to kill:
-// latestVerifyForStage MUST stay correct even when a stage's verify_result is
+// latestVerifyByStage MUST stay correct even when a stage's verify_result is
 // followed by far more than maxStageReplayEvents=200 later same-stage
 // notices — the horizon a per-stage reconstructNotices ring would evict it
-// past. If a future "helpful" refactor delegated latestVerifyForStage to
+// past. If a future "helpful" refactor delegated latestVerifyByStage to
 // reconstructNotices for code reuse (that function IS capped at 200), this
-// test would FAIL; it passes only because latestVerifyForStage does its own
+// test would FAIL; it passes only because latestVerifyByStage does its own
 // dedicated unbounded scan. Uses the real stagefiles.AppendNotice (via the
 // writeNotices helper from events_handler_test.go, same package) for both the
 // verify notice and the 250 filler notices, so the fixture matches the exact
