@@ -292,7 +292,11 @@ export function FileViewer({
         )}
 
         {editing && (
-          <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="line-comment-form"
+            style={{ gridColumn: '1 / -1', width: 'auto', minWidth: 0, alignSelf: 'stretch' }}
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="comment-display-header">
               <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>Comment on line {lineNumber}</span>
               <button

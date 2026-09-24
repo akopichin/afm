@@ -479,10 +479,6 @@
 .file-line .line-comment-form {
   white-space: normal;
   margin-left: 48px;
-  /* .file-line — grid (48px 1fr 20px); без span формы её textarea попадает в
-     узкую колонку и схлопывается. Растягиваем на все колонки, как и
-     .review-pause-confirm ниже. */
-  grid-column: 1 / -1;
 }
 
 /* Инлайновая ошибка сохранения заметки (409 stale_content/rev_conflict и т.п.):
