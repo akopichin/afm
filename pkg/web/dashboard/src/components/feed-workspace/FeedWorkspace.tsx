@@ -65,13 +65,41 @@ export function FeedWorkspace({
 
   const groups = useMemo(() => groupFeedItems(toFeedItems(events)), [events])
 
+  // Ответ на мысль агента: цель хранится ВМЕСТЕ со стадией (stageId), чтобы
+  // асинхронная отправка/смена стадии не «протащили» чужую цитату. text —
+  // сырой Markdown мысли (для чипа и доставляемой цитаты), key — стабильный
+  // ключ строки (маркирует выбранную строку + гейтит race-safe сброс).
+  const [replyTo, setReplyTo] = useState<{ stageId: string; key: string; text: string } | null>(null)
+  // Дерив: чип/выбор показываем только для стадии, на которой стоит композер —
+  // даже до срабатывания эффекта сброса кадр со stale-цитатой невозможен.
+  const activeReply = replyTo !== null && replyTo.stageId === noteTarget ? replyTo : null
+  const activeReplyKey = activeReply?.key ?? null
+
+  // Смена стадии — сбрасываем reply-таргет (композер и так ремаунтится по key).
+  useEffect(() => setReplyTo(null), [noteTarget])
+
   return (
     <section className="feed-workspace" aria-label="Feed">
       <div id="feed-content" className="feed-scroll" ref={feed.ref}>
         {groups.length === 0 ? (
           <div className="empty-hint feed-empty">{emptyHint ?? 'No events yet'}</div>
         ) : (
-          groups.map((g) => <FeedGroupView key={g.key} group={g} showStageBadges={showStageBadges} onOpenDialog={onOpenDialog} />)
+          groups.map((g) => (
+            <FeedGroupView
+              key={g.key}
+              group={g}
+              showStageBadges={showStageBadges}
+              onOpenDialog={onOpenDialog}
+              // Репляибл только per-stage Feed с живым композером: мысль выбирается
+              // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
+              onReplyToThought={
+                noteTarget !== null && onSendNote !== undefined
+                  ? (key, text) => setReplyTo({ stageId: noteTarget, key, text })
+                  : undefined
+              }
+              activeReplyKey={activeReplyKey}
+            />
+          ))
         )}
         {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
       </div>
@@ -81,7 +109,17 @@ export function FeedWorkspace({
           key=noteTarget: смена стадии даёт свежий пустой черновик (черновик не
           «переедет» в другую стадию). */}
       {noteTarget !== null && onSendNote !== undefined && (
-        <FeedComposer key={noteTarget} stageId={noteTarget} onSend={(text) => onSendNote(noteTarget, text)} />
+        <FeedComposer
+          key={noteTarget}
+          stageId={noteTarget}
+          onSend={(text) => onSendNote(noteTarget, text)}
+          replyQuote={activeReply?.text ?? null}
+          replyKey={activeReply?.key}
+          onCancelReply={() => setReplyTo(null)}
+          // Сброс только совпадающего ключа: если пользователь выбрал другую
+          // мысль, пока шла отправка, свежая цель переживёт (race-safe).
+          onSent={(key) => setReplyTo((cur) => (cur?.key === key ? null : cur))}
+        />
       )}
     </section>
   )
@@ -93,6 +131,13 @@ type FeedGroupViewProps = {
   // точки вызова в FeedWorkspace (codex #4 — было безусловным рендером бейджа).
   showStageBadges: boolean
   onOpenDialog?: (stageId: string, phase: string, id: string) => void
+  // onReplyToThought — выбрать мысль агента (kind message + markdown) для ответа.
+  // Присутствует ТОЛЬКО у per-stage Feed с живым композером (см. FeedWorkspace):
+  // где его нет (Full feed), мысли рендерятся обычной непереключаемой прозой.
+  onReplyToThought?: (key: string, text: string) => void
+  // activeReplyKey — ключ выбранной мысли: ровно одна строка получает
+  // is-reply-target (подсветка выбора).
+  activeReplyKey?: string | null
 }
 
 // FeedGroupView — один пузырь: шапка (стадия + актор) + стопка item-строк.
@@ -100,7 +145,9 @@ type FeedGroupViewProps = {
 // наличии onOpenDialog рендерятся кнопкой — переход к вопросу диалога стадии
 // (сама навигация — задача T6, здесь только клик → проброс координат); без
 // onOpenDialog или для остальных item — неизменный <div> как раньше.
-function FeedGroupView({ group, showStageBadges, onOpenDialog }: FeedGroupViewProps): ReactElement {
+// Мысли агента (kind message + markdown) при наличии onReplyToThought
+// становятся репляиблыми (клик по строке/кнопке ↩ выбирает мысль для ответа).
+export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToThought, activeReplyKey = null }: FeedGroupViewProps): ReactElement {
   return (
     <div className={`feed-group feed-${group.side}`} data-actor={group.actor}>
       <div className="feed-group-head">
@@ -154,6 +201,37 @@ function FeedGroupView({ group, showStageBadges, onOpenDialog }: FeedGroupViewPr
               >
                 {content}
               </button>
+            )
+          }
+          // Мысль агента (kind message + markdown) — репляибл ТОЛЬКО когда есть
+          // onReplyToThought (per-stage Feed с живым композером). Контейнер прозы
+          // остаётся НЕинтерактивным <div> (может содержать <a> из linkify —
+          // вкладывать его в role=button нельзя): клик по строке выбирает мысль,
+          // но не по ссылке (closest('a') !== null → это клик по ссылке,
+          // пропускаем). Отдельная реальная кнопка ↩ даёт клавиатурную
+          // активацию/фокус-ринг бесплатно (без ручного keydown).
+          const isThought = item.kind === 'message' && item.markdown === true
+          if (onReplyToThought !== undefined && isThought) {
+            const selected = item.key === activeReplyKey
+            return (
+              <div key={item.key} className="feed-thought-row">
+                <div
+                  className={`${className} feed-item-thought${selected ? ' is-reply-target' : ''}`}
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('a') === null) onReplyToThought(item.key, item.text)
+                  }}
+                >
+                  {content}
+                </div>
+                <button
+                  type="button"
+                  className="feed-thought-reply"
+                  aria-label="Reply to this thought"
+                  onClick={() => onReplyToThought(item.key, item.text)}
+                >
+                  ↩
+                </button>
+              </div>
             )
           }
           // reportVerificationId — только verify_result-строки с отчётом

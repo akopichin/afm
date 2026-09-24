@@ -270,6 +270,103 @@ describe('PasteableTextarea', () => {
     expect(alertSpy).toHaveBeenCalledWith('Target comment is no longer available')
   })
 
+  it('attachInline: renders the Attach button inline in a .pasteable-input-row together with the textarea', () => {
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline />
+      </FileBrowserProvider>,
+    )
+
+    const attach = screen.getByRole('button', { name: 'Attach' })
+    const textarea = screen.getByRole('textbox')
+    const row = attach.closest('.pasteable-input-row')
+    expect(row).not.toBeNull()
+    expect(row).toContainElement(textarea)
+    // Кнопка переехала во входную строку — её больше нет на верхней полосе.
+    expect(attach.closest('.pasteable-attachments')).toBeNull()
+  })
+
+  it('regression: default (no attachInline) keeps the Attach button on the .pasteable-attachments strip and renders no .pasteable-input-row', () => {
+    const { container } = render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences />
+      </FileBrowserProvider>,
+    )
+
+    const attach = screen.getByRole('button', { name: 'Attach' })
+    expect(attach.closest('.pasteable-attachments')).not.toBeNull()
+    expect(container.querySelector('.pasteable-input-row')).toBeNull()
+  })
+
+  it('attachInline: a queued image preview renders on the .pasteable-attachments strip above while the Attach button stays in the input row', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ path: '/afm/run/s1/attachments/paste-1.png' }))
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline />
+      </FileBrowserProvider>,
+    )
+
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [makeImageItem()] } })
+
+    const preview = await screen.findByAltText('Pasted screenshot')
+    // Превью — на верхней полосе (только превью), кнопка Attach — во входной строке.
+    expect(preview.closest('.pasteable-attachments')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Attach' }).closest('.pasteable-input-row')).not.toBeNull()
+  })
+
+  it('attachInline: still inserts picked file references at the caret and keeps exactly one hidden file input', async () => {
+    installFileBrowserApi()
+    const onChange = vi.fn()
+    const { container } = render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences attachInline />
+      </FileBrowserProvider>,
+    )
+
+    // Скрытый <input type=file> существует ровно один раз (не дублируется).
+    expect(container.querySelectorAll('input[type="file"]')).toHaveLength(1)
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    textarea.setSelectionRange(4, 4)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /choose project file/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
+
+    const insertButton = await screen.findByRole('button', { name: /insert references/i })
+    await waitFor(() => expect(insertButton).not.toBeDisabled())
+    fireEvent.click(insertButton)
+
+    expect(onChange).toHaveBeenCalledWith('see [AFM file: "/w/a.go"] end')
+  })
+
+  it('attachInline: Upload image… uploads via the single hidden input and inserts a Screenshot reference', async () => {
+    installFileBrowserApi()
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/attachments')) return jsonResponse({ path: '/afm/run/s1/attachments/up-1.png' })
+      return jsonResponse([])
+    })
+    const onChange = vi.fn()
+    render(
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences attachInline />
+      </FileBrowserProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const img = new File([new Uint8Array([1, 2, 3])], 'shot.png', { type: 'image/png' })
+    fireEvent.click(screen.getByRole('menuitem', { name: /upload image/i }))
+    Object.defineProperty(fileInput, 'files', { value: [img], configurable: true })
+    fireEvent.change(fileInput)
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith('[Screenshot: /afm/run/s1/attachments/up-1.png]\n'),
+    )
+  })
+
   // Kept last deliberately: vi.spyOn(..., 'get').mockRestore() on this jsdom/
   // tinyspy version does not fully restore the accessor on
   // window.HTMLTextAreaElement.prototype — any later test in this file that
