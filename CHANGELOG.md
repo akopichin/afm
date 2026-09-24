@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-24
 
+### Fix: file-browser comment form layout in CSS
+
+Opening a line comment while the flow is paused now spans the editor across
+the file row using CSS, replacing the React inline-style workaround. A wildcard
+path inside a CSS comment prematurely closed the comment, causing browsers to
+discard the form's layout rule entirely. The comment is corrected and the grid
+placement, text wrapping, and gutter spacing now apply normally.
+
 ### Improvement: token-only accounting display with an opt-in money toggle
 
 Cost accounting has always recorded both tokens and an estimated dollar cost,

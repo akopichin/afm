@@ -470,13 +470,11 @@
   opacity: 1;
 }
 
-/* Форма комментария (.line-comment-form/.comment-actions/.btn-send/.btn-cancel/
-   .comment-display-header/.comment-remove) занимает всю ширину grid-строки,
-   как и в PlanPanel — те же классы, определены один раз в plan-panel.css и
-   загружаются в каждый скин вместе с этим файлом (см. skins/*/index.css), так
-   что здесь их переопределять не нужно. white-space: pre строки-контейнера
-   (.file-line) не наследуется в форму — сама форма не preformatted. */
+/* Shared form styles come from plan-panel.css. Span all three file-line grid
+   columns so the editor sits below the source instead of in the 48px gutter.
+   The form must not inherit the source code's preformatted whitespace. */
 .file-line .line-comment-form {
+  grid-column: 1 / -1;
   white-space: normal;
   margin-left: 48px;
 }
