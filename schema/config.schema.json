@@ -33,9 +33,22 @@
       "type": "array",
       "description": "Lifecycle hooks: observer commands receiving event JSON on stdin (global/project layers).",
       "items": { "$ref": "#/definitions/lifecycleHook" }
-    }
+    },
+    "verify": { "$ref": "#/definitions/verify" }
   },
   "definitions": {
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Global verify-gate settings. A per-stage override lives inside the stage's verify block (container form).",
+      "properties": {
+        "max_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many verify rejections (needs_changes) are allowed before the stage fails: N = number of retry-corrections. Default 1; 0 = fail on the first rejection."
+        }
+      }
+    },
     "accounting": {
       "type": "object",
       "additionalProperties": false,

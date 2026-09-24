@@ -250,3 +250,143 @@ func TestVerifySpec_MarshalOmitsWhenEmpty(t *testing.T) {
 		t.Errorf("marshalled yaml = %q, want no verify key for an empty spec", out)
 	}
 }
+
+// TestVerifySpec_ContainerForm — новая объектная форма {steps: [...], max_failures: N}:
+// шаги разбираются как список, max_failures становится указателем.
+func TestVerifySpec_ContainerForm(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - run: \"go test ./...\"\n" +
+		"    - command: codex\n" +
+		"      prompt: \"проверь покрытие\"\n" +
+		"  max_failures: 3\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(spec.Steps) != 2 {
+		t.Fatalf("Steps = %+v, want 2 steps", spec.Steps)
+	}
+	if spec.Steps[0].Kind != VerifyShell || spec.Steps[0].Run != "go test ./..." {
+		t.Errorf("first step = %+v", spec.Steps[0])
+	}
+	if spec.Steps[1].Kind != VerifyAgent || spec.Steps[1].Command != "codex" || spec.Steps[1].Prompt != "проверь покрытие" {
+		t.Errorf("second step = %+v", spec.Steps[1])
+	}
+	if spec.MaxFailures == nil || *spec.MaxFailures != 3 {
+		t.Errorf("MaxFailures = %v, want 3", spec.MaxFailures)
+	}
+	if spec.fromScalar {
+		t.Error("fromScalar = true, want false for a container form")
+	}
+}
+
+// TestVerifySpec_ContainerFormWithoutMaxFailures — steps без max_failures:
+// MaxFailures остаётся nil (наследование из config).
+func TestVerifySpec_ContainerFormWithoutMaxFailures(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - run: \"true\"\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(spec.Steps) != 1 || spec.Steps[0].Run != "true" {
+		t.Fatalf("Steps = %+v", spec.Steps)
+	}
+	if spec.MaxFailures != nil {
+		t.Errorf("MaxFailures = %v, want nil", spec.MaxFailures)
+	}
+}
+
+// TestVerifySpec_ContainerFormZeroMaxFailures — max_failures: 0 разрешён
+// (строгий режим: первое отклонение сразу проваливает стадию).
+func TestVerifySpec_ContainerFormZeroMaxFailures(t *testing.T) {
+	src := "verify:\n  steps:\n    - run: \"true\"\n  max_failures: 0\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.MaxFailures == nil || *spec.MaxFailures != 0 {
+		t.Errorf("MaxFailures = %v, want 0", spec.MaxFailures)
+	}
+}
+
+func TestVerifySpec_ContainerNegativeMaxFailuresRejected(t *testing.T) {
+	src := "verify:\n  steps:\n    - run: \"true\"\n  max_failures: -1\n"
+	_, err := parseVerify(t, src, "s1")
+	if err == nil {
+		t.Fatal("expected error for a negative max_failures")
+	}
+	if !strings.Contains(err.Error(), "max_failures") {
+		t.Errorf("error = %q, want it to mention max_failures", err.Error())
+	}
+}
+
+func TestVerifySpec_ContainerEmptyStepsRejected(t *testing.T) {
+	src := "verify:\n  steps: []\n  max_failures: 2\n"
+	if _, err := parseVerify(t, src, "s1"); err == nil {
+		t.Fatal("expected error for an empty steps list")
+	}
+}
+
+func TestVerifySpec_ContainerStepsNotSequenceRejected(t *testing.T) {
+	src := "verify:\n  steps: nope\n"
+	if _, err := parseVerify(t, src, "s1"); err == nil {
+		t.Fatal("expected error for a non-sequence steps value")
+	}
+}
+
+func TestVerifySpec_ContainerUnknownKeyRejected(t *testing.T) {
+	src := "verify:\n  steps:\n    - run: \"true\"\n  bogus: x\n"
+	_, err := parseVerify(t, src, "s1")
+	if err == nil {
+		t.Fatal("expected error for an unknown container key")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Errorf("error = %q, want it to mention the unknown key", err.Error())
+	}
+}
+
+func TestVerifySpec_ContainerStepsMixedWithRunRejected(t *testing.T) {
+	src := "verify:\n  steps:\n    - run: \"true\"\n  run: \"echo x\"\n"
+	if _, err := parseVerify(t, src, "s1"); err == nil {
+		t.Fatal("expected error for run mixed with steps at the container level")
+	}
+}
+
+// TestVerifySpec_MaxFailuresWithoutStepsRejected — max_failures в одиночной
+// (не container) форме — это неизвестное поле шага, а не бюджет.
+func TestVerifySpec_MaxFailuresWithoutStepsRejected(t *testing.T) {
+	src := "verify:\n  max_failures: 2\n"
+	if _, err := parseVerify(t, src, "s1"); err == nil {
+		t.Fatal("expected error for max_failures without steps")
+	}
+}
+
+// TestVerifySpec_ContainerMarshalRoundTrip — round-trip сохраняет max_failures.
+func TestVerifySpec_ContainerMarshalRoundTrip(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - run: \"go test ./...\"\n" +
+		"    - command: codex\n" +
+		"  max_failures: 4\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out, err := yaml.Marshal(verifyHolder{Verify: spec})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	back, err := parseVerify(t, string(out), "s1")
+	if err != nil {
+		t.Fatalf("re-parse marshalled verify: %v (yaml: %s)", err, out)
+	}
+	if len(back.Steps) != 2 {
+		t.Fatalf("round-trip steps mismatch: %+v", back.Steps)
+	}
+	if back.MaxFailures == nil || *back.MaxFailures != 4 {
+		t.Errorf("round-trip MaxFailures = %v, want 4 (yaml: %s)", back.MaxFailures, out)
+	}
+}

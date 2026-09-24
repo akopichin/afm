@@ -89,6 +89,30 @@
         "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }
       }
     },
+    "verifyContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps"],
+      "description": "Container form: an ordered list of verify steps plus an optional per-stage max_failures budget.",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "description": "Several verify steps run in order.",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/verifyRunStep" },
+              { "$ref": "#/definitions/verifyCommandStep" }
+            ]
+          }
+        },
+        "max_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many verify rejections (needs_changes) are allowed before the stage fails: N = number of retry-corrections. Overrides the global verify.max_failures; 0 = fail on the first rejection."
+        }
+      }
+    },
     "memory": {
       "type": "object",
       "additionalProperties": false,
@@ -206,7 +230,7 @@
           "description": "Enable the file-based dialog protocol with the user via the dashboard."
         },
         "verify": {
-          "description": "Stage-completion check(s) run after .done: a shell command (legacy scalar), one step object ({run: ...} or {command: ...}), or an ordered list of step objects. A non-zero shell exit means the stage is not actually complete.",
+          "description": "Stage-completion check(s) run after .done: a shell command (legacy scalar), one step object ({run: ...} or {command: ...}), an ordered list of step objects, or a container object ({steps: [...], max_failures: N}) that also sets a per-stage verify failure budget. A non-zero shell exit means the stage is not actually complete.",
           "oneOf": [
             { "type": "string", "description": "Shell command (legacy form)." },
             { "$ref": "#/definitions/verifyRunStep" },
@@ -221,7 +245,8 @@
                   { "$ref": "#/definitions/verifyCommandStep" }
                 ]
               }
-            }
+            },
+            { "$ref": "#/definitions/verifyContainer" }
           ]
         },
         "prompt": {

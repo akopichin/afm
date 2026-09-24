@@ -99,6 +99,18 @@ func isRetryableError(err error) bool {
 	return Classify(err) == ClassRetryable
 }
 
+// verifyMaxFailures — бюджет отклонений verify (needs_changes) для стадии:
+// сколько коррекций автора разрешить, прежде чем стадия провалится.
+// Per-stage override (s.Verify.MaxFailures) побеждает глобальный конфиг
+// (Config.Verify), тот — встроенный дефолт 1 (прежнее однократное поведение).
+func (o *Orchestrator) verifyMaxFailures(s flow.Stage) int {
+	n := o.opts.Config.Verify.ResolvedMaxFailures()
+	if s.Verify.MaxFailures != nil {
+		n = *s.Verify.MaxFailures
+	}
+	return n
+}
+
 // buildRetryContext reads the last N lines from the agent's raw stream-json
 // log and formats them as a continuation context for the retry prompt.
 func buildRetryContext(stageDir, phase string) string {
@@ -185,6 +197,13 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	// эта горутина может пережить возврат Run(), поэтому globals не читаем.
 	maxRetries := o.maxRetries
 	retryBackoff := o.retryBackoff
+	// verifyFailures — счётчик verify-отклонений (needs_changes) этой горутины;
+	// maxVerifyFailures — их бюджет (см. verifyMaxFailures). Считаются ТОЛЬКО
+	// verify-отклонения: транспортные ретраи (isRetryableError-ветка ниже) и
+	// план-незавершёнка бюджет verify не трогают. In-memory, сбрасывается на
+	// resume — как и прежнее однократное поведение.
+	verifyFailures := 0
+	maxVerifyFailures := o.verifyMaxFailures(s)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 || resumeCtx {
@@ -280,52 +299,71 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				onUserInterrupted()
 				return
 			}
-			// Incomplete work — retry once without backoff
-			if stagefiles.IsIncompleteWorkError(checkErr) && attempt == 0 {
-				// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД
-				// incompleteReason/continue — см. verifyOutcomeStillOwned.
-				//
-				// H1 (6-е код-ревью) рассмотрел этот call site отдельно: в
-				// отличие от финального verify-driven fail (см.
-				// commitVerifyFailure), здесь НЕТ FSM-перехода, который можно
-				// было бы затереть — `continue` ниже лишь возвращает цикл к
-				// его же top-of-loop проверке (currentStatus == Paused) и
-				// повторному вызову agentFn. Остаточный TOCTOU-зазор между
-				// этим чтением и `continue` не может ничего разрушить: любой
-				// Pause()/Revise(), закоммитившийся именно в этом зазоре, уже
-				// оставил СИГНАЛ на interruptCh (тот же канал, что
-				// зарегистрирован для ВСЕЙ этой горутины, см. Store у входа в
-				// runWithRetry) — следующий agentFn() у этой же стадии
-				// проходит через runnerFor(...).RunAgent -> executor.run,
-				// который делает неблокирующую проверку InterruptCh ПРЯМО
-				// ПЕРЕД cmd.Start() (см. pkg/executor: "D4 код-ревью") и,
-				// если сигнал уже есть, возвращает ErrUserInterrupted, ДАЖЕ
-				// НЕ ЗАПУСКАЯ subprocess. Этот err уже обрабатывается веткой
-				// errors.Is(err, executor.ErrUserInterrupted) выше в этом же
-				// цикле — paused и revising различаются ТАМ ЖЕ, тем же
-				// способом, что и everywhere else. Поэтому здесь достаточно
-				// дешёвого fast-path чтения (экономит incompleteReason/
-				// EventRetryScheduled на заведомо чужой стадии) — атомарная
-				// защита от клобберинга не нужна, потому что клобберить
-				// нечего.
-				if o.verifyOutcomeGuardHook != nil {
-					o.verifyOutcomeGuardHook(s.ID)
+			// Incomplete work — две НЕЗАВИСИМЫЕ политики коррекции без backoff.
+			// verify-отклонение (*VerifyRejectedError) тратит собственный
+			// бюджет verifyFailures (max_failures, дефолт 1); план-незавершёнка
+			// — прежний однократный retry на attempt 0. errors.As проверяем
+			// ПЕРВЫМ: VerifyRejectedError сам unwrap'ится в IncompleteWorkError
+			// (см. errors.go), поэтому без явной проверки типа он съел бы ветку
+			// attempt==0 и получал бы ровно одну коррекцию независимо от
+			// max_failures. verifyFailures++ — только для verify-ветки, чтобы
+			// транспортные ретраи и план-коррекции его не расходовали.
+			if stagefiles.IsIncompleteWorkError(checkErr) {
+				var vre *VerifyRejectedError
+				isVerifyReject := errors.As(checkErr, &vre)
+				retryIncomplete := (isVerifyReject && verifyFailures < maxVerifyFailures) ||
+					(!isVerifyReject && attempt == 0)
+				if retryIncomplete {
+					// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД
+					// incompleteReason/continue — см. verifyOutcomeStillOwned.
+					//
+					// H1 (6-е код-ревью) рассмотрел этот call site отдельно: в
+					// отличие от финального verify-driven fail (см.
+					// commitVerifyFailure), здесь НЕТ FSM-перехода, который можно
+					// было бы затереть — `continue` ниже лишь возвращает цикл к
+					// его же top-of-loop проверке (currentStatus == Paused) и
+					// повторному вызову agentFn. Остаточный TOCTOU-зазор между
+					// этим чтением и `continue` не может ничего разрушить: любой
+					// Pause()/Revise(), закоммитившийся именно в этом зазоре, уже
+					// оставил СИГНАЛ на interruptCh (тот же канал, что
+					// зарегистрирован для ВСЕЙ этой горутины, см. Store у входа в
+					// runWithRetry) — следующий agentFn() у этой же стадии
+					// проходит через runnerFor(...).RunAgent -> executor.run,
+					// который делает неблокирующую проверку InterruptCh ПРЯМО
+					// ПЕРЕД cmd.Start() (см. pkg/executor: "D4 код-ревью") и,
+					// если сигнал уже есть, возвращает ErrUserInterrupted, ДАЖЕ
+					// НЕ ЗАПУСКАЯ subprocess. Этот err уже обрабатывается веткой
+					// errors.Is(err, executor.ErrUserInterrupted) выше в этом же
+					// цикле — paused и revising различаются ТАМ ЖЕ, тем же
+					// способом, что и everywhere else. Поэтому здесь достаточно
+					// дешёвого fast-path чтения (экономит incompleteReason/
+					// EventRetryScheduled на заведомо чужой стадии) — атомарная
+					// защита от клобберинга не нужна, потому что клобберить
+					// нечего.
+					if o.verifyOutcomeGuardHook != nil {
+						o.verifyOutcomeGuardHook(s.ID)
+					}
+					if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
+						return
+					}
+					if isVerifyReject {
+						verifyFailures++
+					}
+					incompleteReason = checkErr.Error()
+					// Раньше публиковалось как EventStageStatusChanged с Data-
+					// сообщением (а не статусом) — фронт (extractStatusString)
+					// рисовал это пустым бейджем "→ ", и на reload сообщение
+					// терялось (не FSM-переход → нет в events.jsonl). По смыслу
+					// это "сейчас будет повторная попытка": шлём EventRetryScheduled
+					// (рендерится как "retry: <msg>") и дублируем в notices.jsonl,
+					// чтобы пережить reload.
+					msg := "incomplete work, retrying: " + checkErr.Error()
+					o.ui.Publish(bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID, Data: msg})
+					stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventRetryScheduled), msg)
+					continue
 				}
-				if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
-					return
-				}
-				incompleteReason = checkErr.Error()
-				// Раньше публиковалось как EventStageStatusChanged с Data-
-				// сообщением (а не статусом) — фронт (extractStatusString)
-				// рисовал это пустым бейджем "→ ", и на reload сообщение
-				// терялось (не FSM-переход → нет в events.jsonl). По смыслу
-				// это "сейчас будет повторная попытка": шлём EventRetryScheduled
-				// (рендерится как "retry: <msg>") и дублируем в notices.jsonl,
-				// чтобы пережить reload.
-				msg := "incomplete work, retrying: " + checkErr.Error()
-				o.ui.Publish(bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID, Data: msg})
-				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventRetryScheduled), msg)
-				continue
+				// verify-бюджет исчерпан ИЛИ план-незавершёнка после attempt 0 —
+				// падаем в общий fail-путь ниже.
 			}
 			// Missing artifact or second incomplete attempt — fail. Причина —
 			// текст самой ошибки completionCheck (IncompleteWorkError/

@@ -53,6 +53,28 @@ type ExecutorConfig struct {
 	TruncateOutput int           `yaml:"truncate_output"`
 }
 
+// defaultVerifyMaxFailures — сколько отклонений (needs_changes) verify допускает
+// по умолчанию: N = число retry-коррекций автора. 1 сохраняет прежнее поведение
+// (ровно одна коррекция, затем провал).
+const defaultVerifyMaxFailures = 1
+
+// VerifyConfig — глобальные настройки verify-гейта.
+type VerifyConfig struct {
+	// MaxFailures — сколько отклонений verify допускать до провала стадии.
+	// Указатель, чтобы отличить «не задано» (nil → дефолт 1) от явного значения,
+	// включая 0. Per-stage override — flow.VerifySpec.MaxFailures.
+	MaxFailures *int `yaml:"max_failures"`
+}
+
+// ResolvedMaxFailures возвращает бюджет отклонений verify: значение из конфига,
+// если задано, иначе дефолт 1.
+func (c VerifyConfig) ResolvedMaxFailures() int {
+	if c.MaxFailures != nil {
+		return *c.MaxFailures
+	}
+	return defaultVerifyMaxFailures
+}
+
 // ServerConfig configures the web dashboard server.
 type ServerConfig struct {
 	Port        *int  `yaml:"port"`
@@ -463,6 +485,9 @@ type Config struct {
 	// mergeFile мёржит их keyed по id: проектный слой заменяет одноимённый
 	// глобальный хук, остальные складываются. См. pkg/lifecyclehooks.
 	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
+	// Verify — глобальные настройки verify-гейта (число допустимых отклонений).
+	// Per-stage override — flow.VerifySpec.MaxFailures.
+	Verify VerifyConfig `yaml:"verify"`
 }
 
 // Default returns the built-in default configuration.
@@ -536,7 +561,19 @@ func LoadFrom(globalDir, projectDir string) (Config, error) {
 	if err := lifecyclehooks.ValidateLayer(cfg.Hooks, false); err != nil {
 		return cfg, fmt.Errorf("hooks: %w", err)
 	}
+	if err := validateVerify(cfg.Verify); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// validateVerify отвергает отрицательный verify.max_failures. Клампа нет —
+// ошибка конфигурации должна быть явной.
+func validateVerify(v VerifyConfig) error {
+	if v.MaxFailures != nil && *v.MaxFailures < 0 {
+		return fmt.Errorf("verify.max_failures: must not be negative, got %d", *v.MaxFailures)
+	}
+	return nil
 }
 
 // validatePricing rejects a PricingConfig containing any negative rate.
@@ -680,6 +717,9 @@ func mergeFile(dst *Config, path string) error {
 				dst.Pricing.Channels[channel][model] = rc
 			}
 		}
+	}
+	if overlay.Verify.MaxFailures != nil {
+		dst.Verify.MaxFailures = overlay.Verify.MaxFailures
 	}
 	if overlay.Hooks != nil {
 		// Слой overlay валидируется ДО keyed-merge: иначе дубль id внутри

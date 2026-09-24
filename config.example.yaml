@@ -222,3 +222,18 @@ client:
 # AFM_ACCOUNTING=1/true force-shows, =0/false force-hides; empty/unset → config decides.
 # accounting:
 #   enabled: false   # hide cost everywhere (data still collected)
+
+# Verify gate — how many verify rejections (needs_changes) are tolerated before a
+# stage fails. max_failures = the number of retry-corrections the author gets:
+# 1 (default) allows exactly one correction, then fails on the second rejection;
+# 0 fails on the very first rejection; 3 allows up to three corrections.
+# This global value is the fallback; a stage overrides it inside its own verify
+# block using the container form:
+#   verify:
+#     steps:
+#       - run: go test ./...
+#       - command: codex
+#     max_failures: 3
+# Default: 1
+# verify:
+#   max_failures: 1

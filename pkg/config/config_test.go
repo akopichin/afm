@@ -1590,3 +1590,75 @@ func TestDockerAutoShim_MergeLayers(t *testing.T) {
 		t.Errorf("merge: expected 2 agents, got %d", len(cfg.Docker.Agents))
 	}
 }
+
+func TestVerify_ResolvedMaxFailuresDefault(t *testing.T) {
+	var v config.VerifyConfig // nil MaxFailures
+	if got := v.ResolvedMaxFailures(); got != 1 {
+		t.Errorf("ResolvedMaxFailures() = %d, want 1 (default)", got)
+	}
+}
+
+func TestVerify_ResolvedMaxFailuresExplicit(t *testing.T) {
+	n := 3
+	v := config.VerifyConfig{MaxFailures: &n}
+	if got := v.ResolvedMaxFailures(); got != 3 {
+		t.Errorf("ResolvedMaxFailures() = %d, want 3", got)
+	}
+	zero := 0
+	v = config.VerifyConfig{MaxFailures: &zero}
+	if got := v.ResolvedMaxFailures(); got != 0 {
+		t.Errorf("ResolvedMaxFailures() = %d, want 0 (explicit)", got)
+	}
+}
+
+func TestVerifyMaxFailuresMerge_ProjectOverGlobal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "g"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, filepath.Join(dir, "g"), "config.yaml", "verify:\n  max_failures: 3\n")
+	writeYAML(t, filepath.Join(dir, "p"), "config.yaml", "verify:\n  max_failures: 5\n")
+	cfg, err := config.LoadFrom(filepath.Join(dir, "g"), filepath.Join(dir, "p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Verify.ResolvedMaxFailures(); got != 5 {
+		t.Errorf("ResolvedMaxFailures() = %d, want 5 (project overrides global)", got)
+	}
+}
+
+// TestVerifyMaxFailuresMerge_ProjectZeroOverGlobal — явный 0 в проектном слое
+// должен перекрыть глобальные 3 (указатель + != nil, а не int + != 0).
+func TestVerifyMaxFailuresMerge_ProjectZeroOverGlobal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "g"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, filepath.Join(dir, "g"), "config.yaml", "verify:\n  max_failures: 3\n")
+	writeYAML(t, filepath.Join(dir, "p"), "config.yaml", "verify:\n  max_failures: 0\n")
+	cfg, err := config.LoadFrom(filepath.Join(dir, "g"), filepath.Join(dir, "p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Verify.ResolvedMaxFailures(); got != 0 {
+		t.Errorf("ResolvedMaxFailures() = %d, want 0 (explicit project 0 overrides global 3)", got)
+	}
+}
+
+func TestVerifyMaxFailures_NegativeRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "verify:\n  max_failures: -1\n")
+	_, err := config.LoadFrom("", dir)
+	if err == nil {
+		t.Fatal("expected LoadFrom to reject a negative verify.max_failures")
+	}
+	if !strings.Contains(err.Error(), "verify.max_failures") {
+		t.Errorf("error = %q, want it to name verify.max_failures", err.Error())
+	}
+}

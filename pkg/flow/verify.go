@@ -36,6 +36,12 @@ type VerifyStep struct {
 // поведение при скалярной форме YAML.
 type VerifySpec struct {
 	Steps []VerifyStep
+	// MaxFailures — сколько отклонений (needs_changes) verify допускает, прежде
+	// чем стадия проваливается: N = число retry-коррекций автора. Указатель, чтобы
+	// отличить «не задано» (nil → берётся config verify.max_failures, дефолт 1) от
+	// явного значения, включая 0 (строгий режим: первое же отклонение проваливает).
+	// Задаётся ТОЛЬКО в container-форме YAML: verify: {steps: [...], max_failures: N}.
+	MaxFailures *int
 	// fromScalar отмечает, что спека получена из legacy-скаляра
 	// (verify: "команда") — используется ТОЛЬКО для симметричной сериализации
 	// обратно в тот же вид (см. MarshalYAML). На валидацию и исполнение не
@@ -89,6 +95,11 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 		return nil
 
 	case yaml.MappingNode:
+		// Наличие ключа steps отличает container-форму
+		// ({steps: [...], max_failures: N}) от одиночного шага ({run: ...}).
+		if mappingHasKey(value, verifyKeySteps) {
+			return s.unmarshalContainer(value)
+		}
 		step, err := verifyStepFromMapping(value)
 		if err != nil {
 			return err
@@ -119,6 +130,17 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// Ключи YAML-полей verify. Вынесены в константы, чтобы одни и те же имена
+// использовались и в разборе одиночного шага, и в разборе container-формы.
+const (
+	verifyKeyRun         = "run"
+	verifyKeyCommand     = "command"
+	verifyKeyPrompt      = "prompt"
+	verifyKeyTimeout     = "timeout"
+	verifyKeySteps       = "steps"
+	verifyKeyMaxFailures = "max_failures"
+)
+
 // verifyStepFromMapping декодирует один mapping-узел verify в VerifyStep.
 func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 	var step VerifyStep
@@ -127,13 +149,13 @@ func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 		key := node.Content[i].Value
 		val := node.Content[i+1]
 		switch key {
-		case "run":
+		case verifyKeyRun:
 			step.Run = val.Value
-		case "command":
+		case verifyKeyCommand:
 			step.Command = val.Value
-		case "prompt":
+		case verifyKeyPrompt:
 			step.Prompt = val.Value
-		case "timeout":
+		case verifyKeyTimeout:
 			timeoutRaw = val.Value
 		case "agent":
 			return VerifyStep{}, errors.New(`verify: unknown field "agent"; use "command"`)
@@ -154,6 +176,69 @@ func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 	return step, nil
 }
 
+// mappingHasKey сообщает, есть ли у mapping-узла ключ key.
+func mappingHasKey(node *yaml.Node, key string) bool {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+// unmarshalContainer разбирает container-форму verify:
+//
+//	verify:
+//	  steps:
+//	    - run: ...
+//	    - command: ...
+//	  max_failures: N   # необязателен
+//
+// В отличие от одиночной формы, здесь допустимы только ключи steps и
+// max_failures. Поля отдельного шага (run/command/prompt/timeout) на верхнем
+// уровне container'а — ошибка (их место внутри steps).
+func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
+	var stepsNode *yaml.Node
+	var maxFailures *int
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		val := node.Content[i+1]
+		switch key {
+		case verifyKeySteps:
+			stepsNode = val
+		case verifyKeyMaxFailures:
+			var n int
+			if err := val.Decode(&n); err != nil {
+				return fmt.Errorf("verify: invalid max_failures: %w", err)
+			}
+			maxFailures = &n
+		case verifyKeyRun, verifyKeyCommand, verifyKeyPrompt, verifyKeyTimeout:
+			return fmt.Errorf("verify: %q cannot be combined with steps (move it inside a steps item)", key)
+		default:
+			return fmt.Errorf("verify: unknown field %q", key)
+		}
+	}
+	if stepsNode == nil || stepsNode.Kind != yaml.SequenceNode {
+		return errors.New("verify: steps must be a list of step objects")
+	}
+	if len(stepsNode.Content) == 0 {
+		return errors.New("verify: steps must not be empty")
+	}
+	steps := make([]VerifyStep, 0, len(stepsNode.Content))
+	for _, item := range stepsNode.Content {
+		if item.Kind != yaml.MappingNode {
+			return errors.New("verify: each steps item must be an object ({run: ...} or {command: ...})")
+		}
+		step, err := verifyStepFromMapping(item)
+		if err != nil {
+			return err
+		}
+		steps = append(steps, step)
+	}
+	*s = VerifySpec{Steps: steps, MaxFailures: maxFailures}
+	return nil
+}
+
 // MarshalYAML сериализует VerifySpec обратно в ту же форму, которую понимает
 // UnmarshalYAML: одна shell-команда, полученная из legacy-скаляра, снова
 // становится скаляром (fromScalar), один шаг — объектом, несколько шагов —
@@ -162,6 +247,15 @@ func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 func (s VerifySpec) MarshalYAML() (any, error) {
 	if s.IsEmpty() {
 		return nil, nil
+	}
+	// Явно заданный max_failures переводит спеку в container-форму — иначе он бы
+	// потерялся при сериализации скаляром/одиночным шагом/списком.
+	if s.MaxFailures != nil {
+		steps := make([]map[string]any, len(s.Steps))
+		for i, step := range s.Steps {
+			steps[i] = verifyStepToMap(step)
+		}
+		return map[string]any{"steps": steps, "max_failures": *s.MaxFailures}, nil
 	}
 	if len(s.Steps) == 1 && s.fromScalar {
 		return s.Steps[0].Run, nil
@@ -219,6 +313,14 @@ func (s Stage) VerifyAgentCommands() []string {
 // на шаг, непустое значение выбранного поля, неотрицательный timeout.
 // Индексы в сообщениях — 1-based (как в остальных ошибках flow.go).
 func (s VerifySpec) validate(stageID string) error {
+	if s.MaxFailures != nil {
+		if len(s.Steps) == 0 {
+			return fmt.Errorf("stage %q: verify: max_failures requires at least one step", stageID)
+		}
+		if *s.MaxFailures < 0 {
+			return fmt.Errorf("stage %q: verify: max_failures must not be negative", stageID)
+		}
+	}
 	for i, step := range s.Steps {
 		idx := i + 1
 		switch {
