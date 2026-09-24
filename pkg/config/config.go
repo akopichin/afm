@@ -65,6 +65,11 @@ type ServerConfig struct {
 // running regardless, so the data is still there when display is re-enabled.
 type AccountingConfig struct {
 	Enabled *bool `yaml:"enabled"` // nil = отображение включено по умолчанию; env AFM_ACCOUNTING имеет приоритет
+	// ShowMoney управляет показом денежных ($) величин. nil/false = скрыты,
+	// показываем только токены; true = показываем и деньги. Указатель, чтобы
+	// проектный слой мог перекрыть глобальный (см. mergeFile). env
+	// AFM_ACCOUNTING_SHOW_MONEY имеет приоритет.
+	ShowMoney *bool `yaml:"show_money"`
 }
 
 // IsEnabled сообщает, показывать ли accounting (стоимость/токены).
@@ -76,6 +81,17 @@ func (c AccountingConfig) IsEnabled() bool {
 		return v
 	}
 	return c.Enabled == nil || *c.Enabled
+}
+
+// ShowMoneyEnabled сообщает, показывать ли денежные величины.
+// Приоритет: env AFM_ACCOUNTING_SHOW_MONEY > config > по умолчанию СКРЫТО.
+// Влияет только на отображение (dashboard, `afm check`/`report`) — сбор
+// стоимости в usage.jsonl продолжается независимо.
+func (c AccountingConfig) ShowMoneyEnabled() bool {
+	if v, set := envBool("AFM_ACCOUNTING_SHOW_MONEY"); set {
+		return v
+	}
+	return c.ShowMoney != nil && *c.ShowMoney
 }
 
 // IsOpenBrowser returns OpenBrowser value (defaults to false).
@@ -640,6 +656,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Accounting.Enabled != nil {
 		dst.Accounting.Enabled = overlay.Accounting.Enabled
+	}
+	if overlay.Accounting.ShowMoney != nil {
+		dst.Accounting.ShowMoney = overlay.Accounting.ShowMoney
 	}
 	if overlay.Pricing.Models != nil {
 		if dst.Pricing.Models == nil {

@@ -705,6 +705,113 @@ accounting:
 	}
 }
 
+func TestAccounting_ShowMoneyDefaultsFalse(t *testing.T) {
+	if (config.AccountingConfig{}).ShowMoneyEnabled() {
+		t.Fatal("nil ShowMoney should default to false (только токены)")
+	}
+	f := false
+	if (config.AccountingConfig{ShowMoney: &f}).ShowMoneyEnabled() {
+		t.Fatal("explicit false must keep money hidden")
+	}
+	tr := true
+	if !(config.AccountingConfig{ShowMoney: &tr}).ShowMoneyEnabled() {
+		t.Fatal("explicit true must show money")
+	}
+}
+
+func TestAccounting_ShowMoneyEnvOverridesConfig(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name      string
+		env       string // "" = не задавать
+		showMoney *bool
+		want      bool
+	}{
+		{name: "env on overrides config off", env: "1", showMoney: &f, want: true},
+		{name: "env off overrides config on", env: "0", showMoney: &tr, want: false},
+		{name: "env true, config nil", env: "true", showMoney: nil, want: true},
+		{name: "env empty falls back to config", env: "", showMoney: &tr, want: true},
+		{name: "env unset, config nil -> false", env: "", showMoney: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env != "" {
+				t.Setenv("AFM_ACCOUNTING_SHOW_MONEY", tc.env)
+			}
+			c := config.AccountingConfig{ShowMoney: tc.showMoney}
+			if got := c.ShowMoneyEnabled(); got != tc.want {
+				t.Errorf("ShowMoneyEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFrom_AccountingShowMoneyMergesAcrossLayers(t *testing.T) {
+	cases := []struct {
+		name        string
+		globalYAML  string
+		projectYAML string
+		want        bool
+	}{
+		{
+			name:        "both unset -> hidden (default off)",
+			globalYAML:  ``,
+			projectYAML: ``,
+			want:        false,
+		},
+		{
+			name: "global true, project unset -> shown",
+			globalYAML: `
+accounting:
+  show_money: true
+`,
+			projectYAML: ``,
+			want:        true,
+		},
+		{
+			name:       "global unset, project true -> shown",
+			globalYAML: ``,
+			projectYAML: `
+accounting:
+  show_money: true
+`,
+			want: true,
+		},
+		{
+			name: "global true, project false -> hidden (project overrides)",
+			globalYAML: `
+accounting:
+  show_money: true
+`,
+			projectYAML: `
+accounting:
+  show_money: false
+`,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir := t.TempDir()
+			projectDir := t.TempDir()
+			if tc.globalYAML != "" {
+				writeYAML(t, globalDir, "config.yaml", tc.globalYAML)
+			}
+			if tc.projectYAML != "" {
+				writeYAML(t, projectDir, "config.yaml", tc.projectYAML)
+			}
+			cfg, err := config.LoadFrom(globalDir, projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Accounting.ShowMoneyEnabled(); got != tc.want {
+				t.Errorf("Accounting.ShowMoneyEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtraMounts_Validate(t *testing.T) {
 	cases := []struct {
 		name string

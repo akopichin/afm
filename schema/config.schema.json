@@ -44,6 +44,10 @@
         "enabled": {
           "type": "boolean",
           "description": "Show accounting. ON by default; explicit false / env AFM_ACCOUNTING=0 hides the display (data is still collected)."
+        },
+        "show_money": {
+          "type": "boolean",
+          "description": "Show monetary ($) values. OFF by default — only tokens are shown; true / env AFM_ACCOUNTING_SHOW_MONEY=1 also shows cost. Presentation-only (cost is still collected in usage.jsonl)."
         }
       }
     },
