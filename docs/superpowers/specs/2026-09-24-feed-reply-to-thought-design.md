@@ -72,91 +72,139 @@ live agent through the existing Revise path. This makes feedback precise —
 
 ## Architecture
 
-### State ownership — `FeedWorkspace`
+### State ownership — `FeedWorkspace` (stage-scoped, race-safe)
 
 `FeedWorkspace` already owns the feed render and conditionally renders
-`FeedComposer`. It gains one piece of state:
+`FeedComposer`. It gains one piece of state, **scoped to the target stage** to
+close codex BLOCKER #1/#8 (a bare `{key,text}` leaks across stage switches for
+one render and lets a stale async send clear a freshly-picked target):
 
 ```ts
-const [replyTo, setReplyTo] = useState<{ key: string; text: string } | null>(null)
+const [replyTo, setReplyTo] = useState<{ stageId: string; key: string; text: string } | null>(null)
+// The chip/selection are only ever shown for the stage the composer is on.
+// Derived, so a mid-flight stage switch can never paint the old quote:
+const activeReply = replyTo !== null && replyTo.stageId === noteTarget ? replyTo : null
 ```
 
-- `key` = the target `FeedItem.key` (stable, unique) — used to mark the row
-  `selected` and to detect "clicked the same one again".
-- `text` = the thought's raw text (`item.text`, the Markdown source), used to
-  build both the chip preview and the delivered quote.
+- `stageId` = the stage this reply targets (== `noteTarget` at pick time).
+- `key` = the target `FeedItem.key` (stable, unique) — marks the selected row,
+  detects "clicked the same one again", and gates race-safe clears.
+- `text` = the thought's raw text (`item.text`, the Markdown source) — builds
+  both the chip preview and the delivered quote.
 
-Reset points (all one-liners):
-- Composer key already changes on `noteTarget` change (stage switch) → the
-  `FeedComposer` remounts. `replyTo` is cleared in the same effect that keys the
-  composer, so a target never leaks across stages.
-- On successful send (see delivery) → clear `replyTo`.
-- On `✕` in the chip → clear `replyTo`.
+Reset points:
+- **Stage switch:** `useEffect(() => setReplyTo(null), [noteTarget])`. Even
+  before the effect runs, `activeReply` is `null` for the new stage (the
+  `stageId` guard), so no stale-quote frame is possible. The `FeedComposer` also
+  remounts (its `key={noteTarget}`), clearing the draft as today.
+- **On `✕` in the chip** → `setReplyTo(null)`.
+- **On successful send (race-safe, codex SHOULD #2):** the composer reports the
+  key it sent via `onSent(sentKey)`; `FeedWorkspace` clears only the matching
+  target: `setReplyTo((cur) => (cur?.key === sentKey ? null : cur))`. If the user
+  picked a different thought while the send was in flight, the new target
+  survives. (The draft text is already cleared race-safely inside `FeedComposer`
+  via the existing `cur === submitted` snapshot check.)
 
-### Making a thought clickable
+### Making a thought repliable — dedicated button, no nested interactive (codex BLOCKER #6)
 
-`FeedGroupView` maps `group.items`. For an item that is a thought
-(`kind === 'message' && markdown === true`) **and** replying is enabled
-(a new `onReplyToThought?: (key, text) => void` prop is present — passed only by
-the per-stage Feed instance that also passes `onSendNote`), the item's rendered
-container becomes clickable:
+Agent thought Markdown is rendered with `renderPlainMarkdown` (**`linkify: true`**),
+so a thought can contain real `<a>` elements. Wrapping the row in a
+`role="button"` container would nest interactive controls (invalid DOM) and make
+link clicks/focus also fire thought-selection. Instead:
 
-- Add `onClick={() => onReplyToThought(item.key, item.text)}`, `role="button"`,
-  `tabIndex=0`, and Enter/Space keyboard activation (a11y).
-- Add class `feed-item-thought` (hover affordance + cursor) and, when
-  `item.key === replyToKey`, `is-reply-target` (selected background + accent).
-- The existing image-marker segmentation (`splitImageMarkers`) is unchanged;
-  the click target is the item container, images inside still render.
+- The prose container stays **non-interactive** (may contain `<a>`). No
+  `role="button"`, no `tabIndex` on it.
+- Selection is driven by a **dedicated real `<button class="feed-thought-reply">`**
+  — the hover/focus affordance ("↩ reply") rendered as a sibling next to the
+  prose. Native button semantics give correct Enter/Space activation, focus ring,
+  and AT labeling for free (closes codex SHOULD #7 — no hand-rolled keydown, no
+  Space-scroll). It is visually revealed on row hover / keyboard focus-within and
+  is always focusable via Tab.
+- **Convenience row click:** the item container also gets an `onClick` that calls
+  `onReplyToThought(item.key, item.text)` — but guarded: if
+  `event.target.closest('a')` is non-null the click is a link, so we return
+  without selecting (link works normally). This is a plain `div` handler, not a
+  button role, so no nested-interactive violation.
+- Class `feed-item-thought` (hover affordance + cursor) and, when
+  `item.key === activeReplyKey`, `is-reply-target` (selected background + accent).
+- `splitImageMarkers` segmentation is unchanged; images inside still render.
 
-This does not conflict with the existing `navigable` branch (dialog rows) —
-dialog rows are `kind === 'dialog'`/`'message'` **without** `markdown` and are
-already rendered as `<button>` for `onOpenDialog`; thoughts are a disjoint set
-(`markdown === true`). A thought is never navigable.
+Repliable rendering happens only when a new `onReplyToThought?: (key, text) => void`
+prop is present — passed only by the per-stage Feed instance that also passes
+`onSendNote`. In Full-feed (no composer) thoughts render exactly as today
+(non-interactive prose).
 
-`replyToKey` (the currently-selected key, or `null`) is threaded from
-`FeedWorkspace` → `FeedGroupView` so exactly one row shows `is-reply-target`.
+This does not conflict with the existing `navigable` branch (dialog rows):
+dialog rows are `message`/`dialog` **without** `markdown` and are already a
+`<button>` for `onOpenDialog`; thoughts are the disjoint `markdown === true` set
+and are never navigable.
+
+`activeReplyKey` (`activeReply?.key ?? null`) is threaded from `FeedWorkspace` →
+`FeedGroupView` so exactly one row shows `is-reply-target`.
 
 ### Chip + inline attach — `FeedComposer`
 
-`FeedComposer` gains two props: `replyQuote?: string | null` (the target
-thought's text, or null) and `onCancelReply?: () => void`.
+`FeedComposer` gains props: `replyQuote?: string | null` (the active target's
+text, or null — derived by the parent from `activeReply`), `replyKey?: string`
+(the target key, passed back on send), `onCancelReply?: () => void` (the `✕`),
+and `onSent?: (key: string) => void` (race-safe success signal).
 
 - When `replyQuote` is non-null, render the quote chip above the input:
   a `.feed-reply-chip` with a small "↩ In reply to" label, the quoted text
   clamped to 2 lines (`-webkit-line-clamp`), and an `✕` button calling
   `onCancelReply`. Reuses the `--quote-bar` / blockquote look from the
   line-comment CSS via shared tokens.
-- **Inline attach:** the input row is laid out as `[attach] [textarea] [✈]`.
-  Because `PasteableTextarea` owns the Attach control (and its strip layout),
-  we add an opt-in **`attachInline?: boolean`** prop to `PasteableTextarea`
-  that renders the Attach button inline (before/adjacent to the textarea in the
-  same row) instead of on the top strip. Default `false` preserves today's strip
-  layout for every existing consumer; `FeedComposer` passes `attachInline`.
-  Image-attachment thumbnails (paste/upload previews) still render on the strip
-  above — only the Attach **button** relocates; a queued image preview is not
-  part of the single input row. (This keeps the change small and avoids
-  reflowing the preview strip.)
+- **Inline attach (codex SHOULD #4):** the input row is laid out as
+  `[attach] [textarea] [✈]`. Because `PasteableTextarea` owns the Attach control
+  and its strip, we add an opt-in **`attachInline?: boolean`** prop.
+  - **Default `false` is a pure no-op for existing consumers:** the current
+    `showStrip = attachments.length > 0 || showAttachButton` strip (attach button
+    + any queued image previews) renders exactly as today — same DOM, same
+    classes. The new inline branch is additive and gated on `attachInline === true`;
+    CSS for it is under a new scoping class only, so it cannot reposition the
+    default strip. Regression guard test asserts the default DOM is unchanged.
+  - **When `attachInline === true`:** the Attach **button** renders inline in the
+    input row (adjacent to the textarea). **Queued image previews still render on
+    the strip above** the input row — only the button relocates; a preview
+    thumbnail is not part of the single input row (keeps the change small, avoids
+    reflowing the preview strip). So with `attachInline`, `showStrip` reduces to
+    "previews only" (`attachments.length > 0`), and the button lives in the row.
+  - Tests must cover, for `attachInline`: file-reference insertion at caret,
+    image upload via the hidden input, caret/focus preserved, and simultaneous
+    queued previews rendering above while the button stays in the row.
 
 ### Delivery (reuse Revise, prepend the quote)
 
-On submit, `FeedComposer` builds the body:
+On submit, `FeedComposer` builds the body (codex SHOULD #5 — normalize line
+endings before prefixing so a CRLF thought doesn't yield `> line\r`):
 
 ```ts
 function buildReplyBody(quote: string | null, comment: string): string {
   const c = comment.trim()
   if (quote === null) return c
-  const q = quote.split('\n').map((l) => `> ${l}`).join('\n')
+  const q = quote.replace(/\r\n?/g, '\n').split('\n').map((l) => `> ${l}`).join('\n')
   return `${q}\n\n${c}`
 }
 ```
 
-then calls the existing `onSend(body)` → `handleSendNote` → `reviseStage(id, body)`.
-No change to `App.handleSendNote` or `run-client.ts`. Empty comment is still a
-no-op (send disabled), regardless of whether a thought is selected. On the
-promise resolving (delivered), the composer clears its text **and** signals the
-parent to clear `replyTo` (via `onCancelReply()` on success, or a dedicated
-`onSent` — see Decisions/impl note); on reject, both the text and the reply
-target are preserved so the user can retry.
+- Every line of the thought is prefixed with `> ` — including blank lines
+  (`> `) and lines that are themselves blockquotes/fences. This is intentionally
+  naive: it is always **safe** (feedback.md is read as text by the agent), and
+  nesting a `> ` in front of an existing `> ` or a ```` ``` ```` fence produces a
+  valid, readable nested quote. Test cases cover: single line, multi-line,
+  embedded blockquote (`> x` → `> > x`), and fenced code block.
+- Empty comment is a no-op (send disabled) regardless of a selected thought.
+
+The body goes to the existing `onSend(body)` → `handleSendNote` →
+`reviseStage(id, body)`. No change to `App.handleSendNote` or `run-client.ts`.
+
+Success/failure handling (race-safe):
+- On resolve: clear the text via the existing `cur === submitted` snapshot check,
+  then call `onSent(sentKey)` so the parent clears `replyTo` **only if it still
+  points at the same key** (see State ownership). If the user selected a
+  different thought mid-send, that new target and its draft survive.
+- On reject (409 / network): keep both the draft text and the reply chip so the
+  user can retry.
 
 ## Data flow (end to end)
 
@@ -196,19 +244,26 @@ Frontend only (vitest + RTL); no Go tests (no backend change).
   `kind:'message', markdown:true`; a guard test that tool/bash rows are
   **not** `markdown` (so the "is a thought" predicate is exact).
 - `FeedWorkspace`:
-  - clicking a thought row calls `onReplyToThought` with its key+text; a
-    tool row does not; only present when `onReplyToThought`/composer enabled.
+  - clicking a thought (row or its `↩` reply button) calls `onReplyToThought`
+    with key+text; a tool row does not; repliable only when `onReplyToThought`
+    present.
+  - **link guard:** clicking an `<a>` inside a thought does **not** select
+    (`closest('a')` guard); the dedicated `↩` `<button>` activates via
+    Enter/Space (native) and does not scroll on Space.
   - exactly one row gets `is-reply-target`; clicking another moves it.
-  - Full-feed instance (no composer) renders thoughts non-clickable.
+  - **stage-scope:** `activeReply` derives null when `replyTo.stageId !== noteTarget`
+    (no stale quote on stage switch); `onSent(key)` clears only the matching key.
+  - Full-feed instance (no composer) renders thoughts non-repliable.
 - `FeedComposer`:
-  - `buildReplyBody` — quote prepended as `> `-blockquote + blank line +
-    comment; no quote → plain comment; multi-line quote → each line prefixed.
+  - `buildReplyBody` — no quote → plain trimmed comment; single/multi-line quote
+    → each line `> `-prefixed + blank line + comment; **CRLF** normalized (no
+    `\r`); embedded blockquote → `> > x`; fenced code block preserved.
   - chip renders when `replyQuote` set, `✕` calls `onCancelReply`; hidden when
     null.
-  - send disabled on empty comment even with a quote; on resolve clears text +
-    reply; on reject preserves both.
-  - `attachInline` prop: attach button in the input row; default strip layout
-    unchanged.
+  - send disabled on empty comment even with a quote; on resolve clears text and
+    calls `onSent(sentKey)`; on reject preserves text (chip preserved by parent).
+  - `attachInline` prop: attach button in the input row; previews still above;
+    default strip layout unchanged.
 - `PasteableTextarea`:
   - `attachInline` renders the Attach button inline; default renders it on the
     strip (regression guard for other consumers).
