@@ -23,7 +23,7 @@ verify: shell and/or AI, run in order
     └── user paused/revised        → existing pause/revise/cancel path
 ```
 
-## The three YAML forms
+## The YAML forms
 
 ### 1. Scalar string (legacy, unchanged)
 
@@ -32,8 +32,10 @@ verify: "go test ./..."
 ```
 
 Exactly the previous behavior: one shell step, run in the project directory after
-`.done`. A non-zero exit is treated as "not actually done" — one corrective author
-retry with the command's output in the prompt, then `failed` if it fails again.
+`.done`. A non-zero exit is treated as "not actually done" — the author gets a
+corrective retry with the command's output in the prompt, then `failed` once the
+correction budget is spent (default 1, configurable via
+[`verify.max_failures`](#the-correction-budget-verifymax_failures)).
 
 ### 2. Object — one step
 
@@ -79,6 +81,32 @@ Steps run **in order**. The first step that doesn't pass stops the sequence —
 remaining steps are recorded as "not run", not "passed". After the author fixes
 the issue, the **whole list re-runs from the beginning** on the next attempt; a
 step that already passed is not cached across attempts.
+
+### 4. Container — steps plus `max_failures`
+
+To set a per-stage correction budget (how many `needs_changes` rejections the
+author may correct before the stage fails, see
+[The correction budget](#the-correction-budget-verifymax_failures) below), wrap
+the steps in an object with `steps:` and `max_failures:`:
+
+```yaml
+verify:
+  steps:
+    - run: "go test ./..."
+      timeout: 5m
+    - command: codex-as-claude
+      timeout: 15m
+      prompt: |
+        Check acceptance criteria and backward compatibility.
+  max_failures: 3          # optional; overrides the global verify.max_failures
+```
+
+`steps` is the same list of step objects as form 3; `max_failures` is optional.
+Only this container form carries `max_failures` — the scalar, single-object, and
+list forms above use the global `verify.max_failures` (default 1). No other
+top-level keys are allowed here: a step field (`run`/`command`/`prompt`/
+`timeout`) at the container's top level is a parse error (it belongs inside a
+`steps` item).
 
 ### Fields
 
@@ -166,16 +194,59 @@ The verifier returns a strict JSON verdict — `pass`, `needs_changes`, or
 | Outcome | Meaning | What afm does |
 |---------|---------|---------------|
 | `pass` | no blocking findings | the step passes; the stage moves to the next step (or completes) |
-| `needs_changes` (≥1 blocking finding) | the verifier found a real, provable problem | the author gets **one** corrective attempt via the existing incomplete-retry mechanism (same `attempt == 0` budget shell-verify has always used), with the blockers and a link to the full report injected into its prompt |
+| `needs_changes` (≥1 blocking finding) | the verifier found a real, provable problem | the author gets a corrective attempt via the incomplete-retry mechanism, with the blockers and a link to the full report injected into its prompt. How many corrections are allowed before the stage fails is the **correction budget** (default 1, configurable via [`verify.max_failures`](#the-correction-budget-verifymax_failures)) |
 | `inconclusive`, a protocol error, a timeout, a non-zero verifier exit, or a transport failure | verify itself could not produce a trustworthy verdict | a "verify execution failed" error — the stage is marked `failed`; the author is **not** re-run automatically (a broken/unreachable verifier is not evidence the author's work is wrong) |
 
-A shell step's non-zero exit is treated the same as an AI `needs_changes` — one
-corrective retry, then `failed`.
+A shell step's non-zero exit is treated the same as an AI `needs_changes` — it
+consumes the correction budget, giving the author a corrective retry, then
+`failed` once the budget is spent.
 
 `script:` stages cannot declare `verify` (there's no agent to correct). A
 planning-only stage (`agents: [planning]`, no implementation/review/autonomous
 execution) cannot declare `verify` either — verify is a gate on the result of doing
 the work, not on a plan.
+
+## The correction budget: `verify.max_failures`
+
+When a verify step returns `needs_changes` (or a shell step exits non-zero), afm
+sends the author back for a correction with the blockers injected into its
+prompt. `verify.max_failures` is how many such corrections are allowed before the
+stage is marked `failed`:
+
+- **`N`** = the number of author corrections. **Default is 1** — the historical
+  behavior (author fails once, gets one corrective run, then pass or fail).
+- **`0`** is strict: the first rejection fails the stage immediately, with no
+  correction.
+- **`3`** allows up to three corrections and fails on the fourth rejection.
+
+A negative value is rejected at config load time.
+
+Set it globally with a top-level `verify:` block in `config.yaml`:
+
+```yaml
+verify:
+  max_failures: 2
+```
+
+or per stage with the [container form](#4-container-steps-plus-max_failures) of
+the stage's `verify:` field. Resolution is **stage `verify.max_failures` >
+global `verify.max_failures` > default 1**.
+
+Only real verify rejections draw down the budget — an AI `needs_changes` or a
+shell step's non-zero exit. Two things it does **not** touch:
+
+- A verifier *execution* failure (`inconclusive`/timeout/non-zero verifier
+  exit/transport failure) still fails the stage immediately, as described under
+  [Outcome semantics](#outcome-semantics) — a broken verifier is not evidence
+  the author's work is wrong, so it never consumes a correction.
+- Transport/rate-limit retries and plan-incomplete retries are counted
+  **separately** and neither draws from the verify budget nor is drawn from by
+  it.
+
+The counter is **in-memory** and resets if the run is resumed after a restart
+(it is not persisted). Verify corrections also still ride the overall retry
+loop, so the effective ceiling is `min(max_failures, MaxRetries)` — with the
+built-in `MaxRetries = 15`, a budget above 15 is capped there.
 
 ## Reports and feedback files
 
@@ -224,12 +295,15 @@ verify introduces a new stage status or a second progress bar.
   with sources mounted elsewhere), a shell verify step can see a different
   directory than an agent verify step, which correctly uses `root_dir`. Aligning
   shell verify's CWD with `root_dir` is a separate follow-up.
-- **The correction budget is the existing shared retry `attempt` counter**, not an
-  independent one. The guaranteed one corrective author run holds in the typical
-  case (author #1 → `needs_changes` → author #2 → pass/fail), but is **not**
-  guaranteed if the author already consumed its `attempt == 0` slot on an unrelated
-  transport retry (e.g. a rate limit) before verify ever ran. A separate, durable
-  correction budget is future work.
+- **The correction budget is an independent, in-memory counter**
+  (`verify.max_failures`, default 1 — see
+  [The correction budget](#the-correction-budget-verifymax_failures)), separate
+  from the shared retry `attempt` counter. Transport/rate-limit retries and
+  plan-incomplete retries no longer eat into it, and vice versa, so the
+  configured number of corrective author runs is honored regardless of unrelated
+  retries. The counter is **not durable**: it lives only for the current run and
+  resets if the run is resumed after a restart. Verify corrections still ride the
+  overall retry loop, so the effective ceiling is `min(max_failures, 15)`.
 - **Read-only is a policy boundary, not a sandbox.** It prevents accidental edits
   and over-broad model actions from the verifier itself; it is not a defense
   against a malicious local process running under the same OS user.

@@ -275,3 +275,42 @@ was off. With the display off, the dashboard omits every cost field from
 `/api/status` (no tile/tab/rail), `afm check` falls back to its pre-accounting
 columns, and `afm report` prints nothing to stdout plus a one-line hint on
 stderr, exiting `0`.
+
+## Showing tokens without money: `accounting.show_money`
+
+Accounting has two independent display axes. `accounting.enabled` (above) turns
+the whole surface on or off; `accounting.show_money` decides whether the
+monetary (`$`) figures appear **when accounting is on**. Tokens are always
+shown; money is hidden by default.
+
+```yaml
+accounting:
+  show_money: true   # also show the Est. cost / $ figures (default: false)
+```
+
+or, without touching config:
+
+```bash
+AFM_ACCOUNTING_SHOW_MONEY=1 afm report   # show money on demand
+AFM_ACCOUNTING_SHOW_MONEY=0 afm check    # tokens only
+```
+
+Priority is **env `AFM_ACCOUNTING_SHOW_MONEY` > config > default off**
+(`=1/true` force-shows money, `=0/false` force-hides, empty/unset lets the
+config decide). Like `enabled`, this is presentation only — the estimated cost
+is still computed and recorded in `usage.jsonl`, so turning money back on
+reveals it for past runs too.
+
+With money **off** (the default) but accounting on:
+
+- **Dashboard** — a new **Est. tokens** header tile (compact `1.2M`/`345K`
+  format) is shown, placed before Est. cost; the **Est. cost** tile, the Cost
+  tab's `Cost` column, and the per-stage rail's `$` figure are all hidden.
+- **`afm check`** — drops the `EST. COST` column but keeps `TOKENS`/`CACHE`.
+- **`afm report`** — omits every `$`/Est. Cost figure while still printing all
+  token output (per-stage, overhead, totals, and the coverage appendix, which
+  still notes reported-vs-estimated mismatches by fact even without the
+  numbers).
+
+With money on, everything described earlier under "Where cost shows up" applies
+as written.

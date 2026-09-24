@@ -35,6 +35,15 @@ accounting:
   enabled: false            # hide cost display everywhere (dashboard + afm check/report);
                             # ON by default, env AFM_ACCOUNTING overrides. Data is still
                             # collected into usage.jsonl — this hides the display, not the data.
+  show_money: false         # also show monetary ($) figures (Est. cost); OFF by default —
+                            # tokens are always shown, money is opt-in. env
+                            # AFM_ACCOUNTING_SHOW_MONEY overrides.
+
+verify:
+  max_failures: 1           # how many verify rejections (needs_changes) the author may
+                            # correct before the stage fails (default 1; 0 = strict, no
+                            # correction). Per-stage override: the container form of a
+                            # stage's verify: field. See verify.md
 
 docker:
   enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
@@ -53,7 +62,8 @@ See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and
 [Cost accounting](accounting.md) for the `pricing:` overrides key (rate
 cards, precedence, and what "estimated cost" means) and the `accounting:`
-display switch (`AFM_ACCOUNTING`).
+display switches (`AFM_ACCOUNTING`, `AFM_ACCOUNTING_SHOW_MONEY`), and
+[AI-verify](verify.md) for the top-level `verify.max_failures` correction budget.
 
 ## Settings priority
 

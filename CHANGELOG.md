@@ -3,6 +3,55 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-24
+
+### Improvement: token-only accounting display with an opt-in money toggle
+
+Cost accounting has always recorded both tokens and an estimated dollar cost,
+but the display now separates the two. A new `accounting.show_money` switch
+controls whether the monetary (`$`) figures are shown; tokens are shown
+regardless. It defaults to **off**, so out of the box afm surfaces token usage
+without ever putting a list-price estimate on screen — the estimate is only a
+qualifier some deployments would rather not show. Collection into
+`usage.jsonl` is untouched either way; this is presentation only.
+
+- **New `accounting.show_money`** (bool, default `false`) plus the environment
+  variable `AFM_ACCOUNTING_SHOW_MONEY`. Priority is **env > config > off**, the
+  same shape as `AFM_ACCOUNTING`.
+- **Dashboard.** A new **Est. tokens** header tile (compact `1.2M`/`345K`
+  format) shows whenever accounting is supported, placed before Est. cost. The
+  **Est. cost** tile, the Cost tab's `Cost` column, and the per-stage rail's
+  `$` figure all appear only when `show_money` is on.
+- **CLI.** With money off, `afm check` drops its `EST. COST` column but keeps
+  `TOKENS`/`CACHE`, and `afm report` omits every `$`/Est. Cost figure while
+  still printing all token output.
+
+### Improvement: configurable verify correction budget (`verify.max_failures`)
+
+The number of verify rejections (`needs_changes`) an author is allowed to
+correct before the stage fails is now configurable. It was previously
+hardcoded to a single corrective attempt (sharing the `attempt == 0` retry
+slot); the new budget makes that count explicit and independent.
+
+- **`verify.max_failures`** — `N` = the number of author corrections allowed.
+  **Default 1** (unchanged behavior); `0` is strict (the first rejection fails
+  with no correction); `3` allows up to three corrections and fails on the
+  fourth rejection. A negative value is a load-time error.
+- **Global** via a top-level `verify:` block in `config.yaml`; **per-stage**
+  via a new object form of the stage's `verify:` field —
+  `verify: { steps: [ ...step objects... ], max_failures: N }`. The existing
+  scalar / single-object / list forms are unchanged and do not carry
+  `max_failures` (they fall back to the global config). Resolution is
+  **stage > global > default 1**.
+- **Only real verify rejections consume the budget** — an AI `needs_changes`
+  or a shell step's non-zero exit. A verifier *execution* failure (unreachable/
+  broken verifier) still fails the stage immediately. Transport/rate-limit
+  retries and plan-incomplete retries are counted separately and do not draw
+  from the verify budget (nor vice versa).
+- The counter is in-memory and resets on resume, and verify corrections still
+  ride the overall retry loop — so the effective ceiling is
+  `min(N, MaxRetries=15)`.
+
 ## 2026-09-23
 
 ### Fix: per-stage Feed no longer goes empty on old completed stages
