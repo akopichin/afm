@@ -31,8 +31,11 @@ function makeCost(overrides: Partial<CostSummary> = {}): CostSummary {
   }
 }
 
-const ACCOUNTING_OK: AccountingState = { supported: true, health: 'ok', hasData: true }
-const ACCOUNTING_UNAVAILABLE: AccountingState = { supported: true, health: 'unavailable', hasData: true }
+// showMoney:true у этих фикстур — тесты стоимости в рейле написаны для случая,
+// когда деньги показываются. ACCOUNTING_OK_NO_MONEY отдельно проверяет скрытие.
+const ACCOUNTING_OK: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: true }
+const ACCOUNTING_OK_NO_MONEY: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: false }
+const ACCOUNTING_UNAVAILABLE: AccountingState = { supported: true, health: 'unavailable', hasData: true, showMoney: true }
 const ACCOUNTING_UNSUPPORTED: AccountingState = { supported: false }
 
 describe('StagesList', () => {
@@ -458,6 +461,25 @@ describe('StagesList', () => {
       { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+  })
+
+  test('rail cost: show_money off hides a priced stage.cost entirely (no $ leaks into the rail)', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [], cost: makeCost({ displayCost: '$4.56' }) },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK_NO_MONEY} />)
+
+    expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
+    expect(screen.getByRole('listitem')).not.toHaveTextContent('$4.56')
+  })
+
+  test('rail cost: show_money off hides the pending spinner too', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK_NO_MONEY} />)
 
     expect(screen.getByRole('listitem').querySelector('.stage-cost')).toBeNull()
   })

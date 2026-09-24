@@ -46,4 +46,7 @@ export type CoverageIssue = {
 
 export type AccountingState =
   | { supported: false }
-  | { supported: true; health: 'ok' | 'unavailable'; hasData: boolean }
+  // showMoney — показывать ли денежные ($) значения. false (дефолт бэкенда)
+  // прячет стоимость всюду в дашборде, оставляя токены. Токены показываются
+  // всегда, независимо от этого флага.
+  | { supported: true; health: 'ok' | 'unavailable'; hasData: boolean; showMoney: boolean }

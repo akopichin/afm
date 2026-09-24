@@ -61,7 +61,11 @@ const (
 // at all, or accounting simply disabled for it) renders the same "No usage
 // data" note as it always has — that shape isn't an error, so it doesn't
 // need its own RenderState.
-func RenderMarkdown(runName string, stages map[string]StageInfo, led *Ledger, state RenderState) string {
+// showMoney gates monetary ($) figures only (accounting.show_money): when
+// false, every cost column/figure is dropped and reported/estimated mismatch
+// amounts are suppressed, while ALL token output stays. Degraded shapes never
+// render cost anyway, so the flag has no effect there.
+func RenderMarkdown(runName string, stages map[string]StageInfo, led *Ledger, state RenderState, showMoney bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Cost report: %s\n\n", runName)
 
@@ -83,10 +87,10 @@ func RenderMarkdown(runName string, stages map[string]StageInfo, led *Ledger, st
 	}
 
 	recs := led.Records()
-	renderStagesTable(&b, recs, led.SummaryByStage(), stages)
-	renderOverhead(&b, recs)
-	renderTotal(&b, led.RunSummary())
-	renderCoverage(&b, recs)
+	renderStagesTable(&b, recs, led.SummaryByStage(), stages, showMoney)
+	renderOverhead(&b, recs, showMoney)
+	renderTotal(&b, led.RunSummary(), showMoney)
+	renderCoverage(&b, recs, showMoney)
 
 	return b.String()
 }
@@ -119,7 +123,7 @@ func renderStageStatusOnly(b *strings.Builder, stages map[string]StageInfo) {
 // renderStagesTable renders one markdown table row per stage: id, per-phase
 // invocation counts, distinct models, the token breakdown, and the
 // estimated cost, followed by the caller-supplied status/duration.
-func renderStagesTable(b *strings.Builder, recs []UsageRecord, byStage map[string]Summary, stages map[string]StageInfo) {
+func renderStagesTable(b *strings.Builder, recs []UsageRecord, byStage map[string]Summary, stages map[string]StageInfo, showMoney bool) {
 	b.WriteString("## Stages\n\n")
 	if len(byStage) == 0 {
 		b.WriteString("No per-stage usage recorded.\n\n")
@@ -132,22 +136,28 @@ func renderStagesTable(b *strings.Builder, recs []UsageRecord, byStage map[strin
 	}
 	slices.Sort(ids)
 
-	b.WriteString("| Stage | Phases (invocations) | Model(s) | Uncached In | Cache Read | Cache Write | Output | Total Tokens | Est. Cost | Status (duration) |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
+	if showMoney {
+		b.WriteString("| Stage | Phases (invocations) | Model(s) | Uncached In | Cache Read | Cache Write | Output | Total Tokens | Est. Cost | Status (duration) |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
+	} else {
+		b.WriteString("| Stage | Phases (invocations) | Model(s) | Uncached In | Cache Read | Cache Write | Output | Total Tokens | Status (duration) |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
+	}
 	for _, id := range ids {
 		sum := byStage[id]
-		fmt.Fprintf(b, "| %s | %s | %s | %d | %d | %d | %d | %d | %s | %s |\n",
-			id,
-			phaseCounts(recs, id),
-			joinModels(sum.Models),
-			sum.Tokens.UncachedInput,
-			sum.Tokens.CacheRead,
-			sum.Tokens.CacheWriteTotal(),
-			sum.Tokens.Output,
-			sum.Tokens.Total(),
-			DisplayCost(sum),
-			statusAndDuration(stages[id]),
-		)
+		if showMoney {
+			fmt.Fprintf(b, "| %s | %s | %s | %d | %d | %d | %d | %d | %s | %s |\n",
+				id, phaseCounts(recs, id), joinModels(sum.Models),
+				sum.Tokens.UncachedInput, sum.Tokens.CacheRead, sum.Tokens.CacheWriteTotal(),
+				sum.Tokens.Output, sum.Tokens.Total(), DisplayCost(sum), statusAndDuration(stages[id]),
+			)
+		} else {
+			fmt.Fprintf(b, "| %s | %s | %s | %d | %d | %d | %d | %d | %s |\n",
+				id, phaseCounts(recs, id), joinModels(sum.Models),
+				sum.Tokens.UncachedInput, sum.Tokens.CacheRead, sum.Tokens.CacheWriteTotal(),
+				sum.Tokens.Output, sum.Tokens.Total(), statusAndDuration(stages[id]),
+			)
+		}
 	}
 	b.WriteString("\n")
 }
@@ -212,7 +222,7 @@ func joinModels(models []string) string {
 // renderOverhead summarizes every ScopeRunOverhead record (currently only
 // the end-of-run memory pipeline) as its own section, separate from the
 // per-stage table — it has no stage to attribute to.
-func renderOverhead(b *strings.Builder, recs []UsageRecord) {
+func renderOverhead(b *strings.Builder, recs []UsageRecord, showMoney bool) {
 	b.WriteString("## Run overhead\n\n")
 
 	var overhead []UsageRecord
@@ -227,17 +237,27 @@ func renderOverhead(b *strings.Builder, recs []UsageRecord) {
 	}
 
 	sum := summarize(overhead)
-	fmt.Fprintf(b, "Invocations: %d (%s). Tokens: %d total (uncached in %d, cache read %d, cache write %d, output %d). Estimated cost: %s.\n\n",
-		len(overhead), phaseCounts(overhead, ""),
-		sum.Tokens.Total(), sum.Tokens.UncachedInput, sum.Tokens.CacheRead, sum.Tokens.CacheWriteTotal(), sum.Tokens.Output,
-		DisplayCost(sum))
+	if showMoney {
+		fmt.Fprintf(b, "Invocations: %d (%s). Tokens: %d total (uncached in %d, cache read %d, cache write %d, output %d). Estimated cost: %s.\n\n",
+			len(overhead), phaseCounts(overhead, ""),
+			sum.Tokens.Total(), sum.Tokens.UncachedInput, sum.Tokens.CacheRead, sum.Tokens.CacheWriteTotal(), sum.Tokens.Output,
+			DisplayCost(sum))
+	} else {
+		fmt.Fprintf(b, "Invocations: %d (%s). Tokens: %d total (uncached in %d, cache read %d, cache write %d, output %d).\n\n",
+			len(overhead), phaseCounts(overhead, ""),
+			sum.Tokens.Total(), sum.Tokens.UncachedInput, sum.Tokens.CacheRead, sum.Tokens.CacheWriteTotal(), sum.Tokens.Output)
+	}
 }
 
 // renderTotal reports the whole-run total (stages + overhead combined) —
 // exactly Ledger.RunSummary(), never recomputed here.
-func renderTotal(b *strings.Builder, run Summary) {
+func renderTotal(b *strings.Builder, run Summary, showMoney bool) {
 	b.WriteString("## Total\n\n")
-	fmt.Fprintf(b, "Tokens: %d total. Estimated cost: %s.\n\n", run.Tokens.Total(), DisplayCost(run))
+	if showMoney {
+		fmt.Fprintf(b, "Tokens: %d total. Estimated cost: %s.\n\n", run.Tokens.Total(), DisplayCost(run))
+	} else {
+		fmt.Fprintf(b, "Tokens: %d total.\n\n", run.Tokens.Total())
+	}
 }
 
 // renderCoverage lists everything a reader should distrust or double-check
@@ -246,7 +266,7 @@ func renderTotal(b *strings.Builder, run Summary) {
 // provenance behind every priced invocation, and any reported-vs-estimated
 // mismatch a record was flagged with at write time. All of this is read
 // straight off the already-built UsageRecords — no new arithmetic here.
-func renderCoverage(b *strings.Builder, recs []UsageRecord) {
+func renderCoverage(b *strings.Builder, recs []UsageRecord, showMoney bool) {
 	b.WriteString("## Coverage and pricing\n\n")
 
 	var mismatched []UsageRecord
@@ -326,12 +346,19 @@ func renderCoverage(b *strings.Builder, recs []UsageRecord) {
 	if len(mismatched) > 0 {
 		b.WriteString("Reported vs. estimated cost mismatches:\n\n")
 		for _, r := range sortedByStagePhase(mismatched) {
-			reported := dashUnknown
-			if r.ReportedCostUSD != nil {
-				reported = FormatUSD(*r.ReportedCostUSD, true)
+			// showMoney=false всё равно сообщает о факте расхождения (и его
+			// warning-токене), но без денежных сумм.
+			if showMoney {
+				reported := dashUnknown
+				if r.ReportedCostUSD != nil {
+					reported = FormatUSD(*r.ReportedCostUSD, true)
+				}
+				fmt.Fprintf(b, "- %s/%s: reported %s vs. estimated %s (reported_cost_differs_from_estimate)\n",
+					recordLabel(r), r.Phase, reported, FormatUSD(r.EstimatedCostUSD, true))
+			} else {
+				fmt.Fprintf(b, "- %s/%s: reported cost differs from estimate (reported_cost_differs_from_estimate)\n",
+					recordLabel(r), r.Phase)
 			}
-			fmt.Fprintf(b, "- %s/%s: reported %s vs. estimated %s (reported_cost_differs_from_estimate)\n",
-				recordLabel(r), r.Phase, reported, FormatUSD(r.EstimatedCostUSD, true))
 		}
 		b.WriteString("\n")
 	}

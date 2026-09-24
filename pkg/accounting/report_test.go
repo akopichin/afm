@@ -54,7 +54,7 @@ func TestRenderMarkdown_Golden(t *testing.T) {
 		"backend": {Status: "done", Duration: "12m34s"},
 	}
 
-	got := RenderMarkdown("myflow-20260914-100000", stages, led, RenderNormal)
+	got := RenderMarkdown("myflow-20260914-100000", stages, led, RenderNormal, true)
 
 	for _, want := range []string{
 		"# Cost report: myflow-20260914-100000",
@@ -82,6 +82,51 @@ func TestRenderMarkdown_Golden(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_ShowMoneyFalse verifies the presentation gate: with
+// showMoney=false the report keeps every token figure (per-stage, overhead,
+// total) but drops all monetary output — the "Est. Cost" column, the
+// "Estimated cost:" lines, any "$" amount, and the reported/estimated dollar
+// figures in the coverage mismatch section (the mismatch itself is still
+// reported by its warning token).
+func TestRenderMarkdown_ShowMoneyFalse(t *testing.T) {
+	r := NewResolver(PricingConfig{})
+	led := &Ledger{}
+	led.Add(BuildRecord(r, reportObsA(), "backend", "implementation", ""))
+	led.Add(BuildRecord(r, reportObsOverhead(), "", "memory_update", ScopeRunOverhead))
+
+	// A mismatch record so the coverage appendix's dollar figures are exercised.
+	obs := reportObsA()
+	rr, ok := r.Resolve(obs.Channel, obs.Model)
+	if !ok {
+		t.Fatal("expected glm-5.3 to resolve for this test's fixture")
+	}
+	reported := rr.cost(obs.Tokens) + costToleranceUSD + 0.05
+	obs.ReportedCostUSD = &reported
+	led.Add(BuildRecord(r, obs, "backend", "review", ""))
+
+	stages := map[string]StageInfo{"backend": {Status: "done", Duration: "12m34s"}}
+
+	got := RenderMarkdown("myflow-20260914-100000", stages, led, RenderNormal, false)
+
+	// Tokens must still be present.
+	for _, want := range []string{
+		"Total Tokens",
+		"10000", // uncached-input tokens of reportObsA
+		"reported_cost_differs_from_estimate",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("show_money=false report missing token/coverage content %q; got:\n%s", want, got)
+		}
+	}
+
+	// No money whatsoever.
+	for _, bad := range []string{"$", "Est. Cost", "Estimated cost"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("show_money=false report must not contain %q; got:\n%s", bad, got)
+		}
+	}
+}
+
 // TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts is a targeted
 // regression for a bug found in review: renderOverhead called
 // phaseCounts(overhead, "") on a slice ALREADY filtered to
@@ -97,7 +142,7 @@ func TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts(t *testing.T) {
 	led := &Ledger{}
 	led.Add(BuildRecord(r, reportObsOverhead(), "", "memory_update", ScopeRunOverhead))
 
-	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
+	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal, true)
 
 	idx := strings.Index(got, "## Run overhead")
 	if idx == -1 {
@@ -124,7 +169,7 @@ func TestRenderMarkdown_NoUsageData(t *testing.T) {
 		"empty ledger": {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
+			got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal, true)
 			if !strings.Contains(got, "No usage data") {
 				t.Errorf("expected a clean \"No usage data\" report; got:\n%s", got)
 			}
@@ -172,7 +217,7 @@ func TestRenderMarkdown_CoverageAndPricing(t *testing.T) {
 	led.Add(unpricedRec)
 	led.Add(mismatchRec)
 
-	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
+	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal, true)
 
 	for _, want := range []string{
 		"## Coverage and pricing",
@@ -208,7 +253,7 @@ func TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount(t *testing.T) {
 	led.Add(unpricedRec)
 	led.Add(unpricedRec)
 
-	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal)
+	got := RenderMarkdown("myflow-20260914-100000", nil, led, RenderNormal, true)
 
 	idx := strings.Index(got, "## Coverage and pricing")
 	if idx == -1 {
@@ -233,7 +278,7 @@ func TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount(t *testing.T) {
 func TestRenderMarkdown_DegradedCorrupt(t *testing.T) {
 	stages := map[string]StageInfo{"backend": {Status: "done", Duration: "12m34s"}}
 
-	got := RenderMarkdown("myflow-20260914-100000", stages, nil, RenderCorrupt)
+	got := RenderMarkdown("myflow-20260914-100000", stages, nil, RenderCorrupt, true)
 
 	for _, want := range []string{
 		"# Cost report: myflow-20260914-100000",
@@ -260,7 +305,7 @@ func TestRenderMarkdown_DegradedCorrupt(t *testing.T) {
 func TestRenderMarkdown_DegradedUnreadable(t *testing.T) {
 	stages := map[string]StageInfo{"backend": {Status: "running"}}
 
-	got := RenderMarkdown("myflow-20260914-100000", stages, nil, RenderUnreadable)
+	got := RenderMarkdown("myflow-20260914-100000", stages, nil, RenderUnreadable, true)
 
 	for _, want := range []string{
 		"# Cost report: myflow-20260914-100000",

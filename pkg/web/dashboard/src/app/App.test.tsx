@@ -70,9 +70,12 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
       // presence. Default it in when a payload omits it, so tests model the
       // enabled backend; a test exercising the disabled switch sets
       // `accounting` explicitly (e.g. null → supported:false, no Cost chrome).
+      // show_money:true keeps the money-visible default these tests were written
+      // against; the money-hidden default is covered in RunMetrics/CostPanel/
+      // StagesList unit tests.
       const payload = statusPayload()
       if (payload !== null && typeof payload === 'object' && !('accounting' in payload)) {
-        ;(payload as Record<string, unknown>).accounting = { health: 'ok', has_data: false }
+        ;(payload as Record<string, unknown>).accounting = { health: 'ok', has_data: false, show_money: true }
       }
       return { ok: true, json: async () => payload } as Response
     }
@@ -1087,7 +1090,7 @@ describe('App', () => {
         cache_hit_ratio: 0.5,
         phases: {},
       },
-      accounting: { health: 'ok', has_data: true },
+      accounting: { health: 'ok', has_data: true, show_money: true },
     }))
 
     render(<App />)

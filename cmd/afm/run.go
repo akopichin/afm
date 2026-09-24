@@ -508,6 +508,7 @@ func newRunCmd() *cobra.Command {
 					Theme:            cfg.EffectiveTheme(),
 					SkinDir:          cfg.SkinDir,
 					Accounting:       serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
+					ShowMoney:        cfg.Accounting.ShowMoneyEnabled(),
 					UIBus:            orch.UIBus(),
 					Actions:          orch,
 					Secondary:        orch,

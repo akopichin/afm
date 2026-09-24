@@ -65,10 +65,13 @@ function makeIssue(overrides: Partial<CoverageIssue> = {}): CoverageIssue {
 }
 
 const ACCOUNTING_UNSUPPORTED: AccountingState = { supported: false }
-const ACCOUNTING_OK_NO_DATA: AccountingState = { supported: true, health: 'ok', hasData: false }
-const ACCOUNTING_OK_DATA: AccountingState = { supported: true, health: 'ok', hasData: true }
-const ACCOUNTING_UNAVAILABLE_NO_DATA: AccountingState = { supported: true, health: 'unavailable', hasData: false }
-const ACCOUNTING_UNAVAILABLE_DATA: AccountingState = { supported: true, health: 'unavailable', hasData: true }
+// showMoney:true у денежных фикстур — колонка Cost присутствует (как раньше).
+// Отдельная фикстура ACCOUNTING_OK_DATA_NO_MONEY проверяет скрытие колонки.
+const ACCOUNTING_OK_NO_DATA: AccountingState = { supported: true, health: 'ok', hasData: false, showMoney: true }
+const ACCOUNTING_OK_DATA: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: true }
+const ACCOUNTING_OK_DATA_NO_MONEY: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: false }
+const ACCOUNTING_UNAVAILABLE_NO_DATA: AccountingState = { supported: true, health: 'unavailable', hasData: false, showMoney: true }
+const ACCOUNTING_UNAVAILABLE_DATA: AccountingState = { supported: true, health: 'unavailable', hasData: true, showMoney: true }
 
 describe('CostPanel — empty-state order', () => {
   test('unavailable && !hasData → "Cost unavailable this run" (highest priority)', () => {
@@ -230,6 +233,33 @@ describe('CostPanel — table + Total + expand', () => {
     expect(td).not.toBeNull()
     expect(td?.getAttribute('colspan')).toBe('5')
     expect(region.tagName).not.toBe('TR')
+  })
+})
+
+describe('CostPanel — show_money off drops the Cost column', () => {
+  test('no Cost header, no $ figures, and the detail row colSpan falls back to 4', () => {
+    const stages = [makeStage('s1', makeCost({ displayCost: '$3.21' }), 'Build')]
+    render(
+      <CostPanel
+        stages={stages}
+        runCost={makeCost({ displayCost: '$7.77' })}
+        runOverheadCost={makeCost({ displayCost: '$0.50' })}
+        coverageIssues={[]}
+        accounting={ACCOUNTING_OK_DATA_NO_MONEY}
+      />,
+    )
+    // Таблица есть, но денежных значений нет нигде.
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Cost' })).toBeNull()
+    expect(screen.queryByText('$3.21')).toBeNull()
+    expect(screen.queryByText('$7.77')).toBeNull()
+    expect(screen.queryByText('$0.50')).toBeNull()
+    // Токены/кэш остаются.
+    expect(screen.getByRole('columnheader', { name: 'Tokens' })).toBeInTheDocument()
+    // Детализация раскрывается в td с colSpan=4.
+    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    const td = screen.getByRole('region').closest('td')
+    expect(td?.getAttribute('colspan')).toBe('4')
   })
 })
 

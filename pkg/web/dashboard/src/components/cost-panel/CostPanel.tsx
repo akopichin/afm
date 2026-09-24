@@ -65,6 +65,11 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
 
   const hasData = hasAccountingData(accounting)
   const unavailable = accounting.supported && accounting.health === 'unavailable'
+  // showMoney — показывать ли колонку Cost. false (дефолт) прячет все денежные
+  // ($) значения, оставляя токены/кэш. Колонок тогда 4, а не 5 (важно для
+  // colSpan раскрываемой строки детализации).
+  const showMoney = accounting.supported && accounting.showMoney
+  const detailColSpan = showMoney ? 5 : 4
 
   // Порядок пустых состояний ТОЧНО в этом порядке (round-4 #5 спеки):
   //   1. unavailable && !hasData → "Cost unavailable this run" (хранилище
@@ -130,11 +135,11 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
           <td className="cost-col-model">{row.cost.models.length > 0 ? row.cost.models.join(', ') : '—'}</td>
           <td className="cost-col-tokens">{formatTokens(row.cost.totalTokens)}</td>
           <td className="cost-col-cacherw">{formatTokens(row.cost.cacheRead)} / {formatTokens(row.cost.cacheWriteTotal)}</td>
-          <td className="cost-col-cost">{row.cost.displayCost}</td>
+          {showMoney && <td className="cost-col-cost">{row.cost.displayCost}</td>}
         </tr>
         {isExpanded && (
           <tr className="cost-detail-row">
-            <td colSpan={5}>
+            <td colSpan={detailColSpan}>
               <div id={regionId} role="region" aria-labelledby={labelId} className="cost-detail">
                 <TokenMixBar cost={row.cost} />
                 <FigureGrid cost={row.cost} />
@@ -162,7 +167,7 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
                 <th scope="col" className="cost-col-model">Model</th>
                 <th scope="col" className="cost-col-tokens">Tokens</th>
                 <th scope="col" className="cost-col-cacherw">Cache R/W</th>
-                <th scope="col" className="cost-col-cost">Cost</th>
+                {showMoney && <th scope="col" className="cost-col-cost">Cost</th>}
               </tr>
             </thead>
             <tbody>
@@ -172,7 +177,7 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
                 <td className="cost-col-model" />
                 <td className="cost-col-tokens" />
                 <td className="cost-col-cacherw" />
-                <td className="cost-col-cost">{runCost?.displayCost ?? '—'}</td>
+                {showMoney && <td className="cost-col-cost">{runCost?.displayCost ?? '—'}</td>}
               </tr>
             </tbody>
           </table>

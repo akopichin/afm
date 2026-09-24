@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { costReason, summarizeCoverageGroups } from '../cost-panel/coverage-summary'
+import { formatTokensCompact } from '../../lib/format-tokens'
 
 // costReason/summarizeCoverageGroups живут в components/cost-panel/coverage-summary
 // (Task 11) — и тайл Est. cost здесь, и CostPanel строят строку покрытия по одним
@@ -71,13 +72,19 @@ export function RunMetrics({
     { key: 'backoff', label: 'Backoff', value: hasStarted ? formatDuration(backoffMs) : '--', icon: iconPulse() },
   ]
 
-  // Est. cost скрыт целиком, когда accounting не поддержан бэкендом
-  // (accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status без объекта
-  // accounting → supported:false). Тогда ни тайла, ни маркера, ни поповер-копии.
-  const showCost = accounting.supported
+  // Тайл Est. tokens показываем, как только accounting поддержан бэкендом —
+  // токены видны всегда, независимо от show_money. Est. cost — только когда
+  // деньги разрешены к показу (show_money). При supported:false нет ни того,
+  // ни другого (accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status без
+  // объекта accounting).
+  const showTokens = accounting.supported
+  const showCost = accounting.supported && accounting.showMoney
   const costMarker = hasCostMarker(coverageIssues, accounting)
   const costReasonText = costMarker ? costReason(coverageIssues, accounting) : ''
   const costValue = runCost?.displayCost ?? '—'
+  // Токены — компактный формат (1.2M/345K). Нет runCost (учёт ещё без данных) →
+  // плоский «—», как у Est. cost.
+  const tokensValue = runCost !== undefined ? formatTokensCompact(runCost.totalTokens) : '—'
   // Один id на оба рендера тайла (инлайн + поповер) — twin render не должен
   // плодить дубликаты id в DOM (round-5 #6 спеки). useId() уникален на
   // экземпляр RunMetrics, так что двух RunMetrics на странице тоже не столкнёт.
@@ -180,9 +187,32 @@ export function RunMetrics({
     )
   }
 
+  // Est. tokens — как и Est. cost, кнопка-переход на вкладку Cost (там токены
+  // показываются в таблице всегда, независимо от show_money). Проще Est. cost:
+  // без amber-маркера и tooltip'а — у количества токенов нет понятия «пробел
+  // покрытия прайса». Иконка — стопка слоёв (отличается от монеты).
+  function renderTokensMetric(fromPopover: boolean): ReactElement {
+    return (
+      <button
+        type="button"
+        className="metric metric-tokens"
+        data-metric="tokens"
+        key="tokens"
+        onClick={() => handleCostActivate(fromPopover)}
+      >
+        <span className="metric-icon" aria-hidden="true">{iconLayers()}</span>
+        <span className="metric-text">
+          <span className="metric-label">Est. tokens</span>
+          <span id={fromPopover ? undefined : 'est-tokens'} className="metric-value">{tokensValue}</span>
+        </span>
+      </button>
+    )
+  }
+
   return (
     <div className="run-metrics" role="group" aria-label="Run metrics" ref={rootRef}>
       {metrics.map((m) => renderMetric(m, true))}
+      {showTokens && renderTokensMetric(false)}
       {showCost && renderCostMetric(false)}
       <button
         type="button"
@@ -197,6 +227,7 @@ export function RunMetrics({
       {moreOpen && (
         <div className="metrics-popover" role="group" aria-label="All run metrics">
           {metrics.map((m) => renderMetric(m, false))}
+          {showTokens && renderTokensMetric(true)}
           {showCost && renderCostMetric(true)}
         </div>
       )}
@@ -253,4 +284,8 @@ function iconPulse(): ReactElement {
 }
 function iconCoin(): ReactElement {
   return svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7 V17 M9.5 9.3 a2.5 1.6 0 0 1 5 0 c0 2 -5 1.4 -5 3.4 a2.5 1.6 0 0 0 5 0" /></>)
+}
+// Стопка слоёв — глиф для Est. tokens, визуально отличается от монеты.
+function iconLayers(): ReactElement {
+  return svg(<><path d="M12 3 L21 8 L12 13 L3 8 Z" /><path d="M3 12 L12 17 L21 12" /><path d="M3 16 L12 21 L21 16" /></>)
 }

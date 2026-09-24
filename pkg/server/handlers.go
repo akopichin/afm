@@ -83,6 +83,9 @@ type statusResponse struct {
 type accountingHealth struct {
 	Health  string `json:"health"`
 	HasData bool   `json:"has_data"`
+	// ShowMoney сообщает фронтенду, показывать ли денежные ($) величины
+	// (accounting.show_money). Токены отображаются всегда.
+	ShowMoney bool `json:"show_money"`
 }
 
 // capabilities advertises optional dashboard features gated by server-side
@@ -115,7 +118,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.RunCost = bundle.Run
 		resp.RunOverheadCost = bundle.Overhead
 		resp.CoverageIssues = bundle.Issues
-		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData}
+		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData, ShowMoney: s.showMoney}
 	}
 	resp.Stages = buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn, s.stageButtons, stageCosts)
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0

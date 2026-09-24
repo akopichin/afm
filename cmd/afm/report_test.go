@@ -18,6 +18,9 @@ import (
 // stage, its cost, and the run total.
 func TestReportRendersCostForRunWithUsage(t *testing.T) {
 	chdirTemp(t)
+	// Деньги показываются только при show_money (дефолт — скрыто); эта проверка
+	// именно про денежный вывод, поэтому явно включаем флаг.
+	t.Setenv("AFM_ACCOUNTING_SHOW_MONEY", "1")
 
 	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
 	writeUsageLog(t, runDir, []accounting.UsageRecord{

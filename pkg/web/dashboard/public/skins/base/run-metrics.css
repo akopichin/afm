@@ -51,11 +51,12 @@
   color: var(--text-primary);
 }
 
-/* Est. cost — the only metric that's a real <button> (destination = the Cost
-   tab, see App.tsx/GlobalHeader). Resets browser button chrome to match the
-   plain .metric look; keeps a relative anchor for the amber marker dot below. */
-.metric-cost {
-  position: relative;
+/* Est. cost / Est. tokens — metric tiles that are real <button>s (destination =
+   the Cost tab, see App.tsx/GlobalHeader). Reset browser button chrome to match
+   the plain .metric look; .metric-cost keeps a relative anchor for the amber
+   marker dot below (Est. tokens has no marker, so no anchor needed). */
+.metric-cost,
+.metric-tokens {
   background: none;
   border: none;
   padding: 0;
@@ -64,7 +65,11 @@
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
-.metric-cost:focus-visible {
+.metric-cost {
+  position: relative;
+}
+.metric-cost:focus-visible,
+.metric-tokens:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
@@ -202,6 +207,7 @@
   .metrics-more { display: inline-flex; }
 }
 @media (max-width: 1079px) {
+  .run-metrics > .metric[data-metric="tokens"],
   .run-metrics > .metric[data-metric="cost"] { display: none; }
 }
 @media (max-width: 899px) {

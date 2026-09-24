@@ -29,9 +29,12 @@ function installControllableMatchMedia(initialMatches: boolean): {
 }
 
 const unsupported: AccountingState = { supported: false }
-const okHealthy: AccountingState = { supported: true, health: 'ok', hasData: true }
-const unavailableWithData: AccountingState = { supported: true, health: 'unavailable', hasData: true }
-const unavailableNoData: AccountingState = { supported: true, health: 'unavailable', hasData: false }
+// showMoney:true у денежных фикстур — тесты Est. cost написаны для случая, когда
+// деньги показываются. showMoney:false отдельно проверяется ниже.
+const okHealthy: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: true }
+const okHealthyNoMoney: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: false }
+const unavailableWithData: AccountingState = { supported: true, health: 'unavailable', hasData: true, showMoney: true }
+const unavailableNoData: AccountingState = { supported: true, health: 'unavailable', hasData: false, showMoney: true }
 
 function makeIssue(overrides: Partial<CoverageIssue> = {}): CoverageIssue {
   return {
@@ -276,6 +279,59 @@ describe('RunMetrics', () => {
       expect(screen.queryByRole('group', { name: /all run metrics/i })).toBeNull()
       expect(document.body.contains(popoverCostBtn)).toBe(false)
       expect(document.activeElement).toBe(moreBtn)
+    })
+
+    it('renders both Est. tokens and Est. cost when accounting is supported and show_money is on', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={okHealthy}
+          runCost={makeCostSummary('$1.23')}
+          onOpenCost={() => {}}
+        />,
+      )
+      expect(screen.getByRole('button', { name: /est\. tokens/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /est\. cost/i })).toBeInTheDocument()
+    })
+
+    it('shows only Est. tokens (not Est. cost) when show_money is off', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={okHealthyNoMoney}
+          runCost={{ ...makeCostSummary('$1.23'), totalTokens: 1_234_567 }}
+          onOpenCost={() => {}}
+        />,
+      )
+      const tokensBtn = screen.getByRole('button', { name: /est\. tokens/i })
+      expect(tokensBtn).toHaveTextContent('1.2M')
+      expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
+    })
+
+    it('Est. tokens shows a flat dash when there is no runCost', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={okHealthyNoMoney}
+          onOpenCost={() => {}}
+        />,
+      )
+      expect(screen.getByRole('button', { name: /est\. tokens/i })).toHaveTextContent('—')
+    })
+
+    it('hides Est. tokens too when accounting is unsupported', () => {
+      render(
+        <RunMetrics
+          {...baseTimeProps}
+          coverageIssues={[]}
+          accounting={unsupported}
+          onOpenCost={() => {}}
+        />,
+      )
+      expect(screen.queryByRole('button', { name: /est\. tokens/i })).toBeNull()
     })
 
     it('inline activation does not touch popover state or focus', () => {

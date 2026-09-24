@@ -219,6 +219,9 @@ func writeUsageLog(t *testing.T, runDir string, recs []accounting.UsageRecord) {
 // derived from accounting.Ledger.RunSummary — never computed by hand in cmd.
 func TestCheckShowsCostColumnsAndTotal(t *testing.T) {
 	chdirTemp(t)
+	// Деньги показываются только при show_money (дефолт — скрыто); эта проверка
+	// именно про денежные колонки, поэтому явно включаем флаг.
+	t.Setenv("AFM_ACCOUNTING_SHOW_MONEY", "1")
 
 	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
 	writeUsageLog(t, runDir, []accounting.UsageRecord{
@@ -259,6 +262,46 @@ func TestCheckShowsCostColumnsAndTotal(t *testing.T) {
 	}
 	if strings.Contains(out, "$0.00") {
 		t.Errorf("must never render a bogus $0.00, got:\n%s", out)
+	}
+}
+
+// TestCheck_ShowMoneyOffKeepsTokensDropsCost verifies the default presentation
+// gate: accounting enabled (tokens collected and shown) but money hidden
+// (show_money defaults to false). The TOKENS/CACHE columns and the TOTAL token
+// figure must still render, while the EST. COST column and every "$" amount are
+// dropped.
+func TestCheck_ShowMoneyOffKeepsTokensDropsCost(t *testing.T) {
+	chdirTemp(t)
+
+	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	writeUsageLog(t, runDir, []accounting.UsageRecord{
+		{
+			RecordVersion: 1, StageID: cmdInit, Phase: "implementation", Model: "claude-sonnet-4-5",
+			Metered: true, Priced: true,
+			Tokens:           accounting.Tokens{UncachedInput: 10_000, CacheRead: 47_600, CacheWrite5m: 18_600, Output: 9_300},
+			EstimatedCostUSD: 1.2345,
+		},
+	})
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "TOKENS") {
+		t.Errorf("show_money off: expected a TOKENS column, got:\n%s", out)
+	}
+	if !strings.Contains(out, "TOTAL") {
+		t.Errorf("show_money off: expected a TOTAL token line, got:\n%s", out)
+	}
+	for _, banned := range []string{"EST. COST", "$1.2345", "$"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("show_money off: stdout must not contain %q, got:\n%s", banned, out)
+		}
 	}
 }
 

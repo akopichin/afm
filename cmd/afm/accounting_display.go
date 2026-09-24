@@ -24,3 +24,18 @@ func accountingDisplayEnabled() bool {
 	cfg, _ := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
 	return cfg.Accounting.IsEnabled()
 }
+
+// accountingShowMoney resolves whether monetary ($) figures are shown by the
+// read-only CLI commands (`afm check`, `afm report`). Orthogonal to
+// accountingDisplayEnabled: accounting can be on (tokens collected and shown)
+// while money is hidden. Priority env AFM_ACCOUNTING_SHOW_MONEY > config
+// accounting.show_money > default false, resolved by
+// config.AccountingConfig.ShowMoneyEnabled.
+//
+// Best-effort like accountingDisplayEnabled: a config load error is ignored,
+// and the returned (partially merged) config's switch is still read.
+func accountingShowMoney() bool {
+	home, _ := os.UserHomeDir() // "" on error → the global layer just isn't found
+	cfg, _ := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
+	return cfg.Accounting.ShowMoneyEnabled()
+}

@@ -83,6 +83,11 @@ func newCheckCmd() *cobra.Command {
 			// falls back to its pre-accounting columns and no cost/coverage
 			// line is printed. Collection into usage.jsonl is unaffected.
 			display := accountingDisplayEnabled()
+			// showCost — показывать ли колонку EST. COST. Ортогонально display:
+			// accounting может быть включён (токены собираются и показываются),
+			// но деньги скрыты (accounting.show_money=false, дефолт). Токены и
+			// кэш показываются всегда при hasUsage.
+			showMoney := display && accountingShowMoney()
 			var (
 				led        *accounting.Ledger
 				loadErr    error
@@ -98,14 +103,21 @@ func newCheckCmd() *cobra.Command {
 					hasUsage = runSummary.Metered+runSummary.Unmetered > 0
 				}
 			}
+			showCost := hasUsage && showMoney
 
 			fmt.Printf("Run: %s\n\n", filepath.Base(latest))
-			if hasUsage {
+			switch {
+			case showCost:
 				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %-10s  %s\n",
 					"STAGE", "STATUS", "UPDATED", "TOKENS", "CACHE", "EST. COST", "LAST ACTION")
 				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %-10s  %s\n",
 					"-----", "------", "-------", "------", "-----", "---------", "-----------")
-			} else {
+			case hasUsage:
+				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %s\n",
+					"STAGE", "STATUS", "UPDATED", "TOKENS", "CACHE", "LAST ACTION")
+				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %s\n",
+					"-----", "------", "-------", "------", "-----", "-----------")
+			default:
 				fmt.Printf("%-20s  %-22s  %-10s  %s\n", "STAGE", "STATUS", "UPDATED", "LAST ACTION")
 				fmt.Printf("%-20s  %-22s  %-10s  %s\n", "-----", "------", "-------", "-----------")
 			}
@@ -124,7 +136,9 @@ func newCheckCmd() *cobra.Command {
 					sum := byStage[id]
 					r.tokens = humanizeTokens(sum.Tokens.Total())
 					r.cache = formatCache(sum.Tokens)
-					r.cost = accounting.DisplayCost(sum)
+					if showCost {
+						r.cost = accounting.DisplayCost(sum)
+					}
 				}
 				rows = append(rows, r)
 			}
@@ -139,10 +153,14 @@ func newCheckCmd() *cobra.Command {
 			})
 			for _, r := range rows {
 				color := statusColor(state.StageStatus(r.status))
-				if hasUsage {
+				switch {
+				case showCost:
 					fmt.Printf("%-20s  %s%-22s%s  %-10s  %-8s  %-20s  %-10s  %s\n",
 						r.id, color, r.status, colorReset, r.updated, r.tokens, r.cache, r.cost, r.lastAction)
-				} else {
+				case hasUsage:
+					fmt.Printf("%-20s  %s%-22s%s  %-10s  %-8s  %-20s  %s\n",
+						r.id, color, r.status, colorReset, r.updated, r.tokens, r.cache, r.lastAction)
+				default:
 					fmt.Printf("%-20s  %s%-22s%s  %-10s  %s\n",
 						r.id, color, r.status, colorReset, r.updated, r.lastAction)
 				}
@@ -165,8 +183,13 @@ func newCheckCmd() *cobra.Command {
 				}
 				return nil
 			}
-			fmt.Printf("TOTAL: %s tokens, %s (incl. run overhead)\n",
-				humanizeTokens(runSummary.Tokens.Total()), accounting.DisplayCost(runSummary))
+			if showCost {
+				fmt.Printf("TOTAL: %s tokens, %s (incl. run overhead)\n",
+					humanizeTokens(runSummary.Tokens.Total()), accounting.DisplayCost(runSummary))
+			} else {
+				fmt.Printf("TOTAL: %s tokens (incl. run overhead)\n",
+					humanizeTokens(runSummary.Tokens.Total()))
+			}
 			if note := coverageNote(led); note != "" {
 				fmt.Printf("  %s\n", note)
 			}

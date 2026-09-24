@@ -91,6 +91,7 @@ type Server struct {
 	store            *state.Store
 	uiBus            *bus.UIBus
 	accounting       accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
+	showMoney        bool                      // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
 	actions          StageActions              // never nil in practice — see StageActions doc
 	secondary        SecondaryActions          // may be nil — see SecondaryActions doc
 	flowActions      FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
@@ -135,7 +136,10 @@ type Config struct {
 	// нерабочего провайдера (accounting.StaticUnavailable(), см. cmd/afm/run.go):
 	// в первом случае все accounting-поля статуса опускаются целиком, во
 	// втором — присутствуют со health:"unavailable".
-	Accounting  accounting.CostProvider
+	Accounting accounting.CostProvider
+	// ShowMoney включает показ денежных ($) величин в дашборде
+	// (accounting.show_money). Токены отображаются всегда, независимо от флага.
+	ShowMoney   bool
 	UIBus       *bus.UIBus
 	Actions     StageActions
 	Secondary   SecondaryActions
@@ -176,6 +180,7 @@ func New(cfg Config) *Server {
 		store:            cfg.Store,
 		uiBus:            cfg.UIBus,
 		accounting:       cfg.Accounting,
+		showMoney:        cfg.ShowMoney,
 		actions:          cfg.Actions,
 		secondary:        cfg.Secondary,
 		flowActions:      cfg.FlowActions,

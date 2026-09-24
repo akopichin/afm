@@ -539,8 +539,9 @@ describe('useStatus', () => {
 
     const status = normalizeStatus(raw)
 
-    // accounting должен быть {supported: true, health: 'ok', hasData: true}
-    expect(status.accounting).toEqual({ supported: true, health: 'ok', hasData: true })
+    // accounting должен быть {supported: true, health: 'ok', hasData: true}.
+    // show_money отсутствует в raw → showMoney дефолтит в false.
+    expect(status.accounting).toEqual({ supported: true, health: 'ok', hasData: true, showMoney: false })
 
     // runCost должен быть маппирован
     expect(status.runCost).toBeDefined()
@@ -575,5 +576,16 @@ describe('useStatus', () => {
     expect(status.stages[0]?.cost?.pricedInvocations).toBe(1)
     expect(status.stages[0]?.cost?.cacheHitRatio).toBe(0.15)
     expect(status.stages[0]?.cost?.phases).toEqual({ planning: 850 })
+  })
+
+  test('normalizeStatus: accounting.show_money=true maps to showMoney:true', () => {
+    const raw = {
+      flow_name: 'f',
+      started_at: '2026-01-01T00:00:00Z',
+      stages: [],
+      accounting: { health: 'ok', has_data: true, show_money: true },
+    }
+    const status = normalizeStatus(raw)
+    expect(status.accounting).toEqual({ supported: true, health: 'ok', hasData: true, showMoney: true })
   })
 })

@@ -76,7 +76,7 @@ func newReportCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Print(accounting.RenderMarkdown(filepath.Base(runDir), stages, led, renderState))
+			fmt.Print(accounting.RenderMarkdown(filepath.Base(runDir), stages, led, renderState, accountingShowMoney()))
 
 			switch {
 			case loadErr == nil:

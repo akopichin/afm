@@ -75,6 +75,10 @@ function costA11yText(displayCost: string, coverage: Coverage): string {
 //   3. иначе — ничего (pending, скрипт, unsupported/unavailable — включая
 //      unavailable с историческими данными, retrying).
 function railCost(stage: Stage, accounting: AccountingState): { text: string; a11y: string; pending?: boolean } | null {
+  // show_money выключен → в рейле не показываем ни стоимость, ни плейсхолдер
+  // оценки: деньги спрятаны всюду в дашборде (токены в рейле не показываются
+  // вовсе, только в шапке/таблице Cost).
+  if (!(accounting.supported && accounting.showMoney)) return null
   if (stage.cost != null) {
     return { text: stage.cost.displayCost, a11y: costA11yText(stage.cost.displayCost, stage.cost.coverage) }
   }

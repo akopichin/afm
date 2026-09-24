@@ -353,7 +353,10 @@ function toAccountingState(raw: Record<string, unknown>): AccountingState {
   // Если health присутствует и valid, это новый бэкенд
   if (typeof raw.health === 'string' && (raw.health === 'ok' || raw.health === 'unavailable')) {
     const hasData = raw.has_data === true
-    return { supported: true, health: raw.health, hasData }
+    // show_money отсутствует у старого бэкенда → трактуем как false (деньги
+    // спрятаны по умолчанию, показываем только токены).
+    const showMoney = raw.show_money === true
+    return { supported: true, health: raw.health, hasData, showMoney }
   }
   // Иначе — старый бэкенд без информации о затратах
   return { supported: false }
