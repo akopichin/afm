@@ -258,6 +258,35 @@ func TestVerifyMaxFailures_RetryEventsPerCorrection(t *testing.T) {
 	}
 }
 
+// TestVerifyMaxFailures_BudgetExceedsMaxRetries — когда бюджет verify (N) >=
+// MaxRetries, коррекции упираются в внешний потолок цикла (min(N, MaxRetries)),
+// и стадия ВСЁ РАВНО получает терминальный переход. Регрессия на баг: `continue`
+// на последней итерации (attempt == maxRetries) выходил из for без EvVerifyFail —
+// стадия зависала в активном статусе.
+func TestVerifyMaxFailures_BudgetExceedsMaxRetries(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	o.maxRetries = 2 // мал специально: N=5 не влезает в потолок
+	five := 5
+	o.opts.Config.Verify = config.VerifyConfig{MaxFailures: &five}
+
+	var attempts int
+	o.runWithRetry(context.Background(), flow.Stage{ID: "s1"}, phaseImplementation,
+		func(string) error { attempts++; return nil },
+		func() error { return newVerifyRejected(1) },
+		func() { t.Error("onUserInterrupted should not be called") },
+	)
+
+	// attempt 0,1 → коррекции (attempt < maxRetries); attempt 2 == maxRetries →
+	// коррекция невозможна, fail. Итого 3 вызова агента.
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts (capped at maxRetries), got %d", attempts)
+	}
+	// Ключевое: стадия завершилась терминально, а не зависла активной.
+	if got := o.opts.Store.Get("s1"); got != state.StatusFailed {
+		t.Fatalf("status = %v, want failed (must not hang active)", got)
+	}
+}
+
 // TestVerifyMaxFailures_ResolutionHelper — verifyMaxFailures: stage override
 // побеждает глобальный конфиг, тот — дефолт 1.
 func TestVerifyMaxFailures_ResolutionHelper(t *testing.T) {

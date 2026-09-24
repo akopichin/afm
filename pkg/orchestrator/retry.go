@@ -311,8 +311,14 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			if stagefiles.IsIncompleteWorkError(checkErr) {
 				var vre *VerifyRejectedError
 				isVerifyReject := errors.As(checkErr, &vre)
-				retryIncomplete := (isVerifyReject && verifyFailures < maxVerifyFailures) ||
-					(!isVerifyReject && attempt == 0)
+				// attempt < maxRetries обязателен: на ПОСЛЕДНЕЙ итерации следующего
+				// прохода цикла уже не будет, поэтому `continue` здесь вышел бы из
+				// for без терминального перехода — стадия зависла бы в активном
+				// статусе (проявляется, когда бюджет verify >= MaxRetries). Тот же
+				// bound, что у транспортной ветки ниже (attempt < maxRetries).
+				retryIncomplete := attempt < maxRetries &&
+					((isVerifyReject && verifyFailures < maxVerifyFailures) ||
+						(!isVerifyReject && attempt == 0))
 				if retryIncomplete {
 					// G2 (5-е код-ревью): повторная проверка ПРЯМО ПЕРЕД
 					// incompleteReason/continue — см. verifyOutcomeStillOwned.
