@@ -1,7 +1,8 @@
 import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react'
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
-import { FeedWorkspace } from './FeedWorkspace'
+import { FeedWorkspace, FeedGroupView } from './FeedWorkspace'
+import type { FeedGroup, FeedItem } from './feed-view-model'
 import * as verifyReportClient from '../../api/verify-report-client'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string): AfmEvent =>
@@ -340,6 +341,121 @@ describe('FeedWorkspace', () => {
       fireEvent.change(screen.getByRole('textbox'), { target: { value: 'учти 500' } })
       fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
       expect(onSendNote).toHaveBeenCalledWith('s1', 'учти 500')
+    })
+  })
+
+  // --- Ответ на мысль агента (repliable thoughts) ---
+
+  const thoughtItem = (over: Partial<FeedItem> = {}): FeedItem => ({
+    key: 'k1',
+    stageId: 's1',
+    actor: 'agent',
+    side: 'left',
+    tone: 'neutral',
+    kind: 'message',
+    text: 'мысль агента',
+    gap: '—',
+    mono: false,
+    markdown: true,
+    ...over,
+  })
+
+  const groupOf = (items: FeedItem[]): FeedGroup => ({
+    key: items[0]!.key,
+    side: 'left',
+    stageId: 's1',
+    actor: 'agent',
+    items,
+  })
+
+  describe('FeedGroupView — repliable thoughts', () => {
+    it('клик по строке-мысли вызывает onReplyToThought(key, text)', () => {
+      const onReply = vi.fn()
+      render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} onReplyToThought={onReply} />)
+      fireEvent.click(screen.getByText('мысль агента'))
+      expect(onReply).toHaveBeenCalledWith('k1', 'мысль агента')
+    })
+
+    it('клик по кнопке ↩ вызывает onReplyToThought(key, text)', () => {
+      const onReply = vi.fn()
+      render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} onReplyToThought={onReply} />)
+      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
+      expect(onReply).toHaveBeenCalledWith('k1', 'мысль агента')
+    })
+
+    it('клик по ссылке <a> внутри мысли НЕ выбирает мысль (link guard)', () => {
+      const onReply = vi.fn()
+      const item = thoughtItem({ text: 'см [link](https://example.com) тут' })
+      render(<FeedGroupView group={groupOf([item])} showStageBadges={false} onReplyToThought={onReply} />)
+      fireEvent.click(screen.getByRole('link', { name: 'link' }))
+      expect(onReply).not.toHaveBeenCalled()
+    })
+
+    it('строка-инструмент (не мысль) не репляибл', () => {
+      const onReply = vi.fn()
+      const tool = thoughtItem({ kind: 'tool', markdown: false, mono: true, text: 'Bash: ls' })
+      render(<FeedGroupView group={groupOf([tool])} showStageBadges={false} onReplyToThought={onReply} />)
+      expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
+      fireEvent.click(screen.getByText('Bash: ls'))
+      expect(onReply).not.toHaveBeenCalled()
+    })
+
+    it('ровно одна строка получает is-reply-target (по activeReplyKey)', () => {
+      const onReply = vi.fn()
+      const items = [thoughtItem({ key: 'k1', text: 'первая' }), thoughtItem({ key: 'k2', text: 'вторая' })]
+      const { container } = render(
+        <FeedGroupView group={groupOf(items)} showStageBadges={false} onReplyToThought={onReply} activeReplyKey="k2" />,
+      )
+      const targets = container.querySelectorAll('.is-reply-target')
+      expect(targets).toHaveLength(1)
+      expect(targets[0]?.textContent).toContain('вторая')
+    })
+
+    it('без onReplyToThought (Full feed) мысли не репляиблы', () => {
+      const { container } = render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} />)
+      expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
+      expect(container.querySelector('.feed-thought-row')).toBeNull()
+      // Но текст мысли по-прежнему отрисован как markdown.
+      expect(screen.getByText('мысль агента')).toBeInTheDocument()
+    })
+  })
+
+  describe('reply-to-thought integration (FeedWorkspace)', () => {
+    const thoughtEvents = (): AfmEvent[] => [
+      ev('agent_action', { tool: 'text', detail: 'Мысль для ответа' }, 's1', '2026-07-10T10:00:00Z'),
+    ]
+
+    it('клик по ↩ в per-stage Feed показывает quote-чип в композере', () => {
+      render(<FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={vi.fn().mockResolvedValue(undefined)} />)
+      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
+      expect(screen.getByText(/in reply to/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /cancel reply to thought/i })).toBeInTheDocument()
+    })
+
+    it('смена стадии сбрасывает reply-чип (нет stale-цитаты)', () => {
+      const { rerender } = render(
+        <FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={vi.fn().mockResolvedValue(undefined)} />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
+      expect(screen.getByRole('button', { name: /cancel reply to thought/i })).toBeInTheDocument()
+
+      rerender(<FeedWorkspace events={thoughtEvents()} stageId="s2" noteTarget="s2" onSendNote={vi.fn().mockResolvedValue(undefined)} />)
+      expect(screen.queryByRole('button', { name: /cancel reply to thought/i })).toBeNull()
+    })
+
+    it('успешная отправка ответа доставляет quote+comment и сбрасывает чип', async () => {
+      const onSendNote = vi.fn().mockResolvedValue(undefined)
+      render(<FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
+      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'ответ' } })
+      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+      await waitFor(() => expect(screen.queryByRole('button', { name: /cancel reply to thought/i })).toBeNull())
+      expect(onSendNote).toHaveBeenCalledWith('s1', expect.stringContaining('> Мысль для ответа'))
+    })
+
+    it('Full feed (без композера) рендерит мысли не репляиблыми', () => {
+      render(<FeedWorkspace events={thoughtEvents()} stageId={null} showStageBadges />)
+      expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
     })
   })
 })

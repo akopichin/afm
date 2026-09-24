@@ -33,6 +33,18 @@ type PasteableTextareaProps = {
   // передают этот проп безусловно, реальный гейт живёт в провайдере/
   // useFileBrowserEnabled(), а не разбросан по каждой панели.
   allowFileReferences?: boolean
+  // attachInline — кнопка Attach (и её скрытый file-input) рендерится ВНУТРИ
+  // строки ввода рядом с textarea, а не на верхней полосе. Превью-миниатюры
+  // по-прежнему остаются на полосе НАД строкой ввода — переезжает только кнопка.
+  // По умолчанию выключено: дефолтная раскладка (полоса с кнопкой над textarea)
+  // не меняется ни на байт. Включает FeedComposer, где строка ввода —
+  // `[attach] [textarea] [✈]`.
+  attachInline?: boolean
+  // rows — начальное число строк <textarea>. По умолчанию не задано (браузерный
+  // дефолт rows=2). FeedComposer передаёт rows={1}, чтобы пустое поле было
+  // ровно в одну строку (autoGrow растит по мере ввода) — иначе scrollHeight
+  // пустого поля = 2 строки и в pill-раскладке текст «уезжает» вверх от иконок.
+  rows?: number
 }
 
 // Drop-in replacement for a plain <textarea>, used everywhere a user writes
@@ -55,6 +67,8 @@ export function PasteableTextarea({
   onKeyDown,
   onSubmit,
   allowFileReferences = false,
+  attachInline = false,
+  rows,
 }: PasteableTextareaProps): ReactElement {
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
   const { nodeRef, attachments, onPaste, uploadFiles, retryAttachment, removeAttachment } = useImagePaste(stageId, value, onChange)
@@ -96,7 +110,50 @@ export function PasteableTextarea({
     onKeyDown?.(event)
   }
 
-  const showStrip = attachments.length > 0 || showAttachButton
+  // Кнопка Attach + её скрытый file-input — единый блок, рендерится РОВНО один
+  // раз: либо на полосе (дефолт), либо во входной строке (attachInline). Общий
+  // JSX-фрагмент гарантирует единственный `<input type=file>`.
+  const attachControls = showAttachButton ? (
+    <>
+      <AttachMenu
+        onInsertFileReference={insertAtCaret}
+        onUploadImage={() => imageInputRef.current?.click()}
+      />
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? [])
+          // Сброс value ДО await — иначе повторный выбор того же файла
+          // не вызовет onChange (браузер сравнивает значения).
+          e.target.value = ''
+          if (files.length > 0) void uploadFiles(files)
+        }}
+      />
+    </>
+  ) : null
+
+  const textarea = (
+    <textarea
+      ref={setRefs}
+      className={className}
+      value={value}
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      disabled={disabled}
+      rows={rows}
+      onChange={handleChange}
+      onPaste={onPaste}
+      onKeyDown={handleKeyDown}
+    />
+  )
+
+  // attachInline: кнопка ушла в строку ввода, поэтому полоса нужна только под
+  // превью. Дефолт: полоса как раньше (превью + кнопка) — DOM не меняется.
+  const showStrip = attachments.length > 0 || (showAttachButton && !attachInline)
 
   return (
     <div className="pasteable-textarea-wrap">
@@ -137,41 +194,18 @@ export function PasteableTextarea({
               </div>
             )
           })}
-          {showAttachButton && (
-            <>
-              <AttachMenu
-                onInsertFileReference={insertAtCaret}
-                onUploadImage={() => imageInputRef.current?.click()}
-              />
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? [])
-                  // Сброс value ДО await — иначе повторный выбор того же файла
-                  // не вызовет onChange (браузер сравнивает значения).
-                  e.target.value = ''
-                  if (files.length > 0) void uploadFiles(files)
-                }}
-              />
-            </>
-          )}
+          {/* Дефолт: кнопка на полосе. attachInline: кнопка — в строке ввода ниже. */}
+          {!attachInline && attachControls}
         </div>
       )}
-      <textarea
-        ref={setRefs}
-        className={className}
-        value={value}
-        placeholder={placeholder}
-        autoFocus={autoFocus}
-        disabled={disabled}
-        onChange={handleChange}
-        onPaste={onPaste}
-        onKeyDown={handleKeyDown}
-      />
+      {attachInline ? (
+        <div className="pasteable-input-row">
+          {attachControls}
+          {textarea}
+        </div>
+      ) : (
+        textarea
+      )}
     </div>
   )
 }

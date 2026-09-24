@@ -25,6 +25,18 @@
   margin-bottom: 6px;
 }
 
+/* attachInline: кнопка Attach живёт в одной строке с textarea (раскладка
+   [attach] [textarea] у FeedComposer). Только новый класс — дефолтная полоса
+   не трогается. flex-end, чтобы кнопка прижималась к низу растущего textarea. */
+.pasteable-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.pasteable-input-row textarea {
+  flex: 1 1 auto;
+}
+
 /* One attachment = thumbnail + (when failed) a visible reason caption below it. */
 .pasteable-attachment-item {
   display: flex;
