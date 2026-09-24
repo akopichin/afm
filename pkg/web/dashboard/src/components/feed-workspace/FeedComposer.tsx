@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
 
 type FeedComposerProps = {
@@ -49,8 +49,17 @@ export function buildReplyBody(quote: string | null, comment: string): string {
 export function FeedComposer({ stageId, onSend, replyQuote = null, replyKey, onCancelReply, onSent }: FeedComposerProps): ReactElement {
   const [value, setValue] = useState('')
   const [sending, setSending] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
 
   const empty = value.trim() === ''
+
+  // Выбор мысли (клик по ↩) — переводим фокус в поле ввода, чтобы Cmd/Ctrl+Enter
+  // сразу отправлял ответ, не требуя лишнего клика в textarea (иначе фокус
+  // остаётся на кнопке ↩ и хоткей не доходит до обработчика textarea).
+  useEffect(() => {
+    if (replyKey === undefined) return
+    rootRef.current?.querySelector<HTMLTextAreaElement>('.feed-composer-textarea')?.focus()
+  }, [replyKey])
 
   async function submit(): Promise<void> {
     if (empty || sending) return
@@ -76,7 +85,7 @@ export function FeedComposer({ stageId, onSend, replyQuote = null, replyKey, onC
   }
 
   return (
-    <div className="feed-composer">
+    <div className="feed-composer" ref={rootRef}>
       {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
           line-comment цитаты (левый акцент + приглушённый исходник, кламп 2
           строки). ✕ снимает цитату. */}
@@ -103,6 +112,7 @@ export function FeedComposer({ stageId, onSend, replyQuote = null, replyKey, onC
           placeholder="Note to agent…"
           allowFileReferences
           attachInline
+          rows={1}
           onSubmit={() => void submit()}
           maxHeight={200}
         />

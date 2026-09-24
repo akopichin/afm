@@ -157,5 +157,16 @@ describe('FeedComposer', () => {
       expect(textarea.value).toBe('ответ')
       expect(onSent).not.toHaveBeenCalled()
     })
+
+    it('focuses the textarea when a reply target appears (Cmd+Enter works right after ↩)', () => {
+      const onSend = vi.fn().mockResolvedValue(undefined)
+      const { rerender } = render(<FeedComposer stageId="s1" onSend={onSend} />)
+      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+      expect(document.activeElement).not.toBe(textarea)
+
+      // Клик по ↩ у мысли = появление replyKey → фокус уезжает в поле ввода.
+      rerender(<FeedComposer stageId="s1" onSend={onSend} replyQuote="мысль" replyKey="seq:5" />)
+      expect(document.activeElement).toBe(textarea)
+    })
   })
 })

@@ -40,6 +40,11 @@ type PasteableTextareaProps = {
   // не меняется ни на байт. Включает FeedComposer, где строка ввода —
   // `[attach] [textarea] [✈]`.
   attachInline?: boolean
+  // rows — начальное число строк <textarea>. По умолчанию не задано (браузерный
+  // дефолт rows=2). FeedComposer передаёт rows={1}, чтобы пустое поле было
+  // ровно в одну строку (autoGrow растит по мере ввода) — иначе scrollHeight
+  // пустого поля = 2 строки и в pill-раскладке текст «уезжает» вверх от иконок.
+  rows?: number
 }
 
 // Drop-in replacement for a plain <textarea>, used everywhere a user writes
@@ -63,6 +68,7 @@ export function PasteableTextarea({
   onSubmit,
   allowFileReferences = false,
   attachInline = false,
+  rows,
 }: PasteableTextareaProps): ReactElement {
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
   const { nodeRef, attachments, onPaste, uploadFiles, retryAttachment, removeAttachment } = useImagePaste(stageId, value, onChange)
@@ -138,6 +144,7 @@ export function PasteableTextarea({
       placeholder={placeholder}
       autoFocus={autoFocus}
       disabled={disabled}
+      rows={rows}
       onChange={handleChange}
       onPaste={onPaste}
       onKeyDown={handleKeyDown}

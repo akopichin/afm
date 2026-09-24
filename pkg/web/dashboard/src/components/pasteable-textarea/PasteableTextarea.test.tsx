@@ -374,6 +374,18 @@ describe('PasteableTextarea', () => {
   // corrupted getter that recurses into itself and blows the call stack.
   // AgentNoteModal.test.tsx's equivalent test avoids this only by accident
   // (it happens to already be the last test in that file).
+  it('forwards the rows prop to the textarea', () => {
+    render(<PasteableTextarea stageId="s1" value="" onChange={vi.fn()} rows={1} />)
+    expect(screen.getByRole('textbox')).toHaveAttribute('rows', '1')
+  })
+
+  it('leaves rows unset by default', () => {
+    render(<PasteableTextarea stageId="s1" value="" onChange={vi.fn()} />)
+    expect(screen.getByRole('textbox')).not.toHaveAttribute('rows', '1')
+  })
+
+  // ВНИМАНИЕ: этот тест ДОЛЖЕН оставаться последним в файле — его scrollHeight
+  // getter-спай после mockRestore ломает последующие рендеры (рекурсия геттера).
   it('grows the textarea to fit its content, same as a plain textarea would', () => {
     const scrollHeightSpy = vi
       .spyOn(window.HTMLTextAreaElement.prototype, 'scrollHeight', 'get')

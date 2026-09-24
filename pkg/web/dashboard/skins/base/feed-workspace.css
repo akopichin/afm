@@ -295,12 +295,24 @@
   padding-top: 10px;
   border-top: 1px solid var(--separator-subtle);
 }
-/* Строка ввода — прежний ряд [textarea][✈] (attach теперь inline внутри
-   PasteableTextarea через attachInline). */
+/* Строка ввода — единое pill-поле [📎 textarea ✈] в стиле Telegram: обе кнопки
+   ЖИВУТ ВНУТРИ поля. align-items:flex-end + textarea с min-height, равной высоте
+   кнопок → при одной строке всё визуально по центру, при росте текста кнопки
+   прибиты к низу. Скругление 50% (pill) через большой радиус. */
 .feed-composer-row {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 2px;
+  padding: 3px 5px;
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  /* Фикс px (не %/pill): при росте textarea радиус углов НЕ меняется — иначе
+     999px/50% превращает высокое поле в «капсулу» с растущими полукружиями. */
+  border-radius: 22px;
+}
+.feed-composer-row:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.28);
 }
 /* PasteableTextarea оборачивает textarea + strip вложений — растягиваем на всю
    доступную ширину, кнопка отправки справа. */
@@ -357,34 +369,68 @@
 }
 .feed-reply-chip-cancel:hover { color: var(--text-primary); background: var(--surface-hover); }
 .feed-reply-chip-cancel:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+/* Внутренняя обёртка [📎][textarea] — безрамочная и прозрачная: рамку/фон/pill
+   несёт .feed-composer-row (см. выше). Скрепка прибита к низу (как и send). */
+.feed-composer .pasteable-input-row {
+  align-items: flex-end;
+  gap: 2px;
+}
+/* Скрепка ВНУТРИ поля: без «таблеточной» рамки, только крупная иконка (label
+   скрыт), мятно-зелёная. Прибита к низу — при росте текста остаётся снизу, при
+   одной строке визуально по центру (высота кнопки == min-height textarea). Скоуп
+   .feed-composer не трогает остальных потребителей PasteableTextarea. */
+.feed-composer .pasteable-attach {
+  align-self: flex-end;
+}
+.feed-composer .pasteable-attach-btn {
+  border: 0;
+  padding: 6px;
+  border-radius: 50%;
+  color: var(--mint);
+}
+.feed-composer .pasteable-attach-btn svg {
+  width: 26px;
+  height: 26px;
+}
+.feed-composer .pasteable-attach-btn:hover {
+  border-color: transparent;
+  box-shadow: none;
+  background: var(--surface-hover);
+}
+.feed-composer .pasteable-attach-label { display: none; }
 .feed-composer-textarea {
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  min-height: 40px;
-  padding: 9px 12px;
+  /* min-height == высота кнопок (38px), чтобы при одной строке ряд читался
+     по центру, а при росте кнопки прибивались к низу. rows={1} у textarea
+     гарантирует, что пустое поле — ровно одна строка (иначе scrollHeight=2 строки
+     и текст уезжает вверх от иконок). */
+  min-height: 38px;
+  padding: 8px 6px;
   font: inherit;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--text-primary);
-  background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 .feed-composer-textarea::placeholder { color: var(--text-muted); }
 .feed-composer-textarea:focus-visible {
   outline: none;
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.28);
+  box-shadow: none;
 }
-/* Круглая кнопка отправки — акцентная, как «primary» действие. */
+/* Кнопка отправки — акцентный круг, ТОЖЕ внутри поля, прибита к низу (Telegram).
+   Крупная (36px), зелёная-акцентная, при одной строке визуально по центру. */
 .feed-composer-send {
   flex-shrink: 0;
+  align-self: flex-end;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border: 0;
   border-radius: 50%;
   background: var(--accent-primary);
@@ -392,6 +438,7 @@
   cursor: pointer;
   transition: opacity var(--motion-fast, 120ms) ease, filter var(--motion-fast, 120ms) ease;
 }
+.feed-composer-send svg { width: 20px; height: 20px; }
 .feed-composer-send:hover:not(:disabled) { filter: brightness(1.06); }
 .feed-composer-send:disabled { opacity: 0.4; cursor: default; }
 .feed-composer-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
