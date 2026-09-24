@@ -25,4 +25,16 @@ describe('formatTokensCompact', () => {
     expect(formatTokensCompact(2_000)).toBe('2K')
     expect(formatTokensCompact(2_000_000)).toBe('2M')
   })
+
+  test('граница округления K→M не даёт «1000K»', () => {
+    expect(formatTokensCompact(999_949)).toBe('999.9K')
+    expect(formatTokensCompact(999_950)).toBe('1M')
+    expect(formatTokensCompact(999_999)).toBe('1M')
+  })
+
+  test('отрицательные значения сохраняют знак и суффикс', () => {
+    expect(formatTokensCompact(-500)).toBe('-500')
+    expect(formatTokensCompact(-1500)).toBe('-1.5K')
+    expect(formatTokensCompact(-2_000_000)).toBe('-2M')
+  })
 })

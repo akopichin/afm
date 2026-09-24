@@ -113,6 +113,54 @@ func TestHandleStatus_AccountingFieldsPresentWhenProviderSet(t *testing.T) {
 	}
 }
 
+// TestHandleStatus_ShowMoney — флаг Server.showMoney протаскивается в
+// accounting.show_money ответа /api/status. По умолчанию (не задан) — false,
+// поэтому дашборд прячет деньги; явный true — показывает.
+func TestHandleStatus_ShowMoney(t *testing.T) {
+	bundle := accounting.CostBundle{Health: accounting.HealthOK, HasData: true}
+
+	t.Run("default false", func(t *testing.T) {
+		srv := newTestServerWithAccounting(t, stubCostProvider{bundle: bundle})
+		req := httptest.NewRequest("GET", "/api/status", nil)
+		w := httptest.NewRecorder()
+		srv.handleStatus(w, req)
+		var resp statusResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Accounting == nil || resp.Accounting.ShowMoney {
+			t.Errorf("Accounting = %+v, want show_money=false by default", resp.Accounting)
+		}
+	})
+
+	t.Run("explicit true", func(t *testing.T) {
+		runDir := t.TempDir()
+		store, err := state.Open(runDir, []string{testStageID})
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+		t.Cleanup(func() { store.Close() })
+		srv := New(Config{
+			RunDir:     runDir,
+			Store:      store,
+			UIBus:      bus.NewUIBus(),
+			Actions:    fakeStageActions{},
+			Accounting: stubCostProvider{bundle: bundle},
+			ShowMoney:  true,
+		})
+		req := httptest.NewRequest("GET", "/api/status", nil)
+		w := httptest.NewRecorder()
+		srv.handleStatus(w, req)
+		var resp statusResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Accounting == nil || !resp.Accounting.ShowMoney {
+			t.Errorf("Accounting = %+v, want show_money=true", resp.Accounting)
+		}
+	})
+}
+
 // TestHandleStatus_StaticUnavailableProvider — accounting.StaticUnavailable()
 // (открытие Store'а провалилось на хосте) отдаёт health:"unavailable",
 // has_data:false — но, в отличие от nil-провайдера, поле accounting
