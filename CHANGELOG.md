@@ -5,6 +5,12 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-25
 
+### Fix: large agent stream events no longer fail a stage
+
+Read agent stdout and saved stream-json logs without a fixed per-line scanner
+limit. A large image or tool result can now be followed by normal agent events
+instead of ending the stage with `bufio.Scanner: token too long`.
+
 ### Fix: working agent CLI versions in the ARM64 runtime image
 
 Pin Claude Code 2.1.212 and Codex 0.155.1. Newer CLI versions crashed on

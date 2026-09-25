@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -480,14 +479,10 @@ func WrittenFiles(jsonlPath string) []string {
 	defer f.Close()
 
 	var files []string
-	sc := bufio.NewScanner(f)
-	// Строки stream-json содержат полный контент Write-вызовов и легко
-	// превышают дефолтный лимит сканера в 64 КБ.
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		ev, ok := parseStreamEvent(sc.Text())
+	_ = lineReader(f, func(line string) bool {
+		ev, ok := parseStreamEvent(line)
 		if !ok {
-			continue
+			return true
 		}
 		for _, c := range ev.Message.Content {
 			if c.Type != contentTypeToolUse || c.Name != toolNameWrite {
@@ -499,7 +494,8 @@ func WrittenFiles(jsonlPath string) []string {
 			}
 			files = append(files, inp.FilePath)
 		}
-	}
+		return true
+	})
 	return files
 }
 

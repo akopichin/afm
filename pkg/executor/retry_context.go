@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 )
@@ -19,20 +18,17 @@ func RenderActions(jsonlPath string) []string {
 	defer f.Close()
 
 	var lines []string
-	sc := bufio.NewScanner(f)
-	// Stream-json lines carrying full Write-tool content easily exceed the
-	// scanner's default 64KB limit (same reasoning as WrittenFiles).
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		ev, ok := parseStreamEvent(sc.Text())
+	_ = lineReader(f, func(line string) bool {
+		ev, ok := parseStreamEvent(line)
 		if !ok {
-			continue
+			return true
 		}
 		for _, c := range ev.Message.Content {
 			if tool, detail, actionOK := contentToAction(c, 0); actionOK {
 				lines = append(lines, fmt.Sprintf("%-6s  %s", tool, detail))
 			}
 		}
-	}
+		return true
+	})
 	return lines
 }

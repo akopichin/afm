@@ -265,6 +265,34 @@ func TestRunAgentLogsOutput(t *testing.T) {
 	}
 }
 
+func TestRunAgentKeepsReadingAfterLargeStreamEvent(t *testing.T) {
+	dir := t.TempDir()
+	streamPath := filepath.Join(dir, "agent-stream.jsonl")
+	largeEvent := `{"type":"system","image":"` + strings.Repeat("A", 2<<20) + `"}`
+	terminalEvent := `{"type":"result","subtype":"success"}`
+	if err := os.WriteFile(streamPath, []byte(largeEvent+"\n"+terminalEvent+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	logFile := filepath.Join(dir, "autonomous.log")
+	ex := executor.New(executor.Config{
+		Command:     "cat",
+		ExtraArgs:   []string{streamPath},
+		IdleTimeout: 5 * time.Second,
+	})
+	if err := ex.RunAgent(context.Background(), "autonomous", "image-stage", "read image", logFile); err != nil {
+		t.Fatalf("RunAgent with large stream event: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "autonomous.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != largeEvent+"\n"+terminalEvent+"\n" {
+		t.Fatal("raw log lost the large event or the following result")
+	}
+}
+
 // TestRunPlanningAgentWritesTool воспроизводит баг: если плановый агент пишет план
 // через Write tool вместо вывода текста, RunPlanning перезаписывает plan.md пустой
 // строкой (textBuf пуст, нет type=="text" блоков).

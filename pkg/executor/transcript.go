@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"strings"
@@ -30,14 +29,10 @@ func DialogTranscript(jsonlPath string) []TranscriptItem {
 
 	var items []TranscriptItem
 	seen := map[string]bool{}
-	sc := bufio.NewScanner(f)
-	// Строки stream-json содержат полный контент Write-вызовов и легко
-	// превышают дефолтный лимит сканера в 64 КБ.
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		ev, ok := parseStreamEvent(sc.Text())
+	_ = lineReader(f, func(line string) bool {
+		ev, ok := parseStreamEvent(line)
 		if !ok {
-			continue
+			return true
 		}
 		for _, c := range ev.Message.Content {
 			switch {
@@ -59,6 +54,7 @@ func DialogTranscript(jsonlPath string) []TranscriptItem {
 				// прочие tool_use в диалоговую ленту не попадают
 			}
 		}
-	}
+		return true
+	})
 	return items
 }
