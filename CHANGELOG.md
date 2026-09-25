@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-25
 
+### Fix: large requests in OpenAI-compatible adapters
+
+Pass prompts, image payloads, conversation history and responses through files
+or stdin instead of process arguments. Large inputs and growing tool histories
+no longer fail with `Argument list too long` in Balian/Qwen and other
+OpenAI-compatible agents. Generated Bash commands also run from files so large
+file-writing commands do not hit the same limit.
+Preserve UTF-8 text across large SSE responses and tool calls when using jq 1.7.
+
 ### Fix: large agent stream events no longer fail a stage
 
 Read agent stdout and saved stream-json logs without a fixed per-line scanner

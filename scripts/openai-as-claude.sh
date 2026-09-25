@@ -79,8 +79,8 @@ extract_image_blocks() {
         # "invalid argument"). Портируемый вариант — читать файл через stdin (у обеих
         # реализаций один и тот же вид вывода по умолчанию) и убрать переводы строк сами.
         b64=$(base64 <"$path" | tr -d '\n')
-        blocks=$(jq -nc --argjson blocks "$blocks" --arg mime "$mime" --arg b64 "$b64" \
-            '$blocks + [{type:"image_url", image_url:{url: ("data:" + $mime + ";base64," + $b64)}}]')
+        blocks=$(printf '%s' "$b64" | jq -Rsc --slurpfile blocks <(printf '%s' "$blocks") --arg mime "$mime" \
+            '$blocks[0] + [{type:"image_url", image_url:{url: ("data:" + $mime + ";base64," + .)}}]')
     done < <(printf '%s' "$text" | grep -oE '\[Screenshot: [^]]+\]' || true)
     printf '%s' "$blocks"
 }
@@ -93,19 +93,24 @@ build_user_content() {
     local blocks
     blocks=$(extract_image_blocks "$text")
     if [[ "$blocks" == "[]" ]]; then
-        jq -nc --arg t "$text" '$t'
+        jq -nc --rawfile text <(printf '%s' "$text") '$text'
         return
     fi
     local cleaned
     cleaned=$(printf '%s' "$text" | sed -E 's/\[Screenshot: [^]]+\]//g')
-    jq -nc --arg t "$cleaned" --argjson imgs "$blocks" '[{type:"text", text:$t}] + $imgs'
+    jq -nc --rawfile text <(printf '%s' "$cleaned") --slurpfile imgs <(printf '%s' "$blocks") '[{type:"text", text:$text}] + $imgs[0]'
 }
 
 # формируем тело запроса. stream_options.include_usage:true просит финальный
 # SSE-чанк с .usage (см. заголовок файла — нужен для accounting).
 content=$(build_user_content "$prompt")
-body=$(jq -nc --arg model "$OPENAI_MODEL" --argjson content "$content" \
-    '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: $content}]}')
+# Prompts, images and responses can exceed Linux's per-argument exec limit.
+# Keep payloads in stdin/files; only small configuration values go in argv.
+# --rawfile also avoids jq 1.7 corrupting UTF-8 at raw stdin buffer boundaries.
+request_file=$(mktemp)
+trap 'rm -f "$request_file"' EXIT
+printf '%s' "$content" | jq -c --arg model "$OPENAI_MODEL" \
+    '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: .}]}' > "$request_file"
 
 # вызываем API один раз, оставляем полный SSE-ответ в переменной — нужен для ДВУХ
 # независимых проходов: накопление текста (существующая логика ниже) и извлечение
@@ -116,7 +121,7 @@ body=$(jq -nc --arg model "$OPENAI_MODEL" --argjson content "$content" \
 response=$(curl -sS --no-buffer \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $OPENAI_API_KEY" \
-    -d "$body" \
+    --data-binary "@$request_file" \
     "${OPENAI_BASE_URL}/chat/completions" 2>/dev/null || true)
 
 # накапливаем SSE-чанки, затем эмитим ОДИН assistant-конверт.
@@ -125,25 +130,26 @@ response=$(curl -sS --no-buffer \
 # и отдаём агрегированную форму, как делает claude в stream-json режиме.
 #
 # SSE формат ответа: "data: {...}" или "data: [DONE]".
-# Накопление делаем одним jq-конвейером: читаем строки как raw, отбрасываем всё
+# Накопление делаем одним jq-конвейером: разбиваем текст на строки, отбрасываем всё
 # до "data: ", парсим JSON, конкатенируем delta.content. [DONE] не парсится (jq
 # выдаст null → пропустим). Финальный usage-чанк (stream_options.include_usage)
 # обычно приходит с пустым choices:[] — .choices[0] там null, delta.content
 # корректно сворачивается в "" и ничего не портит.
-text=$(printf '%s' "$response" | \
-    jq -jRr '
+text=$(jq -njr --rawfile sse <(printf '%s' "$response") '
+        $sse | split("\n")[] |
         sub("^data: ";"")                  # убрать префикс "data: " (если есть)
         | select(test("^\\{"))             # оставить только строки, начинающиеся с "{" (JSON; [DONE]/пустые отбрасываются)
         | fromjson?                        # парсим JSON; некорректные → null и skip
         | (.choices[0].delta.content // "")
-    ' | jq -sRr 'rtrimstr("\n")' || true)  # объединить в одну строку, обрезать хвостовой \n
+    ' || true)
 # подстраховка: если что-то пошло не так и text не задан — пустая строка
 text="${text:-}"
 
 # usage/model: последний чанк с ненулевым .usage (stream_options.include_usage).
 # prompt_tokens_details.cached_tokens сплющивается в плоское prompt_cached_tokens —
 # это то имя поля, которое ждёт rawUsage в pkg/accounting/normalize.go.
-usage_chunk=$(printf '%s' "$response" | jq -Rrc '
+usage_chunk=$(jq -nrc --rawfile sse <(printf '%s' "$response") '
+        $sse | split("\n")[] |
         sub("^data: ";"")
         | select(test("^\\{"))
         | fromjson?
@@ -168,8 +174,8 @@ if [[ -n "$usage_chunk" ]]; then
 fi
 
 # assistant-конверт: агрегированный текст всего ответа.
-# jq -nc --arg t — корректно JSON-экранирует текст (кавычки/переводы строк).
-jq -nc --arg t "$text" '{type:"assistant", message:{content:[{type:"text", text:$t}]}}'
+# jq читает текст из файла, сохраняя JSON-экранирование без лимита argv.
+jq -nc --rawfile text <(printf '%s' "$text") '{type:"assistant", message:{content:[{type:"text", text:$text}]}}'
 
 # финальный result-ивент (claude executor ждёт его для завершения). Без
 # перехваченного usage эмитим голую строку, как раньше — Collector.Finish тогда

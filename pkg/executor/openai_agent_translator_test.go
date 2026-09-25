@@ -28,7 +28,7 @@ func agentScriptPath(t *testing.T) string {
 // writeStatefulFakeCurl creates a fake curl on PATH that returns responses[n]
 // (clamped to the last entry once exhausted) on its (n+1)-th invocation —
 // the real script calls curl once per loop turn, so this lets a test control
-// what each successive turn sees. Each invocation's full argument list is
+// what each successive turn sees. Each invocation's request body is
 // captured to <captureDir>/call_<n>.args so a test can inspect exactly what
 // request body a given turn sent (proving real tool output made it back into
 // history, not just that the script printed something plausible). Each
@@ -50,15 +50,16 @@ func writeStatefulFakeCurl(t *testing.T, responses []string, httpCode string) (f
 		t.Fatalf("write counter: %v", err)
 	}
 	script := fmt.Sprintf(`#!/usr/bin/env bash
+%s
 n=$(cat %q)
-printf '%%s' "$*" > %q/"call_$n.args"
+capture_body "$@" > %q/"call_$n.args"
 idx=$n
 max=%d
 if [ "$idx" -gt "$max" ]; then idx=$max; fi
 cat %q/"$idx"
 printf '\n%s'
 echo $((n + 1)) > %q
-`, counterFile, captureDir, len(responses)-1, respDir, httpCode, counterFile)
+`, captureCurlBody, counterFile, captureDir, len(responses)-1, respDir, httpCode, counterFile)
 	curlPath := filepath.Join(fakeCurlDir, "curl")
 	if err := os.WriteFile(curlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake curl: %v", err)

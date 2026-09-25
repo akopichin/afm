@@ -83,11 +83,7 @@ func readTestPNGBase64(t *testing.T, path string) string {
 	return base64.StdEncoding.EncodeToString(data)
 }
 
-// decodeCapturedRequestBody extracts and JSON-decodes the {"...":...} request body
-// embedded inside a fake curl's captured "$*" argument dump (which also contains
-// unrelated curl flags/headers/URL as plain text before and after the JSON). It
-// finds the first "{" and decodes exactly one JSON value from there — json.Decoder
-// stops once one value is fully read, ignoring any trailing text.
+// decodeCapturedRequestBody decodes the body captured by a fake curl.
 func decodeCapturedRequestBody(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
 	idx := bytes.Index(raw, []byte(`{"`))
@@ -102,16 +98,35 @@ func decodeCapturedRequestBody(t *testing.T, raw []byte) map[string]any {
 	return body
 }
 
-// writeFakeCurlCapturing creates a fake curl (single response, single invocation)
-// that both returns sseResponse and captures its own full "$*" argument list to
-// <dir>/captured.args, so a test can inspect exactly what request body a
-// single-shot script (openai-as-claude.sh) sent.
+// Fake curl must read file/stdin bodies while the adapter's temporary files
+// still exist. Keep support for inline bodies to exercise either transport.
+const captureCurlBody = `
+capture_body() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -d|--data|--data-binary)
+                shift
+                case "$1" in
+                    @-) cat ;;
+                    @*) cat -- "${1#@}" ;;
+                    *) printf '%s' "$1" ;;
+                esac
+                return
+                ;;
+        esac
+        shift
+    done
+    return 1
+}
+`
+
+// writeFakeCurlCapturing returns one SSE response and saves the request body.
 func writeFakeCurlCapturing(t *testing.T, sseResponse string) (fakeCurlDir, captureFile string) {
 	t.Helper()
 	dir := t.TempDir()
 	captureFile = filepath.Join(dir, "captured.args")
 	curlPath := filepath.Join(dir, "curl")
-	content := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s' \"$*\" > %q\n%s\n", captureFile, sseResponse)
+	content := fmt.Sprintf("#!/usr/bin/env bash\n%scapture_body \"$@\" > %q\n%s\n", captureCurlBody, captureFile, sseResponse)
 	if err := os.WriteFile(curlPath, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake curl: %v", err)
 	}
