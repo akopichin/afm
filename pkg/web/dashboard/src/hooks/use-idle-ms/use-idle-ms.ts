@@ -4,11 +4,9 @@ const TICK_INTERVAL_MS = 1000
 
 // Секундомер накопленного Idle-времени: accumulatedMs (пережившее restart,
 // см. RunState.IdleAccumulatedMs на бэкенде) плюс живая дельта с since, пока
-// флоу простаивает прямо сейчас (since не null). Пока connected=false —
-// отображаемое значение просто держится на месте: сокет не обновляет
-// accumulatedMs/since, поэтому дальнейший локальный тик мог бы показать
-// неверное значение (стадия могла давно перестать простаивать).
-export function useIdleMs(accumulatedMs: number, since: string | null, connected: boolean): number {
+// флоу простаивает прямо сейчас (since не null). Пока /api/status не отвечает,
+// значение заморожено: локальный тик мог бы показать уже неверное состояние.
+export function useIdleMs(accumulatedMs: number, since: string | null, statusLive: boolean): number {
   const [displayMs, setDisplayMs] = useState(accumulatedMs)
 
   useEffect(() => {
@@ -19,15 +17,15 @@ export function useIdleMs(accumulatedMs: number, since: string | null, connected
       return accumulatedMs + Math.max(0, Date.now() - sinceMs)
     }
 
-    if (!connected) {
-      setDisplayMs(compute())
+    if (!statusLive) {
+      if (since === null) setDisplayMs(accumulatedMs)
       return
     }
 
     setDisplayMs(compute())
     const timer = setInterval(() => setDisplayMs(compute()), TICK_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [accumulatedMs, since, connected])
+  }, [accumulatedMs, since, statusLive])
 
   return displayMs
 }

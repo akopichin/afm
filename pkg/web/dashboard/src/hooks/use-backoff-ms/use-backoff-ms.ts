@@ -6,8 +6,8 @@ const TICK_INTERVAL_MS = 1000
 // плюс сумма живых дельт для каждого сейчас открытого эпизода в openSince —
 // параллельные ретраи суммируются, а не мёржатся (см. use-status-duration.ts,
 // которую этот хук заменяет). Как и useIdleMs, замораживает отображаемое
-// значение при connected=false.
-export function useBackoffMs(accumulatedMs: number, openSince: string[], connected: boolean): number {
+// значение, пока /api/status недоступен.
+export function useBackoffMs(accumulatedMs: number, openSince: string[], statusLive: boolean): number {
   const [displayMs, setDisplayMs] = useState(accumulatedMs)
 
   useEffect(() => {
@@ -23,15 +23,15 @@ export function useBackoffMs(accumulatedMs: number, openSince: string[], connect
       return accumulatedMs + liveMs
     }
 
-    if (!connected) {
-      setDisplayMs(compute())
+    if (!statusLive) {
+      if (openSince.length === 0) setDisplayMs(accumulatedMs)
       return
     }
 
     setDisplayMs(compute())
     const timer = setInterval(() => setDisplayMs(compute()), TICK_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [accumulatedMs, openSince, connected])
+  }, [accumulatedMs, openSince, statusLive])
 
   return displayMs
 }

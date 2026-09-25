@@ -74,6 +74,9 @@ echo '{"type":"result","subtype":"success"}'`},
 		t.Errorf("stage should be done after run: got %v",
 			loaded.Stages["s1"].Status)
 	}
+	if loaded.RunStatus != state.RunStatusFinished || loaded.EndedAt == nil {
+		t.Errorf("completed run must have a durable end: status=%q ended_at=%v", loaded.RunStatus, loaded.EndedAt)
+	}
 
 	planPath := filepath.Join(runDir, "s1", "plan.md")
 	if _, err := os.Stat(planPath); err != nil {

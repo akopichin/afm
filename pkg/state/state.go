@@ -18,6 +18,22 @@ import (
 // StageStatus represents the lifecycle state of a single stage.
 type StageStatus string
 
+type RunStatus string
+
+const (
+	RunStatusRunning     RunStatus = "running"
+	RunStatusFinished    RunStatus = "finished"
+	RunStatusFailed      RunStatus = "failed"
+	RunStatusInterrupted RunStatus = "interrupted"
+)
+
+const (
+	runEventStarted     = "run_started"
+	runEventFinished    = "run_finished"
+	runEventFailed      = "run_failed"
+	runEventInterrupted = "run_interrupted"
+)
+
 const (
 	StatusPending          StageStatus = "pending"
 	StatusPlanning         StageStatus = "planning"
@@ -68,9 +84,19 @@ type StageState struct {
 
 // RunState is the top-level state persisted in state.json.
 type RunState struct {
-	FlowName   string    `json:"flow_name"`
-	StartedAt  time.Time `json:"started_at"`
-	StageOrder []string  `json:"stage_order"`
+	FlowName  string    `json:"flow_name"`
+	StartedAt time.Time `json:"started_at"`
+	// RunStatus/EndedAt describe the latest process lifetime of this run.
+	// A resumed run clears EndedAt with a durable run_started event.
+	RunStatus RunStatus  `json:"run_status,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// RunStartedAt anchors open idle/backoff periods after a resume. Without it,
+	// a failed or retrying stage would count the time while afm was stopped.
+	RunStartedAt time.Time `json:"run_started_at,omitempty"`
+	// ElapsedAccumulatedMs is the sum of completed process lifetimes. The open
+	// lifetime starts at RunStartedAt and is added on a terminal run event.
+	ElapsedAccumulatedMs int64    `json:"elapsed_accumulated_ms"`
+	StageOrder           []string `json:"stage_order"`
 	// StageNames maps stage id → human-readable name from the flow file.
 	// omitempty keeps old state.json files (without stage_names) compatible
 	// and only emits the field when it has been populated.
@@ -145,7 +171,7 @@ func isIdle(stages map[string]StageState) bool {
 	anyActive := false
 	for _, st := range stages {
 		switch st.Status {
-		case StatusAwaitingUserInput, StatusAwaitingApproval, StatusPaused:
+		case StatusAwaitingUserInput, StatusAwaitingApproval, StatusPaused, StatusHookFailed:
 			return true
 		case StatusFailed:
 			hasFailed = true
@@ -172,6 +198,70 @@ func maxUpdatedAt(stages map[string]StageState) time.Time {
 	return latest
 }
 
+func openSince(rs *RunState, stageUpdatedAt time.Time) time.Time {
+	if rs.RunStartedAt.After(stageUpdatedAt) {
+		return rs.RunStartedAt
+	}
+	return stageUpdatedAt
+}
+
+func isRunEvent(event string) bool {
+	switch event {
+	case runEventStarted, runEventFinished, runEventFailed, runEventInterrupted:
+		return true
+	}
+	return false
+}
+
+func applyRunEvent(rs *RunState, event string, t time.Time) {
+	if event == runEventStarted {
+		if rs.EndedAt == nil {
+			// A previous process disappeared without a terminal event. Its exact
+			// exit time is unknowable; count only up to its last durable stage
+			// transition, excluding the offline gap before this resume.
+			previousStart := rs.RunStartedAt
+			if previousStart.IsZero() {
+				previousStart = rs.StartedAt // run created before run events existed
+			}
+			if last := maxUpdatedAt(rs.Stages); !previousStart.IsZero() && last.After(previousStart) {
+				rs.ElapsedAccumulatedMs += last.Sub(previousStart).Milliseconds()
+			}
+		}
+		rs.RunStatus = RunStatusRunning
+		rs.EndedAt = nil
+		rs.RunStartedAt = t
+		return
+	}
+	if rs.EndedAt == nil {
+		if !rs.RunStartedAt.IsZero() && t.After(rs.RunStartedAt) {
+			rs.ElapsedAccumulatedMs += t.Sub(rs.RunStartedAt).Milliseconds()
+		}
+		if isIdle(rs.Stages) {
+			if since := openSince(rs, maxUpdatedAt(rs.Stages)); !since.IsZero() && t.After(since) {
+				rs.IdleAccumulatedMs += t.Sub(since).Milliseconds()
+			}
+		}
+		for _, st := range rs.Stages {
+			if st.Status == StatusRetrying {
+				if since := openSince(rs, st.UpdatedAt); !since.IsZero() && t.After(since) {
+					rs.BackoffAccumulatedMs += t.Sub(since).Milliseconds()
+				}
+			}
+		}
+	}
+	rs.EndedAt = &t
+	switch event {
+	case runEventFinished:
+		rs.RunStatus = RunStatusFinished
+	case runEventFailed:
+		rs.RunStatus = RunStatusFailed
+	case runEventInterrupted:
+		rs.RunStatus = RunStatusInterrupted
+	default:
+		return // parser and Store only pass known events
+	}
+}
+
 // accountIdleAndBackoff обновляет RunState.IdleAccumulatedMs/BackoffAccumulatedMs
 // ДО применения перехода {stageID, to, t} к rs — читает rs.Stages как оно было
 // ПЕРЕД этим переходом. Вызывается из ОБОИХ мест, применяющих переходы к
@@ -179,28 +269,42 @@ func maxUpdatedAt(stages map[string]StageState) time.Time {
 // восстановление после перезапуска (Store.Open → replayEvents → parseEventLog)
 // давало те же накопленные значения, что и живой прогон.
 func accountIdleAndBackoff(rs *RunState, stageID string, to StageStatus, t time.Time) {
+	if rs.EndedAt != nil {
+		return // offline CLI transitions must not reopen completed time intervals
+	}
 	if isIdle(rs.Stages) {
-		if prev := maxUpdatedAt(rs.Stages); !prev.IsZero() && t.After(prev) {
+		if prev := openSince(rs, maxUpdatedAt(rs.Stages)); !prev.IsZero() && t.After(prev) {
 			rs.IdleAccumulatedMs += t.Sub(prev).Milliseconds()
 		}
 	}
 
 	before := rs.Stages[stageID]
-	if before.Status == StatusRetrying && to != StatusRetrying && t.After(before.UpdatedAt) {
-		rs.BackoffAccumulatedMs += t.Sub(before.UpdatedAt).Milliseconds()
+	if since := openSince(rs, before.UpdatedAt); before.Status == StatusRetrying && to != StatusRetrying && t.After(since) {
+		rs.BackoffAccumulatedMs += t.Sub(since).Milliseconds()
 	}
 }
 
 // IdleSince возвращает момент начала текущего периода простоя, если флоу
 // простаивает сейчас (см. isIdle) — иначе nil.
 func (rs *RunState) IdleSince() *time.Time {
+	if rs.EndedAt != nil {
+		return nil
+	}
 	if !isIdle(rs.Stages) {
 		return nil
 	}
-	t := maxUpdatedAt(rs.Stages)
+	t := openSince(rs, maxUpdatedAt(rs.Stages))
 	if t.IsZero() {
 		return nil
 	}
+	return &t
+}
+
+func (rs *RunState) ElapsedSince() *time.Time {
+	if rs.EndedAt != nil || rs.RunStartedAt.IsZero() {
+		return nil
+	}
+	t := rs.RunStartedAt
 	return &t
 }
 
@@ -209,10 +313,13 @@ func (rs *RunState) IdleSince() *time.Time {
 // (фронтенд), а не мёржатся здесь (осознанное упрощение, см.
 // use-status-duration.ts).
 func (rs *RunState) BackoffOpenSince() []time.Time {
+	if rs.EndedAt != nil {
+		return nil
+	}
 	var out []time.Time
 	for _, st := range rs.Stages {
 		if st.Status == StatusRetrying {
-			out = append(out, st.UpdatedAt)
+			out = append(out, openSince(rs, st.UpdatedAt))
 		}
 	}
 	return out
@@ -301,11 +408,17 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 		// NewRunState штампует StartedAt = time.Now(), что на resume/restart-Open
 		// равно моменту повторного открытия, а не старту рана — без этой
 		// перезаписи STARTED/ELAPSED в дашборде скачком обнулялись после каждого
-		// рестарта afm (лог хранит t.Time каждого перехода, первое событие —
-		// EvStartRun — и есть настоящее начало). На свежем ране лог при Open пуст,
+		// рестарта afm (первое событие run_started, а у старых ранов — первый
+		// stage-переход). На свежем ране лог при Open пуст,
 		// сюда не заходим, и StartedAt остаётся временем Open ≈ реальному старту.
-		if len(res.history) == 0 && !t.Time.IsZero() {
+		if res.lastSeq == 0 && !t.Time.IsZero() {
 			rs.StartedAt = t.Time
+		}
+		if t.StageID == "" && isRunEvent(t.Event) {
+			applyRunEvent(rs, t.Event, t.Time)
+			res.lastSeq = t.Seq
+			goodOffset = offset
+			continue
 		}
 		accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
 		rs.SetStageStatusAt(t.StageID, t.To, t.Time)

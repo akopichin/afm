@@ -50,7 +50,12 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 // Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
 // состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
-  const { flowName, stages, startedAt, description, idleAccumulatedMs, idleSince, backoffAccumulatedMs, backoffOpenSince, capabilities, flowPauseState, flowPausedStages, runCost, runOverheadCost, coverageIssues, accounting, refresh } = useStatus()
+  const {
+    flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
+    description, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
+    backoffOpenSince, capabilities, flowPauseState, flowPausedStages, runCost,
+    runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
+  } = useStatus()
 
   // Модалка ревью-раунда (Task 23) — открывается по клику ReviewBanner's "Send
   // notes". Держит только флаг открытия: сам список заметок/выбор стадии
@@ -277,9 +282,10 @@ export function App(): ReactElement {
       ? workspaceStage.id
       : null
 
-  const elapsedMs = useElapsed(startedAt)
-  const idleMs = useIdleMs(idleAccumulatedMs, idleSince, connected)
-  const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, connected)
+  const statusLive = statusAvailable
+  const elapsedMs = useElapsed(startedAt, endedAt, statusLive, elapsedAccumulatedMs, elapsedSince)
+  const idleMs = useIdleMs(idleAccumulatedMs, idleSince, statusLive)
+  const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, statusLive)
 
   const lastRefreshedEvent = useRef<object | null>(null)
 

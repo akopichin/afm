@@ -1,11 +1,55 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { normalizeStatus, useStatus } from './use-status'
 
 describe('useStatus', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+
+  test('normalizes durable run completion without inferring it from stage statuses', () => {
+    const running = normalizeStatus({ run_status: 'running', elapsed_accumulated_ms: 4000, elapsed_since: '2026-09-25T10:00:04Z', stages: [{ id: 's1', status: 'done' }] })
+    expect(running.runStatus).toBe('running')
+    expect(running.endedAt).toBeNull()
+    expect(running.elapsedAccumulatedMs).toBe(4000)
+    expect(running.elapsedSince).toBe('2026-09-25T10:00:04Z')
+
+    const finished = normalizeStatus({ run_status: 'finished', ended_at: '2026-09-25T10:00:05Z', elapsed_accumulated_ms: 5000, stages: [] })
+    expect(finished.runStatus).toBe('finished')
+    expect(finished.endedAt).toBe('2026-09-25T10:00:05Z')
+    expect(finished.elapsedAccumulatedMs).toBe(5000)
+  })
+
+  test('reports whether HTTP status is available without discarding the last snapshot', async () => {
+    let available = true
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      if (!available) throw new Error('offline')
+      return { ok: true, json: async () => ({ flow_name: 'demo', stages: [] }) } as Response
+    })
+    const { result } = renderHook(() => useStatus())
+    await waitFor(() => expect(result.current.statusAvailable).toBe(true))
+    available = false
+    act(() => result.current.refresh())
+    await waitFor(() => expect(result.current.statusAvailable).toBe(false))
+    expect(result.current.flowName).toBe('demo')
+  })
+
+  test('marks a once-healthy status endpoint stale when later polls never return', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-25T10:00:00Z').getTime() })
+    let calls = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      calls++
+      if (calls > 1) return new Promise<Response>(() => {})
+      return { ok: true, json: async () => ({ flow_name: 'demo', stages: [] }) } as Response
+    })
+    const { result } = renderHook(() => useStatus())
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(result.current.statusAvailable).toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000) })
+    expect(result.current.statusAvailable).toBe(false)
+    expect(result.current.flowName).toBe('demo')
   })
 
   test('normalizes /api/status (ordered stages array) into Stage[]', async () => {

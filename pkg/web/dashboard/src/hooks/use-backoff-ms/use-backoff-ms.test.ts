@@ -29,15 +29,15 @@ describe('useBackoffMs', () => {
     expect(result.current).toBe(9000)
   })
 
-  test('freezes the displayed value while disconnected', () => {
+  test('freezes the displayed value while status is unavailable', () => {
     vi.useFakeTimers({ now: new Date('2026-08-07T10:00:04Z').getTime() })
 
-    const { result, rerender } = renderHook(({ connected }) => useBackoffMs(1000, ['2026-08-07T10:00:00Z'], connected), {
-      initialProps: { connected: true },
+    const { result, rerender } = renderHook(({ statusLive }) => useBackoffMs(1000, ['2026-08-07T10:00:00Z'], statusLive), {
+      initialProps: { statusLive: true },
     })
     expect(result.current).toBe(5000)
 
-    rerender({ connected: false })
+    rerender({ statusLive: false })
     act(() => {
       vi.advanceTimersByTime(5000)
     })

@@ -7,11 +7,16 @@ import type { AccountingState, CostSummary, CoverageIssue } from '../../types/co
 // но в React-форме: поллинг по таймеру + возможность немедленного обновления через
 // refresh() (WS-события — канал обновления состояния, см. корневую композицию).
 const POLL_INTERVAL_MS = 3000
+const STATUS_STALE_MS = 2 * POLL_INTERVAL_MS
 
 export type FlowStatus = {
   flowName: string
   stages: Stage[]
   startedAt: string
+  runStatus: 'running' | 'finished' | 'failed' | 'interrupted' | null
+  endedAt: string | null
+  elapsedAccumulatedMs: number | null
+  elapsedSince: string | null
   // Описание флоу (из корня flow.yaml) — опциональное поле GET /api/status для
   // подзаголовка в шапке (см. FlowHeader). Бэкенд пока его не отдаёт, поле
   // читается защитно (undefined, если отсутствует), без нового API-вызова —
@@ -56,6 +61,10 @@ const EMPTY_STATUS: FlowStatus = {
   flowName: '',
   stages: [],
   startedAt: '',
+  runStatus: null,
+  endedAt: null,
+  elapsedAccumulatedMs: null,
+  elapsedSince: null,
   idleAccumulatedMs: 0,
   idleSince: null,
   backoffAccumulatedMs: 0,
@@ -71,8 +80,10 @@ const EMPTY_STATUS: FlowStatus = {
 // уже упорядоченный массив StageView (см. pkg/server/stageview.go), маппинг 1:1
 // через toStage.
 
-export function useStatus(): FlowStatus & { refresh: () => void } {
+export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable: boolean } {
   const [status, setStatus] = useState<FlowStatus>(EMPTY_STATUS)
+  const [statusAvailable, setStatusAvailable] = useState(false)
+  const lastStatusSuccessAt = useRef<number | null>(null)
   const cancelledRef = useRef(false)
   // Поллинг и WS-триггерный refresh() issue независимые fetch('/api/status') —
   // несколько запросов могут быть в полёте одновременно (напр. burst значимых
@@ -90,17 +101,29 @@ export function useStatus(): FlowStatus & { refresh: () => void } {
     try {
       response = await fetch('/api/status')
     } catch {
+      if (!cancelledRef.current && requestId === latestRequestId.current) setStatusAvailable(false)
       return
     }
 
-    if (!response.ok) return
+    if (!response.ok) {
+      if (!cancelledRef.current && requestId === latestRequestId.current) setStatusAvailable(false)
+      return
+    }
 
     // Единственная точка приведения типа для внешнего JSON.
-    const data: unknown = await response.json()
+    let data: unknown
+    try {
+      data = await response.json()
+    } catch {
+      if (!cancelledRef.current && requestId === latestRequestId.current) setStatusAvailable(false)
+      return
+    }
     if (cancelledRef.current) return
     if (requestId !== latestRequestId.current) return
 
     setStatus(normalizeStatus(data))
+    lastStatusSuccessAt.current = Date.now()
+    setStatusAvailable(true)
   }, [])
 
   const refresh = useCallback(() => {
@@ -114,10 +137,15 @@ export function useStatus(): FlowStatus & { refresh: () => void } {
     const timer = setInterval(() => {
       void load()
     }, POLL_INTERVAL_MS)
+    const freshnessTimer = setInterval(() => {
+      const last = lastStatusSuccessAt.current
+      if (last !== null && Date.now() - last > STATUS_STALE_MS) setStatusAvailable(false)
+    }, 1000)
 
     return () => {
       cancelledRef.current = true
       clearInterval(timer)
+      clearInterval(freshnessTimer)
     }
   }, [load])
 
@@ -141,7 +169,7 @@ export function useStatus(): FlowStatus & { refresh: () => void } {
     }
   }, [load])
 
-  return { ...status, refresh }
+  return { ...status, refresh, statusAvailable }
 }
 
 export function normalizeStatus(raw: unknown): FlowStatus {
@@ -149,6 +177,12 @@ export function normalizeStatus(raw: unknown): FlowStatus {
 
   const flowName = typeof obj.flow_name === 'string' ? obj.flow_name : ''
   const startedAt = typeof obj.started_at === 'string' ? obj.started_at : ''
+  const runStatus: FlowStatus['runStatus'] =
+    obj.run_status === 'running' || obj.run_status === 'finished' || obj.run_status === 'failed' || obj.run_status === 'interrupted'
+      ? obj.run_status : null
+  const endedAt = typeof obj.ended_at === 'string' ? obj.ended_at : null
+  const elapsedAccumulatedMs = typeof obj.elapsed_accumulated_ms === 'number' ? obj.elapsed_accumulated_ms : null
+  const elapsedSince = typeof obj.elapsed_since === 'string' ? obj.elapsed_since : null
   const description = typeof obj.description === 'string' ? obj.description : undefined
 
   const stages: Stage[] = Array.isArray(obj.stages) ? obj.stages.map(toStage).filter((s): s is Stage => s !== null) : []
@@ -187,6 +221,10 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     flowName,
     stages,
     startedAt,
+    runStatus,
+    endedAt,
+    elapsedAccumulatedMs,
+    elapsedSince,
     description,
     idleAccumulatedMs,
     idleSince,

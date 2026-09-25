@@ -30,6 +30,9 @@ func TestIntegration_FailedStage(t *testing.T) {
 	if final.Stages["fail"].Status != state.StatusFailed {
 		t.Errorf("expected failed, got %v", final.Stages["fail"].Status)
 	}
+	if final.RunStatus != state.RunStatusFailed || final.EndedAt == nil {
+		t.Errorf("failed run must have a durable end: status=%q ended_at=%v", final.RunStatus, final.EndedAt)
+	}
 }
 
 // TestIntegration_FailedDependencyCascade verifies that when a stage fails,

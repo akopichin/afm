@@ -1395,6 +1395,31 @@ func TestHandleStatus_IncludesIdleSinceWhenIdle(t *testing.T) {
 	}
 }
 
+func TestHandleStatus_ClosesCountersWhenRunEnds(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if err := srv.store.BeginRun(); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.EndRun(state.RunStatusFailed); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+	var resp struct {
+		RunStatus            string     `json:"run_status"`
+		EndedAt              *time.Time `json:"ended_at"`
+		ElapsedAccumulatedMs int64      `json:"elapsed_accumulated_ms"`
+		ElapsedSince         *time.Time `json:"elapsed_since"`
+		IdleSince            *time.Time `json:"idle_since"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.RunStatus != string(state.RunStatusFailed) || resp.EndedAt == nil || resp.ElapsedSince != nil || resp.IdleSince != nil {
+		t.Fatalf("terminal status = %+v", resp)
+	}
+}
+
 func TestHandleStatus_IncludesBackoffOpenSinceWhenRetrying(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRetrying, Event: "test"}); err != nil {

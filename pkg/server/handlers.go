@@ -46,16 +46,20 @@ func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fall
 // ordered []StageView (see stageview.go) instead of five parallel per-stage
 // maps the frontend used to re-join by id.
 type statusResponse struct {
-	FlowName             string       `json:"flow_name"`
-	StartedAt            time.Time    `json:"started_at"`
-	Description          string       `json:"description,omitempty"`
-	Stages               []StageView  `json:"stages"`
-	LastSeq              uint64       `json:"last_seq"`
-	IdleAccumulatedMs    int64        `json:"idle_accumulated_ms"`
-	IdleSince            *time.Time   `json:"idle_since,omitempty"`
-	BackoffAccumulatedMs int64        `json:"backoff_accumulated_ms"`
-	BackoffOpenSince     []time.Time  `json:"backoff_open_since,omitempty"`
-	Capabilities         capabilities `json:"capabilities"`
+	FlowName             string          `json:"flow_name"`
+	StartedAt            time.Time       `json:"started_at"`
+	RunStatus            state.RunStatus `json:"run_status,omitempty"`
+	EndedAt              *time.Time      `json:"ended_at,omitempty"`
+	ElapsedAccumulatedMs int64           `json:"elapsed_accumulated_ms"`
+	ElapsedSince         *time.Time      `json:"elapsed_since,omitempty"`
+	Description          string          `json:"description,omitempty"`
+	Stages               []StageView     `json:"stages"`
+	LastSeq              uint64          `json:"last_seq"`
+	IdleAccumulatedMs    int64           `json:"idle_accumulated_ms"`
+	IdleSince            *time.Time      `json:"idle_since,omitempty"`
+	BackoffAccumulatedMs int64           `json:"backoff_accumulated_ms"`
+	BackoffOpenSince     []time.Time     `json:"backoff_open_since,omitempty"`
+	Capabilities         capabilities    `json:"capabilities"`
 	// FlowPauseState/FlowPausedStages surface the flow-wide review-pause
 	// round (see pkg/orchestrator/reviewpause.go): "none"|"paused"|"resuming",
 	// plus the ids of stages this round is holding paused. Populated via
@@ -105,6 +109,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp := statusResponse{
 		FlowName:             rs.FlowName,
 		StartedAt:            rs.StartedAt,
+		RunStatus:            rs.RunStatus,
+		EndedAt:              rs.EndedAt,
+		ElapsedAccumulatedMs: rs.ElapsedAccumulatedMs,
+		ElapsedSince:         rs.ElapsedSince(),
 		Description:          s.Description,
 		LastSeq:              rs.LastSeq,
 		IdleAccumulatedMs:    rs.IdleAccumulatedMs,

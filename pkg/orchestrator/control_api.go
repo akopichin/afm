@@ -299,18 +299,25 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 	if err := o.rejectIfReviewPaused(); err != nil {
 		return err
 	}
+	o.continueMu.Lock()
 	if o.currentStatus(stageID) != state.StatusPaused {
+		o.continueMu.Unlock()
 		return nil
 	}
 	stage := o.graph.Stage(stageID)
 	if stage == nil {
+		o.continueMu.Unlock()
 		return nil
 	}
 	pausedFrom := o.opts.Store.PausedFrom(stageID)
+	o.continuedThisProcess.Store(stageID, struct{}{})
 	to, ok := o.Trigger(stageID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "")
 	if !ok {
+		o.continuedThisProcess.Delete(stageID)
+		o.continueMu.Unlock()
 		return nil
 	}
+	o.continueMu.Unlock()
 
 	ctx := o.runContext(reqCtx) // не reqCtx — иначе HTTP-хендлер убьёт агента при возврате ответа
 	if pausedFrom == state.StatusPending {

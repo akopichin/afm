@@ -271,6 +271,10 @@ type Orchestrator struct {
 	// проставит runCtx.
 	runMu  sync.Mutex
 	runCtx context.Context
+	// Continue can race startup recovery. Keep its status transition and the
+	// per-process continuation marker atomic with recovery's status read.
+	continueMu           sync.Mutex
+	continuedThisProcess sync.Map
 
 	// pauseGen — монотонный per-stage счётчик, инкрементируемый каждым Pause
 	// (см. control_api.go). withBeforeHook захватывает его на входе и сверяет
@@ -605,7 +609,7 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 func (o *Orchestrator) SetDashboardURL(url string) { o.opts.DashboardURL = url }
 
 // Run starts the event-driven orchestrator loop.
-func (o *Orchestrator) Run(ctx context.Context) error {
+func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	o.cancelRun = cancel
 	o.runMu.Lock()
@@ -617,8 +621,33 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	// раньше инлайн-flush на выходах Run наблюдал sent==done ДО того, как
 	// отменённые агенты успевали эмитить последнее событие.
 	defer o.finalizeLifecycle()
+	// Persist the terminal boundary after agents have stopped, before lifecycle
+	// hooks are flushed. The dashboard remains available for its drain period.
+	defer func() {
+		if o.terminalFlow == "" {
+			return
+		}
+		var status state.RunStatus
+		switch o.terminalFlow {
+		case lifecyclehooks.EventFlowFinished:
+			status = state.RunStatusFinished
+		case lifecyclehooks.EventFlowFailed:
+			status = state.RunStatusFailed
+		case lifecyclehooks.EventFlowInterrupted:
+			status = state.RunStatusInterrupted
+		default:
+			runErr = errors.Join(runErr, fmt.Errorf("unknown terminal flow event %q", o.terminalFlow))
+			return
+		}
+		if err := o.opts.Store.EndRun(status); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("persist run completion: %w", err))
+		}
+	}()
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
+	if err := o.opts.Store.BeginRun(); err != nil {
+		return fmt.Errorf("persist run start: %w", err)
+	}
 
 	if o.opts.Resumed {
 		o.emitLifecycle(lifecyclehooks.Event{Type: lifecyclehooks.EventFlowResumed})

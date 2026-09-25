@@ -192,11 +192,18 @@ func (s *Store) Snapshot() RunState {
 	out := RunState{
 		FlowName:             s.snapshot.FlowName,
 		StartedAt:            s.snapshot.StartedAt,
+		RunStatus:            s.snapshot.RunStatus,
+		RunStartedAt:         s.snapshot.RunStartedAt,
+		ElapsedAccumulatedMs: s.snapshot.ElapsedAccumulatedMs,
 		LastSeq:              s.snapshot.LastSeq,
 		StageOrder:           append([]string(nil), s.snapshot.StageOrder...),
 		Stages:               make(map[string]StageState, len(s.snapshot.Stages)),
 		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,
 		BackoffAccumulatedMs: s.snapshot.BackoffAccumulatedMs,
+	}
+	if s.snapshot.EndedAt != nil {
+		ended := *s.snapshot.EndedAt
+		out.EndedAt = &ended
 	}
 	if s.snapshot.StageNames != nil {
 		out.StageNames = maps.Clone(s.snapshot.StageNames)
@@ -207,8 +214,8 @@ func (s *Store) Snapshot() RunState {
 	return out
 }
 
-// History returns the full transition history accumulated during Open's replay
-// of events.jsonl and extended by every subsequent Apply. Read-only — it reads
+// History returns stage transitions accumulated during Open's replay and
+// extended by Apply; run boundary records are excluded. Read-only — it reads
 // the already-replayed in-memory log, it never re-opens events.jsonl. The slice
 // is ordered by ascending Seq (the append order of the event log, which also
 // guarantees non-decreasing Time). A defensive copy is returned so callers
@@ -257,6 +264,59 @@ func (s *Store) Close() error {
 		s.lock = nil
 	}
 	return err
+}
+
+// BeginRun and EndRun persist process-lifetime boundaries in events.jsonl.
+// These records share its sequence but are excluded from stage History().
+func (s *Store) BeginRun() error {
+	return s.appendRunEvent(runEventStarted)
+}
+
+func (s *Store) EndRun(status RunStatus) error {
+	var event string
+	switch status {
+	case RunStatusFinished:
+		event = runEventFinished
+	case RunStatusFailed:
+		event = runEventFailed
+	case RunStatusInterrupted:
+		event = runEventInterrupted
+	default:
+		return fmt.Errorf("invalid terminal run status %q", status)
+	}
+	return s.appendRunEvent(event)
+}
+
+func (s *Store) appendRunEvent(event string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.eventsLog == nil {
+		return errors.New("run store is closed")
+	}
+	if event != runEventStarted && s.snapshot.EndedAt != nil {
+		return nil
+	}
+	t := Transition{Seq: s.lastSeq + 1, Time: time.Now(), Event: event}
+	data, err := json.Marshal(t)
+	if err != nil {
+		return fmt.Errorf("marshal run event: %w", err)
+	}
+	if _, err := s.eventsLog.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write run event: %w", err)
+	}
+	if err := s.eventsLog.Sync(); err != nil {
+		return fmt.Errorf("fsync run event: %w", err)
+	}
+	if s.lastSeq == 0 && event == runEventStarted {
+		s.snapshot.StartedAt = t.Time
+	}
+	s.lastSeq = t.Seq
+	applyRunEvent(s.snapshot, event, t.Time)
+	s.snapshot.LastSeq = t.Seq
+	if err := s.writeSnapshot(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: snapshot write failed: %v\n", err)
+	}
+	return nil
 }
 
 // applyHook is for tests only. Called after fsync but before snapshot rewrite.

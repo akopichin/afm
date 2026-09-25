@@ -5,6 +5,20 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-25
 
+### Fix: run timers stop at the durable completion boundary
+
+Persist run start and terminal events in `events.jsonl` and expose `run_status`
+and `ended_at` through the dashboard status API. Elapsed now stops at the actual
+run end, including after the dashboard server closes, and resumes from the
+accumulated active runtime rather than including downtime. Idle and Backoff close
+their open intervals on terminal events and resume from a new anchor. A failed
+blocking hook counts as Idle. All live timers follow fresh HTTP status: a
+WebSocket disconnect alone does not stop them, while an unavailable or stale
+status endpoint freezes them.
+
+Serialize startup recovery's status read with Continue so a stage resumed
+during startup cannot spawn the same agent twice.
+
 ### Fix: large requests in OpenAI-compatible adapters
 
 Pass prompts, image payloads, conversation history and responses through files

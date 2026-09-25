@@ -98,31 +98,38 @@
   чтобы гонка CAS не запустила `runImplementationAgent` (который читает
   несуществующий `plan.md`). Валидация `ParseFile`: `auto` — единственный агент.
 
-### Persistent IDLE/BACKOFF footer metrics
+### Persistent run timers (Elapsed/Idle/Backoff)
 
 - **Аккумуляторы в `RunState`, не в событиях.** `IdleAccumulatedMs`/
-  `BackoffAccumulatedMs` (`int64`, `pkg/state/state.go`) персистятся в снапшот и
-  восстанавливаются реплеем лога. `IdleSince()`/`BackoffOpenSince()` не
-  персистятся — считаются на чтении из `Stages[].UpdatedAt`.
+  `BackoffAccumulatedMs`/`ElapsedAccumulatedMs` (`int64`, `pkg/state/state.go`)
+  персистятся в снапшот и восстанавливаются реплеем лога. `run_started` и
+  терминальные `run_finished`/`run_failed`/`run_interrupted` — записи в
+  авторитетном `events.jsonl` с пустым `stage_id`; они получают seq, но не входят
+  в stage `History()`. `EndedAt`/`RunStatus` завершают открытые интервалы;
+  `RunStartedAt` на resume задаёт новый anchor, исключая офлайн-перерыв.
+  `ElapsedSince()`/`IdleSince()`/`BackoffOpenSince()` вычисляются на чтении.
 - **Один хелпер, два call-site.** `accountIdleAndBackoff(rs, stageID, to, t)`
   обновляет оба аккумулятора по состоянию `rs.Stages` ДО применения перехода.
   Вызывается из `Store.Apply` (live) И из `parseEventLog` (replay) — это разные
   функции, `parseEventLog` не идёт через `Apply`. Забыть один call-site → числа
   разъедутся между живым раном и рестартом.
 - **Idle — flow-wide**: idle, если любая стадия в `awaiting_user_input`/
-  `awaiting_approval`, ЛИБО есть `failed` и нет `running`/`planning`/`revising`
+  `awaiting_approval`/`paused`/`hook_failed`, ЛИБО есть `failed` и нет `running`/`planning`/`revising`
   (`retrying` НЕ считается активной). **Backoff** суммируется параллельно: несколько
   `retrying`-стадий складываются независимо.
 - `Store.Apply` берёт `t.Time` один раз (`SetStageStatusAt`) — иначе повторный
   `time.Now()` после fsync искажал точность. `NewRunState` НЕ штампует `UpdatedAt`
   для pending-стадий — иначе на каждом `Store.Open` untouched-стадия доминировала
   бы в `maxUpdatedAt()` и портила Idle после рестарта.
-- **API `/api/status`:** `idle_accumulated_ms`, `idle_since` (omitempty),
+- **API `/api/status`:** `run_status`, `ended_at`, `elapsed_accumulated_ms`,
+  `elapsed_since`, `idle_accumulated_ms`, `idle_since`,
   `backoff_accumulated_ms`, `backoff_open_since`.
 - **Frontend — anchor + tick, без event-replay.** `useIdleMs`/`useBackoffMs`
-  (`pkg/web/dashboard/src/hooks/`) считают `accumulated + (now - since)`, берут
-  `connected` — при `false` тикер замирает; на reconnect `useStatus`-поллинг
-  подтягивает уже скорректированный сервером anchor.
+  (`pkg/web/dashboard/src/hooks/`) считают `accumulated + (now - since)`;
+  `useElapsed` делает то же для активного запуска. Тик зависит от свежести
+  `/api/status`, не от WebSocket: при сбое/просрочке ответа замирает, при
+  восстановлении опроса получает новый anchor. Терминальный ответ фиксирует
+  точные значения независимо от соединения.
 
 ### Stage order in the dashboard — топологический, не порядок объявления
 
@@ -192,6 +199,9 @@
   (`failBlockedStages`/`startPlanningForUnblocked`/`startReadyStages`/
   `tryActivatePrePlanned`), а не голый `Trigger(EvComplete)` — иначе зависимые
   зависают в `pending`.
+- **Continue и startup-recovery не спавнят одного агента дважды.** `continueMu`
+  связывает CAS-переход Continue с `continuedThisProcess`; startup читает
+  статус и маркер под тем же мьютексом и пропускает уже возобновлённую стадию.
 
 ## Pre-note: заметка стадии до её старта
 

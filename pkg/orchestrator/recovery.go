@@ -169,7 +169,13 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			continue
 		}
 
+		o.continueMu.Lock()
 		current := o.opts.Store.Get(s.ID)
+		_, continuedHere := o.continuedThisProcess.Load(s.ID)
+		o.continueMu.Unlock()
+		if continuedHere {
+			continue // Continue already owns this stage's restart in this process
+		}
 		switch current {
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused:
 			continue

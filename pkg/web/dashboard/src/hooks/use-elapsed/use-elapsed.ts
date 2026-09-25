@@ -1,28 +1,45 @@
 import { useEffect, useState } from 'react'
 
-// Секундомер прошедшего времени от startedAt. Соответствует elapsedTimer в текущем app.js:
-// собственный односекундный интервал, не привязанный к циклу поллинга стадий, чтобы
-// счётчик обновлялся плавно каждую секунду.
+// Elapsed складывает завершённые активные интервалы с текущим. Для старого
+// сервера без накопителя остаётся расчёт от startedAt. Отдельный секундный
+// интервал даёт плавное обновление между ответами /api/status.
 const TICK_INTERVAL_MS = 1000
 
-export function useElapsed(startedAt: string): number {
+export function useElapsed(
+  startedAt: string,
+  endedAt: string | null = null,
+  live = true,
+  accumulatedMs: number | null = null,
+  activeSince: string | null = null,
+): number {
   const [elapsedMs, setElapsedMs] = useState(0)
 
   useEffect(() => {
     const startMs = Date.parse(startedAt)
-    if (Number.isNaN(startMs)) {
-      setElapsedMs(0)
-      return
+    const endMs = endedAt === null ? NaN : Date.parse(endedAt)
+    const activeSinceMs = activeSince === null ? NaN : Date.parse(activeSince)
+    const ended = !Number.isNaN(endMs)
+    const hasActiveCounter = accumulatedMs !== null
+
+    function compute(): number {
+      if (hasActiveCounter) {
+        if (ended || Number.isNaN(activeSinceMs)) return Math.max(0, accumulatedMs ?? 0)
+        return Math.max(0, (accumulatedMs ?? 0) + Math.max(0, Date.now() - activeSinceMs))
+      }
+      if (Number.isNaN(startMs)) return 0
+      return Math.max(0, (ended ? endMs : Date.now()) - startMs)
     }
 
-    setElapsedMs(Date.now() - startMs)
+    if (!live && !ended) return
+    setElapsedMs(compute())
+    if (ended || (hasActiveCounter && Number.isNaN(activeSinceMs)) || (Number.isNaN(startMs) && !hasActiveCounter)) return
 
     const timer = setInterval(() => {
-      setElapsedMs(Date.now() - startMs)
+      setElapsedMs(compute())
     }, TICK_INTERVAL_MS)
 
     return () => clearInterval(timer)
-  }, [startedAt])
+  }, [startedAt, endedAt, live, accumulatedMs, activeSince])
 
   return elapsedMs
 }

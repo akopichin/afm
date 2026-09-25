@@ -15,7 +15,7 @@ describe('useIdleMs', () => {
     expect(result.current).toBe(5000)
   })
 
-  test('adds live delta since the anchor while idle and connected, ticking every second', () => {
+  test('adds live delta since the anchor while status is available, ticking every second', () => {
     vi.useFakeTimers({ now: new Date('2026-08-07T10:00:02Z').getTime() })
 
     const { result } = renderHook(() => useIdleMs(5000, '2026-08-07T10:00:00Z', true))
@@ -28,26 +28,26 @@ describe('useIdleMs', () => {
     expect(result.current).toBe(8000)
   })
 
-  test('freezes the displayed value while disconnected', () => {
+  test('freezes the displayed value while status is unavailable', () => {
     vi.useFakeTimers({ now: new Date('2026-08-07T10:00:02Z').getTime() })
 
-    const { result, rerender } = renderHook(({ connected }) => useIdleMs(5000, '2026-08-07T10:00:00Z', connected), {
-      initialProps: { connected: true },
+    const { result, rerender } = renderHook(({ statusLive }) => useIdleMs(5000, '2026-08-07T10:00:00Z', statusLive), {
+      initialProps: { statusLive: true },
     })
     expect(result.current).toBe(7000)
 
-    rerender({ connected: false })
+    rerender({ statusLive: false })
     act(() => {
       vi.advanceTimersByTime(5000)
     })
     // Отключено — тик не идёт, значение держится на последнем вычисленном.
     expect(result.current).toBe(7000)
 
-    rerender({ connected: true })
+    rerender({ statusLive: true })
     act(() => {
       vi.advanceTimersByTime(1000)
     })
-    // Переподключились — тик продолжается от той же точки (в реальном
+    // Опрос восстановился — тик продолжается от той же точки (в реальном
     // приложении к этому моменту accumulatedMs/since уже обновились свежим
     // /api/status; здесь параметры не менялись, поэтому просто +1s).
     expect(result.current).toBe(13000)

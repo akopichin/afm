@@ -103,6 +103,7 @@ describe('App', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -758,6 +759,24 @@ describe('App', () => {
     }, { timeout: 4000 })
   })
 
+  test('Elapsed stays at the persisted end time while the completed dashboard is open', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-25T10:00:10Z'))
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Done', 'done')],
+      started_at: '2026-09-25T10:00:00Z',
+      run_status: 'finished',
+      ended_at: '2026-09-25T10:00:04Z',
+      elapsed_accumulated_ms: 4000,
+    }))
+    render(<App />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(document.getElementById('elapsed')).toHaveTextContent('00:04')
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(document.getElementById('elapsed')).toHaveTextContent('00:04')
+  })
+
   test('regression: idle_accumulated_ms with idle_since=null does not tick — the backend, not the client, decides what counts as idle', async () => {
     // Реальный баг, который чинил старый useIdleTime на фронте, теперь чинится
     // на бэкенде (см. Task 1's TestIsIdle_FailedWhileAnotherRunningIsNotIdle) —
@@ -780,8 +799,9 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
   })
 
-  test('IDLE stops ticking while the WebSocket is disconnected and resumes once reconnected', async () => {
+  test('IDLE keeps ticking while HTTP status polling works after a WebSocket disconnect', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-29T10:00:00.000Z'))
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'awaiting_approval')],
@@ -803,7 +823,7 @@ describe('App', () => {
       await vi.advanceTimersByTimeAsync(0)
     })
 
-    const idleTextConnected = document.getElementById('idle')?.textContent ?? ''
+    expect(document.getElementById('idle')).toHaveTextContent('00:00')
 
     act(() => {
       ws?.onclose?.()
@@ -812,8 +832,8 @@ describe('App', () => {
       await vi.advanceTimersByTimeAsync(5000)
     })
 
-    // Сокет разорван — значение держится на месте, а не продолжает тикать.
-    expect(document.getElementById('idle')).toHaveTextContent(idleTextConnected)
+    // /api/status продолжает отвечать, поэтому отсутствие WS не замораживает Idle.
+    expect(document.getElementById('idle')).toHaveTextContent('00:05')
 
     vi.useRealTimers()
   })
