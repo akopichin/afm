@@ -5,6 +5,11 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-25
 
+### Improvement: distinct feed bubbles in the Goga skin
+
+Give agent and user messages their own surfaces in both color modes, so grouped
+messages remain visually separate from the feed canvas and command rows.
+
 ### Fix: run timers stop at the durable completion boundary
 
 Persist run start and terminal events in `events.jsonl` and expose `run_status`

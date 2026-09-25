@@ -27,6 +27,8 @@
   --bg:        #0A0E1A;
   --bg-elev:   #121830;
   --panel-bg:  var(--bg-elev);
+  --surface-agent-message: #1B2944;
+  --surface-user-message:  #213B68;
 
   /* text */
   --ink:       #FFFFFF;
@@ -93,6 +95,8 @@
   --bg:        #F7F9FC;
   --bg-elev:   #FFFFFF;
   --panel-bg:  var(--bg-elev);
+  --surface-agent-message: #E8EDF7;
+  --surface-user-message:  #E2EAFF;
 
   /* text */
   --ink:       #0F172A;
