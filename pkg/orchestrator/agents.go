@@ -108,8 +108,7 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 		const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
 		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
 		data := map[string]string{keyError: err.Error(), dataKeyStderrTail: tail, dataKeySeq: strconv.FormatUint(failSeq, 10)}
-		o.ui.Publish(bus.Event{Type: bus.EventScriptFailed, StageID: s.ID, Data: data})
-		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventScriptFailed), data)
+		o.publishNotice(bus.Event{Type: bus.EventScriptFailed, StageID: s.ID, Data: data})
 		o.failBlockedStages()
 		return
 	}
@@ -132,8 +131,7 @@ const sectionAssumptions = "Assumptions"
 // вынесен сюда одной точкой (Задача 1.6/1.4, финальный дедуп).
 func (o *Orchestrator) collectDependencyPlansNoticing(s flow.Stage) string {
 	return stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
-		stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventContextWarning), fmt.Sprintf("%s: %s", depID, msg))
-		o.ui.Publish(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
+		o.publishNotice(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 	})
 }
 

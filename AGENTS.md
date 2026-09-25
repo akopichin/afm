@@ -3,6 +3,32 @@
 Условные обозначения к пути кода даются как ориентир — точные имена символов
 смотри в коде, а не в этом файле (он отстаёт при рефакторингах).
 
+## Composition and shared policies
+
+- `cmd/afm/run.go`: загрузка конфигурации/preflight и `executeFlow`, владеющий
+  ресурсами рана через defer. Подготовка CWD/memory/wrappers и Docker re-exec —
+  `run_environment.go`; lifecycle — `run_lifecycle.go`; сервер —
+  `run_dashboard.go`; workspace и адаптеры review-заметок — `run_workspace.go`.
+  `normalizeInteractiveStages` создаёт копию slice ДО `orchestrator.New`;
+  не меняй `Interactive` после создания graph/оркестратора.
+- `activatePrePlannedStage` — общая подготовка стадии без planning-агента для
+  startup и завершения зависимостей. `startReadyStage` — общий CAS-защищённый
+  ready → running → spawn для scheduler и retry. `executionKind` выбирает
+  implementation/autonomous с учётом legacy `autonomous.flag`.
+- `resumeStageAtStatus` используется startup и Continue; `resumeExecutionStage`
+  проверяет артефакты и verify, `recoverPlan` — план и политику approval.
+  Fresh-start выполняет before-hook; resumed agent его повторно не запускает.
+  Retrying без planning после рестарта по-прежнему идёт через ready/before-hook.
+- `publishNotice` (`pkg/orchestrator/notices.go`) связывает UI и `notices.jsonl`
+  для best-effort non-FSM уведомлений. FSM и critical completion сохраняют
+  собственные durable/CAS/delivery-пути.
+- Статический конфиг сервера — `Config.Stages map[string]StageConfig`;
+  runtime-представление — `StageView`. Промпты кнопок в StageConfig не передаются.
+- `App` использует `useSelectedStage` и `useReviewNoteCount`; режим workspace
+  принадлежит `useWorkspaceView`. `useFilePreview` владеет content/diff/Reload;
+  каждое переключение файла/вкладки и unmount инвалидирует старые ответы,
+  даже если пользователь вернулся к тому же пути.
+
 ## Working directory: `.afm` and `--dir`
 
 - afm хранит runs/flows/config под `.afm/` в рабочем каталоге. Родительский
@@ -14,7 +40,7 @@
   считает, что afm-root (родитель `.afm/`) == корень проекта. Когда это не так
   (Docker: исходники в `/workspace`, `.afm/` отдельно), задай `root_dir` — он
   становится CWD агентов: относительный путь резолвится от afm-root в
-  `cmd/afm/run.go` и протягивается `orchestrator.Options.RootDir` →
+  `cmd/afm/agent_environment.go` и протягивается `orchestrator.Options.RootDir` →
   `executor.Config.Dir` → `cmd.Dir`. Пусто → наследуется CWD процесса.
   `AFM_STAGE_DIR` (файлы диалога) всегда анкорится к afm-root, независимо от
   `root_dir`.
@@ -106,12 +132,12 @@
   объявления, зависимая рендерится сразу после ВСЕХ своих `depends_on`.
 - `state.RunState.StageOrder` не трогается (авторитетный порядок для
   state/scheduling); `topoOrder` — чисто display-слой в `pkg/server`.
-  `Server.stageDependsOn`/`Config.StageDependsOn` заполняются из
-  `flow.Stage.DependsOn` в `cmd/afm/run.go`.
+  `StageConfig.DependsOn` заполняется из `flow.Stage.DependsOn` в
+  `dashboardStageConfig` (`cmd/afm/run_dashboard.go`).
 
 ### Auto-advancing выбранной стадии в дашборде
 
-- `App.tsx` держит `selectedStageId` и автоматически переводит выбор на следующую
+- `useSelectedStage` держит `selectedStageId` и автоматически переводит выбор на следующую
   активную стадию, когда отслеживаемая завершилась — но не двигает пользователя,
   если он вручную открыл уже завершённую стадию.
 - **`wasLive` — флаг per-selection, не per-tick.** Живёт, пока не сменится
@@ -209,7 +235,7 @@ stages:
 - **Клик == Revise живого агента; клиент шлёт только *имя*.** `POST
   /api/stages/{id}/button` `{"name":"..."}` (`handleStageButton`) → гейт (статус
   `running`/`awaiting_approval` И не script; неизвестное имя → `400` через
-  labels-only `stageButtons` map) → `StageActions.Button` → `(*Orchestrator).Button`
+  labels-only `StageConfig.Buttons`) → `StageActions.Button` → `(*Orchestrator).Button`
   (`control_api.go`) резолвит `Buttons.Prompt(name)` и делегирует в `Revise`.
   **Текст промпта клиенту не доверяется** — резолвится на сервере.
 
@@ -224,8 +250,8 @@ Observer-only уведомления/метрики о жизненном цик
 - **Конфигурация — 4 слоя, keyed-merge по id.** Global (`~/.afm/config.yaml`) →
   project (`.afm/config.yaml`) → flow (`flow.yaml` верхний уровень) → stage
   (`stages[].hooks`). Global+project мёржит `config.LoadFrom` (`mergeFile`, keyed
-  по `Hook.ID`); flow/stage добавляются в `cmd/afm/run.go` через
-  `lifecyclehooks.Combine`.
+  по `Hook.ID`); flow/stage добавляются в `combineRunHooks`
+  (`cmd/afm/run_lifecycle.go`) через `lifecyclehooks.Combine`.
 
   ```yaml
   hooks:
@@ -311,7 +337,7 @@ hooks:
   `AFM_` зарезервирован **регистронезависимо** (`strings.ToUpper`); коллизии после
   uppercase внутри хука — ошибка. Существование источника здесь не проверяется.
 - **Резолв — один раз при сборке dispatcher'а, fail-fast до `flow_started`.**
-  `combinedHooks := Combine(...)` собирается в `cmd/afm/run.go` **до** докер-ветки
+  итоговый список собирается `combineRunHooks` в `cmd/afm/run.go` **до** докер-ветки
   (единый источник для host-резолва, `docker.ReExec` и in-container резолва —
   иначе транспортные индексы `hookIdx`/`varIdx` разъехались бы). Host:
   `ResolveHookEnv(hook, secretsMap)`; ошибка называет id хука и имя переменной, но
@@ -431,7 +457,7 @@ hooks:
   за transport-retryable).
 - **Observability — non-FSM, live + durable.** `emitVerifyStarted`/
   `emitVerifyResult` публикуют `bus.EventVerifyStarted`/`EventVerifyResult`
-  (`"verify_started"`/`"verify_result"`) live + durable `AppendNotice` в
+  (`"verify_started"`/`"verify_result"`) через `publishNotice` live + durable в
   `notices.jsonl`. Cost-accounting помечается `verifyExecutionLabel = "verify"`,
   но verify НЕ в `flow.Phases()` (это ортогональный проход, не фаза).
 - **Инварианты перед правкой:** (1) verify никогда сам не зовёт `EvComplete`/не
@@ -510,10 +536,10 @@ bash-цикл всегда найдёт файл; вышедший агент р
   атомарно (O_EXCL) пишет `answer.json` + best-effort `dialog.jsonl` с
   `AutoAnswered: true`. FSM не трогается.
 - **`bus.EventAutoAnswered` — live + `notices.jsonl`.** Не FSM-переход, поэтому не
-  в `events.jsonl`; публикуется live И durable через `stagefiles.AppendNotice` —
+  в `events.jsonl`; публикуется live И durable через `publishNotice` —
   иначе клиент, подключившийся после авто-ответа, не увидит строку в фиде
   (`/api/events`'s `reconstructNotices` реплеит из `notices.jsonl`). **Забыть
-  `AppendNotice` для нового non-FSM UI-события — типовой баг.**
+  durable-копию нового non-FSM UI-события — типовой баг.**
 - **Dashboard:** панель диалога гейтится реальным наличием истории, не типом
   стадии. `/api/status` отдаёт `has_dialog` (JSON-тег; frontend `stage.hasDialog`)
   — наличие любого `<phase>.dialog.jsonl`. Layout-гейт `buildStageViews`'s
@@ -714,7 +740,7 @@ Docker-only, строго **read-only** файл-браузер в дашбор�
 
 - **`docker.file_browser.enabled` (`*bool`, дефолт `true`).** `IsEnabled()`:
   **env `AFM_FILE_BROWSER` > config > default true**. Читается host-side в
-  `cmd/afm/run.go` (решает, форвардить ли манифест). `mergeFile` обязан копировать
+  `cmd/afm/run_environment.go` (решает, форвардить ли манифест). `mergeFile` обязан копировать
   `Docker.FileBrowser.Enabled`, иначе project-слой теряется.
 - **`docker.extra_mounts` — scalar-or-object** (`config.ExtraMount{Path, Name,
   Browse}`): legacy-строка → `browse:false` (приватный), только `browse:true`

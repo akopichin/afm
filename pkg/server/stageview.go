@@ -13,14 +13,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// StageView is the per-stage read model served by GET /api/status. It joins
-// state.StageState (event-log-derived) with the flow's static config
-// (Interactive/AutoApprove) and two filesystem-derived runtime flags
-// (Autonomous/HasDialog), and precomputes the two dashboard visibility
-// capabilities (ShowPlan/ShowDialog) that pkg/web/dashboard's App.tsx used to
-// recompute client-side from the same four raw flags — one source of truth
-// for "can this stage's plan/dialog panel be shown" instead of two
-// (Go here, TypeScript there) that had to be kept in sync by hand.
+// StageView joins event-log state, StageConfig and on-disk artifacts for
+// GET /api/status. ShowPlan and ShowDialog define dashboard panel visibility.
 type StageView struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name,omitempty"`
@@ -39,12 +33,8 @@ type StageView struct {
 	// остаётся непустым и после Continue) — панель паузы в дашборде решает
 	// по нему, какой текст показать.
 	PausedFrom state.StageStatus `json:"paused_from,omitempty"`
-	// ShowPlan/ShowDialog — the two visibility capabilities pkg/web/dashboard's
-	// App.tsx computed from Autonomous/Status/Interactive/HasDialog. See that
-	// file's showPlan/showDialog comment (removed in the frontend task of this
-	// same plan) for the original rationale this mirrors exactly.
-	ShowPlan   bool `json:"show_plan"`
-	ShowDialog bool `json:"show_dialog"`
+	ShowPlan   bool              `json:"show_plan"`
+	ShowDialog bool              `json:"show_dialog"`
 	// PreNote — текст заметки, прикреплённой к стадии до её старта (prenote.md).
 	// Даёт фронту и текст для префилла модалки редактирования, и сигнал для
 	// индикатора 📝 «к стадии прикреплена заметка». Пусто, если заметки нет.
@@ -83,26 +73,19 @@ type VerifyView struct {
 	Phase string `json:"phase"`
 }
 
-// buildStageViews joins rs.Stages (event-log state) with the flow's static
-// interactive/auto_approve config and two on-disk runtime flags
-// (autonomous.flag presence, any <phase>.dialog.jsonl presence) into one
-// slice ordered by topoOrder(rs.StageOrder, dependsOn) — a display-only
-// reordering. rs.StageOrder itself (the authoritative declaration order used
-// by state/scheduling) is never touched. Replaces handleStatus's previous
-// five-parallel-map construction. stageCosts is the per-stage slice of a
-// single accounting.CostBundle.Stages map (nil when accounting isn't wired
-// up) — handleStatus calls CostSnapshot() once per request and passes the
-// same bundle here and into the run-level statusResponse fields.
-func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAutoApprove, stageIsScript map[string]bool, dependsOn map[string][]string, stageButtons map[string][]string, stageCosts map[string]*accounting.CostView) []StageView {
-	order := topoOrder(rs.StageOrder, dependsOn)
+// buildStageViews joins event-log state, static configuration and on-disk
+// artifacts. Ordering is display-only: rs.StageOrder remains unchanged.
+// stageCosts comes from the same snapshot as the run-level cost fields.
+func buildStageViews(rs state.RunState, runDir string, stages map[string]StageConfig, stageCosts map[string]*accounting.CostView) []StageView {
+	order := topoOrder(rs.StageOrder, stages)
 	views := make([]StageView, 0, len(order))
 	verifyByStage := latestVerifyByStage(runDir)
 	for _, id := range order {
 		st := rs.Stages[id]
 		autonomous := stageIsAutonomous(runDir, id)
 		hasDialog := stageHasDialog(runDir, id)
-		interactive := stageInteractive[id]
-		isScript := stageIsScript[id]
+		cfg := stages[id]
+		isScript := cfg.IsScript
 		// autonomous-стадии обычно вообще не имеют plan.md и никогда не доходят
 		// до статусов, для которых нужна панель плана — кроме failed (retry) и
 		// paused (Continue): обе требуют кнопки действия, которая живёт в
@@ -135,16 +118,16 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 			Name:        rs.StageNames[id],
 			Status:      st.Status,
 			UpdatedAt:   st.UpdatedAt,
-			Interactive: interactive,
+			Interactive: cfg.Interactive,
 			Autonomous:  autonomous,
-			AutoApprove: stageAutoApprove[id],
+			AutoApprove: cfg.AutoApprove,
 			HasDialog:   hasDialog,
 			IsScript:    isScript,
 			PausedFrom:  pausedFrom,
 			ShowPlan:    showPlan,
 			ShowDialog:  showDialog,
 			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
-			Buttons:     stageButtons[id],
+			Buttons:     cfg.Buttons,
 			Cost:        stageCosts[id],
 			Verify:      verifyByStage[id],
 		})
@@ -166,7 +149,7 @@ func buildStageViews(rs state.RunState, runDir string, stageInteractive, stageAu
 // well-formed acyclic graph referencing only known stage ids by the time this
 // runs; the length check below is a defensive fallback (return ids as-is)
 // for that invariant, not a real code path.
-func topoOrder(ids []string, dependsOn map[string][]string) []string {
+func topoOrder(ids []string, stages map[string]StageConfig) []string {
 	index := make(map[string]int, len(ids))
 	for i, id := range ids {
 		index[id] = i
@@ -175,7 +158,7 @@ func topoOrder(ids []string, dependsOn map[string][]string) []string {
 	indegree := make(map[string]int, len(ids))
 	dependents := make(map[string][]string, len(ids))
 	for _, id := range ids {
-		for _, dep := range dependsOn[id] {
+		for _, dep := range stages[id].DependsOn {
 			if _, ok := index[dep]; !ok {
 				continue
 			}

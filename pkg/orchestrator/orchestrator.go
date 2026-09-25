@@ -762,40 +762,16 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 	return nil
 }
 
-// onAgentCompleted consumes EventAgentCompleted, published from exactly two
-// places: runWithRetry (retry.go — planning/implementation/autonomous, the
-// only phases the file-based dialog protocol applies to) and the
-// phaseScript path (agents.go), which can never have an open question
-// (flow.IsValidPhase rejects "script" as a dialog phase, so hasOpenQuestion
-// would always be false for it anyway).
-//
-// This function does NOT re-derive "should we hold for an open question" —
-// that decision belongs entirely to whichever code published the event.
-// An earlier version DID duplicate runWithRetry's open-question-vs-
-// completion check here, independently — found live, during a related fix,
-// that the duplicate had silently drifted out of sync with the original
-// (fixed in one place, not the other), stranding a genuinely finished stage
-// forever. Two copies of the same business rule is the bug, not just an
-// incomplete patch — removed rather than fixed a second time. See
-// runWithRetry's comment for the actual precedence logic.
+// onAgentCompleted consumes completions from runWithRetry and script stages.
+// It applies phase transitions and unblocks dependents. The open-question gate
+// below also covers non-interactive phases that runWithRetry does not gate.
 func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error {
 	agentType, _ := ev.Data.(string)
 	current := o.currentStatus(ev.StageID)
 
-	// Open-question gate, ungated by s.Interactive/phase — unlike
-	// runWithRetry's own narrower check (interactive/autonomous stages
-	// only), this is the catch-all for phases that check skips (e.g. a
-	// non-interactive planning stage whose agent leaves a genuinely fresh
-	// question). Restored after being removed as a supposed pure duplicate
-	// of runWithRetry's check — it isn't: it has a strictly broader scope,
-	// and TestIntegration_PlanningWithOpenQuestionWaits (non-interactive
-	// stage, expects to hold for its own fresh question) regressed without
-	// it. Skipped when current is ALREADY AwaitingUserInput: that means the
-	// independent question poller raced ahead of this exact agent
-	// invocation and parked the stage there WHILE the agent was still
-	// running — the open question is then a stale tail from earlier in the
-	// stage's life (e.g. the id-reuse bug, since fixed), not a live one
-	// this completion should wait on — see runWithRetry's matching comment.
+	// Check all phases for fresh questions. AwaitingUserInput means the poller
+	// already parked this invocation; its remaining question is a stale tail,
+	// so completion wins (the same precedence as runWithRetry).
 	if current != state.StatusAwaitingUserInput && o.hasOpenQuestion(ev.StageID, agentType) {
 		o.preAskPhase.Store(ev.StageID, agentType)
 		o.Trigger(ev.StageID, bus.EvAskUser, bus.GuardCtx{Phase: agentType}, "")

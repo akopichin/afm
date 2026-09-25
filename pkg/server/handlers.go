@@ -120,7 +120,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.CoverageIssues = bundle.Issues
 		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData, ShowMoney: s.showMoney}
 	}
-	resp.Stages = buildStageViews(rs, s.runDir, s.stageInteractive, s.stageAutoApprove, s.stageIsScript, s.stageDependsOn, s.stageButtons, stageCosts)
+	resp.Stages = buildStageViews(rs, s.runDir, s.stages, stageCosts)
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	if s.reviewState != nil {
 		st, owners := s.reviewState()
@@ -199,7 +199,7 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 	// rejects `revising`) and the stage would hang. Mirror the same guard
 	// handleStageButton/handleStageNote apply. Defense-in-depth behind the
 	// client-side !isScript gate on the feed composer.
-	if s.stageIsScript[stageID] {
+	if s.stages[stageID].IsScript {
 		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
 		return
 	}
@@ -264,7 +264,7 @@ func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not pending", st.Status), http.StatusBadRequest)
 		return
 	}
-	if s.stageIsScript[stageID] {
+	if s.stages[stageID].IsScript {
 		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
 		return
 	}
@@ -318,7 +318,7 @@ func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
 		return
 	}
-	if s.stageIsScript[stageID] {
+	if s.stages[stageID].IsScript {
 		http.Error(w, "script stage has no agent", http.StatusBadRequest)
 		return
 	}
@@ -331,7 +331,7 @@ func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "button name is required", http.StatusBadRequest)
 		return
 	}
-	if !slices.Contains(s.stageButtons[stageID], req.Name) {
+	if !slices.Contains(s.stages[stageID].Buttons, req.Name) {
 		http.Error(w, "unknown button", http.StatusBadRequest)
 		return
 	}
@@ -387,7 +387,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
 		return
 	}
-	if s.stageIsScript[stageID] && st.Status == state.StatusRunning {
+	if s.stages[stageID].IsScript && st.Status == state.StatusRunning {
 		http.Error(w, "pause is not supported mid-script execution", http.StatusConflict)
 		return
 	}
@@ -476,7 +476,7 @@ func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stageDir := filepath.Join(s.runDir, stageID)
-	out := buildDialogEntries(stageDir, s.stageInteractive[stageID])
+	out := buildDialogEntries(stageDir, s.stages[stageID].Interactive)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
@@ -683,7 +683,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 	// earlier answer.json missing and deadlocks the agent. A well-behaved client
 	// only shows the current question (buildDialogEntries), so this guards
 	// stale/direct clients. Non-interactive stages auto-answer and are exempt.
-	if s.stageInteractive[stageID] {
+	if s.stages[stageID].Interactive {
 		cur, hasCur, err := mcp.CurrentQuestion(stageDir)
 		if err != nil {
 			writeFlowError(w, http.StatusInternalServerError, "current_question_lookup_failed")

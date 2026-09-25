@@ -7,13 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,21 +17,11 @@ import (
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/server/workspace"
 	"github.com/akopichin/afm/pkg/state"
-)
-
-// Compile-time checks that *orchestrator.Orchestrator satisfies both
-// server interfaces directly — a future signature drift here fails the
-// build instead of surfacing as a runtime nil-interface panic in server.New.
-var (
-	_ server.StageActions     = (*orchestrator.Orchestrator)(nil)
-	_ server.SecondaryActions = (*orchestrator.Orchestrator)(nil)
 )
 
 func newRunCmd() *cobra.Command {
@@ -67,500 +53,30 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
 			f, err := flow.ParseFile(flowPath)
 			if err != nil {
 				return fmt.Errorf("parse flow: %w", err)
 			}
 
-			// Preflight: каждый агентский verify-шаг (verify.command) должен
-			// резолвиться в поддерживаемый verify-адаптер ДО старта рана —
-			// иначе стадия провалила бы verify только на этапе выполнения,
-			// когда откатывать уже поздно. flow.Flow.validate() этого не
-			// делает сама — она ничего не знает про cfg.Docker.Agents.
-			//
-			// D1 (второй раунд код-ревью): type:codex recipe считается
-			// поддерживаемым verify-адаптером ТОЛЬКО когда этот ран реально
-			// сгенерирует read-only враппер — Docker-режим С включённым
-			// autoShim. AFM_IN_DOCKER=1 учитываем отдельно от
-			// cfg.Docker.IsDockerEnabled() (та явно возвращает false внутри
-			// контейнера — см. её doc comment), иначе preflight внутри
-			// контейнера (после re-exec, тот же RunE выполняется заново)
-			// ложно решил бы, что шим не активен, хотя на самом деле он уже
-			// применяется этим же процессом.
-			inDockerPreflight := config.ReExecedIntoContainer()
-			codexRecipesShimmed := cfg.Docker.IsAutoShim() && (inDockerPreflight || cfg.Docker.IsDockerEnabled())
-			if err := config.ValidateVerifySpecs(f, cfg, codexRecipesShimmed); err != nil {
+			// Recipe-based verification requires the read-only wrapper, both before
+			// Docker re-exec and inside the container that generates it.
+			shimmed := cfg.Docker.IsAutoShim() && (config.ReExecedIntoContainer() || cfg.Docker.IsDockerEnabled())
+			if err := config.ValidateVerifySpecs(f, cfg, shimmed); err != nil {
 				return fmt.Errorf("verify: %w", err)
 			}
-
-			// Lifecycle hooks (Phase 1-3): слои global+project (уже смёржены в
-			// cfg.Hooks, config.LoadFrom) + flow + per-stage, собранные в ИТОГОВЫЙ
-			// []RegisteredHook (Combine, с учётом override по id) ЗДЕСЬ, ДО
-			// докер-ветки ниже (codex #3) — иначе host-резолв секретов хуков
-			// (docker.ReExec) и in-container резолв после re-exec работали бы по
-			// РАЗНЫМ спискам (сырые слои вместо итоговых hooks), и транспортные
-			// индексы (hookIdx,varIdx, см. lifecyclehooks.TransportName)
-			// разошлись бы между хостом и контейнером.
-			hookLayers := []lifecyclehooks.Layer{{Hooks: cfg.Hooks}, {Hooks: f.Hooks}}
-			for _, st := range f.Stages {
-				if len(st.Hooks) > 0 {
-					hookLayers = append(hookLayers, lifecyclehooks.Layer{StageID: st.ID, Hooks: st.Hooks})
-				}
-			}
-			combinedHooks := lifecyclehooks.Combine(hookLayers...)
-
-			// Docker self-re-exec: если включён Docker-режим и мы не внутри контейнера —
-			// перезапускаем себя в Docker.
+			// Combine before re-exec: host and container must use identical secret indices.
+			hooks := combineRunHooks(cfg, f)
 			if cfg.Docker.IsDockerEnabled() {
-				absDir, absErr := filepath.Abs(rootDir)
-				if absErr != nil {
-					return fmt.Errorf("resolve project dir: %w", absErr)
-				}
-				if err := docker.CheckClaudeDockerAuth(cfg.Client.Command); err != nil {
-					return err
-				}
-				if cfg.Docker.IsAutoShim() {
-					if err := cfg.Docker.ValidateAgents(); err != nil {
-						return err
-					}
-				}
-				var generatedForMount map[string]bool
-				var recipes map[string]config.AgentRecipe
-				if cfg.Docker.IsAutoShim() {
-					// Берём только recipe-агентов, которых реально использует флоу
-					// (команда этапа или глобальный client.command). ReExec резолвит
-					// секрет для КАЖДОЙ записи recipes и fail-fast'ит на первой
-					// отсутствующей — без фильтрации определённый-но-неиспользуемый
-					// агент без секрета заблокировал бы весь запуск, а секреты
-					// неиспользуемых агентов попадали бы в контейнер (least-privilege).
-					recipes = docker.UsedRecipes(f, cfg.Client.Command, cfg.Docker.Agents)
-					// generatedForMount — то же самое множество ключей, чтобы
-					// ScanCommands (mount) и ReExec (secret) работали с одним набором.
-					generatedForMount = make(map[string]bool, len(recipes))
-					for cmd := range recipes {
-						generatedForMount[cmd] = true
-					}
-				}
-				cmds := docker.ScanCommands(f, cfg.Client.Command, generatedForMount)
-				mountCodexState := docker.UsesCodex(f, cfg.Client.Command, recipes)
-				// File browser: манифест корней строим только если он включён —
-				// BuildFileRootManifest всё равно возвращал бы непустой манифест
-				// (корень проекта), и ReExec переключил бы публикацию порта на
-				// loopback, даже когда пользователь file browser выключил.
-				browserEnabled := cfg.Docker.FileBrowser.IsEnabled()
-				var fileRoots docker.FileRootManifest
-				if browserEnabled {
-					fileRoots, err = docker.BuildFileRootManifest(absDir, cfg.Docker.ExtraMounts)
-					if err != nil {
-						return fmt.Errorf("build file root manifest: %w", err)
-					}
-				}
-				port := cfg.Server.GetPort()
-				// afm внутри Linux-контейнера не может открыть браузер на macOS-хосте
-				// (runtime.GOOS=linux → xdg-open без display). Поэтому opener запускаем
-				// на хосте ДО re-exec: это отдельный процесс, он переживает syscall.Exec
-				// родителя и откроет dashboard, как только контейнер поднимет порт.
-				if port > 0 && cfg.Server.IsOpenBrowser() {
-					launchHostBrowserOpener(port)
-				}
-				// --dir должен быть абсолютным: относительный путь внутри контейнера
-				// резолвился бы относительно -w (absDir) и дублировал вложенность.
-				// Последний --dir выигрывает у возможного пользовательского флага
-				// (cobra/pflag берёт последнее вхождение non-slice флага).
-				return docker.ReExec(docker.ReExecConfig{
-					Image:              cfg.Docker.GetImage(),
-					ProjectDir:         absDir,
-					Commands:           cmds,
-					DashboardPort:      port,
-					ExtraMounts:        cfg.Docker.ExtraMounts,
-					ExtraArgs:          append(os.Args[1:], "--dir="+absDir),
-					ClientCommand:      cfg.Client.Command,
-					Recipes:            recipes,
-					SecretsFile:        cfg.Docker.SecretsFile,
-					Hooks:              combinedHooks,
-					MountCodexState:    mountCodexState,
-					FileBrowserEnabled: browserEnabled,
-					FileRoots:          fileRoots,
-				})
+				return reexecFlow(rootDir, f, cfg, hooks)
 			}
 
-			// Apply flow-level overrides (CLI flag takes priority, then YAML, then config)
+			// CLI > flow YAML > config.
 			if maxParallel == 0 && f.MaxParallel > 0 {
 				cfg.Executor.MaxParallel = f.MaxParallel
 			}
-
-			prompts, err := loadPrompts(cfg.PromptsDir)
-			if err != nil {
-				return err
-			}
-
-			runDir, store, err := resolveRun(f)
-			if err != nil {
-				return err
-			}
-			defer store.Close()
-
-			// Accounting (usage.jsonl): observability only — a hard failure to
-			// open the ledger (e.g. permission denied) is logged and the run
-			// continues with accounting disabled (Options.Accounting stays nil,
-			// orchestrator.recordUsage no-ops). A pre-existing corrupt log
-			// (Open still returns a usable, already-Unavailable Store) is passed
-			// through as-is: Append calls become no-ops on their own, nothing
-			// here needs to special-case that.
-			acctResolver := accounting.NewResolver(cfg.Pricing)
-			acct, acctErr := accounting.Open(runDir, acctResolver)
-			if acctErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: accounting: open usage ledger: %v\n", acctErr)
-			}
-			if acct != nil {
-				defer acct.Close()
-			}
-
-			// Populate flow/stage display names from the flow definition. Works for
-			// both new runs and resumed ones — names always come from the current
-			// flow file, so they stay correct even if the flow was edited between
-			// runs.
-			store.SetFlowName(f.Name)
-			{
-				stageNames := make(map[string]string, len(f.Stages))
-				for _, s := range f.Stages {
-					if s.Name != "" {
-						stageNames[s.ID] = s.Name
-					}
-				}
-				store.SetStageNames(stageNames)
-			}
-
-			fmt.Printf("afm: running %q\n", f.Name)
-			fmt.Printf("  run dir: %s\n", runDir)
-
-			// Единый wrapper-dir: generated-врапперы (autoShim, только внутри
-			// контейнера). На хосте врапперы не генерируются — реальные бинарники
-			// используются напрямую.
-			var wrapperSpecs []docker.WrapperSpec
-			generatedAgents := map[string]bool{}
-			// Job A: autoShim-врапперы генерируются ТОЛЬКО когда мы — собственный
-			// re-exec afm (ReExecedIntoContainer), т.к. они зависят от секретов и
-			// system-prompt'ов, переданных docker.ReExec транспортом. В ЧУЖОМ
-			// контейнере (InContainer по marker-файлу, но без AFM_IN_DOCKER) этого
-			// транспорта нет — врапперы намеренно не генерируются, agent-бинарники
-			// ожидаются установленными в самом контейнере (сценарий autoShim в
-			// чужом контейнере экзотичен и заведомо не работал: раньше приводил к
-			// попытке docker-in-docker).
-			if config.ReExecedIntoContainer() && cfg.Docker.IsAutoShim() {
-				if err := cfg.Docker.ValidateAgents(); err != nil {
-					return err
-				}
-				used := docker.UsedRecipeCommands(f, cfg.Client.Command, cfg.Docker.Agents)
-				for cmd := range used {
-					generatedAgents[cmd] = true
-					wrapperSpecs = append(wrapperSpecs, buildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
-				}
-			}
-			var wrapperDir string
-			if len(wrapperSpecs) > 0 {
-				wd, err := docker.CreateWrappers(wrapperSpecs)
-				if err != nil {
-					return fmt.Errorf("create wrappers: %w", err)
-				}
-				wrapperDir = wd
-				defer os.RemoveAll(wd) //nolint:errcheck
-			}
-
-			// Корень проекта для агентов (их CWD) и директория памяти —
-			// общие хелперы cmd/afm/agent_environment.go (Task 13), поведение
-			// не изменилось: относительный root_dir резолвится относительно
-			// afm-корня (--dir); пустой — агенты наследуют CWD процесса afm.
-			agentRootDir, err := resolveAgentRoot(rootDir, f)
-			if err != nil {
-				return err
-			}
-			memDir, err := resolveMemoryDir(rootDir, agentRootDir, f)
-			if err != nil {
-				return err
-			}
-
-			// Lifecycle hooks (Phase 1-3): combinedHooks — итоговый []RegisteredHook,
-			// собранный ВЫШЕ (до докер-ветки, codex #3) из ТЕХ ЖЕ слоёв, что видит
-			// (при re-exec) и хост, и контейнер — переиспользуем его как есть, не
-			// пересобираем из layers здесь, иначе рисковали бы разойтись индексами
-			// hookIdx транспорта, случайно поменяв местами слои.
-			// Dispatcher живёт на собственном ctx (Stop ниже) — хуки-наблюдатели
-			// не зависят от отмены run-ctx (flow_interrupted должен уйти).
-			runID := filepath.Base(runDir)
-			hooksRootDir := lifecycleRootDir(agentRootDir)
-			resumed := store.Snapshot().LastSeq > 0
-			var hooksDisp *lifecyclehooks.Dispatcher
-			var orchRef *orchestrator.Orchestrator
-			inDocker := config.ReExecedIntoContainer()
-			if inDocker {
-				// In-container: секреты хуков УЖЕ резолвнуты хостом (docker.ReExec)
-				// и переданы transient bare `-e` env-переменными (см.
-				// lifecyclehooks.TransportName) — читаем ИЗ транспорта, а НЕ из
-				// secrets.env/файлов (их в контейнере может и не быть смонтировано,
-				// да и не нужно — хост уже резолвнул).
-				for i := range combinedHooks {
-					resolved, rerr := lifecyclehooks.ResolveHookEnvFromTransport(i, combinedHooks[i].Hook)
-					if rerr != nil {
-						return fmt.Errorf("lifecycle hooks: %w", rerr) // fail-fast до flow_started
-					}
-					combinedHooks[i].Hook.ResolvedEnv = resolved
-				}
-				// Единая точка изоляции (codex #2): сразу после того как ВСЕ хуки
-				// резолвили ResolvedEnv из транспорта — и ДО Orchestrator.Run, до
-				// любого запуска агента/стадии — снимаем ВСЕ AFM_HOOK_SECRET_* из
-				// окружения afm-процесса. Дальше их нет вовсе → ни один дочерний
-				// процесс (агент, script-стадия, RunVerify, RunJSONQuery, git,
-				// другой хук) не унаследует их — без аудита каждого spawn-сайта.
-				lifecyclehooks.UnsetTransportVars()
-			}
-			if len(combinedHooks) > 0 && !inDocker {
-				// Хост (без Docker) — прежний путь (Task 3): резолв env-секретов
-				// хуков ДО New/flow_started (fail-fast: ран не должен стартовать с
-				// недорезолвленным секретом). secrets.env грузим ТОЛЬКО если хотя бы
-				// у одного собранного хука непустой Env — иначе нечитаемый
-				// secrets.env заблокировал бы чистый Phase 1-хук без секретов
-				// (codex #8).
-				anyEnv := false
-				for i := range combinedHooks {
-					if len(combinedHooks[i].Hook.Env) > 0 {
-						anyEnv = true
-						break
-					}
-				}
-				var hookSecrets map[string]string
-				if anyEnv {
-					var serr error
-					// Слои: project .afm/secrets.env > global ~/.afm/secrets.env >
-					// env процесса (порядок обеспечивает secrets.ResolveRef:
-					// сначала loaded map, затем os.Getenv; в loaded проектный
-					// слой перекрывает глобальный).
-					if hookSecrets, serr = loadHookSecretLayers(rootDir); serr != nil {
-						return fmt.Errorf("lifecycle hooks: load secrets.env: %w", serr)
-					}
-				}
-				for i := range combinedHooks {
-					if len(combinedHooks[i].Hook.Env) == 0 {
-						continue // чистый Phase 1-хук: секретов нет, слои не нужны
-					}
-					resolved, rerr := lifecyclehooks.ResolveHookEnv(combinedHooks[i].Hook, hookSecrets)
-					if rerr != nil {
-						return fmt.Errorf("lifecycle hooks: %w", rerr) // fail-fast до flow_started
-					}
-					combinedHooks[i].Hook.ResolvedEnv = resolved
-				}
-			}
-			if len(combinedHooks) > 0 {
-				hooksDisp = lifecyclehooks.New(lifecyclehooks.DispatcherOptions{
-					Config: lifecyclehooks.DispatcherConfig{
-						FlowName: f.Name,
-						RunID:    runID,
-						RunDir:   runDir,
-						RootDir:  hooksRootDir,
-						Resumed:  resumed,
-					},
-					Hooks:  combinedHooks,
-					LogDir: filepath.Join(runDir, "hooks"),
-					OnError: func(hookID, eventID string, err error) {
-						if orchRef != nil {
-							orchRef.PublishLifecycleHookFailure(hookID, eventID, err)
-							return
-						}
-						fmt.Fprintf(os.Stderr, "warning: lifecycle hook %s failed (%s): %v\n", hookID, eventID, err)
-					},
-				})
-				// Единая точка остановки: bounded flush, затем Stop. defer
-				// исполняется на ЛЮБОМ выходе из RunE (в т.ч. по ошибке
-				// orch.Run — ранний return с пропущенным flush терял бы
-				// terminal-события; codex MAJ#7).
-				defer func() {
-					if !hooksDisp.Flush(lifecyclehooks.FlushTimeout) {
-						fmt.Fprint(os.Stderr, "warning: lifecycle hooks flush timed out\n")
-					}
-					hooksDisp.Stop()
-				}()
-			}
-
-			// Docker project file browser: только внутри контейнера, где
-			// docker.ReExec передал манифест примонтированных корней через
-			// AFM_DOCKER_FILE_ROOTS. На хосте (или при отсутствии/битом
-			// манифесте) ws остаётся nil — capability просто выключена,
-			// это не фатально (см. task-10 brief). Собирается ДО
-			// orchestrator.New, чтобы ResolveFile/CurrentFileSHA ниже могли
-			// замкнуться на реальный ws (nil в хостовом режиме — оба поля
-			// Options остаются незаданными).
-			var ws workspace.FS
-			if cfg.Server.GetPort() > 0 {
-				if raw := os.Getenv(docker.FileRootsEnvVar); raw != "" && config.ReExecedIntoContainer() {
-					man, err := docker.DecodeFileRootManifest(raw)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: file browser disabled: decode file root manifest: %v\n", err)
-					} else {
-						roots := make([]workspace.Root, 0, len(man.Roots))
-						for _, r := range man.Roots {
-							roots = append(roots, workspace.Root{
-								ID:            r.ID,
-								Label:         r.Label,
-								Path:          r.ContainerPath,
-								Kind:          r.Kind,
-								MountReadOnly: r.MountReadOnly,
-							})
-						}
-						fs, err := workspace.New(roots)
-						switch {
-						case err != nil:
-							fmt.Fprintf(os.Stderr, "warning: file browser disabled: open workspace: %v\n", err)
-						case len(fs.Roots()) == 0:
-							fmt.Fprintf(os.Stderr, "warning: file browser disabled: no roots could be opened (manifest had %d)\n", len(man.Roots))
-						default:
-							ws = fs
-						}
-					}
-				}
-			}
-
-			orchOpts := orchestrator.Options{
-				RunDir:          runDir,
-				Stages:          f.Stages,
-				Store:           store,
-				Config:          cfg,
-				Prompts:         prompts,
-				WrapperDir:      wrapperDir,
-				GeneratedAgents: generatedAgents,
-				GlobalPrompt:    f.Prompt,
-				RootDir:         agentRootDir,
-				RequireApproval: requireApproval,
-				Debug:           debugEnabled,
-				Memory:          f.Memory,
-				MemoryDir:       memDir,
-				Accounting:      acct,
-				FlowName:        f.Name,
-				RunID:           runID,
-				Resumed:         resumed,
-				Hooks:           hooksDisp,
-			}
-			// ResolveFile/CurrentFileSHA питают review-ноты (AddNote,
-			// renderReviewFeedback): без workspace (host-режим, ws == nil)
-			// оба поля остаются nil — orchestrator сам трактует это как
-			// "файл не резолвится" (ErrStaleContent / "file unavailable").
-			if ws != nil {
-				orchOpts.ResolveFile = workspaceResolveFile(ws)
-				orchOpts.CurrentFileSHA = workspaceCurrentFileSHA(ws)
-			}
-			orch := orchestrator.New(orchOpts)
-			orchRef = orch
-			if hooksDisp != nil {
-				// orchRef замыкается в OnError выше; Start после New, чтобы
-				// warning-notice уже имел живой orchestrator. Присвоение
-				// orchRef делаем ДО Start (гонка Emit-до-Start безопасна:
-				// очереди буферизуются).
-				hooksDisp.Start()
-			}
-
-			// Disable interactive flags when dashboard is not running
-			if cfg.Server.GetPort() == 0 {
-				for i := range f.Stages {
-					if f.Stages[i].Interactive {
-						f.Stages[i].Interactive = false
-						fmt.Fprintf(os.Stderr, "warning: stage %q: interactive requires dashboard (server port > 0); running as non-interactive\n", f.Stages[i].ID)
-					}
-				}
-			}
-
-			// dashboardStarted — поднят ли HTTP-сервер дашборда. По флагу после
-			// завершения флоу выдерживаем паузу (waitForDashboardDrain), чтобы UI
-			// успел подтянуть терминальный статус до того, как процесс оборвёт
-			// соединения. srv нужен и после if — waitForDashboardDrain опрашивает
-			// его ConnectedClients().
-			dashboardStarted := false
-			var srv *server.Server
-
-			// Start HTTP server if port > 0
-			if cfg.Server.GetPort() > 0 {
-				stageInteractive := make(map[string]bool, len(f.Stages))
-				stageAutoApprove := make(map[string]bool, len(f.Stages))
-				stageIsScript := make(map[string]bool, len(f.Stages))
-				stageDependsOn := make(map[string][]string, len(f.Stages))
-				stageButtons := make(map[string][]string, len(f.Stages))
-				for _, st := range f.Stages {
-					stageInteractive[st.ID] = st.Interactive
-					stageAutoApprove[st.ID] = st.AutoApprove
-					stageIsScript[st.ID] = st.IsScript()
-					stageDependsOn[st.ID] = st.DependsOn
-					stageButtons[st.ID] = st.Buttons.Labels()
-				}
-
-				// ws (nil in host mode) was already built above, before
-				// orchestrator.New, so ResolveFile/CurrentFileSHA could close
-				// over it too — reused here as-is for server.Config.Workspace.
-
-				srv = server.New(server.Config{
-					Port:             cfg.Server.GetPort(),
-					RunDir:           runDir,
-					Description:      f.Description,
-					StageInteractive: stageInteractive,
-					StageAutoApprove: stageAutoApprove,
-					StageIsScript:    stageIsScript,
-					StageDependsOn:   stageDependsOn,
-					StageButtons:     stageButtons,
-					Store:            store,
-					Theme:            cfg.EffectiveTheme(),
-					SkinDir:          cfg.SkinDir,
-					Accounting:       serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
-					ShowMoney:        cfg.Accounting.ShowMoneyEnabled(),
-					UIBus:            orch.UIBus(),
-					Actions:          orch,
-					Secondary:        orch,
-					FlowActions:      orch,
-					ReviewState:      orch.ReviewState,
-					Workspace:        ws,
-				})
-				addr, err := srv.Start()
-				if err != nil {
-					return fmt.Errorf("start dashboard: %w", err)
-				}
-				defer func() { _ = srv.Shutdown(context.Background()) }()
-				dashboardStarted = true
-
-				// Resolve listener address to localhost for client-facing URLs.
-				// ln.Addr() may return [::]:port which is not reachable as a client URL.
-				_, port, _ := net.SplitHostPort(addr)
-				dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
-				orch.SetDashboardURL(dashURL)
-				fmt.Printf("  dashboard: %s\n", dashURL)
-				if cfg.Server.IsOpenBrowser() {
-					// Локально — openBrowser; в контейнере xdg-open нет. Это Job B
-					// ("я в каком-либо контейнере?") — InContainer ловит и наш
-					// собственный re-exec, и чужой контейнер (где хост-opener не
-					// запускался, но открывать браузер изнутри всё равно нельзя).
-					if !config.InContainer() {
-						openBrowser(dashURL)
-					}
-				} else {
-					fmt.Println("  → open this URL in your browser to follow the run")
-				}
-			}
-
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-			defer stop()
-
-			if err := orch.Run(ctx); err != nil {
-				return fmt.Errorf("run: %w", err)
-			}
-
-			fmt.Printf("afm: flow %q completed\n", f.Name)
-
-			// Удерживаем дашборд после завершения флоу — см. waitForDashboardDrain.
-			if dashboardStarted {
-				fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMinimum)
-				waitForDashboardDrain(ctx, srv.ConnectedClients)
-			}
-
-			return nil
+			return executeFlow(f, cfg, hooks, requireApproval)
 		},
 	}
-
 	cmd.Flags().IntVar(&maxParallel, "max-parallel", 0, "max parallel stages (0=unlimited)")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "agent idle timeout")
 	cmd.Flags().IntVar(&port, "port", 0, "dashboard port (0=use config)")
@@ -568,98 +84,119 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-// browserCmd возвращает команду открытия браузера для текущей ОС
-// ("open" на macOS, "xdg-open" на Linux) или "" для неподдерживаемой ОС.
-func browserCmd() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "open"
-	case "linux":
-		return "xdg-open"
-	default:
-		return ""
+// executeFlow owns run resources. Each resource is released on every return path.
+func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, requireApproval bool) error {
+	prompts, err := loadPrompts(cfg.PromptsDir)
+	if err != nil {
+		return err
 	}
-}
-
-func openBrowser(url string) {
-	cmd := browserCmd()
-	if cmd == "" {
-		return
+	runDir, store, err := resolveRun(f)
+	if err != nil {
+		return err
 	}
-	//nolint:gosec // opening a local URL in the browser is safe
-	_ = exec.Command(cmd, url).Start()
-}
+	defer store.Close()
 
-// launchHostBrowserOpener запускает на хосте фоновый помощник, который ждёт,
-// пока dashboard поднимется на port, и открывает URL в браузере хоста.
-// Нужен только для Docker-режима: afm внутри Linux-контейнера сам открыть
-// браузер на macOS-хосте не может. Помощник — отдельный процесс (Start без
-// Wait), поэтому он переживает syscall.Exec родителя, заменяющего afm на docker.
-func launchHostBrowserOpener(port int) {
-	openCmd := browserCmd()
-	if openCmd == "" {
-		return
+	// Collection remains enabled even when cost display is disabled.
+	acct, acctErr := accounting.Open(runDir, accounting.NewResolver(cfg.Pricing))
+	if acctErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: accounting: open usage ledger: %v\n", acctErr)
 	}
-	url := fmt.Sprintf("http://localhost:%d", port)
-	// Опрашиваем порт до ~60с; открываем браузер при первом ответе и выходим.
-	script := fmt.Sprintf(`for i in $(seq 1 60); do curl -sf -m 1 %s >/dev/null 2>&1 && %s %s && break; sleep 1; done`, url, openCmd, url)
-	c := exec.Command("sh", "-c", script)
-	c.Stdin = nil
-	c.Stdout = nil
-	c.Stderr = nil
-	//nolint:gosec // скрипт собран из констант и int-порта, не из пользовательского ввода
-	_ = c.Start()
-}
-
-const extYAML = ".yaml"
-const extYML = ".yml"
-
-// dashboardExitGraceMinimum — безусловная пауза перед завершением процесса после
-// успеха флоу, если поднят дашборд. Фронтенд опрашивает /api/status каждые 3с
-// (POLL_INTERVAL_MS в use-status.ts) и обновляется по WS; 5с хватает, чтобы UI
-// гарантированно увидел терминальный статус (done/failed), пока вкладка
-// браузера активна.
-const dashboardExitGraceMinimum = 5 * time.Second
-
-// dashboardExitGraceMaximum — верхняя граница суммарного ожидания, пока к
-// дашборду подключён хотя бы один WS-клиент. Свёрнутая/неактивная вкладка
-// браузера троттлится браузером сильнее для setInterval-поллинга /api/status,
-// чем для уже открытого WS-соединения — dashboardExitGraceMinimum один в этом
-// случае недостаточен, UI «залипает» на последнем статусе (см. use-status.ts).
-// Ограничена сверху, чтобы процесс (и, в Docker-режиме, контейнер) не завис
-// навсегда из-за незакрытой вкладки.
-const dashboardExitGraceMaximum = 2 * time.Minute
-
-// dashboardDrainPoll — как часто проверять число подключённых WS-клиентов
-// в течение dashboardExitGraceMaximum.
-const dashboardDrainPoll = 2 * time.Second
-
-// waitForDashboardDrain держит дашборд открытым после успешного завершения
-// флоу: сначала dashboardExitGraceMinimum безусловно, затем — пока
-// connectedClients() > 0, но не дольше dashboardExitGraceMaximum суммарно.
-// Ctrl-C (ctx.Done()) прерывает ожидание немедленно.
-func waitForDashboardDrain(ctx context.Context, connectedClients func() int) {
-	waitForDashboardDrainWithTiming(ctx, connectedClients, dashboardExitGraceMinimum, dashboardExitGraceMaximum, dashboardDrainPoll)
-}
-
-// waitForDashboardDrainWithTiming — тело waitForDashboardDrain с
-// параметризованными длительностями (тесты подставляют миллисекунды вместо
-// реальных minGrace/maxGrace/pollInterval).
-func waitForDashboardDrainWithTiming(ctx context.Context, connectedClients func() int, minGrace, maxGrace, pollInterval time.Duration) {
-	select {
-	case <-time.After(minGrace):
-	case <-ctx.Done():
-		return
+	if acct != nil {
+		defer acct.Close()
 	}
 
-	deadline := time.Now().Add(maxGrace)
-	for connectedClients() > 0 && time.Now().Before(deadline) {
-		select {
-		case <-time.After(pollInterval):
-		case <-ctx.Done():
-			return
+	store.SetFlowName(f.Name)
+	stageNames := make(map[string]string, len(f.Stages))
+	for _, s := range f.Stages {
+		if s.Name != "" {
+			stageNames[s.ID] = s.Name
 		}
 	}
+	store.SetStageNames(stageNames)
+	fmt.Printf("afm: running %q\n", f.Name)
+	fmt.Printf("  run dir: %s\n", runDir)
+
+	env, err := prepareRunEnvironment(rootDir, f, cfg)
+	if err != nil {
+		return err
+	}
+	defer env.Close()
+	stages := normalizeInteractiveStages(f.Stages, cfg.Server.GetPort() > 0)
+	runID := filepath.Base(runDir)
+	resumed := store.Snapshot().LastSeq > 0
+
+	var orch *orchestrator.Orchestrator
+	hooksDisp, err := prepareLifecycleDispatcher(rootDir, lifecyclehooks.DispatcherConfig{
+		FlowName: f.Name,
+		RunID:    runID,
+		RunDir:   runDir,
+		RootDir:  lifecycleRootDir(env.RootDir),
+		Resumed:  resumed,
+	}, hooks, func(hookID, eventID string, err error) {
+		orch.PublishLifecycleHookFailure(hookID, eventID, err)
+	})
+	if err != nil {
+		return err
+	}
+	defer stopLifecycleDispatcher(hooksDisp)
+
+	ws := openRunWorkspace(cfg.Server.GetPort() > 0)
+	orchOpts := orchestrator.Options{
+		RunDir:          runDir,
+		Stages:          stages,
+		Store:           store,
+		Config:          cfg,
+		Prompts:         prompts,
+		WrapperDir:      env.WrapperDir,
+		GeneratedAgents: env.GeneratedAgents,
+		GlobalPrompt:    f.Prompt,
+		RootDir:         env.RootDir,
+		RequireApproval: requireApproval,
+		Debug:           debugEnabled,
+		Memory:          f.Memory,
+		MemoryDir:       env.MemoryDir,
+		Accounting:      acct,
+		FlowName:        f.Name,
+		RunID:           runID,
+		Resumed:         resumed,
+		Hooks:           hooksDisp,
+	}
+	if ws != nil {
+		orchOpts.ResolveFile = workspaceResolveFile(ws)
+		orchOpts.CurrentFileSHA = workspaceCurrentFileSHA(ws)
+	}
+	orch = orchestrator.New(orchOpts)
+	// Workers may report errors only after the orchestrator is available.
+	if hooksDisp != nil {
+		hooksDisp.Start()
+	}
+
+	srv, err := startDashboard(cfg, server.Config{
+		RunDir:      runDir,
+		Description: f.Description,
+		Stages:      dashboardStageConfig(stages),
+		Store:       store,
+		Workspace:   ws,
+		Accounting:  serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
+	}, orch)
+	if err != nil {
+		return err
+	}
+	if srv != nil {
+		defer func() { _ = srv.Shutdown(context.Background()) }()
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if err := orch.Run(ctx); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	fmt.Printf("afm: flow %q completed\n", f.Name)
+	if srv != nil {
+		fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMinimum)
+		waitForDashboardDrain(ctx, srv.ConnectedClients)
+	}
+	return nil
 }
 
 func resolveFlowPath(args []string) (string, error) {
@@ -762,107 +299,4 @@ func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 		Update:         texts[8],
 		Verify:         texts[9],
 	}, nil
-}
-
-// buildWrapperSpec строит WrapperSpec из recipe: прямой upstream URL bake'ится
-// во враппер (прокси удалён — host-match не нужен). Вынесен из контейнерного
-// цикла в run.go, чтобы быть тестируемым без поднятия Docker. Все поля WrapperSpec,
-// включая Type и Bare, заполняются здесь — контейнерный цикл больше не
-// собирает литерал вручную.
-func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.WrapperSpec {
-	return docker.WrapperSpec{
-		Type:         recipe.Type,
-		Command:      cmd,
-		AuthTo:       recipe.Auth.EnvVarName(),
-		BaseURL:      recipe.URL,
-		Model:        recipe.Model,
-		HasSysPrompt: recipe.SystemPrompt != "",
-		Bare:         bare,
-		MaxTurns:     recipe.MaxTurns,
-	}
-}
-
-// serverAccountingProvider decides what the dashboard server sees as its
-// accounting.CostProvider: the live *Store when accounting.Open succeeded
-// (acct != nil), accounting.StaticUnavailable() when it hard-failed to open
-// (acct == nil, acctErr != nil — e.g. permission denied), or nil (accounting
-// unsupported for this server) in the (currently unreachable in practice,
-// see accounting.Open's doc) case of neither. nil vs StaticUnavailable are
-// deliberately distinct in the API: nil omits every accounting field from
-// /api/status, StaticUnavailable reports health:"unavailable" explicitly.
-//
-// display=false (accounting.enabled: false / AFM_ACCOUNTING=0) returns nil
-// regardless of the ledger: the dashboard omits every cost field and renders
-// no tile/tab/rail, while collection into usage.jsonl (via Options.Accounting)
-// keeps running untouched — the switch hides the display, not the data.
-func serverAccountingProvider(display bool, acct *accounting.Store, acctErr error) accounting.CostProvider {
-	if !display {
-		return nil
-	}
-	switch {
-	case acct != nil:
-		return acct
-	case acctErr != nil:
-		return accounting.StaticUnavailable()
-	default:
-		return nil
-	}
-}
-
-// workspaceResolveFile adapts a workspace.FS into orchestrator.Options.
-// ResolveFile: it reads the file's full content through ws.Read (which also
-// gives us DisplayPath/Reference for free, since Read embeds the same
-// "[AFM file: ...]" marker Reference alone would), hashes it for AddNote's
-// stale-content check, and — for a line-scoped note — slices out the
-// requested 1-indexed line. Any workspace error (not found, too large,
-// binary, symlink, ...) is reported as "can't resolve" rather than surfaced
-// to the caller: AddNote already turns that into ErrStaleContent.
-func workspaceResolveFile(ws workspace.FS) func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
-	return func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
-		f, err := ws.Read(context.Background(), root, path)
-		if err != nil {
-			return orchestrator.ResolvedFile{}, false
-		}
-		rf := orchestrator.ResolvedFile{
-			DisplayPath: f.DisplayPath,
-			Reference:   f.Reference,
-			ContentSHA:  state.FileContentSHA([]byte(f.Content)),
-		}
-		if line != nil {
-			// f.Content almost always ends in "\n" for a real source file —
-			// a bare strings.Split would then produce a phantom trailing
-			// empty element (Split("a\nb\n", "\n") == ["a","b",""]), so
-			// len(lines) overcounts by one and a request for the line right
-			// after the real last line wrongly reports InRange=true with an
-			// empty LineText instead of InRange=false. Trim exactly one
-			// trailing newline first so lines counts only real lines. An
-			// empty file has 0 real lines (not the 1 a bare Split("", "\n")
-			// would report), so a line-1 request against it correctly comes
-			// back out of range.
-			content := strings.TrimSuffix(f.Content, "\n")
-			var lines []string
-			if content != "" {
-				lines = strings.Split(content, "\n")
-			}
-			if *line >= 1 && *line <= len(lines) {
-				rf.InRange = true
-				rf.LineText = lines[*line-1]
-			}
-		}
-		return rf, true
-	}
-}
-
-// workspaceCurrentFileSHA adapts a workspace.FS into orchestrator.Options.
-// CurrentFileSHA: the same content-read path as workspaceResolveFile above,
-// minus the line-splitting, used by renderReviewFeedback to detect drift
-// between when a review note was taken and when it's injected.
-func workspaceCurrentFileSHA(ws workspace.FS) func(root, path string) (string, bool) {
-	return func(root, path string) (string, bool) {
-		f, err := ws.Read(context.Background(), root, path)
-		if err != nil {
-			return "", false
-		}
-		return state.FileContentSHA([]byte(f.Content)), true
-	}
 }

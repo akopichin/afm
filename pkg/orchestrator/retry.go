@@ -364,8 +364,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 					// (рендерится как "retry: <msg>") и дублируем в notices.jsonl,
 					// чтобы пережить reload.
 					msg := "incomplete work, retrying: " + checkErr.Error()
-					o.ui.Publish(bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID, Data: msg})
-					stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventRetryScheduled), msg)
+					o.publishNotice(bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID, Data: msg})
 					continue
 				}
 				// verify-бюджет исчерпан ИЛИ план-незавершёнка после attempt 0 —

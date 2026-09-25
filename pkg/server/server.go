@@ -82,12 +82,8 @@ func findSkinFavicon(base string, statFn func(name string) bool) (href, mime str
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
 	runDir           string
-	Description      string              // корневой description флоу (для хедера дашборда)
-	stageInteractive map[string]bool     // id стадии → interactive (статический конфиг флоу)
-	stageAutoApprove map[string]bool     // id стадии → auto_approve (статический конфиг флоу)
-	stageIsScript    map[string]bool     // id стадии → IsScript() (статический конфиг флоу)
-	stageDependsOn   map[string][]string // id стадии → depends_on (статический конфиг флоу, для UI-порядка)
-	stageButtons     map[string][]string // id стадии → подписи кнопок кебаб-меню (статический конфиг флоу)
+	Description      string // корневой description флоу (для хедера дашборда)
+	stages           map[string]StageConfig
 	store            *state.Store
 	uiBus            *bus.UIBus
 	accounting       accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
@@ -119,17 +115,23 @@ func (s *Server) ConnectedClients() int {
 	return int(s.wsClients.Load())
 }
 
+// StageConfig is the immutable, per-stage configuration used by the dashboard.
+// Runtime status and filesystem-derived flags belong to StageView.
+type StageConfig struct {
+	Interactive bool
+	AutoApprove bool
+	IsScript    bool
+	DependsOn   []string
+	Buttons     []string // Labels only; the orchestrator resolves prompts on click.
+}
+
 // Config holds server settings.
 type Config struct {
-	Port             int
-	RunDir           string
-	Description      string // корневой description флоу (для хедера дашборда)
-	StageInteractive map[string]bool
-	StageAutoApprove map[string]bool
-	StageIsScript    map[string]bool
-	StageDependsOn   map[string][]string
-	StageButtons     map[string][]string
-	Store            *state.Store
+	Port        int
+	RunDir      string
+	Description string // корневой description флоу (для хедера дашборда)
+	Stages      map[string]StageConfig
+	Store       *state.Store
 	// Accounting — источник данных о стоимости/токенах run'а для /api/status.
 	// nil означает "accounting не поддерживается этим сервером" (accounting
 	// вообще не был подключён к run'у) — отличается от подключённого, но
@@ -170,27 +172,23 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		runDir:           cfg.RunDir,
-		Description:      cfg.Description,
-		stageInteractive: cfg.StageInteractive,
-		stageAutoApprove: cfg.StageAutoApprove,
-		stageIsScript:    cfg.StageIsScript,
-		stageDependsOn:   cfg.StageDependsOn,
-		stageButtons:     cfg.StageButtons,
-		store:            cfg.Store,
-		uiBus:            cfg.UIBus,
-		accounting:       cfg.Accounting,
-		showMoney:        cfg.ShowMoney,
-		actions:          cfg.Actions,
-		secondary:        cfg.Secondary,
-		flowActions:      cfg.FlowActions,
-		reviewState:      cfg.ReviewState,
-		workspace:        cfg.Workspace,
-		theme:            cfg.Theme,
-		wsPongWait:       pongWait,
-		wsPingPeriod:     pingPeriod,
-		wsWriteWait:      writeWait,
-		fileServer:       http.FileServer(http.FS(web.FS)),
+		runDir:       cfg.RunDir,
+		Description:  cfg.Description,
+		stages:       cfg.Stages,
+		store:        cfg.Store,
+		uiBus:        cfg.UIBus,
+		accounting:   cfg.Accounting,
+		showMoney:    cfg.ShowMoney,
+		actions:      cfg.Actions,
+		secondary:    cfg.Secondary,
+		flowActions:  cfg.FlowActions,
+		reviewState:  cfg.ReviewState,
+		workspace:    cfg.Workspace,
+		theme:        cfg.Theme,
+		wsPongWait:   pongWait,
+		wsPingPeriod: pingPeriod,
+		wsWriteWait:  writeWait,
+		fileServer:   http.FileServer(http.FS(web.FS)),
 	}
 
 	skinName := s.builtinSkinName()

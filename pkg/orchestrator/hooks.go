@@ -12,7 +12,6 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -200,14 +199,7 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 		StageDir:    filepath.Join(o.opts.RunDir, s.ID),
 		OnAction: func(stream, line string) {
 			data := map[string]string{"hook": hook, "line": line, "stream": stream}
-			o.ui.Publish(bus.Event{Type: bus.EventScriptOutput, StageID: s.ID, Data: data})
-			// stagefiles.AppendNotice — тот же механизм, которым EventAgentCompleted/
-			// EventContextWarning уже становятся durable+реплеиваемыми через
-			// /api/events (см. stagefiles/notices.go, reconstructNotices). Без этого
-			// клиент, подключившийся ПОСЛЕ завершения быстрого script/hook
-			// (обычно <1с), никогда не увидит его вывод в ленте событий —
-			// EventScriptOutput publish в o.ui эфемерен и не реплеится.
-			stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventScriptOutput), data)
+			o.publishNotice(bus.Event{Type: bus.EventScriptOutput, StageID: s.ID, Data: data})
 		},
 	})
 	return ex.RunScript(ctx, timeout, logFile)
@@ -223,8 +215,7 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 // EventScriptOutput persistence pattern. seq is the FSM transition seq where one
 // exists (before-hook), 0 otherwise (after-hook, no FSM transition).
 func (o *Orchestrator) publishHookNotice(stageID string, evType bus.EventType, seq uint64, data map[string]string) {
-	o.ui.Publish(bus.Event{Type: evType, StageID: stageID, Data: data, Seq: seq})
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(evType), data)
+	o.publishNotice(bus.Event{Type: evType, StageID: stageID, Data: data, Seq: seq})
 }
 
 // runBeforeHook runs s.ScriptBefore with retries; on exhaustion it blocks the
@@ -504,14 +495,11 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 // [auto]) covers the same stage on a fresh activation — either way its
 // before-hook ran ahead of runAutonomousAgent, never runImplementationAgent.
 func (o *Orchestrator) dispatchMainAfterBeforeHook(ctx context.Context, s flow.Stage) {
-	switch {
-	case s.IsScript():
+	if s.IsScript() {
 		o.runScriptStage(ctx, s)
-	case isAutonomousStage(filepath.Join(o.opts.RunDir, s.ID)) || s.IsAuto():
-		o.runAutonomousAgent(ctx, s)
-	default:
-		o.runImplementationAgent(ctx, s)
+		return
 	}
+	o.plainRunner(o.executionKind(s))(ctx, s)
 }
 
 // resumeAfterHookWait resumes a stage that crashed while its script_after

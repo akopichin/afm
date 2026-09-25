@@ -89,7 +89,7 @@ func runningNoteServer(t *testing.T, isScript bool, revise func(context.Context,
 		Actions: fakeStageActions{revise: revise},
 	}
 	if isScript {
-		cfg.StageIsScript = map[string]bool{testStageID: true}
+		cfg.Stages = map[string]StageConfig{testStageID: {IsScript: true}}
 	}
 	srv := New(cfg)
 	subID, events := uiBus.Subscribe(64)

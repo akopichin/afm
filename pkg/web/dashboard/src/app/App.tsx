@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-import { cancelNotes, listNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
+import { cancelNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -14,6 +14,8 @@ import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescr
 import { FileBrowserProvider } from '../components/file-browser'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
+import { useSelectedStage } from '../hooks/use-selected-stage'
+import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
 import { useElapsed } from '../hooks/use-elapsed'
@@ -24,7 +26,7 @@ import { attentionKindForStatus, countByKind, useWorkspaceView, type AttentionKi
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
-import { ACTIVE_STAGE_STATUSES, SIGNIFICANT_EVENT_TYPES } from '../types'
+import { SIGNIFICANT_EVENT_TYPES } from '../types'
 
 // Подписи контекстной вкладки воркспейса по виду attention (Approval/Question/…).
 const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
@@ -106,38 +108,7 @@ export function App(): ReactElement {
     })
   }
 
-  // Число собранных ревью-заметок для ReviewBanner (Task 22) — реальный счётчик
-  // через listNotes(), а не заглушка: только пока флоу реально на review-паузе
-  // (flowPauseState === 'paused'), с тем же интервалом опроса, что и useStatus,
-  // чтобы не заводить отдельный WS/событийный канал ради одного числа. Вне
-  // паузы опрос не идёт и счётчик сбрасывается — баннер всё равно не рендерит
-  // текст с числом заметок ни в 'none' (не рендерится вовсе), ни в 'resuming'
-  // (фиксированный текст "Resuming…" без счётчика).
-  const [reviewNoteCount, setReviewNoteCount] = useState(0)
-  useEffect(() => {
-    if (flowPauseState !== 'paused') {
-      setReviewNoteCount(0)
-      return
-    }
-
-    let cancelled = false
-    const load = () => {
-      listNotes()
-        .then(({ notes }) => {
-          if (!cancelled) setReviewNoteCount(notes.length)
-        })
-        .catch(() => {
-          /* сеть отвалилась — оставляем предыдущее значение, следующий тик повторит */
-        })
-    }
-
-    load()
-    const timer = setInterval(load, 3000)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [flowPauseState])
+  const reviewNoteCount = useReviewNoteCount(flowPauseState === 'paused')
 
   // onCancel баннера отменяет раунд ревью без доставки заметок (Task 19's
   // cancelNotes) — не требует выбора целевой стадии, поэтому можно вызвать
@@ -160,8 +131,6 @@ export function App(): ReactElement {
   const wsUrl = buildWebSocketUrl()
   const { events, connected } = useEventFeed(wsUrl)
 
-  const [selectedStageId, setSelectedStageId] = useState<string | null>(null)
-
   // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано
   // справа от рейла: Feed, контекстный attention (approval/question/failed/
   // hook_failed/paused) или read-only просмотр истории плана/диалога. Он же
@@ -180,6 +149,10 @@ export function App(): ReactElement {
   const anyModalOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
   const editing = useIsEditing() || anyModalOpen
   const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
+  const [selectedStageId, setSelectedStageId] = useSelectedStage(
+    stages,
+    wsState.view === 'attention' ? attnItem?.stageId ?? null : null,
+  )
 
   // FIX 3 (round-5 #6 спеки): активация Cost из поповера «⋯» шапки должна
   // довести фокус до САМОЙ вкладки Cost воркспейса, а не оставлять его на
@@ -217,15 +190,6 @@ export function App(): ReactElement {
   // (история + live-хвост, см. useStageEvents), а не весь событийный поток
   // флоу. Full feed (глобальный вид) продолжает читать сырые `events` напрямую.
   const stageEvents = useStageEvents(workspaceStage?.id ?? null, events)
-
-  // Держим selectedStageId в согласии с авто-фокусом attention: когда редьюсер
-  // сам открыл/продвинул ожидание, рейл-выбор следует за ним, чтобы после
-  // разрешения (возврат в Feed) контекст остался на той стадии, что смотрели.
-  useEffect(() => {
-    if (wsState.view === 'attention' && attnItem !== null) {
-      setSelectedStageId(attnItem.stageId)
-    }
-  }, [wsState.view, attnItem?.stageId])
 
   // Клик по стадии в рейле (или по desktop-уведомлению): выбираем её и открываем
   // подходящий вид — attention, если стадия ждёт действия; иначе Feed для
@@ -318,65 +282,6 @@ export function App(): ReactElement {
   const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, connected)
 
   const lastRefreshedEvent = useRef<object | null>(null)
-
-  // Отслеживаем, была ли ТЕКУЩАЯ выбранная стадия хоть раз замечена «в работе»
-  // (не done) под этим же выбором — отличает «пользователь выбрал уже
-  // завершённую стадию, чтобы посмотреть план/лог» (не трогаем выбор) от
-  // «стадия, за которой мы следим, завершилась» (нужно продвинуться дальше).
-  // Живёт per-selection: сбрасывается при каждой смене selectedStageId, а не
-  // при каждом опросе — иначе не отличить эти два случая.
-  const watchingId = useRef<string | null>(null)
-  const wasLive = useRef(false)
-
-  // Автовыбор активной стадии (иначе первая failed); продвижение к следующей активной,
-  // пока стадия, за которой мы следим, done. Ручной выбор уже завершённой стадии не
-  // перекидывает пользователя — иначе во время работы флоу нельзя открыть логи/план/
-  // диалог завершённого стейджа (он мгновенно «убегает»).
-  //
-  // Раньше продвижение проверялось ОДИН РАЗ — ровно в тот тик, когда выбранная
-  // стадия переходила !done→done. На скриптовых стейджах (Stage.IsScript(),
-  // running может длиться доли секунды) несколько стадий подряд успевают
-  // полностью пройти running→done МЕЖДУ двумя опросами /api/status — к моменту,
-  // когда фронтенд наконец видит «стадия1 стала done», стадия2 уже тоже done, и
-  // среди ACTIVE_STAGE_STATUSES искать нечего. Прежний код на этом сдавался
-  // навсегда (тот самый единственный тик уже прошёл) — выбор залипал на
-  // стадии1, хотя реально уже работает стадия3/4. Теперь поиск следующей
-  // активной стадии повторяется на КАЖДОМ опросе, пока выбранная стадия done и
-  // wasLive — самокорректируется в течение одного цикла опроса вместо
-  // необратимого залипания.
-  useEffect(() => {
-    if (stages.length === 0) return
-
-    const current = stages.find((stage) => stage.id === selectedStageId) ?? null
-
-    if (current === null) {
-      const active = stages.find((stage) => ACTIVE_STAGE_STATUSES.has(stage.status))
-      const failed = stages.find((stage) => stage.status === 'failed')
-      const next = active ?? failed ?? null
-
-      if (next !== null) {
-        setSelectedStageId(next.id)
-      }
-
-      return
-    }
-
-    if (watchingId.current !== selectedStageId) {
-      watchingId.current = selectedStageId
-      wasLive.current = current.status !== 'done'
-    } else if (current.status !== 'done') {
-      wasLive.current = true
-    }
-
-    if (wasLive.current && current.status === 'done') {
-      const fromIndex = stages.findIndex((stage) => stage.id === selectedStageId)
-      const nextActive = stages.slice(fromIndex + 1).find((stage) => ACTIVE_STAGE_STATUSES.has(stage.status)) ?? null
-
-      if (nextActive !== null) {
-        setSelectedStageId(nextActive.id)
-      }
-    }
-  }, [stages, selectedStageId])
 
   // WebSocket как канал обновления: значимое событие → ре-запрос состояния флоу.
   useEffect(() => {

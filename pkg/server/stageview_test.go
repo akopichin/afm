@@ -38,7 +38,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]bool{"a": true}, map[string]bool{"a": true}, map[string]bool{"a": false}, nil, nil, nil)
+	views := buildStageViews(rs, runDir, map[string]StageConfig{"a": {Interactive: true, AutoApprove: true}}, nil)
 
 	if len(views) != 2 || views[0].ID != "b" || views[1].ID != "a" {
 		t.Fatalf("order not preserved: %+v", views)
@@ -90,12 +90,12 @@ func TestBuildStageViews_HidesPlanForPendingAndScriptStages(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{
-		"script-running": true,
-		"script-done":    true,
-		"script-failed":  true,
-		"script-paused":  true,
-	}, nil, nil, nil)
+	views := buildStageViews(rs, runDir, map[string]StageConfig{
+		"script-running": {IsScript: true},
+		"script-done":    {IsScript: true},
+		"script-failed":  {IsScript: true},
+		"script-paused":  {IsScript: true},
+	}, nil)
 	byID := make(map[string]StageView, len(views))
 	for _, view := range views {
 		byID[view.ID] = view
@@ -135,7 +135,7 @@ func TestBuildStageViews_ShowDialogOnlyWithContent(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil)
 	byID := map[string]StageView{}
 	for _, v := range views {
 		byID[v.ID] = v
@@ -160,7 +160,7 @@ func TestTopoOrder_NoDeps_PreservesDeclarationOrder(t *testing.T) {
 func TestTopoOrder_DependencyRendersAfterItsDep(t *testing.T) {
 	// "child" declared BEFORE its dependency "parent" — must be reordered.
 	ids := []string{"child", "parent"}
-	deps := map[string][]string{"child": {"parent"}}
+	deps := map[string]StageConfig{"child": {DependsOn: []string{"parent"}}}
 	got := topoOrder(ids, deps)
 	want := []string{"parent", "child"}
 	if !equalSlices(got, want) {
@@ -172,9 +172,9 @@ func TestTopoOrder_UnrelatedSiblingsKeepDeclarationOrderRelativeToEachOther(t *t
 	// stage1 depends on stage2; stage3/4/5 have no deps at all; stage6
 	// depends on stage2,3,4,5. Declared as 1,2,3,4,5,6 (1 before its own dep).
 	ids := []string{"stage1", "stage2", "stage3", "stage4", "stage5", "stage6"}
-	deps := map[string][]string{
-		"stage1": {"stage2"},
-		"stage6": {"stage2", "stage3", "stage4", "stage5"},
+	deps := map[string]StageConfig{
+		"stage1": {DependsOn: []string{"stage2"}},
+		"stage6": {DependsOn: []string{"stage2", "stage3", "stage4", "stage5"}},
 	}
 	got := topoOrder(ids, deps)
 	want := []string{"stage2", "stage3", "stage4", "stage5", "stage1", "stage6"}
@@ -185,7 +185,7 @@ func TestTopoOrder_UnrelatedSiblingsKeepDeclarationOrderRelativeToEachOther(t *t
 
 func TestTopoOrder_UnknownDepIgnored(t *testing.T) {
 	ids := []string{"a", "b"}
-	deps := map[string][]string{"a": {"does-not-exist"}}
+	deps := map[string]StageConfig{"a": {DependsOn: []string{"does-not-exist"}}}
 	got := topoOrder(ids, deps)
 	if !equalSlices(got, ids) {
 		t.Fatalf("got %v, want %v (unknown dep should be ignored, not block ordering)", got, ids)
@@ -208,7 +208,7 @@ func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, map[string]bool{"a": true}, nil, nil, nil)
+	views := buildStageViews(rs, runDir, map[string]StageConfig{"a": {IsScript: true}}, nil)
 
 	a, b := views[0], views[1]
 	if !a.IsScript {
@@ -248,7 +248,7 @@ func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil)
 
 	if !views[0].ShowPlan {
 		t.Errorf("autonomous stage paused: ShowPlan should be true (Continue button lives in PlanPanel), got %+v", views[0])
@@ -267,7 +267,7 @@ func TestBuildStageViews_IncludesButtons(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, map[string][]string{"a": {"Run linter", "Rebuild"}}, nil)
+	views := buildStageViews(rs, runDir, map[string]StageConfig{"a": {Buttons: []string{"Run linter", "Rebuild"}}}, nil)
 
 	if !equalSlices(views[0].Buttons, []string{"Run linter", "Rebuild"}) {
 		t.Errorf("Buttons = %v, want [Run linter Rebuild]", views[0].Buttons)
@@ -296,7 +296,7 @@ func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 		"a": {DisplayCost: "$0.12", Coverage: "full"},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, stageCosts)
+	views := buildStageViews(rs, runDir, nil, stageCosts)
 	byID := map[string]StageView{}
 	for _, v := range views {
 		byID[v.ID] = v
@@ -442,7 +442,7 @@ func TestBuildStageViews_VerifyIndicatorFromNotices(t *testing.T) {
 			"build": {Status: state.StatusFailed},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil)
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "needs_changes" || v.Step != 1 || v.Command != "codex" {
 		t.Fatalf("verify view = %+v, want {1 codex needs_changes}", v)
@@ -467,7 +467,7 @@ func TestBuildStageViews_VerifyReRunReturnsRunning(t *testing.T) {
 			"build": {Status: state.StatusRunning},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil)
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "running" || v.Step != 2 || v.Command != "codex" {
 		t.Fatalf("verify view = %+v, want {2 codex running}", v)
@@ -487,7 +487,7 @@ func TestBuildStageViews_NoVerifyNotices_NilVerify(t *testing.T) {
 			"build": {Status: state.StatusDone},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil)
 	if v := findStage(views, "build").Verify; v != nil {
 		t.Fatalf("verify view = %+v, want nil", v)
 	}
@@ -532,7 +532,7 @@ func TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon(t *testing.T) {
 			"other": {Status: state.StatusFailed},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil, nil, nil, nil, nil)
+	views := buildStageViews(rs, runDir, nil, nil)
 
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "pass" || v.Step != 1 || v.Command != "codex" {

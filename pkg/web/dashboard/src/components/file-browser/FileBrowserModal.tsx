@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import {
   getChanged,
-  getContent,
-  getDiff,
   getRoots,
   getSearch,
   type ChangeList,
-  type FileContent,
-  type FileDiff,
   type RootView,
   type SearchResult,
   type TreeEntry,
@@ -19,6 +15,7 @@ import { DiffViewer } from './DiffViewer'
 import { FileSearchResults } from './FileSearchResults'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
+import { useFilePreview, type ActiveFile, type PreviewTab } from './use-file-preview'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
 
@@ -59,9 +56,6 @@ export type FileBrowserModalProps = {
   // выключены".
   flowPauseState?: FlowPauseState
 }
-
-type ActiveFile = { root: string; entry: TreeEntry }
-type Tab = 'FILE' | 'DIFF'
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
@@ -128,7 +122,7 @@ export function FileBrowserModal({
   const [rootsError, setRootsError] = useState<string | null>(null)
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null)
   const [activeFile, setActiveFile] = useState<ActiveFile | null>(null)
-  const [activeTab, setActiveTab] = useState<Tab>('FILE')
+  const [activeTab, setActiveTab] = useState<PreviewTab>('FILE')
 
   // Left-panel width (px) + drag state. bodyRef anchors clientX to the body's
   // left edge; draggingRef gates the document-level move/up listeners.
@@ -184,20 +178,7 @@ export function FileBrowserModal({
   const [changesError, setChangesError] = useState<string | null>(null)
   const changesGenRef = useRef(0)
 
-  const [content, setContent] = useState<FileContent | null>(null)
-  const [contentLoading, setContentLoading] = useState(false)
-  const [contentError, setContentError] = useState<string | null>(null)
-  // Reload — отдельные loading/error от начальной загрузки (contentLoading/
-  // contentError): те двое блокируют весь FileViewer ("Loading file…"/
-  // ошибка на весь пейн), а Reload по дизайну обязан НЕ стирать уже
-  // показанный content — ни в полёте (никакого "loading flicker" на 304),
-  // ни при ошибке (см. бриф finding 10). Поэтому свой флаг + свой баннер.
-  const [reloading, setReloading] = useState(false)
-  const [reloadError, setReloadError] = useState<string | null>(null)
-
-  const [diff, setDiff] = useState<FileDiff | null>(null)
-  const [diffLoading, setDiffLoading] = useState(false)
-  const [diffError, setDiffError] = useState<Error | null>(null)
+  const { content, contentLoading, contentError, diff, diffLoading, diffError, reloading, reloadError, reload: handleReload } = useFilePreview(activeFile, activeTab)
 
   // Optimistic-concurrency rev для FileViewer's addNote (см. её проп
   // expectedRev): flow-wide, а не per-file — тот же rev, что ReviewNotesModal
@@ -256,21 +237,13 @@ export function FileBrowserModal({
   // Поколение поиска: инкрементируется на КАЖДЫЙ запуск эффекта (смена запроса
   // или root'а). Поздний ответ устаревшего запроса/root'а сверяется с текущим
   // поколением и отбрасывается — та же техника, что rootGenerationRef в
-  // FileTree и activeFileRef в handleReload.
+  // FileTree и useFilePreview.
   const searchGenRef = useRef(0)
 
   const modalRef = useRef<HTMLDivElement | null>(null)
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
   const asideRef = useRef<HTMLElement | null>(null)
   const treeToggleRef = useRef<HTMLButtonElement | null>(null)
-  // handleReload — обработчик клика, а не эффект: у него нет своего cleanup,
-  // чтобы пометить "cancelled" в замыкании, как это делают эффекты загрузки
-  // выше/ниже. Вместо этого держим "текущий activeFile" в ref, обновляемом на
-  // каждом рендере, и после await сверяем с ним ЗАПРОШЕННЫЙ файл — тот же
-  // смысл, что и у cancelled-флага, просто через ref вместо замыкания эффекта.
-  const activeFileRef = useRef<ActiveFile | null>(activeFile)
-  activeFileRef.current = activeFile
-
   useEffect(() => {
     let cancelled = false
     void getRoots()
@@ -287,54 +260,6 @@ export function FileBrowserModal({
       cancelled = true
     }
   }, [])
-
-  // Загружаем контент только когда реально показываем таб FILE — DIFF не
-  // нужен, пока пользователь на него не переключился (см. следующий эффект).
-  useEffect(() => {
-    if (activeFile === null || activeTab !== 'FILE') return
-    let cancelled = false
-    setContent(null)
-    setContentError(null)
-    setReloadError(null)
-    setReloading(false)
-    setContentLoading(true)
-    void getContent(activeFile.root, activeFile.entry.path)
-      .then((c) => {
-        if (cancelled) return
-        setContentLoading(false)
-        if (c !== undefined) setContent(c)
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return
-        setContentLoading(false)
-        setContentError(e instanceof Error ? e.message : 'failed to load file')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeFile, activeTab])
-
-  useEffect(() => {
-    if (activeFile === null || activeTab !== 'DIFF') return
-    let cancelled = false
-    setDiff(null)
-    setDiffError(null)
-    setDiffLoading(true)
-    void getDiff(activeFile.root, activeFile.entry.path)
-      .then((d) => {
-        if (cancelled) return
-        setDiffLoading(false)
-        setDiff(d)
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return
-        setDiffLoading(false)
-        setDiffError(e instanceof Error ? e : new Error('failed to load diff'))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeFile, activeTab])
 
   // Поиск с debounce ~250мс и отменой устаревшего запроса. Пустой запрос —
   // немедленно сбрасываем результаты (дерево показывается снова), без сетевого
@@ -537,42 +462,6 @@ export function FileBrowserModal({
     setActiveTab('FILE')
     // На мобиле выбор файла = дерево своё отработало → закрываем шторку, показываем превью.
     if (isNarrowModal) setTreeOpen(false)
-  }
-
-  // Reload — повторный запрос ТОГО ЖЕ файла с If-None-Match: currentEtag
-  // (в отличие от начальной загрузки выше, которая всегда идёт без etag).
-  // 304 (getContent вернул undefined) — файл не менялся, оставляем content/
-  // etag/modifiedAt как есть, никакого "loading flicker". 200 — заменяем
-  // целиком. Ошибка — показываем инлайн-баннером, НЕ трогая content.
-  //
-  // Гонка (найдена ревью): пока Reload файла A летит, пользователь может
-  // кликнуть файл B — эффект загрузки B применит свой (быстрый) ответ, а
-  // МЕДЛЕННЫЙ ответ Reload'а A придёт позже и без проверки перезаписал бы
-  // content B содержимым A. Фиксируем запрошенный файл (requested) и после
-  // await сверяем с activeFileRef.current — если пользователь успел
-  // переключиться на другой файл, ответ считается устаревшим и отбрасывается
-  // целиком (включая reloading/reloadError — тот файл больше не на экране,
-  // его reloading уже сброшен эффектом загрузки выше).
-  async function handleReload(): Promise<void> {
-    if (activeFile === null || content === null) return
-    const requested = activeFile
-    setReloading(true)
-    setReloadError(null)
-    let updated: FileContent | undefined
-    let failure: string | null = null
-    try {
-      updated = await getContent(requested.root, requested.entry.path, content.etag)
-    } catch (e: unknown) {
-      failure = e instanceof Error ? e.message : 'failed to reload file'
-    }
-    const current = activeFileRef.current
-    if (current === null || current.root !== requested.root || current.entry.path !== requested.entry.path) return
-    setReloading(false)
-    if (failure !== null) {
-      setReloadError(failure)
-      return
-    }
-    if (updated !== undefined) setContent(updated)
   }
 
   function rootLabel(rootId: string): string {

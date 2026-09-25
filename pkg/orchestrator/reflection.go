@@ -10,7 +10,6 @@ import (
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
 // flowMemoryLabel — имя, под которым пайплайн памяти помечает шаги/нотисы,
@@ -61,8 +60,7 @@ func (o *Orchestrator) reflectFailed(stageName, step string, err error) {
 
 func (o *Orchestrator) reflectNotice(stageName, msg string) {
 	data := map[string]string{"stage": stageName, "message": msg}
-	o.ui.Publish(bus.Event{Type: bus.EventReflectFailed, Data: data})
-	stagefiles.AppendNotice(o.opts.RunDir, "", string(bus.EventReflectFailed), data)
+	o.publishNotice(bus.Event{Type: bus.EventReflectFailed, Data: data})
 }
 
 // eligibleMemoryDatasets returns the write-reflect, non-script stages whose

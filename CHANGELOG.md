@@ -3,6 +3,46 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-25
+
+### Fix: working agent CLI versions in the ARM64 runtime image
+
+Pin Claude Code 2.1.212 and Codex 0.155.1. Newer CLI versions crashed on
+Linux ARM64 before an agent could start; both pinned versions passed a live
+container smoke check.
+
+### Improvement: simpler run setup and shared stage dispatch
+
+Normal scheduling, retry and recovery share stage preparation, execution-track
+selection and completion probes. The ready-stage launch owns dependency and
+review-pause checks and the durable start transition. Recovery retains its
+verification gates and before-hook behavior.
+
+Run setup is split into environment preparation, lifecycle hooks, workspace and
+dashboard startup, with explicit cleanup. Interactive flags are normalized before
+creating the orchestrator. Dashboard configuration uses one `StageConfig` per
+stage, and best-effort notices share one live/persisted publication path.
+
+Dashboard stage selection, review-note polling and file/diff loading now live in
+focused React hooks. Historical comments have been shortened to current contracts.
+
+### Fix: retry with a cached plan respects dependencies
+
+Retrying a failed stage with an existing `plan.md` now waits for its dependencies
+to finish, including when `eager_planning` is enabled. Previously, this retry
+path could start implementation while a dependency was still running or failed.
+
+### Fix: dependent interactive stages without a plan
+
+Interactive stages that use their description as the initial task now prepare
+the same `plan.md` whether their dependencies finish during the run or were already
+complete at startup.
+
+### Fix: stale file reloads after returning to the same preview
+
+A late Reload response is discarded after switching files or preview tabs, even
+when the user returns to the original file before that response arrives.
+
 ## 2026-09-24
 
 ### Fix: file-browser comment form layout in CSS

@@ -69,12 +69,14 @@ ENV PATH="/usr/local/go/bin:$PATH"
 # подтягивала молча новый claude-code с другим поведением агентского цикла
 # между релизами afm. Обновлять ТОЛЬКО вручную, после того как новая версия
 # протестирована с текущим релизом — см. Dockerfile.runtime в CLAUDE.md.
-ARG CLAUDE_CODE_VERSION=2.1.227
+ARG CLAUDE_CODE_VERSION=2.1.212
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # codex CLI (нативный бинарник — не портируется в контейнер простым mount с
-# хоста, поэтому ставим его так же, как claude, npm-пакетом внутри образа)
-RUN npm install -g @openai/codex
+# хоста, поэтому ставим его так же, как claude, npm-пакетом внутри образа).
+# Версию фиксируем: 0.156.1 падает с SIGSEGV на Linux arm64 даже на --version.
+ARG CODEX_VERSION=0.155.1
+RUN npm install -g @openai/codex@${CODEX_VERSION}
 
 # afm binary
 COPY --from=builder /afm /usr/local/bin/afm

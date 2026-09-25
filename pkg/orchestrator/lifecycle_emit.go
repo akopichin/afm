@@ -5,7 +5,6 @@ import (
 
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -107,6 +106,5 @@ func phaseForStatus(st state.StageStatus) string {
 func (o *Orchestrator) PublishLifecycleHookFailure(hookID, eventID string, err error) {
 	const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
 	data := map[string]string{"hook_id": hookID, "event_id": eventID, keyError: err.Error()}
-	o.ui.Publish(bus.Event{Type: bus.EventLifecycleHookFailed, Data: data})
-	stagefiles.AppendNotice(o.opts.RunDir, "", string(bus.EventLifecycleHookFailed), data)
+	o.publishNotice(bus.Event{Type: bus.EventLifecycleHookFailed, Data: data})
 }

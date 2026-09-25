@@ -90,8 +90,7 @@ func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, c
 		keyVerifyKind:     kind,
 		keyVerifyCommand:  command,
 	}
-	o.ui.Publish(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: data})
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventVerifyStarted), data)
+	o.publishNotice(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: data})
 }
 
 // emitVerifyResult публикует наблюдательное событие "шаг verify завершился" —
@@ -117,8 +116,7 @@ func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, co
 	if reportPath != "" {
 		data[keyReportPath] = reportPath
 	}
-	o.ui.Publish(bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data})
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventVerifyResult), data)
+	o.publishNotice(bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data})
 }
 
 // verifyReportPath возвращает абсолютный путь report.md для данного прохода —

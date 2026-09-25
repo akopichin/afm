@@ -216,8 +216,8 @@ func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
 			return nil
 		}},
-		ReviewState:      func() (string, []string) { return "none", nil },
-		StageInteractive: map[string]bool{testStageID: true},
+		ReviewState: func() (string, []string) { return "none", nil },
+		Stages:      map[string]StageConfig{testStageID: {Interactive: true}},
 	})
 
 	postAnswer := func(id string) *httptest.ResponseRecorder {
@@ -282,8 +282,8 @@ func TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock(t *testing.T) {
 		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
 			return nil
 		}},
-		ReviewState:      func() (string, []string) { return "none", nil },
-		StageInteractive: map[string]bool{testStageID: true},
+		ReviewState: func() (string, []string) { return "none", nil },
+		Stages:      map[string]StageConfig{testStageID: {Interactive: true}},
 	})
 
 	postAnswer := func(id string) *httptest.ResponseRecorder {

@@ -15,7 +15,6 @@ import (
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -228,15 +227,12 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 					continue
 				}
 				processed[key] = true
-				o.ui.Publish(bus.Event{
+				o.publishNotice(bus.Event{
 					Type:    bus.EventAutoAnswered,
 					StageID: stageID,
 					Data: map[string]any{
 						keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
 					},
-				})
-				stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
-					keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
 				})
 				if !parked {
 					o.emitLifecycle(lifecyclehooks.Event{
@@ -324,8 +320,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 // live and persisted JSON are byte-identical (feed dedup depends on it).
 func (o *Orchestrator) publishDialogQuestion(stageID, phase, id, questionText string) {
 	payload := mcp.DialogFeedNotice(phase, id, mcp.DialogSnippet(questionText))
-	o.ui.Publish(bus.Event{Type: bus.EventDialogQuestion, StageID: stageID, Data: payload})
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventDialogQuestion), payload)
+	o.publishNotice(bus.Event{Type: bus.EventDialogQuestion, StageID: stageID, Data: payload})
 }
 
 // reconcileMalformedFixes drops every tracked malformed key for stageID whose
@@ -433,13 +428,10 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 		"⚙️ afm: question.json %s.%s не парсится даже после jsonrepair — запущен отдельный агент для починки JSON (попытка %d из %d).",
 		q.Phase, q.ID, st.attempts, maxJSONFixAttempts,
 	)
-	o.ui.Publish(bus.Event{
+	o.publishNotice(bus.Event{
 		Type:    bus.EventAutoAnswered,
 		StageID: stageID,
 		Data:    map[string]any{keyID: q.ID, keyPhase: q.Phase, keyAnswer: notice, keyFromOptions: false},
-	})
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
-		keyID: q.ID, keyPhase: q.Phase, keyAnswer: notice, keyFromOptions: false,
 	})
 }
 
@@ -459,13 +451,10 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 		log.Printf("WARN: auto-answer malformed %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
 		return
 	}
-	o.ui.Publish(bus.Event{
+	o.publishNotice(bus.Event{
 		Type:    bus.EventAutoAnswered,
 		StageID: stageID,
 		Data:    map[string]any{keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions},
-	})
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAutoAnswered), map[string]any{
-		keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
 	})
 	if !parked {
 		o.emitLifecycle(lifecyclehooks.Event{

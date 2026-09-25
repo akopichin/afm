@@ -66,51 +66,49 @@ func (o *Orchestrator) activateScriptStage(s flow.Stage) bool {
 	return true
 }
 
-// tryActivatePrePlanned checks all pre-planned stages (those with Plan != "")
-// and activates any whose dependencies are now done but status is still pending.
-func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
-	for _, s := range o.opts.Stages {
-		if s.NeedsPlanning() {
-			continue
-		}
+// activatePrePlannedStage prepares a pending stage that needs no planning agent.
+// Startup recovery and dependency-driven activation use the same gates and files.
+func (o *Orchestrator) activatePrePlannedStage(s flow.Stage) {
+	if !o.depsDone(s) {
+		return
+	}
+	if o.shouldGateAutoRun(s) {
+		o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
+		return
+	}
+	if o.activationBlocked() {
+		return
+	}
+	if o.activateAutoStage(s) || o.activateScriptStage(s) {
+		return
+	}
 
-		current := o.opts.Store.Get(s.ID)
-
-		if current != state.StatusPending {
-			continue
-		}
-
-		if !o.depsDone(s) {
-			continue
-		}
-
-		if o.shouldGateAutoRun(s) {
-			o.Trigger(s.ID, bus.EvPause, bus.GuardCtx{}, "auto_run: false")
-			continue
-		}
-
-		if o.activationBlocked() {
-			continue // review mode: hold new activations; the stage stays pending/ready
-		}
-
-		if o.activateAutoStage(s) {
-			continue
-		}
-		if o.activateScriptStage(s) {
-			continue
-		}
-
-		stageDir := filepath.Join(o.opts.RunDir, s.ID)
-		if err := os.MkdirAll(stageDir, 0755); err != nil {
-			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
-			continue
-		}
-		dst := filepath.Join(stageDir, "plan.md")
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
+		return
+	}
+	dst := filepath.Join(stageDir, "plan.md")
+	if s.Plan != "" {
 		if err := copyFile(resolvePlanSource(o.opts.RunDir, s), dst); err != nil {
 			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "copy plan failed")
-			continue
+			return
 		}
-		o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "")
+	} else if s.Interactive {
+		if err := os.WriteFile(dst, []byte(s.Description), 0644); err != nil {
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "write plan failed")
+			return
+		}
+	}
+	o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "")
+}
+
+// tryActivatePrePlanned activates pending stages that need no planning agent.
+func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
+	for _, s := range o.opts.Stages {
+		if !s.NeedsPlanning() && o.opts.Store.Get(s.ID) == state.StatusPending {
+			o.activatePrePlannedStage(s)
+		}
 	}
 
 	// Newly activated stages may now be ready to run.
@@ -147,7 +145,7 @@ func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 	}
 }
 
-// startReadyStages starts implementation for stages whose dependencies are done.
+// startReadyStages starts ready stages whose dependencies are done.
 func (o *Orchestrator) startReadyStages(ctx context.Context) {
 	snap := o.opts.Store.Snapshot()
 	statuses := make(map[string]state.StageStatus, len(snap.Stages))
@@ -157,42 +155,46 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 
 	ready := o.graph.ReadyStages(statuses)
 	for _, id := range ready {
-		stage := o.graph.Stage(id)
-		if stage == nil {
-			continue
+		if stage := o.graph.Stage(id); stage != nil {
+			o.startReadyStage(ctx, *stage)
 		}
-		if o.activationBlocked() {
-			continue // review mode: hold new activations; the stage stays pending/ready
-		}
-		if _, ok := o.Trigger(id, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
-			continue
-		}
-		// Autonomous-стадия могла оказаться в Ready через retryStage (retry
-		// упавшей autonomous-стадии) в узком окне между EvReady и её собственным
-		// EvStartRun. Без этой проверки конкурентный вызов startReadyStages из
-		// другой стадии event-loop'а мог выиграть CAS на EvStartRun первым и
-		// запустить runImplementationAgent — тот читает plan.md, которого у
-		// autonomous-стадии нет, и стадия падает "no such file or directory".
-		//
-		// auto-стадия без deps попадает в Ready ещё до tryActivatePrePlanned (её
-		// подхватывает startPlanningForPending при первом старте Run), поэтому
-		// autonomous.flag на диске может ещё отсутствовать — пишем его здесь же,
-		// перед спавном, чтобы isAutonomousStage (используется dialog-поллером,
-		// resolvePlanSource и т.д.) видел стадию как автономную с самого начала.
-		stageDir := filepath.Join(o.opts.RunDir, id)
-		if stage.IsScript() {
-			o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
-			continue
-		}
-		if isAutonomousStage(stageDir) || stage.IsAuto() {
-			if stage.IsAuto() {
-				_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
-			}
-			o.spawnKind(ctx, *stage, kindAutonomous, o.withBeforeHook(o.runAutonomousAgent))
-			continue
-		}
-		o.spawnKind(ctx, *stage, kindImplementation, o.withBeforeHook(o.runImplementationAgent))
 	}
+}
+
+// startReadyStage is shared by normal scheduling and manual retry. Only the
+// winner of the durable ready -> running transition may spawn the stage.
+// Recheck the gates here because the caller's ready-stage snapshot may be stale.
+func (o *Orchestrator) startReadyStage(ctx context.Context, s flow.Stage) bool {
+	if o.activationBlocked() || !o.depsDone(s) {
+		return false
+	}
+	if _, ok := o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
+		return false
+	}
+
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	switch {
+	case s.IsScript():
+		o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
+	default:
+		kind := o.executionKind(s)
+		// Publish the autonomous marker before spawning so the dialog poller
+		// sees the same track as the runner, regardless of who won the CAS.
+		if s.IsAuto() {
+			_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
+		}
+		o.spawnKind(ctx, s, kind, o.withBeforeHook(o.plainRunner(kind)))
+	}
+	return true
+}
+
+// executionKind selects the agent track for a stage ready to execute its work.
+// The on-disk flag preserves autonomous decisions made by older flow versions.
+func (o *Orchestrator) executionKind(s flow.Stage) string {
+	if s.IsAuto() || isAutonomousStage(filepath.Join(o.opts.RunDir, s.ID)) {
+		return kindAutonomous
+	}
+	return kindImplementation
 }
 
 // clearInteractiveSessions удаляет claude-сессии и обнуляет stream-json логи всех
@@ -256,58 +258,27 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		clearInteractiveSessions(filepath.Join(o.opts.RunDir, stageID))
 	}
 
-	// Script-стадия (Stage.IsScript()): у неё нет ни plan.md, ни агента —
-	// перезапускаем сам скрипт напрямую, а не проваливаемся в ветку
-	// "!NeedsPlanning() → искать/копировать plan.md" ниже (у которой для
-	// script-стадии нет ни plan.md, ни stage.Plan-источника — она бы сразу
-	// повторно фейлила стадию с "no plan.md and no plan source configured"
-	// вместо реального повторного запуска скрипта). Проверяется ДО
-	// autonomous-ветки — script-стадия никогда не бывает autonomous.
-	if stage.IsScript() {
-		if !o.depsDone(*stage) {
-			return
-		}
-		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "manual retry: script")
-		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
-		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
-			return
-		}
-		o.concurrency.SpawnAgent(ctx, *stage, o.withBeforeHook(o.runScriptStage))
-		o.startReadyStages(ctx)
-		return
-	}
-
-	// Autonomous-стадия (супервизор ранее выбрал автономный трек — на диске лежит
-	// autonomous.flag): retry чтит это решение и перезапускает автономный агент
-	// напрямую, а не «сваливается» в planning. Супервизор повторно НЕ опрашивается —
-	// симметрично resume-on-restart в recovery.go, который тоже чтит флаг. Переход
-	// pending → ready → running зеркалит ветку «plan.md уже есть» ниже (EvReady →
-	// EvStartRun), только агент — автономный (без plan.md/approval).
-	if isAutonomousStage(filepath.Join(o.opts.RunDir, stageID)) || stage.IsAuto() {
-		// Незавершённая зависимость: стадия остаётся pending (уже сделано выше
-		// через EvManualRetry) — её подхватит обычный deps-aware путь
-		// (startPlanningForUnblocked/tryActivatePrePlanned/startReadyStages),
-		// который onAgentCompleted вызывает по завершении зависимости. Без этой
-		// проверки retry безусловно спавнил агента, даже когда депенденси ещё
-		// running (баг: ретраенные вниз по графу стадии стартовали параллельно
-		// с ещё не завершившимся предком).
-		if !o.depsDone(*stage) {
-			return
-		}
-		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "manual retry: autonomous")
-		// CAS-guard на EvStartRun — как в остальных spawn-путях (нет двойного запуска).
-		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
-			return
-		}
-		o.spawnKind(ctx, *stage, kindAutonomous, o.withBeforeHook(o.runAutonomousAgent))
-		o.startReadyStages(ctx)
-		return
-	}
-
-	if !stage.NeedsPlanning() {
-		stageDir := filepath.Join(o.opts.RunDir, stageID)
+	stageDir := filepath.Join(o.opts.RunDir, stageID)
+	readyReason := ""
+	switch {
+	case stage.IsScript():
+		readyReason = "manual retry: script"
+	case stage.IsAuto() || isAutonomousStage(stageDir):
+		readyReason = "manual retry: autonomous"
+	default:
 		planPath := filepath.Join(stageDir, "plan.md")
 		if _, err := os.Stat(planPath); err != nil {
+			if stage.NeedsPlanning() {
+				if !stage.EagerPlanning && !o.depsDone(*stage) {
+					return
+				}
+				if _, ok := o.Trigger(stageID, bus.EvStartPlanning, bus.GuardCtx{Stage: *stage}, "manual retry"); !ok {
+					return
+				}
+				o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
+				return
+			}
+
 			// plan.md not yet on disk — try to copy it from stage.Plan source.
 			if !o.depsDone(*stage) {
 				return
@@ -325,38 +296,17 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 				return
 			}
 		}
-		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "")
-		// Synchronous transition guards against a concurrent event-loop path
-		// (e.g. startReadyStages) also winning EvStartRun for this stage.
-		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
-			return
-		}
-		o.spawnKind(ctx, *stage, kindImplementation, o.withBeforeHook(o.runImplementationAgent))
-		o.startReadyStages(ctx)
-		return
 	}
 
-	stageDir := filepath.Join(o.opts.RunDir, stageID)
-	planPath := filepath.Join(stageDir, "plan.md")
-	if _, err := os.Stat(planPath); err == nil {
-		o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, "")
-		// Same CAS guard as above: only the winner spawns.
-		if _, ok := o.Trigger(stageID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
-			return
-		}
-		o.spawnKind(ctx, *stage, kindImplementation, o.withBeforeHook(o.runImplementationAgent))
-	} else {
-		// Deps not done — stay pending; planning starts automatically
-		// via startPlanningForUnblocked once dependencies complete.
-		if !stage.EagerPlanning && !o.depsDone(*stage) {
-			return
-		}
-		// Synchronous transition guards against double start
-		// (matches startPlanningForUnblocked pattern).
-		if _, ok := o.Trigger(stageID, bus.EvStartPlanning, bus.GuardCtx{Stage: *stage}, "manual retry"); !ok {
-			return
-		}
-		o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
+	// Keep blocked retries pending so normal scheduling can activate them
+	// (or cascade a dependency failure). A cached plan only skips planning;
+	// even eager_planning never permits implementation before dependencies.
+	if !o.depsDone(*stage) {
+		return
+	}
+	o.Trigger(stageID, bus.EvReady, bus.GuardCtx{}, readyReason)
+	if o.startReadyStage(ctx, *stage) {
+		o.startReadyStages(ctx)
 	}
 }
 
