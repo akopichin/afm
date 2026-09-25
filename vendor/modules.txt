@@ -1,0 +1,99 @@
+# github.com/aymanbagabas/go-udiff v0.4.1
+## explicit; go 1.24
+github.com/aymanbagabas/go-udiff
+github.com/aymanbagabas/go-udiff/lcs
+# github.com/go-json-experiment/json v0.0.0-20260601182631-00ed12fed2a6
+## explicit; go 1.26
+github.com/go-json-experiment/json
+github.com/go-json-experiment/json/internal
+github.com/go-json-experiment/json/internal/jsonflags
+github.com/go-json-experiment/json/internal/jsonopts
+github.com/go-json-experiment/json/internal/jsonwire
+github.com/go-json-experiment/json/jsontext
+# github.com/gorilla/websocket v1.5.3
+## explicit; go 1.12
+github.com/gorilla/websocket
+# github.com/inconshreveable/mousetrap v1.1.0
+## explicit; go 1.18
+github.com/inconshreveable/mousetrap
+# github.com/kaptinlin/jsonrepair v0.4.8
+## explicit; go 1.26.4
+github.com/kaptinlin/jsonrepair
+# github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+## explicit; go 1.21
+github.com/santhosh-tekuri/jsonschema/v6
+github.com/santhosh-tekuri/jsonschema/v6/kind
+# github.com/spf13/cobra v1.8.0
+## explicit; go 1.15
+github.com/spf13/cobra
+# github.com/spf13/pflag v1.0.5
+## explicit; go 1.12
+github.com/spf13/pflag
+# golang.org/x/mod v0.36.0
+## explicit; go 1.25.0
+golang.org/x/mod/semver
+# golang.org/x/sync v0.20.0
+## explicit; go 1.25.0
+golang.org/x/sync/errgroup
+# golang.org/x/sys v0.46.0
+## explicit; go 1.25.0
+golang.org/x/sys/plan9
+golang.org/x/sys/unix
+golang.org/x/sys/windows
+# golang.org/x/term v0.44.0
+## explicit; go 1.25.0
+golang.org/x/term
+# golang.org/x/text v0.14.0
+## explicit; go 1.18
+golang.org/x/text/feature/plural
+golang.org/x/text/internal
+golang.org/x/text/internal/catmsg
+golang.org/x/text/internal/format
+golang.org/x/text/internal/language
+golang.org/x/text/internal/language/compact
+golang.org/x/text/internal/number
+golang.org/x/text/internal/stringset
+golang.org/x/text/internal/tag
+golang.org/x/text/language
+golang.org/x/text/message
+golang.org/x/text/message/catalog
+# golang.org/x/tools v0.45.0
+## explicit; go 1.25.0
+golang.org/x/tools/go/analysis
+golang.org/x/tools/go/analysis/checker
+golang.org/x/tools/go/analysis/internal
+golang.org/x/tools/go/analysis/internal/analysisflags
+golang.org/x/tools/go/analysis/internal/checker
+golang.org/x/tools/go/analysis/singlechecker
+golang.org/x/tools/go/analysis/unitchecker
+golang.org/x/tools/go/ast/astutil
+golang.org/x/tools/go/ast/edge
+golang.org/x/tools/go/ast/inspector
+golang.org/x/tools/go/gcexportdata
+golang.org/x/tools/go/packages
+golang.org/x/tools/go/types/objectpath
+golang.org/x/tools/go/types/typeutil
+golang.org/x/tools/internal/aliases
+golang.org/x/tools/internal/analysis/driverutil
+golang.org/x/tools/internal/astutil/free
+golang.org/x/tools/internal/diff
+golang.org/x/tools/internal/diff/lcs
+golang.org/x/tools/internal/event
+golang.org/x/tools/internal/event/core
+golang.org/x/tools/internal/event/keys
+golang.org/x/tools/internal/event/label
+golang.org/x/tools/internal/facts
+golang.org/x/tools/internal/gcimporter
+golang.org/x/tools/internal/gocommand
+golang.org/x/tools/internal/packagesinternal
+golang.org/x/tools/internal/pkgbits
+golang.org/x/tools/internal/stdlib
+golang.org/x/tools/internal/typeparams
+golang.org/x/tools/internal/typesinternal
+golang.org/x/tools/internal/versions
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3
+# pgregory.net/rapid v1.1.0
+## explicit; go 1.18
+pgregory.net/rapid

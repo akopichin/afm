@@ -1,0 +1,191 @@
+version: '3'
+
+vars:
+  PROJECT_ROOT:
+    sh: pwd
+  GOBIN: '{{.PROJECT_ROOT}}/bin'
+  GOLANGCI_LINT_LOCAL_BINARY: '{{.GOBIN}}/golangci-lint'
+  REQUIRED_GOLANGCI_LINT_VERSION:
+    sh: cat .golangci.version 2>/dev/null || echo "2.12.2"
+  GOLANGCI_LINT_BINARY:
+    sh: |
+      required="$(cat .golangci.version 2>/dev/null || echo "2.12.2")"
+      for candidate in "$(command -v golangci-lint 2>/dev/null || true)" "{{.GOLANGCI_LINT_LOCAL_BINARY}}"; do
+        [ -n "$candidate" ] || continue
+        [ -x "$candidate" ] || continue
+        version="$("$candidate" version --format short 2>/dev/null || "$candidate" version --short 2>/dev/null || true)"
+        if [ "$version" = "$required" ]; then
+          echo "$candidate"
+          exit 0
+        fi
+      done
+      echo "{{.GOLANGCI_LINT_LOCAL_BINARY}}"
+  GOLANGCI_LINT_VERSION:
+    sh: |
+      {{.GOLANGCI_LINT_BINARY}} version --format short 2>/dev/null ||
+      {{.GOLANGCI_LINT_BINARY}} version --short 2>/dev/null ||
+      echo "not-installed"
+
+env:
+  GOBIN: '{{.GOBIN}}'
+
+tasks:
+  default:
+    desc: Run lint and test
+    cmds:
+      - task: lint
+      - task: test
+
+  help:
+    desc: Show this help message
+    cmds:
+      - echo "JSONRepair - Automatic JSON repair library for Go"
+      - echo "Available targets:"
+      - task --list
+    silent: true
+
+  clean:
+    desc: Clean build artifacts and caches
+    cmds:
+      - echo "Cleaning build artifacts..."
+      - rm -rf {{.GOBIN}}
+      - go clean -cache -testcache || true
+
+  deps:
+    desc: Download Go module dependencies
+    cmds:
+      - echo "Downloading dependencies..."
+      - go mod download
+      - go mod tidy
+
+  deps:update:
+    desc: Update dependencies for the root module and any nested modules
+    cmds:
+      - |
+        set -e
+        echo "Updating dependencies..."
+        MODULES=". $(find . -mindepth 2 -name go.mod \
+          -not -path '*/vendor/*' -not -path '*/.*' \
+          -exec dirname {} \; | sort)"
+        for dir in $MODULES; do
+          echo "==> $dir"
+          (
+            cd "$dir"
+            replaced=$(awk '
+              /^replace[[:space:]]+[^(]/ { print $2 }
+              /^replace[[:space:]]*\(/ { f=1; next }
+              f && /^\)/ { f=0; next }
+              f && /=>/ { print $1 }
+            ' go.mod)
+            deps=$(awk '
+              /^require[[:space:]]+[^(]/ { print $2 }
+              /^require[[:space:]]*\(/ { f=1; next }
+              f && /^\)/ { f=0; next }
+              f && !/\/\/ indirect/ && NF >= 2 { print $1 }
+            ' go.mod | while read -r dep; do
+              echo "$replaced" | grep -qxF "$dep" || echo "$dep"
+            done | tr '\n' ' ')
+            if [ -n "$deps" ]; then
+              go get -u $deps
+            fi
+            go mod tidy
+          )
+        done
+        if [ -f go.work ]; then
+          echo "==> go work sync"
+          go work sync
+        fi
+
+  submodule:update:
+    desc: Update nested reference submodules for this repository
+    cmds:
+      - |
+        set -eu
+        if [ ! -f .gitmodules ] || [ ! -d .references ]; then
+          echo "No reference submodules."
+          exit 0
+        fi
+        git submodule sync --recursive -- .references
+        git submodule update --init --recursive --remote --force -- .references
+
+  deps:submodules:
+    desc: Update nested reference submodules
+    cmds:
+      - task: submodule:update
+
+  test:
+    desc: Run all tests with race detection
+    cmds:
+      - echo "Running all tests..."
+      - go test -race ./...
+
+  lint:
+    desc: Run all linters
+    deps:
+      - golangci-lint
+      - tidy-lint
+
+  install-golangci-lint:
+    desc: Install golangci-lint with the required version
+    cmds:
+      - mkdir -p "{{.GOBIN}}"
+      - |
+        if [ "{{.GOLANGCI_LINT_VERSION}}" != "{{.REQUIRED_GOLANGCI_LINT_VERSION}}" ]; then
+          echo "Installing golangci-lint v{{.REQUIRED_GOLANGCI_LINT_VERSION}}..."
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "{{.GOBIN}}" v{{.REQUIRED_GOLANGCI_LINT_VERSION}}
+          echo "golangci-lint v{{.REQUIRED_GOLANGCI_LINT_VERSION}} installed successfully"
+        fi
+    status:
+      - test "{{.GOLANGCI_LINT_VERSION}}" = "{{.REQUIRED_GOLANGCI_LINT_VERSION}}"
+
+  golangci-lint:
+    desc: Run golangci-lint
+    deps:
+      - install-golangci-lint
+    cmds:
+      - '{{.GOLANGCI_LINT_BINARY}} version'
+      - echo "Running golangci-lint..."
+      - '{{.GOLANGCI_LINT_BINARY}} run --timeout=30m --concurrency=1 --path-prefix=.'
+
+  tidy-lint:
+    desc: Check if go.mod and go.sum are tidy
+    cmds:
+      - echo "Checking go.mod and go.sum are tidy..."
+      - go mod tidy
+      - git diff --exit-code -- go.mod go.sum
+
+  yamllint:
+    desc: Run yamllint
+    cmds:
+      - yamllint -s .
+
+  vuln:
+    desc: Run govulncheck
+    cmds:
+      - govulncheck ./...
+
+  fmt:
+    desc: Format Go code
+    deps:
+      - install-golangci-lint
+    cmds:
+      - echo "Formatting Go code..."
+      - '{{.GOLANGCI_LINT_BINARY}} fmt ./...'
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - echo "Running go vet..."
+      - go vet ./...
+
+  verify:
+    desc: Run all verification steps (deps, format, vet, lint, test, vuln)
+    cmds:
+      - task: deps
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test
+      - task: vuln
+      - echo "All verification steps completed successfully"

@@ -17,6 +17,11 @@ make test         # run the full test suite with -race
 make lint         # golangci-lint (must be clean)
 ```
 
+Go dependencies are checked into `vendor/`, so Go builds and tests can run
+without downloading modules. After changing `go.mod` or `go.sum`, run
+`make vendor` and commit the resulting `vendor/` changes with the manifests.
+Building the dashboard still requires npm dependencies from its lockfile.
+
 Before your first commit, enable the pre-commit hook — it runs lint + build + test on
 every commit:
 

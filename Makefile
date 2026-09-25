@@ -10,7 +10,12 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 GOLANGCI_BIN=$(LOCAL_BIN)/golangci-lint
 GOLANGCI_TAG=v2.11.4
 
-.PHONY: build test lint clean install bindeps
+.PHONY: build test lint clean install bindeps vendor
+
+# Go 1.14+ automatically uses the checked-in vendor/ tree for builds and tests.
+# Regenerate it after changing go.mod or go.sum.
+vendor:
+	$(GOENV) go mod vendor
 
 $(LOCAL_BIN):
 	mkdir -p $(LOCAL_BIN)

@@ -5,6 +5,12 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-25
 
+### Improvement: vendored Go dependencies
+
+Check the Go dependencies into `vendor/` so a clone can build and test the Go
+code without downloading modules. Regenerate the tree with `make vendor` after
+dependency changes.
+
 ### Improvement: distinct feed bubbles in the Goga skin
 
 Give agent and user messages their own surfaces in both color modes, so grouped
