@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { StrictMode, type ReactElement } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { FileBrowserProvider } from '../file-browser'
@@ -437,5 +437,92 @@ describe('LineCommentedDocument quote preview', () => {
     expect(quotedSourceLine(['a', '  text  ', 'b'], 2)).toBe('text')
     // out-of-range index → '' (defensive fallback, same as `?? ''`).
     expect(quotedSourceLine(['only one line'], 5)).toBe('')
+  })
+})
+
+// Тот же quote-блок, что и у открытой формы, но у УЖЕ СОХРАНЁННОГО комментария
+// (LineCommentDisplay) — чтобы читатель видел, к какой строке привязан коммент,
+// не открывая форму. Плюс: при редактировании существующего коммента карточка
+// его строки не рендерится (только форма) — иначе цитата задвоилась бы.
+describe('LineCommentedDocument saved-comment quote', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const listText = ['- Item one', '- Task two: do the thing', '- Item three'].join('\n')
+
+  function saveCommentAt(container: HTMLElement, line: number, text: string): void {
+    fireEvent.click(anchor(container, line))
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
+      target: { value: text },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^(Add|Update)$/ }))
+  }
+
+  test('a saved comment quotes its source line above the comment text', () => {
+    const { container } = render(<Harness text={listText} specialSections={false} />)
+    saveCommentAt(container, 1, 'please fix this item')
+
+    const display = container.querySelector('.line-comment-display[data-comment-line="1"]') as HTMLElement
+    expect(display).not.toBeNull()
+    const quote = display.querySelector('.line-comment-quote-src') as HTMLElement
+    expect(quote?.textContent).toBe('- Item one')
+
+    // Цитата — ВЫШЕ текста комментария в том же контейнере.
+    const commentText = within(display).getByText('please fix this item')
+    expect(quote.compareDocumentPosition(commentText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  test('each saved card quotes ITS OWN line while the open form quotes a third line', () => {
+    const { container } = render(<Harness text={listText} specialSections={false} />)
+    saveCommentAt(container, 1, 'c1')
+    saveCommentAt(container, 2, 'c2')
+
+    // Открываем форму на третьей строке (ещё без коммента).
+    fireEvent.click(anchor(container, 3))
+
+    const card1 = container.querySelector('.line-comment-display[data-comment-line="1"]') as HTMLElement
+    const card2 = container.querySelector('.line-comment-display[data-comment-line="2"]') as HTMLElement
+    const form = container.querySelector('.line-comment-form[data-comment-line="3"]') as HTMLElement
+
+    expect(card1.querySelector('.line-comment-quote-src')?.textContent).toBe('- Item one')
+    expect(card2.querySelector('.line-comment-quote-src')?.textContent).toBe('- Task two: do the thing')
+    expect(form.querySelector('.line-comment-quote-src')?.textContent).toBe('- Item three')
+  })
+
+  test('a saved comment on a horizontal-rule line renders NO quote block', () => {
+    const { container } = render(<Harness text={['first paragraph', '', '---'].join('\n')} specialSections={false} />)
+    // hr — строка 3.
+    saveCommentAt(container, 3, 'why is there a rule here')
+
+    const display = container.querySelector('.line-comment-display[data-comment-line="3"]') as HTMLElement
+    expect(display).not.toBeNull()
+    expect(display.querySelector('.line-comment-quote')).toBeNull()
+  })
+
+  test('editing an existing comment shows exactly one quote (the form), no stale display card', () => {
+    const { container } = render(<Harness text={listText} specialSections={false} />)
+    saveCommentAt(container, 2, 'first version')
+
+    // Кликаем ту же строку — открываем форму на редактирование.
+    fireEvent.click(anchor(container, 2))
+
+    // Карточка активной строки НЕ рендерится — остаётся только форма.
+    expect(container.querySelector('.line-comment-display[data-comment-line="2"]')).toBeNull()
+    const form = container.querySelector('.line-comment-form[data-comment-line="2"]') as HTMLElement
+    expect(form).not.toBeNull()
+    // Ровно одна цитата на всю ленту (формы), не задвоенная.
+    expect(container.querySelectorAll('.line-comment-quote').length).toBe(1)
+    expect(form.querySelector('.line-comment-quote-src')?.textContent).toBe('- Task two: do the thing')
+    // Форма открылась именно на РЕДАКТИРОВАНИЕ — draft содержит сохранённый текст.
+    const textarea = form.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea.value).toBe('first version')
+
+    // Закрытие формы (Escape) возвращает карточку с цитатой на место.
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    const card = container.querySelector('.line-comment-display[data-comment-line="2"]') as HTMLElement
+    expect(card).not.toBeNull()
+    expect(card.querySelector('.line-comment-quote-src')?.textContent).toBe('- Task two: do the thing')
+    // Форма редактирования закрыта. NB: карточка тоже имеет класс
+    // .line-comment-form, поэтому форму отличаем через :not(.line-comment-display).
+    expect(container.querySelector('.line-comment-form:not(.line-comment-display)[data-comment-line="2"]')).toBeNull()
   })
 })

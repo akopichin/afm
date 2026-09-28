@@ -226,9 +226,20 @@ export function LineCommentedDocument({
     return (
       <Fragment key={`block-${block.startLine}`}>
         <div className="md" dangerouslySetInnerHTML={{ __html: block.html }} />
-        {displays.map((line) => (
-          <LineCommentDisplay key={`display-${line}`} line={line} text={comments[line] ?? ''} onRemove={() => deleteComment(line)} />
-        ))}
+        {displays
+          // Активную (редактируемую) строку не показываем карточкой — её
+          // цитату и текст уже рендерит открытая форма ниже. Иначе цитата
+          // задвоилась бы (карточка + форма).
+          .filter((line) => line !== activeCommentLine)
+          .map((line) => (
+            <LineCommentDisplay
+              key={`display-${line}`}
+              line={line}
+              text={comments[line] ?? ''}
+              quotedLine={quotedSourceLine(sourceLines, line)}
+              onRemove={() => deleteComment(line)}
+            />
+          ))}
         {showForm && activeCommentLine !== null && (
           <LineCommentForm
             key={`form-${activeCommentLine}`}
@@ -309,13 +320,27 @@ function SpecialSectionWrapper({
   )
 }
 
+// QuoteBlock — dimmed-превью строки-источника (большая акцентная кавычка). Одна и
+// та же разметка у открытой формы и у сохранённого комментария; пустой quotedLine
+// (пустая/hr-строка) не рендерит ничего.
+function QuoteBlock({ quotedLine }: { quotedLine: string }): ReactElement | null {
+  if (quotedLine === '') return null
+  return (
+    <div className="line-comment-quote">
+      <span className="line-comment-quote-src">{quotedLine}</span>
+    </div>
+  )
+}
+
 function LineCommentDisplay({
   line,
   text,
+  quotedLine,
   onRemove,
 }: {
   line: number
   text: string
+  quotedLine: string
   onRemove: () => void
 }): ReactElement {
   return (
@@ -326,6 +351,7 @@ function LineCommentDisplay({
           ✕
         </button>
       </div>
+      <QuoteBlock quotedLine={quotedLine} />
       <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{text}</div>
     </div>
   )
@@ -373,11 +399,7 @@ function LineCommentForm({
           ✕
         </button>
       </div>
-      {quotedLine !== '' && (
-        <div className="line-comment-quote">
-          <span className="line-comment-quote-src">{quotedLine}</span>
-        </div>
-      )}
+      <QuoteBlock quotedLine={quotedLine} />
       <PasteableTextarea
         stageId={stageId}
         placeholder={`Comment on line ${line}...`}

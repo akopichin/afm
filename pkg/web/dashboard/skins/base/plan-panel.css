@@ -407,6 +407,17 @@
 .line-comment-display {
   border-color: var(--mint-soft);
   background: var(--bg-elev);
+  /* Сохранённый коммент компактнее формы: меньше вертикального воздуха, чтобы
+     карточки не занимали столько места (форма редактирования — прежняя). */
+  gap: 2px;
+  padding: 7px 14px 8px;
+}
+.line-comment-display .comment-display-header { margin-bottom: 0; }
+.line-comment-display .line-comment-quote {
+  min-height: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .comment-display-header {
