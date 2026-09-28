@@ -326,8 +326,8 @@ func TestServer_IndexGogaTheme_TitleAndFavicon(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	body := w.Body.String()
-	if !strings.Contains(body, `<title>QArium</title>`) {
-		t.Error("goga скин должен подставлять <title>QArium</title> из title.txt")
+	if !strings.Contains(body, `<title>Goga</title>`) {
+		t.Error("goga скин должен подставлять <title>Goga</title> из title.txt")
 	}
 	if strings.Contains(body, `<title>afm Dashboard</title>`) {
 		t.Error("goga скин не должен оставлять дефолтный <title>")

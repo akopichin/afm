@@ -155,25 +155,28 @@
    одноимённые правила base (равная специфичность, более поздний порядок в
    каскаде), без .theme-goga-скоупинга старой архитектуры. */
 
-/* Логотип-слово: goga показывает двухцветный wordmark «QArium» (как на
-   qarium.ru) — «QA» цветом --mint (teal), «rium» цветом --ink (белый),
-   системным sans-serif. Текст .gh-wordmark («afm») скрыт (font-size:0); слово
-   собирается из ::before/::after, чтобы не делать React-компонент
-   тема-зависимым. (Редизайн: класс .gh-wordmark пришёл на смену #header h1.) */
+/* Логотип-слово: goga показывает двухцветный wordmark «GOga» — «GO» заглавными
+   цветом --mint (teal/зелёный), «ga» цветом --ink (белый), системным sans-serif.
+   Текст .gh-wordmark («afm») скрыт (font-size:0); слово собирается из
+   ::before/::after, чтобы не делать React-компонент тема-зависимым.
+   Отрицательный margin-left прижимает слово ближе к логотипу-марке (в base
+   .gh-left держит gap:10px). (Редизайн: класс .gh-wordmark пришёл на смену
+   #header h1.) */
 .gh-wordmark {
   font-size: 0;
   letter-spacing: 0;
   text-transform: none;
+  margin-left: -8px;
 }
 .gh-wordmark::before {
-  content: 'QA';
+  content: 'GO';
   font-size: 15px;
   font-weight: 700;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--mint);
 }
 .gh-wordmark::after {
-  content: 'rium';
+  content: 'ga';
   font-size: 15px;
   font-weight: 700;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
