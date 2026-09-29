@@ -253,7 +253,7 @@ describe('StagesList', () => {
     expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
   })
 
-  test('CRITICAL: kebab menu portals to document.body so the scrollable #stages-panel cannot clip it', () => {
+  test('CRITICAL: kebab menu portals to document.body so the scrollable .stages-scroll cannot clip it', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
@@ -264,7 +264,7 @@ describe('StagesList', () => {
     const menuItem = screen.getByText('Pause')
     const menu = menuItem.closest('ul')
     expect(menu).not.toBeNull()
-    // #stages-panel has overflow-y: auto (layout.css) — any descendant that opens
+    // .stages-scroll has overflow-y: auto — any descendant that opens
     // below the visible viewport gets clipped. The menu must live outside it.
     expect(document.getElementById('stages-panel')?.contains(menu)).toBe(false)
     expect(document.body.contains(menu)).toBe(true)
@@ -283,7 +283,7 @@ describe('StagesList', () => {
     expect(screen.queryByText('Pause')).not.toBeInTheDocument()
   })
 
-  test('scrolling the stages panel closes the open kebab menu (the menu is anchored to a button inside it)', () => {
+  test('scrolling the stages scroller closes the open kebab menu (the menu is anchored to a button inside it)', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
@@ -292,7 +292,7 @@ describe('StagesList', () => {
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     expect(screen.getByText('Pause')).toBeInTheDocument()
 
-    fireEvent.scroll(document.getElementById('stages-panel')!)
+    fireEvent.scroll(document.querySelector('.stages-scroll')!)
     expect(screen.queryByText('Pause')).not.toBeInTheDocument()
   })
 
@@ -533,6 +533,35 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
 
     expect(screen.getByRole('button', { name: /^a/ })).not.toHaveAttribute('aria-describedby')
+  })
+
+  // --- Version footer (pinned bottom-left of the rail) ---
+
+  test('version footer: renders "afm <version>" in a .rail-foot element when version is given', () => {
+    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} version="v1.1.28" />)
+    const foot = document.querySelector('.rail-foot')
+    expect(foot).not.toBeNull()
+    expect(foot).toHaveTextContent('afm v1.1.28')
+  })
+
+  test('version footer: renders nothing when version is empty or the prop is omitted', () => {
+    const { rerender } = render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} version="" />)
+    expect(document.querySelector('.rail-foot')).toBeNull()
+
+    rerender(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
+    expect(document.querySelector('.rail-foot')).toBeNull()
+  })
+
+  // NOTE: jsdom does no layout, so this only proves the DOM ordering the pinning
+  // relies on (footer is the last child, after the .stages-scroll region). Actual
+  // bottom-pinning + scroll-above behaviour is verified in a live run, not here.
+  test('version footer: is the LAST child of #stages-panel, after the scroll wrapper', () => {
+    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} version="dev" />)
+    const panel = document.getElementById('stages-panel')
+    expect(panel).not.toBeNull()
+    const last = panel!.lastElementChild
+    expect(last).toHaveClass('rail-foot')
+    expect(last).toHaveTextContent('afm dev')
   })
 
   describe('verify badge (V5b.2, now durable stage.verify — Task 7)', () => {

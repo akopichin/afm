@@ -22,6 +22,11 @@ export type FlowStatus = {
   // читается защитно (undefined, если отсутствует), без нового API-вызова —
   // как только бэкенд начнёт присылать description, подзаголовок появится сам.
   description?: string
+  // version — версия afm, отдаваемая GET /api/status (ключ `version`): 'dev'
+  // для локальных/dev-сборок, 'vX.Y.Z' для релизов. Читается защитно ('', если
+  // бэкенд не прислал поле) — как только бэкенд начнёт присылать version, строка
+  // в футере рейла появится сама, без нового API-вызова.
+  version: string
   // idle/backoff — накопленное на бэкенде время (пережившее restart) плюс
   // необязательный анкер ТЕКУЩЕГО открытого периода/эпизодов, см.
   // useIdleMs/useBackoffMs. idleSince — null, если флоу не простаивает
@@ -61,6 +66,7 @@ const EMPTY_STATUS: FlowStatus = {
   flowName: '',
   stages: [],
   startedAt: '',
+  version: '',
   runStatus: null,
   endedAt: null,
   elapsedAccumulatedMs: null,
@@ -184,6 +190,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const elapsedAccumulatedMs = typeof obj.elapsed_accumulated_ms === 'number' ? obj.elapsed_accumulated_ms : null
   const elapsedSince = typeof obj.elapsed_since === 'string' ? obj.elapsed_since : null
   const description = typeof obj.description === 'string' ? obj.description : undefined
+  const version = typeof obj.version === 'string' ? obj.version : ''
 
   const stages: Stage[] = Array.isArray(obj.stages) ? obj.stages.map(toStage).filter((s): s is Stage => s !== null) : []
 
@@ -226,6 +233,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     elapsedAccumulatedMs,
     elapsedSince,
     description,
+    version,
     idleAccumulatedMs,
     idleSince,
     backoffAccumulatedMs,

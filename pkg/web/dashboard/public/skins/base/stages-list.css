@@ -19,11 +19,43 @@
   padding: 14px 12px;
   background: var(--surface-raised);
   border-right: 1px solid var(--separator-subtle);
+  /* The panel no longer scrolls — it's the fixed flex-column FRAME. .stages-scroll
+     is the scroll region, so the .rail-foot version line can stay pinned to the
+     bottom while the stage list scrolls above it. */
+  overflow: hidden;
+}
+
+/* === Scroll region: only the stage list scrolls, the footer stays pinned === */
+.stages-scroll {
+  flex: 1;
+  min-height: 0;            /* let the flex child actually shrink & scroll */
   overflow-y: auto;
-  /* explicit overflow-x:hidden — otherwise the spec forces overflow-x:auto when
-     overflow-y is non-visible, and 1px sub-pixel overflow (the active-row
-     marker) draws a spurious horizontal scrollbar. */
-  overflow-x: hidden;
+  overflow-x: hidden;       /* also prevents the 1px active-marker sub-pixel h-scrollbar */
+  /* Negative margin pulls the scroll region out to the panel's padding edge so the
+     scrollbar sits flush at the rail edge; the matching 12px side padding re-insets
+     the rows and keeps the SAME 12px horizontal gutter the panel had before this
+     change, so the attention glow and the .stage-item.active translateX(-3px) keep
+     the room they had (no horizontal regression). The 4px top/bottom padding gives
+     the soft attention halo room at the list's scroll ends; its faint outer tail may
+     still clip there — same as the panel clipped it before, acceptable for a pulsing
+     decoration. */
+  margin: 0 -12px;
+  padding: 4px 12px;
+}
+
+/* === Pinned footer: afm version. The flex:1 scroll region above pushes it down. === */
+.rail-foot {
+  flex-shrink: 0;
+  padding: 10px 8px 0;
+  border-top: 1px solid var(--separator-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* === Rail head: title + progress === */

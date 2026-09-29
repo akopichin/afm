@@ -41,6 +41,7 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	}
 	sc.Port = cfg.Server.GetPort()
 	sc.Theme = cfg.EffectiveTheme()
+	sc.Version = version
 	sc.SkinDir = cfg.SkinDir
 	sc.ShowMoney = cfg.Accounting.ShowMoneyEnabled()
 	sc.UIBus = orch.UIBus()

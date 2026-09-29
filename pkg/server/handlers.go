@@ -47,6 +47,7 @@ func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fall
 // maps the frontend used to re-join by id.
 type statusResponse struct {
 	FlowName             string          `json:"flow_name"`
+	Version              string          `json:"version,omitempty"`
 	StartedAt            time.Time       `json:"started_at"`
 	RunStatus            state.RunStatus `json:"run_status,omitempty"`
 	EndedAt              *time.Time      `json:"ended_at,omitempty"`
@@ -108,6 +109,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	var stageCosts map[string]*accounting.CostView
 	resp := statusResponse{
 		FlowName:             rs.FlowName,
+		Version:              s.version,
 		StartedAt:            rs.StartedAt,
 		RunStatus:            rs.RunStatus,
 		EndedAt:              rs.EndedAt,

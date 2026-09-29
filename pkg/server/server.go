@@ -94,6 +94,7 @@ type Server struct {
 	reviewState      func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
 	workspace        workspace.FS              // Docker project file browser backend; nil = capability off
 	theme            string                    // "goga" или "" (default graphite)
+	version          string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
 	indexBytes       []byte                    // предподготовленный index.html (с заменами скина/favicon)
 	fileServer       http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
 	customSkinServer http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
@@ -149,7 +150,9 @@ type Config struct {
 	ReviewState func() (string, []string)
 	Workspace   workspace.FS // Docker project file browser backend; nil = capability off
 	Theme       string
-	SkinDir     string
+	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
+	Version string
+	SkinDir string
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
 	WSPongWait   time.Duration
 	WSPingPeriod time.Duration
@@ -185,6 +188,7 @@ func New(cfg Config) *Server {
 		reviewState:  cfg.ReviewState,
 		workspace:    cfg.Workspace,
 		theme:        cfg.Theme,
+		version:      cfg.Version,
 		wsPongWait:   pongWait,
 		wsPingPeriod: pingPeriod,
 		wsWriteWait:  writeWait,

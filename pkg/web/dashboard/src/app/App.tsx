@@ -52,7 +52,7 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
-    description, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
+    description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, flowPauseState, flowPausedStages, runCost,
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
   } = useStatus()
@@ -519,6 +519,7 @@ export function App(): ReactElement {
                 progressDone={stages.filter((s) => s.status === 'done').length}
                 progressTotal={stages.length}
                 accounting={accounting}
+                version={version}
               />
             }
             tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}

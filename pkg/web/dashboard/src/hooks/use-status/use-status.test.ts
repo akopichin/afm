@@ -622,6 +622,15 @@ describe('useStatus', () => {
     expect(status.stages[0]?.cost?.phases).toEqual({ planning: 850 })
   })
 
+  test('normalizeStatus reads version from obj.version and defaults to "" when missing/non-string', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], version: 'v1.1.28' }).version).toBe('v1.1.28')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], version: 'dev' }).version).toBe('dev')
+    // Отсутствует → '' (старый бэкенд без поля version).
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).version).toBe('')
+    // Не строка → '' (защитно).
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], version: 42 }).version).toBe('')
+  })
+
   test('normalizeStatus: accounting.show_money=true maps to showMoney:true', () => {
     const raw = {
       flow_name: 'f',

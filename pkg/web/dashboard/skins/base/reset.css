@@ -56,7 +56,7 @@ a:hover { text-decoration: underline; }
    включает #feed-panel и #plan-section/#dialog-section — у них
    overflow:visible/без собственного скролла, реальный скролл — на детях
    ниже (см. layout.css/plan-panel.css/dialog-channel.css). */
-#stages-panel,
+.stages-scroll,
 .markdown-body,
 #plan-content,
 .dialog-scroll,
@@ -66,7 +66,7 @@ a:hover { text-decoration: underline; }
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--ink-dim) 60%, transparent) transparent;
 }
-#stages-panel::-webkit-scrollbar,
+.stages-scroll::-webkit-scrollbar,
 .markdown-body::-webkit-scrollbar,
 #plan-content::-webkit-scrollbar,
 .dialog-scroll::-webkit-scrollbar,
@@ -76,7 +76,7 @@ a:hover { text-decoration: underline; }
   display: block;
   width: 5px;
 }
-#stages-panel::-webkit-scrollbar-track,
+.stages-scroll::-webkit-scrollbar-track,
 .markdown-body::-webkit-scrollbar-track,
 #plan-content::-webkit-scrollbar-track,
 .dialog-scroll::-webkit-scrollbar-track,
@@ -85,7 +85,7 @@ a:hover { text-decoration: underline; }
 .file-browser-pane::-webkit-scrollbar-track {
   background: transparent;
 }
-#stages-panel::-webkit-scrollbar-thumb,
+.stages-scroll::-webkit-scrollbar-thumb,
 .markdown-body::-webkit-scrollbar-thumb,
 #plan-content::-webkit-scrollbar-thumb,
 .dialog-scroll::-webkit-scrollbar-thumb,
@@ -96,7 +96,7 @@ a:hover { text-decoration: underline; }
   border-radius: 999px;
   opacity: 0.6;
 }
-#stages-panel::-webkit-scrollbar-thumb:hover,
+.stages-scroll::-webkit-scrollbar-thumb:hover,
 .markdown-body::-webkit-scrollbar-thumb:hover,
 #plan-content::-webkit-scrollbar-thumb:hover,
 .dialog-scroll::-webkit-scrollbar-thumb:hover,

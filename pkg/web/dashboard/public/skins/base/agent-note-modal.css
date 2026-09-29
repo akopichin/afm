@@ -38,8 +38,8 @@
 .stage-kebab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 /* position: fixed + top/left вычисляются в JS (StagesList.tsx, от getBoundingClientRect
-   кнопки) и рендерятся порталом в document.body — #stages-panel скроллится
-   (overflow-y: auto, layout.css) и обрезал бы абсолютно спозиционированное меню. */
+   кнопки) и рендерятся порталом в document.body — .stages-scroll скроллится
+   (overflow-y: auto) и обрезал бы абсолютно спозиционированное меню. */
 .stage-kebab-menu {
   list-style: none;
   min-width: 200px;

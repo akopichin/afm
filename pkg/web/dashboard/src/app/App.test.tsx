@@ -129,6 +129,22 @@ describe('App', () => {
     expect(screen.getByText('Offline')).toBeInTheDocument()
   })
 
+  test('renders the afm version footer (rail-foot) from /api/status version', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      version: 'v1.1.28',
+      stages: [stageView('s1', 'Propose', 'running')],
+    }))
+
+    render(<App />)
+
+    // Ловит забытый проп App→StagesList: отдельные unit-тесты обоих компонентов
+    // прошли бы, а строка версии всё равно не появилась бы.
+    await waitFor(() => {
+      expect(document.querySelector('.rail-foot')).toHaveTextContent('afm v1.1.28')
+    })
+  })
+
   test('a significant WS event triggers a re-fetch of /api/status', async () => {
     let statusCalls = 0
     mockFetchForStatus(

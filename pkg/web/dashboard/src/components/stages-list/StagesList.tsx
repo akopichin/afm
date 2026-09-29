@@ -31,6 +31,10 @@ type StagesListProps = {
   // оценённой (cost==null) активной стадии — сама по себе стадия не знает,
   // включён ли учёт затрат и жив ли прайсер.
   accounting: AccountingState
+  // version — версия afm (из GET /api/status): тихая моно-строка, прибитая к
+  // низу рейла. Опциональна, чтобы существующие вызовы/тесты без неё оставались
+  // валидными; пустая/undefined → футер не рендерится.
+  version?: string
 }
 
 // verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора:
@@ -131,7 +135,7 @@ function hasKebab(stage: Stage): boolean {
 // показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
 // — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
 // just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
-export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting }: StagesListProps): ReactElement {
+export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting, version }: StagesListProps): ReactElement {
   // useId() нельзя звать внутри stages.map (правила хуков запрещают хук в
   // цикле) — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -144,7 +148,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
   // пользователь описал двухуровневое взаимодействие меню→пункт, рассчитанное
   // на будущие пункты меню).
   const [openMenuStageId, setOpenMenuStageId] = useState<string | null>(null)
-  // #stages-panel скроллится (overflow-y: auto, layout.css) — абсолютно
+  // .stages-scroll скроллится (overflow-y: auto) — абсолютно
   // спозиционированное меню внутри него обрезалось бы краем панели, если
   // строка стадии оказывается ближе к низу видимой области (реальный баг,
   // замечен на живом флоу). Меню рендерится порталом в document.body с
@@ -172,18 +176,20 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
     }
 
     document.addEventListener('mousedown', onMouseDown)
-    // Меню спозиционировано fixed относительно кнопки внутри #stages-panel.
-    // Если прокручивается САМА панель — кнопка уезжает, а меню нет: закрываем.
-    // Слушаем скролл ТОЛЬКО панели, а не window с capture:true — иначе любой
-    // посторонний скролл в документе (например автоскролл ленты событий вниз
-    // при новом событии, useStickToBottom дёргает scrollTop) ложно закрывал бы
-    // меню сразу после открытия. Скролл не всплывает, поэтому чужие контейнеры
-    // до этого слушателя не дойдут.
-    const panel = document.getElementById('stages-panel')
-    panel?.addEventListener('scroll', close)
+    // Меню спозиционировано fixed относительно кнопки внутри списка стадий.
+    // Если прокручивается САМА скролл-область списка — кнопка уезжает, а меню
+    // нет: закрываем. Скроллит теперь .stages-scroll (сам #stages-panel —
+    // фиксированный фрейм с overflow:hidden, чтобы футер версии оставался
+    // прибитым к низу). Слушаем скролл ТОЛЬКО этого скроллера, а не window с
+    // capture:true — иначе любой посторонний скролл в документе (например
+    // автоскролл ленты событий вниз при новом событии, useStickToBottom дёргает
+    // scrollTop) ложно закрывал бы меню сразу после открытия. Скролл не
+    // всплывает, поэтому чужие контейнеры до этого слушателя не дойдут.
+    const scroller = document.querySelector('.stages-scroll')
+    scroller?.addEventListener('scroll', close)
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
-      panel?.removeEventListener('scroll', close)
+      scroller?.removeEventListener('scroll', close)
     }
   }, [openMenuStageId])
 
@@ -244,7 +250,8 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
           </div>
         )}
       </div>
-      <ul id="stages-list" className="stages-list">
+      <div className="stages-scroll">
+        <ul id="stages-list" className="stages-list">
         {stages.map((stage, index) => {
           // railCost — null означает «пустой рейл»: ни фигуры, ни описания
           // (см. документацию функции выше). costId существует, только пока
@@ -417,7 +424,11 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
           </li>
           )
         })}
-      </ul>
+        </ul>
+      </div>
+      {version !== undefined && version.trim() !== '' && (
+        <div className="rail-foot">afm {version}</div>
+      )}
     </aside>
   )
 }

@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-29
 
+### Improvement: afm version pinned to the bottom of the stage rail
+
+The dashboard now shows the running afm version (for example `afm v1.1.28`) as a
+quiet monospace line hard-pinned to the bottom-left corner of the stage rail, so
+the current version is always in view. The stage list scrolls above it; the
+footer never scrolls away. The version is the same string `afm --version` prints
+(`dev` for plain local builds, the git tag for releases) and is delivered on
+`GET /api/status`. To keep the footer pinned, the stage list now scrolls inside
+its own region rather than the whole rail panel.
+
 ### Fix: consistent Q&A on completed and restored non-interactive stages
 
 A completed non-interactive stage that afm auto-answered (for example a planning
