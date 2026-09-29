@@ -85,34 +85,43 @@ Frontend:
 
 **Interfaces:**
 - Consumes: existing `Manager`, `pauseGen`/`loadPauseGen` (orchestrator.go).
-- Produces: `Manager.epochOf func(stageID string) uint64` field (nil ⇒ epoch always 0,
-  guard inert); run callback signature gains `epoch uint64`:
-  `run func(ctx context.Context, s flow.Stage, lease *Lease, epoch uint64)`.
-  `SpawnAgent`'s wrapper ignores it (unchanged behavior for non-epoch callers).
+- Produces: epoch propagation for the ENTIRE spawn chain (codex r2 C1):
+  - `New(...)` gains an `epochOf func(stageID) uint64` **constructor parameter** (not a
+    post-hoc field — `Orchestrator` is built after the Manager; pass a closure
+    `func(id) uint64 { return o.loadPauseGen(id) }` where `o` is captured by reference,
+    or a small `*epochSource` shared value the orchestrator fills in before `Run`).
+    nil ⇒ epoch 0 (guard inert).
+  - The epoch reaches the runner **through the whole chain**, not just `SpawnAgentLease`:
+    `spawnAgentLeased` (reviewpause.go:96) and `spawnKind` must NOT drop it. Mechanism:
+    install the captured epoch as a **typed context value** (`ctxWithEpoch(ctx, epoch)`)
+    in `SpawnAgentLease` right before calling `run`, and read it in `runWithRetry` via
+    `epochFromCtx(ctx)` (Task 5). This avoids changing every runner wrapper's signature
+    while still threading the exact spawn epoch. `SpawnAgent`/`spawnAgentLeased`/
+    `spawnKind` callback signatures stay as-is (the epoch rides the ctx).
+  - Update `lease_test.go` + `reviewpause.go`'s `spawnAgentLeased` in THIS task so
+    everything compiles.
 
 - [ ] **Step 1: Write the failing test** — a queued runner whose epoch was bumped abdicates.
 
 ```go
-// concurrency_test.go
+// concurrency_test.go — use the real New signature (critical bus, stages, default cmd,
+// maxParallel, shouldRun) plus the new epochOf param; a 1-slot semaphore forces queueing.
 func TestSpawnAgentLease_SupersededEpochAbdicates(t *testing.T) {
     var epoch atomic.Uint64
-    m := NewWithSemaphores(map[string]Semaphore{"": newBlockingSem(1)}, "")
-    m.epochOf = func(string) uint64 { return epoch.Load() }
-    // occupy the single slot so the next spawn queues
-    release := m.occupy(t, "") // helper: acquires the sole slot, returns releaser
-    ran := make(chan struct{}, 1)
+    m := newTestManagerWithEpoch(t, /*slots*/ 1, func(string) uint64 { return epoch.Load() })
+    release := occupySoleSlot(t, m)              // helper: holds the only slot; the next spawn queues
+    var ran atomic.Bool
     m.SpawnAgentLease(context.Background(), flow.Stage{ID: "s1"},
-        func(context.Context, flow.Stage, *Lease, uint64) { ran <- struct{}{} })
-    epoch.Add(1)          // "pause" happens while the runner is queued
-    release()             // free the slot; queued runner now acquires the lease
-    select {
-    case <-ran:
-        t.Fatal("superseded queued runner must not execute")
-    case <-time.After(200 * time.Millisecond):
-    }
-    m.WaitAgents(context.Background())
+        func(context.Context, flow.Stage, *Lease) { ran.Store(true) })
+    epoch.Add(1)                                  // "pause" bumps generation while the runner is queued
+    release()                                     // free the slot; the queued runner now acquires the lease
+    m.WaitAgents()                                // deterministic: wait for the goroutine to finish/abdicate
+    if ran.Load() { t.Fatal("superseded queued runner must not execute") }
 }
 ```
+(Add `newTestManagerWithEpoch`/`occupySoleSlot` helpers; `WaitAgents()` takes no ctx —
+match the real signature. The positive twin `TestSpawnAgentLease_SameEpochRuns` asserts
+`ran==true` with no bump.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -121,10 +130,12 @@ Expected: FAIL (runner executes — no guard yet; also compile error on the 4-ar
 
 - [ ] **Step 3: Implement the epoch capture + recheck**
 
-In `SpawnAgentLease`: capture the epoch synchronously BEFORE `go`, recheck after lease.
+In `SpawnAgentLease`: capture the epoch synchronously BEFORE `go`, recheck after lease,
+and install it on the ctx so the whole runner chain sees the SAME spawn epoch (callback
+signatures unchanged — the epoch rides the ctx).
 
 ```go
-func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage, *Lease, uint64)) {
+func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage, *Lease)) {
     epoch := m.epoch(s.ID) // synchronous capture, before the goroutine
     m.agentWG.Add(1)
     go func() {
@@ -134,9 +145,9 @@ func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(co
         m.markActive(s.ID)
         defer func() { m.markDone(s.ID); lease.Release() }()
         if m.epoch(s.ID) != epoch || (m.shouldRun != nil && !m.shouldRun(s.ID)) {
-            return
+            return // superseded by a newer generation, or paused
         }
-        run(ctx, s, lease, epoch)
+        run(ctxWithEpoch(ctx, epoch), s, lease) // epoch travels on the ctx
     }()
 }
 
@@ -144,11 +155,14 @@ func (m *Manager) epoch(stageID string) uint64 {
     if m.epochOf == nil { return 0 }
     return m.epochOf(stageID)
 }
+// ctxWithEpoch/epochFromCtx: unexported typed-key helpers in the concurrency package;
+// epochFromCtx returns (0,false) when absent so non-spawn callers are unaffected.
 ```
 
-Add `epochOf func(string) uint64` to `Manager` (settable, like `shouldRun`). Update
-`SpawnAgent` wrapper to the 4-arg callback (ignore `epoch`). In
-`orchestrator.New`, set `mgr.epochOf = o.loadPauseGen`.
+`epochOf` is a constructor param of `New` (see Interfaces). `SpawnAgent` and
+`spawnAgentLeased`/`spawnKind` keep their signatures — they already pass ctx through,
+so the epoch propagates automatically. `runWithRetry` reads it via `epochFromCtx`
+(Task 5).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -244,6 +258,8 @@ git commit -m "concurrency: ref-counted active tracking + WaitDrained для н�
 **Files:**
 - Modify: `pkg/orchestrator/orchestrator.go` (per-stage claim map; replace `continueMu`)
 - Modify: `pkg/orchestrator/control_api.go` (`Pause` signature + atomic EvPause+bumpPauseGen under claim)
+- Modify: `pkg/orchestrator/recovery.go` (startup `continueMu` read/marker check → per-stage claim, recovery.go:172)
+- Modify: `pkg/server/actions.go` (`StageActions.Pause` → `(bool, error)`), `pkg/server/handlers.go` + server test fakes (2-value `Pause`)
 - Test: `pkg/orchestrator/pause_atomic_test.go`
 
 **Interfaces:**
@@ -265,8 +281,10 @@ func TestPause_AtomicWithGen_NoStrand(t *testing.T) {
     if o.loadPauseGen("s1") == 0 { t.Fatal("pauseGen must be bumped under the claim") }
 }
 ```
-(The interleave-strand property is proven end-to-end in Task 6's concurrent test; here
-assert the atomic bump + applied semantics.)
+Also add `TestPause_ContinueCannotInterleaveBeforeGenBump`: spawn a Continue that spins
+trying to resume while a Pause holds the claim; assert the stage never ends
+running/revising-with-no-runner (no strand) — proving `EvPause`+`bumpPauseGen` are atomic
+under the claim, not just that gen!=0.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -324,26 +342,49 @@ git commit -m "orchestrator: per-stage resume-claim; атомарные EvPause+
 - Test: `pkg/orchestrator/resume_test.go`
 
 **Interfaces:**
-- Produces:
+- Produces (codex r2 C2/C3 — richer strategy; core constrains spawn, strategy carries
+  policy + durable authorization):
   ```go
   type resumeStrategy interface {
-      // prepare runs durably BEFORE the FSM transition; error aborts (stage stays paused).
-      prepare(stageID, stageDir string) error
-      event() bus.FSMEvent                 // EvContinue (plain) | EvRevise (feedback)
-      guard(pausedFrom state.StageStatus) bus.GuardCtx
-      // spawn is called after the transition with the resolved kind; plain delegates
-      // to resumeStageAtStatus, feedback/review spawn the *WithFeedback runner.
-      spawn(ctx context.Context, s flow.Stage, pausedFrom state.StageStatus)
-      // acceptsPausedFrom reports whether this strategy runs for a given PausedFrom
-      // (feedback rejects "" / pending).
+      // reviewAuthorized reports the strategy carries durable review-transaction proof,
+      // so the core's rejectIfReviewPaused admission is bypassed AND the active-status
+      // "spawn-only" replay branch is permitted. Plain Continue / feedback → false
+      // (they must never enter that branch).
+      reviewAuthorized() bool
+      // acceptsStatus reports which live statuses this strategy resumes:
+      //   - plain/feedback: only StatusPaused;
+      //   - review-owner: StatusPaused OR the already-transitioned active statuses
+      //     (running/planning/revising/retrying) for crash-between-transition-and-spawn
+      //     replay (reviewpause.go:405). Guarded by reviewAuthorized().
+      acceptsStatus(s state.StageStatus) bool
+      // acceptsPausedFrom: feedback rejects ""/pending; plain accepts all (incl pending,
+      // which routes to first-activation, not resumeStageAtStatus — see spawn); review
+      // accepts per owner.
       acceptsPausedFrom(pausedFrom state.StageStatus) bool
+      // prepare runs durably BEFORE the FSM transition (feedback: durable append;
+      // review-target: SaveFeedbackOnce with the op id; else no-op). Error aborts,
+      // stage stays paused.
+      prepare(stageID, stageDir string) error
+      transition(pausedFrom state.StageStatus) (bus.FSMEvent, bus.GuardCtx) // EvContinue|EvRevise
+      resumeKind(stage flow.Stage, pausedFrom state.StageStatus) string     // for spawnKind stamping
+      feedbackMode() bool                                                   // withFeedbackRunner vs plain
   }
   func (o *Orchestrator) resumePaused(reqCtx context.Context, stageID string, st resumeStrategy) (applied bool, seq uint64, err error)
   ```
-  `resumePaused` owns: `flowPauseMu → resumeClaim` admission + `rejectIfReviewPaused`;
-  status recheck; `WaitDrained`; `st.prepare`; unique-token `continuedThisProcess`
-  marker; FSM CAS (`st.event`); `spawnAgentLeased(runContext, stage, ...)` via
-  `st.spawn`. `Continue` becomes `resumePaused(ctx, id, plainContinueStrategy{o})`.
+  `resumePaused` owns, in order: `flowPauseMu` → `rejectIfReviewPaused` UNLESS
+  `st.reviewAuthorized()` → lock `resumeClaim(stageID)` → unlock `flowPauseMu`; live
+  status must satisfy `st.acceptsStatus` (paused → drive FSM out; authorized active →
+  spawn-only, NO second transition); `acceptsPausedFrom` gate; `WaitDrained`;
+  `st.prepare`; unique-token `continuedThisProcess`; FSM CAS via `st.transition` (skipped
+  on the authorized active-status spawn-only branch); dispatch via **`spawnKind`** (NOT
+  raw `spawnAgentLeased` — kind must be stamped synchronously, codex r2 H7) with
+  `st.resumeKind` + `st.feedbackMode`. Returns `applied` = "conclusively handled" (true
+  even for the nothing-to-do terminal case; false only on abort so callers can retry —
+  codex r2 C4).
+- **plainContinueStrategy** delegates to a shared activation helper: for
+  `pausedFrom==pending` it runs `tryActivatePrePlanned`/`startPlanningForUnblocked`
+  (control_api.go:323 behavior — codex r2 C3), else `resumeStageAtStatus`. `Continue`
+  becomes `resumePaused(ctx, id, plainContinueStrategy{o})`.
 
 - [ ] **Step 1: Write the failing test** — Continue via the shared core still resumes; concurrent double-Continue spawns once.
 
@@ -372,41 +413,62 @@ Expected: FAIL (no `resumePaused`/`testSpawnHook` yet).
 ```go
 func (o *Orchestrator) resumePaused(reqCtx context.Context, stageID string, st resumeStrategy) (bool, uint64, error) {
     o.flowPauseMu.Lock()
-    if err := o.rejectIfReviewPaused(); err != nil { o.flowPauseMu.Unlock(); return false, 0, err }
+    if !st.reviewAuthorized() { // review-owner resumes run DURING the txn (marker=resuming)
+        if err := o.rejectIfReviewPaused(); err != nil { o.flowPauseMu.Unlock(); return false, 0, err }
+    }
     mu := o.resumeClaim(stageID); mu.Lock()
-    o.flowPauseMu.Unlock() // hold stageClaim through drain→transition→spawn; order flowPauseMu→claim preserved
+    o.flowPauseMu.Unlock() // order flowPauseMu→claim; hold claim through drain→transition→spawn
     defer mu.Unlock()
 
-    if o.currentStatus(stageID) != state.StatusPaused { return false, 0, nil }
+    status := o.currentStatus(stageID)
+    if !st.acceptsStatus(status) { return true, 0, nil } // nothing to do, conclusively handled
     pausedFrom := o.opts.Store.PausedFrom(stageID)
-    if !st.acceptsPausedFrom(pausedFrom) { return false, 0, nil }
-    stage := o.graph.Stage(stageID); if stage == nil { return false, 0, nil }
+    if !st.acceptsPausedFrom(pausedFrom) { return true, 0, nil }
+    stage := o.graph.Stage(stageID); if stage == nil { return true, 0, nil }
 
-    // drain admitted old runners (bounded, ctx-escapable) BEFORE the transition
     drainCtx, cancel := context.WithTimeout(o.runContext(reqCtx), drainTimeout); defer cancel()
-    if err := o.concurrency.WaitDrained(drainCtx, stageID); err != nil { return false, 0, nil } // abort: stays paused
-
+    if err := o.concurrency.WaitDrained(drainCtx, stageID); err != nil {
+        return false, 0, nil // abort (NOT conclusively handled): stays paused; caller/txn retries
+    }
     stageDir := filepath.Join(o.opts.RunDir, stageID)
-    if err := st.prepare(stageID, stageDir); err != nil { return false, 0, err } // durable; failure leaves paused
+    if err := st.prepare(stageID, stageDir); err != nil { return false, 0, err }
 
     token := newResumeToken()
     o.continuedThisProcess.Store(stageID, token)
-    _, seq, ok := o.triggerWithSeq(stageID, st.event(), st.guard(pausedFrom), "")
-    if !ok { o.continuedThisProcess.CompareAndDelete(stageID, token); return false, 0, nil }
-    st.spawn(o.runContext(reqCtx), *stage, pausedFrom)
+    var seq uint64
+    if status == state.StatusPaused { // authorized active-status branch skips the transition (spawn-only)
+        ev, guard := st.transition(pausedFrom)
+        var ok bool
+        if _, seq, ok = o.triggerWithSeq(stageID, ev, guard, ""); !ok {
+            o.continuedThisProcess.CompareAndDelete(stageID, token); return false, 0, nil
+        }
+    }
+    o.spawnKind(o.runContext(reqCtx), *stage, st.resumeKind(*stage, pausedFrom), st.feedbackMode())
     return true, seq, nil
 }
 ```
-`plainContinueStrategy`: `prepare` no-op; `event` EvContinue; `guard` sets PausedFrom;
-`spawn` calls the existing `resumeStageAtStatus(ctx, s, pausedFrom)`;
-`acceptsPausedFrom` true for all non-empty (Continue handles pending too — first
-activation). Refactor `Continue` to call `resumePaused` (preserve the
-`continuedThisProcess`/startup-recovery contract via the token). Add `testSpawnHook`
-seam (nil in prod).
+`plainContinueStrategy`: `reviewAuthorized`=false; `acceptsStatus`=paused only;
+`acceptsPausedFrom`=all; `prepare` no-op; `transition`=EvContinue+PausedFrom guard;
+dispatch — for `pending` route through the shared first-activation helper
+(`tryActivatePrePlanned`/`startPlanningForUnblocked`), else `resumeKind` from PausedFrom
+→ plain runner. Refactor `Continue` to call `resumePaused`, preserving its
+`continuedThisProcess` token contract (recovery reads/deletes under the same claim —
+Task 3/Medium-11). Add a `testSpawnHook` seam (nil in prod) recording dispatches.
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `~/homebrew/bin/go test ./pkg/orchestrator/ -run 'PlainContinueSingleSpawn' -v` → PASS.
+
+- [ ] **Step 4b: Additional deterministic tests (codex r2 test-gaps)**
+
+  - `TestResumePaused_QueuedOldGenThroughContinue`: end-to-end — a stage's old runner is
+    queued behind the semaphore, Pause bumps gen, Continue resumes, release the semaphore →
+    the old queued generation never runs (not just the Manager-level unit test).
+  - `TestResumePaused_UniqueTokenLoserRollback`: two resumes race; the loser's
+    `CompareAndDelete` never removes the winner's marker; a subsequent second pause/resume in
+    the same process still works (token lifecycle).
+  - `TestResumePaused_DrainTimeoutStaysPaused`: drain never completes → resume returns
+    `applied=false`, stage stays `paused`, no transition.
 
 - [ ] **Step 5: Regression — existing Continue/recovery tests**
 
@@ -424,14 +486,24 @@ git commit -m "orchestrator: единый resumePaused core + plain-Continue str
 ## Task 5: Epoch-aware side effects in `runWithRetry`
 
 **Files:**
-- Modify: `pkg/orchestrator/retry.go` (receive spawn epoch; staleness check before side effects)
-- Test: `pkg/orchestrator/retry_epoch_test.go`
+- Modify: `pkg/orchestrator/retry.go` (read `epochFromCtx`; staleness check before every side effect)
+- Modify: any notice/publish helpers `runWithRetry` calls that publish outcomes
+  (agent-completed / incomplete-retry / ask-user / verify notices) if the guard belongs there
+- Test: `pkg/orchestrator/retry_epoch_test.go` (records notices/spawns/publications, not only FSM triggers)
 
 **Interfaces:**
-- Consumes: `epoch uint64` from the run callback (Task 1).
-- Produces: a helper `(o *Orchestrator) superseded(stageID string, epoch uint64) bool`
-  (`o.loadPauseGen(stageID) != epoch`), checked before every outcome-publishing side
-  effect (completion, verify-fail, fail, retry-reschedule, interrupt respawn).
+- Consumes: the spawn epoch from the **ctx** (`concurrency.epochFromCtx(ctx)`, Task 1) —
+  this is why Task 1 threads it via ctx: it reaches `runWithRetry` through
+  `spawnKind`/wrappers unchanged.
+- Produces: `(o *Orchestrator) superseded(stageID string, epoch uint64) bool`
+  (`o.loadPauseGen(stageID) != epoch`). `runWithRetry` reads `epoch,_ := epochFromCtx(ctx)`
+  once at entry and checks `superseded` before **every** outcome-publishing side effect —
+  not only the interrupt branch (codex r2 H5): normal completion, `completionCheck`/verify
+  START, verify-fail, `EvFail` (retryable & non-retryable), retry-reschedule
+  (`EvScheduleRetry`) + retry-exhausted publication, `EvResumeAfterRetry`, `EvAskUser` +
+  agent-completed/incomplete-retry notices, cancellation-failure, and session-file
+  deletion where ownership matters. Applies across **all four** pipelines
+  (implementation/review/autonomous/planning) that flow through `runWithRetry`.
 
 - [ ] **Step 1: Write the failing test** — a runner whose epoch is stale publishes no outcome.
 
@@ -454,14 +526,18 @@ Expected: FAIL (outcome published).
 
 - [ ] **Step 3: Implement the guard at each side-effect site**
 
-Thread `epoch` into `runWithRetry`. Before each of: the completion path
-(`retry.go:281` region), the `EvFail`/`commitVerifyFailure` branch, the retry-reschedule
-branch, and the `onUserInterrupted` respawn — add:
+At `runWithRetry` entry: `epoch, _ := concurrency.epochFromCtx(ctx)`. Before EVERY
+side-effect site listed in Interfaces, add:
 ```go
 if o.superseded(s.ID, epoch) { return } // a newer generation owns this stage
 ```
-Keep the existing `status==paused` early-return; the epoch guard covers the
-transitioned-but-superseded window.
+Sites (grep to confirm each in the current retry.go + notice/publish helpers): normal
+completion (`retry.go:281` region), `completionCheck`/verify start, `commitVerifyFailure`,
+`EvFail` (both branches), `EvScheduleRetry` + retry-exhausted, `EvResumeAfterRetry`,
+`EvAskUser`/agent-completed/incomplete notices, cancellation-failure, session-file
+deletion. Keep the existing `status==paused` early-return (belt); the epoch guard covers
+the transitioned-but-superseded window a status check misses. The test records
+notices/spawns/publications (not only FSM triggers) to catch stale UI events.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -489,11 +565,17 @@ git commit -m "orchestrator: epoch-aware side effects в runWithRetry"
 - Test: `pkg/orchestrator/resume_feedback_test.go`
 
 **Interfaces:**
-- Produces: `feedbackStrategy{o, feedback}` — `prepare` persists via a durable-atomic
-  append (reuse `SaveFeedbackOnce`'s fsync/atomic path or add
-  `state.AppendFeedbackDurable`); `event` EvRevise; `guard` `{}`; `spawn` resolves
-  `resumeKind` (detectInterruptedPhase) → `withFeedbackRunner`; `acceptsPausedFrom`
-  false for `""`/`pending`. `Revise` paused branch → `resumePaused(reqCtx, id, feedbackStrategy{...})`.
+- Produces: `feedbackStrategy{o, feedback}` — `reviewAuthorized`=false;
+  `acceptsStatus`=paused only; `acceptsPausedFrom` false for `""`/`pending`;
+  `prepare` persists via a durable-atomic append; `transition`=EvRevise+`{}`;
+  `resumeKind`=`computeResumeKind(stage,pausedFrom)`; `feedbackMode`=true. `Revise`
+  paused branch → `resumePaused(reqCtx, id, feedbackStrategy{...})`.
+- **Feedback-writer serialization (codex r2 H6):** `SaveFeedbackOnce` requires callers to
+  serialize. All feedback mutations must take the SAME per-stage `resumeClaim` — including
+  the EXISTING running-`Revise` branch's bare `SaveFeedback` append (control_api.go:198),
+  which must be moved under the claim too (or the state layer gets its own per-file lock).
+  Otherwise a running-revise append races the paused-resume durable rewrite and loses a
+  note. `state.AppendFeedbackDurable(stageDir, feedback)` = temp+rename+fsync.
 
 - [ ] **Step 1: Write the failing tests** — (a) overlap yields exactly one feedback runner that receives the note; (b) pending-paused → no-op; (c) prepare failure leaves paused.
 
@@ -504,8 +586,10 @@ func TestRevisePaused_OverlapSingleFeedbackRunner(t *testing.T) {
     _, _ = o.Pause(context.Background(), "s1")
     var fbRunners atomic.Int64; var gotFeedback atomic.Value
     o.testFeedbackHook = func(fb string) { fbRunners.Add(1); gotFeedback.Store(fb) }
+    // Revise blocks on WaitDrained until the held old runner exits, so release it
+    // from a goroutine (codex r2 test-gap: a synchronous release after Revise deadlocks).
+    go func() { time.Sleep(30 * time.Millisecond); hold.release() }()
     applied, _, _ := o.Revise(context.Background(), "s1", "add retries")
-    hold.release()
     if !applied || fbRunners.Load() != 1 { t.Fatalf("applied=%v runners=%d", applied, fbRunners.Load()) }
     if gotFeedback.Load() != "add retries" { t.Fatal("feedback not delivered") }
 }
@@ -556,21 +640,39 @@ git commit -m "orchestrator: send-from-paused через feedbackStrategy + dura
 - Test: `pkg/orchestrator/reviewpause_test.go` (existing) + `reviewpause_resume_test.go`
 
 **Interfaces:**
-- Produces: `reviewOwnerStrategy{o, ow, isTarget}` — `prepare` = `SaveFeedbackOnce`
-  (target) / no new write (non-target FromRevising) / none; `armResumeContext` for
-  non-target; `event` EvRevise (useFeedback) | EvContinue; `spawn` by `ow.ResumeKind`;
-  durable-replay authorization for already-transitioned statuses stays in this
-  strategy. `runResumeTransaction` remains the outer transaction; its per-owner tail
-  calls `resumePaused(ctx, ow.ID, reviewOwnerStrategy{...})`.
+- Produces: `reviewOwnerStrategy{o, ow, isTarget, opID, rendered}` (codex r2 C2 — carries
+  the op id + rendered feedback for `SaveFeedbackOnce`):
+  - `reviewAuthorized`=true (bypasses `rejectIfReviewPaused`; enables the active-status
+    spawn-only replay branch);
+  - `acceptsStatus` = paused OR running/planning/revising/retrying (crash-between-
+    transition-and-spawn replay, reviewpause.go:405);
+  - `prepare` = `SaveFeedbackOnce(stageDir, opID, rendered)` (target) / no write
+    (non-target `FromRevising`) / none; plus `armResumeContext` for non-target;
+  - `transition` = EvRevise (`useFeedback = isTarget || ow.FromRevising`) else EvContinue;
+  - `resumeKind` = `ow.ResumeKind`; `feedbackMode` = useFeedback.
+  `runResumeTransaction` stays the outer transaction; its per-owner tail calls
+  `resumePaused(ctx, ow.ID, reviewOwnerStrategy{...})`.
+- **Marker retention (codex r2 C4):** `runResumeTransaction` records `reviewResumed` and
+  proceeds to cleanup ONLY when `resumePaused` returned `applied==true`. On `applied==false`
+  (drain timeout / CAS loss) it must FAIL the transaction and RETAIN the durable marker so
+  recovery retries — never delete the recovery proof for an owner not conclusively handled.
+- **PauseFlow (codex r2 H?/Medium-10):** `PauseFlow` acquires `flowPauseMu` FIRST, then
+  per-stage `resumeClaim` before inspecting/pausing each stage, and bases ownership on
+  eligible FSM status (not only `IsActive`) so a transition-committed-but-queued resume
+  isn't skipped.
 
 - [ ] **Step 1: Write the failing test** — review-pause begins mid-resume: a send-from-paused aborts (no resume inside the review transaction).
 
 ```go
-func TestResumePaused_AbortsWhenReviewPauseWins(t *testing.T) {
+// Review WINS only if PauseFlow held flowPauseMu BEFORE the resume acquired the claim
+// (codex r2 Medium-10: with flowPauseMu→claim, a resume that already owns the claim wins
+// the linearization point and PauseFlow waits — so to test "review wins" the review txn
+// must be established first).
+func TestResumePaused_RejectedWhenReviewPauseAlreadyActive(t *testing.T) {
     o := newTestOrchestrator(t /* s1 paused-from-running */)
-    o.beginReviewPauseDuringDrain("s1") // hook: establishes review transaction while WaitDrained loops
+    _, _ = o.PauseFlow(context.Background()) // review transaction established first
     applied, _, err := o.Revise(context.Background(), "s1", "note")
-    if applied || err == nil { t.Fatalf("resume must be rejected during review pause: applied=%v err=%v", applied, err) }
+    if applied || err == nil { t.Fatalf("resume must be rejected under active review pause: applied=%v err=%v", applied, err) }
     if o.currentStatus("s1") != state.StatusPaused { t.Fatal("stage must remain paused") }
 }
 ```
@@ -594,11 +696,22 @@ transaction is established.
 
 Run: `~/homebrew/bin/go test ./pkg/orchestrator/ -run 'AbortsWhenReviewPauseWins|ReviewPause' -v` → PASS.
 
+- [ ] **Step 4b: Additional deterministic tests (codex r2)**
+
+  - `TestReviewResume_AbortRetainsMarker`: a review-owner resume whose drain times out
+    (`applied=false`) → `runResumeTransaction` fails and the durable marker is RETAINED
+    (recovery proof not deleted); owner not left active-without-runner.
+  - `TestReviewResume_ActiveStatusReplayAuthorized`: an owner already transitioned
+    (running/…) by a crash-before-spawn → the review strategy's authorized spawn-only branch
+    re-spawns exactly once with the saved kind, no second transition.
+  - `TestRevisePaused_LifecycleSequence`: focus→`stage_paused`(EvPause); send→
+    `stage_revision_started`(EvRevise, empty phase); no `stage_resumed`.
+
 - [ ] **Step 5: Full review-pause regression (race)**
 
 Run: `~/homebrew/bin/go test ./pkg/orchestrator/... -race` → PASS (all existing
-review-pause tests green; no duplicated resume logic remains — grep `resume.go` is the
-only transition/drain/spawn site).
+review-pause tests green; no duplicated resume logic remains — grep confirms `resume.go`
+is the ONLY transition/drain/spawn site: `git grep -n "WaitDrained\|triggerWithSeq.*EvRevise\|EvContinue" pkg/orchestrator` should show resume.go + the FSM table only).
 
 - [ ] **Step 6: Commit**
 
@@ -636,7 +749,12 @@ Expected: FAIL (handler rejects paused; pause returns no body).
 - [ ] **Step 3: Implement**
 
 In `handleRevise`, add `state.StatusPaused` to the accepted pre-filter set. In the pause
-handler, capture `applied` from `Pause` and `json.NewEncoder(w).Encode(struct{Applied bool `json:"applied"`}{applied})`.
+handler (handlers.go:394): **relax its status pre-filter** so an already-paused stage is
+NOT rejected with 400 — let it reach `Pause`, which returns `applied=false` (codex r2
+Medium-12), and respond `200` with
+`json.NewEncoder(w).Encode(struct{Applied bool `json:"applied"`}{applied})`. Update
+`StageActions.Pause` in `pkg/server/actions.go` + any handler fakes to the 2-value
+signature (codex r2 Medium-11).
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -742,21 +860,29 @@ git commit -m "dashboard(composer): PasteableTextarea пробрасывает o
 - Produces:
   ```ts
   type PauseOnFocusApi = {
-    enabled: boolean; setEnabled: (v: boolean) => void   // persisted afm.pauseOnFocus
-    isOwnedPause: (stageId: string) => boolean            // banner + deferred-attention key
+    enabled: boolean; setEnabled: (v: boolean) => void   // persisted afm.pauseOnFocus; false ⇒ resume all owned
+    isOwnedPause: (stageId: string) => boolean           // banner (true only after {applied:true}); a REACT STATE value
+    shouldDeferAttention: (stageId: string) => boolean   // operational window pausing|owned|sending|resuming (codex r2 H9)
     onFocus: (stageId: string, status: StageStatus) => void
     onBlur: (stageId: string, hasDraft: boolean) => void
-    beforeSend: (stageId: string) => Promise<void>        // awaits in-flight pause; caller then revises
-    afterSend: (stageId: string) => void                  // clears ownership
+    beforeSend: (stageId: string) => Promise<void>       // awaits in-flight pause; caller then revises
+    afterSend: (stageId: string) => void                 // clears ownership
     onResumeNow: (stageId: string) => void
-    reconcile: (stages: Stage[]) => void                  // clear ownership if status left paused
+    setActiveStage: (stageId: string | null) => void     // navigation: Continue a still-owned prior stage (codex r2 H8)
+    reconcile: (stages: Stage[]) => void                 // clear ownership if live status left paused
   }
   function usePauseOnFocus(deps: { pauseStage; continueStage }): PauseOnFocusApi
   ```
-  Op state machine per stageId: `idle→pausing→owned→(sending|resuming)→idle`; ownership
-  only when `pauseStage` resolves `{applied:true}`; all mutating ops await any in-flight
-  pause; stage change Continues a still-owned prior stage. Stage-ID-driven (no dependence
-  on `workspaceStage`).
+  - Op state machine per stageId: `idle→pausing→owned→(sending|resuming)→idle`.
+  - **Ownership** (`isOwnedPause`) only after `pauseStage` resolves `{applied:true}`, and it
+    is **React state** (triggers rerender of banner/reducer — refs alone won't rerender,
+    codex r2 H9).
+  - **`shouldDeferAttention`** is the SEPARATE operational-window predicate (true from
+    `pausing` onward, before `{applied}` resolves) so a WebSocket paused event arriving
+    mid-request isn't permanently consumed by the workspace reducer.
+  - All mutating ops await any in-flight pause. `setActiveStage(next)` Continues a
+    still-owned previous stage before switching (navigation strand fix). `setEnabled(false)`
+    awaits + Continues EVERY owned pause. Stage-ID-driven (no dependence on `workspaceStage`).
 
 - [ ] **Step 1: Write the failing tests** (the core suite)
 
@@ -770,7 +896,10 @@ test('afterSend clears ownership')
 test('blur empty while owned continues; blur with draft stays paused')
 test('onResumeNow continues and clears ownership; dedups with blur')
 test('does NOT own a pause that returned applied:false (manual/cross-tab) → blur no continue')
-test('stage change continues the previously owned stage before switching')
+test('setActiveStage continues the previously owned stage before switching')
+test('setEnabled(false) awaits and continues every owned pause')
+test('shouldDeferAttention is true from pausing (before applied resolves), isOwnedPause only after applied')
+test('ownership is React state — banner rerenders when it flips')
 test('reconcile clears ownership when live status leaves paused')
 ```
 Use `vi.fn()` resolved promises for `pauseStage`/`continueStage`; assert call order with
@@ -804,10 +933,12 @@ git commit -m "dashboard: usePauseOnFocus (ownership + promise-sequenced op stat
 
 **Interfaces:**
 - Consumes: `usePauseOnFocus` (Task 11).
-- Produces: `useWorkspaceView` accepts a `deferAttentionFor?: (stageId, kind) => boolean`
-  so an owned paused stage's attention is deferred (NOT permanently marked handled) and
-  re-opens once ownership releases. `App` instantiates `usePauseOnFocus` BEFORE
-  `useWorkspaceView`, keyed by `stages`. `noteTarget = !isScript &&
+- Produces: `useWorkspaceView` accepts `deferAttentionFor?: (stageId) => boolean` fed by
+  the hook's **`shouldDeferAttention`** (operational window — NOT `isOwnedPause`, codex r2
+  H9) so a paused arrival during `pausing` isn't permanently consumed; the reducer skips
+  marking it handled while deferred and re-queues it when the predicate flips false. `App`
+  instantiates `usePauseOnFocus` BEFORE `useWorkspaceView`, keyed by `stages`; calls
+  `setActiveStage(selectedStageId)` on selection change. `noteTarget = !isScript &&
   flowPauseState==='none' && (status==='running' || (status==='paused' && ['running',
   'planning','revising','retrying'].includes(pausedFrom)))`.
 
