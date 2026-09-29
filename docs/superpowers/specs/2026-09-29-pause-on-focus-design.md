@@ -1,3 +1,9 @@
+> **STATUS: DEFERRED (2026-09-29).** This is the FULL reliability-hardened design
+> for send-from-paused (resume with note in-place). After several codex rounds it
+> proved to be a substantial reliability-core project. We shipped a **reduced-scope**
+> version instead (frontend-only: focus→Pause, Send→Continue-then-normal-Revise),
+> which reuses existing safe paths. Keep this doc for if/when the full version is revived.
+>
 # Design: "Pause on focus" composer + safe resume-from-paused
 
 Status: draft for review · Date: 2026-09-29

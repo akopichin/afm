@@ -1,3 +1,9 @@
+> **STATUS: DEFERRED (2026-09-29).** This is the FULL reliability-hardened design
+> for send-from-paused (resume with note in-place). After several codex rounds it
+> proved to be a substantial reliability-core project. We shipped a **reduced-scope**
+> version instead (frontend-only: focus→Pause, Send→Continue-then-normal-Revise),
+> which reuses existing safe paths. Keep this doc for if/when the full version is revived.
+>
 # Pause on focus — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
