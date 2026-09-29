@@ -442,3 +442,106 @@
 .feed-composer-send:hover:not(:disabled) { filter: brightness(1.06); }
 .feed-composer-send:disabled { opacity: 0.4; cursor: default; }
 .feed-composer-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* --- Pause on focus: полоса опций, toggle, баннер паузы --- */
+/* Полоса опций над строкой ввода: подсказка слева, переключатель справа. */
+.composer-opts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.composer-opts-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* Переключатель — компактный слайдер + подпись. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+/* Нативный checkbox прячем визуально, но оставляем доступным для клика/скринридера. */
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.switch .track {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--separator-subtle);
+  transition: background var(--motion-fast, 120ms) ease;
+}
+.switch .track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface-canvas);
+  transition: transform var(--motion-fast, 120ms) ease;
+}
+.switch input:checked + .track {
+  background: var(--attention);
+}
+.switch input:checked + .track::after {
+  transform: translateX(14px);
+}
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.switch-label { white-space: nowrap; }
+
+/* Баннер паузы — янтарный акцент (attention-словарь): левая кайма, ⏸-иконка,
+   «Resume now»-пилюля справа. */
+.pause-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--attention);
+  border-radius: 6px;
+  background: rgba(var(--attention-rgb), 0.10);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.pause-banner-icon {
+  flex-shrink: 0;
+  color: var(--attention);
+  font-size: 13px;
+}
+.pause-banner-text { flex: 1; min-width: 0; }
+.pause-banner-resume {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--attention);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--attention);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) ease;
+}
+.pause-banner-resume:hover { background: rgba(var(--attention-rgb), 0.16); }
+.pause-banner-resume:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Тонировка строки ввода/кнопки, пока стадия на паузе (янтарный вместо акцента). */
+.feed-composer-row.focused {
+  border-color: var(--attention);
+  box-shadow: 0 0 0 2px rgba(var(--attention-rgb), 0.28);
+}
+.feed-composer-send.paused { background: var(--attention); }

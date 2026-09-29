@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-29
 
+### Improvement: "Pause on focus" — freeze a stage while you write a note
+
+The Feed note composer gains a **Pause on focus** toggle. With it on, clicking into
+the note field pauses the running stage so the agent can't finish before you're done
+typing; a banner shows the stage is on hold. **Send** resumes the stage and delivers
+your note in one step, **Resume now** (or leaving the field empty) un-pauses without
+sending, and turning the toggle off restores the previous behavior. The preference
+persists across sessions. It reuses the existing pause and note-delivery paths — no
+new orchestrator machinery — and only the stage you're writing to is paused; other
+running stages keep going.
+
 ### Improvement: afm version pinned to the bottom of the stage rail
 
 The dashboard now shows the running afm version (for example `afm v1.1.28`) as a

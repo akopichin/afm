@@ -109,6 +109,24 @@ bottom of its **Feed** — the same input you'd expect in a chat app:
 4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
    the agent's own messages (it is not clickable — it's a record of what you sent).
 
+### Pause on focus — freeze the stage while you write
+
+A running agent can finish (or move on) before you're done typing a note. The
+composer has a **Pause on focus** toggle (top-right of the note input) for this:
+
+- With it **on**, clicking into the note field pauses the running stage — the agent
+  is put on hold and a banner shows *"Stage paused — it'll resume when you send."*
+  Take your time; the agent won't advance past where it was.
+- **Send** resumes the stage and delivers your note in one step. **Resume now** (or
+  leaving the field empty and clicking away) un-pauses without sending.
+- With it **off**, the composer behaves as above (Send interrupts the live agent, no
+  pause).
+
+The toggle is remembered across sessions. It reuses the ordinary pause and
+note-delivery paths, so on resume the agent restarts the phase once with your note
+in context. Only the stage you're writing to is paused — other running stages are
+untouched.
+
 At the `awaiting_approval` checkpoint you redirect the stage a different way — with
 line comments and "Send revision" (see [Inline plan comments](#inline-plan-comments) above).
 

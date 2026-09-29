@@ -14,6 +14,11 @@ type PasteableTextareaProps = {
   disabled?: boolean
   maxHeight?: number
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void
+  // onFocus/onBlur — прокидываются во внутренний <textarea> как есть. Нужны
+  // «pause on focus» композеру (фокус ставит стадию на паузу, blur снимает).
+  // Существующие потребители их не передают — поведение не меняется.
+  onFocus?: () => void
+  onBlur?: () => void
   // onSubmit — отправка по Cmd/Ctrl+Enter (единообразно для ВСЕХ полей ввода:
   // комментарий плана/вопроса, ответ, заметка агенту). Встроено в
   // PasteableTextarea, чтобы каждый потребитель не дублировал обработчик и это
@@ -65,6 +70,8 @@ export function PasteableTextarea({
   disabled,
   maxHeight = 400,
   onKeyDown,
+  onFocus,
+  onBlur,
   onSubmit,
   allowFileReferences = false,
   attachInline = false,
@@ -148,6 +155,8 @@ export function PasteableTextarea({
       onChange={handleChange}
       onPaste={onPaste}
       onKeyDown={handleKeyDown}
+      onFocus={onFocus}
+      onBlur={onBlur}
     />
   )
 

@@ -169,4 +169,60 @@ describe('FeedComposer', () => {
       expect(document.activeElement).toBe(textarea)
     })
   })
+
+  // --- Pause on focus (toggle + banner + focus/blur проброс) ---
+  describe('pause on focus', () => {
+    it('renders the toggle and calls onTogglePauseOnFocus on change', () => {
+      const onToggle = vi.fn()
+      render(
+        <FeedComposer
+          stageId="s1"
+          onSend={vi.fn()}
+          pauseOnFocusEnabled={false}
+          onTogglePauseOnFocus={onToggle}
+        />,
+      )
+      const toggle = screen.getByRole('checkbox', { name: /pause on focus/i })
+      expect(toggle).not.toBeChecked()
+      fireEvent.click(toggle)
+      expect(onToggle).toHaveBeenCalledWith(true)
+    })
+
+    it('shows the paused banner when paused', () => {
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} paused />)
+      expect(screen.getByText(/agent is on hold/i)).toBeInTheDocument()
+    })
+
+    it('does not show the banner when not paused', () => {
+      const { container } = render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
+      expect(container.querySelector('.pause-banner')).toBeNull()
+    })
+
+    it('Resume now calls onResumeNow', () => {
+      const onResumeNow = vi.fn()
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} paused onResumeNow={onResumeNow} />)
+      fireEvent.click(screen.getByRole('button', { name: /resume now/i }))
+      expect(onResumeNow).toHaveBeenCalledTimes(1)
+    })
+
+    it('focusing the textarea calls onFocus', () => {
+      const onFocus = vi.fn()
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} onFocus={onFocus} />)
+      fireEvent.focus(screen.getByRole('textbox'))
+      expect(onFocus).toHaveBeenCalledTimes(1)
+    })
+
+    it('blurring reports whether a draft is present', () => {
+      const onBlur = vi.fn()
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} onBlur={onBlur} />)
+      const textarea = screen.getByRole('textbox')
+
+      fireEvent.blur(textarea)
+      expect(onBlur).toHaveBeenLastCalledWith(false)
+
+      fireEvent.change(textarea, { target: { value: '  hi  ' } })
+      fireEvent.blur(textarea)
+      expect(onBlur).toHaveBeenLastCalledWith(true)
+    })
+  })
 })

@@ -106,6 +106,7 @@ describe('App', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    localStorage.clear()
   })
 
   test('renders the flow name and auto-selects an active stage', async () => {
@@ -1332,5 +1333,129 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
     await assertBothNavigableToDialog()
+  })
+
+  test('pause on focus: focusing the composer pauses; sending continues before revise', async () => {
+    // Toggle-предпочтение читается из localStorage при монтировании.
+    localStorage.setItem('afm.pauseOnFocus', 'true')
+
+    // Собираем порядок мутирующих POST-ов (pause/continue/revise) в один журнал.
+    const posts: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', 'running')],
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (method === 'POST' && url.includes('/pause')) {
+        posts.push('pause')
+        return { ok: true, json: async () => ({}) } as Response
+      }
+      if (method === 'POST' && url.includes('/continue')) {
+        posts.push('continue')
+        return { ok: true, json: async () => ({}) } as Response
+      }
+      if (method === 'POST' && url.includes('/revise')) {
+        posts.push('revise')
+        return { ok: true, json: async () => ({}) } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    // Композер живёт в ленте — открываем её.
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
+
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+
+    // Фокус → стадия ставится на паузу (POST /pause), владение отмечается.
+    fireEvent.focus(composer)
+    await waitFor(() => expect(posts).toContain('pause'))
+
+    // Отправка при владении: continue ДО revise.
+    fireEvent.change(composer, { target: { value: 'note while paused' } })
+    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+
+    await waitFor(() => expect(posts).toContain('revise'))
+    expect(posts.indexOf('continue')).toBeLessThan(posts.indexOf('revise'))
+  })
+
+  test('pause on focus: a self-owned paused stage keeps the feed composer (draft) and does not auto-open the paused attention view', async () => {
+    // Review High #2 + Medium #4: когда НАША пауза применяется (стадия мигает в
+    // paused) при непустом черновике, композер обязан остаться смонтированным
+    // (noteTarget через hasActiveOp), а воркспейс НЕ должен авто-переключиться в
+    // attention-вид paused (shouldSuppressAttention → editing), иначе черновик
+    // и поле исчезли бы у пользователя из-под рук.
+    localStorage.setItem('afm.pauseOnFocus', 'true')
+
+    let paused = false
+    const posts: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', paused ? 'paused' : 'running')],
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (method === 'POST' && url.includes('/pause')) {
+        posts.push('pause')
+        paused = true // следующий /api/status отдаст стадию уже на паузе
+        return { ok: true, json: async () => ({}) } as Response
+      }
+      if (method === 'POST' && url.includes('/continue')) {
+        posts.push('continue')
+        return { ok: true, json: async () => ({}) } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+    const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
+    fireEvent.click(feedTab)
+
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    fireEvent.focus(composer)
+    fireEvent.change(composer, { target: { value: 'draft note' } })
+    // Дожидаемся, что pause применился (владение подтверждено).
+    await waitFor(() => expect(posts).toContain('pause'))
+
+    // Blur с НЕпустым черновиком не возобновляет стадию (владение сохраняется).
+    fireEvent.blur(composer)
+
+    // Сервер теперь отдаёт стадию на паузе; значимое WS-событие триггерит рефетч.
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'paused' }, stage_id: 's1' }) })
+    })
+
+    // Композер остался, черновик цел; воркспейс не ушёл в attention (Feed активна),
+    // и стадию никто не возобновил самопроизвольно.
+    await waitFor(() => expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('draft note'))
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(posts).not.toContain('continue')
   })
 })
