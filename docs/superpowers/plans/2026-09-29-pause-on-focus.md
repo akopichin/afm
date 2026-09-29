@@ -155,8 +155,9 @@ func (m *Manager) epoch(stageID string) uint64 {
     if m.epochOf == nil { return 0 }
     return m.epochOf(stageID)
 }
-// ctxWithEpoch/epochFromCtx: unexported typed-key helpers in the concurrency package;
-// epochFromCtx returns (0,false) when absent so non-spawn callers are unaffected.
+// CtxWithEpoch/EpochFromCtx: EXPORTED typed-key helpers in the concurrency package
+// (retry.go in the parent orchestrator package calls EpochFromCtx — codex r2 H4);
+// EpochFromCtx returns (0,false) when absent so non-spawn callers are unaffected (guard disabled).
 ```
 
 `epochOf` is a constructor param of `New` (see Interfaces). `SpawnAgent` and
@@ -177,9 +178,15 @@ Expected: PASS (existing behavior preserved; callers ignore `epoch` for now — 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pkg/orchestrator/concurrency/concurrency.go pkg/orchestrator/concurrency/concurrency_test.go pkg/orchestrator/orchestrator.go
+git add pkg/orchestrator/concurrency/concurrency.go pkg/orchestrator/concurrency/concurrency_test.go \
+        pkg/orchestrator/concurrency/lease_test.go pkg/orchestrator/concurrency/verify_c5_test.go \
+        pkg/orchestrator/orchestrator.go pkg/orchestrator/reviewpause.go
 git commit -m "concurrency: epoch-guard в SpawnAgentLease против queued-раннеров"
 ```
+Note: `New(...)`'s real signature is `New(critical *bus.CriticalBus, stages []flow.Stage,
+defaultCommand string, globalMaxParallel int, shouldRun func(string) bool)` — add
+`epochOf func(string) uint64` as the final param and update ALL callers + test
+constructors (incl `NewWithSemaphores`, which takes `critical *bus.CriticalBus` first).
 
 ---
 
@@ -264,8 +271,14 @@ git commit -m "concurrency: ref-counted active tracking + WaitDrained для н�
 
 **Interfaces:**
 - Produces: `(o *Orchestrator) resumeClaim(stageID string) *sync.Mutex` (per-stage,
-  from a `sync.Map`); `(o *Orchestrator) Pause(ctx, stageID) (applied bool, err error)`.
-  `EvPause` and `bumpPauseGen` happen while holding `resumeClaim(stageID)`.
+  from a `sync.Map`) — serializes the resume DECISION (drain/prepare/transition-choice)
+  among Pause/Continue/Revise-from-paused/review-resume; and
+  `(o *Orchestrator) Pause(ctx, stageID) (applied bool, err error)`.
+  Note: `EvPause`+`bumpPauseGen` **atomicity** is provided by the store (Task 5 — both in
+  one locked `Apply`), NOT by holding the claim across a bump; the claim here serializes the
+  higher-level decision so two resumers don't both proceed. (This split is what avoids the
+  drain-vs-commit deadlock: outcome commits are linearized by the store epoch guard, not the
+  claim.)
 
 - [ ] **Step 1: Write the failing test** — Pause returns applied; a Continue cannot interleave between EvPause and bumpPauseGen.
 
@@ -308,7 +321,8 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) (bool, error) {
     if _, ok := o.Trigger(stageID, bus.EvPause, bus.GuardCtx{}, "manual pause"); !ok {
         return false, nil
     }
-    o.bumpPauseGen(stageID) // atomic with EvPause under the claim
+    // NOTE: pauseGen is bumped INSIDE EvPause's store.Apply (Task 5) — atomic with the
+    // transition, so no separate bump here and no race between EvPause and the bump.
     if ch, ok := o.interruptChans.Load(stageID); ok { select { case ch.(chan struct{}) <- struct{}{}: default: } }
     return true, nil
 }
@@ -328,9 +342,14 @@ Expected: PASS (server handler still compiles — adjust its `Pause` call to ign
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pkg/orchestrator/orchestrator.go pkg/orchestrator/control_api.go pkg/orchestrator/pause_atomic_test.go
-git commit -m "orchestrator: per-stage resume-claim; атомарные EvPause+bumpPauseGen; Pause возвращает applied"
+git add pkg/orchestrator/orchestrator.go pkg/orchestrator/control_api.go pkg/orchestrator/recovery.go \
+        pkg/server/actions.go pkg/server/handlers.go pkg/server/*_test.go \
+        pkg/orchestrator/pause_atomic_test.go
+git commit -m "orchestrator: per-stage resume-claim; Pause возвращает applied"
 ```
+(This task changes `Pause`'s signature, so its commit MUST include the server action
+interface, the handler, and every fake/test that implements or calls `Pause` — build stays
+green.)
 
 ---
 
@@ -338,7 +357,10 @@ git commit -m "orchestrator: per-stage resume-claim; атомарные EvPause+
 
 **Files:**
 - Create: `pkg/orchestrator/resume.go`
-- Modify: `pkg/orchestrator/control_api.go` (`Continue` delegates)
+- Modify: `pkg/orchestrator/control_api.go` (`Continue` delegates + returns `applied`)
+- Modify: `pkg/orchestrator/orchestrator.go` (`testSpawnHook` seam)
+- Modify: `pkg/orchestrator/recovery.go` (startup recovery holds the claim across re-read+dispatch)
+- Modify: `pkg/server/handlers.go` (continue handler → 409 on `applied==false`)
 - Test: `pkg/orchestrator/resume_test.go`
 
 **Interfaces:**
@@ -367,7 +389,11 @@ git commit -m "orchestrator: per-stage resume-claim; атомарные EvPause+
       prepare(stageID, stageDir string) error
       transition(pausedFrom state.StageStatus) (bus.FSMEvent, bus.GuardCtx) // EvContinue|EvRevise
       resumeKind(stage flow.Stage, pausedFrom state.StageStatus) string     // for spawnKind stamping
-      feedbackMode() bool                                                   // withFeedbackRunner vs plain
+      runner(kind string, pausedFrom state.StageStatus) func(context.Context, flow.Stage) // dispatched via spawnKind(ctx,s,kind,run)
+      // rejectResult: applied value when acceptsStatus/acceptsPausedFrom rejects. FEEDBACK
+      // returns FALSE (codex r2 H1: else the server clears the draft + posts a phantom
+      // agent-note though nothing was delivered); plain Continue / terminal review return TRUE.
+      rejectResult() bool
   }
   func (o *Orchestrator) resumePaused(reqCtx context.Context, stageID string, st resumeStrategy) (applied bool, seq uint64, err error)
   ```
@@ -421,10 +447,10 @@ func (o *Orchestrator) resumePaused(reqCtx context.Context, stageID string, st r
     defer mu.Unlock()
 
     status := o.currentStatus(stageID)
-    if !st.acceptsStatus(status) { return true, 0, nil } // nothing to do, conclusively handled
+    if !st.acceptsStatus(status) { return st.rejectResult(), 0, nil } // feedback→false, plain/review→true
     pausedFrom := o.opts.Store.PausedFrom(stageID)
-    if !st.acceptsPausedFrom(pausedFrom) { return true, 0, nil }
-    stage := o.graph.Stage(stageID); if stage == nil { return true, 0, nil }
+    if !st.acceptsPausedFrom(pausedFrom) { return st.rejectResult(), 0, nil }
+    stage := o.graph.Stage(stageID); if stage == nil { return st.rejectResult(), 0, nil }
 
     drainCtx, cancel := context.WithTimeout(o.runContext(reqCtx), drainTimeout); defer cancel()
     if err := o.concurrency.WaitDrained(drainCtx, stageID); err != nil {
@@ -443,17 +469,27 @@ func (o *Orchestrator) resumePaused(reqCtx context.Context, stageID string, st r
             o.continuedThisProcess.CompareAndDelete(stageID, token); return false, 0, nil
         }
     }
-    o.spawnKind(o.runContext(reqCtx), *stage, st.resumeKind(*stage, pausedFrom), st.feedbackMode())
+    kind := st.resumeKind(*stage, pausedFrom)
+    o.spawnKind(o.runContext(reqCtx), *stage, kind, st.runner(kind, pausedFrom)) // real spawnKind: (ctx,s,kind,run)
     return true, seq, nil
 }
 ```
 `plainContinueStrategy`: `reviewAuthorized`=false; `acceptsStatus`=paused only;
-`acceptsPausedFrom`=all; `prepare` no-op; `transition`=EvContinue+PausedFrom guard;
-dispatch — for `pending` route through the shared first-activation helper
-(`tryActivatePrePlanned`/`startPlanningForUnblocked`), else `resumeKind` from PausedFrom
-→ plain runner. Refactor `Continue` to call `resumePaused`, preserving its
-`continuedThisProcess` token contract (recovery reads/deletes under the same claim —
-Task 3/Medium-11). Add a `testSpawnHook` seam (nil in prod) recording dispatches.
+`acceptsPausedFrom`=all; `rejectResult`=true; `prepare` no-op; `transition`=EvContinue+
+PausedFrom guard; `runner` — for `pending`, return a closure invoking the shared
+first-activation helper (`tryActivatePrePlanned`/`startPlanningForUnblocked`), else the
+plain runner for the kind. Refactor `Continue` to call `resumePaused` and **return its
+`applied`** to the caller (codex r2 H2): `Continue` returns
+`(applied bool, err error)`; the HTTP continue handler responds `409` when
+`applied==false` (drain busy) so the client keeps ownership and retries — never a false
+success. Preserve the `continuedThisProcess` token contract.
+- **Startup-recovery exactly-once (codex r2 Critical):** startup recovery must hold
+  `resumeClaim(stageID)` across BOTH its status re-read AND its `resumeStageAtStatus`
+  dispatch (not merely check the marker under the claim), so a concurrent HTTP
+  Pause+Continue can't enqueue a second runner at the same epoch. Both spawns would carry
+  the same post-bump epoch, so the epoch guard would admit both — only the claim-held
+  read+dispatch makes it exactly-once. Update recovery.go accordingly.
+- Add a `testSpawnHook` seam (nil in prod) recording dispatches.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -483,75 +519,81 @@ git commit -m "orchestrator: единый resumePaused core + plain-Continue str
 
 ---
 
-## Task 5: Epoch-aware side effects in `runWithRetry`
+## Task 5: Linearizable epoch guard — `pauseGen` in the FSM, checked atomically in `Apply`
+
+Codex r2 H5: a pre-check-then-publish is TOCTOU, and guarding outcome commits with the
+per-stage claim would DEADLOCK against `resumePaused` holding that claim across
+`WaitDrained` (the draining runner would need the claim to commit). The linearizable,
+deadlock-free fix is to make the epoch part of the FSM transition itself — checked in the
+store's already-locked CAS section, where `EvPause`+bump also happen atomically.
 
 **Files:**
-- Modify: `pkg/orchestrator/retry.go` (read `epochFromCtx`; staleness check before every side effect)
-- Modify: any notice/publish helpers `runWithRetry` calls that publish outcomes
-  (agent-completed / incomplete-retry / ask-user / verify notices) if the guard belongs there
-- Test: `pkg/orchestrator/retry_epoch_test.go` (records notices/spawns/publications, not only FSM triggers)
+- Modify: `pkg/orchestrator/bus/fsm.go` (`GuardCtx.Epoch *uint64`; epoch check in `Apply`)
+- Modify: `pkg/state/state.go` (per-stage `pauseGen` colocated with FSM state, bumped in
+  the SAME locked section that applies `EvPause`)
+- Modify: `pkg/orchestrator/orchestrator.go` (`loadPauseGen`/`bumpPauseGen` delegate to the
+  store; `triggerWithSeq` passes `GuardCtx.Epoch` for outcome events)
+- Modify: `pkg/orchestrator/retry.go` (read `EpochFromCtx`; pass it as `GuardCtx.Epoch` on
+  EvComplete/EvVerifyFail/EvFail/EvScheduleRetry/EvResumeAfterRetry; skip non-FSM notices
+  when `superseded`)
+- Test: `pkg/orchestrator/bus/fsm_epoch_test.go`, `pkg/orchestrator/retry_epoch_test.go`
 
 **Interfaces:**
-- Consumes: the spawn epoch from the **ctx** (`concurrency.epochFromCtx(ctx)`, Task 1) —
-  this is why Task 1 threads it via ctx: it reaches `runWithRetry` through
-  `spawnKind`/wrappers unchanged.
-- Produces: `(o *Orchestrator) superseded(stageID string, epoch uint64) bool`
-  (`o.loadPauseGen(stageID) != epoch`). `runWithRetry` reads `epoch,_ := epochFromCtx(ctx)`
-  once at entry and checks `superseded` before **every** outcome-publishing side effect —
-  not only the interrupt branch (codex r2 H5): normal completion, `completionCheck`/verify
-  START, verify-fail, `EvFail` (retryable & non-retryable), retry-reschedule
-  (`EvScheduleRetry`) + retry-exhausted publication, `EvResumeAfterRetry`, `EvAskUser` +
-  agent-completed/incomplete-retry notices, cancellation-failure, and session-file
-  deletion where ownership matters. Applies across **all four** pipelines
-  (implementation/review/autonomous/planning) that flow through `runWithRetry`.
+- Produces: `GuardCtx.Epoch *uint64` (nil ⇒ not epoch-guarded, current behavior). `Apply`
+  rejects (`ok=false`) when `Epoch != nil && *Epoch != pauseGen(stageID)`, atomically with
+  the transition CAS — so an outcome from a superseded generation can NEVER commit, with no
+  separate lock and no TOCTOU. `EvPause`'s Apply increments `pauseGen` in the same locked
+  section (subsumes Task 3's atomicity requirement). Non-FSM notices (ask-user /
+  agent-completed / incomplete) are gated by a plain `superseded(stageID, epoch)` read (a
+  stale UI notice is harmless if occasionally raced; only FSM outcomes need linearizability).
 
-- [ ] **Step 1: Write the failing test** — a runner whose epoch is stale publishes no outcome.
+- [ ] **Step 1: Write the failing test** — an EvComplete carrying a stale epoch is rejected atomically.
 
 ```go
-func TestRunWithRetry_SupersededPublishesNothing(t *testing.T) {
-    o := newTestOrchestrator(t /* s1 */)
-    // simulate: runner started at epoch 0, a pause bumped to 1 mid-run
-    epoch := uint64(0)
-    o.bumpPauseGen("s1") // now current=1, runner holds epoch 0
-    published := o.captureTriggers(t) // records EvComplete/EvFail/EvScheduleRetry
-    o.runWithRetryForTest("s1", epoch, fakeRunnerThatCompletes)
-    if published.any() { t.Fatalf("superseded runner must publish nothing, got %v", published) }
+func TestFSMApply_StaleEpochRejected(t *testing.T) {
+    st := state.NewInMemory(t, /* s1 running */)
+    f := bus.NewFSM(st)
+    _, _, _, ok, _ := f.Apply("s1", bus.EvPause, bus.GuardCtx{}, "")   // paused, pauseGen→1
+    if !ok { t.Fatal("pause") }
+    _, _, _, ok2, _ := f.Apply("s1", bus.EvContinue, bus.GuardCtx{PausedFrom: state.StatusRunning}, "") // running, gen stays 1
+    if !ok2 { t.Fatal("continue") }
+    old := uint64(0) // a runner spawned before the pause holds epoch 0
+    _, _, _, ok3, _ := f.Apply("s1", bus.EvComplete, bus.GuardCtx{Epoch: &old}, "")
+    if ok3 { t.Fatal("stale-epoch EvComplete must be rejected atomically") }
+    cur := uint64(1)
+    _, _, _, ok4, _ := f.Apply("s1", bus.EvComplete, bus.GuardCtx{Epoch: &cur}, "")
+    if !ok4 { t.Fatal("current-epoch EvComplete must commit") }
 }
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `~/homebrew/bin/go test ./pkg/orchestrator/ -run SupersededPublishesNothing -v`
-Expected: FAIL (outcome published).
+Run: `~/homebrew/bin/go test ./pkg/orchestrator/bus/ -run StaleEpochRejected -v`
+Expected: FAIL (no `GuardCtx.Epoch` / no pauseGen in store yet).
 
-- [ ] **Step 3: Implement the guard at each side-effect site**
-
-At `runWithRetry` entry: `epoch, _ := concurrency.epochFromCtx(ctx)`. Before EVERY
-side-effect site listed in Interfaces, add:
-```go
-if o.superseded(s.ID, epoch) { return } // a newer generation owns this stage
-```
-Sites (grep to confirm each in the current retry.go + notice/publish helpers): normal
-completion (`retry.go:281` region), `completionCheck`/verify start, `commitVerifyFailure`,
-`EvFail` (both branches), `EvScheduleRetry` + retry-exhausted, `EvResumeAfterRetry`,
-`EvAskUser`/agent-completed/incomplete notices, cancellation-failure, session-file
-deletion. Keep the existing `status==paused` early-return (belt); the epoch guard covers
-the transitioned-but-superseded window a status check misses. The test records
-notices/spawns/publications (not only FSM triggers) to catch stale UI events.
+- [ ] **Step 3: Implement** — move per-stage `pauseGen` into the store (bumped in the
+`EvPause` apply under the store lock); add `GuardCtx.Epoch`; in `Apply`, after resolving
+the From/To CAS but within the same locked section, reject if the epoch mismatches. Wire
+`loadPauseGen`/`bumpPauseGen` to the store. In `runWithRetry`, read
+`epoch,_ := concurrency.EpochFromCtx(ctx)` and pass `GuardCtx{Epoch:&epoch}` on the FSM
+outcome triggers (completion, verify-fail, fail, retry-reschedule, resume-after-retry);
+gate non-FSM notices with `o.superseded(s.ID, epoch)`.
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `~/homebrew/bin/go test ./pkg/orchestrator/ -run SupersededPublishesNothing -v` → PASS.
+Run: `~/homebrew/bin/go test ./pkg/orchestrator/bus/ -run StaleEpochRejected -v` → PASS.
+Add `TestRunWithRetry_SupersededPublishesNothing` (a pause mid-run ⇒ the runner's
+EvComplete is rejected; no stale notice emitted) and pass it.
 
-- [ ] **Step 5: Regression**
+- [ ] **Step 5: Regression (race)**
 
-Run: `~/homebrew/bin/go test ./pkg/orchestrator/...` → PASS.
+Run: `~/homebrew/bin/go test ./pkg/orchestrator/... ./pkg/orchestrator/bus/... -race` → PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pkg/orchestrator/retry.go pkg/orchestrator/retry_epoch_test.go
-git commit -m "orchestrator: epoch-aware side effects в runWithRetry"
+git add pkg/orchestrator/bus/fsm.go pkg/state/state.go pkg/orchestrator/orchestrator.go pkg/orchestrator/retry.go pkg/orchestrator/bus/fsm_epoch_test.go pkg/orchestrator/retry_epoch_test.go
+git commit -m "orchestrator: линеаризуемый epoch-guard в FSM.Apply (pauseGen в store, атомарно с CAS)"
 ```
 
 ---
@@ -570,12 +612,14 @@ git commit -m "orchestrator: epoch-aware side effects в runWithRetry"
   `prepare` persists via a durable-atomic append; `transition`=EvRevise+`{}`;
   `resumeKind`=`computeResumeKind(stage,pausedFrom)`; `feedbackMode`=true. `Revise`
   paused branch → `resumePaused(reqCtx, id, feedbackStrategy{...})`.
-- **Feedback-writer serialization (codex r2 H6):** `SaveFeedbackOnce` requires callers to
-  serialize. All feedback mutations must take the SAME per-stage `resumeClaim` — including
-  the EXISTING running-`Revise` branch's bare `SaveFeedback` append (control_api.go:198),
-  which must be moved under the claim too (or the state layer gets its own per-file lock).
-  Otherwise a running-revise append races the paused-resume durable rewrite and loses a
-  note. `state.AppendFeedbackDurable(stageDir, feedback)` = temp+rename+fsync.
+- **Feedback-writer serialization (codex r2 H6):** the SIMPLEST correct fix is per-file
+  serialization in the state layer — give `state` an internal per-stageDir mutex used by
+  BOTH `AppendFeedbackDurable` and `SaveFeedbackOnce` (and the existing running-`Revise`
+  append, control_api.go:198). Then feedback writes are safe regardless of which orchestrator
+  path calls them, without threading the `resumeClaim` through every writer (which would
+  entangle lock ordering). `state.AppendFeedbackDurable(stageDir, feedback)` =
+  temp+rename+fsync under that per-file mutex. Feedback rejection returns `applied=false`
+  (via `rejectResult`, Task 4) → HTTP 409 preserves the draft.
 
 - [ ] **Step 1: Write the failing tests** — (a) overlap yields exactly one feedback runner that receives the note; (b) pending-paused → no-op; (c) prepare failure leaves paused.
 
@@ -883,6 +927,14 @@ git commit -m "dashboard(composer): PasteableTextarea пробрасывает o
   - All mutating ops await any in-flight pause. `setActiveStage(next)` Continues a
     still-owned previous stage before switching (navigation strand fix). `setEnabled(false)`
     awaits + Continues EVERY owned pause. Stage-ID-driven (no dependence on `workspaceStage`).
+  - **Reconcile must not discard fresh ownership from a stale snapshot (codex r2 H3):** a
+    pre-pause `/api/status` can resolve late still saying `running`. Gate `reconcile` on the
+    status `last_seq` (already on `/api/status`): only treat a non-paused snapshot as an
+    external resume if its `last_seq` is NEWER than the seq at which we acquired ownership
+    (i.e. we've observed our own paused episode). Otherwise ignore it.
+  - **`continueStage` rejection keeps ownership:** the client throws on the 409 that plain
+    Continue now returns when `applied==false` (drain busy); the hook stays `owned` and
+    retries (does NOT clear ownership on a failed resume).
 
 - [ ] **Step 1: Write the failing tests** (the core suite)
 
