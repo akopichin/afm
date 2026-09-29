@@ -204,17 +204,19 @@ function isDialogContentEvent(e: AfmEvent): boolean {
 }
 
 // dialogContentKey — контент-ключ семейства диалога из ИМЕНОВАННЫХ полей
-// (type|stageId|phase|id|answer), а не из JSON.stringify(payload): порядок
-// ключей в payload между live (WS) и history (/api/events) не гарантирован,
-// поэтому одна и та же запись, доставленная двумя путями, обязана давать
-// один и тот же ключ. phase/id адресуют вопрос; answer различает разные
-// авто-ответы на один и тот же вопрос (у dialog_question/dialog_answer поля
-// answer нет — компонент пустой, что и требуется).
+// (type|stageId|phase|id|title|question_title|answer), а не из
+// JSON.stringify(payload): порядок ключей в payload между live (WS) и history
+// (/api/events) не гарантирован, поэтому одна и та же запись, доставленная двумя
+// путями, обязана давать один и тот же ключ. phase/id адресуют вопрос, но агент
+// может законно переиспользовать отвеченный id для ДРУГОГО вопроса, поэтому текст
+// вопроса — часть ключа: title различает вопросы (dialog_question/dialog_answer),
+// question_title — авто-ответы на разные вопросы, answer — два авто-ответа на один
+// вопрос. Ключ ЗЕРКАЛИТ серверный dialogNoticeDedupKey (events_handler.go).
 function dialogContentKey(e: AfmEvent): string {
   const p = e.payload
   const obj = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {}
   const field = (v: unknown): string => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v))
-  return `${e.type}|${e.stageId}|${field(obj.phase)}|${field(obj.id)}|${field(obj.answer)}`
+  return `${e.type}|${e.stageId}|${field(obj.phase)}|${field(obj.id)}|${field(obj.title)}|${field(obj.question_title)}|${field(obj.answer)}`
 }
 
 // feedDedupeKey — единый дедуп-ключ для ленты, используемый И ингест-путём

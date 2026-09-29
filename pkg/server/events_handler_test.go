@@ -183,6 +183,11 @@ func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
 		// A navigable auto-answer with a DIFFERENT answer, same phase/id — must NOT
 		// collapse into the first two (Task 1: answer is part of the dedup key).
 		`{"time":"2026-09-29T10:00:06Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q1","answer":"Option C","from_options":true,"question_title":"Which approach?","dialog":true}}`,
+		// Two navigable auto-answers reusing id q3 with the SAME answer but for
+		// DIFFERENT questions (an agent may legitimately reuse an answered id) —
+		// must NOT collapse: question_title is part of the dedup key (review HIGH #2).
+		`{"time":"2026-09-29T10:00:07Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q3","answer":"Yes","from_options":true,"question_title":"Use Postgres?","dialog":true}}`,
+		`{"time":"2026-09-29T10:00:08Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q3","answer":"Yes","from_options":true,"question_title":"Enable cache?","dialog":true}}`,
 	}
 	data := ""
 	for _, l := range lines {
@@ -206,9 +211,10 @@ func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
 			repair++
 		}
 	}
-	// Option B (deduped from 2 → 1) + Option C (distinct answer) = 2 navigable.
-	if navigable != 2 {
-		t.Errorf("navigable auto_answered count = %d, want 2 (identical dialog:true collapse; different answer survives)", navigable)
+	// Option B (deduped from 2 → 1) + Option C (distinct answer) + q3/"Use
+	// Postgres?" + q3/"Enable cache?" (distinct question_title) = 4 navigable.
+	if navigable != 4 {
+		t.Errorf("navigable auto_answered count = %d, want 4 (identical collapse; distinct answer AND distinct question_title survive)", navigable)
 	}
 	// Both repair-progress notices survive — never dialog-deduped.
 	if repair != 2 {

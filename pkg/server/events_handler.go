@@ -298,19 +298,23 @@ func reconstructNotices(runDir, stageID string) []feedEvent {
 }
 
 // dialogNoticeDedupKey builds the content dedup key for a dialog notice:
-// type + stage_id + phase + id + title + answer. Data arrives as `any` holding a
-// map[string]any (the generic JSON round-trip of mcp.DialogFeedNotice's /
-// mcp.AutoAnsweredNotice's payload) — fields are read defensively so a
-// malformed/missing field degrades to an empty string component instead of
-// panicking. dialog_question/dialog_answer carry `title` (answer is ""); the
-// navigable auto_answered carries `answer` (title is ""), so the two never
-// collide. Including `answer` also keeps two navigable auto-answers that share
-// phase/id but differ in answer as distinct rows.
+// type + stage_id + phase + id + title + question_title + answer. Data arrives as
+// `any` holding a map[string]any (the generic JSON round-trip of
+// mcp.DialogFeedNotice's / mcp.AutoAnsweredNotice's payload) — fields are read
+// defensively so a malformed/missing field degrades to an empty string component
+// instead of panicking. dialog_question/dialog_answer carry `title` (answer and
+// question_title are ""); the navigable auto_answered carries `answer` +
+// `question_title` (title is ""). Because an agent may legitimately reuse an
+// answered id for a DIFFERENT question (see EventDialogQuestion contract), the
+// question text must be part of the key: `title` distinguishes reused-id
+// questions, `question_title` distinguishes reused-id auto-answers, and `answer`
+// distinguishes two auto-answers that share the same question.
 func dialogNoticeDedupKey(typ, stageID string, data any) string {
 	m, _ := data.(map[string]any)
 	phase, _ := m["phase"].(string)
 	id, _ := m["id"].(string)
 	title, _ := m["title"].(string)
+	questionTitle, _ := m["question_title"].(string)
 	answer, _ := m["answer"].(string)
-	return typ + "|" + stageID + "|" + phase + "|" + id + "|" + title + "|" + answer
+	return typ + "|" + stageID + "|" + phase + "|" + id + "|" + title + "|" + questionTitle + "|" + answer
 }

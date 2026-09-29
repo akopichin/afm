@@ -541,6 +541,40 @@ func TestPollQuestions_MalformedNonInteractive_TerminalFallbackNavigable(t *test
 	}
 }
 
+// TestPollQuestions_MalformedParkedNonInteractiveStageIsUnparked закрывает баг,
+// найденный на ревью: терминальный fallback autoAnswerMalformed писал answer.json,
+// но (в отличие от обычной non-interactive ветки) НЕ вызывал resumeAfterAnswer.
+// Если восстановленная non-interactive стадия уже запаркована в
+// awaiting_user_input (агент задал вопрос и вышел), а вопрос неисправим, стадия
+// висла бы навсегда. Инвариант: fallback публикует EventUserAnswered в critical-
+// шину — сигнал, по которому onUserAnswered перезапускает вышедшего агента.
+func TestPollQuestions_MalformedParkedNonInteractiveStageIsUnparked(t *testing.T) {
+	o, store, _ := setupMalformedTestOrchNI(t, `not json at all {{{`)
+	// Агент задал (битый) вопрос и вышел → стадия запаркована.
+	if err := store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusAwaitingUserInput, Event: "test_park"}); err != nil {
+		t.Fatal(err)
+	}
+	injectFixStub(t, o, "") // никогда не чинит → терминальный fallback
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	for i := 0; i < maxJSONFixAttempts+3; i++ {
+		o.pollQuestions(processed, malformed)
+	}
+
+	select {
+	case ev := <-o.critical.Recv():
+		if ev.Type != bus.EventUserAnswered {
+			t.Fatalf("critical event = %s, want %s (autoAnswerMalformed must resume a parked stage)", ev.Type, bus.EventUserAnswered)
+		}
+		if ev.StageID != "s1" {
+			t.Fatalf("critical event stage = %s, want s1", ev.StageID)
+		}
+	default:
+		t.Fatal("autoAnswerMalformed did not publish EventUserAnswered — a parked stage would hang forever")
+	}
+}
+
 // TestPollQuestions_InteractiveStageStillAsksUser — регрессионная гарантия:
 // interactive-стадия НЕ получает авто-ответ, поведение (EvAskUser →
 // awaiting_user_input) не меняется этой фичей.

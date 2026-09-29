@@ -486,6 +486,13 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 			Key:       q.Phase + "/" + q.ID,
 		})
 	}
+	// Как и в обычной non-interactive ветке (см. resumeAfterAnswer выше): если
+	// агент уже вышел, оставив стадию запаркованной в awaiting_user_input,
+	// написать answer.json недостаточно — стадию надо вывести из этого статуса и
+	// перезапустить агента. Без этого восстановленная стадия с неисправимым
+	// malformed-вопросом висла бы в awaiting_user_input навсегда. В нормальном
+	// случае (агент ещё жив) — no-op.
+	_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
 }
 
 // giveUpOnMalformedQuestion runs once fix attempts are exhausted on an

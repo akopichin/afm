@@ -816,6 +816,38 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(3)
   })
 
+  // Review HIGH #3: агент может переиспользовать отвеченный id для ДРУГОГО
+  // вопроса — dialog_question с тем же id/phase, но разным title, это две записи.
+  // Ключ обязан включать title (регресс: раньше выпадал и вторую строку теряли).
+  test('two dialog_question with same id/phase but different title are both kept', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'dialog_question', stage_id: 's1', data: { phase: 'planning', id: 'q1', title: 'Use Postgres?' } })
+      FakeWebSocket.last().emitMessage({ type: 'dialog_question', stage_id: 's1', data: { phase: 'planning', id: 'q1', title: 'Enable cache?' } })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(2)
+  })
+
+  // Review HIGH #2/#3: два навигируемых авто-ответа на переиспользованный id с
+  // ОДИНАКОВЫМ answer, но для РАЗНЫХ вопросов (разный question_title) — обе записи.
+  // Ключ обязан включать question_title (зеркалит серверный dialogNoticeDedupKey).
+  test('two navigable auto_answered with same id/answer but different question_title are both kept', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'Yes', question_title: 'Use Postgres?', dialog: true } })
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'Yes', question_title: 'Enable cache?', dialog: true } })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(2)
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })
