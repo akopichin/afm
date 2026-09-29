@@ -16,16 +16,16 @@ import (
 )
 
 // maxReplayEvents bounds the GLOBAL /api/events history (Full feed + the WS
-// status-refresh trigger). Raised from 200 to 1000 so the whole-flow feed is
-// deep enough on long runs. (The AI-verify badge no longer reads this — it's a
+// status-refresh trigger). Raised to 10000 so the whole-flow feed is deep
+// enough on long runs. (The AI-verify badge no longer reads this — it's a
 // durable per-stage field on /api/status, see Task 7.)
-const maxReplayEvents = 1000
+const maxReplayEvents = 10000
 
 // maxStageReplayEvents bounds the PER-STAGE /api/events?stage=<id> history
 // (the Feed tab). Independent of maxReplayEvents so a completed stage always
-// shows its own last 200 events regardless of global recency — the whole point
+// shows its own last 2000 events regardless of global recency — the whole point
 // of the fix.
-const maxStageReplayEvents = 200
+const maxStageReplayEvents = 2000
 
 // Названия FSM-событий (Transition.Event) и производных feed-типов, которые
 // из них выводятся, текстуально совпадают — общие константы вместо
@@ -164,22 +164,22 @@ func reconstructAgentActions(runDir, stageID string) []feedEvent {
 	return out
 }
 
-// maxLinesPerLog bounds how many trailing lines readLines keeps per file —
-// only the last maxReplayEvents (1000) events survive the final cap across
-// ALL sources anyway, so reading an unbounded number of lines per phase log
-// (agent stream-json logs routinely run multi-MB) wastes memory/CPU on every
-// request without ever being used. 1200 gives comfortable headroom above the
-// 1000 global cap while bounding worst case regardless of total log size.
+// maxLinesPerLog bounds how many trailing lines readLines keeps per file. A
+// single phase log feeds the PER-STAGE view (capped at maxStageReplayEvents,
+// 2000); the GLOBAL view aggregates many stages, so the window only needs
+// headroom above the per-stage cap, not the global one. Reading an unbounded
+// number of lines per phase log (agent stream-json logs routinely run multi-MB)
+// wastes memory/CPU on every request without ever being used. 2400 gives
+// comfortable headroom above the 2000 per-stage cap while bounding worst case
+// regardless of total log size.
 //
 // Approximation caveat: this window counts RAW lines, not parseable actions —
 // a phase log with many non-assistant/unparseable lines yields fewer than
-// 1200 reconstructed events, so the global feed (and, symmetrically, the
-// per-stage 200) can be under-filled for a log that is mostly noise. Accepted
-// approximation (agent stream-json logs are overwhelmingly assistant events
-// in practice, and the durable per-stage feed is always >= what the old
-// flow-wide-200 gave); do not add a scan-until-N-valid loop (YAGNI unless a
-// real under-fill is observed).
-const maxLinesPerLog = 1200
+// 2400 reconstructed events, so the per-stage feed (capped at 2000) can be
+// under-filled for a log that is mostly noise. Accepted approximation (agent
+// stream-json logs are overwhelmingly assistant events in practice); do not add
+// a scan-until-N-valid loop (YAGNI unless a real under-fill is observed).
+const maxLinesPerLog = 2400
 
 // readLines reads path and keeps only the last maxLinesPerLog lines (a
 // sliding window, not the whole file) — bounds memory even for very large

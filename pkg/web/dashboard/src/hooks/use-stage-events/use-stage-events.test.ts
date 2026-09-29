@@ -156,6 +156,17 @@ describe('useStageEvents', () => {
     expect(result.current.every((e) => e.stageId === 'early')).toBe(true)
   })
 
+  it('caps a single stage feed at 2000 events', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([])))
+    // Больше кэпа (MAX_STAGE_EVENTS=2000) live-событий ОДНОЙ стадии — лента должна
+    // обрезаться до последних 2000, самые старые отбрасываются.
+    const live = Array.from({ length: 2200 }, (_, i) => ev('s1', i))
+    const { result } = renderHook(() => useStageEvents('s1', live))
+    await waitFor(() => expect(result.current.length).toBe(2000))
+    expect(result.current[0]?.seq).toBe(200)
+    expect(result.current[1999]?.seq).toBe(2199)
+  })
+
   it('does not stitch the previous stage history onto the new stage during the switch (review round 1, Important)', async () => {
     const captured: AfmEvent[][] = []
     function useTracked(stageId: string | null, globalEvents: AfmEvent[]): AfmEvent[] {

@@ -54,7 +54,7 @@ type StageView struct {
 	// и вся эта фича лечит. Теперь это поле сервер считает через
 	// latestVerifyByStage — ОДНО необрезанное сканирование ВСЕГО notices.jsonl
 	// на весь /api/status (а не на стадию), а не reconstructNotices (тот
-	// капнут maxStageReplayEvents=200). nil, если у стадии ни разу не было
+	// капнут maxStageReplayEvents=2000). nil, если у стадии ни разу не было
 	// verify_started/verify_result.
 	Verify *VerifyView `json:"verify,omitempty"`
 }
@@ -221,8 +221,8 @@ type verifyNotice struct {
 // stage id, only its single latest verify_started/verify_result notice
 // (O(distinct stages) memory, unbounded lookback) — a DEDICATED single-pass
 // scan, deliberately not reconstructNotices, which is capped at
-// maxStageReplayEvents=200 and would let the badge age out on a long run
-// after 200+ later same-stage notices (the exact eviction class this whole
+// maxStageReplayEvents=2000 and would let the badge age out on a long run
+// after 2000+ later same-stage notices (the exact eviction class this whole
 // feature exists to kill). Prior to this, buildStageViews called a per-stage
 // scan (latestVerifyForStage) once per stage, making /api/status rescan the
 // entire file O(stages) times per poll — this collapses it to one scan

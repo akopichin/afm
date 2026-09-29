@@ -72,8 +72,8 @@ func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 }
 
 // TestHandleEvents_TransitionsNeverExceedGlobalCap is a basic sanity check
-// that the global response never exceeds maxReplayEvents (raised from 200 to
-// 1000 — see TestHandleEvents_GlobalCapRaisedTo1000 for the actual boundary
+// that the global response never exceeds maxReplayEvents (raised from 1000 to
+// 10000 — see TestHandleEvents_GlobalCapRaisedTo10000 for the actual boundary
 // test, which exercises the cap via notices rather than transitions).
 func TestHandleEvents_TransitionsNeverExceedGlobalCap(t *testing.T) {
 	srv, _ := setupTestServer(t)
@@ -333,29 +333,109 @@ func TestHandleEvents_StageFilterReturnsOnlyThatStage(t *testing.T) {
 	}
 }
 
-func TestHandleEvents_StageFilterCapsAt200(t *testing.T) {
-	// 'noise' has > 200 reconstructable events; ?stage=noise must cap at 200.
-	srv := newTestServerWithStages(t, map[string]int{"noise": 300})
+func TestHandleEvents_StageFilterCapsAt2000(t *testing.T) {
+	// 'noise' has > 2000 reconstructable events; ?stage=noise must cap at 2000.
+	srv := newTestServerWithStages(t, map[string]int{"noise": 2100})
 	req := httptest.NewRequest("GET", "/api/events?stage=noise", nil)
 	rr := httptest.NewRecorder()
 	srv.handleEvents(rr, req)
 	var got []feedEvent
 	mustDecode(t, rr, &got)
-	if len(got) != 200 {
-		t.Fatalf("per-stage cap: want 200, got %d", len(got))
+	if len(got) != 2000 {
+		t.Fatalf("per-stage cap: want 2000, got %d", len(got))
 	}
 }
 
-func TestHandleEvents_GlobalCapRaisedTo1000(t *testing.T) {
-	// > 1000 events flow-wide; global response caps at 1000 (was 200).
-	srv := newTestServerWithStages(t, map[string]int{"noise": 1100})
+func TestHandleEvents_GlobalCapRaisedTo10000(t *testing.T) {
+	// > 10000 events flow-wide; global response caps at 10000 (was 1000).
+	srv := newTestServerWithStages(t, map[string]int{"noise": 11000})
 	req := httptest.NewRequest("GET", "/api/events", nil)
 	rr := httptest.NewRecorder()
 	srv.handleEvents(rr, req)
 	var got []feedEvent
 	mustDecode(t, rr, &got)
-	if len(got) != 1000 {
-		t.Fatalf("global cap: want 1000, got %d", len(got))
+	if len(got) != 10000 {
+		t.Fatalf("global cap: want 10000, got %d", len(got))
+	}
+}
+
+// TestReconstructEventHistory_PerStageReaches2000NotBottleneckedByMaxLines
+// proves the per-stage feed can actually reach its 2000 cap: a single stage
+// whose phase log holds MORE than 2000 parseable agent-action lines must yield
+// exactly maxStageReplayEvents=2000 reconstructed events. This can only hold if
+// maxLinesPerLog (2400) leaves headroom above the per-stage cap — with the old
+// 1200 window readLines would keep only 1200 lines, so the per-stage feed would
+// top out at 1200 and this test would fail.
+func TestReconstructEventHistory_PerStageReaches2000NotBottleneckedByMaxLines(t *testing.T) {
+	runDir := t.TempDir()
+	stageID := "solo"
+	if err := os.MkdirAll(filepath.Join(runDir, stageID), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2500 parseable assistant tool_use lines in one phase log — well above the
+	// per-stage cap (2000) AND above maxLinesPerLog (2400), so the read window
+	// is exercised too. Each line is a valid agent action (executor.ParseToolAction).
+	var buf []byte
+	for i := 0; i < 2500; i++ {
+		buf = append(buf, []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo `+strconv.Itoa(i)+`"}}]}}`+"\n")...)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, stageID, "planning.jsonl"), buf, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServerForRunDir(t, runDir, []string{stageID})
+	got := srv.reconstructEventHistory(stageID)
+	if len(got) != 2000 {
+		t.Fatalf("per-stage reconstruction: want exactly 2000 (cap), got %d — maxLinesPerLog must not bottleneck below the per-stage cap", len(got))
+	}
+}
+
+// TestReconstructEventHistory_QAOnCompletedStageVisibleWithinCap proves a
+// completed stage's dialog_question/dialog_answer notices remain visible in the
+// per-stage feed when followed by many (but < 2000) later same-stage events.
+// With the old 200 cap the two dialog notices, written FIRST, would be evicted
+// from the per-stage ring by the trailing filler; the raised 2000 cap keeps them.
+func TestReconstructEventHistory_QAOnCompletedStageVisibleWithinCap(t *testing.T) {
+	runDir := t.TempDir()
+	stageID := "chat"
+	if err := os.MkdirAll(filepath.Join(runDir, stageID), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Q&A written FIRST, then 1500 later same-stage filler notices (< 2000).
+	stagefiles.AppendNotice(runDir, stageID, string(bus.EventDialogQuestion), map[string]any{
+		"phase": "planning", "id": "q1", "title": "Which approach?",
+	})
+	stagefiles.AppendNotice(runDir, stageID, string(bus.EventDialogAnswer), map[string]any{
+		"phase": "planning", "id": "q1", "title": "Option B",
+	})
+	writeNotices(t, runDir, stageID, 1500)
+
+	srv := newTestServerForRunDir(t, runDir, []string{stageID})
+	// Mark the stage done — the scenario is Q&A on an already-completed stage.
+	if err := srv.store.Apply(&state.Transition{
+		StageID: stageID, From: state.StatusPending, To: state.StatusDone, Event: "done",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := srv.reconstructEventHistory(stageID)
+	var sawQuestion, sawAnswer bool
+	for _, e := range got {
+		switch e.Type {
+		case string(bus.EventDialogQuestion):
+			sawQuestion = true
+		case string(bus.EventDialogAnswer):
+			sawAnswer = true
+		default:
+		}
+	}
+	if !sawQuestion {
+		t.Error("dialog_question evicted: Q&A on a completed stage must stay visible within the 2000 cap")
+	}
+	if !sawAnswer {
+		t.Error("dialog_answer evicted: Q&A on a completed stage must stay visible within the 2000 cap")
 	}
 }
 

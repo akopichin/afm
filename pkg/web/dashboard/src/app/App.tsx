@@ -294,14 +294,14 @@ export function App(): ReactElement {
     if (events.length === 0) return
 
     // Идентичность по ССЫЛКЕ на последнее событие, а не по events.length: лента
-    // капается в MAX_EVENTS=200 (use-event-feed), после чего length навсегда
-    // остаётся 200, и старое сравнение `refreshedForEvent === events.length`
-    // (200 === 200) возвращалось раньше НАВСЕГДА — WS-канал обновления статуса
+    // капается в MAX_EVENTS=10000 (use-event-feed), после чего length навсегда
+    // остаётся 10000, и старое сравнение `refreshedForEvent === events.length`
+    // (10000 === 10000) возвращалось раньше НАВСЕГДА — WS-канал обновления статуса
     // тихо умирал на длинных ранах, оставляя только тротлящийся в фоне 3s-poll.
     // use-event-feed добавляет новый объект события в конец на каждое
     // поступление, поэтому ссылка на последний элемент меняется ровно тогда,
     // когда пришло новое событие. См. App.test.tsx "WS refresh survives past
-    // the 200-event feed cap".
+    // the 10000-event feed cap".
     const latest = events[events.length - 1]
     if (latest === undefined || latest === lastRefreshedEvent.current) return
 

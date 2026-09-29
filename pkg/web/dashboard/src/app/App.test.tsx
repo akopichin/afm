@@ -189,7 +189,7 @@ describe('App', () => {
     expect(statusCalls).toBe(2)
   })
 
-  test('CRITICAL: WS refresh survives past the 1000-event feed cap (Finding #2)', async () => {
+  test('CRITICAL: WS refresh survives past the 10000-event feed cap (Finding #2)', async () => {
     let statusCalls = 0
     mockFetchForStatus(
       () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }),
@@ -203,11 +203,11 @@ describe('App', () => {
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
 
-    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=1000, use-event-feed) незначимыми
+    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=10000, use-event-feed) незначимыми
     // agent_action — сами по себе refresh они не вызывают, но насыщают длину
     // массива до кэпа.
     act(() => {
-      for (let i = 0; i < 1005; i += 1) {
+      for (let i = 0; i < 10005; i += 1) {
         ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { n: i }, stage_id: 's1' }) })
       }
     })

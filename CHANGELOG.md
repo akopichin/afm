@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-29
+
+### Improvement: deeper event feed
+
+Raise the per-stage feed cap from 200 to 2000 events and the global (Full feed)
+cap from 1000 to 10000, on both the backend replay and the frontend buffers. The
+per-phase log read window grows from 1200 to 2400 lines so a single stage's feed
+can actually fill to its new 2000 cap. Questions and answers on completed stages
+stay visible as long as they fall within the (now much larger) per-stage window.
+
 ## 2026-09-25
 
 ### Improvement: vendored Go dependencies

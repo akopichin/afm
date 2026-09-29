@@ -9,10 +9,10 @@ import type { AfmEvent } from '../../types'
 const INITIAL_RECONNECT_DELAY_MS = 1000
 const MAX_RECONNECT_DELAY_MS = 10000
 // Лента событий ограничена (как $feedContent в app.js обрезалась до 200
-// записей). Поднято 200 → 1000 — full feed depth: старый кап слишком быстро
+// записей). Поднято до 10000 — full feed depth: меньший кап слишком быстро
 // отрезал начало долгого рана из глобальной ленты; per-stage лента (Task 3,
 // useStageEvents) переиспользует mergeCapped со своим, отдельным капом.
-const MAX_EVENTS = 1000
+const MAX_EVENTS = 10000
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
 // Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ (см. onmessage

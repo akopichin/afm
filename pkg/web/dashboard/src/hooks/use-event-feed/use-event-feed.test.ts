@@ -213,7 +213,7 @@ describe('useEventFeed', () => {
     expect(result.current.events).toHaveLength(0)
   })
 
-  test('caps the global feed at 1000 events', () => {
+  test('caps the global feed at 10000 events', () => {
     const { result } = renderHook(() => useEventFeed('/ws'))
 
     act(() => {
@@ -221,14 +221,14 @@ describe('useEventFeed', () => {
     })
 
     act(() => {
-      for (let i = 0; i < 1200; i += 1) {
+      for (let i = 0; i < 10200; i += 1) {
         FakeWebSocket.last().emitMessage({ type: 'agent_action', data: i, stage_id: `s${i}` })
       }
     })
 
-    expect(result.current.events).toHaveLength(1000)
+    expect(result.current.events).toHaveLength(10000)
     expect(result.current.events[0]?.stageId).toBe('s200')
-    expect(result.current.events[999]?.stageId).toBe('s1199')
+    expect(result.current.events[9999]?.stageId).toBe('s10199')
   })
 
   // mergeCapped — генерализация mergeHistory с явным cap-параметром (Task 3
