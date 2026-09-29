@@ -384,6 +384,19 @@ describe('PasteableTextarea', () => {
     expect(screen.getByRole('textbox')).not.toHaveAttribute('rows', '1')
   })
 
+  it('forwards focus/blur to onFocus/onBlur', () => {
+    const onFocus = vi.fn()
+    const onBlur = vi.fn()
+    render(<PasteableTextarea stageId="s1" value="" onChange={vi.fn()} onFocus={onFocus} onBlur={onBlur} />)
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.focus(textarea)
+    expect(onFocus).toHaveBeenCalledTimes(1)
+
+    fireEvent.blur(textarea)
+    expect(onBlur).toHaveBeenCalledTimes(1)
+  })
+
   // ВНИМАНИЕ: этот тест ДОЛЖЕН оставаться последним в файле — его scrollHeight
   // getter-спай после mockRestore ломает последующие рендеры (рекурсия геттера).
   it('grows the textarea to fit its content, same as a plain textarea would', () => {

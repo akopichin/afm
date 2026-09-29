@@ -21,6 +21,20 @@ type FeedComposerProps = {
   // Успешная доставка ответа: сообщаем родителю ключ отправленной мысли, чтобы
   // он сбросил reply-таргет ТОЛЬКО если он всё ещё указывает на неё (race-safe).
   onSent?: (key: string) => void
+  // --- Pause on focus (весь стейт живёт в usePauseOnFocus у родителя) ---
+  // Состояние toggle «Pause on focus» и его переключатель.
+  pauseOnFocusEnabled?: boolean
+  onTogglePauseOnFocus?: (v: boolean) => void
+  // paused — эта стадия сейчас на паузе И поставлена на неё нами (родитель
+  // считает status==='paused' && isOwned). Показывает янтарный баннер + тонирует
+  // строку ввода/кнопку.
+  paused?: boolean
+  // Фокус/blur поля ввода: родитель ставит/снимает паузу. onBlur сообщает,
+  // остался ли непустой черновик (при нём паузу НЕ снимаем — Send сам возобновит).
+  onFocus?: () => void
+  onBlur?: (hasDraft: boolean) => void
+  // «Resume now» на баннере — снять паузу немедленно, не отправляя заметку.
+  onResumeNow?: () => void
 }
 
 // buildReplyBody собирает тело Revise для ответа на мысль: цитата целиком как
@@ -46,7 +60,20 @@ export function buildReplyBody(quote: string | null, comment: string): string {
 // AgentNoteModal. Отправка кнопкой ✈ или Cmd/Ctrl+Enter; пустой текст — no-op.
 // Доставка идёт через существующий Revise (graceful-пауза + feedback.md) — сам
 // вызов задаёт FeedWorkspace/App.
-export function FeedComposer({ stageId, onSend, replyQuote = null, replyKey, onCancelReply, onSent }: FeedComposerProps): ReactElement {
+export function FeedComposer({
+  stageId,
+  onSend,
+  replyQuote = null,
+  replyKey,
+  onCancelReply,
+  onSent,
+  pauseOnFocusEnabled = false,
+  onTogglePauseOnFocus,
+  paused = false,
+  onFocus,
+  onBlur,
+  onResumeNow,
+}: FeedComposerProps): ReactElement {
   const [value, setValue] = useState('')
   const [sending, setSending] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -103,7 +130,32 @@ export function FeedComposer({ stageId, onSend, replyQuote = null, replyKey, onC
           </button>
         </div>
       )}
-      <div className="feed-composer-row">
+      {/* Полоса опций над строкой ввода: подсказка слева, toggle справа. */}
+      {onTogglePauseOnFocus !== undefined && (
+        <div className="composer-opts">
+          <span className="composer-opts-hint">Pause the agent while you type</span>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={pauseOnFocusEnabled}
+              onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
+            />
+            <span className="track" aria-hidden="true" />
+            <span className="switch-label">Pause on focus</span>
+          </label>
+        </div>
+      )}
+      {/* Янтарный баннер: стадия на паузе, снимется на отправке (или «Resume now»). */}
+      {paused && (
+        <div className="pause-banner" role="status">
+          <span className="pause-banner-icon" aria-hidden="true">⏸</span>
+          <span className="pause-banner-text">Stage paused. The agent is on hold — it'll resume when you send.</span>
+          <button type="button" className="pause-banner-resume" onClick={onResumeNow}>
+            Resume now
+          </button>
+        </div>
+      )}
+      <div className={`feed-composer-row${paused ? ' focused' : ''}`}>
         <PasteableTextarea
           stageId={stageId}
           className="feed-composer-textarea"
@@ -114,11 +166,13 @@ export function FeedComposer({ stageId, onSend, replyQuote = null, replyKey, onC
           attachInline
           rows={1}
           onSubmit={() => void submit()}
+          onFocus={onFocus}
+          onBlur={() => onBlur?.(value.trim() !== '')}
           maxHeight={200}
         />
         <button
           type="button"
-          className="feed-composer-send"
+          className={`feed-composer-send${paused ? ' paused' : ''}`}
           aria-label="Send note to agent"
           disabled={empty || sending}
           onClick={() => void submit()}

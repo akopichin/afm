@@ -36,6 +36,14 @@ type FeedWorkspaceProps = {
   // отклоняться при неудаче, чтобы FeedComposer сохранил текст.
   noteTarget?: string | null
   onSendNote?: (stageId: string, text: string) => Promise<void>
+  // --- Pause on focus — сквозной проброс в FeedComposer (стейт живёт в App). ---
+  pauseOnFocusEnabled?: boolean
+  onTogglePauseOnFocus?: (v: boolean) => void
+  // paused — стадия композера на паузе И поставлена на неё нами (считает App).
+  composerPaused?: boolean
+  onComposerFocus?: () => void
+  onComposerBlur?: (hasDraft: boolean) => void
+  onComposerResumeNow?: () => void
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -60,6 +68,12 @@ export function FeedWorkspace({
   onOpenDialog,
   noteTarget = null,
   onSendNote,
+  pauseOnFocusEnabled = false,
+  onTogglePauseOnFocus,
+  composerPaused = false,
+  onComposerFocus,
+  onComposerBlur,
+  onComposerResumeNow,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
 
@@ -119,6 +133,12 @@ export function FeedWorkspace({
           // Сброс только совпадающего ключа: если пользователь выбрал другую
           // мысль, пока шла отправка, свежая цель переживёт (race-safe).
           onSent={(key) => setReplyTo((cur) => (cur?.key === key ? null : cur))}
+          pauseOnFocusEnabled={pauseOnFocusEnabled}
+          onTogglePauseOnFocus={onTogglePauseOnFocus}
+          paused={composerPaused}
+          onFocus={onComposerFocus}
+          onBlur={onComposerBlur}
+          onResumeNow={onComposerResumeNow}
         />
       )}
     </section>

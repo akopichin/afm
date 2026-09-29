@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-import { cancelNotes, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
+import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -26,6 +26,7 @@ import { attentionKindForStatus, countByKind, useWorkspaceView, type AttentionKi
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
+import { usePauseOnFocus } from '../hooks/use-pause-on-focus'
 import { SIGNIFICANT_EVENT_TYPES } from '../types'
 
 // Подписи контекстной вкладки воркспейса по виду attention (Approval/Question/…).
@@ -81,14 +82,16 @@ export function App(): ReactElement {
     }
   }
 
-  // Отправка заметки живому агенту из messenger-поля ленты (FeedComposer).
-  // Возвращаем промис reviseStage КАК ЕСТЬ — при неудаче (стадия ушла из
-  // running → 409, либо сеть) он отклоняется, и FeedComposer сохраняет текст.
-  // Здесь НЕ глотаем ошибку (в отличие от прежней модалочной handleSubmitNote):
-  // ловит её сам композер.
-  const handleSendNote = useCallback((stageId: string, text: string): Promise<void> => {
-    return reviseStage(stageId, text)
-  }, [])
+  // «Pause on focus» — при включённом toggle фокус поля заметки ставит running-
+  // стадию на паузу (pauseStage), а отправка сперва снимает паузу (continueStage),
+  // затем доставляет заметку (reviseStage). При выключенном toggle handleSend
+  // просто зовёт reviseStage — сегодняшнее поведение. Только переиспользование
+  // готовых вызовов, без новых эндпоинтов. Весь стейт (toggle + владение) — внутри
+  // хука. Отправка заметки живому агенту из messenger-поля ленты (FeedComposer)
+  // идёт через pauseOnFocus.handleSend: промис проброшен КАК ЕСТЬ — при неудаче
+  // (стадия ушла из running → 409, либо сеть) он отклоняется, и FeedComposer
+  // сохраняет текст (ошибку ловит сам композер).
+  const pauseOnFocus = usePauseOnFocus({ pauseStage, continueStage, reviseStage })
 
   function handlePause(stageId: string): void {
     // StagesList закрывает кебаб синхронно ДО вызова onPause, так что здесь
@@ -152,8 +155,19 @@ export function App(): ReactElement {
   // модалки). Сами модальные состояния объявлены выше по файлу.
   const [filesOpen, setFilesOpen] = useState(false)
   const anyModalOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
-  const editing = useIsEditing() || anyModalOpen
+  // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция
+  // (мы её ставим/держим/снимаем). Пока так — не даём НАШЕЙ же паузе авто-открыть
+  // attention и выкинуть пользователя из композера (shouldSuppressAttention).
+  const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
+  const editing = useIsEditing() || anyModalOpen || selfOwnedActive
   const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
+
+  // reconcile «Pause on focus»-владения с авторитетным статусом: если владеемая
+  // стадия внешне ушла в running (внешний Continue) или завершилась — забыть
+  // владение, иначе устаревшее ownership привело бы к Send→continue→400.
+  useEffect(() => {
+    pauseOnFocus.reconcile(stages.map((s) => ({ id: s.id, status: s.status })))
+  }, [stages, pauseOnFocus.reconcile])
   const [selectedStageId, setSelectedStageId] = useSelectedStage(
     stages,
     wsState.view === 'attention' ? attnItem?.stageId ?? null : null,
@@ -277,8 +291,17 @@ export function App(): ReactElement {
   // messenger-поля ленты: только running (агент реально работает и примет
   // Revise) И не скрипт (у скрипта нет живого агента; Revise увёл бы его в
   // revising и подвесил). Прочие статусы/скрипты → null (поле не показываем).
+  // Композер остаётся смонтированным на всём цикле «Pause on focus»
+  // (pause→набор→send→resume), пока у стадии есть незавершённая операция
+  // (hasActiveOp) — иначе поле (и черновик) исчезли бы в момент, когда стадия
+  // мигнула в paused/resuming, и Send/Resume стали бы недоступны.
+  // flowPauseState==='none' сохраняет прежний гейт (в ревью-раунде поле не
+  // показываем).
   const noteTarget =
-    workspaceStage !== null && workspaceStage.status === 'running' && !workspaceStage.isScript
+    workspaceStage !== null &&
+    flowPauseState === 'none' &&
+    !workspaceStage.isScript &&
+    (workspaceStage.status === 'running' || pauseOnFocus.hasActiveOp(workspaceStage.id))
       ? workspaceStage.id
       : null
 
@@ -564,7 +587,23 @@ export function App(): ReactElement {
                     emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                     onOpenDialog={handleOpenDialogFromFeed}
                     noteTarget={noteTarget}
-                    onSendNote={handleSendNote}
+                    onSendNote={pauseOnFocus.handleSend}
+                    pauseOnFocusEnabled={pauseOnFocus.enabled}
+                    onTogglePauseOnFocus={pauseOnFocus.setEnabled}
+                    composerPaused={
+                      workspaceStage !== null &&
+                      workspaceStage.status === 'paused' &&
+                      pauseOnFocus.isOwned(workspaceStage.id)
+                    }
+                    onComposerFocus={() =>
+                      workspaceStage !== null && pauseOnFocus.onFocus(workspaceStage.id, workspaceStage.status)
+                    }
+                    onComposerBlur={(hasDraft) =>
+                      workspaceStage !== null && pauseOnFocus.onBlur(workspaceStage.id, hasDraft)
+                    }
+                    onComposerResumeNow={() =>
+                      workspaceStage !== null && pauseOnFocus.resumeNow(workspaceStage.id)
+                    }
                   />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
