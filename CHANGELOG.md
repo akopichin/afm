@@ -5,6 +5,20 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-29
 
+### Fix: consistent Q&A on completed and restored non-interactive stages
+
+A completed non-interactive stage that afm auto-answered (for example a planning
+stage with `auto_approve`) now shows both the question and the automatic answer
+in the Feed, and each opens the full dialog history. Previously only the answer
+appeared and neither row was navigable. The auto-answer row is rendered as a
+system message (distinct from a human reply) and carries the question text and a
+`dialog` marker so it stays navigable after a page reload and after an afm
+restart, restored purely from persisted HTTP history. Technical repair notices
+for malformed question files stay non-navigable and are never collapsed with real
+answers. Live and replayed events dedupe by content (type, stage, phase, id,
+answer), so the same Q&A never appears twice, and stage filtering keeps an early
+stage's Q&A visible even under more than 10,000 notices from other stages.
+
 ### Improvement: deeper event feed
 
 Raise the per-stage feed cap from 200 to 2000 events and the global (Full feed)

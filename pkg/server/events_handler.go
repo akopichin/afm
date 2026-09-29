@@ -217,6 +217,27 @@ var dialogDedupTypes = map[string]bool{
 	string(bus.EventDialogAnswer):   true,
 }
 
+// isDialogDedupable reports whether a notice takes part in the dialog content
+// dedup (see dialogDedupTypes' doc for WHY dialog notices double-emit across a
+// restart). dialog_question/dialog_answer always qualify. `auto_answered`
+// qualifies ONLY when its data carries `dialog: true` — that marks the single
+// navigable auto-answer the feed links to the full dialog history, the one that
+// can be re-emitted on restart. The non-navigable ⚙️ repair-progress notices
+// (same type, NO `dialog` marker) are deliberately excluded: they legitimately
+// repeat once per repair attempt, so deduping them would silently drop real,
+// distinct feed rows.
+func isDialogDedupable(typ string, data any) bool {
+	if dialogDedupTypes[typ] {
+		return true
+	}
+	if typ == string(bus.EventAutoAnswered) {
+		m, _ := data.(map[string]any)
+		dialog, _ := m["dialog"].(bool)
+		return dialog
+	}
+	return false
+}
+
 // reconstructNotices reads the shared notices.jsonl. When stageID != "" it
 // keeps only that stage's notices (last maxStageReplayEvents of them);
 // otherwise it keeps the last maxReplayEvents across all stages. Retention is
@@ -261,7 +282,7 @@ func reconstructNotices(runDir, stageID string) []feedEvent {
 		if stageID != "" && e.StageID != stageID {
 			continue // per-stage: only this stage's notices enter the ring
 		}
-		if dialogDedupTypes[e.Type] {
+		if isDialogDedupable(e.Type, e.Data) {
 			key := dialogNoticeDedupKey(e.Type, e.StageID, e.Data)
 			if seen[key] {
 				continue
@@ -276,16 +297,20 @@ func reconstructNotices(runDir, stageID string) []feedEvent {
 	return ring
 }
 
-// dialogNoticeDedupKey builds the content dedup key for a dialog_question/
-// dialog_answer notice: type + stage_id + phase + id + title. Data arrives as
-// `any` holding a map[string]any (the generic JSON round-trip of
-// mcp.DialogFeedNotice's payload) — fields are read defensively so a
+// dialogNoticeDedupKey builds the content dedup key for a dialog notice:
+// type + stage_id + phase + id + title + answer. Data arrives as `any` holding a
+// map[string]any (the generic JSON round-trip of mcp.DialogFeedNotice's /
+// mcp.AutoAnsweredNotice's payload) — fields are read defensively so a
 // malformed/missing field degrades to an empty string component instead of
-// panicking.
+// panicking. dialog_question/dialog_answer carry `title` (answer is ""); the
+// navigable auto_answered carries `answer` (title is ""), so the two never
+// collide. Including `answer` also keeps two navigable auto-answers that share
+// phase/id but differ in answer as distinct rows.
 func dialogNoticeDedupKey(typ, stageID string, data any) string {
 	m, _ := data.(map[string]any)
 	phase, _ := m["phase"].(string)
 	id, _ := m["id"].(string)
 	title, _ := m["title"].(string)
-	return typ + "|" + stageID + "|" + phase + "|" + id + "|" + title
+	answer, _ := m["answer"].(string)
+	return typ + "|" + stageID + "|" + phase + "|" + id + "|" + title + "|" + answer
 }

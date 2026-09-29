@@ -1217,4 +1217,104 @@ describe('App', () => {
     // История, не live-вопрос — баннер ожидания ответа не должен показываться.
     expect(screen.queryByText('Agent needs your input')).not.toBeInTheDocument()
   })
+
+  // Non-interactive стадия с auto_approve авто-ответила на вопрос агента. Лента
+  // завершённой стадии должна показывать И вопрос, И авто-ответ, оба
+  // навигируемые в один и тот же диалог, и оба должны переживать перезагрузку
+  // страницы (восстановление ТОЛЬКО из HTTP-истории /api/events, без live-WS).
+  test('авто-ответ и вопрос завершённой auto_approve стадии навигируемы и переживают reload', async () => {
+    const feedEvents = [
+      {
+        type: 'dialog_question',
+        stage_id: 's1',
+        data: { phase: 'implementation', id: 'q1', title: 'Which backend?' },
+        timestamp: '2026-09-29T10:00:00.000Z',
+      },
+      {
+        type: 'auto_answered',
+        stage_id: 's1',
+        data: {
+          phase: 'implementation',
+          id: 'q1',
+          answer: 'Use Postgres',
+          from_options: true,
+          question_title: 'Which backend?',
+          dialog: true,
+        },
+        timestamp: '2026-09-29T10:00:01.000Z',
+      },
+    ]
+
+    // fetch маршрутизируется по URL: /api/status → payload; любой /api/events
+    // (глобальный И per-stage ?stage=) → feedEvents из истории; /dialog → полная
+    // запись вопроса и авто-ответа. Порядок веток важен (dialog до events).
+    function mockFetchForFeed() {
+      return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        if (url.includes('/api/status')) {
+          return {
+            ok: true,
+            json: async () => ({
+              flow_name: 'demo',
+              accounting: { health: 'ok', has_data: false, show_money: true },
+              stages: [
+                stageView('s1', 'Archive', 'done', { autoApprove: true, hasDialog: true, showDialog: true }),
+                stageView('s2', 'Build', 'running'),
+                stageView('s3', 'Ship', 'pending'),
+              ],
+            }),
+          } as Response
+        }
+        if (url.includes('/dialog')) {
+          return {
+            ok: true,
+            json: async () => [
+              { phase: 'implementation', id: 'q1', question: 'Which backend?', options: ['Use Postgres', 'Use SQLite'] },
+              { phase: 'implementation', id: 'q1', answer: 'Use Postgres', auto_answered: true },
+            ],
+          } as Response
+        }
+        if (url.includes('/api/events')) return { ok: true, json: async () => feedEvents } as Response
+        if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+        return { ok: true, json: async () => [] } as Response
+      })
+    }
+
+    // Общие проверки, одинаковые до и после reload: выбрать завершённую s1,
+    // увидеть в ленте обе строки, кликнуть по каждой и попасть в один диалог.
+    async function assertBothNavigableToDialog() {
+      // Авто-выбор берёт активную s2 (running). Выбираем завершённую s1 в рейле.
+      await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-row')).not.toBeNull())
+      fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+      // Лента показывает ОБЕ строки как кликабельные кнопки.
+      const questionBtn = await screen.findByRole('button', { name: /Which backend\?/ })
+      expect(await screen.findByRole('button', { name: /Use Postgres/ })).toBeInTheDocument()
+
+      // Клик по вопросу открывает диалог стадии s1.
+      fireEvent.click(questionBtn)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Archive'))
+      expect(document.getElementById('dialog-section')).not.toBeNull()
+
+      // Возврат в Feed и клик по авто-ответу открывает ТОТ ЖЕ диалог.
+      fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+      const answerBtnAgain = await screen.findByRole('button', { name: /Use Postgres/ })
+      fireEvent.click(answerBtnAgain)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Archive'))
+      expect(document.getElementById('dialog-section')).not.toBeNull()
+    }
+
+    // До reload.
+    mockFetchForFeed()
+    const first = render(<App />)
+    await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
+    await assertBothNavigableToDialog()
+
+    // Reload: полностью размонтируем и монтируем заново. Никаких WS-сообщений
+    // не эмитим — контент обязан восстановиться ТОЛЬКО из HTTP-истории.
+    first.unmount()
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
+    await assertBothNavigableToDialog()
+  })
 })

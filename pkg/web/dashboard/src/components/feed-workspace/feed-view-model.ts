@@ -270,8 +270,32 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // это доставленный юзером текст, а не переход к диалогу. id (seq перехода)
       // в payload нужен для дедупа live/replay, в презентацию не попадает.
       return { actor: 'user', tone: 'neutral', kind: 'message', text: str(obj.text), mono: false }
-    case 'auto_answered':
+    case 'auto_answered': {
+      // Реальный авто-ответ на вопрос диалога несёт dialog:true (см. FROZEN
+      // contract). Такую строку делаем НАВИГИРУЕМОЙ (клик → тот же диалог, что
+      // и dialog_question), но оставляем actor:'system' — это автоматический
+      // ответ afm, а не реплика человека (dialog_answer, actor:'user' справа),
+      // поэтому он рисуется слева и визуально отличим. Текст несёт сам ответ,
+      // чтобы строку можно было отличить от вопроса.
+      if (obj.dialog === true) {
+        const answer = str(obj.answer)
+        const title = str(obj.question_title)
+        const body = answer !== '' ? answer : title !== '' ? title : 'auto-answered'
+        return {
+          actor: 'system',
+          tone: 'accent',
+          kind: 'dialog',
+          text: `⚙ ${body}`,
+          mono: false,
+          navigable: true,
+          phase: str(obj.phase),
+          id: str(obj.id),
+        }
+      }
+      // Legacy/repair авто-ответ (без dialog-флага, напр. "⚙️ …"-прогресс
+      // ремонта битого question.json) — прежняя не навигируемая mono-строка.
       return { actor: 'system', tone: 'neutral', kind: 'dialog', text: `auto-answered ${str(obj.id)}: ${str(obj.answer)}`, mono: true }
+    }
     case 'context_warning':
       return { actor: 'system', tone: 'warning', kind: 'status', text: `context warning: ${str(data)}`, mono: false }
     default:

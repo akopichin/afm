@@ -1,6 +1,7 @@
 package mcp_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/mcp"
@@ -196,6 +197,67 @@ func TestDialogFeedNotice(t *testing.T) {
 
 			if gotTitle, ok := got["title"]; !ok || gotTitle != tt.title {
 				t.Errorf("title: got %v, want %v", gotTitle, tt.title)
+			}
+		})
+	}
+}
+
+func TestAutoAnsweredNotice(t *testing.T) {
+	tests := []struct {
+		name          string
+		phase         string
+		id            string
+		answer        string
+		fromOptions   bool
+		questionTitle string
+	}{
+		{
+			name:          "from options",
+			phase:         "planning",
+			id:            "q1",
+			answer:        "Вариант B",
+			fromOptions:   true,
+			questionTitle: "Which option?",
+		},
+		{
+			name:          "free-text answer",
+			phase:         "implementation",
+			id:            "q2",
+			answer:        "decide autonomously",
+			fromOptions:   false,
+			questionTitle: "What next?",
+		},
+		{
+			name:          "empty values",
+			phase:         "",
+			id:            "",
+			answer:        "",
+			fromOptions:   false,
+			questionTitle: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mcp.AutoAnsweredNotice(tt.phase, tt.id, tt.answer, tt.fromOptions, tt.questionTitle)
+			if got == nil {
+				t.Fatal("AutoAnsweredNotice returned nil")
+			}
+
+			want := map[string]any{
+				"phase":          tt.phase,
+				"id":             tt.id,
+				"answer":         tt.answer,
+				"from_options":   tt.fromOptions,
+				"question_title": tt.questionTitle,
+				"dialog":         true,
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("AutoAnsweredNotice() = %#v, want %#v", got, want)
+			}
+			// dialog:true is the navigable marker the frontend keys on.
+			if dialog, _ := got["dialog"].(bool); !dialog {
+				t.Errorf("dialog marker: got %v, want true", got["dialog"])
 			}
 		})
 	}

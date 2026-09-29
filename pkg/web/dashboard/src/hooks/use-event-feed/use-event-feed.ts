@@ -29,7 +29,7 @@ const WATCHDOG_SILENCE_MS = 75000
 // легитимно повторяются), публикуется live И персистится в notices.jsonl без
 // seq — без ингест-дедупа реконнект/гонка history-vs-live даёт вторую строку
 // в ленте с тем же error/stderr_tail.
-const CONTENT_DEDUPE_ON_INGEST = new Set(['dialog_question', 'dialog_answer', 'agent_note', 'script_failed'])
+const CONTENT_DEDUPE_ON_INGEST = new Set(['agent_note', 'script_failed'])
 
 export function useEventFeed(url: string): { events: AfmEvent[]; connected: boolean } {
   const [events, setEvents] = useState<AfmEvent[]>([])
@@ -119,9 +119,15 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
           // CONTENT_DEDUPE_ON_INGEST (см. константу выше) — бланковый
           // контент-дедуп всех seq-less событий схлопнул бы легитимные
           // повторы agent_action/script_output.
-          if (CONTENT_DEDUPE_ON_INGEST.has(event.type)) {
-            const key = dedupeKey(event)
-            if (prev.some((e) => dedupeKey(e) === key)) return prev
+          // Семейство диалога (dialog_question/dialog_answer и навигируемый
+          // auto_answered с dialog:true) дедупится по контент-ключу из
+          // именованных полей (см. feedDedupeKey), остальные из
+          // CONTENT_DEDUPE_ON_INGEST (agent_note/script_failed) — по прежнему
+          // dedupeKey. Legacy/repair auto_answered (без dialog) сюда НЕ попадает
+          // — два разных прогресс-сообщения ремонта обязаны оба остаться.
+          if (isDialogContentEvent(event) || CONTENT_DEDUPE_ON_INGEST.has(event.type)) {
+            const key = feedDedupeKey(event)
+            if (prev.some((e) => feedDedupeKey(e) === key)) return prev
           }
 
           return [...prev, event].slice(-MAX_EVENTS)
@@ -184,6 +190,40 @@ function dedupeKey(e: AfmEvent): string {
   return `${e.type}|${e.stageId}|${JSON.stringify(e.payload)}`
 }
 
+// isDialogContentEvent — событие принадлежит «семейству диалога»: dialog_question,
+// dialog_answer, а также auto_answered ТОЛЬКО когда это настоящий авто-ответ на
+// вопрос (payload.dialog === true, тот же контракт, что делает его навигируемым
+// в feed-view-model). Legacy/repair auto_answered (без dialog) сюда не входит —
+// его дедуп идёт прежним путём, чтобы два разных прогресс-сообщения ремонта не
+// схлопнулись.
+function isDialogContentEvent(e: AfmEvent): boolean {
+  if (e.type === 'dialog_question' || e.type === 'dialog_answer') return true
+  if (e.type !== 'auto_answered') return false
+  const p = e.payload
+  return typeof p === 'object' && p !== null && (p as { dialog?: unknown }).dialog === true
+}
+
+// dialogContentKey — контент-ключ семейства диалога из ИМЕНОВАННЫХ полей
+// (type|stageId|phase|id|answer), а не из JSON.stringify(payload): порядок
+// ключей в payload между live (WS) и history (/api/events) не гарантирован,
+// поэтому одна и та же запись, доставленная двумя путями, обязана давать
+// один и тот же ключ. phase/id адресуют вопрос; answer различает разные
+// авто-ответы на один и тот же вопрос (у dialog_question/dialog_answer поля
+// answer нет — компонент пустой, что и требуется).
+function dialogContentKey(e: AfmEvent): string {
+  const p = e.payload
+  const obj = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {}
+  const field = (v: unknown): string => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v))
+  return `${e.type}|${e.stageId}|${field(obj.phase)}|${field(obj.id)}|${field(obj.answer)}`
+}
+
+// feedDedupeKey — единый дедуп-ключ для ленты, используемый И ингест-путём
+// (onmessage), И mergeCapped: семейство диалога → контент-ключ из именованных
+// полей, всё остальное → прежний dedupeKey (seq либо type|stageId|JSON(payload)).
+function feedDedupeKey(e: AfmEvent): string {
+  return isDialogContentEvent(e) ? dialogContentKey(e) : dedupeKey(e)
+}
+
 // mergeCapped сливает историю из /api/events (history) с уже накопленными
 // live-событиями (live). history — авторитетна и уже отсортирована сервером по
 // времени (reconstructEventHistory, slices.SortFunc по Timestamp), поэтому она
@@ -199,8 +239,8 @@ function dedupeKey(e: AfmEvent): string {
 // cap вынесен параметром (был жёстко MAX_EVENTS) — переиспользуется per-stage
 // лентой (Task 3, useStageEvents) со своим, отдельным капом.
 export function mergeCapped(history: AfmEvent[], live: AfmEvent[], cap: number): AfmEvent[] {
-  const historyKeys = new Set(history.map(dedupeKey))
-  const liveOnly = live.filter((e) => !historyKeys.has(dedupeKey(e)))
+  const historyKeys = new Set(history.map(feedDedupeKey))
+  const liveOnly = live.filter((e) => !historyKeys.has(feedDedupeKey(e)))
   return [...history, ...liveOnly].slice(-cap)
 }
 

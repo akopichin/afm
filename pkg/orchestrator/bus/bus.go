@@ -21,6 +21,18 @@ const (
 	// EventAutoAnswered fires when a non-interactive stage's open question was
 	// answered by afm itself (see pkg/mcp.PickAutoAnswer), not by a real user.
 	// Never triggers an FSM transition — the stage's status is unaffected.
+	//
+	// A REAL auto-answer carries the navigable payload from
+	// mcp.AutoAnsweredNotice — {phase,id,answer,from_options,question_title,
+	// dialog:true} — and is paired with an EventDialogQuestion published just
+	// before it, so a completed non-interactive (e.g. auto_approve) stage shows
+	// both the question and the auto-answer in the Feed, each opening the full
+	// dialog history. The dashboard treats an auto_answered row as navigable IFF
+	// its payload has dialog==true, and dedupes it by content (see
+	// isDialogDedupable / dialogNoticeDedupKey and use-event-feed.ts). The
+	// malformed-question repair-PROGRESS notice reuses this event type WITHOUT
+	// dialog:true on purpose, so it stays a plain non-navigable system line and
+	// is never dialog-deduped.
 	EventAutoAnswered EventType = "auto_answered"
 	// EventDialogQuestion surfaces an interactive question to the dashboard
 	// Feed — carries the display-ready {phase,id,title} payload (see
@@ -29,10 +41,12 @@ const (
 	// normally emits it once per surfacing, but it can legitimately be emitted
 	// AGAIN — the malformed-question give-up fallback and, after an afm
 	// restart, a still-unanswered question re-scanned from awaiting_user_input
-	// both re-publish it. Duplicates are collapsed by content (type+stage+
-	// phase+id+title): the live path dedupes in use-event-feed.ts and the
-	// replay path in reconstructNotices' dialogDedupTypes allowlist, so the
-	// user sees one row. A genuinely new question reusing an answered id (with
+	// both re-publish it. Also published from the non-interactive auto-answer
+	// path just before a navigable EventAutoAnswered. Duplicates are collapsed
+	// by content (type+stage+phase+id+title+answer): the live path dedupes in
+	// use-event-feed.ts and the replay path via reconstructNotices'
+	// isDialogDedupable predicate, so the user sees one row. A genuinely new
+	// question reusing an answered id (with
 	// different text) has a different title → its own row. Never triggers an
 	// FSM transition itself.
 	EventDialogQuestion EventType = "dialog_question"

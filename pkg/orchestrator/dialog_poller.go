@@ -227,12 +227,15 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 					continue
 				}
 				processed[key] = true
+				// Публикуем dialog_question ПЕРЕД auto_answered — лента должна
+				// показать и вопрос, и авто-ответ, оба навигируемыми в полный
+				// диалог, в правильном порядке. Обе строки durable (notices.jsonl),
+				// поэтому переживают reload/рестарт.
+				o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
 				o.publishNotice(bus.Event{
 					Type:    bus.EventAutoAnswered,
 					StageID: stageID,
-					Data: map[string]any{
-						keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions,
-					},
+					Data:    mcp.AutoAnsweredNotice(q.Phase, q.ID, answer, fromOptions, mcp.DialogSnippet(q.Question)),
 				})
 				if !parked {
 					o.emitLifecycle(lifecyclehooks.Event{
@@ -447,14 +450,23 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 	// pollQuestions: снимаем ДО WriteAnswer, паркинг-стадию покрывает FSM-путь.
 	parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
 	answer, fromOptions := mcp.PickAutoAnswer(mcp.QuestionFile{ID: q.ID, Phase: q.Phase})
+	// Оригинальный question.json так и не распарсился — реального текста вопроса
+	// нет. Кладём в диалог синтетический (bounded) заголовок, чтобы у ленты была
+	// навигируемая пара «вопрос + авто-ответ» так же, как в обычной ветке.
+	syntheticQuestion := mcp.DialogSnippet(fmt.Sprintf("question %s (unreadable — invalid JSON)", q.ID))
+	dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
+	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
+		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: syntheticQuestion})
+	}
 	if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 		log.Printf("WARN: auto-answer malformed %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
 		return
 	}
+	o.publishDialogQuestion(stageID, q.Phase, q.ID, syntheticQuestion)
 	o.publishNotice(bus.Event{
 		Type:    bus.EventAutoAnswered,
 		StageID: stageID,
-		Data:    map[string]any{keyID: q.ID, keyPhase: q.Phase, keyAnswer: answer, keyFromOptions: fromOptions},
+		Data:    mcp.AutoAnsweredNotice(q.Phase, q.ID, answer, fromOptions, syntheticQuestion),
 	})
 	if !parked {
 		o.emitLifecycle(lifecyclehooks.Event{

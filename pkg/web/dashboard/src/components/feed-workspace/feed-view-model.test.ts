@@ -238,6 +238,67 @@ describe('dialog_question/dialog_answer — реальный текст диал
   })
 })
 
+describe('auto_answered — dialog:true делает авто-ответ навигируемым, legacy/repair остаётся системной mono-строкой', () => {
+  it('навигируемый авто-ответ (dialog:true) — системный элемент со стороны agent-диалога, несёт phase/id и текст ответа', () => {
+    const items = toFeedItems([
+      ev(
+        'auto_answered',
+        {
+          phase: 'implementation',
+          id: 'q7',
+          answer: 'Option B (recommended)',
+          from_options: true,
+          question_title: 'Which storage backend?',
+          dialog: true,
+        },
+        's1',
+        '2026-07-10T10:00:00Z',
+      ),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      actor: 'system',
+      side: 'left',
+      kind: 'dialog',
+      navigable: true,
+      phase: 'implementation',
+      id: 'q7',
+    })
+    // Текст несёт сам ответ, чтобы строку можно было отличить от вопроса.
+    expect(items[0]?.text).toContain('Option B (recommended)')
+    // Это НЕ ответ человека (dialog_answer, actor:'user', справа) — визуально
+    // отличается: системный автоматический ответ слева, не в mono-стиле.
+    expect(items[0]?.side).toBe('left')
+    expect(items[0]?.mono).toBe(false)
+  })
+
+  it('legacy авто-ответ (без dialog) остаётся НЕ навигируемой системной mono-строкой', () => {
+    const items = toFeedItems([
+      ev('auto_answered', { phase: 'planning', id: 'q1', answer: 'yes' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      actor: 'system',
+      kind: 'dialog',
+      text: 'auto-answered q1: yes',
+      mono: true,
+    })
+    expect(items[0]?.navigable).toBeFalsy()
+    expect(items[0]?.phase).toBeUndefined()
+    expect(items[0]?.id).toBeUndefined()
+  })
+
+  it('repair-прогресс авто-ответ (dialog:false, answer "⚙️ …") остаётся НЕ навигируемой системной строкой', () => {
+    const items = toFeedItems([
+      ev('auto_answered', { phase: 'planning', id: 'q1', answer: '⚙️ repairing question…', from_options: false }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]?.navigable).toBeFalsy()
+    expect(items[0]?.mono).toBe(true)
+    expect(items[0]?.actor).toBe('system')
+  })
+})
+
 describe('agent_note — заметка агенту справа своим текстом, но НЕ кликабельна', () => {
   it('maps to a right-side user message carrying the payload text, non-navigable', () => {
     const items = toFeedItems([

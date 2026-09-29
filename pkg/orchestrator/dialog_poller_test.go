@@ -68,12 +68,13 @@ func TestPollQuestions_NonInteractiveStageAutoAnswers(t *testing.T) {
 		t.Errorf("auto-answer = %v, want %q", got["answer"], "Вариант B")
 	}
 
-	select {
-	case ev := <-events:
-		if ev.Type != bus.EventAutoAnswered {
-			t.Errorf("got event %s, want %s", ev.Type, bus.EventAutoAnswered)
+	sawAutoAnswered := false
+	for _, ev := range drainAllEvents(events) {
+		if ev.Type == bus.EventAutoAnswered {
+			sawAutoAnswered = true
 		}
-	default:
+	}
+	if !sawAutoAnswered {
 		t.Fatal("expected EventAutoAnswered to be published")
 	}
 
@@ -273,15 +274,270 @@ func TestPollQuestions_AutoAnswerPersistsToNotices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("notices.jsonl not written: %v", err)
 	}
+	// The feed now persists both a dialog_question and an auto_answered line;
+	// locate the auto_answered one.
 	var notice noticeEnvelope
-	if err := json.Unmarshal(noticesData, &notice); err != nil {
-		t.Fatalf("invalid notices.jsonl line: %v (content: %s)", err, noticesData)
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(noticesData)), "\n") {
+		if line == "" {
+			continue
+		}
+		var n noticeEnvelope
+		if err := json.Unmarshal([]byte(line), &n); err != nil {
+			t.Fatalf("invalid notices.jsonl line: %v (content: %s)", err, line)
+		}
+		if n.Type == string(bus.EventAutoAnswered) {
+			notice = n
+			found = true
+		}
 	}
-	if notice.Type != string(bus.EventAutoAnswered) {
-		t.Errorf("notice type = %q, want %q", notice.Type, bus.EventAutoAnswered)
+	if !found {
+		t.Fatalf("no auto_answered line in notices.jsonl (content: %s)", noticesData)
 	}
 	if notice.StageID != stage.ID || notice.Data.ID != "q1" || notice.Data.Answer != "Вариант B" {
 		t.Errorf("notice content mismatch: %+v", notice)
+	}
+}
+
+// rawNotice — одна строка notices.jsonl с data как произвольной картой, чтобы
+// проверять наличие/отсутствие ключей (напр. dialog:true).
+type rawNotice struct {
+	Type string         `json:"type"`
+	Data map[string]any `json:"data"`
+}
+
+// readNotices читает все строки notices.jsonl в исходном порядке.
+func readNotices(t *testing.T, runDir string) []rawNotice {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	var out []rawNotice
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var n rawNotice
+		if err := json.Unmarshal([]byte(line), &n); err != nil {
+			t.Fatalf("invalid notices.jsonl line: %v (%s)", err, line)
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// drainAllEvents non-blockingly drains every currently-buffered event from a UI
+// bus subscription channel, preserving publish order.
+func drainAllEvents(events <-chan bus.Event) []bus.Event {
+	var got []bus.Event
+	for {
+		select {
+		case ev := <-events:
+			got = append(got, ev)
+		default:
+			return got
+		}
+	}
+}
+
+// TestPollQuestions_NonInteractive_EmitsQuestionThenNavigableAutoAnswer is the
+// core producer-side guarantee of the auto-answer feed feature: when a
+// non-interactive stage auto-answers, the feed must show BOTH the question and
+// the auto-answer, both navigable to the full dialog, in the right order. On
+// the emission side this means: publish dialog_question FIRST, then a navigable
+// auto_answered (dialog:true, non-empty question_title) — live to the UI bus AND
+// durably to notices.jsonl so it survives reload/restart.
+func TestPollQuestions_NonInteractive_EmitsQuestionThenNavigableAutoAnswer(t *testing.T) {
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stageDir := filepath.Join(runDir, stage.ID)
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"Вариант A", "Вариант B (recommended)"})
+
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	subID, events := o.ui.Subscribe(64)
+	defer o.ui.Unsubscribe(subID)
+
+	o.pollQuestions(map[string]bool{}, map[string]*malformedQuestionState{})
+
+	// dialog.jsonl carries both the question and the auto-answer.
+	entries, err := mcp.ReadDialog(filepath.Join(stageDir, "implementation.dialog.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Question != "which?" || entries[0].Answer == nil || *entries[0].Answer != "Вариант B" || !entries[0].AutoAnswered {
+		t.Fatalf("dialog entry must carry question + auto-answer: %+v", entries)
+	}
+
+	// Live events: dialog_question BEFORE auto_answered, same phase+id.
+	all := drainAllEvents(events)
+	qIdx, aIdx := -1, -1
+	var autoEv bus.Event
+	for i, ev := range all {
+		switch ev.Type {
+		case bus.EventDialogQuestion:
+			if qIdx == -1 {
+				qIdx = i
+			}
+		case bus.EventAutoAnswered:
+			if aIdx == -1 {
+				aIdx = i
+				autoEv = ev
+			}
+		default:
+		}
+	}
+	if qIdx == -1 || aIdx == -1 {
+		t.Fatalf("want both dialog_question and auto_answered, got events %+v", all)
+	}
+	if qIdx > aIdx {
+		t.Errorf("dialog_question must be published before auto_answered, got q@%d a@%d", qIdx, aIdx)
+	}
+	qData, _ := all[qIdx].Data.(map[string]any)
+	aData, _ := autoEv.Data.(map[string]any)
+	if qData["phase"] != "implementation" || qData["id"] != "q1" {
+		t.Errorf("dialog_question data mismatch: %+v", qData)
+	}
+	if aData["phase"] != "implementation" || aData["id"] != "q1" {
+		t.Errorf("auto_answered data mismatch: %+v", aData)
+	}
+	if dialog, _ := aData["dialog"].(bool); !dialog {
+		t.Errorf("auto_answered must carry dialog:true (navigable), got %v", aData["dialog"])
+	}
+	if title, _ := aData["question_title"].(string); title == "" {
+		t.Errorf("auto_answered must carry a non-empty question_title, got %+v", aData)
+	}
+	if aData["answer"] != "Вариант B" {
+		t.Errorf("auto_answered answer = %v, want %q", aData["answer"], "Вариант B")
+	}
+
+	// Durable notices.jsonl: same order + navigable marker survives replay.
+	notices := readNotices(t, runDir)
+	nq, na := -1, -1
+	for i, n := range notices {
+		switch n.Type {
+		case string(bus.EventDialogQuestion):
+			if nq == -1 {
+				nq = i
+			}
+		case string(bus.EventAutoAnswered):
+			if na == -1 {
+				na = i
+			}
+		default:
+		}
+	}
+	if nq == -1 || na == -1 {
+		t.Fatalf("want both dialog_question and auto_answered in notices.jsonl, got %+v", notices)
+	}
+	if nq > na {
+		t.Errorf("notices.jsonl order: dialog_question must precede auto_answered, got q@%d a@%d", nq, na)
+	}
+	if dialog, _ := notices[na].Data["dialog"].(bool); !dialog {
+		t.Errorf("durable auto_answered must carry dialog:true, got %v", notices[na].Data["dialog"])
+	}
+}
+
+// TestPollQuestions_MalformedRepairProgress_NotNavigable guards the invariant
+// that the ⚙️ "fixing question.json" progress notice — which is also an
+// EventAutoAnswered — must NOT be navigable: it carries no dialog:true, so the
+// dashboard never tries to open a dialog for a repair-progress line.
+func TestPollQuestions_MalformedRepairProgress_NotNavigable(t *testing.T) {
+	o, _, _ := setupMalformedTestOrchNI(t, `not json at all {{{`)
+	injectFixStub(t, o, "") // stays broken → a fix agent is spawned + progress notice emitted
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	o.pollQuestions(processed, malformed) // grace tick: remembers broken bytes
+	o.pollQuestions(processed, malformed) // stable → spawn fix agent + ⚙️ progress notice
+
+	notices := readNotices(t, o.opts.RunDir)
+	var progress []rawNotice
+	for _, n := range notices {
+		if n.Type == string(bus.EventAutoAnswered) {
+			progress = append(progress, n)
+		}
+	}
+	if len(progress) == 0 {
+		t.Fatal("expected at least one ⚙️ repair-progress auto_answered notice")
+	}
+	for _, n := range progress {
+		if dialog, _ := n.Data["dialog"].(bool); dialog {
+			t.Errorf("repair-progress notice must not be navigable (dialog:true), got %+v", n.Data)
+		}
+	}
+}
+
+// TestPollQuestions_MalformedNonInteractive_TerminalFallbackNavigable covers the
+// non-interactive terminal fallback (autoAnswerMalformed): once no fix agent can
+// repair the file, afm still records a navigable dialog row — a synthetic
+// question plus its auto-answer — so the feed shows what happened, survives
+// reload, and points at the dialog.
+func TestPollQuestions_MalformedNonInteractive_TerminalFallbackNavigable(t *testing.T) {
+	o, store, stageDir := setupMalformedTestOrchNI(t, `not json at all {{{`)
+	injectFixStub(t, o, "") // never repairs → terminal fallback
+	processed := map[string]bool{}
+	malformed := map[string]*malformedQuestionState{}
+
+	subID, events := o.ui.Subscribe(256)
+	defer o.ui.Unsubscribe(subID)
+
+	for i := 0; i < maxJSONFixAttempts+3; i++ {
+		o.pollQuestions(processed, malformed)
+	}
+
+	if got := store.Snapshot().Stages["s1"].Status; got != state.StatusRunning {
+		t.Fatalf("status = %s, want running (non-interactive never awaits a human)", got)
+	}
+
+	// A dialog row (synthetic question + auto-answer) exists.
+	entries, err := mcp.ReadDialog(filepath.Join(stageDir, "implementation.dialog.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Answer == nil || !entries[0].AutoAnswered {
+		t.Fatalf("want 1 auto-answered dialog entry in the terminal fallback, got %+v", entries)
+	}
+
+	// A navigable dialog_question + auto_answered pair was published.
+	all := drainAllEvents(events)
+	sawDialogQ := false
+	sawNavigableAuto := false
+	for _, ev := range all {
+		if ev.Type == bus.EventDialogQuestion {
+			sawDialogQ = true
+		}
+		if ev.Type == bus.EventAutoAnswered {
+			data, _ := ev.Data.(map[string]any)
+			if dialog, _ := data["dialog"].(bool); dialog {
+				sawNavigableAuto = true
+			}
+		}
+	}
+	if !sawDialogQ {
+		t.Error("terminal fallback must publish a dialog_question")
+	}
+	if !sawNavigableAuto {
+		t.Error("terminal fallback must publish a navigable (dialog:true) auto_answered")
+	}
+
+	// Durable copies survive replay.
+	dq := readDialogQuestionNotices(t, o.opts.RunDir)
+	if len(dq) == 0 {
+		t.Error("terminal fallback dialog_question must be persisted to notices.jsonl")
 	}
 }
 
@@ -369,6 +625,14 @@ func TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce(t *testing.T)
 	}
 	if notices[0].Phase != "implementation" || notices[0].ID != "q1" || notices[0].Title != wantTitle {
 		t.Errorf("notice data = %+v, want phase=implementation id=q1 title=%q", notices[0], wantTitle)
+	}
+
+	// Interactive path is unchanged by the auto-answer feature: no auto_answered
+	// event at all (the human answers), so certainly no navigable dialog:true one.
+	for _, ev := range drainAllEvents(events) {
+		if ev.Type == bus.EventAutoAnswered {
+			t.Errorf("interactive stage must not publish auto_answered, got %+v", ev)
+		}
 	}
 }
 

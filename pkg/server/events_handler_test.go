@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
@@ -158,6 +159,120 @@ func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T)
 	}
 	if scriptOutputs != 2 {
 		t.Errorf("script_output count = %d, want 2 (non-allowlisted type must never be deduped)", scriptOutputs)
+	}
+}
+
+// TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog is the regression guard
+// for the auto-answer feed feature: an `auto_answered` notice is dialog-navigable
+// (and therefore dialog-dedupable) IFF its data carries `dialog: true` — the
+// navigable auto-answer the frontend links to the full dialog history. The
+// non-navigable repair-progress notices (data.answer == "⚙️ …", NO `dialog`
+// field) must NEVER be collapsed: they legitimately repeat, one per repair
+// attempt, and dropping them would hide the progress trail. It also proves Task 1
+// (answer is part of the dedup key): two navigable auto-answers that share
+// phase/id but carry DIFFERENT answers must both survive.
+func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
+	runDir := t.TempDir()
+	lines := []string{
+		// Two identical navigable auto-answers (dialog:true) — collapse to ONE.
+		`{"time":"2026-09-29T10:00:00Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q1","answer":"Option B","from_options":true,"question_title":"Which approach?","dialog":true}}`,
+		`{"time":"2026-09-29T10:00:05Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q1","answer":"Option B","from_options":true,"question_title":"Which approach?","dialog":true}}`,
+		// Two DIFFERENT repair-progress notices (no dialog marker) — both survive.
+		`{"time":"2026-09-29T10:00:01Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q2","answer":"⚙️ repairing (attempt 1)","from_options":false}}`,
+		`{"time":"2026-09-29T10:00:02Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q2","answer":"⚙️ repairing (attempt 2)","from_options":false}}`,
+		// A navigable auto-answer with a DIFFERENT answer, same phase/id — must NOT
+		// collapse into the first two (Task 1: answer is part of the dedup key).
+		`{"time":"2026-09-29T10:00:06Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q1","answer":"Option C","from_options":true,"question_title":"Which approach?","dialog":true}}`,
+	}
+	data := ""
+	for _, l := range lines {
+		data += l + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "notices.jsonl"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := reconstructNotices(runDir, "")
+
+	var navigable, repair int
+	for _, e := range out {
+		if e.Type != string(bus.EventAutoAnswered) {
+			continue
+		}
+		m, _ := e.Data.(map[string]any)
+		if dialog, _ := m["dialog"].(bool); dialog {
+			navigable++
+		} else {
+			repair++
+		}
+	}
+	// Option B (deduped from 2 → 1) + Option C (distinct answer) = 2 navigable.
+	if navigable != 2 {
+		t.Errorf("navigable auto_answered count = %d, want 2 (identical dialog:true collapse; different answer survives)", navigable)
+	}
+	// Both repair-progress notices survive — never dialog-deduped.
+	if repair != 2 {
+		t.Errorf("repair-progress auto_answered count = %d, want 2 (non-dialog notices must never be deduped)", repair)
+	}
+}
+
+// TestHandleEvents_EarlyStageQAndASurviveGlobalLimit is the stage-filter-before-
+// limit guard for the auto-answer feed feature. An early stage's dialog_question
+// and its navigable auto_answered notice, written FIRST, must both survive a
+// per-stage query even when the shared notices.jsonl is buried under >10000 later
+// notices from dozens of OTHER stages. reconstructNotices rings PER SCOPE while
+// scanning, so a ?stage=early query only ever holds early's own notices — it must
+// NOT global-ring-then-filter (the original bug), which would evict the two
+// early notices (oldest of >10000) before the stage filter ever ran.
+func TestHandleEvents_EarlyStageQAndASurviveGlobalLimit(t *testing.T) {
+	runDir := t.TempDir()
+
+	// early: the question and its navigable auto-answer, written FIRST (oldest).
+	stagefiles.AppendNotice(runDir, "early", string(bus.EventDialogQuestion),
+		mcp.DialogFeedNotice("planning", "q1", "Which approach?"))
+	stagefiles.AppendNotice(runDir, "early", string(bus.EventAutoAnswered),
+		mcp.AutoAnsweredNotice("planning", "q1", "Option B", true, "Which approach?"))
+
+	// >10000 later notices spread across 35 OTHER stages (35*300 = 10500).
+	stageIDs := []string{"early"}
+	for i := 0; i < 35; i++ {
+		id := "noise" + strconv.Itoa(i)
+		stageIDs = append(stageIDs, id)
+		writeNotices(t, runDir, id, 300)
+	}
+
+	srv := newTestServerForRunDir(t, runDir, stageIDs)
+	req := httptest.NewRequest("GET", "/api/events?stage=early", nil)
+	rr := httptest.NewRecorder()
+	srv.handleEvents(rr, req)
+
+	var got []feedEvent
+	mustDecode(t, rr, &got)
+
+	questionIdx, answerIdx := -1, -1
+	var questions, answers int
+	for i, e := range got {
+		if e.StageID != "early" {
+			t.Fatalf("stage filter leaked stage %q", e.StageID)
+		}
+		switch e.Type {
+		case string(bus.EventDialogQuestion):
+			questions++
+			questionIdx = i
+		case string(bus.EventAutoAnswered):
+			answers++
+			answerIdx = i
+		default:
+		}
+	}
+	if questions != 1 {
+		t.Errorf("dialog_question count = %d, want exactly 1 (survives the global limit, no duplicate)", questions)
+	}
+	if answers != 1 {
+		t.Errorf("navigable auto_answered count = %d, want exactly 1 (survives the global limit, no duplicate)", answers)
+	}
+	if questionIdx >= 0 && answerIdx >= 0 && questionIdx > answerIdx {
+		t.Errorf("question must sort before its answer: questionIdx=%d, answerIdx=%d", questionIdx, answerIdx)
 	}
 }
 

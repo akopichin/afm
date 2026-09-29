@@ -666,6 +666,156 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(2)
   })
 
+  // Навигируемый авто-ответ (auto_answered с dialog:true) публикуется И live,
+  // И в notices.jsonl (реплеится через /api/events) без seq — как dialog_answer.
+  // Дедуп идёт по контент-ключу type|stageId|phase|id|answer, так что один и тот
+  // же авто-ответ (WS + history) схлопывается в одну строку.
+  test('the same navigable auto_answered arriving via WS then history collapses to one row', async () => {
+    const answerPayload = { phase: 'implementation', id: 'q7', answer: 'Option B', from_options: true, question_title: 'Which?', dialog: true }
+    let resolveFetch: (value: unknown) => void = () => {}
+    const fetchPromise = new Promise((res) => {
+      resolveFetch = res
+    })
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: answerPayload })
+    })
+
+    await act(async () => {
+      resolveFetch({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { type: 'auto_answered', stage_id: 's1', data: answerPayload, timestamp: '2026-09-15T10:00:00.000Z' },
+          ]),
+      })
+      await fetchPromise
+    })
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
+    })
+  })
+
+  // Обратный порядок — ингест-путь onmessage: навигируемый авто-ответ уже
+  // вошёл из истории, теперь та же запись долетает по WS. Без ингест-дедупа
+  // (auto_answered с dialog:true должен в него входить) onmessage слепо
+  // аппендил бы вторую строку поверх уже засинканной истории.
+  test('navigable auto_answered already in history, then the same one arrives live — dedup keeps one row', async () => {
+    const answerPayload = { phase: 'implementation', id: 'q7', answer: 'Option B', from_options: true, question_title: 'Which?', dialog: true }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { type: 'auto_answered', stage_id: 's1', data: answerPayload, timestamp: '2026-09-15T10:00:00.000Z' },
+          ]),
+      }),
+    )
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
+    })
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: answerPayload })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
+  })
+
+  // Дедуп навигируемого авто-ответа НЕ должен зависеть от порядка ключей в
+  // payload (JSON.stringify его не гарантирует между live и history) — ключ
+  // строится из именованных полей type|stageId|phase|id|answer. Здесь WS и
+  // history несут один и тот же логический ответ с РАЗНЫМ порядком ключей.
+  test('navigable auto_answered dedupes regardless of payload key order (WS vs history)', async () => {
+    const wsPayload = { dialog: true, id: 'q7', phase: 'implementation', answer: 'Option B', from_options: true }
+    const historyPayload = { phase: 'implementation', id: 'q7', answer: 'Option B', dialog: true, from_options: true }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { type: 'auto_answered', stage_id: 's1', data: historyPayload, timestamp: '2026-09-15T10:00:00.000Z' },
+          ]),
+      }),
+    )
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+
+    await waitFor(() => {
+      expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
+    })
+
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: wsPayload })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
+  })
+
+  // Два РАЗНЫХ авто-ответа на один и тот же вопрос (тот же id/phase, разный
+  // answer) — это две самостоятельные записи и обе должны выжить: ключ включает
+  // answer.
+  test('two navigable auto_answered with same id/phase but different answer are both kept', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'yes', dialog: true } })
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'no', dialog: true } })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(2)
+  })
+
+  // Legacy/repair авто-ответы (без dialog-флага) НЕ проходят dialog-дедуп: два
+  // разных прогресс-сообщения ремонта с одинаковым id обязаны оба остаться.
+  test('two different repair auto_answered (no dialog flag) are both kept', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: '⚙️ step 1' } })
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: '⚙️ step 2' } })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(2)
+  })
+
+  // Тот же id/answer, но в РАЗНЫХ стадиях/фазах — разные записи (ключ включает
+  // stageId и phase), обе выживают.
+  test('navigable auto_answered with same id/answer but different stage or phase are both kept', () => {
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'yes', dialog: true } })
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's2', data: { phase: 'planning', id: 'q1', answer: 'yes', dialog: true } })
+      FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'implementation', id: 'q1', answer: 'yes', dialog: true } })
+    })
+
+    expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(3)
+  })
+
   test('re-fetches and merges /api/events after a reconnect completes (not just on initial mount)', () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })

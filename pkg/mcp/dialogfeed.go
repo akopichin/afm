@@ -52,3 +52,20 @@ func DialogFeedNotice(phase, id, title string) map[string]any {
 		"title": title,
 	}
 }
+
+// AutoAnsweredNotice returns the payload for a navigable auto_answered feed
+// message: the phase/id/answer/from_options an auto-answer already carries, plus
+// question_title (a bounded snippet of the question) and dialog:true. The
+// dialog:true marker is what tells the dashboard this notice is navigable to the
+// full dialog history — the non-navigable ⚙️ repair-progress notice never sets
+// it. The same map is used live and durable so their JSON stays byte-identical.
+func AutoAnsweredNotice(phase, id, answer string, fromOptions bool, questionTitle string) map[string]any {
+	return map[string]any{
+		"phase":          phase,
+		"id":             id,
+		"answer":         answer,
+		"from_options":   fromOptions,
+		"question_title": questionTitle,
+		"dialog":         true,
+	}
+}
