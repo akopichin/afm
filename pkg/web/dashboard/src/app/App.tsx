@@ -232,8 +232,18 @@ export function App(): ReactElement {
     setScrollToDialogTarget(null)
     const stage = stages.find((s) => s.id === stageId) ?? null
     const kind = stage === null ? null : attentionKindForStatus(stage.status)
-    if (kind !== null) openAttention(stageId)
-    else if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
+    if (kind !== null) {
+      openAttention(stageId)
+      return
+    }
+    // Нет ожидающего действия. Если пользователь в ГЛОБАЛЬНОМ виде (Feed/Cost/
+    // Full feed) — сохраняем его: клик по стадии в рейле не должен выдёргивать в
+    // историю (её план/диалог доступны кликом по detail-вкладке). Раньше live-
+    // стадия с историей (например уже отвеченный вопрос: showDialog остаётся true)
+    // насильно открывала dialog/plan-history, из-за чего возврат к такой стадии из
+    // Feed «прыгал» на вопросы вместо ленты.
+    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed') return
+    if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
     else if (stage?.showDialog === true) openHistory('dialog-history')
     else if (stage?.showPlan === true) openHistory('plan-history')
     else openFeed()

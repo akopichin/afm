@@ -466,6 +466,33 @@ describe('App', () => {
     })
   })
 
+  test('selecting a RUNNING stage with dialog history while on Feed stays on Feed', async () => {
+    // Репорт: пользователь ответил на вопрос (стадия снова running, но showDialog
+    // остаётся true — это «есть история диалога»), кликнул другую стадию, потом
+    // вернулся к ней — воркспейс прыгал в dialog-history вместо того чтобы
+    // остаться в Feed. Клик по стадии в рейле, пока ты в глобальном виде (Feed),
+    // не должен выдёргивать в историю: план/диалог доступны кликом по detail-вкладке.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Worker', 'running', { showPlan: false, showDialog: false }),
+        stageView('s2', 'Asker', 'running', { hasDialog: true, showDialog: true }),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Worker'))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+    fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+      expect(document.getElementById('dialog-section')).toBeNull()
+    })
+  })
+
   test('CRITICAL: a failed autonomous stage still shows the retry button', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

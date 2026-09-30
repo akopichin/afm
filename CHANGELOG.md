@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-30
 
+### Fix: selecting a stage from Feed no longer jumps into its dialog/plan history
+
+Clicking a stage in the rail while you're on **Feed** now keeps you on Feed instead of
+yanking the workspace into that stage's dialog or plan history. Previously a live stage
+that merely *had* history — for example a question you'd already answered (its dialog
+history persists) — would force the history view open every time you selected it, so
+returning to such a stage bounced you onto the old question rather than its Feed. The
+stage's plan/dialog is still one click away on the detail tab; a stage that genuinely
+needs action still auto-surfaces.
+
 ### Fix: attention actions arriving while you type are deferred, not dropped
 
 When a stage started waiting for you (a question, approval, pause, or failure) while
