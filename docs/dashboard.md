@@ -17,13 +17,17 @@ right (there is no three-column layout or bottom progress bar).
   Run metrics (Started / Elapsed / Idle / Backoff) live in the header, center.
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
   *selected stage's own* event history, capped at its last 200 events) plus one
-  contextual tab for the selected live/actionable stage, plus a permanent
+  contextual tab for the selected stage — live/actionable, or completed with a
+  plan or Q&A history to reopen — plus a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
   flow's last 1000 events across every stage. Feed always reflects whichever
   stage is selected — including an old, already-completed one, which used to
   show up empty once enough later activity had pushed it out of a single
   flow-wide window. Clicking a `pending` or `done` stage stays on Feed; read-only
-  history is not opened automatically. When a stage needs action the contextual
+  history is not opened automatically. A completed stage that has a plan or an
+  answered-question history still exposes that contextual detail tab, so its
+  **Plan | Dialog** history is always one click away — you just have to click the
+  tab, it never opens on its own. When a stage needs action the contextual
   tab is labelled by kind (**Approval / Question / Paused / Failed / Hook
   failed**) with a count and a glow, and the workspace auto-opens it — one
   active view at a time, filling the whole area. When several stages await

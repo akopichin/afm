@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-30
 
+### Improvement: a completed stage's plan and Q&A history are always reachable
+
+A finished (`done`) stage that has a plan or an answered-question history now shows a
+contextual detail tab in the workspace, giving you a one-click entry point back into
+its **Plan | Dialog** history. Previously such a stage exposed no detail tab once it
+completed, so its plan and dialog — though still stored and served — had no way to be
+reopened from the dashboard. Selecting the stage from the rail still stays on Feed and
+never forces the history open; the history opens only when you click the detail tab
+yourself. Stages with no plan and no dialog (for example a bare autonomous stage) get
+no tab, as before.
+
 ### Fix: codex verify no longer fails inside Docker
 
 The codex-based `verify` gate ran `codex -s read-only`, whose sandbox (bwrap) cannot

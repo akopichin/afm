@@ -394,9 +394,11 @@ describe('App', () => {
     })
   })
 
-  test('another stage awaits in Feed: a completed stage does not open a detail tab', async () => {
+  test('another stage awaits in Feed: a completed stage exposes a detail tab but stays on Feed', async () => {
     // Ждёт s2, а выбрана в рейле завершённая s1. Маяк указывает на чужое
-    // ожидание (s2), а клик по завершённой стадии оставляет Feed активным.
+    // ожидание (s2). Клик по завершённой стадии оставляет Feed активным, но у
+    // s1 (есть план) теперь появляется кликабельная detail-вкладка «Alpha» —
+    // явная точка входа в историю, не открываемая автоматически.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [
@@ -415,7 +417,7 @@ describe('App', () => {
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-      expect(labels.some((l) => l === 'Alpha')).toBe(false)
+      expect(labels.some((l) => l === 'Alpha')).toBe(true) // detail-вкладка завершённой s1
       expect(labels.some((l) => /Approval/.test(l))).toBe(true) // и маяк чужого ожидания
     })
   })
@@ -435,12 +437,13 @@ describe('App', () => {
     // Воркспейс авто-открывает ожидание s2.
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Waiter'))
 
-    // Кликаем по s1 — история завершённой стадии не открывается автоматически.
+    // Кликаем по s1 — история завершённой стадии не открывается автоматически,
+    // но detail-вкладка «Done stage» становится доступной как точка входа.
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
 
     const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-    expect(labels.some((l) => /Done stage/.test(l))).toBe(false)
+    expect(labels.some((l) => /Done stage/.test(l))).toBe(true)
     expect(labels.some((l) => /Approval/.test(l))).toBe(true)
   })
 
@@ -460,10 +463,121 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+      // detail-вкладка появилась (точка входа в историю), но история не открыта.
+      expect(screen.getAllByRole('tab').some((t) => t.textContent === 'Both')).toBe(true)
       expect(screen.queryByRole('group', { name: /history view/i })).not.toBeInTheDocument()
       expect(document.getElementById('dialog-section')).toBeNull()
       expect(document.getElementById('plan-section')).toBeNull()
     })
+  })
+
+  test('done stage with plan: clicking its detail tab opens plan history', async () => {
+    // Завершённая обычная стадия с планом. Клик по строке рейла оставляет Feed,
+    // но detail-вкладка «Alpha» ведёт в историю плана.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'done', { showPlan: true, showDialog: false })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    const detailTab = await screen.findByRole('tab', { name: 'Alpha' })
+    fireEvent.click(detailTab)
+
+    await waitFor(() => {
+      expect(detailTab).toHaveAttribute('aria-selected', 'true')
+      expect(document.getElementById('plan-section')).not.toBeNull()
+      expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'false')
+    })
+  })
+
+  test('done stage with dialog only: clicking its detail tab opens dialog history', async () => {
+    // Non-interactive/авто-отвеченная завершённая стадия: только диалог, без плана.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Alpha', 'done', { hasDialog: true, showPlan: false, showDialog: true })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    const detailTab = await screen.findByRole('tab', { name: 'Alpha' })
+    fireEvent.click(detailTab)
+
+    await waitFor(() => {
+      expect(document.getElementById('dialog-section')).not.toBeNull()
+      expect(document.getElementById('plan-section')).toBeNull()
+    })
+  })
+
+  test('done stage with plan and dialog: detail tab opens dialog history, Plan switch shows plan', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Both', 'done', { hasDialog: true, showPlan: true, showDialog: true })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Both')).toBeInTheDocument())
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    const detailTab = await screen.findByRole('tab', { name: 'Both' })
+    fireEvent.click(detailTab)
+
+    // По умолчанию открывается диалог (showDialog → dialog-history), а рядом есть
+    // переключатель Plan|Dialog.
+    await waitFor(() => {
+      expect(document.getElementById('dialog-section')).not.toBeNull()
+      expect(screen.getByRole('group', { name: /history view/i })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Plan$/ }))
+    await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
+  })
+
+  test('auto_approve done stage: detail tab exposes the plan history', async () => {
+    // auto_approve влияет только на awaiting_approval; завершённая auto_approve
+    // стадия семантически идентична обычной done с планом — detail-вкладка ведёт
+    // в план.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Auto', 'done', { autoApprove: true, showPlan: true, showDialog: false })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Auto')).toBeInTheDocument())
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    const detailTab = await screen.findByRole('tab', { name: 'Auto' })
+    fireEvent.click(detailTab)
+
+    await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
+  })
+
+  test('auto_approve done stage with plan and dialog: detail tab reaches both histories', async () => {
+    // Замыкает матрицу: auto_approve + и план, и диалог. По умолчанию открывается
+    // диалог, переключатель Plan даёт план — как у обычной done с обоими.
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'AutoBoth', 'done', { autoApprove: true, hasDialog: true, showPlan: true, showDialog: true })],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('AutoBoth')).toBeInTheDocument())
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+
+    const detailTab = await screen.findByRole('tab', { name: 'AutoBoth' })
+    fireEvent.click(detailTab)
+
+    await waitFor(() => {
+      expect(document.getElementById('dialog-section')).not.toBeNull()
+      expect(screen.getByRole('group', { name: /history view/i })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Plan$/ }))
+    await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
   })
 
   test('selecting a RUNNING stage with dialog history while on Feed stays on Feed', async () => {
@@ -1031,8 +1145,9 @@ describe('App', () => {
     // detail-таб выбранной стадии и attention-маяк оказывались ПОСЛЕ Cost —
     // Cost «застревала» посередине списка. Cost должна всегда идти предпоследней
     // (Full feed, Task 6, теперь всегда самая последняя).
-    // s1 done с планом — клик по ней оставляет Feed; s2 ждёт аппрув — отдельный
-    // маяк Approval. Порядок: Feed, Approval (маяк), Cost, Full feed.
+    // s1 done с планом — клик по ней оставляет Feed, но добавляет detail-вкладку
+    // «Greet»; s2 ждёт аппрув — отдельный маяк Approval. Порядок:
+    // Feed, Greet (detail), Approval (маяк), Cost, Full feed.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [
@@ -1053,7 +1168,7 @@ describe('App', () => {
       expect(labels[0]).toBe('Feed')
       expect(labels[labels.length - 1]).toBe('Full feed')
       expect(labels[labels.length - 2]).toBe('Cost')
-      expect(labels).not.toContain('Greet')
+      expect(labels).toContain('Greet') // detail-вкладка завершённой s1
       expect(labels.some((l) => /Approval/.test(l))).toBe(true)
     })
 

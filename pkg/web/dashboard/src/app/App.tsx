@@ -428,11 +428,16 @@ export function App(): ReactElement {
         count: countByKind(attnItems, contextKind),
         glow: true,
       })
-    } else if (!isGlobalView || (wsState.view === 'feed' && workspaceStage.status !== 'done' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
+    } else if (!isGlobalView || (wsState.view === 'feed' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
       // Тело показывает историю/детали выбранной стадии — вкладка это и отражает.
-      // Не рисуем detail-таб в трёх случаях:
-      //   • wsState.view === 'cost' — глобальный отчёт, не привязан ни к какой
-      //     стадии, тело не показывает историю выбранной стадии вовсе (FIX 1);
+      // Завершённая (done) стадия с планом или диалогом тоже получает detail-таб:
+      // это единственная точка входа в её историю Plan/Dialog из Feed (rail-click
+      // остаётся на Feed и не открывает историю автоматически).
+      // Не рисуем detail-таб в глобальном виде, если:
+      //   • wsState.view — cost или full-feed — глобальный отчёт/лента, не
+      //     привязанные к стадии, тело не показывает историю выбранной стадии
+      //     вовсе (только view === 'feed' пускает detail-таб, FIX 1);
+      //   • стадия ещё не стартовала (pending) — плана и диалога у неё нет;
       //   • duplicatesBeacon — он вёл бы в то же ожидание, что и glow-маяк
       //     (в Feed у стадии с собственным ожиданием), т.е. дубль маяка;
       //   • в Feed у стадии нет ни плана, ни диалога (напр. завершённая
