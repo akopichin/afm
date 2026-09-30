@@ -16,6 +16,9 @@ tmp/
 docs/plans/
 .DS_Store
 
+# локальный dev-pipeline флоу (не коммитим)
+/dev-pipeline.yaml
+
 # React-дашборд: npm-зависимости и runtime-данные afm
 pkg/web/dashboard/node_modules/
 pkg/web/dashboard/.afm/

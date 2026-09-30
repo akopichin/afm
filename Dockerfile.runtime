@@ -105,5 +105,11 @@ RUN chmod +x /usr/local/bin/cursor-as-claude
 COPY scripts/codex-as-claude.sh /usr/local/bin/codex-as-claude
 RUN chmod +x /usr/local/bin/codex-as-claude
 
+# afm-telegram-notify: lifecycle-hook нотификатор в Telegram (подключается флоу
+# через hooks:, секреты — из hook env:file:). Запекаем в образ, чтобы флоу с
+# hook'ом работал без монтирования скрипта.
+COPY scripts/telegram-notify.sh /usr/local/bin/afm-telegram-notify
+RUN chmod +x /usr/local/bin/afm-telegram-notify
+
 WORKDIR /project
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
