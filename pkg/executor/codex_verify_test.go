@@ -59,7 +59,7 @@ func TestCodexAsClaude_VerifyMode_ReadOnlyNoBypass(t *testing.T) {
 {"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodex,
 		"HOME="+t.TempDir(),
 		"CODEX_VERIFY=1",
@@ -105,7 +105,7 @@ func TestCodexAsClaude_VerifyMode_DockerFullAccess(t *testing.T) {
 {"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodex,
 		"HOME="+t.TempDir(),
 		"CODEX_VERIFY=1",
@@ -155,7 +155,7 @@ func TestCodexAsClaude_VerifyMode_UsesOutputLastMessageWhenSupported(t *testing.
 {"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodex,
 		"HOME="+t.TempDir(),
 		"CODEX_VERIFY=1",
@@ -210,7 +210,7 @@ func TestCodexAsClaude_VerifyMode_FallsBackToAggregatedWhenUnsupported(t *testin
 {"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodex,
 		"HOME="+t.TempDir(),
 		"CODEX_VERIFY=1",
@@ -253,7 +253,7 @@ func TestCodexAsClaude_NonVerifyMode_UnchangedByDefault(t *testing.T) {
 {"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodex,
 		"HOME="+t.TempDir(),
 		// CODEX_VERIFY deliberately unset.
@@ -306,7 +306,7 @@ func TestCodexAsClaude_VerifyMode_AggregatesNoToolRows(t *testing.T) {
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(), "CODEX_BIN="+fakeCodex, "HOME="+t.TempDir(), "CODEX_VERIFY=1")
+	cmd.Env = append(codexBaseEnv(), "CODEX_BIN="+fakeCodex, "HOME="+t.TempDir(), "CODEX_VERIFY=1")
 	cmd.Stdin = strings.NewReader("review")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

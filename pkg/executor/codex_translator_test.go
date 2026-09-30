@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +46,35 @@ func writeFakeCodex(t *testing.T, jsonlOutput string, exitCode int) string {
 	return path
 }
 
+// codexControlVars are the environment variables scripts/codex-as-claude.sh
+// reads to decide its behavior. Tests invoke the script directly (bypassing the
+// executor's RunVerifyAgent, which strips these in production), so they must NOT
+// inherit ambient values: a real `afm run` executes `go test ./...` with these
+// vars set in its environment (e.g. CODEX_VERIFY=1, AFM_IN_DOCKER=1), which would
+// make the script take a different branch than the test asserts. Stripping them
+// from the base env makes each script test hermetic — it sees only what it sets.
+var codexControlVars = []string{
+	"AFM_IN_DOCKER", "CODEX_BIN", "CODEX_HOME", "CODEX_MODEL",
+	"CODEX_SANDBOX", "CODEX_VERBOSE", "CODEX_VERIFY",
+}
+
+// codexBaseEnv returns os.Environ() with every codexControlVars entry removed —
+// a hermetic base for codex-script tests to append their own settings onto.
+func codexBaseEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			name = kv[:i]
+		}
+		if !slices.Contains(codexControlVars, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // runCodexScript runs the real scripts/codex-as-claude.sh with CODEX_BIN
 // pointed at fakeCodexPath, isolating HOME (and hence ~/.codex/config.toml) to
 // an empty temp dir unless the test overrides it via extraEnv, so tests never
@@ -53,7 +83,7 @@ func runCodexScript(t *testing.T, fakeCodexPath, prompt string, extraEnv ...stri
 	t.Helper()
 	cmd := exec.Command("bash", codexScriptPath(t))
 	isolatedHome := t.TempDir()
-	env := append(os.Environ(),
+	env := append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodexPath,
 		"HOME="+isolatedHome,
 	)
@@ -218,7 +248,7 @@ func TestCodexAsClaude_ModelPrecedence_EnvOverridesToml(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(codexBaseEnv(),
 		"CODEX_BIN="+fakeCodex,
 		"HOME="+home,
 		"CODEX_MODEL=env-model-should-win",
@@ -260,7 +290,7 @@ func TestCodexAsClaude_ModelFallsBackToTopLevelTomlOnly(t *testing.T) {
 	// specific HOME (holding the fixture config.toml above), so it builds the
 	// command directly instead of using the shared helper.
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(), "CODEX_BIN="+fakeCodex, "HOME="+home)
+	cmd.Env = append(codexBaseEnv(), "CODEX_BIN="+fakeCodex, "HOME="+home)
 	cmd.Stdin = strings.NewReader("x")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -465,7 +495,7 @@ func TestCodexAsClaude_NonVerify_StreamsLive(t *testing.T) {
 		3)
 
 	cmd := exec.Command("bash", codexScriptPath(t))
-	cmd.Env = append(os.Environ(), "CODEX_BIN="+slow, "HOME="+t.TempDir())
+	cmd.Env = append(codexBaseEnv(), "CODEX_BIN="+slow, "HOME="+t.TempDir())
 	cmd.Stdin = strings.NewReader("go")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
