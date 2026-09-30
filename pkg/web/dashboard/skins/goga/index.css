@@ -155,7 +155,7 @@
    одноимённые правила base (равная специфичность, более поздний порядок в
    каскаде), без .theme-goga-скоупинга старой архитектуры. */
 
-/* Логотип-слово: goga показывает двухцветный wordmark «GOga» — «GO» заглавными
+/* Логотип-слово: goga показывает двухцветный wordmark «Goga» — «Go»
    цветом --mint (teal/зелёный), «ga» цветом --ink (белый), системным sans-serif.
    Текст .gh-wordmark («afm») скрыт (font-size:0); слово собирается из
    ::before/::after, чтобы не делать React-компонент тема-зависимым.
@@ -169,7 +169,7 @@
   margin-left: -8px;
 }
 .gh-wordmark::before {
-  content: 'GO';
+  content: 'Go';
   font-size: 15px;
   font-weight: 700;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
