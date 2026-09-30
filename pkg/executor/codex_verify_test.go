@@ -83,6 +83,56 @@ func TestCodexAsClaude_VerifyMode_ReadOnlyNoBypass(t *testing.T) {
 	}
 }
 
+// TestCodexAsClaude_VerifyMode_DockerFullAccess проверяет docker-исключение:
+// внутри собственного контейнера afm (AFM_IN_DOCKER=1) codex read-only sandbox
+// (bwrap) не может создать namespace, поэтому verify запускается «на максимум»
+// как обычный агент — `--dangerously-bypass-approvals-and-sandbox -s
+// danger-full-access`, БЕЗ `-s read-only`. Контейнер и есть граница изоляции
+// (тот же trust, что у не-verify пути). Флаг bypass — version-agnostic; `-a`
+// на `codex exec` не принимается codex'ом из закреплённого образа (0.155.x).
+func TestCodexAsClaude_VerifyMode_DockerFullAccess(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	fakeCodex := writeFakeCodexWithHelp(t, argvFile, "no special flags here",
+		"", `{"type":"item.completed","item":{"type":"agent_message","text":"verdict text"}}
+{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}`, 0)
+
+	cmd := exec.Command("bash", codexScriptPath(t))
+	cmd.Env = append(os.Environ(),
+		"CODEX_BIN="+fakeCodex,
+		"HOME="+t.TempDir(),
+		"CODEX_VERIFY=1",
+		"AFM_IN_DOCKER=1",
+	)
+	cmd.Stdin = strings.NewReader("verify this stage")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+
+	argvData, rErr := os.ReadFile(argvFile)
+	if rErr != nil {
+		t.Fatalf("read argv file: %v\nscript output:\n%s", rErr, out)
+	}
+	argv := string(argvData)
+	if !strings.Contains(argv, "-s danger-full-access") {
+		t.Errorf("argv missing -s danger-full-access in docker verify: %q", argv)
+	}
+	if !strings.Contains(argv, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Errorf("argv missing --dangerously-bypass-approvals-and-sandbox in docker verify: %q", argv)
+	}
+	if strings.Contains(argv, "-s read-only") {
+		t.Errorf("argv must not contain -s read-only inside the container: %q", argv)
+	}
+}
+
 // TestCodexAsClaude_VerifyMode_UsesOutputLastMessageWhenSupported проверяет,
 // что при поддержке --output-last-message скрипт использует его содержимое
 // как финальный текст, а не агрегированный agent_message (который тут

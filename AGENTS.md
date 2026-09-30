@@ -436,9 +436,17 @@ hooks:
   через `os.OpenRoot(runDir)` (client-supplied `verID`/stage id не выйдет за
   runDir через `..`/symlink); `report_path` в событии — только для отображения.
 - **Read-only Codex adapter — `scripts/codex-as-claude.sh`.** Режим
-  `CODEX_VERIFY=1` (ставит только `executor.RunVerifyAgent`): без
-  `--dangerously-bypass-...`, всегда `-s read-only`, без эскалации, финальный ответ
-  через `--output-last-message`.
+  `CODEX_VERIFY=1` (ставит только `executor.RunVerifyAgent`) на **хосте**: без
+  `--dangerously-bypass-...`, `-s read-only`, без эскалации — сильная ОС-гарантия
+  read-only (Seatbelt/Landlock). **Docker-исключение (`AFM_IN_DOCKER=1`):** codex
+  read-only sandbox (bwrap) не может создать namespace в непривилегированном
+  контейнере («bwrap: No permissions to create a new namespace») и падает на
+  КАЖДОЙ команде → verify невозможен. Поэтому в своём контейнере адаптер идёт
+  «на максимум» как обычный агент: `--dangerously-bypass-approvals-and-sandbox -s
+  danger-full-access` (без sandbox, без bwrap). Именно этот флаг, а не `-a never`:
+  codex из закреплённого образа (0.155.x) не принимает `-a` на `exec`, а bypass
+  version-agnostic. ОС-гарантии read-only тут нет — граница изоляции = сам
+  контейнер (тот же trust, что у не-verify пути). Финал — `--output-last-message`.
 - **`executor.Config.VerifyMode`/`RunVerifyAgent`** (`pkg/executor/executor.go`):
   свежая сессия (без `--resume`), без `AFM_STAGE_DIR`. Окружение фильтруется:
   срезает inherited `CODEX_VERIFY`, `IsCrossAgentTransportSecret`-матчи (секреты

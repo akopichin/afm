@@ -14,10 +14,16 @@
 #   CODEX_VERBOSE  — set to 1 to include command execution output (default: 0)
 #   CODEX_HOME     — codex config dir (default: ~/.codex), read-only, only to
 #                    resolve a fallback model id for the usage envelope below.
-#   CODEX_VERIFY   — set to 1 for a read-only AI-verify pass (set by
-#                    Executor.RunVerifyAgent, pkg/executor). Never passes the
-#                    bypass/full-access flags, always requests -s read-only,
-#                    and never escalates to broader access on error. Captures
+#   CODEX_VERIFY   — set to 1 for an AI-verify pass (set by
+#                    Executor.RunVerifyAgent, pkg/executor). On the HOST: strong
+#                    OS-enforced read-only — requests -s read-only, never the
+#                    bypass/full-access flags, never escalates on error. Inside
+#                    afm's own container (AFM_IN_DOCKER=1):
+#                    --dangerously-bypass-approvals-and-sandbox -s
+#                    danger-full-access instead (the same flag the normal agent
+#                    path uses), because codex's read-only sandbox (bwrap) can't
+#                    create a namespace in an unprivileged container; the
+#                    container itself is the isolation boundary. Captures
 #                    exactly the final answer via --output-last-message when
 #                    the installed codex CLI supports it (probed via
 #                    `codex exec --help`, no network call), otherwise falls
@@ -86,9 +92,27 @@ supports_output_last_message() {
 # non-verify behavior must remain byte-identical to before this feature.
 last_msg_file=""
 if [[ "$CODEX_VERIFY" == "1" ]]; then
-    # Read-only verify mode: never the bypass/full-access flags, always an
-    # explicit supported read-only sandbox, never escalate on error.
-    codex_args=(exec --json -s read-only)
+    # AI-verify pass. The permission model is chosen by the isolation boundary:
+    if [[ "${AFM_IN_DOCKER:-}" == "1" ]]; then
+        # Inside afm's OWN container the workspace is already isolated — the same
+        # trust basis as the normal (non-verify) agent path. codex's read-only
+        # sandbox (bwrap) can't create a user namespace in an unprivileged
+        # container ("bwrap: No permissions to create a new namespace") and would
+        # fail EVERY command, making verify impossible. So run with full access,
+        # exactly like the normal (non-verify) agent path does there:
+        # --dangerously-bypass-approvals-and-sandbox -s danger-full-access (no
+        # sandbox → no bwrap). NB: the pinned image's codex (0.155.x) does NOT
+        # accept `-a/--ask-for-approval` on `exec`, so the bypass flag — which
+        # skips approvals AND sandboxing in one, and is version-agnostic — is
+        # what we use. There is no OS-level read-only guard here; the container
+        # IS the isolation boundary.
+        codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox -s danger-full-access)
+    else
+        # On the host codex's read-only sandbox (Seatbelt/Landlock) works — keep
+        # the strong OS-enforced read-only guarantee: never the bypass/full-access
+        # flags, always an explicit read-only sandbox, never escalate on error.
+        codex_args=(exec --json -s read-only)
+    fi
     if supports_output_last_message; then
         last_msg_file=$(mktemp)
         codex_args+=(--output-last-message "$last_msg_file")

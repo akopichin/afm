@@ -5,6 +5,18 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-09-30
 
+### Fix: codex verify no longer fails inside Docker
+
+The codex-based `verify` gate ran `codex -s read-only`, whose sandbox (bwrap) cannot
+create a user namespace inside an unprivileged container — every read-only command
+failed with "bwrap: No permissions to create a new namespace", so codex could not
+read the plan/diff it was meant to review and the stage failed as inconclusive.
+Inside afm's own container (`AFM_IN_DOCKER=1`) the verify adapter now runs codex with
+`--dangerously-bypass-approvals-and-sandbox -s danger-full-access` — no sandbox, no
+bwrap — matching the trust model of the regular agent path (the container is the
+isolation boundary). On the host, codex verify keeps its strong OS-enforced read-only
+sandbox unchanged.
+
 ### Fix: selecting a stage from Feed no longer jumps into its dialog/plan history
 
 Clicking a stage in the rail while you're on **Feed** now keeps you on Feed instead of
