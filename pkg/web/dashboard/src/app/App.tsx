@@ -22,11 +22,12 @@ import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting } from '../hooks/use-attention'
-import { attentionKindForStatus, countByKind, useWorkspaceView, type AttentionKind } from '../hooks/use-workspace-view'
+import { attentionKindForStatus, countByKind, sig, useWorkspaceView, type AttentionKind } from '../hooks/use-workspace-view'
 import { useTitleFlash } from '../hooks/use-title-flash'
 import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
 import { usePauseOnFocus } from '../hooks/use-pause-on-focus'
+import { useIsEditing } from '../hooks/use-is-editing'
 import { SIGNIFICANT_EVENT_TYPES } from '../types'
 
 // Подписи контекстной вкладки воркспейса по виду attention (Approval/Question/…).
@@ -160,7 +161,14 @@ export function App(): ReactElement {
   // attention и выкинуть пользователя из композера (shouldSuppressAttention).
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
   const editing = useIsEditing() || anyModalOpen || selfOwnedActive
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing)
+  // ownedHandledSigs — подписи НАШИХ же paused-эпизодов (Pause on focus): их
+  // auto-open подавляется навсегда, а не откладывается. Иначе после Send владение
+  // снимается (clearOp) до refresh /api/status, и устаревший paused всплыл бы
+  // ложной панелью вместо отложенного вопроса другой стадии.
+  const ownedHandledSigs = stages
+    .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
+    .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing, ownedHandledSigs)
 
   // reconcile «Pause on focus»-владения с авторитетным статусом: если владеемая
   // стадия внешне ушла в running (внешний Continue) или завершилась — забыть
@@ -664,35 +672,6 @@ export function App(): ReactElement {
       )}
     </FileBrowserProvider>
   )
-}
-
-// isEditableFocused — сейчас в фокусе редактируемый элемент (textarea/input/
-// contenteditable)? Используется для suppression авто-открытия attention, чтобы
-// не выдёргивать пользователя из набора текста (rule 9).
-function isEditableFocused(): boolean {
-  const el = document.activeElement
-  if (el === null) return false
-  const tag = el.tagName
-  return tag === 'TEXTAREA' || tag === 'INPUT' || (el as HTMLElement).isContentEditable === true
-}
-
-// useIsEditing — реактивный сигнал «сейчас в фокусе редактируемый элемент».
-// В отличие от разовой проверки isEditableFocused(), пригоден как зависимость
-// (обновляется по focusin/focusout), поэтому его можно передать в workspace-
-// редьюсер как suppressed: пока пользователь печатает, прибывшее ожидание лишь
-// светится на вкладке, но фокус из ввода не крадётся (rule 9).
-function useIsEditing(): boolean {
-  const [editing, setEditing] = useState(false)
-  useEffect(() => {
-    const update = (): void => setEditing(isEditableFocused())
-    document.addEventListener('focusin', update)
-    document.addEventListener('focusout', update)
-    return () => {
-      document.removeEventListener('focusin', update)
-      document.removeEventListener('focusout', update)
-    }
-  }, [])
-  return editing
 }
 
 function buildWebSocketUrl(): string {

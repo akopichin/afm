@@ -27,7 +27,14 @@ right (there is no three-column layout or bottom progress bar).
   tab is labelled by kind (**Approval / Question / Paused / Failed / Hook
   failed**) with a count and a glow, and the workspace auto-opens it — one
   active view at a time, filling the whole area. When several stages await
-  action, prev/next navigation steps through the queue.
+  action, prev/next navigation steps through the queue. If an action arrives
+  while you're mid-task — typing in a note field, with an overlay open, or while
+  a **Pause on focus** operation is in flight — the workspace does **not** steal
+  focus: the contextual tab appears and glows as a beacon, and the action opens
+  automatically the moment you finish (blur the field, close the overlay), as long
+  as it's still current. It is never silently dropped. Merely focusing a checkbox
+  (such as the **Pause on focus** toggle) does not count as typing, so a question
+  arriving then opens right away.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.

@@ -29,6 +29,10 @@ type StageViewOverrides = {
   isScript?: boolean
   showPlan?: boolean
   showDialog?: boolean
+  // updatedAt параметризует episode-подпись attention (stageId+kind+updatedAt).
+  // По умолчанию '' — так же, как раньше, чтобы существующие тесты не менялись;
+  // тесты про повторные эпизоды одной стадии задают разные t1/t2.
+  updatedAt?: string
 }
 
 // Строит один элемент нового wire-формата stages: []StageView (см. Task 2's
@@ -46,7 +50,7 @@ function stageView(id: string, name: string, status: string, overrides: StageVie
     id,
     name,
     status,
-    updated_at: '',
+    updated_at: overrides.updatedAt ?? '',
     interactive,
     autonomous,
     auto_approve: overrides.autoApprove ?? false,
@@ -1457,5 +1461,413 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('draft note'))
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
     expect(posts).not.toContain('continue')
+  })
+
+  // --- Deferred attention: не терять авто-переход из Feed (Task 4) ---
+  //
+  // ВАЖНО (jsdom): фокус драйвится ТОЛЬКО реальными element.focus()/.blur() —
+  // именно они выставляют document.activeElement и эмитят focusin/focusout,
+  // которые слушает useIsEditing. fireEvent.focus/blur этого НЕ делают, поэтому
+  // suppression от ввода под ними не наступает (см. план «Как тесты обязаны
+  // драйвить фокус»). Где suppression даёт owned-pause/overlay, а не текстовый
+  // фокус — источник другой (selfOwnedActive/anyModalOpen), и остаточный фокус
+  // textarea снимается blur'ом, чтобы не подмешивать useIsEditing.
+
+  // Хелпер: значимое WS-событие → App ре-запрашивает /api/status (мутируемый
+  // payload уже обновлён вызывающим ДО этого вызова).
+  function emitStageStatus(stageId: string, status: string): void {
+    const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+    act(() => {
+      ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status }, stage_id: stageId }) })
+    })
+  }
+
+  const QUESTION_FLAGS = { interactive: true, hasDialog: true, showDialog: true } as const
+
+  test('Question while Feed textarea is focused: Feed stays, beacon shows, draft preserved; blur auto-opens', async () => {
+    let asking = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Beta', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {}),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    // Фокус composer'а через РЕАЛЬНЫЙ .focus() → useIsEditing=true (suppression).
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    expect(document.activeElement).toBe(composer)
+    fireEvent.change(composer, { target: { value: 'my draft' } })
+
+    // Пока идёт ввод — s2 задаёт вопрос: он ОТКЛАДЫВАЕТСЯ (маяк), фокус не крадётся.
+    asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    // Черновик цел — воркспейс не размонтировался под suppression.
+    expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('my draft')
+
+    // Снятие фокуса — всё ещё актуальный вопрос авто-открывается.
+    act(() => composer.blur())
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+  })
+
+  test('Question resolves before blur: no late auto-open, no transient navigation', async () => {
+    let asking = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Beta', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {}),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    fireEvent.change(composer, { target: { value: 'my draft' } })
+
+    // Вопрос пришёл (отложен под фокусом), маяк засветился.
+    asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(true))
+
+    // Вопрос РАЗРЕШИЛСЯ до blur (ответ пришёл в другой вкладке/через API) —
+    // дожидаемся исчезновения маяка (снимок running применён).
+    asking = false
+    emitStageStatus('s2', 'running')
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(false))
+
+    // Только теперь blur: release нечего открывать — ни позднего auto-open, ни
+    // мелькнувшей навигации в Question (иначе detail-title стал бы 'Beta').
+    act(() => composer.blur())
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(document.getElementById('detail-title')).toHaveTextContent('Alpha')
+    expect(document.getElementById('dialog-section')).toBeNull()
+  })
+
+  test('Overlay defers, close releases: question stays a beacon under a modal, auto-opens on close', async () => {
+    let asking = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Beta', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {}),
+        stageView('s3', 'Gamma', 'pending', { showPlan: false, showDialog: false }),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    // Открываем модалку pre-note на pending s3 — anyModalOpen=true (overlay
+    // suppression). Проводка App→hook, которую reducer-тест с абстрактным
+    // suppressed не доказывает. Кебаб именно s3 (у running s1 тоже есть свой).
+    const s3Kebab = within(document.querySelector('[data-stage-id="s3"]') as HTMLElement).getByRole('button', { name: /more actions/i })
+    fireEvent.click(s3Kebab)
+    fireEvent.click(screen.getByText('Add note (before start)'))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+
+    // Вопрос s2 приходит, пока открыт overlay: только светится, Feed под ним цел.
+    asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    // Шорткат к ждущему действию виден в шапке модалки (Finding #4).
+    expect(screen.getByRole('button', { name: /Question waiting/ })).toBeInTheDocument()
+
+    // Закрываем overlay — актуальный вопрос авто-открывается.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+  })
+
+  test('Pause-on-focus op does not consume another stage\'s question; finishing the op releases it', async () => {
+    localStorage.setItem('afm.pauseOnFocus', 'true')
+
+    let s1Status = 'running'
+    let s2Status = 'running'
+    const posts: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            accounting: { health: 'ok', has_data: false, show_money: true },
+            stages: [
+              stageView('s1', 'Alpha', s1Status),
+              stageView('s2', 'Beta', s2Status, s2Status === 'awaiting_user_input' ? QUESTION_FLAGS : {}),
+            ],
+          }),
+        } as Response
+      }
+      if (method === 'POST' && url.includes('/pause')) { posts.push('pause'); s1Status = 'paused'; return { ok: true, json: async () => ({}) } as Response }
+      if (method === 'POST' && url.includes('/continue')) { posts.push('continue'); s1Status = 'running'; return { ok: true, json: async () => ({}) } as Response }
+      if (method === 'POST' && url.includes('/revise')) { posts.push('revise'); return { ok: true, json: async () => ({}) } as Response }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    // Фокус composer'а на A ставит НАШУ паузу (self-owned) и заносит черновик.
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    fireEvent.change(composer, { target: { value: 'draft note' } })
+    await waitFor(() => expect(posts).toContain('pause'))
+
+    // Статус отдаёт A на паузе → владение подтверждается (баннер паузы).
+    emitStageStatus('s1', 'paused')
+    await waitFor(() => expect(screen.getByText(/Stage paused/)).toBeInTheDocument())
+
+    // Blur с НЕпустым черновиком: владение сохраняется, а textarea-фокус снят —
+    // единственный источник suppression теперь selfOwnedActive, не useIsEditing.
+    act(() => composer.blur())
+    expect(document.activeElement).not.toBe(composer)
+
+    // Пока держим owned-паузу — B задаёт вопрос: он ОТКЛАДЫВАЕТСЯ.
+    s2Status = 'awaiting_user_input'
+    emitStageStatus('s2', 'awaiting_user_input')
+    // Ждём именно ПРИМЕНЕНИЯ snapshot с вопросом B (data-status строки s2), а не
+    // маяка Paused самой A — иначе тест ложно-зелёный: условие уже выполнено
+    // паузой A ещё до того, как вопрос B вообще пришёл.
+    await waitFor(() =>
+      expect(document.querySelector('[data-stage-id="s2"][data-status="awaiting_user_input"]')).not.toBeNull(),
+    )
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('draft note')
+
+    // Завершаем op отправкой (continue → revise): владение снимается.
+    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    await waitFor(() => expect(posts).toContain('revise'))
+
+    // Авторитетный статус: A снова running (владения нет), B всё ещё ждёт —
+    // отдельное событие (дедуп ленты схлопнул бы повтор того же status s2) →
+    // B авто-открывается.
+    emitStageStatus('s1', 'running')
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+  })
+
+  test('self-owned paused does not flash a false Paused panel after Send before /api/status catches up', async () => {
+    // Регрессия (codex code-review р2): handleSend снимает владение (clearOp) СРАЗУ
+    // после revise — до того как /api/status заменит локальный paused на running.
+    // В этот зазор suppression отпущен, а стадия ещё paused: её paused-эпизод НЕ
+    // должен всплыть ложной attention-панелью. Здесь /continue НЕ меняет статус
+    // (симулируем лаг WS/poll), поэтому A остаётся paused после Send.
+    localStorage.setItem('afm.pauseOnFocus', 'true')
+    let s1Status = 'running'
+    const posts: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url.includes('/api/status')) {
+        return { ok: true, json: async () => ({ flow_name: 'demo', stages: [stageView('s1', 'Alpha', s1Status)] }) } as Response
+      }
+      if (method === 'POST' && url.includes('/pause')) { posts.push('pause'); s1Status = 'paused'; return { ok: true, json: async () => ({}) } as Response }
+      // continue НАМЕРЕННО не трогает s1Status — статус ещё не догнал (лаг).
+      if (method === 'POST' && url.includes('/continue')) { posts.push('continue'); return { ok: true, json: async () => ({}) } as Response }
+      if (method === 'POST' && url.includes('/revise')) { posts.push('revise'); return { ok: true, json: async () => ({}) } as Response }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    fireEvent.change(composer, { target: { value: 'draft note' } })
+    await waitFor(() => expect(posts).toContain('pause'))
+    emitStageStatus('s1', 'paused') // A/paused приходит под нашим владением → consumed.
+    await waitFor(() => expect(screen.getByText(/Stage paused/)).toBeInTheDocument())
+
+    // Send: continue → revise, затем clearOp (владение снято) — А ещё paused.
+    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    await waitFor(() => expect(posts).toContain('revise'))
+
+    // Зазор: владение снято, suppression отпущен, A всё ещё paused. Триггерим
+    // refresh (тот же paused-статус). A НЕ должен авто-открыть Paused-панель —
+    // остаёмся в Feed (эпизод уже handled, пока держали владение).
+    emitStageStatus('s1', 'paused')
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  test('Pause checkbox focus is not editing: a question auto-opens immediately', async () => {
+    let asking = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Beta', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {}),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    // Фокус на checkbox `Pause on focus` — клик сам по себе фокус в jsdom не
+    // гарантирует, поэтому .focus() + assert activeElement (denylist → не editing).
+    const checkbox = screen.getByRole('checkbox')
+    act(() => checkbox.focus())
+    expect(document.activeElement).toBe(checkbox)
+
+    // Вопрос приходит — suppression'а нет, авто-открытие сразу.
+    asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+  })
+
+  test('Manual beacon open during suppression: episode does not auto-open again after release', async () => {
+    let asking = false
+    let s3done = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        stageView('s2', 'Beta', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {}),
+        stageView('s3', 'Gamma', s3done ? 'done' : 'running'),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    fireEvent.change(composer, { target: { value: 'my draft' } })
+
+    asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    const beacon = await waitFor(() => {
+      const t = screen.getAllByRole('tab').find((x) => /Question/.test(x.textContent ?? ''))
+      expect(t).toBeDefined()
+      return t as HTMLElement
+    })
+
+    // Открываем маяк вручную (это ПОМЕЧАЕТ эпизод handled). Клик уводит фокус с
+    // composer'а — suppression от ввода снимается.
+    fireEvent.click(beacon)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+
+    // Возвращаемся в Feed вручную.
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+    await waitFor(() => expect(document.getElementById('dialog-section')).toBeNull())
+
+    // Свежий суппрешн-free sync (s3 завершилась — отдельное событие, чтобы дедуп
+    // ленты не схлопнул его; s2-вопрос всё ещё в очереди): эпизод s2 уже handled,
+    // поэтому фокус не крадётся — остаёмся на Feed.
+    s3done = true
+    emitStageStatus('s3', 'done')
+    // Дожидаемся, что suppression-free refresh РЕАЛЬНО применился (s3 стал done в
+    // DOM) — иначе фиксированная задержка прошла бы, даже если событие вообще не
+    // вызвало refetch, и тест не доказал бы «эпизод handled, повторно не крадётся».
+    await waitFor(() =>
+      expect(document.querySelector('[data-stage-id="s3"][data-status="done"]')).not.toBeNull(),
+    )
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(document.getElementById('dialog-section')).toBeNull()
+  })
+
+  test('Same-stage question after typing surfaces without a manual blur (reconcile-after-unmount)', async () => {
+    // Реальный репорт: одна стадия B; фокус в её composer'е (editing=true), затем
+    // B сама уходит в awaiting_user_input → её composer размонтируется
+    // (noteTarget=null). .blur() вручную НЕ зовём: editing обязан схлопнуться в
+    // false через reconcile-эффект после commit, иначе вопрос B завис бы в Feed.
+    let asking = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Bravo', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {})],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    expect(document.activeElement).toBe(composer)
+    fireEvent.change(composer, { target: { value: 'half-typed' } })
+
+    // B → awaiting_user_input: composer B размонтируется, .blur() не вызываем.
+    asking = true
+    emitStageStatus('s1', 'awaiting_user_input')
+
+    // Reconcile-эффект схлопывает editing → вопрос B авто-открывается (не виснет).
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+    expect(screen.getByText('Agent needs your input')).not.toBeNull()
+  })
+
+  test('New episode through the real pipeline: t2 under suppression defers, then auto-opens on blur', async () => {
+    // Suppression держится на ОТДЕЛЬНОЙ running-стадии A (composer самой B
+    // размонтируется при уходе из running). Проверяет через реальный App→hook
+    // пайплайн, что updated_at-параметризация и episode-identity живут в проде.
+    const t1 = '2026-09-30T10:00:00.000Z'
+    const t2 = '2026-09-30T10:05:00.000Z'
+    let bStatus = 'awaiting_user_input'
+    let bUpdated = t1
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('sA', 'Alpha', 'running'),
+        stageView('sB', 'Bravo', bStatus, bStatus === 'awaiting_user_input' ? { ...QUESTION_FLAGS, updatedAt: bUpdated } : { updatedAt: bUpdated }),
+      ],
+    }))
+
+    render(<App />)
+    // (1) B входит awaiting t1 БЕЗ фокуса → авто-открытие attention на B/t1.
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
+
+    // (2) Выбираем A, открываем Feed, фокусируем её composer (suppression).
+    fireEvent.click(document.querySelector('[data-stage-id="sA"] .stage-row') as HTMLElement)
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+    const composer = screen.getByPlaceholderText(/note to agent/i)
+    act(() => composer.focus())
+    expect(document.activeElement).toBe(composer)
+
+    // (3) B возвращается в running, затем снова awaiting с НОВЫМ эпизодом t2 —
+    // на снимке t2 composer A сфокусирован → t2 откладывается, Feed/A цел.
+    bStatus = 'running'
+    emitStageStatus('sB', 'running')
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(false))
+
+    bStatus = 'awaiting_user_input'
+    bUpdated = t2
+    emitStageStatus('sB', 'awaiting_user_input')
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(document.getElementById('detail-title')).toHaveTextContent('Alpha')
+
+    // (4) Снятие фокуса — новый эпизод t2 авто-открывается.
+    act(() => composer.blur())
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 })

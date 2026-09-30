@@ -3,6 +3,21 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-09-30
+
+### Fix: attention actions arriving while you type are deferred, not dropped
+
+When a stage started waiting for you (a question, approval, pause, or failure) while
+the dashboard was temporarily not allowed to steal focus — you were typing in a note
+field, an overlay was open, or a **Pause on focus** operation was mid-flight — the
+action used to be marked as already-seen on that first status snapshot and would
+never auto-open afterwards, even though its tab kept glowing. Such an action is now
+**deferred**: it glows as a beacon immediately and opens automatically the moment the
+suppression lifts (you blur the field or close the overlay), provided it's still
+current. Separately, focusing a non-text input — notably the **Pause on focus**
+checkbox — no longer counts as typing, so a question arriving in that moment opens
+right away instead of being suppressed.
+
 ## 2026-09-29
 
 ### Improvement: "Pause on focus" — freeze a stage while you write a note

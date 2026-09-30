@@ -34,8 +34,13 @@ function stage(id: string, status: StageStatus): Stage {
 const item = (stageId: string, kind: AttentionItem['kind'], episode = ''): AttentionItem => ({ stageId, kind, episode })
 
 // sync — короткий помощник: применить снимок очереди (по умолчанию не suppressed).
-function sync(state: WorkspaceState, items: AttentionItem[], suppressed = false): WorkspaceState {
-  return workspaceReducer(state, { type: 'sync', items, suppressed })
+function sync(
+  state: WorkspaceState,
+  items: AttentionItem[],
+  suppressed = false,
+  ownedHandledSigs: string[] = [],
+): WorkspaceState {
+  return workspaceReducer(state, { type: 'sync', items, suppressed, ownedHandledSigs })
 }
 
 describe('attentionKindForStatus', () => {
@@ -87,11 +92,11 @@ describe('workspaceReducer — auto-open (rule 9)', () => {
   })
 
   it('does NOT steal focus when suppressed (typing / reviewing a file) — only glows', () => {
+    // Только половина контракта: под suppression фокус не крадётся, остаёмся в
+    // feed. Полный цикл defer → release покрыт в блоке «deferred attention» ниже
+    // (не дублируем сюда, чтобы контракт жил в одном месте).
     const s = sync(initialWorkspaceState, [item('b', 'approval')], true)
     expect(s.view).toBe('feed')
-    // и позже, когда suppression снят, задним числом НЕ открывает
-    const s2 = sync(s, [item('b', 'approval')], false)
-    expect(s2.view).toBe('feed')
   })
 
   it('auto-opens only once — returning to Feed is respected on the next poll', () => {
@@ -121,6 +126,186 @@ describe('workspaceReducer — auto-open (rule 9)', () => {
     const again = sync(gone, [item('b', 'approval')]) // b снова awaiting_approval
     expect(again.view).toBe('attention')
     expect(again.activeStageId).toBe('b')
+  })
+})
+
+describe('workspaceReducer — deferred attention (suppression defers, release opens)', () => {
+  it('a suppressed arrival is deferred, then auto-opens once suppression is lifted', () => {
+    const deferred = sync(initialWorkspaceState, [item('b', 'approval')], true)
+    expect(deferred.view).toBe('feed')
+    const released = sync(deferred, [item('b', 'approval')], false)
+    expect(released.view).toBe('attention')
+    expect(released.activeStageId).toBe('b')
+  })
+
+  it('a deferred item that resolves before release opens nothing', () => {
+    const deferred = sync(initialWorkspaceState, [item('x', 'question')], true)
+    expect(deferred.view).toBe('feed')
+    const gone = sync(deferred, [], false)
+    expect(gone.view).toBe('feed')
+    expect(gone.activeStageId).toBeNull()
+  })
+
+  it('manual openAttention during suppression consumes only the target, not the whole queue', () => {
+    const deferred = sync(initialWorkspaceState, [item('a', 'approval'), item('b', 'question')], true)
+    expect(deferred.view).toBe('feed')
+    const openedB = workspaceReducer(deferred, { type: 'openAttention', stageId: 'b' })
+    expect(openedB.activeStageId).toBe('b')
+    const feed = workspaceReducer(openedB, { type: 'openFeed' })
+    // A ещё не handled — release должен авто-открыть именно его.
+    const released = sync(feed, [item('a', 'approval'), item('b', 'question')], false)
+    expect(released.view).toBe('attention')
+    expect(released.activeStageId).toBe('a')
+  })
+
+  it('release opens the first candidate in server order, not insertion order', () => {
+    let s = sync(initialWorkspaceState, [item('b', 'question')], true) // сначала отложили B
+    s = sync(s, [item('a', 'approval'), item('b', 'question')], true) // затем A встал перед B
+    expect(s.view).toBe('feed')
+    const released = sync(s, [item('a', 'approval'), item('b', 'question')], false)
+    expect(released.view).toBe('attention')
+    expect(released.activeStageId).toBe('a')
+  })
+
+  it('a candidate marked handled on release does not steal focus on a later poll', () => {
+    let s = sync(initialWorkspaceState, [item('b', 'question')], true)
+    s = sync(s, [item('a', 'approval'), item('b', 'question')], true)
+    const released = sync(s, [item('a', 'approval'), item('b', 'question')], false)
+    expect(released.activeStageId).toBe('a')
+    const feed = workspaceReducer(released, { type: 'openFeed' })
+    const polled = sync(feed, [item('a', 'approval'), item('b', 'question')], false)
+    expect(polled.view).toBe('feed')
+    // B помечен handled на release, но остаётся в очереди (доступен через advance).
+    expect(polled.items.some((it) => it.stageId === 'b')).toBe(true)
+  })
+
+  it('a new episode of the same stage under suppression is deferred, then opens on release', () => {
+    let s = sync(initialWorkspaceState, [item('a', 'question', 't1')]) // t1 авто-открылся, handled
+    expect(s.view).toBe('attention')
+    s = workspaceReducer(s, { type: 'openFeed' }) // важно: между t1 и t2 — возврат в Feed
+    expect(s.view).toBe('feed')
+    s = sync(s, [item('a', 'question', 't2')], true) // новый эпизод под suppression — светится
+    expect(s.view).toBe('feed')
+    const released = sync(s, [item('a', 'question', 't2')], false)
+    expect(released.view).toBe('attention')
+    expect(released.activeStageId).toBe('a')
+  })
+
+  it('releasing suppression while already in attention marks the deferred item handled without stealing the active one', () => {
+    let s = sync(initialWorkspaceState, [item('a', 'approval')]) // A авто-открылся
+    expect(s.activeStageId).toBe('a')
+    s = sync(s, [item('a', 'approval'), item('b', 'question')], true) // B прибыл под suppression
+    expect(s.activeStageId).toBe('a')
+    const released = sync(s, [item('a', 'approval'), item('b', 'question')], false)
+    expect(released.view).toBe('attention')
+    expect(released.activeStageId).toBe('a') // активный A не сбит на B
+    expect(released.items.some((it) => it.stageId === 'b')).toBe(true)
+    // возврат в Feed + ещё poll — B (уже handled) не крадёт фокус.
+    const feed = workspaceReducer(released, { type: 'openFeed' })
+    const polled = sync(feed, [item('a', 'approval'), item('b', 'question')], false)
+    expect(polled.view).toBe('feed')
+  })
+
+  it('intra-attention advance runs under suppression and marks the newly active item handled', () => {
+    let s = sync(initialWorkspaceState, [item('a', 'approval')])
+    expect(s.activeStageId).toBe('a')
+    s = sync(s, [item('a', 'approval'), item('b', 'question')], true) // B отложен
+    expect(s.activeStageId).toBe('a')
+    s = sync(s, [item('b', 'question')], true) // A разрешился — advance на B даже под suppression
+    expect(s.view).toBe('attention')
+    expect(s.activeStageId).toBe('b')
+    // B был показан как активный → handled: openFeed + release не переоткрывают его.
+    const feed = workspaceReducer(s, { type: 'openFeed' })
+    const released = sync(feed, [item('b', 'question')], false)
+    expect(released.view).toBe('feed')
+  })
+
+  it('in-place episode rollover under suppression is handled by the active item, not re-opened on release', () => {
+    let s = sync(initialWorkspaceState, [item('a', 'question', 't1')])
+    expect(s.activeStageId).toBe('a')
+    // та же стадия A, новый эпизод t2, под suppression; activeStageId остаётся A.
+    s = sync(s, [item('a', 'question', 't2')], true)
+    expect(s.view).toBe('attention')
+    expect(s.activeStageId).toBe('a')
+    const feed = workspaceReducer(s, { type: 'openFeed' })
+    const released = sync(feed, [item('a', 'question', 't2')], false)
+    expect(released.view).toBe('feed') // t2 был показан как активный → handled
+  })
+
+  it('delayed returnView — records cost when the deferred arrival is released from cost', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const deferred = sync(cost, [item('b', 'approval')], true)
+    expect(deferred.view).toBe('cost')
+    const released = sync(deferred, [item('b', 'approval')], false)
+    expect(released.view).toBe('attention')
+    expect(released.returnView).toBe('cost')
+    const resolved = sync(released, [])
+    expect(resolved.view).toBe('cost')
+  })
+
+  it('delayed returnView is computed at open time, not arrival time', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const deferred = sync(cost, [item('b', 'approval')], true)
+    expect(deferred.view).toBe('cost')
+    // openHistory НЕ пишет returnView — если бы returnView брался в момент arrival,
+    // он остался бы cost и тест был бы ложно-зелёным.
+    const history = workspaceReducer(deferred, { type: 'openHistory', view: 'plan-history' })
+    expect(history.view).toBe('plan-history')
+    const released = sync(history, [item('b', 'approval')], false)
+    expect(released.view).toBe('attention')
+    expect(released.returnView).toBe('feed') // globalReturnView(plan-history) = feed
+    const resolved = sync(released, [])
+    expect(resolved.view).toBe('feed')
+  })
+
+  it('invalid-stage fallback consumes the actual fallback item, not the requested id', () => {
+    const deferred = sync(initialWorkspaceState, [item('a', 'approval')], true) // A ещё не handled
+    expect(deferred.view).toBe('feed')
+    const opened = workspaceReducer(deferred, { type: 'openAttention', stageId: 'does-not-exist' })
+    expect(opened.view).toBe('attention')
+    expect(opened.activeStageId).toBe('a') // fallback выбрал фактический A
+    const feed = workspaceReducer(opened, { type: 'openFeed' })
+    const released = sync(feed, [item('a', 'approval')], false)
+    expect(released.view).toBe('feed') // консумлен именно фактический A
+  })
+
+  it('manual openAttention from history records feed as returnView', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const deferred = sync(cost, [item('a', 'approval')], true)
+    const history = workspaceReducer(deferred, { type: 'openHistory', view: 'plan-history' })
+    const opened = workspaceReducer(history, { type: 'openAttention', stageId: 'a' })
+    expect(opened.view).toBe('attention')
+    expect(opened.returnView).toBe('feed') // globalReturnView(history) = feed, не cost
+    const resolved = sync(opened, [])
+    expect(resolved.view).toBe('feed')
+  })
+
+  it('a self-owned paused episode is consumed on arrival and never auto-opens — even after ownership drops before status refresh', () => {
+    const paused = item('a', 'paused', 't1')
+    // Владение активно: A/paused приходит под suppression, помечается handled сразу
+    // (не откладывается), остаётся в очереди (beacon), но не открывается.
+    const held = sync(initialWorkspaceState, [paused], true, [sig(paused)])
+    expect(held.view).toBe('feed')
+    expect(held.items.some((it) => it.stageId === 'a')).toBe(true)
+    // Владение снято (clearOp после Send) ДО refresh /api/status: A ещё paused в
+    // снимке, ownedHandledSigs уже пуст, suppression отпущен. A НЕ должен всплыть
+    // ложной панелью — он уже handled.
+    const afterDrop = sync(held, [paused], false, [])
+    expect(afterDrop.view).toBe('feed')
+    expect(afterDrop.activeStageId).toBeNull()
+  })
+
+  it('a self-owned paused stage does not block a real question on another stage from opening after release', () => {
+    const paused = item('a', 'paused', 't1')
+    const question = item('b', 'question', 't1')
+    // Владение на A; приходит A/paused (consumed) и вопрос B (отложен под suppression).
+    const held = sync(initialWorkspaceState, [paused, question], true, [sig(paused)])
+    expect(held.view).toBe('feed')
+    // Send завершён: владение снято, suppression отпущен, A всё ещё paused в снимке.
+    // A не крадёт фокус (handled), а B авто-открывается.
+    const released = sync(held, [paused, question], false, [])
+    expect(released.view).toBe('attention')
+    expect(released.activeStageId).toBe('b')
   })
 })
 
