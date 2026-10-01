@@ -50,6 +50,15 @@ type FeedWorkspaceProps = {
   onComposerFocus?: () => void
   onComposerBlur?: (hasDraft: boolean) => void
   onComposerResumeNow?: () => void
+  // systemAuthorLabel — подпись пузыря системного автора (actor 'system'). Дефолт
+  // 'Flow' — обычная лента стадий. Боковой чат (Side agent) переопределяет её,
+  // чтобы его turn_failed/turn_interrupted не подписывались «Flow».
+  systemAuthorLabel?: string
+  // imagePolicy — как трактовать маркеры [AFM image: …] в прозе агента. 'stage'
+  // (дефолт) — разбирать в <FeedImage> с per-stage URL (лента стадий). 'none' —
+  // рендерить маркер как обычный markdown-текст, без картинки и stage-URL: у
+  // бокового чата нет каталога артефактов стадии, строить такой URL некуда.
+  imagePolicy?: 'stage' | 'none'
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -89,6 +98,8 @@ export function FeedWorkspace({
   onComposerFocus,
   onComposerBlur,
   onComposerResumeNow,
+  systemAuthorLabel = 'Flow',
+  imagePolicy = 'stage',
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
 
@@ -133,6 +144,8 @@ export function FeedWorkspace({
               key={g.key}
               group={g}
               showStageBadges={showStageBadges}
+              systemAuthorLabel={systemAuthorLabel}
+              imagePolicy={imagePolicy}
               enteringKey={enteringKey}
               onEntered={onEntered}
               onOpenDialog={onOpenDialog}
@@ -182,6 +195,11 @@ type FeedGroupViewProps = {
   // showStageBadges — см. FeedWorkspaceProps: пробрасывается явно с единственной
   // точки вызова в FeedWorkspace (codex #4 — было безусловным рендером бейджа).
   showStageBadges: boolean
+  // systemAuthorLabel/imagePolicy — см. FeedWorkspaceProps. Дефолты сохраняют
+  // прежнее поведение ленты стадий ('Flow' + per-stage картинки), боковой чат
+  // (SideAgentHistory рендерит FeedGroupView напрямую) их переопределяет.
+  systemAuthorLabel?: string
+  imagePolicy?: 'stage' | 'none'
   onOpenDialog?: (stageId: string, phase: string, id: string) => void
   // onReplyToThought — выбрать мысль агента (kind message + markdown) для ответа.
   // Присутствует ТОЛЬКО у per-stage Feed с живым композером (см. FeedWorkspace):
@@ -204,12 +222,15 @@ type FeedGroupViewProps = {
 // onOpenDialog или для остальных item — неизменный <div> как раньше.
 // Мысли агента (kind message + markdown) при наличии onReplyToThought
 // становятся репляиблыми (клик по строке/кнопке ↩ выбирает мысль для ответа).
-export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered }: FeedGroupViewProps): ReactElement {
+export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered }: FeedGroupViewProps): ReactElement {
+  // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
+  // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
+  const authorLabel = group.actor === 'system' ? systemAuthorLabel : ACTOR_LABEL[group.actor]
   return (
     <div className={`feed-group feed-${group.side}`} data-actor={group.actor}>
       <div className="feed-group-head">
         {showStageBadges && group.stageId !== '' && <span className="feed-stage-badge">{group.stageId}</span>}
-        <span className="feed-actor">{ACTOR_LABEL[group.actor]}</span>
+        <span className="feed-actor">{authorLabel}</span>
       </div>
       <div className="feed-bubble">
         {group.items.map((item) => {
@@ -231,29 +252,37 @@ export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToT
           const content = (
             <>
               {isMd ? (
-                // Нарратив агента — markdown (заголовки/таблицы/жирный/код). Нейтральный
-                // рендерер (без plan-обёрток), html:false → без XSS. Текст сегментируется
-                // по standalone-маркерам [AFM image: <name>]: md-куски рендерятся как
-                // раньше, маркеры — настоящим <img> (FeedImage), src которого фронт строит
-                // сам из stageId+name (никакой строки агента в атрибуте).
-                // .feed-item — flex-РЯД (текст слева, timestamp справа), поэтому сегменты
-                // (несколько md/img) заворачиваем в колоночный контейнер, иначе при
-                // тексте вокруг картинки или нескольких картинках они встали бы в ряд и
-                // сжались/переполнились вместо вертикального порядка. Timestamp остаётся
-                // отдельным flex-элементом ряда.
-                <div className="feed-item-segments">
-                  {splitImageMarkers(item.text).map((seg, i) =>
-                    seg.type === 'md' ? (
-                      <div
-                        key={`seg${i}`}
-                        className="feed-item-text md"
-                        dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(seg.text) }}
-                      />
-                    ) : (
-                      <FeedImage key={`seg${i}`} stageId={item.stageId} name={seg.name} />
-                    ),
-                  )}
-                </div>
+                imagePolicy === 'none' ? (
+                  // imagePolicy='none' (боковой чат): [AFM image: …]-маркеры не
+                  // раскрываются в <FeedImage> — у беседы нет каталога артефактов
+                  // стадии, строить per-stage URL некуда. Маркер остаётся обычным
+                  // markdown-текстом (рендерится тем же санитайзером, html:false).
+                  <div className="feed-item-text md" dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(item.text) }} />
+                ) : (
+                  // Нарратив агента — markdown (заголовки/таблицы/жирный/код). Нейтральный
+                  // рендерер (без plan-обёрток), html:false → без XSS. Текст сегментируется
+                  // по standalone-маркерам [AFM image: <name>]: md-куски рендерятся как
+                  // раньше, маркеры — настоящим <img> (FeedImage), src которого фронт строит
+                  // сам из stageId+name (никакой строки агента в атрибуте).
+                  // .feed-item — flex-РЯД (текст слева, timestamp справа), поэтому сегменты
+                  // (несколько md/img) заворачиваем в колоночный контейнер, иначе при
+                  // тексте вокруг картинки или нескольких картинках они встали бы в ряд и
+                  // сжались/переполнились вместо вертикального порядка. Timestamp остаётся
+                  // отдельным flex-элементом ряда.
+                  <div className="feed-item-segments">
+                    {splitImageMarkers(item.text).map((seg, i) =>
+                      seg.type === 'md' ? (
+                        <div
+                          key={`seg${i}`}
+                          className="feed-item-text md"
+                          dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(seg.text) }}
+                        />
+                      ) : (
+                        <FeedImage key={`seg${i}`} stageId={item.stageId} name={seg.name} />
+                      ),
+                    )}
+                  </div>
+                )
               ) : (
                 <span className="feed-item-text">{item.text}</span>
               )}

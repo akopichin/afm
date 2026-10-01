@@ -833,6 +833,42 @@ func TestReExec_NoFileBrowser_KeepsOpenPublishNoEnv(t *testing.T) {
 	}
 }
 
+// TestReExec_SideAgentLoopback: боковой агент (без file browser) тоже уводит
+// публикацию dashboard-порта на loopback — через dashboard API доступен агент с
+// правами на запись в проект, порт не должен быть открыт наружу хоста.
+func TestReExec_SideAgentLoopback(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := docker.ReExecConfig{
+		Image: "img", ProjectDir: "/work/afm", DashboardPort: 8080,
+		ExtraArgs:          []string{"run", "flow.yaml"},
+		FileBrowserEnabled: false,
+		SideAgentEnabled:   true,
+	}
+	if err := docker.ReExec(cfg); err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "-p 127.0.0.1:8080:8080") {
+		t.Errorf("expected loopback publish, got: %s", joined)
+	}
+	// Боковой агент не задействует file-roots транспорт.
+	if hasEnvKey(capturedArgs, docker.FileRootsEnvVar) {
+		t.Errorf("did not expect file-roots env, got: %s", joined)
+	}
+}
+
 // TestReExec_ExtraMountPathResolution — регрессия R7: относительный
 // extra_mounts.path (не начинающийся ни с "/", ни с "~") раньше давал
 // невалидный `-v ../shared:../shared` (относительный путь Docker не

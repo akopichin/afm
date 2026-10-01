@@ -46,8 +46,11 @@ func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fall
 // ordered []StageView (see stageview.go) instead of five parallel per-stage
 // maps the frontend used to re-join by id.
 type statusResponse struct {
-	FlowName             string          `json:"flow_name"`
-	Version              string          `json:"version,omitempty"`
+	FlowName string `json:"flow_name"`
+	Version  string `json:"version,omitempty"`
+	// RunID — id разговора бокового агента (== run_id). Непусто только когда
+	// боковой агент подключён (Config.SideAgent != nil); иначе опускается.
+	RunID                string          `json:"run_id,omitempty"`
 	StartedAt            time.Time       `json:"started_at"`
 	RunStatus            state.RunStatus `json:"run_status,omitempty"`
 	EndedAt              *time.Time      `json:"ended_at,omitempty"`
@@ -97,6 +100,7 @@ type accountingHealth struct {
 // setup (e.g. whether the Docker project file browser is wired up).
 type capabilities struct {
 	FileBrowser bool `json:"file_browser"`
+	SideAgent   bool `json:"side_agent"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -132,6 +136,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	resp.Stages = buildStageViews(rs, s.runDir, s.stages, stageCosts)
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
+	resp.Capabilities.SideAgent = s.sideAgent != nil
+	if s.sideAgent != nil {
+		resp.RunID = s.sideAgent.ConversationID()
+	}
 	if s.reviewState != nil {
 		st, owners := s.reviewState()
 		resp.FlowPauseState = st

@@ -12,7 +12,7 @@ import (
 // вариант «dashboard/*» утягивал бы в бинарь ~96 МБ зависимостей и исходников
 // фронтенда. Набор путей = набор публичных веб-путей дашборда.
 //
-//go:embed dashboard/index.html dashboard/favicon.svg dashboard/quarium-logo.png dashboard/skins dashboard/assets
+//go:embed dashboard/index.html dashboard/favicon.svg dashboard/quarium-logo.png dashboard/skins dashboard/assets dashboard/side-agent.css
 var embedded embed.FS
 
 // FS serves the dashboard assets rooted at their original web paths

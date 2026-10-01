@@ -113,6 +113,36 @@ describe('FeedWorkspace', () => {
     expect(container.textContent).toContain('→ running')
   })
 
+  describe('systemAuthorLabel + imagePolicy (Side agent parameterization)', () => {
+    // Регрессия: без prop'ов обычная лента рисует 'Flow' для system-актора и
+    // раскрывает [AFM image: …] в stage-картинку ровно как прежде.
+    it('defaults: system author is "Flow" and image markers render as <img>', () => {
+      const events = [
+        ev('stage_status_changed', 'running', '', '2026-07-10T10:00:00Z'),
+        ev('agent_action', { tool: 'text', detail: '[AFM image: chart.png]' }, 's1', '2026-07-10T10:00:01Z'),
+      ]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      expect(container.querySelector('.feed-actor')?.textContent).toBe('Flow')
+      expect(container.querySelector('img.feed-image')).not.toBeNull()
+    })
+
+    it('systemAuthorLabel overrides the "Flow" bubble label', () => {
+      const events = [ev('stage_status_changed', 'running', '', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId={null} systemAuthorLabel="Side agent" />)
+      const labels = Array.from(container.querySelectorAll('.feed-actor')).map((el) => el.textContent)
+      expect(labels).toContain('Side agent')
+      expect(labels).not.toContain('Flow')
+    })
+
+    it('imagePolicy="none" renders [AFM image: …] as literal markdown text, not an <img>', () => {
+      const events = [ev('agent_action', { tool: 'text', detail: 'before [AFM image: chart.png] after' }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" imagePolicy="none" />)
+      expect(container.querySelector('img.feed-image')).toBeNull()
+      expect(container.querySelector('.feed-item-segments')).toBeNull()
+      expect(container.textContent).toContain('[AFM image: chart.png]')
+    })
+  })
+
   describe('showStageBadges', () => {
     const events = (): AfmEvent[] => [ev('agent_action', { tool: 'read_file', detail: 'a.ts' }, 's1', '2026-07-10T10:00:00Z')]
 

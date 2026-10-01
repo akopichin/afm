@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -93,6 +94,7 @@ type Server struct {
 	flowActions      FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
 	reviewState      func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
 	workspace        workspace.FS              // Docker project file browser backend; nil = capability off
+	sideAgent        SideAgentService          // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
 	theme            string                    // "goga" или "" (default graphite)
 	version          string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
 	indexBytes       []byte                    // предподготовленный index.html (с заменами скина/favicon)
@@ -109,6 +111,13 @@ type Server struct {
 	// завершении run'а, чтобы не гасить дашборд, пока за ним кто-то следит
 	// (см. waitForDashboardDrain в cmd/afm/run.go).
 	wsClients atomic.Int64
+
+	// done закрывается в Shutdown — server-level сигнал для долгоживущих
+	// стрим-хендлеров (SSE бокового агента), чтобы они не держали
+	// http.Server.Shutdown открытым бесконечно. shutdownOnce защищает от
+	// повторного close при повторном Shutdown.
+	done         chan struct{}
+	shutdownOnce sync.Once
 }
 
 // ConnectedClients возвращает текущее число открытых /ws-соединений.
@@ -148,7 +157,8 @@ type Config struct {
 	Secondary   SecondaryActions
 	FlowActions FlowActions
 	ReviewState func() (string, []string)
-	Workspace   workspace.FS // Docker project file browser backend; nil = capability off
+	Workspace   workspace.FS     // Docker project file browser backend; nil = capability off
+	SideAgent   SideAgentService // «боковой» разговор; nil = capability off
 	Theme       string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
@@ -187,12 +197,14 @@ func New(cfg Config) *Server {
 		flowActions:  cfg.FlowActions,
 		reviewState:  cfg.ReviewState,
 		workspace:    cfg.Workspace,
+		sideAgent:    cfg.SideAgent,
 		theme:        cfg.Theme,
 		version:      cfg.Version,
 		wsPongWait:   pongWait,
 		wsPingPeriod: pingPeriod,
 		wsWriteWait:  writeWait,
 		fileServer:   http.FileServer(http.FS(web.FS)),
+		done:         make(chan struct{}),
 	}
 
 	skinName := s.builtinSkinName()
@@ -260,6 +272,13 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/api/files/", s.routeFiles)
 	mux.HandleFunc("/api/flow/", s.routeFlow)
+	// Маршруты бокового агента регистрируются только при включённой фиче —
+	// иначе запрос доходит до статики и возвращает 404 (старый сервер не
+	// затронут). Нужны обе формы: точный путь и поддерево (/stream, /messages…).
+	if s.sideAgent != nil {
+		mux.HandleFunc("/api/side-agent", s.routeSideAgent)
+		mux.HandleFunc("/api/side-agent/", s.routeSideAgent)
+	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {
 		// custom skin CSS — тоже фиксированное имя, не кэшируем (см. serveStatic).
@@ -268,11 +287,24 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/", s.serveStatic)
 
 	s.httpSrv = &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Port),
+		Addr:              sideAgentListenAddr(cfg.Port, cfg.SideAgent != nil, config.ReExecedIntoContainer()),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
+}
+
+// sideAgentListenAddr выбирает адрес прослушивания (инвариант 9). Когда боковой
+// агент включён на нативном хосте (не в контейнере), API бокового агента даёт
+// команды реальному агенту — bind'имся на loopback (127.0.0.1), чтобы сервер не
+// был доступен из сети. В контейнере bind обязан быть 0.0.0.0 (":port"), иначе
+// хостовый `docker -p` не достучится до слушателя; при выключенном боковом
+// агенте сохраняем прежнее поведение (все интерфейсы).
+func sideAgentListenAddr(port int, enabled, inContainer bool) string {
+	if enabled && !inContainer {
+		return fmt.Sprintf("127.0.0.1:%d", port)
+	}
+	return fmt.Sprintf(":%d", port)
 }
 
 // builtinSkinName нормализует Theme до имени встроенного скина: "goga",
@@ -419,8 +451,11 @@ func (s *Server) Start() (string, error) {
 	return ln.Addr().String(), nil
 }
 
-// Shutdown gracefully stops the server.
+// Shutdown gracefully stops the server. Сначала закрываем server-level done,
+// чтобы долгоживущие SSE-хендлеры вышли из select и соединения стали idle —
+// иначе httpSrv.Shutdown ждал бы их бесконечно.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.shutdownOnce.Do(func() { close(s.done) })
 	err := s.httpSrv.Shutdown(ctx)
 	if s.workspace != nil {
 		_ = s.workspace.Close()

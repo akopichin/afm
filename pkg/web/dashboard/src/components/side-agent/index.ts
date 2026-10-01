@@ -1,0 +1,5 @@
+export { SideAgentProvider, useSideAgentContext, type SideAgentContextValue } from './SideAgentProvider'
+export { SideAgentModal } from './SideAgentModal'
+export { SideAgentHistory } from './SideAgentHistory'
+export { SideAgentComposer } from './SideAgentComposer'
+export { toSideAgentFeedItems, sideAgentFeedGroups } from './side-agent-feed-model'

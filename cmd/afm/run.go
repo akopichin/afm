@@ -171,6 +171,28 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		hooksDisp.Start()
 	}
 
+	// Процессный ctx (Ctrl+C) создаётся ДО бокового агента и дашборда: агентские
+	// горутины бокового агента живут под собственным процессным ctx менеджера (не
+	// под ctx запроса), а Ctrl+C отменяет и флоу, и ожидание дренажа бокового хода.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	// Боковой агент дашборда поднимается всегда, когда поднят дашборд (инъекция в
+	// server.Config делает capability живым; отдельного конфиг-флага нет). Жёсткий
+	// сбой открытия журнала не валит ран — просто отключает боковой агент.
+	var side *sideAgentRuntime
+	var sideDrained bool
+	if cfg.Server.GetPort() > 0 {
+		side, err = startSideAgent(runID, cfg, env)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: side agent disabled: %v\n", err)
+		}
+	}
+	// Журнал/учёт закрываются ПОСЛЕ остановки сервера (srv.Shutdown снимает
+	// SSE-подписки) и только если агент дренирован. Регистрируем ДО defer
+	// srv.Shutdown — LIFO выполнит closeStores уже после srv.Shutdown.
+	defer func() { side.closeStores(sideDrained) }()
+
 	srv, err := startDashboard(cfg, server.Config{
 		RunDir:      runDir,
 		Description: f.Description,
@@ -178,6 +200,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		Store:       store,
 		Workspace:   ws,
 		Accounting:  serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
+		SideAgent:   side.service(),
 	}, orch)
 	if err != nil {
 		return err
@@ -186,16 +209,22 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		defer func() { _ = srv.Shutdown(context.Background()) }()
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	if err := orch.Run(ctx); err != nil {
-		return fmt.Errorf("run: %w", err)
+	runErr := orch.Run(ctx)
+	if runErr != nil {
+		// Аварийный выход (Ctrl+C / сбой): прерываем активный боковой ход и ждём
+		// его лишь ограниченное время; журнал закрываем только если дренирован.
+		sideDrained = side.shutdownEmergency(sideAgentEmergencyDrain)
+		return fmt.Errorf("run: %w", runErr)
 	}
 	fmt.Printf("afm: flow %q completed\n", f.Name)
 	if srv != nil {
 		fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMinimum)
 		waitForDashboardDrain(ctx, srv.ConnectedClients)
 	}
+	// Штатное завершение: ждём активный боковой ход без 2-минутного колпака.
+	// Если Ctrl+C пришёл во время дренирования — shutdownAfterFlow эскалирует к
+	// аварийному завершению (interrupt), чтобы подпроцесс не пережил выход.
+	sideDrained = side.shutdownAfterFlow(ctx, sideAgentEmergencyDrain)
 	return nil
 }
 

@@ -51,6 +51,41 @@ right (there is no three-column layout or bottom progress bar).
   rail shows a quiet per-stage cost. All of it can be switched off — see
   [Cost tracking](#cost-tracking) below.
 
+## Side agent — a free-form chat alongside the run
+
+Open the **Side agent** — a large centered modal over the dashboard — to talk
+directly to the same agent your flow uses (`client.command`), in the same working
+directory and environment as the flow's stages. Use it to ask questions, probe the
+project, or run a quick command-style exchange *without* touching the run.
+
+- **Open it** with the **Side agent** button in the header, or press **Cmd/Ctrl+`**
+  (the backquote key, recognised physically so keyboard layout doesn't matter).
+  Opening the window by itself does not call the model; **Escape** closes it. The
+  header button carries a small indicator — it lights while a reply is in flight and
+  flags an unseen result once one arrives while the window is closed.
+- **One conversation per run, one request at a time.** The chat keeps a single
+  conversation tied to the run; you can't fire a second message while one is still
+  working — send it after the current reply lands (or **Stop** the current one).
+- **Fully isolated from the flow.** The side chat has its own journal and its own
+  cost accounting; it is *not* part of any stage. It never appears in a stage's Feed,
+  never changes a stage's status, and never triggers stage timers or lifecycle hooks.
+  An error in the chat cannot fail a stage.
+- **The agent outlives the HTTP request.** Once a message is accepted the agent runs
+  under afm's own lifetime, not the browser request — closing the window or reloading
+  the page does **not** interrupt it. Only **Stop**, `Ctrl+C`, or afm shutting down
+  does. Reopening the window catches you back up on whatever ran while it was closed.
+- **afm assembles the context, with an explicit budget.** Each message is a fresh
+  agent call; afm rebuilds the conversation itself rather than relying on the agent's
+  native resume. The assembled prompt has a hard byte budget — exceeding it is a
+  `context_limit` error (your history and draft are preserved), never a silent drop of
+  older turns.
+
+The side agent is available whenever the dashboard is up; there is no separate config
+flag to enable it. Because it runs an arbitrary agent command with full project
+access, its endpoints require a trusted local client: on a native host afm binds the
+dashboard to `127.0.0.1`, and in Docker mode the port is published loopback-only (see
+[Docker](docker.md)). Remote/authenticated access is not supported in this version.
+
 ## Themes
 
 The dashboard ships with three built-in themes; choose one with `theme:` in

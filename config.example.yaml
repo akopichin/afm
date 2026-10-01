@@ -205,11 +205,13 @@ client:
 #   # empty/unset → the config decides (enabled by default). The decision is made on
 #   # the host before Docker re-exec.
 #   #
-#   # IMPORTANT: while the file browser is on (the default), Docker publishes the
-#   # dashboard port on loopback only (-p 127.0.0.1:<port>:<port>) instead of 0.0.0.0 —
-#   # the dashboard stops being reachable from the LAN. To restore 0.0.0.0, disable the
-#   # browser (enabled: false or AFM_FILE_BROWSER=0). If you keep it on but need LAN
-#   # access, use an SSH tunnel to loopback.
+#   # IMPORTANT: a dashboard-enabled Docker run publishes the dashboard port on
+#   # loopback only (-p 127.0.0.1:<port>:<port>) instead of 0.0.0.0, so it is not
+#   # reachable from the LAN. This holds whenever a locally-trusted surface is exposed:
+#   # the file browser (on by default) OR the side agent, which is always present when
+#   # the dashboard is up. Because the side agent is always on, turning the file browser
+#   # off does NOT restore a 0.0.0.0 publish. For remote access use an SSH tunnel to
+#   # loopback.
 #   # file_browser:
 #   #   enabled: false   # opt-out; ON by default (env AFM_FILE_BROWSER overrides)
 

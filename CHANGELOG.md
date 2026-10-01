@@ -5,6 +5,29 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-01
 
+### Improvement: side agent — a free-form chat in the dashboard
+
+The dashboard now hosts a **side agent**: a large centered modal where you talk
+directly to the same agent the flow uses (`client.command`), in the same working
+directory and environment as the stages — handy for asking questions or probing the
+project without disturbing the run. Open it with the header **Side agent** button or
+**Cmd/Ctrl+`** (recognised by physical key, so layout doesn't matter); the header
+button lights while a reply is in flight and flags an unseen result that arrived while
+the window was closed. The conversation is **fully isolated from the flow**: it keeps
+its own journal and cost accounting, is not part of any stage, and never appears in a
+stage's Feed, changes a stage's status, or triggers stage timers or lifecycle hooks —
+an error in the chat cannot fail a stage. There is one conversation per run and one
+request in flight at a time. Once a message is accepted the agent runs under afm's own
+lifetime, so closing the window or reloading the page does not interrupt it — only
+**Stop**, `Ctrl+C`, or shutdown does. afm assembles the conversation context itself
+(rather than the agent's native resume) within an explicit byte budget; exceeding it
+is a `context_limit` error that preserves your history and draft rather than silently
+dropping older turns. The side agent is available whenever the dashboard is up. Because
+it runs an arbitrary agent command with full project access, its endpoints require a
+trusted local client: on a native host afm binds the dashboard to `127.0.0.1`, and in
+Docker mode the dashboard port is published loopback-only. Remote/authenticated access
+is not supported in this version.
+
 ### Improvement: subtle entrance animations in the dashboard
 
 Three dashboard surfaces now animate gently as they appear, so new content reads as

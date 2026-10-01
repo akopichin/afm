@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akopichin/afm/pkg/redact"
 )
 
 func hasEnvKey(env []string, key string) bool {
@@ -71,7 +73,7 @@ func TestRunCommand_RedactsSecretInLog(t *testing.T) {
 	if strings.Contains(string(raw), "s3cr3t") {
 		t.Fatalf("secret leaked into log: %s", raw)
 	}
-	if !strings.Contains(string(raw), defaultRedactionMarker) {
+	if !strings.Contains(string(raw), redact.DefaultMarker) {
 		t.Fatalf("expected redaction: %s", raw)
 	}
 }
@@ -95,7 +97,7 @@ func TestRunCommand_HeaderRoutedThroughRedactor(t *testing.T) {
 	if strings.Contains(string(raw), "s3cr3t-stage") {
 		t.Fatalf("secret leaked raw via attempt header: %s", raw)
 	}
-	if !strings.Contains(string(raw), defaultRedactionMarker) {
+	if !strings.Contains(string(raw), redact.DefaultMarker) {
 		t.Fatalf("expected header to be redacted: %s", raw)
 	}
 	if !strings.Contains(string(raw), "event=stage_failed") {

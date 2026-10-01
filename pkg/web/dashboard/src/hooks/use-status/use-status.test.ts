@@ -416,6 +416,22 @@ describe('useStatus', () => {
     expect(result.capabilities.fileBrowser).toBe(false)
   })
 
+  test('normalizeStatus maps capabilities.side_agent to capabilities.sideAgent', () => {
+    const result = normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { side_agent: true } })
+    expect(result.capabilities.sideAgent).toBe(true)
+  })
+
+  test('normalizeStatus defaults capabilities.sideAgent to false when absent (old backend)', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).capabilities.sideAgent).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: {} }).capabilities.sideAgent).toBe(false)
+  })
+
+  test('normalizeStatus reads run_id and defaults to "" when absent/non-string', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], run_id: 'demo-123-ab12' }).runId).toBe('demo-123-ab12')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).runId).toBe('')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], run_id: 42 }).runId).toBe('')
+  })
+
   test('maps flow_pause_state and flow_paused_stages', () => {
     const s = normalizeStatus({ flow_name: 'demo', stages: [], flow_pause_state: 'paused', flow_paused_stages: ['s1'] })
     expect(s.flowPauseState).toBe('paused')

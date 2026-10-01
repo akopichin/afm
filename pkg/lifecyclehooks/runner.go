@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/akopichin/afm/pkg/redact"
 )
 
 // DefaultHookTimeout применяется, когда h.Timeout == 0. 30s: уведомлящие
@@ -156,10 +158,10 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	// самой команды, ни через finish-строку.
 	logFile, logErr := openAttemptLog(logPath)
 	var sink io.Writer = logFile
-	var redactor *redactingWriter
+	var redactor *redact.Writer
 	if logErr == nil {
 		if vals := secretValues(h); len(vals) > 0 {
-			redactor = newRedactingWriter(logFile, vals)
+			redactor = redact.NewWriter(logFile, vals)
 			sink = redactor
 		}
 		// Заголовок пишем через sink (редактор при наличии секретов), а не
@@ -186,7 +188,7 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	}
 	// Санитизировать ошибку ДО возврата (она уходит в OnError → notices.jsonl).
 	if err != nil {
-		err = errors.New(redactString(err.Error(), secretValues(h)))
+		err = errors.New(redact.String(err.Error(), secretValues(h)))
 	}
 	return err
 }

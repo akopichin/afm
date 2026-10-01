@@ -56,6 +56,13 @@ type ReExecConfig struct {
 	// закодированный и передаваемый в контейнер только когда FileBrowserEnabled
 	// и Roots непусты.
 	FileRoots FileRootManifest
+	// SideAgentEnabled — поднят ли боковой агент дашборда. Как и file browser,
+	// он открывает в dashboard API доступ к агенту с правами на запись в проект,
+	// поэтому публикация dashboard-порта тоже должна уходить только на loopback
+	// (127.0.0.1), а не наружу хоста. Листенер внутри контейнера остаётся :port
+	// (server.go решает это по ReExecedIntoContainer) — меняется только host-side
+	// публикация. Боковой агент включён всегда, когда поднят дашборд.
+	SideAgentEnabled bool
 
 	// Hooks — итоговый список lifecycle-хуков (Combine global+project+flow+stage
 	// слоёв, с учётом override по id), собранный ВЫЗЫВАЮЩИМ КОДОМ (cmd/afm/run.go)
@@ -331,11 +338,13 @@ func ReExec(cfg ReExecConfig) error {
 
 	// Dashboard: пробрасываем порт на хост, иначе UI недоступен извне контейнера.
 	// С включённым file browser (доступ на чтение к содержимому смонтированных
-	// корней через dashboard API) публикуем порт только на loopback — иначе
-	// файлы проекта были бы читаемы с любого хоста в той же сети.
+	// корней через dashboard API) или боковым агентом (агент с правами на запись
+	// через dashboard API) публикуем порт только на loopback — иначе проект был бы
+	// доступен с любого хоста в той же сети.
 	if cfg.DashboardPort > 0 {
+		needLoopback := (cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0) || cfg.SideAgentEnabled
 		bind := fmt.Sprintf("%d:%d", cfg.DashboardPort, cfg.DashboardPort)
-		if cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0 {
+		if needLoopback {
 			bind = fmt.Sprintf("127.0.0.1:%d:%d", cfg.DashboardPort, cfg.DashboardPort)
 		}
 		args = append(args, "-p", bind)

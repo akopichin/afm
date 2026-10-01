@@ -121,6 +121,9 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		MountCodexState:    docker.UsesCodex(f, cfg.Client.Command, recipes),
 		FileBrowserEnabled: browserEnabled,
 		FileRoots:          fileRoots,
+		// Боковой агент дашборда включён всегда, когда поднят дашборд — публикуем
+		// порт только на loopback.
+		SideAgentEnabled: port > 0,
 	})
 }
 

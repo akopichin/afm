@@ -1,11 +1,12 @@
 package lifecyclehooks
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akopichin/afm/pkg/redact"
 )
 
 func TestResolveHookEnv(t *testing.T) {
@@ -150,147 +151,21 @@ func TestUnsetTransportVars_RemovesOnlyHookSecretPrefix(t *testing.T) {
 	}
 }
 
-func TestRedactingWriter(t *testing.T) {
-	var buf bytes.Buffer
-	w := newRedactingWriter(&buf, []string{"topsecret"})
-	// секрет, разорванный между двумя Write, тоже редактируется
-	if _, err := w.Write([]byte("before top")); err != nil {
-		t.Fatal(err)
+// TestSecretValues_FeedsRedactor — регрессия на Hook-специфичный glue после
+// выноса примитива в pkg/redact: secretValues извлекает значения ResolvedEnv, а
+// пропущенная через redact строка их маскирует (поведение lifecyclehooks не
+// изменилось). Байт-в-байт семантику самого редактора покрывает pkg/redact.
+func TestSecretValues_FeedsRedactor(t *testing.T) {
+	h := Hook{ResolvedEnv: map[string]string{"A": "s3cr3t", "B": "topsecret"}}
+	vals := secretValues(h)
+	if len(vals) != 2 {
+		t.Fatalf("secretValues: expected 2 values, got %d: %v", len(vals), vals)
 	}
-	if _, err := w.Write([]byte("secret after")); err != nil {
-		t.Fatal(err)
+	got := redact.String("A=s3cr3t B=topsecret", vals)
+	if strings.Contains(got, "s3cr3t") || strings.Contains(got, "topsecret") {
+		t.Fatalf("secret leaked through lifecyclehooks glue: %q", got)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
-	if strings.Contains(out, "topsecret") {
-		t.Fatalf("secret leaked: %q", out)
-	}
-	if !strings.Contains(out, defaultRedactionMarker) {
-		t.Fatalf("no redaction marker: %q", out)
-	}
-	if !strings.Contains(out, "before ") || !strings.Contains(out, " after") {
-		t.Fatalf("non-secret text mangled: %q", out)
-	}
-}
-
-func TestRedactingWriter_FullSecretOneWrite(t *testing.T) {
-	var buf bytes.Buffer
-	w := newRedactingWriter(&buf, []string{"topsecret"})
-	if _, err := w.Write([]byte("token=topsecret\n")); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
-	if strings.Contains(out, "topsecret") {
-		t.Fatalf("secret leaked: %q", out)
-	}
-	if !strings.Contains(out, defaultRedactionMarker) {
-		t.Fatalf("no redaction marker: %q", out)
-	}
-}
-
-func TestRedactingWriter_BoundedMemoryOnLargeStream(t *testing.T) {
-	var buf bytes.Buffer
-	secret := "topsecret"
-	w := newRedactingWriter(&buf, []string{secret})
-	// Большой поток без '\n', секрет где-то в середине: buf хвост должен
-	// оставаться ограниченным (≤ maxLen-1), а секрет всё равно отредактирован.
-	chunk := strings.Repeat("x", 8192)
-	if _, err := w.Write([]byte(chunk)); err != nil {
-		t.Fatal(err)
-	}
-	if len(w.buf) > len(secret)-1 {
-		t.Fatalf("buf not bounded: %d bytes held", len(w.buf))
-	}
-	if _, err := w.Write([]byte(secret)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte(chunk)); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
-	if strings.Contains(out, secret) {
-		t.Fatal("secret leaked in large stream")
-	}
-	if !strings.Contains(out, defaultRedactionMarker) {
-		t.Fatal("no redaction marker in large stream")
-	}
-}
-
-func TestRedactMarker_FallsBackWhenSecretIsSubstringOfCandidates(t *testing.T) {
-	// Секрет совпадает с содержимым маркера-кандидата → нужен безопасный фолбэк.
-	secrets := []string{"REDACTED"}
-	m := redactMarker(secrets)
-	if strings.Contains(m, "REDACTED") {
-		t.Fatalf("marker must not contain the secret itself: %q", m)
-	}
-}
-
-func TestRedactMarker_RejectsCandidateThatIsSubstringOfAnotherSecret(t *testing.T) {
-	// Секрет "a[REDACTED]b" содержит стандартный маркер как подстроку —
-	// redactMarker обязан пропустить его (условие (в), Finding #2).
-	overlapping := "a[REDACTED]b"
-	secrets := []string{"QR", overlapping}
-	m := redactMarker(secrets)
-	if strings.Contains(overlapping, m) && m != "" {
-		t.Fatalf("marker must not be a substring of another secret: %q", m)
-	}
-	if m == defaultRedactionMarker {
-		t.Fatalf("expected redactMarker to skip the default marker, got %q", m)
-	}
-}
-
-// TestRedactingWriter_NoSynthesisAcrossFlushedBoundary воспроизводит утечку
-// из Finding #2: секрет "QR" редактируется на границе двух Write так, что
-// сброшенный в лог контекст "a" + маркер + "b" совпадает со значением
-// ДРУГОГО секрета "a[REDACTED]b". Правильный маркер должен исключать такое
-// совпадение — итоговый лог не должен содержать значение второго секрета
-// целиком.
-func TestRedactingWriter_NoSynthesisAcrossFlushedBoundary(t *testing.T) {
-	shortSecret := "QR"
-	overlapping := "a[REDACTED]b" // содержит дефолтный маркер как подстроку
-	var buf bytes.Buffer
-	w := newRedactingWriter(&buf, []string{shortSecret, overlapping})
-	if w.marker == defaultRedactionMarker {
-		t.Fatalf("redactingWriter must not pick a marker that is a substring of overlapping, got %q", w.marker)
-	}
-	// "aQ" flush-ит "a" (Q удержан как возможный префикс shortSecret), затем
-	// "Rb" достраивает "QR" -> marker, стыкуясь с уже сброшенным "a" и
-	// последующим "b" — именно граница, которую пропускала старая проверка.
-	if _, err := w.Write([]byte("aQ")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte("Rb")); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
-	if strings.Contains(out, shortSecret) {
-		t.Fatalf("shortSecret leaked: %q", out)
-	}
-	if strings.Contains(out, overlapping) {
-		t.Fatalf("overlapping secret synthesized across flushed Write boundary: %q", out)
-	}
-}
-
-func TestRedactString(t *testing.T) {
-	if got := redactString("no secrets here", nil); got != "no secrets here" {
-		t.Fatalf("no secrets: no-op expected, got %q", got)
-	}
-	got := redactString("error: token s3cr3t failed", []string{"s3cr3t"})
-	if strings.Contains(got, "s3cr3t") {
-		t.Fatalf("secret leaked in error string: %q", got)
-	}
-	if !strings.Contains(got, defaultRedactionMarker) {
+	if !strings.Contains(got, redact.DefaultMarker) {
 		t.Fatalf("expected redaction marker: %q", got)
 	}
 }

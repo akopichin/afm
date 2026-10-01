@@ -12,6 +12,7 @@ import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
 import { FileBrowserProvider } from '../components/file-browser'
+import { SideAgentProvider } from '../components/side-agent'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
@@ -55,7 +56,7 @@ export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
-    backoffOpenSince, capabilities, flowPauseState, flowPausedStages, runCost,
+    backoffOpenSince, capabilities, runId, flowPauseState, flowPausedStages, runCost,
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
   } = useStatus()
 
@@ -155,7 +156,13 @@ export function App(): ReactElement {
   // за непрозрачной модалкой; оно только светится (маяк-вкладка/шорткат в шапке
   // модалки). Сами модальные состояния объявлены выше по файлу.
   const [filesOpen, setFilesOpen] = useState(false)
-  const anyModalOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
+  // sideAgentOpen — видимость «бокового» агента (владеет SideAgentProvider,
+  // сообщает сюда через onOpenChange). Входит в anyModalOpen, чтобы attention
+  // других стадий не авто-открывался за открытой беседой (только сигналил).
+  // otherModalsOpen НЕ включает сам Side agent — это его гейт «не красть хоткей».
+  const [sideAgentOpen, setSideAgentOpen] = useState(false)
+  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
+  const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция
   // (мы её ставим/держим/снимаем). Пока так — не даём НАШЕЙ же паузе авто-открыть
   // attention и выкинуть пользователя из композера (shouldSuppressAttention).
@@ -525,6 +532,7 @@ export function App(): ReactElement {
 
   return (
     <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
+      <SideAgentProvider runId={runId} enabled={capabilities.sideAgent} blocked={otherModalsOpen} onOpenChange={setSideAgentOpen} attentionShortcut={attentionShortcut}>
       <GlobalHeader
         flowName={flowName}
         description={description}
@@ -689,6 +697,7 @@ export function App(): ReactElement {
       {reviewModalOpen && (
         <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} attentionShortcut={attentionShortcut} />
       )}
+      </SideAgentProvider>
     </FileBrowserProvider>
   )
 }

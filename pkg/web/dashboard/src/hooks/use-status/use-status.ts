@@ -37,10 +37,17 @@ export type FlowStatus = {
   backoffAccumulatedMs: number
   backoffOpenSince: string[]
   // capabilities — фичефлаги бэкенда для текущего запуска (см. Go
-  // Server.Capabilities). Сейчас единственный флаг: включён ли файловый
-  // браузер проекта (Task 13 UI). Отсутствие поля в ответе — как на старом
-  // бэкенде без этого API — трактуется как выключено, а не как ошибка.
-  capabilities: { fileBrowser: boolean }
+  // Server.Capabilities): включён ли файловый браузер проекта (Task 13 UI) и
+  // подключён ли «боковой» агент (side agent). Отсутствие поля/флага в ответе —
+  // как на старом бэкенде без этого API — трактуется как выключено, а не как
+  // ошибка.
+  capabilities: { fileBrowser: boolean; sideAgent: boolean }
+  // runId — id текущего разговора бокового агента (== run_id, ключ GET /api/status
+  // `run_id`, omitempty на бэкенде). Непусто только когда боковой агент подключён;
+  // читается защитно ('' при отсутствии) — как только бэкенд начнёт присылать
+  // run_id, он станет доступен без нового API-вызова. Используется хуком бокового
+  // агента как поколение: смена run_id инвалидирует прежний разговор.
+  runId: string
   // flowPauseState/flowPausedStages — состояние flow-wide review-pause (см.
   // Go handlers.go's statusResponse.FlowPauseState/FlowPausedStages): 'none' —
   // обычная работа; 'paused' — активные стадии приостановлены для сбора
@@ -75,7 +82,8 @@ const EMPTY_STATUS: FlowStatus = {
   idleSince: null,
   backoffAccumulatedMs: 0,
   backoffOpenSince: [],
-  capabilities: { fileBrowser: false },
+  capabilities: { fileBrowser: false, sideAgent: false },
+  runId: '',
   flowPauseState: 'none',
   flowPausedStages: [],
   coverageIssues: [],
@@ -202,7 +210,11 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     : []
 
   const rawCapabilities = isRecord(obj.capabilities) ? obj.capabilities : {}
-  const capabilities = { fileBrowser: rawCapabilities.file_browser === true }
+  const capabilities = {
+    fileBrowser: rawCapabilities.file_browser === true,
+    sideAgent: rawCapabilities.side_agent === true,
+  }
+  const runId = typeof obj.run_id === 'string' ? obj.run_id : ''
 
   const flowPauseState: FlowStatus['flowPauseState'] =
     obj.flow_pause_state === 'paused' || obj.flow_pause_state === 'resuming' ? obj.flow_pause_state : 'none'
@@ -239,6 +251,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     backoffAccumulatedMs,
     backoffOpenSince,
     capabilities,
+    runId,
     flowPauseState,
     flowPausedStages,
     runCost,

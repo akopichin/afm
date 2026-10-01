@@ -25,6 +25,11 @@
         <phase>.q<N>.question.json   # agent's question
         <phase>.q<N>.answer.json     # user's answer
         <phase>.dialog.jsonl         # dialog history for the UI
+  side-agent/
+    <flow>-<ts>-<rand>/    # dashboard side-agent chat, keyed by run id (separate from the flow)
+      chat.jsonl     # side conversation journal — its own seq, not part of events.jsonl
+      usage.jsonl    # side-agent cost accounting
+      .lock          # flock of the active side-agent writer
   config.yaml      # project config (optional)
 ```
 

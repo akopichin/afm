@@ -16,6 +16,7 @@ import { FileSearchResults } from './FileSearchResults'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { useFilePreview, type ActiveFile, type PreviewTab } from './use-file-preview'
+import { visibleFocusables } from '../../lib/focus-trap'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
 
@@ -55,18 +56,6 @@ export type FileBrowserModalProps = {
   // (тесты), что не передают этот проп, получают прежнее поведение "аннотации
   // выключены".
   flowPauseState?: FlowPauseState
-}
-
-const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
-
-// Видимо-фокусируемые элементы модалки: FOCUSABLE_SELECTOR ловит и элементы,
-// скрытые CSS-ом (напр. mobile-only «Toggle file tree» с display:none на
-// desktop) — реальный .focus() по ним не срабатывает, и фокус остаётся снаружи
-// (Finding #3, раунд 3). checkVisibility() (Chrome 105+) отсеивает display:none/
-// visibility:hidden; в jsdom его нет — там оставляем всё (layout не считается).
-function visibleFocusables(modal: HTMLElement): HTMLElement[] {
-  const all = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-  return all.filter((el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true))
 }
 
 // Resizable left panel: the file list/tree column can be dragged wider/narrower

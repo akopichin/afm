@@ -159,8 +159,9 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
   This is a deliberate safe default: after upgrading afm, every existing
   `extra_mounts` entry stays private. Only add `browse: true` for a code root you're
   comfortable showing.
-- **Security: loopback-only port when the browser is on.** With the browser enabled
-  (the default), the dashboard port is published as `-p 127.0.0.1:<port>:<port>` — not
-  reachable from other hosts on your LAN. Disable the browser
-  (`file_browser: {enabled: false}` or `AFM_FILE_BROWSER=0`) to restore the LAN-reachable
-  `0.0.0.0` publish, or keep it on and use an SSH tunnel for remote access.
+- **Security: loopback-only port.** Whenever the dashboard exposes a locally-trusted
+  surface — the project file browser (on by default) or the [side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+  (always on when the dashboard is up) — the dashboard port is published as
+  `-p 127.0.0.1:<port>:<port>`, not reachable from other hosts on your LAN. Because the
+  side agent is always present, this is the effective default for Docker runs with a
+  dashboard. Use an SSH tunnel for remote access rather than widening the publish.

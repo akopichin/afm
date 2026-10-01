@@ -119,6 +119,80 @@ func TestServer_IndexDefaultTheme(t *testing.T) {
 	}
 }
 
+// Структурный CSS «бокового» агента доставляется ПОСТОЯННОЙ ссылкой
+// /side-agent.css (её сервер не подменяет, в отличие от skin-ссылки). Проверяем
+// на РЕЗУЛЬТАТЕ сборки (встроенный index.html, регенерированный из
+// index.dev.html) — тест упадёт ровно тогда, когда будущая сборка потеряет
+// ссылку. Плюс фактическая отдача файла: HTML-only проверка не поймала бы 404
+// из-за отсутствия файла в embed.
+func TestServer_SideAgentCSSLinkInIndex(t *testing.T) {
+	srv := New(Config{})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	// Активная skin-ссылка (встроенная тема) И постоянная ссылка на side-agent.css.
+	if !strings.Contains(body, `href="./skins/graphite/index.css"`) {
+		t.Error("index должен сохранять активную skin-ссылку")
+	}
+	if !strings.Contains(body, `href="./side-agent.css"`) {
+		t.Error("index должен содержать постоянную ссылку на /side-agent.css (её добавляет index.dev.html, сборка переносит в index.html)")
+	}
+}
+
+func TestServer_ServesSideAgentCSS(t *testing.T) {
+	srv := New(Config{})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/side-agent.css", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /side-agent.css: got %d, want 200 (файл обязан быть в //go:embed)", w.Code)
+	}
+	if strings.TrimSpace(w.Body.String()) == "" {
+		t.Error("GET /side-agent.css должен отдавать непустой CSS")
+	}
+	if !strings.Contains(w.Body.String(), ".side-agent-modal") {
+		t.Error("side-agent.css должен содержать структурные правила .side-agent-modal")
+	}
+}
+
+// Для skin_dir (custom skin) skin-ссылка указывает на custom, НО постоянная
+// ссылка на /side-agent.css по-прежнему есть, и сам файл отдаётся из встроенного
+// web.FS (не из skin_dir) — иначе под кастомным скином модалка осталась бы без
+// структурного CSS.
+func TestServer_SideAgentCSSSurvivesSkinDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root{--x:1;}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{SkinDir: dir})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	body := w.Body.String()
+	if !strings.Contains(body, `href="./skins/custom/index.css"`) {
+		t.Error("skin_dir должен давать custom skin-ссылку")
+	}
+	if !strings.Contains(body, `href="./side-agent.css"`) {
+		t.Error("ссылка /side-agent.css должна оставаться и для skin_dir")
+	}
+
+	cssReq := httptest.NewRequest("GET", "/side-agent.css", nil)
+	cssW := httptest.NewRecorder()
+	handler.ServeHTTP(cssW, cssReq)
+	if cssW.Code != http.StatusOK {
+		t.Fatalf("GET /side-agent.css под skin_dir: got %d, want 200", cssW.Code)
+	}
+}
+
 func TestServer_IndexGogaTheme(t *testing.T) {
 	srv := New(Config{Theme: config.ThemeGoga})
 	handler := srv.Handler()

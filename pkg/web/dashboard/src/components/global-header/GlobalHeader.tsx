@@ -3,6 +3,7 @@ import { useThemeMode } from '../../hooks/use-theme-mode'
 import type { NotificationPermissionState } from '../../hooks/use-desktop-notifications'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { useFileBrowser } from '../file-browser'
+import { useSideAgentContext } from '../side-agent'
 import { RunMetrics } from '../run-metrics'
 
 type GlobalHeaderProps = {
@@ -85,6 +86,7 @@ export function GlobalHeader({
       </div>
 
       <div className="gh-right header-actions">
+        <SideAgentHeaderButton />
         {capabilities.fileBrowser && <OpenFileBrowserButton />}
         {/* Сегментированный переключатель темы (солнце | луна), как в макете. */}
         <div className="gh-theme-seg" role="group" aria-label="Theme mode">
@@ -153,6 +155,33 @@ function bellIcon(enabled: boolean): ReactElement {
       <path d="M9.8 20.5a2.4 2.4 0 0 0 4.4 0" />
       {!enabled && <path d="M4 3.5l16 16" />}
     </>,
+  )
+}
+
+// Кнопка открытия «бокового» агента. Контекст имеет безопасный дефолт
+// (enabled=false вне провайдера), поэтому GlobalHeader остаётся тестируемым без
+// SideAgentProvider — кнопка просто не рендерится, пока capability выключена.
+// Индикатор-точка: активный запрос (пульс) или непросмотренный результат.
+function SideAgentHeaderButton(): ReactElement | null {
+  const { enabled, open, unseenResult, active } = useSideAgentContext()
+  if (!enabled) return null
+  const dot = active ? ' gh-side-agent-active' : unseenResult ? ' gh-side-agent-unseen' : ''
+  return (
+    <button
+      type="button"
+      className="icon-btn gh-side-agent-btn"
+      aria-label="Open side agent"
+      title="Side agent (Cmd/Ctrl+`)"
+      onClick={open}
+    >
+      <span className="gh-side-agent-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 5h16v11H8l-4 3Z" />
+        </svg>
+      </span>
+      <span className="gh-side-agent-label">Side agent</span>
+      {dot !== '' && <span className={`gh-side-agent-dot${dot}`} aria-hidden="true" />}
+    </button>
   )
 }
 

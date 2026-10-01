@@ -16,7 +16,13 @@
       })();
     </script>
     <link rel="stylesheet" href="./skins/graphite/index.css">
-  <script type="module" crossorigin src="./assets/index-DU2o8l7H.js"></script>
+    <!-- Структурный CSS «бокового» агента — ПОСТОЯННАЯ ссылка, сервер её не
+         подменяет (в отличие от skin-ссылки выше). Присутствует и для встроенных
+         тем, и для skin_dir: skin_dir заменяет основной stylesheet целиком,
+         поэтому доставлять этот слой через skin @import нельзя. Оформление — на
+         семантических токенах активной темы. -->
+    <link rel="stylesheet" href="./side-agent.css">
+  <script type="module" crossorigin src="./assets/index-C6icHti1.js"></script>
 </head>
 <body class="theme-graphite">
     <div id="root"></div>
