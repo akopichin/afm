@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 // Authoritative source skins, inlined as strings by Vite (?raw). Typed by vite/client.
 import tokensCss from '../../skins/base/tokens.css?raw'
 import feedWorkspaceCss from '../../skins/base/feed-workspace.css?raw'
+import planPanelCss from '../../skins/base/plan-panel.css?raw'
 
 const tokens = () => tokensCss
 const keyframe = (css: string, name: string) =>
@@ -40,5 +41,14 @@ describe('skins CSS contract — reply-to-thought chip (Task 2)', () => {
   })
   it('.feed-reply-chip-label springs its mark via quoteMarkPop', () => {
     expect(rule(feedWorkspaceCss, '.feed-reply-chip-label')).toMatch(/animation:\s*quoteMarkPop/)
+  })
+})
+
+describe('skins CSS contract — line-comment quote (Task 3)', () => {
+  it('.line-comment-quote glows in via quoteChipIn', () => {
+    expect(planPanelCss).toMatch(/\.line-comment-quote\s*\{[\s\S]*?animation:\s*quoteChipIn[\s\S]*?\}/)
+  })
+  it('.line-comment-quote::before springs its mark via quoteMarkPop', () => {
+    expect(planPanelCss).toMatch(/\.line-comment-quote::before\s*\{[\s\S]*?animation:\s*quoteMarkPop[\s\S]*?\}/)
   })
 })
