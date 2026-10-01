@@ -3,6 +3,22 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-01
+
+### Improvement: subtle entrance animations in the dashboard
+
+Three dashboard surfaces now animate gently as they appear, so new content reads as
+arriving rather than popping in: the **reply-to-thought** quote chip and the
+**line-comment** quote mark glow in with a brief accent flash that settles to rest,
+and the **newest feed message** slides and fades in — but only when its content
+actually differs from the previous last message, so re-renders and autoscroll never
+replay it. The two quote glows take their color from the active theme's accent; the
+feed message animates with just a small translate and fade that doesn't fight
+stick-to-bottom scrolling. All of it honors
+`prefers-reduced-motion`: with reduced motion requested the animations collapse to
+effectively instant. Presentation only — no change to the event feed, orchestration,
+or any stage behavior.
+
 ## 2026-09-30
 
 ### Improvement: a completed stage's plan and Q&A history are always reachable

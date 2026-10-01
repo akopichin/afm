@@ -69,6 +69,12 @@ itself and is independent of the theme choice. A fully custom skin can be suppli
 via the top-level `skin_dir:` config option (a directory containing `index.css`),
 which overrides the built-in theme.
 
+The dashboard uses a few subtle entrance animations as content appears. The
+reply-to-thought quote chip and the line-comment quote mark glow in, taking their
+accent color from the active theme; the newest feed message slides and fades in with
+no color effect. All of them honor `prefers-reduced-motion`: if your system requests
+reduced motion, they collapse to effectively instant.
+
 ## Cost tracking
 
 The dashboard surfaces the run's **estimated** cost in three places:
