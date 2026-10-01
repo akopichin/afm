@@ -332,12 +332,16 @@
   background: var(--surface-hover);
   border-left: 2px solid var(--accent-primary);
   border-radius: var(--radius-sm);
+  animation: quoteChipIn var(--motion-base) var(--ease-out) backwards;
 }
 .feed-reply-chip-label {
   flex-shrink: 0;
   font-size: 11.5px;
   font-weight: 600;
   color: var(--accent-primary);
+  display: inline-block;
+  animation: quoteMarkPop var(--motion-slow) var(--ease-spring) backwards;
+  transform-origin: left center;
 }
 .feed-reply-chip-src {
   flex: 1;
