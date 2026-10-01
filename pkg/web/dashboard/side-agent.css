@@ -233,6 +233,23 @@
 .gh-side-agent-btn {
   position: relative;
 }
+.header-actions .icon-btn.gh-side-agent-btn {
+  width: auto;
+  height: 34px;
+  padding: 0 14px;
+  gap: 7px;
+  white-space: nowrap;
+}
+.gh-side-agent-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.gh-side-agent-label {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
 .gh-side-agent-dot {
   position: absolute;
   top: 2px;
@@ -252,4 +269,13 @@
 @keyframes side-agent-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+
+@media (max-width: 900px) {
+  .gh-side-agent-label { display: none; }
+  .header-actions .icon-btn.gh-side-agent-btn {
+    width: 38px;
+    padding: 0;
+    justify-content: center;
+  }
 }

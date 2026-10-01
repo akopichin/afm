@@ -28,6 +28,14 @@ trusted local client: on a native host afm binds the dashboard to `127.0.0.1`, a
 Docker mode the dashboard port is published loopback-only. Remote/authenticated access
 is not supported in this version.
 
+### Fix: the side-agent header action now keeps its label on one line
+
+The shared header icon-button rule fixed every action to a 34px square. Unlike the
+Files action, the new Side agent action did not override that width, so its label
+wrapped and overflowed the button border. The action now expands to its content on
+regular screens and collapses to the chat icon at the existing narrow-screen
+breakpoint.
+
 ### Fix: the side-agent modal now starts hidden and stays closed
 
 The side-agent overlay's base `display: flex` rule overrode the browser's default
