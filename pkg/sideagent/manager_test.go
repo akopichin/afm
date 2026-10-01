@@ -177,6 +177,8 @@ func lastDataTexts(h []Event, typ EventType) []string {
 			var d TurnFailedData
 			_ = e.DecodeData(&d)
 			out = append(out, d.Message)
+		default:
+			continue
 		}
 	}
 	return out
@@ -545,7 +547,7 @@ func TestManager_StorageUnavailable(t *testing.T) {
 		t.Fatalf("code = %q, want %q", code, ErrCodeStorageUnavailable)
 	}
 	if ff.count() != 0 {
-		t.Fatalf("агент запущен при недоступном сторе")
+		t.Fatal("агент запущен при недоступном сторе")
 	}
 }
 
@@ -628,7 +630,7 @@ func TestManager_ValidationErrors(t *testing.T) {
 		t.Fatalf("слишком большой текст: code = %q", codeOf(t, err))
 	}
 	if ff.count() != 0 {
-		t.Fatalf("агент запущен при провале валидации")
+		t.Fatal("агент запущен при провале валидации")
 	}
 }
 

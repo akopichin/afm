@@ -30,6 +30,8 @@ const sideAgentAcctLabel = "side"
 // при аварийном выходе (Ctrl+C / сбой флоу). Не дождались — журнал не закрываем.
 const sideAgentEmergencyDrain = 5 * time.Second
 
+const openAIProviderEnv = "OPENAI_API_KEY"
+
 // sideAgentRuntime владеет ресурсами бокового агента в пределах executeFlow:
 // менеджер (приём ходов + агентские горутины под процессным ctx), журнал
 // разговора (chat.jsonl) и учёт стоимости (usage.jsonl в том же namespace).
@@ -214,7 +216,7 @@ func sideAgentProtectedValues(cfg config.Config) []string {
 // авторизуется через OAuth (~/.codex), токена в env нет. ANTHROPIC_BASE_URL — URL.
 func isProviderCredentialEnv(name string) bool {
 	switch name {
-	case "OPENAI_API_KEY", "CURSOR_API_KEY":
+	case openAIProviderEnv, "CURSOR_API_KEY":
 		return true
 	}
 	for _, v := range config.ClaudeAuthEnvVars {

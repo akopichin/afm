@@ -369,7 +369,7 @@ func TestSideAgent_StatePaginationCursor(t *testing.T) {
 	if int(m["last_seq"].(float64)) != 4 {
 		t.Errorf("last_seq = %v, want 4", m["last_seq"])
 	}
-	if m["has_more"] != true {
+	if hasMore, ok := m["has_more"].(bool); !ok || !hasMore {
 		t.Errorf("has_more = %v, want true", m["has_more"])
 	}
 	if events, _ := m["events"].([]any); len(events) != 2 {
@@ -381,7 +381,7 @@ func TestSideAgent_StatePaginationCursor(t *testing.T) {
 	if int(m2["next_cursor"].(float64)) != 4 {
 		t.Errorf("next_cursor = %v, want 4", m2["next_cursor"])
 	}
-	if m2["has_more"] != false {
+	if hasMore, ok := m2["has_more"].(bool); !ok || hasMore {
 		t.Errorf("has_more = %v, want false", m2["has_more"])
 	}
 	if m2["state"] != "idle" {

@@ -66,14 +66,14 @@ func TestMapAction_RedactsToolDetail(t *testing.T) {
 func TestMapAction_NoSecretsIsNoop(t *testing.T) {
 	_, data := mapAction("text", "обычный текст", "", nil)
 	if data.(AssistantTextData).Text != "обычный текст" {
-		t.Fatalf("текст изменён без секретов")
+		t.Fatal("текст изменён без секретов")
 	}
 }
 
 // Реальная фабрика строит AgentRunner поверх executor.New — проверяем только,
 // что тип удовлетворяет интерфейсу (без запуска подпроцесса).
 func TestNewExecutorRunner_SatisfiesInterface(t *testing.T) {
-	var r AgentRunner = NewExecutorRunner(executor.Config{Command: "true"})
+	r := NewExecutorRunner(executor.Config{Command: "true"})
 	if r == nil {
 		t.Fatal("NewExecutorRunner вернул nil")
 	}
