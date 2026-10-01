@@ -23,5 +23,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Process CSS so the skins contract test can read authoritative skins/base/*.css
+    // via Vite `?raw` imports (otherwise vitest stubs .css to an empty string). No
+    // component imports .css directly, so this is inert for every other test.
+    css: true,
   },
 })

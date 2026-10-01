@@ -84,4 +84,46 @@
   --cost-rail:        var(--text-muted);
   --cost-rail-strong: var(--text-secondary);
   --cost-warning:     var(--attention);
+
+  /* === motion ===
+     Shared, theme-agnostic entrance motion. Durations/easings are tokens;
+     keyframes (below, outside :root) animate only opacity/transform/box-shadow
+     and take color from the active --accent-primary via color-mix.
+     --motion-fast is pinned to 120ms (already used as var(--motion-fast, 120ms)). */
+  --motion-fast:  120ms;
+  --motion-base:  240ms;
+  --motion-slow:  420ms;
+  --ease-out:     cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Quote chip entrance (reply-to-thought & line-comment): a bright accent glow
+   that flashes on appear and eases down to rest, while the chip rises a hair.
+   box-shadow ends at none (no lingering glow). Color from the ACTIVE accent. */
+@keyframes quoteChipIn {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 55%, transparent),
+                0 0 18px 2px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  }
+  55% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); box-shadow: 0 0 0 0 transparent; }
+}
+
+/* Quote-mark entrance — NOT a plain fade: spring in from a small rotated scale
+   with a brief overshoot, then settle. TRANSFORM ONLY: the fade-in comes from the
+   parent quoteChipIn (the chip/quote block animates opacity 0->1 and the mark is
+   its child), so each mark keeps its OWN resting opacity (1 for the chip label,
+   0.30 for the line-comment ::before) with no end-of-animation opacity jump. */
+@keyframes quoteMarkPop {
+  0%   { transform: scale(0.4) rotate(-14deg); }
+  60%  { transform: scale(1.12) rotate(3deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+/* Feed item entrance — gentle slide+fade; small translate to not fight autoscroll. */
+@keyframes feedItemIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
 }
