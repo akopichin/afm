@@ -495,7 +495,7 @@ describe('FeedWorkspace', () => {
       rerender(<FeedWorkspace events={[histRow, liveRow]} stageId="s1" />)           // L animates
       const row = document.querySelector('.feed-item--enter') as HTMLElement
       expect(row).not.toBeNull()
-      fireEvent.animationEnd(row, { animationName: 'feedItemIn' })                   // entrance done
+      fireEvent.animationEnd(row)                                                    // entrance done (its own animationend)
       // A backfill prepends (regroups), but the newest message (L) is unchanged:
       rerender(<FeedWorkspace events={[
         ev('agent_action', { tool: 'text', detail: 'M' }, 's1', '2026-01-01T00:00:01Z'),
@@ -522,6 +522,39 @@ describe('FeedWorkspace', () => {
         events={[ev('agent_action', { tool: 'text', detail: 'stage-full-last' }, 'full', '2026-01-01T00:00:05Z')]}
         stageId="full" scopeToken="scope:stage:full" />)
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
+    })
+
+    // The decision MUST key on CONTENT, not the feed key. All three rows share
+    // ts|type|stage, so the key carries an occurrence suffix #N that SHIFTS when an
+    // earlier same-base row is prepended — but the newest row's content (detail
+    // 'same') is unchanged. A key-based signal would animate here; a content one must
+    // not. (Pins the lastSig=feedItemSignature wiring against a lastKey regression.)
+    it('decides by content not the feed key: a re-keyed but content-unchanged newest row does not animate', () => {
+      const mk = (detail: string) => ev('agent_action', { tool: 'text', detail }, 's1', '2026-01-01T00:00:00Z')
+      const { rerender } = render(<FeedWorkspace events={[mk('x'), mk('same')]} stageId="s1" />) // baseline; newest 'same' = key #1
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
+      rerender(<FeedWorkspace events={[mk('y'), mk('x'), mk('same')]} stageId="s1" />)           // prepend shifts newest to key #2
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)                       // content unchanged -> no animate
+    })
+
+    // The entrance clears ONLY on the row's own animationend (e.target===e.currentTarget),
+    // never on a bubbled child animation. Pins the guard (jsdom leaves animationName
+    // null, so name-filtering is impossible — this check is the only defense).
+    it('clears the entrance on the row’s own animationend, not a bubbled child animation', () => {
+      const first = ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z')
+      const events = [first, ev('agent_action', { tool: 'text', detail: 'b' }, 's1', '2026-01-01T00:00:01Z')]
+      const { rerender } = render(<FeedWorkspace events={[first]} stageId="s1" />) // baseline
+      rerender(<FeedWorkspace events={events} stageId="s1" />)                       // 'b' animates
+      const row = document.querySelector('.feed-item--enter') as HTMLElement
+      expect(row).not.toBeNull()
+      const child = row.querySelector('.feed-item-text') as HTMLElement
+      expect(child).not.toBeNull()
+      fireEvent.animationEnd(child)                                                     // bubbles up — must be ignored
+      rerender(<FeedWorkspace events={events} stageId="s1" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(1)             // still armed
+      fireEvent.animationEnd(document.querySelector('.feed-item--enter') as HTMLElement) // row's own end
+      rerender(<FeedWorkspace events={events} stageId="s1" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)             // cleared
     })
 
     // Signature must be collision-free: two DIFFERENT tuples that would share a

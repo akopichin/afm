@@ -3,8 +3,10 @@ import { useCallback, useState } from 'react'
 // useEnteringLast — the feed entrance is deliberately minimal (owner decision):
 // animate ONLY the last feed message, and ONLY when it differs from the
 // previously-COMMITTED last message. `signature` is a STABLE CONTENT signature of
-// the last row (stageId|kind|actor|text) — never the timestamp-bearing feed key —
-// so a reconnect re-sync or history backfill that re-keys rows but leaves the
+// the last row (the (stageId, kind, actor, text) tuple — see feedItemSignature,
+// which JSON-encodes it rather than '|'-joining to avoid delimiter collisions) —
+// never the timestamp-bearing feed key — so a reconnect re-sync or history backfill
+// that re-keys rows but leaves the
 // newest message's content unchanged produces the SAME signature and animates
 // nothing. A new live message changes the signature → animate. A byte-identical
 // repeat of the current last does not differ → no animation. A resetToken (feed

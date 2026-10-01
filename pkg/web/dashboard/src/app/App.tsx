@@ -608,7 +608,9 @@ export function App(): ReactElement {
                   <FeedWorkspace
                     events={stageEvents}
                     stageId={workspaceStage?.id ?? null}
-                    scopeToken={workspaceStage ? `scope:stage:${workspaceStage.id}` : 'scope:none'}
+                    // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно
+                    // `scope:stage:<id>` / `scope:none`. Явный токен нужен только
+                    // Full-feed-сайту (scope:full), который переопределяет дефолт.
                     emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                     onOpenDialog={handleOpenDialogFromFeed}
                     noteTarget={noteTarget}

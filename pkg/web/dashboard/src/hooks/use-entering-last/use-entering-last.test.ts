@@ -70,4 +70,19 @@ describe('useEnteringLast', () => {
     rerender({ s: 'c', t: 's1' })              // c supersedes before b finished
     expect(result.current.animate).toBe(true)  // still animating — now the new last (c)
   })
+
+  it('stays armed across several rapid appends (b -> c -> d, no onEntered between)', () => {
+    const { result, rerender } = run('a', 's1')
+    rerender({ s: 'b', t: 's1' })
+    rerender({ s: 'c', t: 's1' })
+    rerender({ s: 'd', t: 's1' })
+    expect(result.current.animate).toBe(true)  // tracks the final last (d)
+  })
+
+  it('onEntered is a harmless no-op when nothing is animating', () => {
+    const { result } = run('a', 's1')          // baseline, not animating
+    expect(result.current.animate).toBe(false)
+    act(() => result.current.onEntered())      // must not flip anything on
+    expect(result.current.animate).toBe(false)
+  })
 })
