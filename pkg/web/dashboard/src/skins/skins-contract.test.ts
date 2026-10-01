@@ -52,3 +52,9 @@ describe('skins CSS contract — line-comment quote (Task 3)', () => {
     expect(planPanelCss).toMatch(/\.line-comment-quote::before\s*\{[\s\S]*?animation:\s*quoteMarkPop[\s\S]*?\}/)
   })
 })
+
+describe('skins CSS contract — feed item entrance (Task 4)', () => {
+  it('.feed-item--enter animates via feedItemIn', () => {
+    expect(feedWorkspaceCss).toMatch(/\.feed-item--enter\s*\{[\s\S]*?animation:\s*feedItemIn[\s\S]*?\}/)
+  })
+})

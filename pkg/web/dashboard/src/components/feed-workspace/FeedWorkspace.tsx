@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type ReactElement } from 'react'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
+import { useEnteringLast } from '../../hooks/use-entering-last'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer } from './FeedComposer'
@@ -17,6 +18,11 @@ type FeedWorkspaceProps = {
   // сигнатуре компонента для параллелизма с вызывающим кодом (координаты
   // «какая стадия сейчас выбрана») — сам компонент это поле не читает.
   stageId: string | null
+  // scopeToken — пространство имён текущего скоупа ленты (reset-токен для
+  // useEnteringLast). App передаёт `scope:full` / `scope:stage:<id>` / `scope:none`,
+  // чтобы стадия, легитимно названная `full`, не схлопнулась с Full-feed скоупом
+  // (у обеих stageId может быть null). Не задан → дефолт из stageId.
+  scopeToken?: string
   // showStageBadges — показывать бейдж стадии в шапке группы. false (дефолт) для
   // per-stage Feed (все строки — одна и та же стадия, бейдж — лишний шум); true
   // для Full feed (несколько стадий вперемешку — бейдж нужен для ориентации).
@@ -61,8 +67,17 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
 // App.tsx: per-stage Feed передаёт уже отфильтрованный список, Full feed — весь
 // флоу). Мысли агента (agent_action tool="text") рендерятся здесь как проза — это
 // событие ленты, отдельного лог-режима больше нет.
+// Collision-free content signature of a feed row, used by useEnteringLast to decide
+// whether the newest message changed. JSON.stringify of the tuple (not a '|'-join)
+// so fields containing '|' can never collapse two different rows to one signature.
+export function feedItemSignature(item: { stageId: string; kind: string; actor: string; text: string }): string {
+  return JSON.stringify([item.stageId, item.kind, item.actor, item.text])
+}
+
 export function FeedWorkspace({
   events,
+  stageId,
+  scopeToken,
   showStageBadges = false,
   emptyHint,
   onOpenDialog,
@@ -78,6 +93,21 @@ export function FeedWorkspace({
   const feed = useStickToBottom<HTMLDivElement>()
 
   const groups = useMemo(() => groupFeedItems(toFeedItems(events)), [events])
+
+  // Анимация появления: только самая свежая строка ленты и только когда её
+  // КОНТЕНТ (а не timestamp-ключ) отличается от прошлой свежей строки (см.
+  // useEnteringLast — реконнект/бэкфилл с тем же содержимым не анимируются).
+  const lastItem = useMemo(() => {
+    const g = groups[groups.length - 1]
+    return g ? g.items[g.items.length - 1] : undefined
+  }, [groups])
+  const lastKey = lastItem?.key ?? null
+  const lastSig = lastItem ? feedItemSignature(lastItem) : null
+  // Namespaced reset token so a stage legitimately named "full" can never collide
+  // with the Full-feed scope (stage-id validation allows "full"; pkg/flow/flow.go).
+  const resetToken = scopeToken ?? (stageId !== null ? `scope:stage:${stageId}` : 'scope:none')
+  const { animate, onEntered } = useEnteringLast(lastSig, resetToken)
+  const enteringKey = animate ? lastKey : null
 
   // Ответ на мысль агента: цель хранится ВМЕСТЕ со стадией (stageId), чтобы
   // асинхронная отправка/смена стадии не «протащили» чужую цитату. text —
@@ -103,6 +133,8 @@ export function FeedWorkspace({
               key={g.key}
               group={g}
               showStageBadges={showStageBadges}
+              enteringKey={enteringKey}
+              onEntered={onEntered}
               onOpenDialog={onOpenDialog}
               // Репляибл только per-stage Feed с живым композером: мысль выбирается
               // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
@@ -158,6 +190,11 @@ type FeedGroupViewProps = {
   // activeReplyKey — ключ выбранной мысли: ровно одна строка получает
   // is-reply-target (подсветка выбора).
   activeReplyKey?: string | null
+  // enteringKey — the feed key of the single newest row that should play the
+  // entrance animation (null = none). onEntered clears it on that row's
+  // animationend (one-shot; superseded by a newer last, so no replay).
+  enteringKey?: string | null
+  onEntered?: () => void
 }
 
 // FeedGroupView — один пузырь: шапка (стадия + актор) + стопка item-строк.
@@ -167,7 +204,7 @@ type FeedGroupViewProps = {
 // onOpenDialog или для остальных item — неизменный <div> как раньше.
 // Мысли агента (kind message + markdown) при наличии onReplyToThought
 // становятся репляиблыми (клик по строке/кнопке ↩ выбирает мысль для ответа).
-export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToThought, activeReplyKey = null }: FeedGroupViewProps): ReactElement {
+export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered }: FeedGroupViewProps): ReactElement {
   return (
     <div className={`feed-group feed-${group.side}`} data-actor={group.actor}>
       <div className="feed-group-head">
@@ -177,7 +214,20 @@ export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToT
       <div className="feed-bubble">
         {group.items.map((item) => {
           const isMd = item.markdown === true
-          const className = `feed-item feed-kind-${item.kind} tone-${item.tone}${item.mono ? ' mono' : ''}${isMd ? ' feed-item-markdown' : ''}`
+          // Самая свежая строка играет анимацию появления один раз: класс
+          // feed-item--enter + одноразовый обработчик animationend (чистит флаг
+          // через onEntered). Новое сообщение переназначит enteringKey на новую
+          // последнюю строку — старая теряет класс по позиции, реплея нет.
+          const isEntering = item.key === enteringKey
+          const enterCls = isEntering ? ' feed-item--enter' : ''
+          const className = `feed-item feed-kind-${item.kind} tone-${item.tone}${item.mono ? ' mono' : ''}${isMd ? ' feed-item-markdown' : ''}${enterCls}`
+          // Чистим флаг только когда закончилась анимация САМОЙ строки (её
+          // единственная анимация — feedItemIn), а не всплывшая анимация потомка:
+          // target===currentTarget надёжно в браузере и в jsdom (где animationName
+          // не проставляется, поэтому фильтр по имени здесь не годится).
+          const onAnimEnd = isEntering
+            ? (e: ReactAnimationEvent<HTMLElement>) => { if (e.target === e.currentTarget) onEntered?.() }
+            : undefined
           const content = (
             <>
               {isMd ? (
@@ -218,6 +268,7 @@ export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToT
                 className={`${className} feed-item-navigable`}
                 title="Open in dialog"
                 onClick={() => onOpenDialog(item.stageId, item.phase ?? '', item.id ?? '')}
+                onAnimationEnd={onAnimEnd}
               >
                 {content}
               </button>
@@ -240,6 +291,7 @@ export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToT
                   onClick={(e) => {
                     if ((e.target as HTMLElement).closest('a') === null) onReplyToThought(item.key, item.text)
                   }}
+                  onAnimationEnd={onAnimEnd}
                 >
                   {content}
                 </div>
@@ -260,7 +312,7 @@ export function FeedGroupView({ group, showStageBadges, onOpenDialog, onReplyToT
           // произвольной высоты) — тот же приём, что и feed-item-segments.
           return (
             <div key={item.key} className="feed-item-with-report">
-              <div className={className}>{content}</div>
+              <div className={className} onAnimationEnd={onAnimEnd}>{content}</div>
               {item.reportVerificationId !== undefined && (
                 <VerifyReportLink stageId={item.stageId} verificationId={item.reportVerificationId} />
               )}

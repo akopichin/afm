@@ -95,6 +95,13 @@
   line-height: 1.5;
   border-radius: var(--radius-sm);
 }
+/* The newest message only (see useEnteringLast — animates when the last row's
+   content differs from the previous last). The row clears this class on
+   animationend so a later remount never replays. Small translate to not fight
+   stick-to-bottom autoscroll. Animate opacity/transform only. */
+.feed-item--enter {
+  animation: feedItemIn var(--motion-base) var(--ease-out) backwards;
+}
 .feed-item-text { min-width: 0; overflow-wrap: anywhere; }
 /* Колонка сегментов markdown-сообщения (текст + картинки [AFM image: …]).
    .feed-item — flex-РЯД (текст/timestamp), поэтому несколько сегментов

@@ -599,6 +599,7 @@ export function App(): ReactElement {
                   <FeedWorkspace
                     events={events}
                     stageId={null}
+                    scopeToken="scope:full"
                     showStageBadges
                     onOpenDialog={handleOpenDialogFromFeed}
                     emptyHint="No events yet"
@@ -607,6 +608,7 @@ export function App(): ReactElement {
                   <FeedWorkspace
                     events={stageEvents}
                     stageId={workspaceStage?.id ?? null}
+                    scopeToken={workspaceStage ? `scope:stage:${workspaceStage.id}` : 'scope:none'}
                     emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                     onOpenDialog={handleOpenDialogFromFeed}
                     noteTarget={noteTarget}

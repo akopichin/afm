@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react'
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
-import { FeedWorkspace, FeedGroupView } from './FeedWorkspace'
+import { FeedWorkspace, FeedGroupView, feedItemSignature } from './FeedWorkspace'
 import type { FeedGroup, FeedItem } from './feed-view-model'
 import * as verifyReportClient from '../../api/verify-report-client'
 
@@ -456,6 +456,81 @@ describe('FeedWorkspace', () => {
     it('Full feed (без композера) рендерит мысли не репляиблыми', () => {
       render(<FeedWorkspace events={thoughtEvents()} stageId={null} showStageBadges />)
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
+    })
+  })
+
+  describe('entrance animation of the newest message', () => {
+    it('animates only the newest row when a new live message arrives', () => {
+      const { rerender } = render(<FeedWorkspace events={[
+        ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z'),
+      ]} stageId="s1" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0) // baseline
+      rerender(<FeedWorkspace events={[
+        ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z'),
+        ev('agent_action', { tool: 'text', detail: 'b' }, 's1', '2026-01-01T00:00:01Z'),
+      ]} stageId="s1" />)
+      const entering = document.querySelectorAll('.feed-item--enter')
+      expect(entering.length).toBe(1)                                   // exactly the newest row
+      expect(entering[0]?.textContent).toContain('b')
+    })
+
+    it('does not animate a reconnect re-sync that leaves the newest message unchanged', () => {
+      const a = ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z')
+      const b = ev('agent_action', { tool: 'text', detail: 'b' }, 's1', '2026-01-01T00:00:01Z')
+      const { rerender } = render(<FeedWorkspace events={[a, b]} stageId="s1" />) // baseline, last = b
+      // reconnect re-sync: history prepends an older row and re-keys 'a' with an
+      // interpolated timestamp, but the newest message (content 'b') is unchanged:
+      rerender(<FeedWorkspace events={[
+        ev('agent_action', { tool: 'text', detail: 'older' }, 's1', '2025-12-31T23:59:59Z'),
+        ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00.5Z'),
+        b,
+      ]} stageId="s1" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
+    })
+
+    it('does not replay the entrance after animationend + regroup remount', () => {
+      const histRow = ev('agent_action', { tool: 'text', detail: 'H' }, 's1', '2026-01-01T00:00:00Z')
+      const liveRow = ev('agent_action', { tool: 'text', detail: 'L' }, 's1', '2026-01-01T00:00:02Z')
+      const { rerender } = render(<FeedWorkspace events={[histRow]} stageId="s1" />) // baseline
+      rerender(<FeedWorkspace events={[histRow, liveRow]} stageId="s1" />)           // L animates
+      const row = document.querySelector('.feed-item--enter') as HTMLElement
+      expect(row).not.toBeNull()
+      fireEvent.animationEnd(row, { animationName: 'feedItemIn' })                   // entrance done
+      // A backfill prepends (regroups), but the newest message (L) is unchanged:
+      rerender(<FeedWorkspace events={[
+        ev('agent_action', { tool: 'text', detail: 'M' }, 's1', '2026-01-01T00:00:01Z'),
+        histRow,
+        liveRow,
+      ]} stageId="s1" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)          // no replay
+    })
+
+    it('does not animate on a stage switch', () => {
+      const { rerender } = render(<FeedWorkspace events={[ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z')]} stageId="s1" />)
+      rerender(<FeedWorkspace events={[ev('agent_action', { tool: 'text', detail: 'x' }, 's2', '2026-01-01T00:00:03Z')]} stageId="s2" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
+    })
+
+    // scopeToken namespacing: a stage legitimately named "full" must NOT collide with
+    // the Full-feed scope. Switching between them changes the token -> re-baseline ->
+    // the (different) newest row must NOT animate.
+    it('does not animate when switching Full feed <-> a stage whose id is "full"', () => {
+      const { rerender } = render(<FeedWorkspace
+        events={[ev('agent_action', { tool: 'text', detail: 'full-feed-last' }, 's1', '2026-01-01T00:00:00Z')]}
+        stageId={null} scopeToken="scope:full" showStageBadges />)
+      rerender(<FeedWorkspace
+        events={[ev('agent_action', { tool: 'text', detail: 'stage-full-last' }, 'full', '2026-01-01T00:00:05Z')]}
+        stageId="full" scopeToken="scope:stage:full" />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
+    })
+
+    // Signature must be collision-free: two DIFFERENT tuples that would share a
+    // '|'-join must produce DIFFERENT signatures, else a genuinely-new newest row
+    // fails to animate.
+    it('feedItemSignature does not collide for different tuples that share a |-join', () => {
+      const a = feedItemSignature({ stageId: 'x', kind: 'tool', actor: 'agent', text: 'message|user|z' })
+      const b = feedItemSignature({ stageId: 'x|tool|agent', kind: 'message', actor: 'user', text: 'z' })
+      expect(a).not.toBe(b)
     })
   })
 })
