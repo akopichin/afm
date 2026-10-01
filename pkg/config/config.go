@@ -409,6 +409,21 @@ func defaultContainerMarkerPresent() bool {
 	return false
 }
 
+// SwapContainerMarkerPresent replaces the container-marker detector used by
+// InContainer and returns a function that restores the previous one. It lets a
+// test in ANY package make container detection hermetic: a suite that itself
+// runs inside a container (e.g. afm's own Docker image, where /.dockerenv
+// exists) must not consult the real marker, or it would flip InContainer and
+// defeat tests that exercise the host-only Docker re-exec path. Production code
+// never calls this; it deliberately takes no *testing.T so this file stays free
+// of the testing import. Pair it with t.Setenv("AFM_IN_DOCKER", "") to also
+// neutralize the re-exec signal.
+func SwapContainerMarkerPresent(fn func() bool) (restore func()) {
+	prev := containerMarkerPresent
+	containerMarkerPresent = fn
+	return func() { containerMarkerPresent = prev }
+}
+
 // InContainer reports whether afm is running inside ANY container — either
 // because afm re-exec'd itself into its own managed container (AFM_IN_DOCKER=1,
 // see ReExecedIntoContainer) or because it was placed into a foreign container

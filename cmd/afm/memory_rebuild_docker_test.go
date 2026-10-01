@@ -64,9 +64,21 @@ func TestRebuildDockerReExec_SkippedWhenInDocker(t *testing.T) {
 // стадий; docker.ScanCommands/UsedRecipes/UsesCodex вызываются с nil-флоу
 // (Task 13's nil-flow tolerance).
 func TestRebuildDockerReExec_OnlyGlobalCommandFeedsMounts(t *testing.T) {
+	// Hermeticity: this test exercises the host-only re-exec path, so container
+	// detection must report "not in a container" even when the suite itself runs
+	// inside afm's Docker image (AFM_IN_DOCKER=1 + a real /.dockerenv marker).
+	t.Setenv("AFM_IN_DOCKER", "")
+	t.Cleanup(config.SwapContainerMarkerPresent(func() bool { return false }))
+
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "myagent")
 	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// A stub `docker` on PATH so ReExec's exec.LookPath("docker") succeeds even on
+	// a host (or container) without Docker installed; SetExecFunc intercepts the
+	// actual `docker run`, so this stub is resolved but never executed.
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
@@ -126,6 +138,11 @@ func TestRebuildDockerReExec_ClaudeCommandRequiresAuth(t *testing.T) {
 	for _, key := range config.ClaudeAuthEnvVars {
 		t.Setenv(key, "")
 	}
+	// Hermeticity: reach the auth preflight (host-only path) even when the suite
+	// runs inside afm's Docker image — otherwise InContainer() short-circuits
+	// rebuildDockerReExec to a no-op and no auth error is produced.
+	t.Setenv("AFM_IN_DOCKER", "")
+	t.Cleanup(config.SwapContainerMarkerPresent(func() bool { return false }))
 	docker.SetExecFunc(func(string, []string, []string) error {
 		t.Fatal("execFunc must not be called when auth preflight fails")
 		return nil
