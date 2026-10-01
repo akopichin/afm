@@ -95,6 +95,13 @@
   line-height: 1.5;
   border-radius: var(--radius-sm);
 }
+/* The newest message only (see useEnteringLast — animates when the last row's
+   content differs from the previous last). The row clears this class on
+   animationend so a later remount never replays. Small translate to not fight
+   stick-to-bottom autoscroll. Animate opacity/transform only. */
+.feed-item--enter {
+  animation: feedItemIn var(--motion-base) var(--ease-out) backwards;
+}
 .feed-item-text { min-width: 0; overflow-wrap: anywhere; }
 /* Колонка сегментов markdown-сообщения (текст + картинки [AFM image: …]).
    .feed-item — flex-РЯД (текст/timestamp), поэтому несколько сегментов
@@ -332,12 +339,16 @@
   background: var(--surface-hover);
   border-left: 2px solid var(--accent-primary);
   border-radius: var(--radius-sm);
+  animation: quoteChipIn var(--motion-base) var(--ease-out) backwards;
 }
 .feed-reply-chip-label {
   flex-shrink: 0;
   font-size: 11.5px;
   font-weight: 600;
   color: var(--accent-primary);
+  display: inline-block;
+  animation: quoteMarkPop var(--motion-slow) var(--ease-spring) backwards;
+  transform-origin: left center;
 }
 .feed-reply-chip-src {
   flex: 1;

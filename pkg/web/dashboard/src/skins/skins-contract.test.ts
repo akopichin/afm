@@ -58,3 +58,17 @@ describe('skins CSS contract — feed item entrance (Task 4)', () => {
     expect(feedWorkspaceCss).toMatch(/\.feed-item--enter\s*\{[\s\S]*?animation:\s*feedItemIn[\s\S]*?\}/)
   })
 })
+
+describe('skins CSS contract — reduced motion (Task 5)', () => {
+  const rmBlock = () =>
+    tokens().match(/@media[^{]*prefers-reduced-motion[^{]*\{[\s\S]*?\}\s*\}/)?.[0] ?? ''
+  it('turns off the pure mount animations under reduced motion', () => {
+    const b = rmBlock()
+    expect(b).toMatch(/\.feed-reply-chip/)
+    expect(b).toMatch(/\.line-comment-quote::before/)
+    expect(b).toMatch(/animation:\s*none/)
+  })
+  it('does NOT disable .feed-item--enter (it needs animationend to self-clear)', () => {
+    expect(rmBlock()).not.toMatch(/\.feed-item--enter/)
+  })
+})

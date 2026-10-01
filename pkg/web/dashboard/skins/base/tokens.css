@@ -127,3 +127,20 @@
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
+
+/* reset.css already zeroes durations under reduced motion (0.01ms), which STILL
+   fires animationend. Name the pure mount-animation surfaces off explicitly
+   (house convention) so they collapse to rest.
+   DO NOT include .feed-item--enter here: that class is cleared by its own
+   animationend handler (useEnteringLast.onEntered), and animation:none would
+   suppress the event, leaving a stale entrance flag that could animate later if
+   the user turns reduced motion off. The 0.01ms gate already makes it effectively
+   instant while preserving the cleanup event — exactly what we want. */
+@media (prefers-reduced-motion: reduce) {
+  .feed-reply-chip,
+  .feed-reply-chip-label,
+  .line-comment-quote,
+  .line-comment-quote::before {
+    animation: none !important;
+  }
+}

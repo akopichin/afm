@@ -381,6 +381,7 @@
   min-height: 26px;
   display: flex;
   align-items: center;
+  animation: quoteChipIn var(--motion-base) var(--ease-out) backwards;
 }
 .line-comment-quote::before {
   content: "\201C";                 /* " */
@@ -393,6 +394,8 @@
   color: var(--accent-primary);
   opacity: 0.30;                    /* faint, per approved mockup */
   pointer-events: none;
+  animation: quoteMarkPop var(--motion-slow) var(--ease-spring) backwards;
+  transform-origin: left top;
 }
 .line-comment-quote-src {
   font-family: var(--font-mono);
