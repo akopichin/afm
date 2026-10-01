@@ -557,6 +557,38 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)             // cleared
     })
 
+    // Per-branch wiring: the entrance class + its self-clearing onAnimationEnd must
+    // be present on ALL three row branches, not just the default div. A navigable
+    // (dialog_question) newest row renders through the <button> branch.
+    it('animates and self-clears a navigable (dialog) newest row (button branch)', () => {
+      const q1 = ev('dialog_question', { phase: 'planning', id: 'q1', title: 'first?' }, 's1', '2026-01-01T00:00:00Z')
+      const q2 = ev('dialog_question', { phase: 'planning', id: 'q2', title: 'second?' }, 's1', '2026-01-01T00:00:01Z')
+      const { rerender } = render(<FeedWorkspace events={[q1]} stageId="s1" onOpenDialog={vi.fn()} />) // baseline
+      rerender(<FeedWorkspace events={[q1, q2]} stageId="s1" onOpenDialog={vi.fn()} />)                  // q2 animates
+      const row = document.querySelector('.feed-item--enter')
+      expect(row?.tagName).toBe('BUTTON')
+      expect(row).toHaveClass('feed-item-navigable')
+      fireEvent.animationEnd(row as HTMLElement)                                                        // its own end
+      rerender(<FeedWorkspace events={[q1, q2]} stageId="s1" onOpenDialog={vi.fn()} />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)                              // cleared
+    })
+
+    // The reply-able thought branch (kind message + markdown, with a live composer)
+    // renders through its own <div className="… feed-item-thought">; it too must carry
+    // the entrance class and self-clear.
+    it('animates and self-clears a reply-able thought newest row (thought branch)', () => {
+      const onSendNote = vi.fn().mockResolvedValue(undefined)
+      const t1 = ev('agent_action', { tool: 'text', detail: 'первая мысль' }, 's1', '2026-01-01T00:00:00Z')
+      const t2 = ev('agent_action', { tool: 'text', detail: 'вторая мысль' }, 's1', '2026-01-01T00:00:01Z')
+      const { rerender } = render(<FeedWorkspace events={[t1]} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
+      rerender(<FeedWorkspace events={[t1, t2]} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
+      const row = document.querySelector('.feed-item--enter')
+      expect(row).toHaveClass('feed-item-thought')
+      fireEvent.animationEnd(row as HTMLElement)
+      rerender(<FeedWorkspace events={[t1, t2]} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
+      expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
+    })
+
     // Signature must be collision-free: two DIFFERENT tuples that would share a
     // '|'-join must produce DIFFERENT signatures, else a genuinely-new newest row
     // fails to animate.

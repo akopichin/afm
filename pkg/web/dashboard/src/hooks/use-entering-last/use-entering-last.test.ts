@@ -79,6 +79,12 @@ describe('useEnteringLast', () => {
     expect(result.current.animate).toBe(true)  // tracks the final last (d)
   })
 
+  it('does NOT animate a non-null -> null transition within the same scope (signature guard)', () => {
+    const { result, rerender } = run('a', 's1')
+    rerender({ s: null, t: 's1' })             // last row disappears (feed emptied) — not an append
+    expect(result.current.animate).toBe(false)
+  })
+
   it('onEntered is a harmless no-op when nothing is animating', () => {
     const { result } = run('a', 's1')          // baseline, not animating
     expect(result.current.animate).toBe(false)
