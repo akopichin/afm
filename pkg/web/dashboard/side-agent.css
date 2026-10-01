@@ -22,6 +22,14 @@
   background: var(--overlay-scrim);
 }
 
+/* `hidden` is implemented by a user-agent `display: none`, which the author
+   rule above (`display: flex`) otherwise overrides. Closed SideAgentModal nodes
+   stay mounted to preserve conversation UI state, so they need an explicit
+   author-level hide rule; `inert` alone blocks input but does not hide pixels. */
+.side-agent-overlay[hidden] {
+  display: none;
+}
+
 /* Открытие: scrim проявляется, окно поднимается и слегка увеличивается. Только
    opacity/transform (дёшево, без layout). Закрытие — обратный, более быстрый
    переход; класс .side-agent-closing держит окно видимым, пока доигрывает. */

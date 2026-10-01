@@ -28,6 +28,16 @@ trusted local client: on a native host afm binds the dashboard to `127.0.0.1`, a
 Docker mode the dashboard port is published loopback-only. Remote/authenticated access
 is not supported in this version.
 
+### Fix: the side-agent modal now starts hidden and stays closed
+
+The side-agent overlay's base `display: flex` rule overrode the browser's default
+styling for the `hidden` attribute. As a result, the modal was painted immediately
+even though React correctly considered it closed and marked it `inert`: the close
+button, composer, and Send button appeared disabled, and closing with the shortcut
+only replayed the exit animation before the inert window became visible again. The
+overlay now has an explicit author-level `[hidden] { display: none; }` rule, while the
+closing animation remains visible until its normal timeout.
+
 ### Improvement: subtle entrance animations in the dashboard
 
 Three dashboard surfaces now animate gently as they appear, so new content reads as
