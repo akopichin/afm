@@ -152,13 +152,13 @@ func (c Config) ValidateBrowser() error {
 
 // BrowserPreflight checks host prerequisites using the production seam.
 func (c Config) BrowserPreflight(mode browser.BrowserMode) (BrowserStatus, error) {
-	return c.browserPreflight(mode, browserDefaultSeam)
+	return c.preflightWithSeam(mode, browserDefaultSeam)
 }
 
-// browserPreflight is the testable core. Severity keys off EffectiveEnable():
+// preflightWithSeam is the testable core. Severity keys off EffectiveEnable():
 // EnableOn + missing prerequisite → hard error; EnableAuto + missing → degraded
 // (Available:false, nil error); EnableOff → never checks deps.
-func (c Config) browserPreflight(mode browser.BrowserMode, seam browserSeam) (BrowserStatus, error) {
+func (c Config) preflightWithSeam(mode browser.BrowserMode, seam browserSeam) (BrowserStatus, error) {
 	state := c.Browser.EffectiveEnable()
 	if state == EnableOff {
 		return BrowserStatus{Available: false, Reason: "browser disabled"}, nil

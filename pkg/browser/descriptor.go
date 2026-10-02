@@ -39,5 +39,7 @@ type Descriptor struct {
 // the in-container launcher compute the same value, so no registration RPC is
 // needed: the manager lazily creates the session on the first authorized connect.
 func (d *Descriptor) StageEndpoint(stageID string) string {
-	return fmt.Sprintf("ws://%s/session/%s/%s", d.Endpoint, d.Epoch, stageID)
+	// Loopback / host.docker.internal transport authenticated by a bearer token;
+	// plain ws is intentional (no TLS on localhost), so wss is not applicable.
+	return fmt.Sprintf("ws://%s/session/%s/%s", d.Endpoint, d.Epoch, stageID) //nolint:revive // loopback transport, token-authenticated, no TLS
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -66,7 +67,7 @@ var upgrader = websocket.Upgrader{
 // from prior crashed runs, and starts serving. It does NOT launch Chrome.
 func New(opts Options) (*Manager, error) {
 	if opts.Epoch == "" {
-		return nil, fmt.Errorf("browser: empty epoch")
+		return nil, errors.New("browser: empty epoch")
 	}
 	tok, err := randomToken()
 	if err != nil {
@@ -102,7 +103,7 @@ func New(opts Options) (*Manager, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/session/", m.handleSession)
-	m.srv = &http.Server{Handler: mux}
+	m.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = m.srv.Serve(ln) }()
 	return m, nil
 }
@@ -166,7 +167,7 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("browser: manager closed")
+		return nil, errors.New("browser: manager closed")
 	}
 	s, ok := m.sessions[key]
 	if !ok {
@@ -244,7 +245,7 @@ func (m *Manager) Close() error {
 	_ = m.ln.Close()
 	for _, s := range sessions {
 		s.close()
-		os.RemoveAll(s.profileDir)
+		_ = os.RemoveAll(s.profileDir)
 	}
 	return nil
 }

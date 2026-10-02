@@ -3,6 +3,8 @@ package config
 import (
 	"os/exec"
 	"testing"
+
+	"github.com/akopichin/afm/pkg/browser"
 )
 
 // chromeOK is a statFile seam that reports Chrome present.
@@ -72,18 +74,18 @@ func TestBrowserPreflight_PortConflict_OnlyWhenStarting(t *testing.T) {
 	tr, fa := true, false
 	// EnableOn + same port → hard error.
 	on := Config{Server: ServerConfig{Port: &p}, Browser: BrowserConfig{Enabled: &tr, AppPort: 18080}}
-	if _, err := on.browserPreflight(BrowserModeNative, seamWithMCPVersion(PinnedChromeDevtoolsMCPVersion, chromeOK)); err == nil {
+	if _, err := on.preflightWithSeam(browser.BrowserModeNative, seamWithMCPVersion(PinnedChromeDevtoolsMCPVersion, chromeOK)); err == nil {
 		t.Fatal("EnableOn + server.port==app_port must be a hard preflight error")
 	}
 	// EnableOff + same port → fully off, NO error (CLI/API-only project stays valid).
 	off := Config{Server: ServerConfig{Port: &p}, Browser: BrowserConfig{Enabled: &fa, AppPort: 18080}}
-	if _, err := off.BrowserPreflight(BrowserModeNative); err != nil {
+	if _, err := off.BrowserPreflight(browser.BrowserModeNative); err != nil {
 		t.Fatalf("EnableOff must never fail on port collision, got %v", err)
 	}
 	// EnableAuto but deps unavailable → degrade (Available:false), NO error, even on collision.
 	stubMCPVersionProbe(t, "" /* no chrome-devtools-mcp on PATH */)
 	auto := Config{Server: ServerConfig{Port: &p}, Browser: BrowserConfig{AppPort: 18080}} // nil → auto
-	st, err := auto.BrowserPreflight(BrowserModeNative)
+	st, err := auto.BrowserPreflight(browser.BrowserModeNative)
 	if err != nil || st.Available {
 		t.Fatalf("auto-degraded must not fail the run on port collision: st=%+v err=%v", st, err)
 	}
@@ -91,7 +93,7 @@ func TestBrowserPreflight_PortConflict_OnlyWhenStarting(t *testing.T) {
 
 func TestBrowserPreflight_AutoMissingChromeIsDegradedNotError(t *testing.T) {
 	c := Config{Browser: BrowserConfig{ExecutablePath: "/nonexistent/chrome"}}
-	st, err := c.BrowserPreflight(BrowserModeNative)
+	st, err := c.BrowserPreflight(browser.BrowserModeNative)
 	if err != nil || st.Available {
 		t.Fatalf("auto+missing: want degraded nil-err, got avail=%v err=%v", st.Available, err)
 	}
@@ -100,7 +102,7 @@ func TestBrowserPreflight_AutoMissingChromeIsDegradedNotError(t *testing.T) {
 func TestBrowserPreflight_ExplicitMissingChromeIsError(t *testing.T) {
 	tr := true
 	c := Config{Browser: BrowserConfig{Enabled: &tr, ExecutablePath: "/nonexistent/chrome"}}
-	if _, err := c.BrowserPreflight(BrowserModeNative); err == nil {
+	if _, err := c.BrowserPreflight(browser.BrowserModeNative); err == nil {
 		t.Fatal("explicit enable + missing chrome must error")
 	}
 }
@@ -109,7 +111,7 @@ func TestBrowserPreflight_NativeWrongMCPVersionIsMissing(t *testing.T) {
 	tr := true
 	c := Config{Browser: BrowserConfig{Enabled: &tr}}
 	// seam reports chrome-devtools-mcp present but version 1.9.0
-	st, err := c.browserPreflight(BrowserModeNative, seamWithMCPVersion("1.9.0", chromeOK))
+	st, err := c.preflightWithSeam(browser.BrowserModeNative, seamWithMCPVersion("1.9.0", chromeOK))
 	if err == nil || st.Available {
 		t.Fatal("wrong pinned MCP version must count as a missing prerequisite (hard-fail when explicit)")
 	}
@@ -119,7 +121,7 @@ func TestBrowserPreflight_DockerSkipsHostMCPCheck(t *testing.T) {
 	tr := true
 	c := Config{Browser: BrowserConfig{Enabled: &tr}}
 	// no host MCP at all, but Docker mode provides it from the image
-	st, err := c.browserPreflight(BrowserModeDocker, seamNoMCP(chromeOK))
+	st, err := c.preflightWithSeam(browser.BrowserModeDocker, seamNoMCP(chromeOK))
 	if err != nil || !st.Available {
 		t.Fatalf("docker must not require host MCP; got avail=%v err=%v", st.Available, err)
 	}
@@ -127,8 +129,8 @@ func TestBrowserPreflight_DockerSkipsHostMCPCheck(t *testing.T) {
 
 func TestBrowserSupportedFor(t *testing.T) {
 	c := Config{Docker: DockerConfig{Agents: map[string]AgentRecipe{
-		"glm51":          {Type: ClaudeCommand},
-		"codexrec":       {Type: RecipeTypeCodex},
+		"glm51":           {Type: ClaudeCommand},
+		"codexrec":        {Type: RecipeTypeCodex},
 		"deepseek-openai": {Type: RecipeTypeOpenAI},
 	}}}
 	if !c.BrowserSupportedFor("claude") {

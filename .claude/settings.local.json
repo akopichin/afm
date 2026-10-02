@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(rsync -a --delete --exclude='.git/' --exclude='.idea/' --exclude='/bin/' --exclude='.DS_Store' --exclude='.flowManager/' --exclude='.superpowers/' --exclude='.claude/' --exclude='.gitlab-ci.yml' --exclude='/flowmanager' --exclude='/vendor/' /Users/alexander.kopichin/work/flowManager/ /Users/alexander.kopichin/work/personal/afm/)",
+      "Bash(go mod *)",
+      "Bash(./bin/flowmanager --help)",
+      "Bash(chmod +x sync-upstream.sh)",
+      "Bash(./sync-upstream.sh)",
+      "Skill(flowmanager)",
+      "Bash(bash sync-upstream.sh)",
+      "Read(//Users/alexander.kopichin/homebrew/bin/**)",
+      "Read(//Users/alexander.kopichin/Documents/llms/ai-free/**)",
+      "Read(//Users/alexander.kopichin/**)",
+      "Bash(cat /tmp_vet_out.txt)",
+      "Bash(rm -f /tmp_vet_out.txt)"
+    ]
+  }
+}

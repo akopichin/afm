@@ -1158,7 +1158,7 @@ func TestReExec_BrowserTokenNotInArgv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReExec: %v", err)
 	}
-	defer os.Unsetenv("AFM_BROWSER_TRANSPORT_TOKEN")
+	defer func() { _ = os.Unsetenv("AFM_BROWSER_TRANSPORT_TOKEN") }()
 
 	argsStr := strings.Join(gotArgv, " ")
 	for _, a := range gotArgv {

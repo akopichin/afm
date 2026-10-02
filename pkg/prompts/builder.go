@@ -141,13 +141,13 @@ func Build(in Inputs) string {
 
 	if in.BrowserRuntime != nil {
 		b := in.BrowserRuntime
-		fmt.Fprintf(&sb, "\n\n<browser_tools>\n")
+		sb.WriteString("\n\n<browser_tools>\n")
 		fmt.Fprintf(&sb, "You have a managed Chrome DevTools browser via the MCP server %q — use it to run the app for real (a live run), not just unit tests.\n", b.ServerName)
 		fmt.Fprintf(&sb, "- Serve the app under test on 0.0.0.0:$AFM_BROWSER_APP_PORT (port %d) — bind 0.0.0.0, not localhost, so it is reachable.\n", b.AppPort)
 		fmt.Fprintf(&sb, "- Open the app at $AFM_BROWSER_APP_URL (%s). NEVER open container localhost:%d directly, and never host.docker.internal — always use $AFM_BROWSER_APP_URL.\n", b.AppURL, b.AppPort)
 		fmt.Fprintf(&sb, "- Drive the page with the %s MCP tools (navigate, snapshot, click, fill, evaluate, screenshot, console/network inspection).\n", b.ServerName)
-		fmt.Fprintf(&sb, "- Save screenshots / console logs / network captures into $AFM_STAGE_DIR/artifacts so they appear in the run.\n")
-		fmt.Fprintf(&sb, "- If the browser is unavailable or the scenario fails, treat it as a FAILED check — do not claim success.\n")
+		sb.WriteString("- Save screenshots / console logs / network captures into $AFM_STAGE_DIR/artifacts so they appear in the run.\n")
+		sb.WriteString("- If the browser is unavailable or the scenario fails, treat it as a FAILED check — do not claim success.\n")
 		sb.WriteString("</browser_tools>\n")
 	}
 

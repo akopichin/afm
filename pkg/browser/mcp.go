@@ -87,15 +87,15 @@ func WriteMCPConfig(d *InvocationDescriptor) (string, func(), error) {
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", nil, err
 	}
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", nil, err
 	}
-	return path, func() { os.RemoveAll(dir) }, nil
+	return path, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 // mcpSeams injects the resolver, child factory, and a config-written hook for tests.
@@ -112,10 +112,10 @@ func defaultMCPChild(ctx context.Context, name string, args []string) *exec.Cmd 
 // RunMCP reads the descriptor, launches the pinned MCP as a stdio child with a
 // private config, and removes BOTH the private config and the descriptor on exit.
 func RunMCP(ctx context.Context, descriptorPath string, mode BrowserMode) error {
-	return runMCP(ctx, descriptorPath, mode, mcpSeams{resolve: ResolveMCP, child: defaultMCPChild})
+	return runMCPSeamed(ctx, descriptorPath, mode, mcpSeams{resolve: ResolveMCP, child: defaultMCPChild})
 }
 
-func runMCP(ctx context.Context, descriptorPath string, mode BrowserMode, s mcpSeams) error {
+func runMCPSeamed(ctx context.Context, descriptorPath string, mode BrowserMode, s mcpSeams) error {
 	desc, err := ReadInvocationDescriptor(descriptorPath)
 	if err != nil {
 		return err
@@ -129,7 +129,7 @@ func runMCP(ctx context.Context, descriptorPath string, mode BrowserMode, s mcpS
 		return err
 	}
 	defer cleanup()
-	defer os.Remove(descriptorPath)
+	defer func() { _ = os.Remove(descriptorPath) }()
 	if s.onConfigWritten != nil {
 		s.onConfigWritten(cfgPath)
 	}

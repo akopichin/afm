@@ -76,8 +76,8 @@ type ReExecConfig struct {
 	// поднят на ХОСТЕ до docker run; контейнерный afm достаёт endpoint/token/epoch/
 	// app-url из env и строит per-stage descriptor. Токен уходит bare `-e` (значение
 	// из env afm-процесса, не в argv — не видно в ps aux), как hook-секреты.
-	BrowserEnabled bool
-	BrowserToken   string // → bare -e AFM_BROWSER_TRANSPORT_TOKEN (секрет)
+	BrowserEnabled  bool
+	BrowserToken    string // → bare -e AFM_BROWSER_TRANSPORT_TOKEN (секрет)
 	BrowserEndpoint string // host.docker.internal:<managerPort> → -e AFM_BROWSER_ENDPOINT
 	BrowserEpoch    string // host-generated epoch → -e AFM_BROWSER_EPOCH
 	// Фиксированная публикация порта тестируемого приложения: host-порт выбран на

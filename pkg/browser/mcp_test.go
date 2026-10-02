@@ -67,7 +67,7 @@ func TestRunMCP_RemovesPrivateConfigAndDescriptorOnExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfgPath string
-	err := runMCP(context.Background(), descPath, BrowserModeNative, mcpSeams{
+	err := runMCPSeamed(context.Background(), descPath, BrowserModeNative, mcpSeams{
 		// Trivial child that exits immediately — no real MCP on PATH needed.
 		resolve:         func(BrowserMode) (string, []string, error) { return "sh", []string{"-c", "exit 0"}, nil },
 		child:           defaultMCPChild,

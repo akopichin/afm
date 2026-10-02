@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -31,7 +32,7 @@ func newBrowserMCPCmd() *cobra.Command {
 		Short: "Run the managed Chrome DevTools MCP over stdio (reads --descriptor)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if descriptor == "" {
-				return fmt.Errorf("browser mcp: --descriptor is required")
+				return errors.New("browser mcp: --descriptor is required")
 			}
 			return browser.RunMCP(cmd.Context(), descriptor, browserRunMode())
 		},
@@ -51,7 +52,7 @@ func newBrowserStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), out)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), out)
 			return nil
 		},
 	}
@@ -65,7 +66,7 @@ func newBrowserProtocolVersionCmd() *cobra.Command {
 		Use:   "protocol-version",
 		Short: "Print the browser transport protocol version and exit",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), browserProtocolVersionString())
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), browserProtocolVersionString())
 			return nil
 		},
 	}
@@ -92,8 +93,8 @@ func browserStatusJSON(descriptorPath string) (string, error) {
 		AppURL    string `json:"app_url"`
 		Reason    string `json:"reason,omitempty"`
 	}
-	switch {
-	case descriptorPath == "":
+	switch descriptorPath {
+	case "":
 		st.Reason = "browser capability not active for this invocation"
 	default:
 		d, err := browser.ReadInvocationDescriptor(descriptorPath)

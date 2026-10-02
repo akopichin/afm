@@ -125,7 +125,7 @@ func sweepStaleProfiles(parent string, isAlive func(int) bool) {
 			continue
 		}
 		if !isAlive(m.PID) {
-			os.RemoveAll(dir)
+			_ = os.RemoveAll(dir)
 		}
 	}
 }
