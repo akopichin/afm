@@ -93,7 +93,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["steps"],
-      "description": "Container form: an ordered list of verify steps plus an optional per-stage max_failures budget.",
+      "description": "Container form: an ordered list of verify steps plus an optional per-stage max_failures and review_patience budget.",
       "properties": {
         "steps": {
           "type": "array",
@@ -110,6 +110,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many verify rejections (needs_changes) are allowed before the stage fails: N = number of retry-corrections. Overrides the global verify.max_failures; 0 = fail on the first rejection."
+        },
+        "review_patience": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many CONSECUTIVE verify rejections that left the working tree unchanged (the author stopped editing in response to review) are tolerated before the stage is accepted as complete (reviewer/author stalemate). Overrides the global verify.review_patience; 0 = disabled (today's behavior). For this to engage, max_failures must be >= review_patience — otherwise the stage fails on the failure budget before the stalemate count is reached and the setting is a silent no-op."
         }
       }
     },

@@ -601,6 +601,16 @@ describe('StagesList', () => {
       expect(screen.getByRole('button', { name: /Build/i })).toHaveAttribute('title', 'Running')
     })
 
+    test('accepted_stalemate (review_patience) renders a distinct data-phase badge with its own title', () => {
+      const stalemate: Stage = { ...stage, verify: { step: 2, command: 'codex', phase: 'accepted_stalemate' } }
+      const { container } = render(
+        <StagesList stages={[stalemate]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
+      )
+      const badge = container.querySelector('.verify-badge')
+      expect(badge).toHaveAttribute('data-phase', 'accepted_stalemate')
+      expect(badge).toHaveAttribute('title', expect.stringContaining('accepted (stalemate)'))
+    })
+
     test('pause/kebab actions remain available on a stage with a verify badge', () => {
       const running: Stage = { ...stage, status: 'running', verify: { step: 1, command: 'codex', phase: 'running' } }
       const onPause = vi.fn()

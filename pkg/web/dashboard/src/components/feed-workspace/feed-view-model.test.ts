@@ -142,6 +142,15 @@ describe('verify_started/verify_result — наблюдательные собы
     expect(items[0]?.reportVerificationId).toBeUndefined() // inconclusive никогда не пишет report.md
   })
 
+  it('verify_result verdict=accepted_stalemate (review_patience) renders as a success row naming the reason', () => {
+    const items = toFeedItems([
+      ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'accepted_stalemate', reason: 'accepted after 2 unchanged round(s) (reviewer/author stalemate)' }, 's1', '2026-07-10T10:00:05Z'),
+    ])
+    expect(items[0]).toMatchObject({ tone: 'success', actor: 'system' })
+    expect(items[0]?.text).toContain('Verify accepted')
+    expect(items[0]?.text).toContain('stalemate')
+  })
+
   it('verify_result exec_error renders a tone DISTINCT from a needs_changes rejection (execution error vs code rejection)', () => {
     const rejection = toFeedItems([
       ev('verify_result', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', verdict: 'needs_changes', reason: 'x' }, 's1', '2026-07-10T10:00:00Z'),

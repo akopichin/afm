@@ -20,6 +20,14 @@ const (
 	VerdictPass         Verdict = "pass"
 	VerdictNeedsChanges Verdict = "needs_changes"
 	VerdictInconclusive Verdict = "inconclusive"
+	// VerdictAcceptedStalemate синтезируется САМИМ afm (не декодируется из
+	// ответа модели) при срабатывании review_patience: стадия принята как
+	// завершённая, потому что автор перестал менять дерево в ответ на
+	// повторные verify-отклонения (reviewer/author stalemate). Намеренно НЕ
+	// входит в allow-list DecodeModelResult ниже — модель не вправе его
+	// вернуть; значение живёт только на пути отображения (verify-result
+	// нотис → latestVerifyByStage/feed-view-model).
+	VerdictAcceptedStalemate Verdict = "accepted_stalemate"
 )
 
 // Finding — одно замечание верификатора. Path/LineStart/LineEnd — указатели,

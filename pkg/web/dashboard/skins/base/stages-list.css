@@ -314,6 +314,9 @@
   animation: approvalPulse 1.8s ease-in-out infinite;
 }
 .verify-badge[data-phase="pass"] { color: var(--success); }
+/* accepted_stalemate — терминальный ПРИНЯТЫЙ исход (review_patience), но не
+   чистый pass: отдельный accent-цвет, отличный от success и не тревожный. */
+.verify-badge[data-phase="accepted_stalemate"] { color: var(--accent-primary); }
 .verify-badge[data-phase="needs_changes"],
 .verify-badge[data-phase="inconclusive"] { color: var(--attention); }
 .verify-badge[data-phase="error"] { color: var(--danger); }

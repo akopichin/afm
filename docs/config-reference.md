@@ -44,6 +44,11 @@ verify:
                             # correct before the stage fails (default 1; 0 = strict, no
                             # correction). Per-stage override: the container form of a
                             # stage's verify: field. See verify.md
+  review_patience: 0        # how many CONSECUTIVE rejections that left the working tree
+                            # unchanged are tolerated before the stage is accepted as
+                            # complete (reviewer/author stalemate). Default 0 = disabled.
+                            # Needs max_failures >= review_patience to engage. Per-stage
+                            # override: the container form of a stage's verify: field
 
 docker:
   enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
@@ -63,7 +68,8 @@ See [Docker mode](docker.md) for the full `docker:` section,
 [Cost accounting](accounting.md) for the `pricing:` overrides key (rate
 cards, precedence, and what "estimated cost" means) and the `accounting:`
 display switches (`AFM_ACCOUNTING`, `AFM_ACCOUNTING_SHOW_MONEY`), and
-[AI-verify](verify.md) for the top-level `verify.max_failures` correction budget.
+[AI-verify](verify.md) for the top-level `verify.max_failures` correction budget
+and `verify.review_patience` stalemate backstop.
 
 ## Settings priority
 

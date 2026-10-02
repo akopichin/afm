@@ -61,7 +61,7 @@ export type Stage = {
 export type StageVerify = {
   step: number
   command: string
-  phase: 'running' | 'pass' | 'needs_changes' | 'inconclusive' | 'error'
+  phase: 'running' | 'pass' | 'accepted_stalemate' | 'needs_changes' | 'inconclusive' | 'error'
 }
 
 // Человекочитаемые подписи статусов для списка стадий и панели деталей.

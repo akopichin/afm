@@ -58,12 +58,27 @@ type ExecutorConfig struct {
 // (ровно одна коррекция, затем провал).
 const defaultVerifyMaxFailures = 1
 
+// defaultVerifyReviewPatience — дефолт review_patience: 0 = ВЫКЛЮЧЕНО (сегодняшнее
+// поведение). В отличие от max_failures (дефолт 1), stalemate-бэкстоп опционален:
+// без явного значения verify-цикл работает ровно как раньше.
+const defaultVerifyReviewPatience = 0
+
 // VerifyConfig — глобальные настройки verify-гейта.
 type VerifyConfig struct {
 	// MaxFailures — сколько отклонений verify допускать до провала стадии.
 	// Указатель, чтобы отличить «не задано» (nil → дефолт 1) от явного значения,
 	// включая 0. Per-stage override — flow.VerifySpec.MaxFailures.
 	MaxFailures *int `yaml:"max_failures"`
+	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших
+	// рабочее дерево (автор ничего не правит в ответ на ревью), допустить, прежде
+	// чем принять стадию как завершённую (reviewer/author stalemate). Указатель,
+	// чтобы отличить «не задано» (nil → дефолт 0 = выключено) от явного значения.
+	// Per-stage override — flow.VerifySpec.ReviewPatience. ВАЖНО: чтобы stalemate
+	// вообще сработал, нужно max_failures >= review_patience — иначе стадия
+	// провалится по бюджету отклонений РАНЬШЕ, чем счётчик неизменных раундов
+	// дойдёт до review_patience, и настройка станет тихим no-op (безопасная
+	// сторона: никогда не принимает ошибочно, просто не включается).
+	ReviewPatience *int `yaml:"review_patience"`
 }
 
 // ResolvedMaxFailures возвращает бюджет отклонений verify: значение из конфига,
@@ -73,6 +88,15 @@ func (c VerifyConfig) ResolvedMaxFailures() int {
 		return *c.MaxFailures
 	}
 	return defaultVerifyMaxFailures
+}
+
+// ResolvedReviewPatience возвращает бюджет stalemate: значение из конфига, если
+// задано, иначе дефолт 0 (выключено).
+func (c VerifyConfig) ResolvedReviewPatience() int {
+	if c.ReviewPatience != nil {
+		return *c.ReviewPatience
+	}
+	return defaultVerifyReviewPatience
 }
 
 // ServerConfig configures the web dashboard server.
@@ -588,6 +612,9 @@ func validateVerify(v VerifyConfig) error {
 	if v.MaxFailures != nil && *v.MaxFailures < 0 {
 		return fmt.Errorf("verify.max_failures: must not be negative, got %d", *v.MaxFailures)
 	}
+	if v.ReviewPatience != nil && *v.ReviewPatience < 0 {
+		return fmt.Errorf("verify.review_patience: must not be negative, got %d", *v.ReviewPatience)
+	}
 	return nil
 }
 
@@ -735,6 +762,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Verify.MaxFailures != nil {
 		dst.Verify.MaxFailures = overlay.Verify.MaxFailures
+	}
+	if overlay.Verify.ReviewPatience != nil {
+		dst.Verify.ReviewPatience = overlay.Verify.ReviewPatience
 	}
 	if overlay.Hooks != nil {
 		// Слой overlay валидируется ДО keyed-merge: иначе дубль id внутри

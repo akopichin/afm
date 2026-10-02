@@ -205,6 +205,14 @@ type Orchestrator struct {
 	// тайминговых гонок (D3a/D4), не завязываясь на реальный OS-уровневый race.
 	runVerifyShell verifyShellRunner
 
+	// fingerprintFn вычисляет отпечаток рабочего дерева для stalemate-детекции
+	// (review_patience, см. verify_stalemate.go) — инъектируемый seam, тот же
+	// приём, что runVerifyAgent/runVerifyShell выше: продакшн — package-level
+	// workingTreeFingerprint (ставится в New); тесты подменяют этот field, чтобы
+	// детерминированно задавать «дерево изменилось / не изменилось» без реального
+	// git-репозитория (вызывается только при review_patience > 0).
+	fingerprintFn func(dir string) (string, bool)
+
 	// terminalFlow — финальное flow-событие, установленное одним из выходов
 	// Run; эмитится finalizeLifecycle ПОСЛЕ остановки продюсеров (single
 	// writer — горутина Run, отдельная синхронизация не нужна).
@@ -513,6 +521,7 @@ func New(opts Options) *Orchestrator {
 	o.spawnJSONFix = o.runJSONFixAgent
 	o.runVerifyAgent = o.execVerifyAgent
 	o.runVerifyShell = runVerifyShellCommand
+	o.fingerprintFn = workingTreeFingerprint
 	o.mem = memorypipeline.New(memorypipeline.Prompts{
 		Reflect:    opts.Prompts.Reflect,
 		Aggregate:  opts.Prompts.Aggregate,

@@ -298,7 +298,7 @@ function toStage(raw: unknown): Stage | null {
 // pkg/server/stageview.go) defensively — the server shape isn't blindly
 // trusted: an unrecognized/missing phase or a wrong-typed step/command falls
 // back rather than producing a malformed StageVerify.
-const VERIFY_PHASES = new Set(['running', 'pass', 'needs_changes', 'inconclusive', 'error'])
+const VERIFY_PHASES = new Set(['running', 'pass', 'accepted_stalemate', 'needs_changes', 'inconclusive', 'error'])
 
 function toVerifyView(raw: unknown): StageVerify | undefined {
   const obj = isRecord(raw) ? raw : null

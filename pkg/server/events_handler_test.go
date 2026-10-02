@@ -72,6 +72,60 @@ func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 	}
 }
 
+// TestHandleEvents_AcceptedStalemateVerifyResultReplays — durable verify_result
+// с синтезированным afm вердиктом accepted_stalemate (B1 review_patience) должен
+// пройти через /api/events (handleEvents → reconstructNotices) с сохранением
+// вердикта, причины, шага и команды. Это реплей-гарантия: клиент, подключившийся
+// ПОСЛЕ приёма по stalemate, всё равно увидит исход в ленте.
+func TestHandleEvents_AcceptedStalemateVerifyResultReplays(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+
+	appendVerifyNotice(t, runDir, testStageID, "verify_result", map[string]any{
+		"verification_id": "v-1",
+		"step":            2,
+		"kind":            "agent",
+		"command":         "codex",
+		"verdict":         "accepted_stalemate",
+		"reason":          "accepted after 2 unchanged round(s) (reviewer/author stalemate)",
+	})
+
+	req := httptest.NewRequest("GET", "/api/events?stage="+testStageID, nil)
+	w := httptest.NewRecorder()
+	srv.handleEvents(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var events []feedEvent
+	if err := json.Unmarshal(w.Body.Bytes(), &events); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	var found map[string]any
+	for _, e := range events {
+		if e.Type != "verify_result" {
+			continue
+		}
+		data, ok := e.Data.(map[string]any)
+		if ok && data["verdict"] == "accepted_stalemate" {
+			found = data
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected an accepted_stalemate verify_result event to replay through /api/events")
+	}
+	if found["reason"] != "accepted after 2 unchanged round(s) (reviewer/author stalemate)" {
+		t.Errorf("reason did not survive reconstruction: %v", found["reason"])
+	}
+	if found["command"] != "codex" {
+		t.Errorf("command did not survive reconstruction: %v", found["command"])
+	}
+	// JSON-числа декодируются как float64.
+	if step, ok := found["step"].(float64); !ok || step != 2 {
+		t.Errorf("step did not survive reconstruction: %v", found["step"])
+	}
+}
+
 // TestHandleEvents_TransitionsNeverExceedGlobalCap is a basic sanity check
 // that the global response never exceeds maxReplayEvents (raised from 1000 to
 // 10000 — see TestHandleEvents_GlobalCapRaisedTo10000 for the actual boundary

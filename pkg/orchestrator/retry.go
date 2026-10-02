@@ -94,6 +94,17 @@ func (o *Orchestrator) commitVerifyFailure(stageID, reason string, onUserInterru
 	return false
 }
 
+// completeAgent публикует терминальный success стадии — durable-нотис
+// EventAgentCompleted (переживает reload, см. reconstructNotices) ПЛЮС
+// critical-событие, из которого Run-цикл двигает FSM в completed (onAgentCompleted).
+// Единая точка вместо дублирования пары AppendNotice+publishCritical на каждом
+// success-пути: чистый pass, pass при открытом stale-вопросе и stalemate-приём
+// (acceptStalemate, verify_stalemate.go) используют ровно её.
+func (o *Orchestrator) completeAgent(ctx context.Context, stageID, phase string) {
+	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAgentCompleted), phase)
+	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: stageID, Data: phase})
+}
+
 // isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
 func isRetryableError(err error) bool {
 	return Classify(err) == ClassRetryable
@@ -107,6 +118,19 @@ func (o *Orchestrator) verifyMaxFailures(s flow.Stage) int {
 	n := o.opts.Config.Verify.ResolvedMaxFailures()
 	if s.Verify.MaxFailures != nil {
 		n = *s.Verify.MaxFailures
+	}
+	return n
+}
+
+// verifyReviewPatience — бюджет stalemate (review_patience) для стадии: сколько
+// ПОДРЯД идущих verify-отклонений, НЕ изменивших рабочее дерево, допустить до
+// приёма стадии. Per-stage override (s.Verify.ReviewPatience) побеждает
+// глобальный конфиг (Config.Verify), тот — встроенный дефолт 0 (выключено).
+// Зеркалит verifyMaxFailures.
+func (o *Orchestrator) verifyReviewPatience(s flow.Stage) int {
+	n := o.opts.Config.Verify.ResolvedReviewPatience()
+	if s.Verify.ReviewPatience != nil {
+		n = *s.Verify.ReviewPatience
 	}
 	return n
 }
@@ -204,6 +228,18 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	// resume — как и прежнее однократное поведение.
 	verifyFailures := 0
 	maxVerifyFailures := o.verifyMaxFailures(s)
+	// B1 stalemate (review_patience): reviewPatience = 0 → выключено (сегодняшнее
+	// поведение). prevFingerprint/unchangedRejections — in-memory состояние ЭТОЙ
+	// горутины: сколько verify-отклонений ПОДРЯД оставили рабочее дерево
+	// неизменным. fingerprintDir — эффективный корень стадии (куда реально пишет
+	// агент: RootDir резолвится, пусто → CWD процесса, как cmd.Dir).
+	reviewPatience := o.verifyReviewPatience(s)
+	prevFingerprint := ""
+	unchangedRejections := 0
+	fingerprintDir := o.opts.RootDir
+	if fingerprintDir == "" {
+		fingerprintDir = "."
+	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 || resumeCtx {
@@ -250,8 +286,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				// сделана; вопрос, оставшийся на диске, в этом случае не
 				// более чем повод для FSM транзишна, который уже случился.
 				if completionCheck == nil || completionCheck() == nil {
-					stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
-					o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
+					o.completeAgent(ctx, s.ID, phase)
 				}
 				return
 			}
@@ -286,8 +321,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				return
 			}
 			if checkErr == nil {
-				stagefiles.AppendNotice(o.opts.RunDir, s.ID, string(bus.EventAgentCompleted), phase)
-				o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phase})
+				o.completeAgent(ctx, s.ID, phase)
 				return
 			}
 			// AI-verify (V5a): верификатор слушает тот же interruptChans, что и
@@ -311,6 +345,22 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			if stagefiles.IsIncompleteWorkError(checkErr) {
 				var vre *VerifyRejectedError
 				isVerifyReject := errors.As(checkErr, &vre)
+				// B1 stalemate (review_patience): если автор перестал менять
+				// рабочее дерево в ответ на повторные verify-отклонения —
+				// принять стадию как завершённую вместо очередной коррекции
+				// (handleStalemate, verify_stalemate.go). Только для агентского
+				// отклонения, прошедшего гейт §3.0 — красный shell-шаг НИКОГДА не
+				// принимается. done=true → стадия принята ИЛИ её увели (paused/
+				// revising) → возвращаемся.
+				if isVerifyReject && reviewPatience > 0 {
+					var done bool
+					done, prevFingerprint, unchangedRejections = o.handleStalemate(
+						ctx, s, phase, vre, reviewPatience, fingerprintDir,
+						prevFingerprint, unchangedRejections, onUserInterrupted)
+					if done {
+						return
+					}
+				}
 				// attempt < maxRetries обязателен: на ПОСЛЕДНЕЙ итерации следующего
 				// прохода цикла уже не будет, поэтому `continue` здесь вышел бы из
 				// for без терминального перехода — стадия зависла бы в активном

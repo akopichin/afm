@@ -42,6 +42,12 @@ type VerifySpec struct {
 	// явного значения, включая 0 (строгий режим: первое же отклонение проваливает).
 	// Задаётся ТОЛЬКО в container-форме YAML: verify: {steps: [...], max_failures: N}.
 	MaxFailures *int
+	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших
+	// рабочее дерево, допустить до принятия стадии (reviewer/author stalemate).
+	// Указатель, чтобы отличить «не задано» (nil → config verify.review_patience,
+	// дефолт 0 = выключено) от явного значения. Как и MaxFailures, задаётся ТОЛЬКО
+	// в container-форме YAML: verify: {steps: [...], review_patience: N}.
+	ReviewPatience *int
 	// fromScalar отмечает, что спека получена из legacy-скаляра
 	// (verify: "команда") — используется ТОЛЬКО для симметричной сериализации
 	// обратно в тот же вид (см. MarshalYAML). На валидацию и исполнение не
@@ -133,12 +139,13 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 // Ключи YAML-полей verify. Вынесены в константы, чтобы одни и те же имена
 // использовались и в разборе одиночного шага, и в разборе container-формы.
 const (
-	verifyKeyRun         = "run"
-	verifyKeyCommand     = "command"
-	verifyKeyPrompt      = "prompt"
-	verifyKeyTimeout     = "timeout"
-	verifyKeySteps       = "steps"
-	verifyKeyMaxFailures = "max_failures"
+	verifyKeyRun            = "run"
+	verifyKeyCommand        = "command"
+	verifyKeyPrompt         = "prompt"
+	verifyKeyTimeout        = "timeout"
+	verifyKeySteps          = "steps"
+	verifyKeyMaxFailures    = "max_failures"
+	verifyKeyReviewPatience = "review_patience"
 )
 
 // verifyStepFromMapping декодирует один mapping-узел verify в VerifyStep.
@@ -200,6 +207,7 @@ func mappingHasKey(node *yaml.Node, key string) bool {
 func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 	var stepsNode *yaml.Node
 	var maxFailures *int
+	var reviewPatience *int
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key := node.Content[i].Value
 		val := node.Content[i+1]
@@ -212,6 +220,12 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 				return fmt.Errorf("verify: invalid max_failures: %w", err)
 			}
 			maxFailures = &n
+		case verifyKeyReviewPatience:
+			var n int
+			if err := val.Decode(&n); err != nil {
+				return fmt.Errorf("verify: invalid review_patience: %w", err)
+			}
+			reviewPatience = &n
 		case verifyKeyRun, verifyKeyCommand, verifyKeyPrompt, verifyKeyTimeout:
 			return fmt.Errorf("verify: %q cannot be combined with steps (move it inside a steps item)", key)
 		default:
@@ -235,7 +249,7 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 		}
 		steps = append(steps, step)
 	}
-	*s = VerifySpec{Steps: steps, MaxFailures: maxFailures}
+	*s = VerifySpec{Steps: steps, MaxFailures: maxFailures, ReviewPatience: reviewPatience}
 	return nil
 }
 
@@ -248,14 +262,21 @@ func (s VerifySpec) MarshalYAML() (any, error) {
 	if s.IsEmpty() {
 		return nil, nil
 	}
-	// Явно заданный max_failures переводит спеку в container-форму — иначе он бы
-	// потерялся при сериализации скаляром/одиночным шагом/списком.
-	if s.MaxFailures != nil {
+	// Явно заданный max_failures/review_patience переводит спеку в container-форму
+	// — иначе он бы потерялся при сериализации скаляром/одиночным шагом/списком.
+	if s.MaxFailures != nil || s.ReviewPatience != nil {
 		steps := make([]map[string]any, len(s.Steps))
 		for i, step := range s.Steps {
 			steps[i] = verifyStepToMap(step)
 		}
-		return map[string]any{"steps": steps, "max_failures": *s.MaxFailures}, nil
+		out := map[string]any{"steps": steps}
+		if s.MaxFailures != nil {
+			out["max_failures"] = *s.MaxFailures
+		}
+		if s.ReviewPatience != nil {
+			out["review_patience"] = *s.ReviewPatience
+		}
+		return out, nil
 	}
 	if len(s.Steps) == 1 && s.fromScalar {
 		return s.Steps[0].Run, nil
@@ -319,6 +340,14 @@ func (s VerifySpec) validate(stageID string) error {
 		}
 		if *s.MaxFailures < 0 {
 			return fmt.Errorf("stage %q: verify: max_failures must not be negative", stageID)
+		}
+	}
+	if s.ReviewPatience != nil {
+		if len(s.Steps) == 0 {
+			return fmt.Errorf("stage %q: verify: review_patience requires at least one step", stageID)
+		}
+		if *s.ReviewPatience < 0 {
+			return fmt.Errorf("stage %q: verify: review_patience must not be negative", stageID)
 		}
 	}
 	for i, step := range s.Steps {

@@ -135,6 +135,18 @@ describe('useStatus', () => {
     expect(byId.get('s5')?.verify).toEqual({ step: 0, command: '', phase: 'running' })
   })
 
+  // accepted_stalemate (B1 review_patience) — синтезированный afm терминальный
+  // ПРИНЯТЫЙ исход должен пережить нормализацию /api/status, иначе бейдж стадии
+  // пропадёт (его нет в allow-list VERIFY_PHASES).
+  test('парсит verify phase accepted_stalemate (review_patience) без отбрасывания', () => {
+    const raw = {
+      flow_name: 'demo',
+      stages: [{ id: 's1', status: 'done', verify: { step: 2, command: 'codex', phase: 'accepted_stalemate' } }],
+    }
+    const { stages } = normalizeStatus(raw)
+    expect(stages[0]?.verify).toEqual({ step: 2, command: 'codex', phase: 'accepted_stalemate' })
+  })
+
   test('парсит is_script/paused_from/pre_note', () => {
     const raw = {
       flow_name: 'demo',

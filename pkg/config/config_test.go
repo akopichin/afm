@@ -1662,3 +1662,58 @@ func TestVerifyMaxFailures_NegativeRejected(t *testing.T) {
 		t.Errorf("error = %q, want it to name verify.max_failures", err.Error())
 	}
 }
+
+// TestVerify_ResolvedReviewPatienceDefault — nil → 0 (disabled, today's behavior).
+func TestVerify_ResolvedReviewPatienceDefault(t *testing.T) {
+	var v config.VerifyConfig // nil ReviewPatience
+	if got := v.ResolvedReviewPatience(); got != 0 {
+		t.Errorf("ResolvedReviewPatience() = %d, want 0 (default disabled)", got)
+	}
+}
+
+// TestVerify_ResolvedReviewPatienceExplicit — явное значение (включая 0) берётся как есть.
+func TestVerify_ResolvedReviewPatienceExplicit(t *testing.T) {
+	n := 2
+	v := config.VerifyConfig{ReviewPatience: &n}
+	if got := v.ResolvedReviewPatience(); got != 2 {
+		t.Errorf("ResolvedReviewPatience() = %d, want 2", got)
+	}
+	zero := 0
+	v = config.VerifyConfig{ReviewPatience: &zero}
+	if got := v.ResolvedReviewPatience(); got != 0 {
+		t.Errorf("ResolvedReviewPatience() = %d, want 0 (explicit)", got)
+	}
+}
+
+// TestVerifyReviewPatienceMerge_ProjectOverGlobal — проектный слой переопределяет глобальный.
+func TestVerifyReviewPatienceMerge_ProjectOverGlobal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "g"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "p"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, filepath.Join(dir, "g"), "config.yaml", "verify:\n  review_patience: 2\n")
+	writeYAML(t, filepath.Join(dir, "p"), "config.yaml", "verify:\n  review_patience: 5\n")
+	cfg, err := config.LoadFrom(filepath.Join(dir, "g"), filepath.Join(dir, "p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Verify.ResolvedReviewPatience(); got != 5 {
+		t.Errorf("ResolvedReviewPatience() = %d, want 5 (project overrides global)", got)
+	}
+}
+
+// TestVerifyReviewPatience_NegativeRejected — отрицательное значение отвергается.
+func TestVerifyReviewPatience_NegativeRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "config.yaml", "verify:\n  review_patience: -1\n")
+	_, err := config.LoadFrom("", dir)
+	if err == nil {
+		t.Fatal("expected LoadFrom to reject a negative verify.review_patience")
+	}
+	if !strings.Contains(err.Error(), "verify.review_patience") {
+		t.Errorf("error = %q, want it to name verify.review_patience", err.Error())
+	}
+}

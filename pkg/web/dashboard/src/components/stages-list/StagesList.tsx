@@ -46,6 +46,8 @@ function verifyPhaseLabel(phase: StageVerify['phase']): string {
       return 'in progress'
     case 'pass':
       return 'passed'
+    case 'accepted_stalemate':
+      return 'accepted (stalemate)'
     case 'needs_changes':
       return 'needs changes'
     case 'inconclusive':

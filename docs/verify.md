@@ -82,12 +82,15 @@ remaining steps are recorded as "not run", not "passed". After the author fixes
 the issue, the **whole list re-runs from the beginning** on the next attempt; a
 step that already passed is not cached across attempts.
 
-### 4. Container — steps plus `max_failures`
+### 4. Container — steps plus `max_failures` / `review_patience`
 
 To set a per-stage correction budget (how many `needs_changes` rejections the
 author may correct before the stage fails, see
-[The correction budget](#the-correction-budget-verifymax_failures) below), wrap
-the steps in an object with `steps:` and `max_failures:`:
+[The correction budget](#the-correction-budget-verifymax_failures) below) or a
+per-stage stalemate backstop (see
+[Stalemate detection](#stalemate-detection-verifyreview_patience) below), wrap
+the steps in an object with `steps:` plus `max_failures:` and/or
+`review_patience:`:
 
 ```yaml
 verify:
@@ -99,14 +102,15 @@ verify:
       prompt: |
         Check acceptance criteria and backward compatibility.
   max_failures: 3          # optional; overrides the global verify.max_failures
+  review_patience: 2       # optional; overrides the global verify.review_patience
 ```
 
-`steps` is the same list of step objects as form 3; `max_failures` is optional.
-Only this container form carries `max_failures` — the scalar, single-object, and
-list forms above use the global `verify.max_failures` (default 1). No other
-top-level keys are allowed here: a step field (`run`/`command`/`prompt`/
-`timeout`) at the container's top level is a parse error (it belongs inside a
-`steps` item).
+`steps` is the same list of step objects as form 3; both `max_failures` and
+`review_patience` are optional. Only this container form carries them — the
+scalar, single-object, and list forms above use the global `verify.max_failures`
+(default 1) and `verify.review_patience` (default 0). No other top-level keys are
+allowed here: a step field (`run`/`command`/`prompt`/`timeout`) at the
+container's top level is a parse error (it belongs inside a `steps` item).
 
 ### Fields
 
@@ -228,7 +232,7 @@ verify:
   max_failures: 2
 ```
 
-or per stage with the [container form](#4-container-steps-plus-max_failures) of
+or per stage with the [container form](#4-container-steps-plus-max_failures-review_patience) of
 the stage's `verify:` field. Resolution is **stage `verify.max_failures` >
 global `verify.max_failures` > default 1**.
 
@@ -247,6 +251,64 @@ The counter is **in-memory** and resets if the run is resumed after a restart
 (it is not persisted). Verify corrections also still ride the overall retry
 loop, so the effective ceiling is `min(max_failures, MaxRetries)` — with the
 built-in `MaxRetries = 15`, a budget above 15 is capped there.
+
+## Stalemate detection: `verify.review_patience`
+
+An AI reviewer runs fresh each round with no memory of the previous ones, so it
+can keep finding ever-subtler refinements forever. When the author disagrees and
+stops editing in response, the two deadlock: the reviewer keeps returning
+`needs_changes`, the author keeps producing the same result, and the stage burns
+its correction budget and `fails` over a dispute, not a real defect.
+
+`verify.review_patience` is a backstop for exactly that case. When a verify
+rejection is the **N-th consecutive** one that left the git **working tree
+unchanged** — the author made no edits in response to the review — afm **accepts
+the stage as complete** instead of looping to failure. In effect the implementer
+wins the dispute once they have held their ground `review_patience` times in a row.
+
+- **`0`** (the **default**) disables stalemate detection entirely — exactly
+  today's behavior. The feature is opt-in.
+- **`N` ≥ 1** accepts the stage after the author has left the working tree
+  unchanged across `N` consecutive rejections.
+
+A negative value is rejected at config load / flow validation time.
+
+Set it globally with the top-level `verify:` block in `config.yaml`, or per stage
+with the [container form](#4-container-steps-plus-max_failures-review_patience)
+of the stage's `verify:` field. Resolution is **stage `verify.review_patience` >
+global `verify.review_patience` > default 0**.
+
+```yaml
+verify:
+  review_patience: 2
+```
+
+Important guarantees and guardrails:
+
+- **It never accepts work that still fails a check.** Only an **AI** step's
+  `needs_changes` can be accepted by stalemate, and only when **no shell step runs
+  after it** in the sequence. A red `go test` (a shell step) can never be accepted
+  this way — put your shell gates first in the list and they stay authoritative.
+- **"Unchanged" is measured between rejections.** afm fingerprints the working
+  tree at each rejection (HEAD, the staged and unstaged diffs, and each
+  **non-ignored** untracked file's path **and** content; afm's own `.afm/`
+  directory is excluded). The counter only advances when the fingerprints of two
+  consecutive rejections match. Two consequences worth knowing: a change that is
+  **visible between snapshots** resets the counter, but an edit that is made and
+  then **fully reverted before the next rejection snapshot** looks identical and is
+  not detected; and because untracked files are collected with git's standard
+  exclude rules, a change confined to **gitignored-only** files is not seen either.
+- **It is fail-safe.** If afm cannot prove the tree is unchanged (not a git repo,
+  an unborn `HEAD`, any git error, or a file too large to hash), that round does
+  **not** count as unchanged and the counter resets — afm never accepts on
+  uncertainty.
+- **Budget interplay.** For stalemate to engage you need
+  `max_failures >= review_patience`; otherwise the stage fails on the correction
+  budget before the unchanged-round count is reached, and `review_patience` is a
+  silent no-op (the safe side — it never accepts by mistake, it just doesn't
+  engage).
+- Like the correction budget, the unchanged-round counter is **in-memory** and
+  resets if the run is resumed after a restart.
 
 ## Reports and feedback files
 
@@ -284,6 +346,11 @@ The Feed shows a line for each step as it starts and finishes: `Verify step N ·
 or an execution error (danger) — with a **Show full report** link and the step's
 cost, alongside the stage's normal pause/retry/revise actions. Nothing about
 verify introduces a new stage status or a second progress bar.
+
+When [stalemate detection](#stalemate-detection-verifyreview_patience) accepts a
+stage, the Feed and the stage rail show a distinct **accepted (stalemate)** verify
+badge (its own accent colour, separate from a clean pass or an error) so it's clear
+the stage was accepted after unchanged rounds rather than by a passing verdict.
 
 ## Limitations (v1)
 

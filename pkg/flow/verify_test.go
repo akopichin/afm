@@ -390,3 +390,83 @@ func TestVerifySpec_ContainerMarshalRoundTrip(t *testing.T) {
 		t.Errorf("round-trip MaxFailures = %v, want 4 (yaml: %s)", back.MaxFailures, out)
 	}
 }
+
+// TestVerifySpec_ContainerReviewPatience — container-форма с review_patience:
+// значение становится указателем, max_failures остаётся независимым.
+func TestVerifySpec_ContainerReviewPatience(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - command: codex\n" +
+		"  review_patience: 2\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.ReviewPatience == nil || *spec.ReviewPatience != 2 {
+		t.Errorf("ReviewPatience = %v, want 2", spec.ReviewPatience)
+	}
+	if spec.MaxFailures != nil {
+		t.Errorf("MaxFailures = %v, want nil", spec.MaxFailures)
+	}
+}
+
+// TestVerifySpec_ScalarLeavesReviewPatienceNil — скалярная форма review_patience
+// не несёт (это чисто container-ключ), поле остаётся nil.
+func TestVerifySpec_ScalarLeavesReviewPatienceNil(t *testing.T) {
+	spec, err := parseVerify(t, "verify: \"go test ./...\"\n", "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.ReviewPatience != nil {
+		t.Errorf("ReviewPatience = %v, want nil for scalar form", spec.ReviewPatience)
+	}
+}
+
+// TestVerifySpec_ContainerNegativeReviewPatienceRejected — отрицательное значение отвергается.
+func TestVerifySpec_ContainerNegativeReviewPatienceRejected(t *testing.T) {
+	src := "verify:\n  steps:\n    - command: codex\n  review_patience: -1\n"
+	_, err := parseVerify(t, src, "s1")
+	if err == nil {
+		t.Fatal("expected error for a negative review_patience")
+	}
+	if !strings.Contains(err.Error(), "review_patience") {
+		t.Errorf("error = %q, want it to mention review_patience", err.Error())
+	}
+}
+
+// TestVerifySpec_ReviewPatienceWithoutStepsRejected — review_patience без steps
+// (одиночная форма) — неизвестное поле шага, а не бюджет.
+func TestVerifySpec_ReviewPatienceWithoutStepsRejected(t *testing.T) {
+	src := "verify:\n  review_patience: 2\n"
+	if _, err := parseVerify(t, src, "s1"); err == nil {
+		t.Fatal("expected error for review_patience without steps")
+	}
+}
+
+// TestVerifySpec_ContainerReviewPatienceMarshalRoundTrip — round-trip сохраняет
+// review_patience вместе с max_failures.
+func TestVerifySpec_ContainerReviewPatienceMarshalRoundTrip(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - command: codex\n" +
+		"  max_failures: 6\n" +
+		"  review_patience: 2\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out, err := yaml.Marshal(verifyHolder{Verify: spec})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	back, err := parseVerify(t, string(out), "s1")
+	if err != nil {
+		t.Fatalf("re-parse marshalled verify: %v (yaml: %s)", err, out)
+	}
+	if back.ReviewPatience == nil || *back.ReviewPatience != 2 {
+		t.Errorf("round-trip ReviewPatience = %v, want 2 (yaml: %s)", back.ReviewPatience, out)
+	}
+	if back.MaxFailures == nil || *back.MaxFailures != 6 {
+		t.Errorf("round-trip MaxFailures = %v, want 6 (yaml: %s)", back.MaxFailures, out)
+	}
+}

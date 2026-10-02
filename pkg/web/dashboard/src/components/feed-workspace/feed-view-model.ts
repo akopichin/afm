@@ -336,6 +336,13 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<st
   if (verdict === 'pass') {
     return { actor: 'system', tone: 'success', kind: 'success', text: `Verify passed (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
   }
+  if (verdict === 'accepted_stalemate') {
+    // Синтезированный afm вердикт (review_patience): стадия принята, потому что
+    // автор перестал менять дерево в ответ на повторные отклонения. Это
+    // ПРИНЯТЫЙ исход (success-тон), но текст прямо называет причину, чтобы было
+    // видно, что гейт был завершён по stalemate, а не чистым прохождением.
+    return { actor: 'system', tone: 'success', kind: 'success', text: `Verify accepted (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+  }
   if (verdict === 'needs_changes') {
     return { actor: 'system', tone: 'warning', kind: 'status', text: `Verify needs changes (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
   }

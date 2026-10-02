@@ -449,6 +449,31 @@ func TestBuildStageViews_VerifyIndicatorFromNotices(t *testing.T) {
 	}
 }
 
+// TestBuildStageViews_VerifyAcceptedStalemate — replay: verify_result с
+// синтезированным afm вердиктом accepted_stalemate (B1 review_patience) должен
+// реконструироваться как терминальный ПРИНЯТЫЙ исход, не error.
+func TestBuildStageViews_VerifyAcceptedStalemate(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "build"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyStarted), map[string]any{"step": 1, "command": "codex"})
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 1, "command": "codex", "verdict": "needs_changes"})
+	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 1, "command": "codex", "verdict": "accepted_stalemate", "reason": "accepted after 2 unchanged round(s) (reviewer/author stalemate)"})
+
+	rs := state.RunState{
+		StageOrder: []string{"build"},
+		Stages: map[string]state.StageState{
+			"build": {Status: state.StatusDone},
+		},
+	}
+	views := buildStageViews(rs, runDir, nil, nil)
+	v := findStage(views, "build").Verify
+	if v == nil || v.Phase != "accepted_stalemate" || v.Step != 1 || v.Command != "codex" {
+		t.Fatalf("verify view = %+v, want {1 codex accepted_stalemate}", v)
+	}
+}
+
 // TestBuildStageViews_VerifyReRunReturnsRunning: started → result(pass) →
 // started(step2) ⇒ phase "running" — a new verify pass after a completed one
 // re-enters "running" (current state, not the last-ever outcome).

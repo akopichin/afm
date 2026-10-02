@@ -278,7 +278,7 @@ func verifyViewFromNotice(n *verifyNotice) *VerifyView {
 		return view
 	}
 	switch verdict := noticeStringField(n.Data, "verdict"); verdict {
-	case VerifyPhasePass, VerifyPhaseNeedsChanges, VerifyPhaseInconclusive:
+	case VerifyPhasePass, VerifyPhaseNeedsChanges, VerifyPhaseInconclusive, VerifyPhaseAcceptedStalemate:
 		view.Phase = verdict
 	default:
 		view.Phase = VerifyPhaseError
@@ -291,11 +291,16 @@ func verifyViewFromNotice(n *verifyNotice) *VerifyView {
 // which golangci-lint's goconst would otherwise flag) for the same vocabulary
 // as the deleted client VerifyIndicatorPhase.
 const (
-	VerifyPhaseRunning      = "running"
-	VerifyPhasePass         = "pass"
-	VerifyPhaseNeedsChanges = "needs_changes"
-	VerifyPhaseInconclusive = "inconclusive"
-	VerifyPhaseError        = "error"
+	VerifyPhaseRunning = "running"
+	VerifyPhasePass    = "pass"
+	// VerifyPhaseAcceptedStalemate — терминальный ПРИНЯТЫЙ исход, синтезированный
+	// afm при срабатывании review_patience (reviewer/author stalemate). Отличается
+	// от pass (это не чистое прохождение) и НЕ error — стадия принята. Строка
+	// совпадает с verify.VerdictAcceptedStalemate.
+	VerifyPhaseAcceptedStalemate = "accepted_stalemate"
+	VerifyPhaseNeedsChanges      = "needs_changes"
+	VerifyPhaseInconclusive      = "inconclusive"
+	VerifyPhaseError             = "error"
 )
 
 // noticeIntField/noticeStringField defensively read a notice's data map —

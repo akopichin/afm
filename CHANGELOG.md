@@ -3,6 +3,31 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-02
+
+### Improvement: `verify.review_patience` — break reviewer/author stalemates
+
+An AI verify reviewer runs fresh each round and can keep finding ever-subtler
+refinements indefinitely; when the author disagrees and stops editing, the stage
+used to burn its correction budget and `fail` over a dispute rather than a real
+defect. The new `verify.review_patience` option is an opt-in backstop: when a verify
+rejection is the N-th **consecutive** one that left the git working tree **unchanged**
+(the author made no edits in response to the review), afm **accepts the stage as
+complete** instead of looping to failure — the implementer wins the dispute. The
+default is `0` (disabled), so existing flows behave exactly as before. Set it globally
+under the top-level `verify:` block in `config.yaml`, or per stage via the container
+form of a stage's `verify:` field (`{steps: [...], review_patience: N}`); resolution
+is stage > global > default. Guardrails keep it safe: only an AI step's `needs_changes`
+with no shell step after it can be accepted — a red `go test` is never accepted this
+way; "unchanged" is measured between rejections by fingerprinting HEAD, staged/unstaged
+diffs, and each non-ignored untracked file's content (afm's own `.afm/` excluded), so a
+change visible between two consecutive rejection snapshots resets the counter (an edit
+reverted before the next snapshot, or one confined to gitignored files, is not detected);
+if afm cannot prove the tree is unchanged it never accepts on uncertainty; and
+for the backstop to engage at all you need `max_failures >= review_patience`. When a
+stage is accepted this way the dashboard shows a distinct **accepted (stalemate)**
+verify badge so it reads differently from a clean pass.
+
 ## 2026-10-01
 
 ### Improvement: side agent — a free-form chat in the dashboard

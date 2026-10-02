@@ -236,6 +236,15 @@ client:
 #       - run: go test ./...
 #       - command: codex
 #     max_failures: 3
+#     review_patience: 2
 # Default: 1
+#
+# review_patience — stalemate backstop for an AI reviewer that keeps finding ever-
+# subtler refinements. When a rejection is the N-th CONSECUTIVE one that left the
+# working tree unchanged (the author stopped editing in response to review), afm
+# accepts the stage as complete instead of looping to failure. Only an AI step with
+# no shell step after it can be accepted this way (a red test is never accepted).
+# Default: 0 (disabled). For it to engage you need max_failures >= review_patience.
 # verify:
 #   max_failures: 1
+#   review_patience: 0
