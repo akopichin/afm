@@ -127,10 +127,16 @@ fi
 # The token lives in the descriptor file — NOT in argv/env — so we pass only the
 # server command (resolved absolute afm launcher) and args as a SEQUENCE. Pinned
 # codex 0.155.1 rejects env_vars={...} (a map), so no env_vars key is emitted.
+# The command/args values are built with jq (a hard dependency, checked above):
+# a JSON string is a valid TOML basic string and a JSON array is a valid TOML
+# array, so this escapes any quote/backslash/newline in the path for the TOML
+# parser — raw interpolation would only protect the shell, not codex's TOML reader.
 if [[ "$CODEX_VERIFY" != "1" && -n "${AFM_BROWSER_DESCRIPTOR:-}" ]]; then
     if [[ -n "${AFM_BROWSER_LAUNCHER:-}" ]]; then
-        codex_args+=(-c "mcp_servers.afm_chrome.command=\"$AFM_BROWSER_LAUNCHER\"")
-        codex_args+=(-c "mcp_servers.afm_chrome.args=[\"browser\",\"mcp\",\"--descriptor\",\"$AFM_BROWSER_DESCRIPTOR\"]")
+        browser_cmd_val=$(jq -nc --arg v "$AFM_BROWSER_LAUNCHER" '$v')
+        browser_args_val=$(jq -nc --arg d "$AFM_BROWSER_DESCRIPTOR" '["browser","mcp","--descriptor",$d]')
+        codex_args+=(-c "mcp_servers.afm_chrome.command=$browser_cmd_val")
+        codex_args+=(-c "mcp_servers.afm_chrome.args=$browser_args_val")
     fi
     # If AFM_BROWSER_LAUNCHER is unset, skip the override rather than guess a bare
     # "afm" that may not be on PATH under that name.

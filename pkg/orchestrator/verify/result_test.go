@@ -195,3 +195,115 @@ func TestDecodeModelResult_Rejections(t *testing.T) {
 		})
 	}
 }
+
+// TestDecodeModelResult_RepairsBareNewline покрывает реальный инцидент: codex-
+// ревьюер вписал в строковое значение (evidence) многострочную цитату кода, и
+// сырой перенос строки попал прямо внутрь строкового литерала JSON. Строгий
+// json недопускает сырой \n внутри строки — но это чисто лексическая поломка
+// вывода модели, а не проблема вердикта. Декодер чинит её через jsonrepair и
+// принимает результат, вместо того чтобы валить verify красным из-за транспорта.
+func TestDecodeModelResult_RepairsBareNewline(t *testing.T) {
+	// Реальный перенос строки (не экранированный) внутри evidence.
+	raw := "{\"schema_version\":1,\"verdict\":\"needs_changes\",\"summary\":\"есть проблема\"," +
+		"\"findings\":[{\"blocking\":true,\"title\":\"t\",\"path\":null,\"line_start\":null," +
+		"\"line_end\":null,\"requirement\":\"r\",\"evidence\":\"line1\nline2\",\"minimal_fix\":\"f\"}]}"
+
+	got, err := DecodeModelResult([]byte(raw))
+	if err != nil {
+		t.Fatalf("expected repair to accept the result, got error: %v", err)
+	}
+	if got.Verdict != VerdictNeedsChanges {
+		t.Fatalf("verdict: got %q, want %q", got.Verdict, VerdictNeedsChanges)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("findings: got %d, want 1", len(got.Findings))
+	}
+	if got.Findings[0].Evidence != "line1\nline2" {
+		t.Fatalf("evidence: got %q, want %q", got.Findings[0].Evidence, "line1\nline2")
+	}
+}
+
+// TestDecodeModelResult_RepairDoesNotMaskRejections гарантирует, что ремонт
+// применяется ТОЛЬКО к лексической поломке (сырой \n), но не вскрывает дыру в
+// намеренных отказах: если после ремонта остаётся дубль ключа — результат всё
+// равно отклоняется. (jsonrepair не дедуплицирует ключи, а строгая проверка
+// дубликатов прогоняется повторно по отремонтированным байтам.)
+func TestDecodeModelResult_RepairDoesNotMaskRejections(t *testing.T) {
+	// Сырой \n в evidence (чинится) + дубль ключа "blocking" (должен отклониться).
+	raw := "{\"schema_version\":1,\"verdict\":\"needs_changes\",\"summary\":\"ok\"," +
+		"\"findings\":[{\"blocking\":true,\"blocking\":true,\"title\":\"t\",\"path\":null," +
+		"\"line_start\":null,\"line_end\":null,\"requirement\":\"r\",\"evidence\":\"a\nb\"," +
+		"\"minimal_fix\":\"f\"}]}"
+
+	_, err := DecodeModelResult([]byte(raw))
+	if err == nil {
+		t.Fatal("expected rejection: a duplicate key must not survive repair")
+	}
+	// The input is malformed in two ways; afm returns the first failure (the
+	// syntax error) — what matters is that the repaired-but-still-duplicate
+	// document is NOT accepted. A pure duplicate (no syntax error) still surfaces
+	// the "duplicate" message, proven by TestDecodeModelResult_Rejections.
+}
+
+// TestDecodeModelResult_SyntaxErrorMessageIsNotMisleading фиксирует, что
+// лексическая ошибка больше не маскируется под "duplicate key" (детектор
+// дубликатов теперь идёт ПОСЛЕ структурного разбора). Берём вход с сырым \n и
+// неизвестным полем, который ремонт не доведёт до валидной схемы, и проверяем,
+// что ошибка — не про дубликат ключа.
+func TestDecodeModelResult_SyntaxErrorMessageIsNotMisleading(t *testing.T) {
+	raw := "{\"schema_version\":1,\"verdict\":\"pass\",\"summary\":\"x\ny\"," +
+		"\"findings\":[],\"bogus\":true}"
+
+	_, err := DecodeModelResult([]byte(raw))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("error must not be mislabeled as a duplicate key: %q", err.Error())
+	}
+}
+
+// TestDecodeModelResult_RepairStaysNarrow гарантирует, что узкий ремонт сырых
+// управляющих символов НЕ превращается в вседозволенный нормализатор: обёртки и
+// лишний контент, которые jsonrepair снял бы, тут обязаны по-прежнему
+// отклоняться (даже если рядом есть сырой \n, запускающий путь ремонта).
+func TestDecodeModelResult_RepairStaysNarrow(t *testing.T) {
+	valid := `{"schema_version":1,"verdict":"pass","summary":"ok","findings":[]}`
+	cases := map[string]string{
+		// JSONP-обёртка + сырой \n: ремонт экранирует \n, но обёртка остаётся →
+		// json.Decode по-прежнему падает, лишний контент не проходит.
+		"jsonp wrapper": "callback(" + `{"schema_version":1,"verdict":"pass","summary":"a` + "\n" + `b","findings":[]})`,
+		"trailing junk": valid + " trailing-junk",
+		"double doc":    valid + valid,
+		"line comment":  "// note\n" + valid,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeModelResult([]byte(raw)); err == nil {
+				t.Fatalf("narrow repair must not accept %q", raw)
+			}
+		})
+	}
+}
+
+// TestEscapeRawControlCharsInStrings_OnlyInsideStrings проверяет, что ремонт
+// трогает управляющие символы ТОЛЬКО внутри строковых литералов, а структурные
+// переносы строк между токенами (валидный pretty-printed JSON) не меняет.
+func TestEscapeRawControlCharsInStrings_OnlyInsideStrings(t *testing.T) {
+	// Переносы строк МЕЖДУ токенами (не в строке) — валидны, ремонт не нужен.
+	pretty := "{\n  \"schema_version\": 1\n}"
+	if _, changed := escapeRawControlCharsInStrings([]byte(pretty)); changed {
+		t.Fatal("structural whitespace outside strings must not be escaped")
+	}
+	// Сырой \n ВНУТРИ строки — экранируется.
+	inStr := "{\"s\":\"a\nb\"}"
+	got, changed := escapeRawControlCharsInStrings([]byte(inStr))
+	if !changed || string(got) != `{"s":"a\nb"}` {
+		t.Fatalf("raw newline inside a string must be escaped, got %q changed=%v", got, changed)
+	}
+	// Уже экранированный \n (бэкслэш+n) — не трогаем (не удваиваем).
+	already := `{"s":"a\nb"}`
+	if _, changed := escapeRawControlCharsInStrings([]byte(already)); changed {
+		t.Fatal("already-escaped \\n must not be touched")
+	}
+}

@@ -19,6 +19,13 @@ docs/plans/
 # локальный dev-pipeline флоу (не коммитим)
 /dev-pipeline.yaml
 
+# рабочие артефакты dev-pipeline в корне (план/спека) — как и docs/plans/, не коммитим
+/dev-plan.md
+/dev-spec.md
+
+# локальный workstation-конфиг Claude Code (абсолютные пути, личные разрешения)
+.claude/settings.local.json
+
 # React-дашборд: npm-зависимости и runtime-данные afm
 pkg/web/dashboard/node_modules/
 pkg/web/dashboard/.afm/

@@ -64,7 +64,22 @@ type browserSeam struct {
 // browserDefaultSeam is the production seam; tests swap it to avoid the real host.
 var browserDefaultSeam = browserSeam{
 	lookPath: exec.LookPath,
-	statFile: func(p string) error { _, err := os.Stat(p); return err },
+	// statFile must reject a path that exists but could never launch: a directory
+	// or a non-executable file would pass a bare os.Stat and defer the failure to
+	// the first browser tool call instead of a clean startup error.
+	statFile: func(p string) error {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			return fmt.Errorf("%s is a directory, not the Chrome executable", p)
+		}
+		if fi.Mode()&0o111 == 0 {
+			return fmt.Errorf("%s is not executable", p)
+		}
+		return nil
+	},
 	mcpVersion: func() (string, error) {
 		out, err := exec.Command("chrome-devtools-mcp", "--version").Output()
 		return string(out), err

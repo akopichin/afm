@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,13 +130,25 @@ func TestBrowserForStage_RootsCoverProjectAndStageDir(t *testing.T) {
 	}
 }
 
-func TestBrowserForStage_RootsSkipEmptyRootDir(t *testing.T) {
+func TestBrowserForStage_EmptyRootDirUsesCWD(t *testing.T) {
 	runDir := t.TempDir()
 	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
-	o.opts.RunDir = runDir // RootDir left "" → only the stage dir is a root
+	o.opts.RunDir = runDir // RootDir left "" → the agent inherits afm's CWD as root
 	b := o.browserForStage(flow.Stage{ID: "build", Command: "claude"}, "claude")
-	if b == nil || len(b.Roots) != 1 || b.Roots[0] != filepath.Join(runDir, "build") {
-		t.Fatalf("empty RootDir must yield a single stage-dir root, got %+v", b)
+	if b == nil {
+		t.Fatal("expected capability")
+	}
+	wd, _ := os.Getwd()
+	wantStage := filepath.Join(runDir, "build")
+	// An empty project root resolves to the CWD (the agent's project root), and
+	// every root is absolute so the MCP resolves them correctly under the agent CWD.
+	if len(b.Roots) != 2 || b.Roots[0] != wd || b.Roots[1] != wantStage {
+		t.Fatalf("empty RootDir must yield [cwd, stageDir], got %v", b.Roots)
+	}
+	for _, r := range b.Roots {
+		if !filepath.IsAbs(r) {
+			t.Fatalf("every filesystemRoot must be absolute, got %q", r)
+		}
 	}
 }
 

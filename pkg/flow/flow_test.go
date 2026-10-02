@@ -118,6 +118,36 @@ func TestValidateMissingPlan(t *testing.T) {
 	}
 }
 
+func TestValidateStageIDCharset(t *testing.T) {
+	// An id outside [A-Za-z0-9._-] must be rejected: it feeds filesystem paths,
+	// the managed-browser session URL, and a Chrome profile dir name, where chars
+	// like ':' or '@' or '#' silently collide or truncate.
+	for _, bad := range []string{"a:b", "a@b", "ui#one", "has space", "кирилл"} {
+		yaml := "name: f\nstages:\n  - id: \"" + bad + "\"\n    name: s\n    agents: [auto]\n"
+		if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
+			t.Fatalf("stage id %q must be rejected", bad)
+		}
+	}
+	// Normal ids remain valid.
+	for _, ok := range []string{"build", "live-run", "step.2", "a_b"} {
+		yaml := "name: f\nstages:\n  - id: \"" + ok + "\"\n    name: s\n    agents: [auto]\n"
+		if _, err := flow.ParseFile(writeTemp(t, yaml)); err != nil {
+			t.Fatalf("stage id %q must be accepted, got %v", ok, err)
+		}
+	}
+}
+
+func TestValidateStageIDCaseInsensitiveCollision(t *testing.T) {
+	// "Build" and "build" differ only in case: on a case-insensitive FS (macOS)
+	// they map to one Chrome profile dir, so afm must reject the pair.
+	yaml := "name: f\nstages:\n" +
+		"  - id: Build\n    name: a\n    agents: [auto]\n" +
+		"  - id: build\n    name: b\n    agents: [auto]\n"
+	if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
+		t.Fatal("case-insensitive id collision (Build/build) must be rejected")
+	}
+}
+
 const artifactsYAML = `
 name: artifact-flow
 description: "flow with artifacts"

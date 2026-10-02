@@ -78,14 +78,99 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 	}
 
 	trimmed := bytes.TrimSpace(raw)
+	// Markdown-fence отклоняем до любого ремонта: это намеренная строгость (модель
+	// обязана отдавать голый JSON), а jsonrepair умеет снимать fence и тем самым
+	// обошёл бы это правило.
 	if bytes.HasPrefix(trimmed, []byte("```")) {
 		return ModelResult{}, errors.New("verification result is wrapped in a markdown code fence; expected bare JSON")
 	}
 
-	if err := detectDuplicateKeys(trimmed); err != nil {
-		return ModelResult{}, fmt.Errorf("duplicate key in verification result JSON: %w", err)
+	r, err := decodeStrict(trimmed)
+	if err == nil {
+		return r, nil
 	}
 
+	// Ремонтируем ТОЛЬКО одну узкую поломку: сырые управляющие символы
+	// (перенос строки/возврат каретки/таб) ВНУТРИ строкового литерала JSON —
+	// именно это выдают ревьюеры, вписывая многострочную цитату кода в поле
+	// evidence. escapeRawControlCharsInStrings НЕ снимает fence/JSONP/
+	// комментарии и не отбрасывает лишний контент (в отличие от jsonrepair),
+	// поэтому все намеренные строгие отказы сохраняются: после ремонта мы
+	// повторно прогоняем ВЕСЬ строгий конвейер, и дубли ключей, неизвестные
+	// поля, trailing-контент, неверные schema_version/verdict по-прежнему
+	// отвергаются. Применяем ремонт, только если вход вообще содержал сырой
+	// управляющий символ (иначе чинить нечего — возвращаем исходную ошибку).
+	if repaired, changed := escapeRawControlCharsInStrings(trimmed); changed {
+		if r2, err2 := decodeStrict(repaired); err2 == nil {
+			return r2, nil
+		}
+	}
+	return ModelResult{}, err
+}
+
+// escapeRawControlCharsInStrings проходит JSON побайтово, отслеживая, находимся
+// ли мы внутри строкового литерала, и заменяет сырые управляющие символы внутри
+// строк на их валидные escape-последовательности (\n, \r, \t; прочие < 0x20 —
+// на \u00XX). Вне строк байты не трогаются, поэтому структура документа
+// (границы, лишний контент, fence) остаётся как есть — это намеренно узкий
+// ремонт, не нормализатор. Возвращает (возможно изменённые) байты и флаг, были
+// ли замены.
+func escapeRawControlCharsInStrings(data []byte) ([]byte, bool) {
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, 0, len(data)+8)
+	inString := false
+	escaped := false
+	changed := false
+	for _, b := range data {
+		if inString {
+			if escaped { // предыдущий байт был '\' — текущий уже экранирован
+				out = append(out, b)
+				escaped = false
+				continue
+			}
+			switch {
+			case b == '\\':
+				escaped = true
+			case b == '"':
+				inString = false
+			case b < 0x20: // сырой управляющий символ внутри строки недопустим — экранируем
+				switch b {
+				case '\n':
+					out = append(out, '\\', 'n')
+				case '\r':
+					out = append(out, '\\', 'r')
+				case '\t':
+					out = append(out, '\\', 't')
+				default:
+					out = append(out, '\\', 'u', '0', '0', hexdigits[b>>4], hexdigits[b&0xf])
+				}
+				changed = true
+				continue
+			default:
+				// обычный байт строки — добавляется ниже без изменений
+			}
+			out = append(out, b)
+			continue
+		}
+		if b == '"' {
+			inString = true
+		}
+		out = append(out, b)
+	}
+	if !changed {
+		return data, false
+	}
+	return out, true
+}
+
+// decodeStrict — строгий конвейер разбора ОДНОГО JSON-документа без репейра.
+// Порядок важен: структурный разбор (json.Decode) идёт ПЕРВЫМ, поэтому
+// лексическая ошибка выходит как "failed to parse …" с развёрнутым
+// *json.SyntaxError (а не маскируется под "duplicate key"), и вызывающий может
+// отличить её по типу, чтобы решить, стоит ли пробовать jsonrepair. Проверка
+// дубликатов ключей идёт ПОСЛЕ успешного разбора (json сам дубли молча
+// схлопывает, поэтому их всё равно надо ловить отдельным проходом).
+func decodeStrict(trimmed []byte) (ModelResult, error) {
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
 	var r ModelResult
@@ -94,6 +179,10 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return ModelResult{}, errors.New("trailing content after JSON document in verification result (extra data or multiple documents)")
+	}
+
+	if err := detectDuplicateKeys(trimmed); err != nil {
+		return ModelResult{}, fmt.Errorf("duplicate key in verification result JSON: %w", err)
 	}
 
 	if r.SchemaVersion != SupportedSchemaVersion {

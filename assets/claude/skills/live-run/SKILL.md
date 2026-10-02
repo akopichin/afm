@@ -40,12 +40,15 @@ For another project, use its real build command (check the repo / dev-plan).
 
 ## Step 2: Start the app on the managed port
 
-Launch the server bound to `0.0.0.0:$AFM_BROWSER_APP_PORT` in the background, then
-wait for it to answer before driving the browser:
+Launch the server in the background (bind address per the mode note above — Docker:
+`0.0.0.0`; native: `127.0.0.1`), then wait for it to answer before driving the
+browser:
 
 ```bash
-# example — replace with the real start command
-./your-app --addr "0.0.0.0:$AFM_BROWSER_APP_PORT" &
+# example — replace with the real start command.
+# BIND: Docker → 0.0.0.0, native → 127.0.0.1 (don't expose a native dev server on the LAN)
+BIND=0.0.0.0; [ -z "$AFM_IN_DOCKER" ] && BIND=127.0.0.1
+./your-app --addr "$BIND:$AFM_BROWSER_APP_PORT" &
 until curl -sf "http://127.0.0.1:$AFM_BROWSER_APP_PORT" >/dev/null; do sleep 0.5; done
 ```
 

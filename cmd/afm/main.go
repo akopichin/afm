@@ -98,7 +98,11 @@ func runMain(args []string) int {
 	}
 
 	cmd.PrintErrln(cmd.ErrPrefix(), err.Error())
-	cmd.Println(cmd.UsageString())
+	// Usage goes to STDERR, never stdout: `afm browser mcp` is a stdio JSON-RPC
+	// server whose stdout carries the MCP protocol, so a usage dump on stdout on a
+	// startup error would corrupt the client's handshake. Usage-on-error belongs on
+	// stderr for every command anyway.
+	cmd.PrintErrln(cmd.UsageString())
 	return 1
 }
 

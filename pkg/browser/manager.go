@@ -23,7 +23,7 @@ import (
 const defaultLaunchTimeout = 30 * time.Second
 
 // writeQueueSize bounds the per-session serialized write queue to Chrome. A full
-// queue applies backpressure and drops the slow session rather than growing.
+// queue applies backpressure (the client reader blocks) rather than growing.
 const writeQueueSize = 256
 
 // Options configures a Manager.
@@ -191,13 +191,28 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 	go func() {
 		s.once.Do(func() {
 			conn, err := m.launch(launchCtx, key, s.profileDir)
-			s.conn, s.err = conn, err
-			if err == nil {
-				_ = writeOwnerMarker(s.profileDir, os.Getpid(), m.epoch)
-				s.proxy = newProxy()
-				go s.writeLoop()
-				go s.readFromChrome()
+			if err != nil {
+				s.err = err
+				close(s.launched)
+				return
 			}
+			// Hand off ownership under s.mu. If close() already ran (run ending, or
+			// a client-cancel teardown) while this launch was in flight, WE own the
+			// cleanup: kill the Chrome we just started instead of orphaning it.
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				conn.close()
+				s.err = errors.New("browser: session closed during launch")
+				close(s.launched)
+				return
+			}
+			s.conn = conn
+			s.mu.Unlock()
+			_ = writeOwnerMarker(s.profileDir, os.Getpid(), m.epoch)
+			s.proxy = newProxy()
+			go s.writeLoop()
+			go s.readFromChrome()
 			close(s.launched)
 		})
 		close(done)
@@ -268,6 +283,16 @@ func (m *Manager) Close() error {
 	_ = m.srv.Shutdown(ctx)
 	_ = m.ln.Close()
 	for _, s := range sessions {
+		// Wait for any in-flight launch to finish before tearing the session down.
+		// s.launched is closed only AFTER the launch goroutine assigns s.conn, so
+		// this receive both (a) establishes the happens-before that lets s.close()
+		// read s.conn without a data race, and (b) ensures a Chrome that finished
+		// launching is actually killed instead of being orphaned (s.conn still nil
+		// at close time → conn.close() skipped). Bounded by the same 10s budget.
+		select {
+		case <-s.launched:
+		case <-ctx.Done():
+		}
 		s.close()
 		_ = os.RemoveAll(s.profileDir)
 	}

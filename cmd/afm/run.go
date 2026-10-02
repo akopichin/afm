@@ -129,6 +129,10 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	var browserDesc *browser.Descriptor
 	if config.ReExecedIntoContainer() {
 		browserDesc = descriptorFromEnv(true)
+		// The transport (incl. the secret token) has now been consumed into the
+		// descriptor; strip AFM_BROWSER_* from afm's own env so no child — not even
+		// a direct, non-executor spawn like memory.Commit's `git` — inherits it.
+		browser.UnsetTransportVars()
 	} else {
 		_, desc, browserCleanup, berr := startBrowser(cfg, browser.BrowserModeNative)
 		if berr != nil {

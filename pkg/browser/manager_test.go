@@ -236,6 +236,71 @@ func TestManager_WSWrongTokenIs401_NoChrome(t *testing.T) {
 	}
 }
 
+// TestManager_CloseDuringLaunch verifies that a Manager.Close racing an
+// in-flight Chrome launch does not orphan the Chrome: once the launch completes,
+// Close must still kill it (close its pipes) instead of observing s.conn==nil and
+// skipping teardown. Before the fix Close did not wait for the launch, read a nil
+// conn, and left the finished Chrome unowned.
+func TestManager_CloseDuringLaunch(t *testing.T) {
+	m, err := New(Options{Epoch: "ep1", ChromePath: "/fake/chrome", LaunchTimeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	// The launcher owns a real pipe pair so we can observe whether chromeConn.close
+	// ran (closing an already-closed *os.File returns an error).
+	inR, inW, _ := os.Pipe()
+	outR, outW, _ := os.Pipe()
+	t.Cleanup(func() { inR.Close(); outW.Close() })
+
+	m.launch = func(_ context.Context, _, dir string) (*chromeConn, error) {
+		close(started)
+		<-release // block so Close runs while the launch is in flight
+		_ = os.MkdirAll(dir, 0o700)
+		return &chromeConn{toChrome: inW, fromChrome: outR}, nil
+	}
+
+	go func() { _, _ = m.firstConnect(context.Background(), "ep1", "build") }()
+	<-started // launch goroutine is running; session is in the map
+
+	closed := make(chan struct{})
+	go func() { _ = m.Close(); close(closed) }()
+
+	// Let Close reach its wait on s.launched, then let the launch finish.
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+
+	// The launched Chrome's pipes must have been closed by teardown; a second
+	// Close on toChrome therefore errors. If it succeeds, the conn was orphaned.
+	if err := inW.Close(); err == nil {
+		t.Fatal("Chrome launched during Close was orphaned: its conn was never closed")
+	}
+}
+
+// TestSession_DeliverAfterClientDoneIsSafe proves the send/close fix: once a
+// client is torn down (its done channel closed), deliver never sends on — let alone
+// closes — c.send, and never touches the client's socket. With a full queue the
+// select deterministically takes the done branch instead of the "slow client" fallback.
+func TestSession_DeliverAfterClientDoneIsSafe(t *testing.T) {
+	s := &session{done: make(chan struct{})}
+	c := &wsClient{send: make(chan []byte, 1), done: make(chan struct{})}
+	c.send <- []byte("fill") // saturate the queue so the send case is not ready
+	close(c.done)            // client torn down
+
+	// Must not panic (c.send is never closed) and must not dereference the nil ws
+	// via the slow-client fallback — the closed done branch wins.
+	s.deliver(c, []byte("x"), true)
+	s.deliver(c, []byte("y"), false)
+}
+
 func TestManager_LaunchErrorNotCached(t *testing.T) {
 	var calls int32
 	m := newTestManager(t, nil)

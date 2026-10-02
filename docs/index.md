@@ -51,6 +51,7 @@ or the **[flow.yaml reference](flow-reference.md)** for every field.
 | Passing data between stages | [Artifacts & inputs](artifacts.md) |
 | Carrying lessons across runs | [Agent memory](agent-memory.md) |
 | The web dashboard | [Dashboard](dashboard.md) |
+| Driving a real Chrome from a stage | [Managed browser](browser.md) |
 | Running in Docker, non-Claude agents | [Docker mode](docker.md) |
 | Driving afm from Go | [Go SDK](sdk.md) |
 | Event log, directory layout, prompts | [Internals](internals/directory-layout.md) |

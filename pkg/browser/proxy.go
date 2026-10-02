@@ -113,8 +113,12 @@ func (p *proxy) fromClient(conn *wsClient, msg []byte) []byte {
 }
 
 // fromChrome maps a Chrome message back to its originating client, restoring the
-// client's local id. A message with no matching pending id (an event, or a dropped
-// request) routes to nil (broadcast to all clients of the session).
+// client's local id. A CDP event (no id) routes to nil → broadcast to all clients.
+// A nil return means DROP: a message that carries an id is a response to exactly
+// one request we forwarded; if its id is no longer pending (the issuing client
+// disconnected, or it is a late duplicate) it must NOT be broadcast — a reconnected
+// client that happens to have a live local request with the same numeric id would
+// otherwise accept the stale frame as its own answer.
 func (p *proxy) fromChrome(msg []byte) *routed {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(msg, &m); err != nil {
@@ -135,7 +139,7 @@ func (p *proxy) fromChrome(msg []byte) *routed {
 	}
 	p.mu.Unlock()
 	if !found {
-		return &routed{conn: nil, payload: msg}
+		return nil // stale/duplicate response for an expired id → drop, never broadcast
 	}
 	m["id"] = req.localID
 	out, err := json.Marshal(m)
@@ -146,7 +150,7 @@ func (p *proxy) fromChrome(msg []byte) *routed {
 }
 
 // disconnect drops all pending requests issued by a client that has gone away, so
-// a late Chrome response for it is treated as unroutable (broadcast/ignored)
+// a late Chrome response for it is unroutable and gets dropped (see fromChrome)
 // rather than delivered to a reused connection object.
 func (p *proxy) disconnect(conn *wsClient) {
 	p.mu.Lock()

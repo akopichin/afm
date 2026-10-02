@@ -5,6 +5,42 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-02
 
+### Improvement: managed browser (Chrome DevTools) for live runs
+
+A stage agent can now drive a real Chrome on the host to run the app it built — click
+through it, read the console and network, screenshot it — via a managed `afm_chrome`
+MCP ([Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp)),
+the automated form of a "живой прогон". It works both natively and when afm
+re-executes into Docker; afm owns a small host-side helper that lazily launches a
+dedicated Chrome per stage (its own profile) and proxies CDP over a token-authenticated
+loopback WebSocket — you never start Chrome, enable Remote Login, or open a CDP port.
+Enable it with a `browser:` block in `config.yaml` (tri-state `enabled`: omitted =
+auto and degrades silently on an unsupported host, `true` = required, `false` = off;
+`AFM_BROWSER=1/0` overrides). A stage opts out with `browser: false`. The agent gets
+`AFM_BROWSER_APP_PORT`/`AFM_BROWSER_APP_URL` and serves its app there; the bundled
+`live-run` skill automates build → run → walk the scenario → capture evidence.
+Read-only verify, JSON-fix, and memory agents never receive the browser or its
+transport token, parallel stages never share a browser, and the token lives only in
+per-call `0600` files (never in argv, the agent env, the claude `.mcp.json`, or
+logs). The first release targets
+macOS + Docker Desktop + Chrome; cleanup on a hard `SIGKILL` is best-effort (swept on
+the next start). See [Managed browser](https://github.com/akopichin/afm/blob/main/docs/browser.md).
+
+### Fix: AI-verify no longer fails on a raw newline in the reviewer's JSON
+
+A codex reviewer that put a multi-line code excerpt into a string field (e.g.
+`evidence`) could emit a raw, unescaped newline inside a JSON string literal. The
+strict result decoder rejected it — and, worse, reported the lexical error as a
+misleading "duplicate key …" because the duplicate-key scan ran first. afm now runs
+the structural parse first (so the real "failed to parse …" cause is reported) and,
+only for a genuine JSON syntax error, applies a **narrow** repair that escapes raw
+control characters (newline/carriage-return/tab) found *inside string literals* and
+re-decodes. The repair is deliberately not a general normalizer: it never strips
+fences, JSONP wrappers, or comments, and never drops trailing content, so every
+other strict guarantee is preserved — duplicate keys, unknown fields, trailing
+content, and markdown-fence wrapping are all still rejected. A transient
+control-character glitch in a reviewer's output no longer fails a verify gate red.
+
 ### Improvement: `verify.review_patience` — break reviewer/author stalemates
 
 An AI verify reviewer runs fresh each round and can keep finding ever-subtler

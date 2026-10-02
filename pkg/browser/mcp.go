@@ -37,10 +37,15 @@ type InvocationDescriptor struct {
 // mcpPrivateConfig is the Chrome-DevTools-MCP --config file. wsHeaders is a
 // JSON-encoded STRING (pinned 1.10.1 declares it as a string it JSON.parses), not
 // an object — a bare object makes config parsing fail before the MCP starts.
+// filesystemRoot is an ARRAY: pinned 1.10.1 declares it repeatable ("may be
+// specified more than once") and maps over the list, so afm passes EVERY requested
+// root (project root + the stage artifacts dir). In the common layout the project
+// root already contains the stage dir; in the divergent Docker layout (root_dir and
+// .afm on different mounts) carrying both keeps the stage dir writable by the MCP.
 type mcpPrivateConfig struct {
-	WSEndpoint     string `json:"wsEndpoint"`
-	WSHeaders      string `json:"wsHeaders"`
-	FilesystemRoot string `json:"filesystemRoot"`
+	WSEndpoint     string   `json:"wsEndpoint"`
+	WSHeaders      string   `json:"wsHeaders"`
+	FilesystemRoot []string `json:"filesystemRoot"`
 }
 
 // WriteInvocationDescriptor writes a 0600 descriptor file.
@@ -89,7 +94,7 @@ func WriteMCPConfig(d *InvocationDescriptor) (string, func(), error) {
 	cfg := mcpPrivateConfig{
 		WSEndpoint:     d.WSEndpoint,
 		WSHeaders:      fmt.Sprintf(`{"Authorization":"Bearer %s"}`, d.Token),
-		FilesystemRoot: filesystemRoot(d.Roots),
+		FilesystemRoot: d.Roots,
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -145,20 +150,4 @@ func runMCPSeamed(ctx context.Context, descriptorPath string, mode BrowserMode, 
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
-}
-
-// filesystemRoot picks the single MCP filesystemRoot from the requested roots: the
-// PRIMARY (first) root, which browserForStage always places first — the project
-// root (flow.root_dir), or the stage dir when no project root is set. This is the
-// tightest correct containment boundary and never resolves above what was
-// requested: a common-ancestor scheme would collapse to "/" for divergent trees
-// (afm-root != root_dir, the Docker layout) or to a parent dir for a monorepo
-// subdir root_dir, either of which would over-expose mounted host credentials.
-// (The nested case — stage dir under the project root — is already covered, since
-// the project root contains it.) An empty list yields "".
-func filesystemRoot(roots []string) string {
-	if len(roots) == 0 {
-		return ""
-	}
-	return roots[0]
 }

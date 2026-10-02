@@ -155,8 +155,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique identifier. Must be a safe path component (no '/', '\\', '.', '..', or NUL).",
-          "pattern": "^[^/\\\\\\x00]+$",
+          "description": "Unique identifier restricted to [A-Za-z0-9._-] (it is also used in filesystem paths, the managed-browser session URL, and a Chrome profile dir name). Not '.' or '..'.",
+          "pattern": "^[A-Za-z0-9._-]+$",
           "not": { "enum": [".", ".."] }
         },
         "name": {

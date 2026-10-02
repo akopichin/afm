@@ -496,32 +496,54 @@ func (f *Flow) applyScriptTimeoutDefaults() {
 	}
 }
 
-// safePathComponent сообщает, безопасна ли строка как единственный компонент
-// пути на диске (напр. <runDir>/<stageID>): непусто, не "." и не "..", без
-// разделителей пути и без NUL. Используется и для stage.ID (см.
-// filepath.Join(o.opts.RunDir, s.ID) в pkg/orchestrator/agents.go), и как
-// первый барьер для reflect.file (см. filepath.IsLocal ниже для полной
-// проверки многосегментного относительного пути).
-func safePathComponent(s string) bool {
-	return s != "" && s != "." && s != ".." &&
-		!strings.ContainsAny(s, `/\`) && !strings.ContainsRune(s, 0)
+// stageIDSafe сообщает, безопасен ли s как stage.ID. Кроме пути на диске
+// (<runDir>/<stageID>) id попадает в URL managed-browser сессии
+// (/session/<epoch>/<stageID>) и в имя профиля Chrome.
+// Символы вроде '#', '?', ':' или '@' там молча схлопываются или обрезаются
+// (напр. '#' делает остаток фрагментом URL, а ':'/'@' дают один профиль на два
+// разных id → два Chrome поверх одной --user-data-dir). Поэтому id ограничен
+// [A-Za-z0-9._-] — тем же набором, что и sanitizeComponent в pkg/browser.
+func stageIDSafe(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (f *Flow) validate() error {
 	ids := make(map[string]bool, len(f.Stages))
+	// folded tracks ids after ASCII case-folding: on a case-INSENSITIVE filesystem
+	// (macOS APFS default) two ids that differ only in case (e.g. "Build"/"build")
+	// map to the SAME Chrome profile dir (profileDirName), so two Chromes would
+	// share one --user-data-dir. Reject such collisions up front; depends_on still
+	// resolves against the exact-case `ids` set below.
+	folded := make(map[string]string, len(f.Stages))
 	for _, s := range f.Stages {
 		if ids[s.ID] {
 			return fmt.Errorf("duplicate stage id: %q", s.ID)
 		}
 		ids[s.ID] = true
+		fold := strings.ToLower(s.ID)
+		if prev, ok := folded[fold]; ok {
+			return fmt.Errorf("stage ids %q and %q collide case-insensitively (they map to the same session/profile on a case-insensitive filesystem)", prev, s.ID)
+		}
+		folded[fold] = s.ID
 	}
 
-	// stage.ID используется как компонент пути на диске (директория стадии
-	// внутри рана) — небезопасное значение (пусто, ".", "..", разделитель,
-	// NUL) должно быть отклонено до того, как оно попадёт в filepath.Join.
+	// stage.ID используется как компонент пути на диске (директория стадии внутри
+	// рана), как часть URL managed-browser сессии и как имя профиля Chrome —
+	// значение вне [A-Za-z0-9._-] (включая пусто, ".", "..") должно быть отклонено
+	// до того, как оно попадёт в filepath.Join / URL / имя профиля.
 	for _, s := range f.Stages {
-		if !safePathComponent(s.ID) {
-			return fmt.Errorf("stage %q: id must be a safe path component (non-empty, not \".\"/\"..\", no \"/\" or \"\\\", no NUL)", s.ID)
+		if !stageIDSafe(s.ID) {
+			return fmt.Errorf("stage %q: id must match [A-Za-z0-9._-] (non-empty, not \".\"/\"..\")", s.ID)
 		}
 	}
 

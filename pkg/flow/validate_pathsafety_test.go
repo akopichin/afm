@@ -4,7 +4,7 @@ import "testing"
 
 // minimalFlowWithStageID строит минимальный валидный (во всём, кроме id)
 // флоу с одной нескриптовой стадией, чтобы изолированно проверить только
-// safePathComponent-проверку id. Стадия несёт planning+implementation,
+// stageIDSafe-проверку id. Стадия несёт planning+implementation,
 // чтобы не упасть на более раннем "must have planning agent" чеке.
 func minimalFlowWithStageID(id string) *Flow {
 	return &Flow{

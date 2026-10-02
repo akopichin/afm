@@ -80,9 +80,21 @@ func TestProxy_DropsPendingOnDisconnect(t *testing.T) {
 	out := px.fromClient(connA, []byte(`{"id":1,"method":"Page.enable"}`))
 	gid := extractID(t, out)
 	px.disconnect(connA)
-	// A late reply for a disconnected client must not route to it.
+	// A late reply for a disconnected client must be DROPPED, not broadcast: a
+	// reconnected client reusing the same local id would otherwise accept it as
+	// its own answer.
 	r := px.fromChrome([]byte(fmt.Sprintf(`{"id":%d,"result":{}}`, gid)))
-	if r.conn != nil {
-		t.Fatal("pending request must be dropped after disconnect (unroutable → broadcast)")
+	if r != nil {
+		t.Fatalf("a response for an expired pending id must be dropped, got %+v", r)
+	}
+}
+
+func TestProxy_UnknownIDResponseIsDropped(t *testing.T) {
+	px := newProxy()
+	// A response whose id was never issued (no pending entry) must not be
+	// broadcast to clients — it is an unroutable response, not an event.
+	r := px.fromChrome([]byte(`{"id":999,"result":{}}`))
+	if r != nil {
+		t.Fatalf("unknown-id response must be dropped (nil), got %+v", r)
 	}
 }

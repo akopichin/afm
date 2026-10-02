@@ -48,13 +48,14 @@ func TestWriteMCPConfig_WSHeadersIsString_And0600(t *testing.T) {
 	if obj["Authorization"] != "Bearer tok-SECRET" {
 		t.Fatalf("Authorization header wrong: %q", obj["Authorization"])
 	}
-	// filesystemRoot is the primary (first) root — the project root.
-	var fr string
+	// filesystemRoot is an array carrying EVERY requested root (the MCP accepts
+	// repeated roots): the project root plus the stage artifacts dir.
+	var fr []string
 	if err := json.Unmarshal(raw["filesystemRoot"], &fr); err != nil {
-		t.Fatal(err)
+		t.Fatalf("filesystemRoot must be a JSON array, got %s: %v", raw["filesystemRoot"], err)
 	}
-	if fr != "/a/b" {
-		t.Fatalf("filesystemRoot must be the primary root, got %q", fr)
+	if len(fr) != 2 || fr[0] != "/a/b" || fr[1] != "/a/c" {
+		t.Fatalf("filesystemRoot must carry all requested roots [/a/b /a/c], got %v", fr)
 	}
 }
 
@@ -87,21 +88,36 @@ func TestRunMCP_RemovesPrivateConfigAndDescriptorOnExit(t *testing.T) {
 	}
 }
 
-func TestFilesystemRoot_NeverWholeFS(t *testing.T) {
-	// Divergent trees (afm-root != root_dir) must NOT expose the whole filesystem —
-	// filesystemRoot is the primary (project) root, never a common ancestor.
-	if got := filesystemRoot([]string{"/workspace", "/app/.afm/runs/r/s"}); got != "/workspace" {
-		t.Fatalf("divergent roots must not expose /, got %q", got)
+func TestWriteMCPConfig_CarriesAllRootsNeverWholeFS(t *testing.T) {
+	// Divergent trees (afm-root != root_dir) must expose EACH requested root
+	// explicitly, never a common ancestor that would widen to "/".
+	d := &InvocationDescriptor{
+		WSEndpoint: "ws://x/session/ep/s", Token: "t",
+		Roots: []string{"/workspace", "/app/.afm/runs/r/s"},
 	}
-	// Nested (normal) layout → the project root (which contains the stage dir).
-	if got := filesystemRoot([]string{"/proj", "/proj/.afm/runs/r/s"}); got != "/proj" {
-		t.Fatalf("want /proj, got %q", got)
+	cfgPath, cleanup, err := WriteMCPConfig(d)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Single root → itself.
-	if got := filesystemRoot([]string{"/only"}); got != "/only" {
-		t.Fatalf("want /only, got %q", got)
+	defer cleanup()
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := filesystemRoot(nil); got != "" {
-		t.Fatalf("empty roots → empty, got %q", got)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	var fr []string
+	if err := json.Unmarshal(raw["filesystemRoot"], &fr); err != nil {
+		t.Fatal(err)
+	}
+	if len(fr) != 2 || fr[0] != "/workspace" || fr[1] != "/app/.afm/runs/r/s" {
+		t.Fatalf("divergent roots must both be carried, never collapsed to an ancestor, got %v", fr)
+	}
+	for _, r := range fr {
+		if r == "/" || r == "" {
+			t.Fatalf("filesystemRoot must never be the whole FS or empty, got %v", fr)
+		}
 	}
 }

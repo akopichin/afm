@@ -965,3 +965,63 @@ Agent memory (opt-in) после завершения стадии дистил�
   commit/manifest-ошибка → non-zero exit, manifest в `failed`). Не «чинить»
   rebuild-падение, делая его best-effort — это скроет ровно тот класс проблем,
   ради которого команда существует.
+
+## Managed browser (Chrome DevTools capability)
+
+Стадийный агент драйвит настоящий Chrome на хосте через управляемый MCP
+`afm_chrome` (живой прогон) — и в Docker, и нативно. Пакет — `pkg/browser`; обвязка
+в `pkg/config`, `pkg/docker`, `pkg/executor`, `pkg/orchestrator`, `cmd/afm`.
+
+- **Владелец helper'а — ХОСТ, не контейнер.** `pkg/browser.Manager` поднимает
+  loopback token-authenticated WebSocket listener и лениво стартует отдельный Chrome
+  на стадию через `--remote-debugging-pipe` (никогда не TCP-порт). В Docker agent+MCP
+  внутри, helper на хосте; endpoint идёт через `host.docker.internal`. `cmd/afm/run.go`:
+  нативно владеет Manager через defer; в контейнере только пересобирает дескриптор из
+  транспорт-env. **Chrome стартует только на первый реальный browser-tool call** (не
+  на `initialize`/`tools/list`), живёт до конца рана.
+- **Tri-state `browser.enabled`** (`*bool`, `config.BrowserConfig`): nil→auto
+  (деградирует молча), true→on (preflight обязателен), false→off. `AFM_BROWSER=1/0`
+  бьёт конфиг (`EffectiveEnable` — единственная точка разыменования `*Enabled`).
+  Per-stage opt-out `Stage.Browser *bool` (`browser: false`, `BrowserDisabled()`).
+  Поддержанный агент — только claude-семейство и codex (`Config.BrowserSupportedFor`
+  по recipe type, без alias-строк).
+- **Токен не утекает.** Форвардится в контейнер bare `-e AFM_BROWSER_TRANSPORT_TOKEN`
+  (нет значения в argv `docker run`), агенту отдаётся ТОЛЬКО через per-invocation
+  `0600` дескриптор-файл (в argv/env/`.mcp.json`/логах — путь, не токен). После
+  потребления дескриптора в контейнере `browser.UnsetTransportVars()` снимает все
+  `AFM_BROWSER_*` из окружения afm — иначе прямой спавн (git из `memory.Commit`,
+  project-хуки) унаследовал бы токен. Для агент-спавнов работает default-deny фильтр
+  `browser.IsTransportEnv` во ВСЕХ путях (author/verify/JSON-fix/memory/shell-verify/
+  lifecycle `inherit_env`); author-раннеры добавляют назад только non-secret подмножество.
+- **Verify/helper агенты браузер НЕ получают** (read-only ФС не мешает MCP менять
+  внешнее приложение) — одна политика `browserForStage` гейтит И MCP-инъекцию, И
+  runtime-prompt, на всех прод-путях раннера (включая fallback с пустым `command`).
+- **CDP-прокси (`proxy.go`): per-connection ремап request id → глобально-уникальный
+  gid.** Ответ Chrome с id, которого НЕТ в pending (клиент отвалился / поздний дубль),
+  ДРОПается (`fromChrome` → nil), НЕ броадкастится — иначе переподключившийся клиент с
+  тем же локальным id принял бы stale-ответ за свой. Броадкаст — только для событий
+  (без id). Backpressure: на вход блокируемся (не теряем pending), на выход закрываем
+  медленного клиента для ответа (его tool-call получит ошибку, а не вечное зависание).
+- **Lifecycle Chrome.** Сессии — `epoch/stageID` (epoch — per-process random, не run
+  id; retry/resume переподключается к той же). Singleflight launch; launch-ошибка НЕ
+  кэшируется (evict → релонч). `Manager.Close` ЖДЁТ `s.launched` перед teardown
+  каждой сессии (bounded 10s ctx): это и happens-before для чтения `s.conn` без гонки,
+  и гарантия, что завершившийся во время Close launch убьёт Chrome, а не осиротит его.
+  SIGKILL не покрыт defer'ом — sweep stale-профилей по owner-маркеру на след. старте.
+- **stdio launcher `afm browser mcp --descriptor <path>`** запускает пиннутый
+  `chrome-devtools-mcp` (`PinnedChromeDevtoolsMCPVersion`, обязан совпадать с
+  `Dockerfile.runtime`) с приватным `0600 --config` (wsEndpoint/wsHeaders/
+  **filesystemRoot — массив всех корней**: project root + stage artifacts dir; MCP
+  1.10.1 принимает повторяемый filesystemRoot). stdout = только MCP JSON-RPC (ошибки/
+  usage строго в stderr — иначе транспорт MCP ломается). Codex-адаптер
+  (`scripts/codex-as-claude.sh`) подключает сервер через `-c` TOML-overrides, значения
+  команды/args строятся `jq` (валидный TOML-escaping), без токена.
+- **`stage.ID` ограничен `[A-Za-z0-9._-]`** (`stageIDSafe` в `pkg/flow`, тот же набор,
+  что `sanitizeComponent`): id идёт и в session-URL, и в имя профиля Chrome — символы
+  вроде `:`/`@`/`#` молча схлопнули бы два id в один профиль (два Chrome поверх одной
+  `--user-data-dir`) или обрезали URL.
+- **Агент получает** `AFM_BROWSER_APP_PORT`/`AFM_BROWSER_APP_URL`: сервит приложение на
+  `0.0.0.0:$AFM_BROWSER_APP_PORT`, открывает `$AFM_BROWSER_APP_URL` (в Docker — host
+  port из `docker inspect`, не контейнерный localhost). Встроенный skill `live-run`
+  (`assets/claude/skills/live-run`) автоматизирует build-from-source → health → сценарий
+  → artifacts.

@@ -60,6 +60,7 @@ nav:
       - Agent memory: agent-memory.md
       - Cost accounting: accounting.md
       - Dashboard: dashboard.md
+      - Managed browser: browser.md
       - Docker mode: docker.md
       - Go SDK: sdk.md
   - Internals:

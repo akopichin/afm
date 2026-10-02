@@ -92,10 +92,27 @@ func browserLauncherPath() string {
 // dedupRoots returns the effective filesystem roots (effective RootDir + stage
 // dir), skipping empties and duplicates, preserving order.
 func dedupRoots(root, stageDir string) []string {
+	// An empty project root means the agent inherits afm's CWD as its root, so the
+	// MCP's filesystemRoot must point there too.
+	if root == "" {
+		if wd, err := os.Getwd(); err == nil {
+			root = wd
+		}
+	}
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range []string{root, stageDir} {
-		if r == "" || seen[r] {
+		if r == "" {
+			continue
+		}
+		// Resolve to ABSOLUTE here (relative to afm's CWD, where these paths were
+		// computed). The Chrome-DevTools MCP re-resolves each filesystemRoot
+		// relative to the AGENT's CWD, which differs when root_dir is set — so a
+		// relative root would otherwise point somewhere wrong inside the agent.
+		if abs, err := filepath.Abs(r); err == nil {
+			r = abs
+		}
+		if seen[r] {
 			continue
 		}
 		seen[r] = true
@@ -113,39 +130,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		if o.opts.Runner != nil && s.Command == "" {
 			return o.runner
 		}
-		// Per-stage runner. Для дефолтной команды берём клиент из конфига (+ его
-		// ExtraArgs) — иначе разделяемый o.runner привязывал OnAction к пустому
-		// stageID, и события agent_action уходили без бейджа стадии (косяк №1).
-		cmd := s.Command
-		var extraArgs []string
-		if cmd == "" {
-			cmd = o.opts.Config.Client.Command
-			extraArgs = o.opts.Config.Client.ExtraArgs
-		}
-		cfg := executor.Config{
-			Command:        cmd,
-			ExtraArgs:      extraArgs,
-			IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
-			TruncateOutput: o.opts.Config.Executor.TruncateOutput,
-			OnAction:       uiActionPublisher(o.ui, s.ID),
-			WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-			Dir:            o.opts.RootDir,
-			Debug:          o.opts.Debug,
-			RunDir:         o.opts.RunDir,
-			StageID:        s.ID,
-			// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or
-			// skill that uses the file-based dialog protocol always has somewhere
-			// to write question.json — the poller auto-answers it (dialog_poller.go).
-			StageDir:   filepath.Join(o.opts.RunDir, s.ID),
-			Phase:      phase,
-			UsageHint:  o.usageHintFor(cmd),
-			OnUsage:    o.recordUsage(s.ID, phase, ""),
-			BrowserMCP: o.browserForStage(s, cmd),
-		}
-		if ch, ok := o.interruptChans.Load(s.ID); ok {
-			cfg.InterruptCh = ch.(chan struct{})
-		}
-		return executor.New(cfg)
+		return o.nonInteractiveRunner(s, phase)
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -188,24 +173,53 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	return executor.New(cfg)
 }
 
-func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Runner {
-	if s.Command == "" {
-		return o.runner
+// nonInteractiveRunner builds the per-stage non-interactive executor with the FULL
+// stage wiring — Dir (root_dir CWD), StageDir (file-dialog protocol), and the
+// browser policy. It is the single source shared by the normal non-interactive path
+// and the interactive fallback below, so a fallback can never silently drop Dir/
+// StageDir/BrowserMCP (which a hand-rolled second config previously did).
+func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor.Runner {
+	// Для дефолтной команды берём клиент из конфига (+ его ExtraArgs) — иначе
+	// разделяемый runner привязывал бы OnAction к пустому stageID, и события
+	// agent_action уходили бы без бейджа стадии (косяк №1).
+	cmd := s.Command
+	var extraArgs []string
+	if cmd == "" {
+		cmd = o.opts.Config.Client.Command
+		extraArgs = o.opts.Config.Client.ExtraArgs
 	}
-	return executor.New(executor.Config{
-		Command:        s.Command,
+	cfg := executor.Config{
+		Command:        cmd,
+		ExtraArgs:      extraArgs,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
-		WrapperDir:     executor.WrapperDirFor(s.Command, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Dir:            o.opts.RootDir,
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 		StageID:        s.ID,
-		Phase:          phase,
-		UsageHint:      o.usageHintFor(s.Command),
-		OnUsage:        o.recordUsage(s.ID, phase, ""),
-		BrowserMCP:     o.browserForStage(s, s.Command),
-	})
+		// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or skill
+		// that uses the file-based dialog protocol always has somewhere to write
+		// question.json — the poller auto-answers it (dialog_poller.go).
+		StageDir:   filepath.Join(o.opts.RunDir, s.ID),
+		Phase:      phase,
+		UsageHint:  o.usageHintFor(cmd),
+		OnUsage:    o.recordUsage(s.ID, phase, ""),
+		BrowserMCP: o.browserForStage(s, cmd),
+	}
+	if ch, ok := o.interruptChans.Load(s.ID); ok {
+		cfg.InterruptCh = ch.(chan struct{})
+	}
+	return executor.New(cfg)
+}
+
+func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Runner {
+	// Test seam: an injected runner stands in only for the default command.
+	if o.opts.Runner != nil && s.Command == "" {
+		return o.runner
+	}
+	return o.nonInteractiveRunner(s, phase)
 }
 
 // runnerForVerify собирает *executor.Executor для ОДНОГО шага AI-verify.
