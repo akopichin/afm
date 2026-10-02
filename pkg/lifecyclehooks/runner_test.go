@@ -199,3 +199,16 @@ sleep 30
 		t.Fatalf("timeout did not kill the group: %v", time.Since(start))
 	}
 }
+
+func TestBuildEnv_InheritEnv_StripsBrowserTransport(t *testing.T) {
+	t.Setenv("AFM_BROWSER_TRANSPORT_TOKEN", "tok")
+	t.Setenv("AFM_BROWSER_ENDPOINT", "host.docker.internal:1")
+	cfg := DispatcherConfig{RunID: "r"}
+	p := BuildPayload(cfg, Event{Type: EventFlowStarted}, "id")
+	env := buildEnv(Hook{ID: "h", InheritEnv: true}, cfg, p)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "AFM_BROWSER_") {
+			t.Fatalf("inherit_env hook must not receive %q", kv)
+		}
+	}
+}

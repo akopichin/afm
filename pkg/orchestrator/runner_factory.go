@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -26,6 +27,73 @@ func (o *Orchestrator) usageHintFor(cmd string) accounting.UsageHint {
 		return accounting.UsageHint{}
 	}
 	return accounting.UsageHint{Channel: recipe.Type, Model: recipe.Model}
+}
+
+// browserForStage is the single stage-aware policy for the managed browser
+// capability. It returns nil (no capability) when: no descriptor for this run,
+// the stage opted out (browser: false), or the command cannot drive the MCP
+// tool-loop. Otherwise it builds the per-stage executor.BrowserMCP. Used by
+// runnerFor (both branches), runnerForFallback, AND the prompt builder — one
+// policy, no copy-paste. runnerForVerify and the detached memory/JSON-fix runners
+// never call it.
+func (o *Orchestrator) browserForStage(s flow.Stage, cmd string) *executor.BrowserMCP {
+	d := o.opts.BrowserDescriptor
+	if d == nil || s.BrowserDisabled() || !o.opts.Config.BrowserSupportedFor(cmd) {
+		return nil
+	}
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	return &executor.BrowserMCP{
+		ServerName:   browserServerName,
+		LauncherPath: browserLauncherPath(),
+		WSEndpoint:   d.StageEndpoint(s.ID),
+		Token:        d.Token,
+		AppURL:       d.AppURL,
+		AppPort:      o.opts.Config.Browser.GetAppPort(),
+		Roots:        dedupRoots(o.opts.RootDir, stageDir),
+		Codex:        o.isCodexCommand(cmd),
+	}
+}
+
+// browserServerName is the MCP server name the agent sees.
+const browserServerName = "afm_chrome"
+
+// isCodexCommand reports whether the resolved command is the codex adapter (reads
+// AFM_BROWSER_DESCRIPTOR from env instead of a claude .mcp.json).
+func (o *Orchestrator) isCodexCommand(cmd string) bool {
+	resolved, _ := config.ResolveAgentCommand(cmd, o.opts.Config)
+	if recipe, ok := o.opts.Config.Docker.Agents[resolved]; ok {
+		return recipe.Type == config.RecipeTypeCodex
+	}
+	return resolved == codexAdapterCommandName
+}
+
+// codexAdapterCommandName is the bare codex read-only adapter command.
+const codexAdapterCommandName = "codex-as-claude"
+
+// browserLauncherPath resolves the absolute afm path used as the MCP command. It
+// must never be the bare literal "afm" (native afm is often invoked by an absolute
+// path and may not be on PATH as "afm"). Falls back to "afm" only if resolution
+// fails.
+func browserLauncherPath() string {
+	if p, err := os.Executable(); err == nil && p != "" {
+		return p
+	}
+	return "afm"
+}
+
+// dedupRoots returns the effective filesystem roots (effective RootDir + stage
+// dir), skipping empties and duplicates, preserving order.
+func dedupRoots(root, stageDir string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range []string{root, stageDir} {
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 // runnerFor returns the appropriate Runner for a stage's phase.
@@ -60,10 +128,11 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 			// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or
 			// skill that uses the file-based dialog protocol always has somewhere
 			// to write question.json — the poller auto-answers it (dialog_poller.go).
-			StageDir:  filepath.Join(o.opts.RunDir, s.ID),
-			Phase:     phase,
-			UsageHint: o.usageHintFor(cmd),
-			OnUsage:   o.recordUsage(s.ID, phase, ""),
+			StageDir:   filepath.Join(o.opts.RunDir, s.ID),
+			Phase:      phase,
+			UsageHint:  o.usageHintFor(cmd),
+			OnUsage:    o.recordUsage(s.ID, phase, ""),
+			BrowserMCP: o.browserForStage(s, cmd),
 		}
 		if ch, ok := o.interruptChans.Load(s.ID); ok {
 			cfg.InterruptCh = ch.(chan struct{})
@@ -103,6 +172,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		Phase:          phase,
 		UsageHint:      o.usageHintFor(cmd),
 		OnUsage:        o.recordUsage(s.ID, phase, ""),
+		BrowserMCP:     o.browserForStage(s, cmd),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
@@ -126,6 +196,7 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Ru
 		Phase:          phase,
 		UsageHint:      o.usageHintFor(s.Command),
 		OnUsage:        o.recordUsage(s.ID, phase, ""),
+		BrowserMCP:     o.browserForStage(s, s.Command),
 	})
 }
 

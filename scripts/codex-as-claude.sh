@@ -122,6 +122,20 @@ else
 fi
 [[ -n "$CODEX_MODEL" ]] && codex_args+=(-m "$CODEX_MODEL")
 
+# Managed browser capability (afm_chrome MCP). Only for a normal author pass
+# (never verify) and only when the executor exported a per-invocation descriptor.
+# The token lives in the descriptor file — NOT in argv/env — so we pass only the
+# server command (resolved absolute afm launcher) and args as a SEQUENCE. Pinned
+# codex 0.155.1 rejects env_vars={...} (a map), so no env_vars key is emitted.
+if [[ "$CODEX_VERIFY" != "1" && -n "${AFM_BROWSER_DESCRIPTOR:-}" ]]; then
+    if [[ -n "${AFM_BROWSER_LAUNCHER:-}" ]]; then
+        codex_args+=(-c "mcp_servers.afm_chrome.command=\"$AFM_BROWSER_LAUNCHER\"")
+        codex_args+=(-c "mcp_servers.afm_chrome.args=[\"browser\",\"mcp\",\"--descriptor\",\"$AFM_BROWSER_DESCRIPTOR\"]")
+    fi
+    # If AFM_BROWSER_LAUNCHER is unset, skip the override rather than guess a bare
+    # "afm" that may not be on PATH under that name.
+fi
+
 # resolve_codex_model: $CODEX_MODEL (explicit) -> safe top-level `model` key from
 # codex's own config.toml (text match only, no TOML eval, no rollout/session
 # files) -> empty (omitted from the envelope below; the collector falls back to
@@ -217,6 +231,12 @@ XLATE='
             tool("Bash"; {command: (.item.command // "")}),
             (if $verbose == 1 and ((.item.aggregated_output // "") | length) > 0
              then asst((.item.aggregated_output) + "\n") else empty end)
+        elif ($it == "mcp_tool_call" or $it == "mcp_call") then
+            # Managed browser (afm_chrome) and other MCP tool calls: surface as a
+            # visible tool_use so the feed shows the action and the idle timer
+            # resets. Field names are codex-version-dependent — best-effort display.
+            tool(((.item.tool // .item.name // "mcp") | tostring);
+                 {server: (.item.server // ""), arguments: (.item.arguments // .item.input // {})})
         else empty
         end
     else empty

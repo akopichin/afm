@@ -1,0 +1,106 @@
+package orchestrator
+
+import (
+	"testing"
+
+	"github.com/akopichin/afm/pkg/browser"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+)
+
+func newOrchWithBrowser(t *testing.T, d *browser.Descriptor) *Orchestrator {
+	t.Helper()
+	return &Orchestrator{
+		opts: Options{RunDir: t.TempDir(), Config: config.Config{}, BrowserDescriptor: d},
+		ui:   bus.NewUIBus(),
+	}
+}
+
+func normalClaudeStage(id string) flow.Stage {
+	return flow.Stage{ID: id, Command: "claude", Agents: []flow.AgentType{flow.AgentImplementation}}
+}
+
+func stageWithBrowserFalse(id string) flow.Stage {
+	fa := false
+	s := normalClaudeStage(id)
+	s.Browser = &fa
+	return s
+}
+
+func interactiveClaudeStage(id string) flow.Stage {
+	s := normalClaudeStage(id)
+	s.Interactive = true
+	return s
+}
+
+func execConfigHasBrowser(r executor.Runner) bool {
+	e, ok := r.(*executor.Executor)
+	return ok && e.BrowserMCPConfig() != nil
+}
+
+func TestBrowserForStage_Policy(t *testing.T) {
+	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
+	if o.browserForStage(normalClaudeStage("build"), "claude") == nil {
+		t.Fatal("normal supported stage must get the capability")
+	}
+	if o.browserForStage(stageWithBrowserFalse("build"), "claude") != nil {
+		t.Fatal("browser:false stage must get nil")
+	}
+	if o.browserForStage(normalClaudeStage("build"), "deepseek-openai") != nil {
+		t.Fatal("unsupported client (no MCP tool-loop) must get nil")
+	}
+}
+
+func TestBrowserForStage_NilDescriptor(t *testing.T) {
+	o := newOrchWithBrowser(t, nil)
+	if o.browserForStage(normalClaudeStage("build"), "claude") != nil {
+		t.Fatal("no descriptor → capability off")
+	}
+}
+
+func TestRunnerFor_InteractiveAndFallbackGetBrowser(t *testing.T) {
+	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
+	if !execConfigHasBrowser(o.runnerFor(interactiveClaudeStage("build"), "implementation")) {
+		t.Fatal("interactive author runner should receive afm_chrome")
+	}
+	if !execConfigHasBrowser(o.runnerForFallback(interactiveClaudeStage("build"), "implementation")) {
+		t.Fatal("interactive fallback runner must also receive afm_chrome")
+	}
+}
+
+func TestRunnerFor_NonInteractiveGetsBrowser(t *testing.T) {
+	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
+	if !execConfigHasBrowser(o.runnerFor(normalClaudeStage("build"), "implementation")) {
+		t.Fatal("non-interactive author runner should receive afm_chrome")
+	}
+}
+
+func TestRunnerForVerify_NoBrowser(t *testing.T) {
+	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
+	if execConfigHasBrowser(o.runnerForVerify(normalClaudeStage("build"), "codex-as-claude")) {
+		t.Fatal("verify runner must never receive the browser capability")
+	}
+}
+
+func TestBrowserForStage_CodexFlag(t *testing.T) {
+	o := &Orchestrator{
+		opts: Options{
+			RunDir:            t.TempDir(),
+			BrowserDescriptor: &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"},
+			Config: config.Config{Docker: config.DockerConfig{Agents: map[string]config.AgentRecipe{
+				"codexrec": {Type: config.RecipeTypeCodex},
+			}}},
+		},
+		ui: bus.NewUIBus(),
+	}
+	b := o.browserForStage(flow.Stage{ID: "build", Command: "codexrec"}, "codexrec")
+	if b == nil || !b.Codex {
+		t.Fatalf("codex recipe must set Codex=true, got %+v", b)
+	}
+	cl := o.browserForStage(normalClaudeStage("build"), "claude")
+	if cl == nil || cl.Codex {
+		t.Fatalf("claude must set Codex=false, got %+v", cl)
+	}
+}

@@ -815,7 +815,7 @@ func sanitizedShellVerifyEnv() []string {
 	env := os.Environ()
 	filtered := make([]string, 0, len(env))
 	for _, kv := range env {
-		if executor.IsCrossAgentTransportSecret(kv) {
+		if executor.IsCrossAgentTransportSecret(kv) || executor.IsBrowserTransportEnv(kv) {
 			continue
 		}
 		filtered = append(filtered, kv)

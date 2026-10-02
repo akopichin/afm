@@ -134,6 +134,11 @@ type Config struct {
 	// a normal author/builder run — no bypass/full-access sandbox flags, no
 	// editing tools. Set only by RunVerifyAgent; never by RunPlanning/RunAgent.
 	VerifyMode bool
+	// BrowserMCP, if set, injects the managed Chrome DevTools MCP (afm_chrome)
+	// for this author runner: a per-invocation descriptor file + (claude)
+	// --mcp-config, plus the non-secret AFM_BROWSER_* env. nil = capability off.
+	// Never set on verify/JSON-fix/memory runners (they get the central strip only).
+	BrowserMCP *BrowserMCP
 }
 
 // ErrUserInterrupted signals that the agent process was stopped because the
@@ -762,6 +767,29 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 // Не использует stream-json — просто захватывает stdout через cmd.Output().
 // Предназначен для однократных LLM-вызовов (без логирования действий).
 // Возвращает сырые байты stdout; парсинг конверта/полей остаётся за вызывающей стороной.
+// jsonQueryEnv builds the RunJSONQuery child env: the ambient env minus every
+// AFM_BROWSER_* (default-deny — this is not an author runner), with WrapperDir
+// prepended to PATH when set.
+func (e *Executor) jsonQueryEnv(ambient []string) []string {
+	filtered := make([]string, 0, len(ambient)+1)
+	pathSet := false
+	for _, kv := range ambient {
+		if IsBrowserTransportEnv(kv) {
+			continue
+		}
+		if e.cfg.WrapperDir != "" && strings.HasPrefix(kv, "PATH=") {
+			filtered = append(filtered, "PATH="+e.cfg.WrapperDir+string(os.PathListSeparator)+kv[5:])
+			pathSet = true
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	if e.cfg.WrapperDir != "" && !pathSet {
+		filtered = append(filtered, "PATH="+e.cfg.WrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+	return filtered
+}
+
 func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
 	e.logAgentInput("supervisor", prompt)
 	// Чистая one-shot JSON-инвокация. Намеренно НЕ наследуем e.cfg.ExtraArgs:
@@ -781,23 +809,11 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 	}
 
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
-	if e.cfg.WrapperDir != "" {
-		env := os.Environ()
-		filtered := make([]string, 0, len(env)+1)
-		pathSet := false
-		for _, kv := range env {
-			if strings.HasPrefix(kv, "PATH=") {
-				filtered = append(filtered, "PATH="+e.cfg.WrapperDir+string(os.PathListSeparator)+kv[5:])
-				pathSet = true
-				continue
-			}
-			filtered = append(filtered, kv)
-		}
-		if !pathSet {
-			filtered = append(filtered, "PATH="+e.cfg.WrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-		}
-		cmd.Env = filtered
-	}
+	// RunJSONQuery (supervisor/JSON-fix) is NOT an author runner — it must never
+	// inherit the browser transport. jsonQueryEnv strips AFM_BROWSER_* even when
+	// WrapperDir is empty (otherwise cmd.Env=nil would inherit the full parent env,
+	// including the ambient AFM_BROWSER_TRANSPORT_TOKEN).
+	cmd.Env = e.jsonQueryEnv(os.Environ())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -812,6 +828,41 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 // (fallback: signal the direct child only, no process-group equivalent
 // wired up for Windows).
 
+// filterInheritedEnv applies the default-deny strip to an ambient environment:
+// CLAUDECODE / AFM_STAGE_DIR / CODEX_VERIFY (re-added by the caller when set) and
+// AFM_BROWSER_* (re-added only for author runners, non-secret subset), plus — in
+// VerifyMode only — cross-agent transport secrets and the author's Claude creds
+// (keeping the verifier's own secret). Re-adds (StageDir/CODEX_VERIFY/browser/PATH)
+// are the caller's job.
+func (e *Executor) filterInheritedEnv(ambient []string) []string {
+	filtered := make([]string, 0, len(ambient)+3)
+	for _, kv := range ambient {
+		switch {
+		case strings.HasPrefix(kv, "CLAUDECODE="):
+			// always strip for nested sessions
+		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
+			// always strip inherited; re-added by caller only if cfg.StageDir != ""
+		case strings.HasPrefix(kv, "CODEX_VERIFY="):
+			// always strip inherited; re-added by caller only if cfg.VerifyMode
+		case IsBrowserTransportEnv(kv):
+			// Central default-deny: strip every AFM_BROWSER_* from EVERY child
+			// (incl. the ambient transport token). Author runners re-add only the
+			// non-secret subset; verify/JSON-fix/memory never re-add anything.
+		case e.cfg.VerifyMode && isVerifierOwnSecret(kv, e.cfg.Command):
+			// D2b: the verifier's OWN secret (AFM_SECRET_<verifyCommand>) survives.
+			filtered = append(filtered, kv)
+		case e.cfg.VerifyMode && IsCrossAgentTransportSecret(kv):
+			// C2: a read-only verifier must not inherit OTHER agents'/hooks'
+			// transport secrets (it could reflect them in its persisted JSON).
+		case e.cfg.VerifyMode && isClaudeAuthorCredential(kv):
+			// F4: the author's forwarded Claude auth must not reach the verifier.
+		default:
+			filtered = append(filtered, kv)
+		}
+	}
+	return filtered
+}
+
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls
 // lineCallback for each stdout line. Respects idle timeout.
 func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) error {
@@ -823,6 +874,18 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		} else {
 			args = append(args, "--session-id", e.cfg.SessionID)
 		}
+	}
+
+	// Managed browser capability (author runners only; never in VerifyMode).
+	var browserEnv []string
+	if e.cfg.BrowserMCP != nil && !e.cfg.VerifyMode {
+		bargs, benv, cleanup, berr := e.setupBrowserMCP()
+		if berr != nil {
+			return fmt.Errorf("browser mcp setup: %w", berr)
+		}
+		defer cleanup()
+		args = append(args, bargs...)
+		browserEnv = benv
 	}
 	// Resolve the command via WrapperDir before exec. exec.Command does LookPath
 	// against THIS process's PATH; the wrapper-dir is only added to the CHILD's
@@ -848,46 +911,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 
 	// Strip CLAUDECODE to allow nested sessions, expose stage directory and
 	// wrapper-dir (prepended to PATH so generated wrapper scripts resolve).
-	env := os.Environ()
-	filtered := make([]string, 0, len(env)+3)
-	for _, kv := range env {
-		switch {
-		case strings.HasPrefix(kv, "CLAUDECODE="):
-			// always strip for nested sessions
-		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
-			// always strip inherited; re-added below only if cfg.StageDir != ""
-		case strings.HasPrefix(kv, "CODEX_VERIFY="):
-			// always strip inherited; re-added below only if cfg.VerifyMode
-		case e.cfg.VerifyMode && isVerifierOwnSecret(kv, e.cfg.Command):
-			// D2b код-ревью: собственный секрет ЭТОГО ЖЕ верификатора
-			// (AFM_SECRET_<verifyCommand>) — исключение из ветки ниже.
-			// e.cfg.Command здесь — алиас/recipe-ключ verify-шага
-			// (RunVerifyAgent зовёт RunVerifyAgent(..., cmd, ...) с cmd,
-			// оставляя verifyCfg.Command исходным), ТОЧНО тот же ключ, что
-			// pkg/docker/wrapper.go использовал при генерации имени
-			// переменной для враппера — без этого исключения
-			// аутентифицированный codex-recipe верификатор стартовал бы без
-			// своего же токена.
-			filtered = append(filtered, kv)
-		case e.cfg.VerifyMode && IsCrossAgentTransportSecret(kv):
-			// C2: непроверенный verify-верификатор не должен унаследовать
-			// транспортные секреты ЧУЖИХ агентов/хуков (см.
-			// IsCrossAgentTransportSecret) — он мог бы отразить их в своём
-			// JSON-ответе, который afm персистит как raw-result/report.
-			// Обычный (не-verify) запуск это условие не задевает вовсе.
-		case e.cfg.VerifyMode && isClaudeAuthorCredential(kv):
-			// F4 (4-е код-ревью): Docker forwards Claude-авторизацию АВТОРА
-			// (CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/
-			// ANTHROPIC_BASE_URL) в окружение afm-процесса — эти четыре имени
-			// не покрывались ни isVerifierOwnSecret (другой namespace,
-			// AFM_SECRET_<CMD>), ни IsCrossAgentTransportSecret выше (другие
-			// префиксы). Read-only верификатору чужая авторизация автора не
-			// нужна и не должна попасть в его персистируемый JSON-ответ.
-			// Обычный (не-verify) запуск это условие не задевает вовсе.
-		default:
-			filtered = append(filtered, kv)
-		}
-	}
+	filtered := e.filterInheritedEnv(os.Environ())
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
 	}
@@ -899,6 +923,9 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		// этом и исполнялся бы в обычном (небезопасном для verify) режиме.
 		filtered = append(filtered, "CODEX_VERIFY=1")
 	}
+	// Re-add only the non-secret browser env for author runners (the token lives
+	// solely in the 0600 descriptor file referenced by AFM_BROWSER_DESCRIPTOR).
+	filtered = append(filtered, browserEnv...)
 	if e.cfg.WrapperDir != "" {
 		pathSet := false
 		for i, kv := range filtered {
