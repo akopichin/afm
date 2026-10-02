@@ -44,6 +44,19 @@ type Inputs struct {
 	// v1's статический GlobalPrompt-указатель на память: тот был одним и тем
 	// же текстом для всех стадий флоу, этот пересчитывается на каждый Build.
 	MemoryBlock string
+	// BrowserRuntime, если non-nil, добавляет блок <browser_tools> — короткая
+	// подсказка агенту, что у него есть managed-браузер (afm_chrome MCP) и как им
+	// пользоваться. Ставится вызывающей стороной под ТОЙ ЖЕ policy, что и инъекция
+	// MCP (Orchestrator.browserForStage), чтобы промпт и реальная доступность
+	// инструментов шли в ногу (не «рассказали про инструмент, которого нет»).
+	BrowserRuntime *BrowserRuntime
+}
+
+// BrowserRuntime describes the live managed-browser capability for the prompt.
+type BrowserRuntime struct {
+	AppURL     string
+	AppPort    int
+	ServerName string
 }
 
 func Build(in Inputs) string {
@@ -125,6 +138,18 @@ func Build(in Inputs) string {
 	sb.WriteString("   Example: [AFM image: chart.png]  (one marker per line; for several images print several lines).\n")
 	sb.WriteString("Supported formats: PNG, JPEG, GIF. Do NOT print the marker before the file is fully written and renamed.\n")
 	sb.WriteString("</image_output>\n")
+
+	if in.BrowserRuntime != nil {
+		b := in.BrowserRuntime
+		fmt.Fprintf(&sb, "\n\n<browser_tools>\n")
+		fmt.Fprintf(&sb, "You have a managed Chrome DevTools browser via the MCP server %q — use it to run the app for real (a live run), not just unit tests.\n", b.ServerName)
+		fmt.Fprintf(&sb, "- Serve the app under test on 0.0.0.0:$AFM_BROWSER_APP_PORT (port %d) — bind 0.0.0.0, not localhost, so it is reachable.\n", b.AppPort)
+		fmt.Fprintf(&sb, "- Open the app at $AFM_BROWSER_APP_URL (%s). NEVER open container localhost:%d directly, and never host.docker.internal — always use $AFM_BROWSER_APP_URL.\n", b.AppURL, b.AppPort)
+		fmt.Fprintf(&sb, "- Drive the page with the %s MCP tools (navigate, snapshot, click, fill, evaluate, screenshot, console/network inspection).\n", b.ServerName)
+		fmt.Fprintf(&sb, "- Save screenshots / console logs / network captures into $AFM_STAGE_DIR/artifacts so they appear in the run.\n")
+		fmt.Fprintf(&sb, "- If the browser is unavailable or the scenario fails, treat it as a FAILED check — do not claim success.\n")
+		sb.WriteString("</browser_tools>\n")
+	}
 
 	sb.WriteString("\n</system_rules>\n\n")
 

@@ -3,6 +3,7 @@ package assets
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +52,17 @@ func TestReadPrompt_EmbeddedWhenNoOverrideDir(t *testing.T) {
 	}
 	if len(text) == 0 {
 		t.Fatal("embedded planning.md must be non-empty")
+	}
+}
+
+// The live-run skill must ship in the embedded bundle so the managed-browser
+// capability does not depend on a user's personal ~/.claude/skills/live-run.
+func TestSkillsFS_IncludesLiveRun(t *testing.T) {
+	data, err := SkillsFS.ReadFile("claude/skills/live-run/SKILL.md")
+	if err != nil {
+		t.Fatalf("live-run skill must be embedded: %v", err)
+	}
+	if !strings.Contains(string(data), "afm_chrome") {
+		t.Fatal("live-run skill must reference the afm_chrome MCP server")
 	}
 }

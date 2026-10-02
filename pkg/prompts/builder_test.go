@@ -418,3 +418,19 @@ func TestBuild_MemoryBlockEscapesOwnClosingTag(t *testing.T) {
 		t.Error("memory block content injected raw <system_rules>")
 	}
 }
+
+func TestBuild_BrowserRuntimeBlockPresent(t *testing.T) {
+	out := Build(Inputs{BrowserRuntime: &BrowserRuntime{AppURL: "http://127.0.0.1:55115", AppPort: 55115, ServerName: "afm_chrome"}})
+	if !strings.Contains(out, "afm_chrome") || !strings.Contains(out, "http://127.0.0.1:55115") {
+		t.Fatal("runtime prompt must name the MCP server and app URL")
+	}
+	if !strings.Contains(out, "<browser_tools>") {
+		t.Fatal("expected <browser_tools> block")
+	}
+}
+
+func TestBuild_NoBrowserBlockWhenNil(t *testing.T) {
+	if strings.Contains(Build(Inputs{}), "afm_chrome") {
+		t.Fatal("no browser block when capability off")
+	}
+}

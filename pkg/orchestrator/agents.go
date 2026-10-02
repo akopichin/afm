@@ -230,6 +230,7 @@ func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, sta
 			RetryContext:     retryContext,
 			GlobalPrompt:     o.opts.GlobalPrompt,
 			MemoryBlock:      o.memoryBlockForStage(s),
+			BrowserRuntime:   o.browserRuntimeFor(s),
 		}
 		if err := fillInputs(retryContext, &in); err != nil {
 			return err
@@ -320,6 +321,7 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 		GlobalPrompt:    o.opts.GlobalPrompt,
 		MemoryBlock:     o.memoryBlockForStage(s),
 		RetryContext:    verifyNote,
+		BrowserRuntime:  o.browserRuntimeFor(s),
 	})
 	reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 	rr := o.runnerFor(s, phaseReview)
@@ -377,6 +379,7 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			RetryContext:    retryContext + stageDirNote + note + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
+			BrowserRuntime:  o.browserRuntimeFor(s),
 		})
 		logFile := filepath.Join(stageDir, logFileName)
 
@@ -436,6 +439,7 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 			RetryContext:    retryContext + note + verifyNote,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
+			BrowserRuntime:  o.browserRuntimeFor(s),
 		})
 		reviewLog := filepath.Join(stageDir, logFileName)
 		rr := o.runnerFor(s, phaseReview)
@@ -508,6 +512,7 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			RetryContext:    retryContext + summaryNote + note + verifyNote,
+			BrowserRuntime:  o.browserRuntimeFor(s),
 		})
 		logFile := filepath.Join(stageDir, logFileName)
 		r := o.runnerFor(s, phaseAutonomous)

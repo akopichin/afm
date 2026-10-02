@@ -13,6 +13,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
+	"github.com/akopichin/afm/pkg/prompts"
 )
 
 // usageHintFor returns a best-effort accounting.UsageHint for the given agent
@@ -56,6 +57,26 @@ func (o *Orchestrator) browserForStage(s flow.Stage, cmd string) *executor.Brows
 
 // browserServerName is the MCP server name the agent sees.
 const browserServerName = "afm_chrome"
+
+// stageCommand resolves the effective agent command for a stage (its own command
+// or the configured default client).
+func (o *Orchestrator) stageCommand(s flow.Stage) string {
+	if s.Command != "" {
+		return s.Command
+	}
+	return o.opts.Config.Client.Command
+}
+
+// browserRuntimeFor returns the prompt-side browser runtime block for a stage,
+// gated by the SAME policy as the MCP injection (browserForStage) so the prompt
+// and the actual tool availability stay in lockstep. nil = no block.
+func (o *Orchestrator) browserRuntimeFor(s flow.Stage) *prompts.BrowserRuntime {
+	b := o.browserForStage(s, o.stageCommand(s))
+	if b == nil {
+		return nil
+	}
+	return &prompts.BrowserRuntime{AppURL: b.AppURL, AppPort: b.AppPort, ServerName: b.ServerName}
+}
 
 // isCodexCommand reports whether the resolved command is the codex adapter (reads
 // AFM_BROWSER_DESCRIPTOR from env instead of a claude .mcp.json).
