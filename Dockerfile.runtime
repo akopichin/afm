@@ -78,6 +78,13 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 ARG CODEX_VERSION=0.155.1
 RUN npm install -g @openai/codex@${CODEX_VERSION}
 
+# Chrome DevTools MCP for the managed browser capability (afm_chrome). Pinned —
+# the host↔image transport contract and config shape are version-specific; bump
+# ONLY after testing together with a prepared afm release (same rule as claude/
+# codex pins). Must match browser.PinnedChromeDevtoolsMCPVersion.
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.10.1
+RUN npm install -g chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}
+
 # afm binary
 COPY --from=builder /afm /usr/local/bin/afm
 

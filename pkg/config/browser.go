@@ -5,13 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/akopichin/afm/pkg/browser"
 )
 
-// PinnedChromeDevtoolsMCPVersion is the exact Chrome DevTools MCP version afm
-// supports. It is pinned in Dockerfile.runtime (ARG CHROME_DEVTOOLS_MCP_VERSION)
-// and required — same string — for the already-installed native executable.
-// Never @latest, never a runtime install.
-const PinnedChromeDevtoolsMCPVersion = "1.10.1"
+// PinnedChromeDevtoolsMCPVersion re-exports the pinned Chrome DevTools MCP version
+// from pkg/browser so config callers (preflight, messages) share one source.
+const PinnedChromeDevtoolsMCPVersion = browser.PinnedChromeDevtoolsMCPVersion
 
 // defaultBrowserAppPort is the port the tested app is served on by default.
 const defaultBrowserAppPort = 18080
@@ -45,18 +45,6 @@ const (
 	EnableOn
 	// EnableOff disables the capability entirely.
 	EnableOff
-)
-
-// BrowserMode selects how the MCP package and app URL are produced.
-type BrowserMode int
-
-const (
-	// BrowserModeNative runs afm on the host; the MCP is the already-installed
-	// pinned chrome-devtools-mcp and the app is served on the host port directly.
-	BrowserModeNative BrowserMode = iota
-	// BrowserModeDocker runs the agent in the afm container; the MCP comes from
-	// the image and the app URL is a host loopback publish.
-	BrowserModeDocker
 )
 
 // BrowserStatus is the outcome of a host preflight: whether the capability is
@@ -163,14 +151,14 @@ func (c Config) ValidateBrowser() error {
 }
 
 // BrowserPreflight checks host prerequisites using the production seam.
-func (c Config) BrowserPreflight(mode BrowserMode) (BrowserStatus, error) {
+func (c Config) BrowserPreflight(mode browser.BrowserMode) (BrowserStatus, error) {
 	return c.browserPreflight(mode, browserDefaultSeam)
 }
 
 // browserPreflight is the testable core. Severity keys off EffectiveEnable():
 // EnableOn + missing prerequisite → hard error; EnableAuto + missing → degraded
 // (Available:false, nil error); EnableOff → never checks deps.
-func (c Config) browserPreflight(mode BrowserMode, seam browserSeam) (BrowserStatus, error) {
+func (c Config) browserPreflight(mode browser.BrowserMode, seam browserSeam) (BrowserStatus, error) {
 	state := c.Browser.EffectiveEnable()
 	if state == EnableOff {
 		return BrowserStatus{Available: false, Reason: "browser disabled"}, nil
@@ -185,14 +173,14 @@ func (c Config) browserPreflight(mode BrowserMode, seam browserSeam) (BrowserSta
 }
 
 // browserMissingPrereq returns a reason if a host prerequisite is missing, else "".
-func (c Config) browserMissingPrereq(mode BrowserMode, seam browserSeam) string {
+func (c Config) browserMissingPrereq(mode browser.BrowserMode, seam browserSeam) string {
 	chromePath := c.Browser.ChromePath()
 	if err := seam.statFile(chromePath); err != nil {
 		return fmt.Sprintf("Chrome not found at %q", chromePath)
 	}
 	// Native: the pinned chrome-devtools-mcp must already be installed. Docker
 	// provides it from the image, so no host MCP check there.
-	if mode == BrowserModeNative {
+	if mode == browser.BrowserModeNative {
 		if path, err := seam.lookPath("chrome-devtools-mcp"); err != nil || path == "" {
 			return fmt.Sprintf("chrome-devtools-mcp not installed (required pinned version %s; no install is attempted)", PinnedChromeDevtoolsMCPVersion)
 		}

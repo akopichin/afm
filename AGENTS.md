@@ -671,12 +671,17 @@ multi-arch (`linux/amd64` + `linux/arm64`) через `docker buildx --platform 
 
 ### Пины версий в образе — бампить руками
 
-`Dockerfile.runtime`: `ARG CLAUDE_CODE_VERSION` и `ARG UV_VERSION` пинят версии
-`@anthropic-ai/claude-code` и `uv` (uv копируется из `ghcr.io/astral-sh/uv`).
-Пины — чтобы rebuild не тянул молча новую версию (разное поведение agent-loop).
-**Правило:** не бампить `CLAUDE_CODE_VERSION` на каждый npm-релиз — только после
-ручного теста вместе с готовящимся afm-релизом. Текущие версии:
-`npm view @anthropic-ai/claude-code version`, `github.com/astral-sh/uv/releases`.
+`Dockerfile.runtime`: `ARG CLAUDE_CODE_VERSION`, `ARG CODEX_VERSION`,
+`ARG CHROME_DEVTOOLS_MCP_VERSION` и `ARG UV_VERSION` пинят версии
+`@anthropic-ai/claude-code`, `@openai/codex`, `chrome-devtools-mcp` и `uv` (uv
+копируется из `ghcr.io/astral-sh/uv`). Пины — чтобы rebuild не тянул молча новую
+версию (разное поведение agent-loop / транспорта). `CHROME_DEVTOOLS_MCP_VERSION`
+обязан совпадать с `browser.PinnedChromeDevtoolsMCPVersion` (host↔image transport
+контракт version-specific; native-режим требует ровно эту версию на PATH).
+**Правило:** не бампить пины на каждый npm-релиз — только после ручного теста
+вместе с готовящимся afm-релизом. Текущие версии:
+`npm view @anthropic-ai/claude-code version`, `npm view chrome-devtools-mcp version`,
+`github.com/astral-sh/uv/releases`.
 
 ### Non-standard agents (не claude)
 

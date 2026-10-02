@@ -6,6 +6,18 @@ package browser
 
 import "fmt"
 
+// BrowserMode selects how the MCP package and the tested-app URL are produced.
+type BrowserMode int
+
+const (
+	// BrowserModeNative runs afm on the host: the MCP is the already-installed
+	// pinned chrome-devtools-mcp and the app is served on the host port directly.
+	BrowserModeNative BrowserMode = iota
+	// BrowserModeDocker runs the agent in the afm container: the MCP comes from the
+	// image and the app URL is a host loopback publish.
+	BrowserModeDocker
+)
+
 // TransportProtocolVersion is the host↔container transport-compatibility version.
 // The host probes a pinned image via `afm browser protocol-version` and refuses /
 // degrades on a mismatch rather than hanging. Bump ONLY on a breaking transport
