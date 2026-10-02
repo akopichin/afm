@@ -206,6 +206,9 @@ type Stage struct {
 	// Hooks — lifecycle-хуки, ограниченные этой стадией (flow-события в них
 	// запрещены валидацией).
 	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
+	// Browser (managed Chrome DevTools capability): explicit false opts this
+	// stage out of the afm_chrome MCP. nil — inherits the global browser policy.
+	Browser *bool `yaml:"browser,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -269,6 +272,13 @@ func (s *Stage) IsScript() bool {
 // instead of starting immediately (auto_run explicitly set to false).
 func (s Stage) AutoRunDisabled() bool {
 	return s.AutoRun != nil && !*s.AutoRun
+}
+
+// BrowserDisabled reports whether this stage explicitly opts out of the managed
+// Chrome DevTools browser capability (browser: false). nil inherits the global
+// policy.
+func (s Stage) BrowserDisabled() bool {
+	return s.Browser != nil && !*s.Browser
 }
 
 // MemoryConfig — настройки agent-памяти флоу (v3 — директория).

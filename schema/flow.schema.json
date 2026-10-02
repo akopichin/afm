@@ -296,6 +296,10 @@
           "type": "array",
           "description": "Lifecycle hooks scoped to this stage. Flow-level events are not allowed here.",
           "items": { "$ref": "#/definitions/lifecycleHook" }
+        },
+        "browser": {
+          "type": "boolean",
+          "description": "Explicit false opts this stage out of the managed Chrome DevTools (afm_chrome) capability. Omitted inherits the global browser policy."
         }
       },
       "allOf": [

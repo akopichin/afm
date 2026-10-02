@@ -527,6 +527,9 @@ type Config struct {
 	// Verify — глобальные настройки verify-гейта (число допустимых отклонений).
 	// Per-stage override — flow.VerifySpec.MaxFailures.
 	Verify VerifyConfig `yaml:"verify"`
+	// Browser — managed Chrome DevTools browser capability (afm_chrome MCP).
+	// nil/auto = offered on a supported host; per-stage opt-out via flow.Stage.Browser.
+	Browser BrowserConfig `yaml:"browser"`
 }
 
 // Default returns the built-in default configuration.
@@ -601,6 +604,9 @@ func LoadFrom(globalDir, projectDir string) (Config, error) {
 		return cfg, fmt.Errorf("hooks: %w", err)
 	}
 	if err := validateVerify(cfg.Verify); err != nil {
+		return cfg, err
+	}
+	if err := cfg.ValidateBrowser(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -765,6 +771,18 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Verify.ReviewPatience != nil {
 		dst.Verify.ReviewPatience = overlay.Verify.ReviewPatience
+	}
+	if overlay.Browser.Enabled != nil {
+		dst.Browser.Enabled = overlay.Browser.Enabled
+	}
+	if overlay.Browser.Headless != nil {
+		dst.Browser.Headless = overlay.Browser.Headless
+	}
+	if overlay.Browser.AppPort != 0 {
+		dst.Browser.AppPort = overlay.Browser.AppPort
+	}
+	if overlay.Browser.ExecutablePath != "" {
+		dst.Browser.ExecutablePath = overlay.Browser.ExecutablePath
 	}
 	if overlay.Hooks != nil {
 		// Слой overlay валидируется ДО keyed-merge: иначе дубль id внутри

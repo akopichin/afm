@@ -34,9 +34,35 @@
       "description": "Lifecycle hooks: observer commands receiving event JSON on stdin (global/project layers).",
       "items": { "$ref": "#/definitions/lifecycleHook" }
     },
-    "verify": { "$ref": "#/definitions/verify" }
+    "verify": { "$ref": "#/definitions/verify" },
+    "browser": { "$ref": "#/definitions/browser" }
   },
   "definitions": {
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Managed Chrome DevTools browser capability (afm_chrome MCP). Drives a real Chrome on the host so a stage agent can run the app for real, in Docker or native.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Tri-state: omitted = auto (offered on a supported host, Chrome launches on first use); true = on (preflight must succeed or the run fails); false = fully off. AFM_BROWSER=1/0 overrides."
+        },
+        "headless": {
+          "type": "boolean",
+          "description": "Launch Chrome without a visible window. Default visible."
+        },
+        "app_port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Port the tested app is served on. Default 18080. Must differ from server.port."
+        },
+        "executable_path": {
+          "type": "string",
+          "description": "Override the Chrome binary location (default: macOS Google Chrome)."
+        }
+      }
+    },
     "verify": {
       "type": "object",
       "additionalProperties": false,

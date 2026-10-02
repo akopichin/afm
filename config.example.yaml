@@ -248,3 +248,17 @@ client:
 # verify:
 #   max_failures: 1
 #   review_patience: 0
+
+# Managed Chrome DevTools browser capability (afm_chrome MCP). afm drives a real
+# Chrome on the host so a stage agent can run the app for real ("живой прогон"),
+# both in Docker and when afm runs natively. Chrome launches lazily on the agent's
+# first browser tool call; its lifetime ends with the run.
+# enabled: omitted = auto (tools offered on a supported host with Chrome; degrades
+#   silently on a CLI/API-only host); true = on (preflight must succeed or the run
+#   fails); false = fully off. Env AFM_BROWSER=1/0 overrides the config.
+# A per-stage opt-out lives in the flow: `browser: false` on a stage.
+# browser:
+#   enabled: true
+#   headless: false
+#   app_port: 18080            # the tested app is served here; must differ from server.port
+#   executable_path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

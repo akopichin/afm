@@ -731,6 +731,39 @@ func TestStage_AutoRunDisabled(t *testing.T) {
 	}
 }
 
+func TestStage_BrowserDisabled(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	if (flow.Stage{}).BrowserDisabled() {
+		t.Error("nil Browser should not be disabled (inherits global policy)")
+	}
+	if (flow.Stage{Browser: &enabled}).BrowserDisabled() {
+		t.Error("browser=true should not be disabled")
+	}
+	if !(flow.Stage{Browser: &disabled}).BrowserDisabled() {
+		t.Error("browser=false should be disabled")
+	}
+}
+
+func TestParseFile_BrowserFalse(t *testing.T) {
+	yaml := `
+name: test-flow
+stages:
+  - id: s1
+    name: "S1"
+    agents: [planning, implementation]
+    browser: false
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Stages[0].BrowserDisabled() {
+		t.Error("expected browser: false to parse as disabled")
+	}
+}
+
 func TestParseFile_AutoRunFalse(t *testing.T) {
 	yaml := `
 name: test-flow
