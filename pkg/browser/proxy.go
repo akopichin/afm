@@ -66,14 +66,14 @@ func encodeFrame(msg []byte) []byte {
 // pendingReq remembers which client issued a request and its local id, so a
 // Chrome response can be routed back and the local id restored.
 type pendingReq struct {
-	conn    any
+	conn    *wsClient
 	localID json.RawMessage
 }
 
 // routed is the destination of a Chrome message: a specific client (response) or
 // all clients when conn is nil (a CDP event with no id — broadcast).
 type routed struct {
-	conn    any
+	conn    *wsClient
 	payload []byte
 }
 
@@ -90,7 +90,7 @@ func newProxy() *proxy { return &proxy{pending: map[int64]pendingReq{}} }
 // fromClient rewrites a client CDP message's id to a globally-unique id, records
 // the mapping, and returns the message to forward to Chrome. A message without an
 // id (rare) is forwarded unchanged.
-func (p *proxy) fromClient(conn any, msg []byte) []byte {
+func (p *proxy) fromClient(conn *wsClient, msg []byte) []byte {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(msg, &m); err != nil {
 		return msg // not an object we understand; forward verbatim
@@ -148,7 +148,7 @@ func (p *proxy) fromChrome(msg []byte) *routed {
 // disconnect drops all pending requests issued by a client that has gone away, so
 // a late Chrome response for it is treated as unroutable (broadcast/ignored)
 // rather than delivered to a reused connection object.
-func (p *proxy) disconnect(conn any) {
+func (p *proxy) disconnect(conn *wsClient) {
 	p.mu.Lock()
 	for gid, req := range p.pending {
 		if req.conn == conn {

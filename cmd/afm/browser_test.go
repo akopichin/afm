@@ -2,12 +2,33 @@ package main
 
 import (
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/browser"
 )
+
+// TestCodexBrowserAdapterScript runs the shell-level test for the codex adapter's
+// afm_chrome -c overrides so it is covered by `go test ./...` (CI), not only by a
+// manual script invocation. Skips when bash/jq are unavailable.
+func TestCodexBrowserAdapterScript(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "test-codex-browser.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("bash", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("codex browser adapter script failed: %v\n%s", err, out)
+	}
+}
 
 func TestBrowserStatus_JSON_NoSecret(t *testing.T) {
 	dir := t.TempDir()

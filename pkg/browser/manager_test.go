@@ -218,3 +218,43 @@ func TestManager_SweepLeavesUnmarkedDirs(t *testing.T) {
 		t.Fatal("a dir without a readable owner marker must be left untouched")
 	}
 }
+
+func TestManager_WSWrongTokenIs401_NoChrome(t *testing.T) {
+	launched := 0
+	m := newTestManager(t, func() { launched++ })
+	url := "ws://" + m.Addr() + "/session/ep1/build"
+	h := http.Header{"Authorization": {"Bearer wrong-token"}}
+	_, resp, err := websocket.DefaultDialer.Dial(url, h)
+	if err == nil {
+		t.Fatal("want handshake failure")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %v", resp)
+	}
+	if launched != 0 {
+		t.Fatal("a wrong token must not launch Chrome")
+	}
+}
+
+func TestManager_LaunchErrorNotCached(t *testing.T) {
+	var calls int32
+	m := newTestManager(t, nil)
+	m.launch = func(_ context.Context, _, dir string) (*chromeConn, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return nil, errors.New("transient launch failure")
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		return newFakeChromeConn(t), nil
+	}
+	if _, err := m.firstConnect(context.Background(), "ep1", "build"); err == nil {
+		t.Fatal("first connect should surface the launch failure")
+	}
+	if _, err := m.firstConnect(context.Background(), "ep1", "build"); err != nil {
+		t.Fatalf("second connect must relaunch after a transient failure (not cache it), got %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("want 2 launch attempts, got %d", calls)
+	}
+}

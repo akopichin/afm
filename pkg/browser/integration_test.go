@@ -3,12 +3,69 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+func waitEvicted(t *testing.T, m *Manager, key string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		m.mu.Lock()
+		_, ok := m.sessions[key]
+		m.mu.Unlock()
+		if !ok {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("session was not evicted after Chrome death")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// TestManager_ChromeDeathRelaunchesOnReconnect proves that when Chrome exits
+// mid-stage the session is torn down and evicted, so a retry/resume reconnect
+// launches a fresh Chrome instead of proxying to a dead one.
+func TestManager_ChromeDeathRelaunchesOnReconnect(t *testing.T) {
+	var launches int32
+	deaths := make(chan *os.File, 4) // Chrome stdout write-ends; close to simulate death
+	m := newTestManager(t, nil)
+	m.launch = func(_ context.Context, _, dir string) (*chromeConn, error) {
+		atomic.AddInt32(&launches, 1)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		inR, inW, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			inR.Close()
+			inW.Close()
+			return nil, err
+		}
+		go func() { _, _ = io.Copy(io.Discard, inR); inR.Close() }()
+		deaths <- outW
+		return &chromeConn{toChrome: inW, fromChrome: outR}, nil
+	}
+
+	dialAuthed(t, m, "ep1", "build")
+	(<-deaths).Close() // kill Chrome: its stdout closes → readFromChrome EOF → evict
+	waitEvicted(t, m, "ep1/build")
+
+	dialAuthed(t, m, "ep1", "build") // reconnect
+	if atomic.LoadInt32(&launches) != 2 {
+		t.Fatalf("Chrome death must relaunch on reconnect, got %d launches", launches)
+	}
+}
 
 // fakeCDPManager wires the Manager's launch seam to an in-process fake Chrome that
 // speaks the CDP pipe protocol: it reads NUL-terminated requests and echoes a

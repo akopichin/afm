@@ -23,9 +23,13 @@ const PinnedChromeDevtoolsMCPVersion = "1.10.1"
 
 // InvocationDescriptor is the per-invocation 0600 file the executor writes and
 // `afm browser mcp --descriptor <path>` reads. It carries the secret token, so it
-// is never placed in argv or env — only its path is non-secret.
+// is never placed in argv or env — only its path is non-secret. The JSON uses
+// camelCase to mirror the Chrome-DevTools-MCP config shape it feeds into
+// (mcpPrivateConfig), which mandates camelCase keys; this is afm-internal (written
+// and read only by afm), so the divergence from the snake_case Descriptor is
+// deliberate, not an inconsistency.
 type InvocationDescriptor struct {
-	WSEndpoint string   `json:"wsEndpoint"`
+	WSEndpoint string   `json:"wsEndpoint"` // full per-stage ws:// URL (Descriptor.StageEndpoint)
 	Token      string   `json:"token"`
 	AppURL     string   `json:"appURL"`
 	Roots      []string `json:"roots"`
@@ -65,7 +69,10 @@ func ReadInvocationDescriptor(path string) (*InvocationDescriptor, error) {
 // ResolveMCP resolves the pinned Chrome DevTools MCP executable. Both modes look
 // it up on PATH; a missing executable is a clear error naming the required pinned
 // version (the Task 1 preflight blocks this earlier — this is defense in depth).
+// mode is currently unused (resolution is identical in both) but kept so the
+// resolver matches the mcpSeams.resolve seam signature and can diverge later.
 func ResolveMCP(mode BrowserMode) (cmd string, args []string, err error) {
+	_ = mode
 	path, lerr := exec.LookPath(mcpExecutable)
 	if lerr != nil || path == "" {
 		return "", nil, fmt.Errorf("browser: %s not found on PATH (required pinned version %s; no install is attempted)", mcpExecutable, PinnedChromeDevtoolsMCPVersion)
@@ -83,7 +90,7 @@ func WriteMCPConfig(d *InvocationDescriptor) (string, func(), error) {
 	cfg := mcpPrivateConfig{
 		WSEndpoint:     d.WSEndpoint,
 		WSHeaders:      fmt.Sprintf(`{"Authorization":"Bearer %s"}`, d.Token),
-		FilesystemRoot: lowestCommonAncestor(d.Roots),
+		FilesystemRoot: filesystemRoot(d.Roots),
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -141,9 +148,26 @@ func runMCPSeamed(ctx context.Context, descriptorPath string, mode BrowserMode, 
 	return c.Run()
 }
 
+// filesystemRoot picks the single MCP filesystemRoot from the requested roots. It
+// uses the lowest common ancestor so one root covers them all — BUT never returns
+// the whole filesystem ("/"): when the roots live on divergent trees (afm-root !=
+// flow.root_dir, the Docker layout) the LCA collapses to "/", which would expose
+// mounted host credentials. In that case it falls back to the primary (first) root,
+// which browserForStage places first (the project root). An empty list yields "".
+func filesystemRoot(roots []string) string {
+	lca := lowestCommonAncestor(roots)
+	if lca == "" || lca == string(filepath.Separator) {
+		if len(roots) > 0 {
+			return roots[0]
+		}
+		return ""
+	}
+	return lca
+}
+
 // lowestCommonAncestor returns the deepest directory that is an ancestor of all
-// paths, so a single filesystemRoot covers every requested root (safe even if the
-// MCP accepts only one root).
+// paths. May return "/" for divergent trees — callers that must not expose the
+// whole filesystem should use filesystemRoot instead.
 func lowestCommonAncestor(paths []string) string {
 	if len(paths) == 0 {
 		return ""

@@ -84,6 +84,7 @@ func (c *chromeConn) close() {
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		killProcessGroup(c.cmd)
+		_ = c.cmd.Wait() // reap the killed process so it does not linger as a zombie
 	}
 	if c.toChrome != nil {
 		c.toChrome.Close()

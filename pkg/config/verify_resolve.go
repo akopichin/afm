@@ -86,6 +86,20 @@ func SupportedVerifyCommand(cmd string, cfg Config) bool {
 	return resolved == codexAdapterCommand
 }
 
+// IsCodexCommand reports whether a command resolves to the codex read-only
+// adapter — the bare shim name codex-as-claude, or a docker.agents recipe of
+// type codex. Shared by the browser capability (which drives the codex adapter
+// via env-based -c overrides rather than a claude .mcp.json). Reuses the same
+// resolution and the same codexAdapterCommand constant as SupportedVerifyCommand,
+// so there is one definition of "this is codex" across the codebase.
+func (c Config) IsCodexCommand(cmd string) bool {
+	resolved, _ := ResolveAgentCommand(cmd, c)
+	if recipe, ok := c.Docker.Agents[resolved]; ok {
+		return recipe.Type == RecipeTypeCodex
+	}
+	return resolved == codexAdapterCommand
+}
+
 // ValidateVerifySpecs проверяет ДО старта рана, что каждый агентский
 // verify-шаг (Kind==VerifyAgent) резолвится в поддерживаемый verify-адаптер.
 // Живёт в pkg/config, а не в flow.Flow.validate(): та ничего не знает о

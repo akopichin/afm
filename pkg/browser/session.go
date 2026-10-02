@@ -98,6 +98,7 @@ func (s *session) writeLoop() {
 			}
 			if _, err := s.conn.toChrome.Write(encodeFrame(msg)); err != nil {
 				logf("session %s write to chrome failed: %v", s.key, err)
+				s.close() // Chrome pipe is gone → tear down so a reconnect relaunches
 				return
 			}
 		case <-s.done:
@@ -125,6 +126,10 @@ func (s *session) readFromChrome() {
 			}
 		}
 		if err != nil {
+			// EOF/read error = Chrome exited or crashed. Tear the session down and
+			// evict it (via close) so a retry/resume reconnect relaunches a fresh
+			// Chrome instead of proxying to a dead one forever.
+			s.close()
 			return
 		}
 	}
@@ -134,7 +139,7 @@ func (s *session) readFromChrome() {
 func (s *session) route(msg []byte) {
 	r := s.proxy.fromChrome(msg)
 	if r.conn != nil {
-		s.deliver(r.conn.(*wsClient), r.payload)
+		s.deliver(r.conn, r.payload)
 		return
 	}
 	s.clientsMu.Lock()
@@ -160,12 +165,22 @@ func (s *session) deliver(c *wsClient, msg []byte) {
 	}
 }
 
-// close tears the session down once: signal done, kill Chrome, close the pipes.
+// close tears the session down once: signal done, close connected clients' sockets
+// (so their serveClient readers unblock instead of hanging on a dead session), kill
+// Chrome, and evict the session from the manager so a reconnect relaunches.
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
+		s.clientsMu.Lock()
+		for c := range s.clients {
+			_ = c.ws.Close()
+		}
+		s.clientsMu.Unlock()
 		if s.conn != nil {
 			s.conn.close()
+		}
+		if s.mgr != nil {
+			s.mgr.evictSession(s.key, s)
 		}
 	})
 }

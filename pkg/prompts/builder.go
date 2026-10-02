@@ -57,6 +57,10 @@ type BrowserRuntime struct {
 	AppURL     string
 	AppPort    int
 	ServerName string
+	// Docker shapes the bind guidance: in Docker the app must bind 0.0.0.0 so the
+	// published port is reachable from the host browser; natively it binds 127.0.0.1
+	// to avoid exposing the dev app on the LAN.
+	Docker bool
 }
 
 func Build(in Inputs) string {
@@ -143,8 +147,12 @@ func Build(in Inputs) string {
 		b := in.BrowserRuntime
 		sb.WriteString("\n\n<browser_tools>\n")
 		fmt.Fprintf(&sb, "You have a managed Chrome DevTools browser via the MCP server %q — use it to run the app for real (a live run), not just unit tests.\n", b.ServerName)
-		fmt.Fprintf(&sb, "- Serve the app under test on 0.0.0.0:$AFM_BROWSER_APP_PORT (port %d) — bind 0.0.0.0, not localhost, so it is reachable.\n", b.AppPort)
-		fmt.Fprintf(&sb, "- Open the app at $AFM_BROWSER_APP_URL (%s). NEVER open container localhost:%d directly, and never host.docker.internal — always use $AFM_BROWSER_APP_URL.\n", b.AppURL, b.AppPort)
+		if b.Docker {
+			fmt.Fprintf(&sb, "- Serve the app under test on 0.0.0.0:$AFM_BROWSER_APP_PORT (port %d) — bind 0.0.0.0 inside the container, not localhost, so the host browser can reach the published port.\n", b.AppPort)
+		} else {
+			fmt.Fprintf(&sb, "- Serve the app under test on 127.0.0.1:$AFM_BROWSER_APP_PORT (port %d).\n", b.AppPort)
+		}
+		fmt.Fprintf(&sb, "- Open the app at $AFM_BROWSER_APP_URL (%s). Always use this exact value — do not guess the URL.\n", b.AppURL)
 		fmt.Fprintf(&sb, "- Drive the page with the %s MCP tools (navigate, snapshot, click, fill, evaluate, screenshot, console/network inspection).\n", b.ServerName)
 		sb.WriteString("- Save screenshots / console logs / network captures into $AFM_STAGE_DIR/artifacts so they appear in the run.\n")
 		sb.WriteString("- If the browser is unavailable or the scenario fails, treat it as a FAILED check — do not claim success.\n")

@@ -33,6 +33,11 @@ type Descriptor struct {
 	Token    string `json:"token"`
 	AppURL   string `json:"app_url"`
 	Epoch    string `json:"epoch"`
+	// Docker reports whether the agent runs inside the afm container (vs native
+	// host). It only shapes agent-facing guidance (bind 0.0.0.0 in Docker so the
+	// published port is reachable, vs 127.0.0.1 natively to avoid LAN exposure);
+	// it is not part of the transport.
+	Docker bool `json:"docker"`
 }
 
 // StageEndpoint derives the deterministic per-stage WebSocket URL. The host and

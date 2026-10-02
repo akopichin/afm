@@ -19,9 +19,11 @@ treat the live run as **not performed** (do not claim success).
 - `$AFM_BROWSER_APP_URL` — the URL to open in the browser. ALWAYS use this.
   Never open `localhost:<app_port>` inside the container, and never
   `host.docker.internal` — only `$AFM_BROWSER_APP_URL`.
-- `$AFM_BROWSER_APP_PORT` — the port the app under test MUST listen on. Bind the
-  server to `0.0.0.0:$AFM_BROWSER_APP_PORT` (not `127.0.0.1`), or the browser on
-  the host cannot reach it.
+- `$AFM_BROWSER_APP_PORT` — the port the app under test MUST listen on. In Docker,
+  bind the server to `0.0.0.0:$AFM_BROWSER_APP_PORT` so the host browser can reach
+  the published port; natively `127.0.0.1:$AFM_BROWSER_APP_PORT` is enough (and
+  avoids exposing the dev app on your LAN). The `<browser_tools>` block in your
+  prompt states the correct bind for the current mode — follow it.
 - `$AFM_STAGE_DIR/artifacts/` — write screenshots, console logs and network
   captures here so they show up in the run.
 

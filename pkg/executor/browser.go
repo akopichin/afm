@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/akopichin/afm/pkg/browser"
 )
@@ -32,11 +31,10 @@ type BrowserMCP struct {
 func (e *Executor) BrowserMCPConfig() *BrowserMCP { return e.cfg.BrowserMCP }
 
 // IsBrowserTransportEnv reports whether an env entry is a managed-browser
-// transport variable (AFM_BROWSER_*). It is the single predicate used to
-// default-deny the browser transport from every child process environment
-// (author runners re-add only the non-secret subset afterwards).
+// transport variable (AFM_BROWSER_*). It delegates to browser.IsTransportEnv so
+// the prefix has a single source of truth shared with pkg/lifecyclehooks.
 func IsBrowserTransportEnv(kv string) bool {
-	return strings.HasPrefix(kv, "AFM_BROWSER_")
+	return browser.IsTransportEnv(kv)
 }
 
 // setupBrowserMCP writes the per-invocation 0600 descriptor file (and, for a

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -51,7 +50,7 @@ func (o *Orchestrator) browserForStage(s flow.Stage, cmd string) *executor.Brows
 		AppURL:       d.AppURL,
 		AppPort:      o.opts.Config.Browser.GetAppPort(),
 		Roots:        dedupRoots(o.opts.RootDir, stageDir),
-		Codex:        o.isCodexCommand(cmd),
+		Codex:        o.opts.Config.IsCodexCommand(cmd),
 	}
 }
 
@@ -75,21 +74,9 @@ func (o *Orchestrator) browserRuntimeFor(s flow.Stage) *prompts.BrowserRuntime {
 	if b == nil {
 		return nil
 	}
-	return &prompts.BrowserRuntime{AppURL: b.AppURL, AppPort: b.AppPort, ServerName: b.ServerName}
+	docker := o.opts.BrowserDescriptor != nil && o.opts.BrowserDescriptor.Docker
+	return &prompts.BrowserRuntime{AppURL: b.AppURL, AppPort: b.AppPort, ServerName: b.ServerName, Docker: docker}
 }
-
-// isCodexCommand reports whether the resolved command is the codex adapter (reads
-// AFM_BROWSER_DESCRIPTOR from env instead of a claude .mcp.json).
-func (o *Orchestrator) isCodexCommand(cmd string) bool {
-	resolved, _ := config.ResolveAgentCommand(cmd, o.opts.Config)
-	if recipe, ok := o.opts.Config.Docker.Agents[resolved]; ok {
-		return recipe.Type == config.RecipeTypeCodex
-	}
-	return resolved == codexAdapterCommandName
-}
-
-// codexAdapterCommandName is the bare codex read-only adapter command.
-const codexAdapterCommandName = "codex-as-claude"
 
 // browserLauncherPath resolves the absolute afm path used as the MCP command. It
 // must never be the bare literal "afm" (native afm is often invoked by an absolute

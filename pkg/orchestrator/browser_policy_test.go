@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/browser"
@@ -102,5 +104,49 @@ func TestBrowserForStage_CodexFlag(t *testing.T) {
 	cl := o.browserForStage(normalClaudeStage("build"), "claude")
 	if cl == nil || cl.Codex {
 		t.Fatalf("claude must set Codex=false, got %+v", cl)
+	}
+}
+
+// afm-root != flow.root_dir (the Docker layout): the descriptor roots must carry
+// BOTH the project root and the stage dir so the MCP can read the project and
+// write artifacts.
+func TestBrowserForStage_RootsCoverProjectAndStageDir(t *testing.T) {
+	runDir := t.TempDir()
+	o := &Orchestrator{
+		opts: Options{
+			RunDir: runDir, RootDir: "/workspace", Config: config.Config{},
+			BrowserDescriptor: &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"},
+		},
+		ui: bus.NewUIBus(),
+	}
+	b := o.browserForStage(flow.Stage{ID: "build", Command: "claude"}, "claude")
+	if b == nil {
+		t.Fatal("expected capability")
+	}
+	wantStage := filepath.Join(runDir, "build")
+	if len(b.Roots) != 2 || b.Roots[0] != "/workspace" || b.Roots[1] != wantStage {
+		t.Fatalf("roots must be [RootDir, stageDir], got %v", b.Roots)
+	}
+}
+
+func TestBrowserForStage_RootsSkipEmptyRootDir(t *testing.T) {
+	runDir := t.TempDir()
+	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
+	o.opts.RunDir = runDir // RootDir left "" → only the stage dir is a root
+	b := o.browserForStage(flow.Stage{ID: "build", Command: "claude"}, "claude")
+	if b == nil || len(b.Roots) != 1 || b.Roots[0] != filepath.Join(runDir, "build") {
+		t.Fatalf("empty RootDir must yield a single stage-dir root, got %+v", b)
+	}
+}
+
+// The shell-verify env path (sanitizedShellVerifyEnv) is a security-relevant
+// default-deny site that must also strip the browser transport.
+func TestSanitizedShellVerifyEnv_StripsBrowserTransport(t *testing.T) {
+	t.Setenv("AFM_BROWSER_TRANSPORT_TOKEN", "x")
+	t.Setenv("AFM_BROWSER_ENDPOINT", "y")
+	for _, kv := range sanitizedShellVerifyEnv() {
+		if strings.HasPrefix(kv, "AFM_BROWSER_") {
+			t.Fatalf("shell verify env must strip AFM_BROWSER_*: %q", kv)
+		}
 	}
 }

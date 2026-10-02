@@ -205,22 +205,38 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 
 	select {
 	case <-done:
-		return s, s.err
+		if s.err != nil {
+			// A launch failure must NOT be cached for the whole run: evict so a
+			// later connect (after a transient fork/EAGAIN or a cleared profile
+			// lock) relaunches a fresh session instead of replaying sync.Once's
+			// stale error forever.
+			m.evictSession(key, s)
+			return nil, s.err
+		}
+		return s, nil
 	case <-launchCtx.Done():
-		m.teardownSession(key)
+		// The caller gave up (client disconnected or the launch deadline fired)
+		// before the launch finished. Evict now so a later connect relaunches, and
+		// reap whatever the in-flight launch eventually produces so a slow Chrome is
+		// never orphaned (launchChrome is not ctx-killable).
+		m.evictSession(key, s)
+		go func() {
+			<-done
+			s.close()
+		}()
 		return nil, launchCtx.Err()
 	}
 }
 
-// teardownSession removes and closes a session (used on launch timeout/cancel).
-func (m *Manager) teardownSession(key string) {
+// evictSession removes a session from the map ONLY if it is still the mapped one
+// (identity check), so a concurrently-created replacement for the same key is not
+// clobbered. Safe to call multiple times.
+func (m *Manager) evictSession(key string, s *session) {
 	m.mu.Lock()
-	s := m.sessions[key]
-	delete(m.sessions, key)
-	m.mu.Unlock()
-	if s != nil {
-		s.close()
+	if m.sessions[key] == s {
+		delete(m.sessions, key)
 	}
+	m.mu.Unlock()
 }
 
 // Close is a bounded, idempotent teardown: stop serving, kill owned Chromes, and

@@ -43,7 +43,6 @@ func newBrowserMCPCmd() *cobra.Command {
 
 func newBrowserStatusCmd() *cobra.Command {
 	var descriptor string
-	var asJSON bool
 	c := &cobra.Command{
 		Use:   "status",
 		Short: "Report browser capability status as JSON (never launches Chrome, never prints a credential)",
@@ -57,7 +56,6 @@ func newBrowserStatusCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&descriptor, "descriptor", "", "path to the browser descriptor file")
-	c.Flags().BoolVar(&asJSON, "json", true, "output JSON (always true)")
 	return c
 }
 

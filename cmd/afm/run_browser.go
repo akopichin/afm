@@ -37,7 +37,9 @@ var dockerProtocolProbe = func(argv []string) (string, int) {
 // startBrowser builds and owns the managed browser Manager for a run. It returns
 // nil manager + nil descriptor + a no-op cleanup when the capability is off or
 // degraded; otherwise a live manager, a runtime descriptor, and a defer-able
-// cleanup. It generates its own random epoch (never a run id).
+// cleanup. It generates its own random epoch (never a run id). Production callers
+// keep the manager alive solely via the returned cleanup closure and discard the
+// *Manager; it is returned for test assertions (see run_browser_test.go).
 func startBrowser(cfg config.Config, mode browser.BrowserMode) (*browser.Manager, *browser.Descriptor, func(), error) {
 	noop := func() {}
 	st, err := browserPreflightFn(cfg, mode)
@@ -84,6 +86,7 @@ func startBrowser(cfg config.Config, mode browser.BrowserMode) (*browser.Manager
 		Token:    mgr.Token(),
 		AppURL:   appURL,
 		Epoch:    epoch,
+		Docker:   mode == browser.BrowserModeDocker,
 	}
 	return mgr, desc, func() { _ = mgr.Close() }, nil
 }
@@ -175,6 +178,7 @@ func descriptorFromEnv(inContainer bool) *browser.Descriptor {
 		Token:    token,
 		AppURL:   os.Getenv("AFM_BROWSER_APP_URL"),
 		Epoch:    epoch,
+		Docker:   true, // descriptorFromEnv only runs in-container (ReExecedIntoContainer)
 	}
 }
 

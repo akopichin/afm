@@ -98,3 +98,22 @@ func TestLowestCommonAncestor(t *testing.T) {
 		t.Fatalf("single root is itself, got %q", got)
 	}
 }
+
+func TestFilesystemRoot_NeverWholeFS(t *testing.T) {
+	// Divergent trees (afm-root != root_dir) → LCA would be "/" → must fall back to
+	// the first (project) root, never expose the whole filesystem.
+	if got := filesystemRoot([]string{"/workspace", "/app/.afm/runs/r/s"}); got != "/workspace" {
+		t.Fatalf("divergent roots must not expose /, got %q", got)
+	}
+	// Nested (normal) layout → the common ancestor.
+	if got := filesystemRoot([]string{"/proj", "/proj/.afm/runs/r/s"}); got != "/proj" {
+		t.Fatalf("want /proj, got %q", got)
+	}
+	// Single root → itself.
+	if got := filesystemRoot([]string{"/only"}); got != "/only" {
+		t.Fatalf("want /only, got %q", got)
+	}
+	if got := filesystemRoot(nil); got != "" {
+		t.Fatalf("empty roots → empty, got %q", got)
+	}
+}

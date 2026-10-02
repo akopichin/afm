@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/redact"
 )
 
@@ -91,7 +92,7 @@ func minimalBaseEnv() []string {
 func stripTransportVars(env []string) []string {
 	out := env[:0]
 	for _, kv := range env {
-		if strings.HasPrefix(kv, HookSecretTransportPrefix) || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") || strings.HasPrefix(kv, "AFM_BROWSER_") {
+		if strings.HasPrefix(kv, HookSecretTransportPrefix) || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") || browser.IsTransportEnv(kv) {
 			continue
 		}
 		out = append(out, kv)
