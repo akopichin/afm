@@ -48,13 +48,13 @@ func TestWriteMCPConfig_WSHeadersIsString_And0600(t *testing.T) {
 	if obj["Authorization"] != "Bearer tok-SECRET" {
 		t.Fatalf("Authorization header wrong: %q", obj["Authorization"])
 	}
-	// filesystemRoot is the lowest common ancestor of the roots.
+	// filesystemRoot is the primary (first) root — the project root.
 	var fr string
 	if err := json.Unmarshal(raw["filesystemRoot"], &fr); err != nil {
 		t.Fatal(err)
 	}
-	if fr != "/a" {
-		t.Fatalf("filesystemRoot LCA wrong: %q", fr)
+	if fr != "/a/b" {
+		t.Fatalf("filesystemRoot must be the primary root, got %q", fr)
 	}
 }
 
@@ -87,25 +87,13 @@ func TestRunMCP_RemovesPrivateConfigAndDescriptorOnExit(t *testing.T) {
 	}
 }
 
-func TestLowestCommonAncestor(t *testing.T) {
-	if got := lowestCommonAncestor([]string{"/proj", "/proj/.afm/runs/r/build"}); got != "/proj" {
-		t.Fatalf("want /proj, got %q", got)
-	}
-	if got := lowestCommonAncestor([]string{"/a/b", "/c/d"}); got != "/" {
-		t.Fatalf("disjoint roots must fall back to /, got %q", got)
-	}
-	if got := lowestCommonAncestor([]string{"/only"}); got != "/only" {
-		t.Fatalf("single root is itself, got %q", got)
-	}
-}
-
 func TestFilesystemRoot_NeverWholeFS(t *testing.T) {
-	// Divergent trees (afm-root != root_dir) → LCA would be "/" → must fall back to
-	// the first (project) root, never expose the whole filesystem.
+	// Divergent trees (afm-root != root_dir) must NOT expose the whole filesystem —
+	// filesystemRoot is the primary (project) root, never a common ancestor.
 	if got := filesystemRoot([]string{"/workspace", "/app/.afm/runs/r/s"}); got != "/workspace" {
 		t.Fatalf("divergent roots must not expose /, got %q", got)
 	}
-	// Nested (normal) layout → the common ancestor.
+	// Nested (normal) layout → the project root (which contains the stage dir).
 	if got := filesystemRoot([]string{"/proj", "/proj/.afm/runs/r/s"}); got != "/proj" {
 		t.Fatalf("want /proj, got %q", got)
 	}

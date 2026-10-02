@@ -171,6 +171,12 @@ func (s *session) deliver(c *wsClient, msg []byte) {
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
+		// Evict FIRST (before the blocking conn.close()/cmd.Wait()) so a reconnect
+		// arriving while Chrome is being reaped doesn't bind to this dead session;
+		// it will miss the map and relaunch a fresh one.
+		if s.mgr != nil {
+			s.mgr.evictSession(s.key, s)
+		}
 		s.clientsMu.Lock()
 		for c := range s.clients {
 			_ = c.ws.Close()
@@ -178,9 +184,6 @@ func (s *session) close() {
 		s.clientsMu.Unlock()
 		if s.conn != nil {
 			s.conn.close()
-		}
-		if s.mgr != nil {
-			s.mgr.evictSession(s.key, s)
 		}
 	})
 }

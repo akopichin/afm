@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // mcpExecutable is the pinned Chrome DevTools MCP binary name, resolved on PATH in
@@ -148,55 +147,18 @@ func runMCPSeamed(ctx context.Context, descriptorPath string, mode BrowserMode, 
 	return c.Run()
 }
 
-// filesystemRoot picks the single MCP filesystemRoot from the requested roots. It
-// uses the lowest common ancestor so one root covers them all — BUT never returns
-// the whole filesystem ("/"): when the roots live on divergent trees (afm-root !=
-// flow.root_dir, the Docker layout) the LCA collapses to "/", which would expose
-// mounted host credentials. In that case it falls back to the primary (first) root,
-// which browserForStage places first (the project root). An empty list yields "".
+// filesystemRoot picks the single MCP filesystemRoot from the requested roots: the
+// PRIMARY (first) root, which browserForStage always places first — the project
+// root (flow.root_dir), or the stage dir when no project root is set. This is the
+// tightest correct containment boundary and never resolves above what was
+// requested: a common-ancestor scheme would collapse to "/" for divergent trees
+// (afm-root != root_dir, the Docker layout) or to a parent dir for a monorepo
+// subdir root_dir, either of which would over-expose mounted host credentials.
+// (The nested case — stage dir under the project root — is already covered, since
+// the project root contains it.) An empty list yields "".
 func filesystemRoot(roots []string) string {
-	lca := lowestCommonAncestor(roots)
-	if lca == "" || lca == string(filepath.Separator) {
-		if len(roots) > 0 {
-			return roots[0]
-		}
+	if len(roots) == 0 {
 		return ""
 	}
-	return lca
-}
-
-// lowestCommonAncestor returns the deepest directory that is an ancestor of all
-// paths. May return "/" for divergent trees — callers that must not expose the
-// whole filesystem should use filesystemRoot instead.
-func lowestCommonAncestor(paths []string) string {
-	if len(paths) == 0 {
-		return ""
-	}
-	lca := filepath.Clean(paths[0])
-	for _, p := range paths[1:] {
-		lca = commonPath(lca, filepath.Clean(p))
-	}
-	return lca
-}
-
-func commonPath(a, b string) string {
-	sep := string(filepath.Separator)
-	as := strings.Split(a, sep)
-	bs := strings.Split(b, sep)
-	n := len(as)
-	if len(bs) < n {
-		n = len(bs)
-	}
-	var out []string
-	for i := 0; i < n; i++ {
-		if as[i] != bs[i] {
-			break
-		}
-		out = append(out, as[i])
-	}
-	res := strings.Join(out, sep)
-	if res == "" {
-		return sep
-	}
-	return res
+	return roots[0]
 }

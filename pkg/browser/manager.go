@@ -215,16 +215,31 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 		}
 		return s, nil
 	case <-launchCtx.Done():
-		// The caller gave up (client disconnected or the launch deadline fired)
-		// before the launch finished. Evict now so a later connect relaunches, and
-		// reap whatever the in-flight launch eventually produces so a slow Chrome is
-		// never orphaned (launchChrome is not ctx-killable).
-		m.evictSession(key, s)
-		go func() {
-			<-done
-			s.close()
-		}()
-		return nil, launchCtx.Err()
+		// This caller gave up (client disconnected or its deadline fired). But under
+		// singleflight many callers share one session, each with its own deadline, so
+		// "this caller gave up" does NOT mean the session is unwanted. If the launch
+		// actually finished at the same instant (both select cases ready), prefer it
+		// and hand back the live session rather than tearing down a Chrome the other
+		// callers just received.
+		select {
+		case <-done:
+			if s.err != nil {
+				m.evictSession(key, s)
+				return nil, s.err
+			}
+			return s, nil
+		default:
+			// Genuinely still in flight: evict so a later connect relaunches, and reap
+			// whatever the in-flight launch eventually produces so a slow Chrome is
+			// never orphaned (launchChrome is not ctx-killable). The identity check in
+			// evictSession keeps this reaper from clobbering a replacement session.
+			m.evictSession(key, s)
+			go func() {
+				<-done
+				s.close()
+			}()
+			return nil, launchCtx.Err()
+		}
 	}
 }
 
