@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -103,6 +104,10 @@ type Options struct {
 	RunID    string
 	Resumed  bool
 	Hooks    *lifecyclehooks.Dispatcher
+	// BrowserDescriptor — managed Chrome DevTools capability for this run (nil =
+	// off/degraded). Built on the host (native) or from transport env (in Docker)
+	// by cmd/afm; threaded into eligible author runners by browserForStage (Task 5).
+	BrowserDescriptor *browser.Descriptor
 }
 
 // ResolvedFile — то, что Options.ResolveFile возвращает про файл, к которому

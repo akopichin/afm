@@ -1132,3 +1132,65 @@ func TestUsesLifecycleSecrets(t *testing.T) {
 		t.Error("a hook with Env among others → true")
 	}
 }
+
+func TestReExec_BrowserTokenNotInArgv(t *testing.T) {
+	var gotArgv []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		gotArgv = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	// fake docker on PATH
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image: "img", ProjectDir: "/p",
+		BrowserEnabled: true, BrowserToken: "tok-SECRET",
+		BrowserEndpoint: "host.docker.internal:5001", BrowserEpoch: "ep1",
+		BrowserAppHostPort: 54321, BrowserAppContainerPort: 18080,
+		BrowserAppURL: "http://127.0.0.1:54321",
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	defer os.Unsetenv("AFM_BROWSER_TRANSPORT_TOKEN")
+
+	argsStr := strings.Join(gotArgv, " ")
+	for _, a := range gotArgv {
+		if strings.Contains(a, "tok-SECRET") {
+			t.Fatalf("token leaked into argv: %q", a)
+		}
+	}
+	// bare -e (no =value) for the token — value inherited from the process env.
+	if !containsBareEnv(gotArgv, "AFM_BROWSER_TRANSPORT_TOKEN") {
+		t.Fatalf("expected bare -e AFM_BROWSER_TRANSPORT_TOKEN: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "AFM_BROWSER_APP_URL=http://127.0.0.1:54321") {
+		t.Fatalf("expected app URL baked into env before start: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "AFM_BROWSER_ENDPOINT=host.docker.internal:5001") {
+		t.Fatalf("expected endpoint env: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "AFM_BROWSER_EPOCH=ep1") {
+		t.Fatalf("expected epoch env: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "-p 127.0.0.1:54321:18080") {
+		t.Fatalf("expected fixed loopback app publish 127.0.0.1:54321:18080: %s", argsStr)
+	}
+}
+
+// containsBareEnv reports whether argv has `-e NAME` with NAME as its own token
+// (no "=value"), i.e. the value is inherited from the process env.
+func containsBareEnv(argv []string, name string) bool {
+	for i := 0; i < len(argv)-1; i++ {
+		if argv[i] == "-e" && argv[i+1] == name {
+			return true
+		}
+	}
+	return false
+}

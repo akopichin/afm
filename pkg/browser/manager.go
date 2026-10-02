@@ -258,6 +258,18 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// NewEpoch returns a host-generated random session epoch ("b-"+8 hex). It is a
+// per-process value, NOT a run id: sessions/Chrome never outlive the process that
+// created the manager, so a random epoch is both sufficient and the only value
+// available at reexec time (the run is resolved later, inside the container).
+func NewEpoch() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("browser: epoch: %w", err)
+	}
+	return "b-" + hex.EncodeToString(b), nil
+}
+
 // parseSessionPath parses /session/<epoch>/<stageID>.
 func parseSessionPath(p string) (epoch, stageID string, ok bool) {
 	rest := strings.TrimPrefix(p, "/session/")

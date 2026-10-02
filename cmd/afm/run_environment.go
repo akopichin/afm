@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
@@ -106,7 +107,16 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 	if port > 0 && cfg.Server.IsOpenBrowser() {
 		launchHostBrowserOpener(port)
 	}
-	return docker.ReExec(docker.ReExecConfig{
+
+	// Managed browser capability: start the host-side manager NOW (it must be
+	// serving while `docker run` blocks) and forward the transport to the container.
+	_, browserDesc, browserCleanup, berr := startBrowser(cfg, browser.BrowserModeDocker)
+	if berr != nil {
+		return berr
+	}
+	defer browserCleanup()
+
+	rc := docker.ReExecConfig{
 		Image:         cfg.Docker.GetImage(),
 		ProjectDir:    absDir,
 		Commands:      docker.ScanCommands(f, cfg.Client.Command, generatedForMount),
@@ -124,7 +134,17 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		// Боковой агент дашборда включён всегда, когда поднят дашборд — публикуем
 		// порт только на loopback.
 		SideAgentEnabled: port > 0,
-	})
+	}
+	if browserDesc != nil {
+		rc.BrowserEnabled = true
+		rc.BrowserToken = browserDesc.Token
+		rc.BrowserEndpoint = browserDesc.Endpoint
+		rc.BrowserEpoch = browserDesc.Epoch
+		rc.BrowserAppURL = browserDesc.AppURL
+		rc.BrowserAppContainerPort = cfg.Browser.GetAppPort()
+		rc.BrowserAppHostPort = portFromURL(browserDesc.AppURL)
+	}
+	return docker.ReExec(rc)
 }
 
 // buildWrapperSpec translates a used agent recipe into its generated wrapper.

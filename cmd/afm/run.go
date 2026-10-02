@@ -16,6 +16,7 @@ import (
 
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
@@ -121,6 +122,22 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		return err
 	}
 	defer env.Close()
+
+	// Managed browser capability. In the container the manager runs on the host —
+	// we only rebuild the descriptor from transport env; natively we own the
+	// manager here for the run's lifetime.
+	var browserDesc *browser.Descriptor
+	if config.ReExecedIntoContainer() {
+		browserDesc = descriptorFromEnv(true)
+	} else {
+		_, desc, browserCleanup, berr := startBrowser(cfg, browser.BrowserModeNative)
+		if berr != nil {
+			return berr
+		}
+		defer browserCleanup()
+		browserDesc = desc
+	}
+
 	stages := normalizeInteractiveStages(f.Stages, cfg.Server.GetPort() > 0)
 	runID := filepath.Base(runDir)
 	resumed := store.Snapshot().LastSeq > 0
@@ -142,24 +159,25 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 
 	ws := openRunWorkspace(cfg.Server.GetPort() > 0)
 	orchOpts := orchestrator.Options{
-		RunDir:          runDir,
-		Stages:          stages,
-		Store:           store,
-		Config:          cfg,
-		Prompts:         prompts,
-		WrapperDir:      env.WrapperDir,
-		GeneratedAgents: env.GeneratedAgents,
-		GlobalPrompt:    f.Prompt,
-		RootDir:         env.RootDir,
-		RequireApproval: requireApproval,
-		Debug:           debugEnabled,
-		Memory:          f.Memory,
-		MemoryDir:       env.MemoryDir,
-		Accounting:      acct,
-		FlowName:        f.Name,
-		RunID:           runID,
-		Resumed:         resumed,
-		Hooks:           hooksDisp,
+		RunDir:            runDir,
+		Stages:            stages,
+		Store:             store,
+		Config:            cfg,
+		Prompts:           prompts,
+		WrapperDir:        env.WrapperDir,
+		GeneratedAgents:   env.GeneratedAgents,
+		GlobalPrompt:      f.Prompt,
+		RootDir:           env.RootDir,
+		RequireApproval:   requireApproval,
+		Debug:             debugEnabled,
+		Memory:            f.Memory,
+		MemoryDir:         env.MemoryDir,
+		Accounting:        acct,
+		FlowName:          f.Name,
+		RunID:             runID,
+		Resumed:           resumed,
+		Hooks:             hooksDisp,
+		BrowserDescriptor: browserDesc,
 	}
 	if ws != nil {
 		orchOpts.ResolveFile = workspaceResolveFile(ws)

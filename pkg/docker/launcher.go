@@ -71,6 +71,20 @@ type ReExecConfig struct {
 	// контейнер после re-exec строит ТОТ ЖЕ combined из тех же слоёв и читает
 	// значения из транспорта по (hookIdx,varIdx), а не из secrets.env/файлов.
 	Hooks []lifecyclehooks.RegisteredHook
+
+	// Managed browser capability transport (см. cmd/afm/run_browser.go). Менеджер
+	// поднят на ХОСТЕ до docker run; контейнерный afm достаёт endpoint/token/epoch/
+	// app-url из env и строит per-stage descriptor. Токен уходит bare `-e` (значение
+	// из env afm-процесса, не в argv — не видно в ps aux), как hook-секреты.
+	BrowserEnabled bool
+	BrowserToken   string // → bare -e AFM_BROWSER_TRANSPORT_TOKEN (секрет)
+	BrowserEndpoint string // host.docker.internal:<managerPort> → -e AFM_BROWSER_ENDPOINT
+	BrowserEpoch    string // host-generated epoch → -e AFM_BROWSER_EPOCH
+	// Фиксированная публикация порта тестируемого приложения: host-порт выбран на
+	// хосте ДО docker run (app-url известен заранее), -p 127.0.0.1:<host>:<container>.
+	BrowserAppHostPort      int
+	BrowserAppContainerPort int
+	BrowserAppURL           string // http://127.0.0.1:<hostPort> → -e AFM_BROWSER_APP_URL (не секрет)
 }
 
 // UsesLifecycleSecrets сообщает, объявляет ли хоть один хук из combined
@@ -504,6 +518,26 @@ func ReExec(cfg ReExecConfig) error {
 				_ = os.Setenv(name, val) // процесс далее exec'нет docker; утечки в argv нет
 				args = append(args, "-e", name)
 			}
+		}
+	}
+
+	// Managed browser capability: публикуем фиксированный app-порт на loopback и
+	// передаём транспорт. Токен — bare `-e` (значение из env afm, не в argv);
+	// endpoint/epoch/app-url — не секреты, валюем. Менеджер уже слушает на хосте.
+	if cfg.BrowserEnabled {
+		if cfg.BrowserAppHostPort > 0 && cfg.BrowserAppContainerPort > 0 {
+			args = append(args, "-p", fmt.Sprintf("127.0.0.1:%d:%d", cfg.BrowserAppHostPort, cfg.BrowserAppContainerPort))
+		}
+		_ = os.Setenv("AFM_BROWSER_TRANSPORT_TOKEN", cfg.BrowserToken) // процесс далее exec'нет docker; утечки в argv нет
+		args = append(args, "-e", "AFM_BROWSER_TRANSPORT_TOKEN")
+		if cfg.BrowserEndpoint != "" {
+			args = append(args, "-e", "AFM_BROWSER_ENDPOINT="+cfg.BrowserEndpoint)
+		}
+		if cfg.BrowserEpoch != "" {
+			args = append(args, "-e", "AFM_BROWSER_EPOCH="+cfg.BrowserEpoch)
+		}
+		if cfg.BrowserAppURL != "" {
+			args = append(args, "-e", "AFM_BROWSER_APP_URL="+cfg.BrowserAppURL)
 		}
 	}
 
