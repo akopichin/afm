@@ -262,19 +262,22 @@ func TestSideAgent_OversizeBodyIsMessageTooLarge(t *testing.T) {
 	}
 }
 
-func TestSideAgent_ListenAddrMatrix(t *testing.T) {
+func TestDashboard_ListenAddrMatrix(t *testing.T) {
 	cases := []struct {
-		enabled, inContainer bool
-		want                 string
+		name        string
+		inContainer bool
+		want        string
 	}{
-		{true, false, "127.0.0.1:8900"}, // native host: loopback only
-		{true, true, ":8900"},           // in-container: must be 0.0.0.0 for docker -p
-		{false, false, ":8900"},         // side-agent off: preserve today's behavior
-		{false, true, ":8900"},
+		// The dashboard serves unauthenticated mutating stage/flow APIs, so on a
+		// native host it ALWAYS binds loopback — independent of the side-agent.
+		{"native host", false, "127.0.0.1:8900"},
+		// In-container it must be 0.0.0.0 so the host `docker -p` can reach it;
+		// the host side publishes to 127.0.0.1 (see launcher).
+		{"in container", true, ":8900"},
 	}
 	for _, tc := range cases {
-		if got := sideAgentListenAddr(8900, tc.enabled, tc.inContainer); got != tc.want {
-			t.Errorf("sideAgentListenAddr(8900,%v,%v) = %q, want %q", tc.enabled, tc.inContainer, got, tc.want)
+		if got := dashboardListenAddr(8900, tc.inContainer); got != tc.want {
+			t.Errorf("%s: dashboardListenAddr(8900,%v) = %q, want %q", tc.name, tc.inContainer, got, tc.want)
 		}
 	}
 }

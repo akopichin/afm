@@ -3,6 +3,24 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-11
+
+### Improvement: disable the dashboard side agent with a toggle
+
+The dashboard [side agent](https://github.com/akopichin/afm/blob/main/docs/dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+can now be turned off. It stays ON by default; disable it with `side_agent.enabled: false`
+in `config.yaml`, `AFM_SIDEAGENT=0` for a single run, or `side_agent: false` at the top
+of `flow.yaml`. Precedence is **flow `side_agent` > env `AFM_SIDEAGENT` > config
+`side_agent.enabled` > default ON** (mirroring the file-browser toggle). When off, the
+manager is never created: the `/api/side-agent*` routes are not registered, the
+`side_agent` capability reports `false`, and the header **Side agent** button is hidden.
+
+The dashboard's loopback boundary no longer depends on this (or the file-browser) toggle.
+Because the dashboard exposes unauthenticated mutating stage/flow APIs, it now **always**
+binds to `127.0.0.1` on a native host and is **always** published loopback-only
+(`-p 127.0.0.1:<port>:<port>`) in Docker mode — turning the side agent or file browser off
+never widens the publish. Use an SSH tunnel for remote access.
+
 ## 2026-10-02
 
 ### Improvement: managed browser (Chrome DevTools) for live runs

@@ -343,8 +343,11 @@ type Flow struct {
 	RootDir string       `yaml:"root_dir,omitempty"`
 	Memory  MemoryConfig `yaml:"memory,omitempty"`
 	// Hooks — lifecycle-хуки флоу-слоя: получают события всех стадий.
-	Hooks  []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
-	Stages []Stage               `yaml:"stages"`
+	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
+	// SideAgent, when set, overrides config/env for the dashboard side-agent
+	// (nil = no opinion → defer to AFM_SIDEAGENT / config). Highest precedence.
+	SideAgent *bool   `yaml:"side_agent,omitempty"`
+	Stages    []Stage `yaml:"stages"`
 }
 
 // MemoryEnabled сообщает, включена ли agent-память для этого флоу.

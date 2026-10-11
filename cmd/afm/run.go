@@ -199,12 +199,16 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// Боковой агент дашборда поднимается всегда, когда поднят дашборд (инъекция в
-	// server.Config делает capability живым; отдельного конфиг-флага нет). Жёсткий
-	// сбой открытия журнала не валит ран — просто отключает боковой агент.
+	// Боковой агент дашборда поднимается, когда поднят дашборд И не выключен
+	// переключателем (flow.side_agent > AFM_SIDEAGENT > config side_agent.enabled >
+	// по умолчанию ВКЛ). Когда выключен — менеджер не создаётся, side.service()
+	// отдаёт nil-интерфейс: маршруты /api/side-agent* не регистрируются, capability
+	// гаснет, фронтенд-панель прячется. Жёсткий сбой открытия журнала не валит ран —
+	// просто отключает боковой агент. Loopback-граница от этого НЕ зависит (см.
+	// dashboardListenAddr / launcher — она безусловна из-за мутирующих stage/flow API).
 	var side *sideAgentRuntime
 	var sideDrained bool
-	if cfg.Server.GetPort() > 0 {
+	if cfg.Server.GetPort() > 0 && sideAgentEnabled(cfg, f) {
 		side, err = startSideAgent(runID, cfg, env)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: side agent disabled: %v\n", err)

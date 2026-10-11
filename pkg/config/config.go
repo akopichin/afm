@@ -328,6 +328,22 @@ type DockerFileBrowserConfig struct {
 	Enabled *bool `yaml:"enabled"` // nil = включено по умолчанию; env AFM_FILE_BROWSER имеет приоритет
 }
 
+// SideAgentConfig gates the dashboard side-agent. nil Enabled = ON by default;
+// env AFM_SIDEAGENT wins over this field.
+type SideAgentConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled сообщает, включён ли боковой агент дашборда.
+// Приоритет: env AFM_SIDEAGENT > config > по умолчанию ВКЛЮЧЕНО.
+// Зеркалит DockerFileBrowserConfig.IsEnabled.
+func (c SideAgentConfig) IsEnabled() bool {
+	if v, set := envBool("AFM_SIDEAGENT"); set {
+		return v
+	}
+	return c.Enabled == nil || *c.Enabled
+}
+
 // IsEnabled сообщает, включён ли файловый браузер.
 // Приоритет: env AFM_FILE_BROWSER > config > по умолчанию ВКЛЮЧЕНО.
 // Только явный enabled: false (или AFM_FILE_BROWSER=0) выключает его.
@@ -530,6 +546,9 @@ type Config struct {
 	// Browser — managed Chrome DevTools browser capability (afm_chrome MCP).
 	// nil/auto = offered on a supported host; per-stage opt-out via flow.Stage.Browser.
 	Browser BrowserConfig `yaml:"browser"`
+	// SideAgent gates the dashboard side-agent. nil/true = ON by default;
+	// explicit false / AFM_SIDEAGENT=0 disables it. flow.yaml side_agent overrides.
+	SideAgent SideAgentConfig `yaml:"side_agent,omitempty"`
 }
 
 // Default returns the built-in default configuration.
@@ -721,6 +740,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Docker.FileBrowser.Enabled != nil {
 		dst.Docker.FileBrowser.Enabled = overlay.Docker.FileBrowser.Enabled
+	}
+	if overlay.SideAgent.Enabled != nil {
+		dst.SideAgent.Enabled = overlay.SideAgent.Enabled
 	}
 	if overlay.Docker.AutoShim != nil {
 		dst.Docker.AutoShim = overlay.Docker.AutoShim

@@ -35,9 +35,21 @@
       "items": { "$ref": "#/definitions/lifecycleHook" }
     },
     "verify": { "$ref": "#/definitions/verify" },
-    "browser": { "$ref": "#/definitions/browser" }
+    "browser": { "$ref": "#/definitions/browser" },
+    "side_agent": { "$ref": "#/definitions/sideAgent" }
   },
   "definitions": {
+    "sideAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The dashboard side-agent (chat helper). Precedence: flow.yaml side_agent > env AFM_SIDEAGENT > this > default ON.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the side-agent. ON by default; explicit false / env AFM_SIDEAGENT=0 disables it."
+        }
+      }
+    },
     "browser": {
       "type": "object",
       "additionalProperties": false,

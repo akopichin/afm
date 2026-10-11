@@ -1717,3 +1717,66 @@ func TestVerifyReviewPatience_NegativeRejected(t *testing.T) {
 		t.Errorf("error = %q, want it to name verify.review_patience", err.Error())
 	}
 }
+
+func TestSideAgent_IsEnabled_Default(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name    string
+		enabled *bool
+		want    bool
+	}{
+		{name: "nil defaults ON", enabled: nil, want: true},
+		{name: "explicit false", enabled: &f, want: false},
+		{name: "explicit true", enabled: &tr, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_SIDEAGENT", "") // treated as unset (envBool: empty => not set)
+			c := config.SideAgentConfig{Enabled: tc.enabled}
+			if got := c.IsEnabled(); got != tc.want {
+				t.Errorf("IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSideAgent_EnvOverridesConfig(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name    string
+		env     string // "" = не задавать (unset)
+		enabled *bool
+		want    bool
+	}{
+		{name: "env off overrides config on", env: "0", enabled: &tr, want: false},
+		{name: "env off overrides config nil", env: "0", enabled: nil, want: false},
+		{name: "env on overrides config off", env: "1", enabled: &f, want: true},
+		{name: "env true, config off", env: "true", enabled: &f, want: true},
+		{name: "env false, config nil", env: "false", enabled: nil, want: false},
+		{name: "env unset falls back to config off", env: "", enabled: &f, want: false},
+		{name: "env unset falls back to config nil (default ON)", env: "", enabled: nil, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_SIDEAGENT", tc.env)
+			c := config.SideAgentConfig{Enabled: tc.enabled}
+			if got := c.IsEnabled(); got != tc.want {
+				t.Errorf("IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSideAgent_ProjectOverridesGlobal(t *testing.T) {
+	globalDir := t.TempDir()
+	projectDir := t.TempDir()
+	writeYAML(t, globalDir, "config.yaml", "side_agent:\n  enabled: true\n")
+	writeYAML(t, projectDir, "config.yaml", "side_agent:\n  enabled: false\n")
+	cfg, err := config.LoadFrom(globalDir, projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SideAgent.Enabled == nil || *cfg.SideAgent.Enabled {
+		t.Errorf("project side_agent.enabled: false should override global true, got %v", cfg.SideAgent.Enabled)
+	}
+}

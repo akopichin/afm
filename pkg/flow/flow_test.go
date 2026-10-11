@@ -1314,3 +1314,62 @@ stages: [{id: s1, script: "true", hooks: [{id: stagehook, events: all, command: 
 		t.Fatalf("different ids must coexist: %v", err)
 	}
 }
+
+func TestParse_SideAgent_Absent(t *testing.T) {
+	const yaml = `
+name: f
+description: "no side_agent"
+stages:
+  - id: s
+    name: "S"
+    description: "d"
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.SideAgent != nil {
+		t.Errorf("side_agent absent: got %v, want nil", *f.SideAgent)
+	}
+}
+
+func TestParse_SideAgent_False(t *testing.T) {
+	const yaml = `
+name: f
+description: "side_agent false"
+side_agent: false
+stages:
+  - id: s
+    name: "S"
+    description: "d"
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.SideAgent == nil || *f.SideAgent {
+		t.Errorf("side_agent false: got %v, want pointer to false", f.SideAgent)
+	}
+}
+
+func TestParse_SideAgent_True(t *testing.T) {
+	const yaml = `
+name: f
+description: "side_agent true"
+side_agent: true
+stages:
+  - id: s
+    name: "S"
+    description: "d"
+    agents: [planning, implementation]
+`
+	f, err := flow.ParseFile(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.SideAgent == nil || !*f.SideAgent {
+		t.Errorf("side_agent true: got %v, want pointer to true", f.SideAgent)
+	}
+}

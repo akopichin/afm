@@ -80,11 +80,33 @@ project, or run a quick command-style exchange *without* touching the run.
   `context_limit` error (your history and draft are preserved), never a silent drop of
   older turns.
 
-The side agent is available whenever the dashboard is up; there is no separate config
-flag to enable it. Because it runs an arbitrary agent command with full project
-access, its endpoints require a trusted local client: on a native host afm binds the
-dashboard to `127.0.0.1`, and in Docker mode the port is published loopback-only (see
-[Docker](docker.md)). Remote/authenticated access is not supported in this version.
+The side agent is on by default whenever the dashboard is up. Disable it with a
+toggle resolved **flow `side_agent` > env `AFM_SIDEAGENT` > config
+`side_agent.enabled` > default ON**:
+
+```yaml
+# .afm/config.yaml
+side_agent:
+  enabled: false        # turn the side agent off for this project
+```
+
+```yaml
+# flow.yaml (top level) — overrides config and env for this flow
+side_agent: true
+```
+
+`AFM_SIDEAGENT=0` disables it for a single run (and `=1` re-enables), overriding the
+config but not an explicit `side_agent` in `flow.yaml`. When it is off the manager is
+never created: the `/api/side-agent*` routes are not registered, the `side_agent`
+capability reports `false`, and the header **Side agent** button is hidden.
+
+Because it runs an arbitrary agent command with full project access, its endpoints
+require a trusted local client. This loopback boundary does **not** depend on the
+toggle: on a native host afm **always** binds the dashboard to `127.0.0.1`, and in
+Docker mode the port is **always** published loopback-only (see [Docker](docker.md)) —
+the dashboard also exposes unauthenticated mutating stage/flow APIs, so the bind is
+unconditional regardless of whether the side agent or file browser is enabled.
+Remote/authenticated access is not supported in this version.
 
 ## Themes
 

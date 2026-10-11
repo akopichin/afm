@@ -31,6 +31,10 @@ server:
 # prompts_dir: .afm/prompts/  # custom prompt templates
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
+# side_agent:
+#   enabled: false          # dashboard side agent; ON by default. env AFM_SIDEAGENT overrides,
+#                           # and flow.yaml side_agent overrides both. See dashboard.md
+
 accounting:
   enabled: false            # hide cost display everywhere (dashboard + afm check/report);
                             # ON by default, env AFM_ACCOUNTING overrides. Data is still

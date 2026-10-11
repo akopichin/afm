@@ -234,7 +234,7 @@ func deriveSideAgentState(history []sideagent.Event) string {
 }
 
 // sameOriginOK — defence-in-depth проверка Origin для мутирующих POST'ов. Это НЕ
-// авторизация: реальная граница — loopback-bind (инвариант 9, sideAgentListenAddr).
+// авторизация: реальная граница — loopback-bind (инвариант 9, dashboardListenAddr).
 // Отсутствующий или чужой Origin отклоняется; одинаковый host с r.Host проходит.
 func sameOriginOK(r *http.Request) bool {
 	origin := r.Header.Get("Origin")

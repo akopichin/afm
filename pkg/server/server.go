@@ -287,24 +287,24 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/", s.serveStatic)
 
 	s.httpSrv = &http.Server{
-		Addr:              sideAgentListenAddr(cfg.Port, cfg.SideAgent != nil, config.ReExecedIntoContainer()),
+		Addr:              dashboardListenAddr(cfg.Port, config.ReExecedIntoContainer()),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
 }
 
-// sideAgentListenAddr выбирает адрес прослушивания (инвариант 9). Когда боковой
-// агент включён на нативном хосте (не в контейнере), API бокового агента даёт
-// команды реальному агенту — bind'имся на loopback (127.0.0.1), чтобы сервер не
-// был доступен из сети. В контейнере bind обязан быть 0.0.0.0 (":port"), иначе
-// хостовый `docker -p` не достучится до слушателя; при выключенном боковом
-// агенте сохраняем прежнее поведение (все интерфейсы).
-func sideAgentListenAddr(port int, enabled, inContainer bool) string {
-	if enabled && !inContainer {
-		return fmt.Sprintf("127.0.0.1:%d", port)
+// dashboardListenAddr выбирает адрес прослушивания (инвариант 9). Dashboard
+// отдаёт неаутентифицированные мутирующие stage/flow API (approve/revise/note/
+// button/retry/dialog), поэтому на нативном хосте всегда bind'имся только на
+// loopback (127.0.0.1) — независимо от бокового агента. В контейнере bind обязан
+// быть 0.0.0.0 (":port"), иначе хостовый `docker -p` не достучится до слушателя;
+// host-side публикация при этом всё равно уходит на 127.0.0.1 (см. launcher).
+func dashboardListenAddr(port int, inContainer bool) string {
+	if inContainer {
+		return fmt.Sprintf(":%d", port)
 	}
-	return fmt.Sprintf(":%d", port)
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
 // builtinSkinName нормализует Theme до имени встроенного скина: "goga",

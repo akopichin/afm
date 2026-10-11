@@ -56,13 +56,6 @@ type ReExecConfig struct {
 	// закодированный и передаваемый в контейнер только когда FileBrowserEnabled
 	// и Roots непусты.
 	FileRoots FileRootManifest
-	// SideAgentEnabled — поднят ли боковой агент дашборда. Как и file browser,
-	// он открывает в dashboard API доступ к агенту с правами на запись в проект,
-	// поэтому публикация dashboard-порта тоже должна уходить только на loopback
-	// (127.0.0.1), а не наружу хоста. Листенер внутри контейнера остаётся :port
-	// (server.go решает это по ReExecedIntoContainer) — меняется только host-side
-	// публикация. Боковой агент включён всегда, когда поднят дашборд.
-	SideAgentEnabled bool
 
 	// Hooks — итоговый список lifecycle-хуков (Combine global+project+flow+stage
 	// слоёв, с учётом override по id), собранный ВЫЗЫВАЮЩИМ КОДОМ (cmd/afm/run.go)
@@ -351,16 +344,12 @@ func ReExec(cfg ReExecConfig) error {
 	}
 
 	// Dashboard: пробрасываем порт на хост, иначе UI недоступен извне контейнера.
-	// С включённым file browser (доступ на чтение к содержимому смонтированных
-	// корней через dashboard API) или боковым агентом (агент с правами на запись
-	// через dashboard API) публикуем порт только на loopback — иначе проект был бы
-	// доступен с любого хоста в той же сети.
+	// Dashboard отдаёт неаутентифицированные мутирующие stage/flow API (а также,
+	// опц., file browser на чтение смонтированных корней), поэтому порт публикуется
+	// ТОЛЬКО на loopback (127.0.0.1) — иначе проект был бы доступен с любого хоста в
+	// той же сети. Граница не зависит от фичефлагов.
 	if cfg.DashboardPort > 0 {
-		needLoopback := (cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0) || cfg.SideAgentEnabled
-		bind := fmt.Sprintf("%d:%d", cfg.DashboardPort, cfg.DashboardPort)
-		if needLoopback {
-			bind = fmt.Sprintf("127.0.0.1:%d:%d", cfg.DashboardPort, cfg.DashboardPort)
-		}
+		bind := fmt.Sprintf("127.0.0.1:%d:%d", cfg.DashboardPort, cfg.DashboardPort)
 		args = append(args, "-p", bind)
 	}
 
@@ -432,6 +421,13 @@ func ReExec(cfg ReExecConfig) error {
 	// бы стоимость, а AFM_ACCOUNTING=1 не мог бы переопределить config внутри.
 	if os.Getenv("AFM_ACCOUNTING") != "" {
 		args = append(args, "-e", "AFM_ACCOUNTING="+os.Getenv("AFM_ACCOUNTING"))
+	}
+	// AFM_SIDEAGENT — не секрет, передаём значением: переключатель бокового агента
+	// резолвится ВНУТРИ контейнера (config.SideAgentConfig.IsEnabled там), поэтому
+	// host-set AFM_SIDEAGENT=0/1 должен доехать до контейнера, чтобы переопределить
+	// смонтированный config. Та же логика, что у AFM_ACCOUNTING выше.
+	if os.Getenv("AFM_SIDEAGENT") != "" {
+		args = append(args, "-e", "AFM_SIDEAGENT="+os.Getenv("AFM_SIDEAGENT"))
 	}
 	// File browser: манифест корней (не секрет) передаём значением — контейнер
 	// читает его один раз при старте, чтобы знать, какие пути показывать в UI.

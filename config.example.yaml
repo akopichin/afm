@@ -205,15 +205,22 @@ client:
 #   # empty/unset → the config decides (enabled by default). The decision is made on
 #   # the host before Docker re-exec.
 #   #
-#   # IMPORTANT: a dashboard-enabled Docker run publishes the dashboard port on
+#   # IMPORTANT: a Docker run with a dashboard ALWAYS publishes the dashboard port on
 #   # loopback only (-p 127.0.0.1:<port>:<port>) instead of 0.0.0.0, so it is not
-#   # reachable from the LAN. This holds whenever a locally-trusted surface is exposed:
-#   # the file browser (on by default) OR the side agent, which is always present when
-#   # the dashboard is up. Because the side agent is always on, turning the file browser
-#   # off does NOT restore a 0.0.0.0 publish. For remote access use an SSH tunnel to
-#   # loopback.
+#   # reachable from the LAN. The dashboard exposes unauthenticated mutating stage/flow
+#   # APIs (plus, optionally, the file browser and the side agent), so this boundary is
+#   # unconditional — disabling those features does NOT restore a 0.0.0.0 publish. For
+#   # remote access use an SSH tunnel to loopback.
 #   # file_browser:
 #   #   enabled: false   # opt-out; ON by default (env AFM_FILE_BROWSER overrides)
+
+# Dashboard side agent — the free-form chat alongside the run (see docs/dashboard.md).
+# ON by default. Priority: flow.yaml side_agent > env AFM_SIDEAGENT > config > default true.
+# AFM_SIDEAGENT=1/true force-enables over the config, =0/false force-disables.
+# When off, the /api/side-agent* routes are not registered, the capability reports
+# false, and the header button is hidden. This does NOT change the loopback bind above.
+# side_agent:
+#   enabled: false
 
 # Accounting DISPLAY switch (cost/usage).
 # Controls only whether cost is SHOWN: the dashboard cost tile/tab/rail, the

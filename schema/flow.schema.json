@@ -36,6 +36,10 @@
       "description": "Lifecycle hooks: observer commands receiving event JSON on stdin (flow layer, gets all stages' events).",
       "items": { "$ref": "#/definitions/lifecycleHook" }
     },
+    "side_agent": {
+      "type": "boolean",
+      "description": "Enable the dashboard side-agent for this flow. Highest precedence: overrides env AFM_SIDEAGENT and config side_agent.enabled. Omitted = defer to env/config (default ON)."
+    },
     "stages": {
       "type": "array",
       "description": "The stages of the flow.",

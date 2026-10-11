@@ -96,7 +96,13 @@ stages:
 
 `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`,
 `root_dir` (project root = agents' working directory, see below),
-`memory` ([agent-memory config](agent-memory.md)), `stages`.
+`memory` ([agent-memory config](agent-memory.md)), `hooks`
+([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `stages`.
+
+`side_agent: true|false` overrides the dashboard
+[side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) toggle for
+this flow, taking precedence over `AFM_SIDEAGENT` and `config.yaml`. Omit it to defer
+to those (default ON).
 
 ### `root_dir` — the project root for agents
 

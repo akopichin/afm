@@ -11,10 +11,20 @@ import (
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/secrets"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/sideagent"
 )
+
+// sideAgentEnabled resolves the effective side-agent toggle:
+// flow (if set) > env AFM_SIDEAGENT > config side_agent.enabled > default ON.
+func sideAgentEnabled(cfg config.Config, f *flow.Flow) bool {
+	if f != nil && f.SideAgent != nil {
+		return *f.SideAgent
+	}
+	return cfg.SideAgent.IsEnabled()
+}
 
 // sideAgentContextByteLimit — явный верхний предел размера собранного промпта
 // одного хода бокового агента (история разговора + текущее сообщение). Нужен,
@@ -43,8 +53,10 @@ type sideAgentRuntime struct {
 
 // startSideAgent поднимает боковой агент дашборда. Журнал кладётся под afm-root
 // .afm (база fmDir()), keyed по runID — namespace анкорится к afm-root
-// независимо от flow.root_dir (то же правило, что у AFM_STAGE_DIR). Боковой агент
-// включён всегда, когда поднят дашборд (отдельного конфиг-флага нет).
+// независимо от flow.root_dir (то же правило, что у AFM_STAGE_DIR). Вызывается
+// только когда дашборд поднят И переключатель не выключен (гейт sideAgentEnabled
+// у вызывающего: flow.side_agent > AFM_SIDEAGENT > config side_agent.enabled >
+// по умолчанию ВКЛ).
 //
 // Жёсткий сбой открытия журнала (store == nil) возвращается ошибкой — вызывающий
 // решает, продолжать ли ран без бокового агента (он не должен ронять флоу).

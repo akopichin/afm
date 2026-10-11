@@ -350,7 +350,7 @@ func TestReExec_BuildsDockerArgs(t *testing.T) {
 
 	checks := []string{
 		"docker run --rm",
-		"-p 9876:9876",
+		"-p 127.0.0.1:9876:9876", // dashboard всегда публикуется только на loopback
 		"-v /home/user/myproject:/home/user/myproject",
 		":/home/afm/.claude", // хост-путь зависит от ОС, проверяем контейнерную часть (= HOME контейнера)
 		":/home/afm/.afm",
@@ -470,6 +470,53 @@ func TestReExec_ForwardsAccounting(t *testing.T) {
 	t.Run("unset forwards nothing", func(t *testing.T) {
 		if got := run(t, "", false); strings.Contains(got, "AFM_ACCOUNTING") {
 			t.Errorf("AFM_ACCOUNTING must not appear when unset: %s", got)
+		}
+	})
+}
+
+// TestReExec_ForwardsSideAgentEnv verifies AFM_SIDEAGENT reaches the container by
+// value (not a secret): the toggle is resolved INSIDE the container, so a
+// host-set AFM_SIDEAGENT=0/1 must carry through to override the mounted config.
+func TestReExec_ForwardsSideAgentEnv(t *testing.T) {
+	run := func(t *testing.T, envVal string, setEnv bool) string {
+		var capturedArgs []string
+		docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+			capturedArgs = argv
+			return nil
+		})
+		defer docker.ResetExecFunc()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		if setEnv {
+			t.Setenv("AFM_SIDEAGENT", envVal)
+		} else {
+			_ = os.Unsetenv("AFM_SIDEAGENT")
+		}
+
+		if err := docker.ReExec(docker.ReExecConfig{
+			Image:      "akopichin/afm:latest",
+			ProjectDir: "/tmp/proj",
+			ExtraArgs:  []string{"run", "flow.yaml"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(capturedArgs, " ")
+	}
+
+	for _, v := range []string{"0", "1"} {
+		t.Run("forwards "+v, func(t *testing.T) {
+			if got := run(t, v, true); !strings.Contains(got, "-e AFM_SIDEAGENT="+v) {
+				t.Errorf("AFM_SIDEAGENT=%s not forwarded by value: %s", v, got)
+			}
+		})
+	}
+	t.Run("unset forwards nothing", func(t *testing.T) {
+		if got := run(t, "", false); strings.Contains(got, "AFM_SIDEAGENT") {
+			t.Errorf("AFM_SIDEAGENT must not appear when unset: %s", got)
 		}
 	})
 }
@@ -799,10 +846,12 @@ func TestReExec_FileBrowserWiring(t *testing.T) {
 	}
 }
 
-// TestReExec_NoFileBrowser_KeepsOpenPublishNoEnv: без file browser (или с
-// пустым манифестом) поведение не меняется — открытая публикация порта, без
-// AFM_DOCKER_FILE_ROOTS.
-func TestReExec_NoFileBrowser_KeepsOpenPublishNoEnv(t *testing.T) {
+// TestReExec_DashboardAlwaysLoopback: даже без file browser и без прочих фич
+// dashboard-порт публикуется только на loopback (127.0.0.1) — dashboard отдаёт
+// неаутентифицированные мутирующие stage/flow API, поэтому не должен быть открыт
+// наружу хоста. Это регрессионный guard: раньше публикация уходила на все
+// интерфейсы, когда боковой агент был выключен.
+func TestReExec_DashboardAlwaysLoopback(t *testing.T) {
 	var capturedArgs []string
 	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
 		capturedArgs = argv
@@ -820,41 +869,6 @@ func TestReExec_NoFileBrowser_KeepsOpenPublishNoEnv(t *testing.T) {
 		Image: "img", ProjectDir: "/work/afm", DashboardPort: 8080,
 		ExtraArgs:          []string{"run", "flow.yaml"},
 		FileBrowserEnabled: false,
-	}
-	if err := docker.ReExec(cfg); err != nil {
-		t.Fatalf("ReExec: %v", err)
-	}
-	joined := strings.Join(capturedArgs, " ")
-	if !strings.Contains(joined, "-p 8080:8080") || strings.Contains(joined, "127.0.0.1") {
-		t.Errorf("expected open publish, got: %s", joined)
-	}
-	if hasEnvKey(capturedArgs, docker.FileRootsEnvVar) {
-		t.Errorf("did not expect file-roots env, got: %s", joined)
-	}
-}
-
-// TestReExec_SideAgentLoopback: боковой агент (без file browser) тоже уводит
-// публикацию dashboard-порта на loopback — через dashboard API доступен агент с
-// правами на запись в проект, порт не должен быть открыт наружу хоста.
-func TestReExec_SideAgentLoopback(t *testing.T) {
-	var capturedArgs []string
-	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
-		capturedArgs = argv
-		return nil
-	})
-	defer docker.ResetExecFunc()
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-
-	cfg := docker.ReExecConfig{
-		Image: "img", ProjectDir: "/work/afm", DashboardPort: 8080,
-		ExtraArgs:          []string{"run", "flow.yaml"},
-		FileBrowserEnabled: false,
-		SideAgentEnabled:   true,
 	}
 	if err := docker.ReExec(cfg); err != nil {
 		t.Fatalf("ReExec: %v", err)
@@ -863,7 +877,6 @@ func TestReExec_SideAgentLoopback(t *testing.T) {
 	if !strings.Contains(joined, "-p 127.0.0.1:8080:8080") {
 		t.Errorf("expected loopback publish, got: %s", joined)
 	}
-	// Боковой агент не задействует file-roots транспорт.
 	if hasEnvKey(capturedArgs, docker.FileRootsEnvVar) {
 		t.Errorf("did not expect file-roots env, got: %s", joined)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/sideagent"
 )
 
@@ -268,4 +269,34 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func TestSideAgentEnabled_Precedence(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name string
+		flow *bool  // flow.SideAgent
+		cfg  *bool  // cfg.SideAgent.Enabled
+		env  string // "" = unset
+		want bool
+	}{
+		{name: "all unset → default ON", flow: nil, cfg: nil, env: "", want: true},
+		{name: "config off, no env/flow", flow: nil, cfg: &f, env: "", want: false},
+		{name: "env on overrides config off", flow: nil, cfg: &f, env: "1", want: true},
+		{name: "flow off overrides env on", flow: &f, cfg: nil, env: "1", want: false},
+		{name: "flow on overrides env off + config off", flow: &tr, cfg: &f, env: "0", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_SIDEAGENT", tc.env)
+			cfg := config.Config{SideAgent: config.SideAgentConfig{Enabled: tc.cfg}}
+			var fl *flow.Flow
+			if tc.flow != nil {
+				fl = &flow.Flow{SideAgent: tc.flow}
+			}
+			if got := sideAgentEnabled(cfg, fl); got != tc.want {
+				t.Errorf("sideAgentEnabled: got %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
