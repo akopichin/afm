@@ -87,20 +87,6 @@
   /* black scrim veil, same across themes/skins (not tinted, like coffee) */
   --overlay-scrim-rgb: 0, 0, 0;
 
-  /* status map */
-  --c-pending:       var(--ink-dim);
-  --c-planning:      var(--mint);
-  --c-awaiting:      var(--amber);
-  --c-revising:      var(--amber);
-  --c-ready:         var(--mint);
-  --c-running:       var(--amber);
-  --c-done:          var(--mint);
-  --c-failed:        var(--coral);
-  --c-retrying:      var(--amber);
-  --c-awaiting-user: var(--violet);
-  --c-hook-failed:   var(--c-failed);
-  --c-paused:        var(--amber);
-
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
@@ -177,20 +163,6 @@
 
   /* same black scrim veil as dark (deliberately unchanged on light) */
   --overlay-scrim-rgb: 0, 0, 0;
-
-  /* status map */
-  --c-pending:       var(--ink-dim);
-  --c-planning:      var(--mint);
-  --c-awaiting:      var(--amber);
-  --c-revising:      var(--amber);
-  --c-ready:         var(--mint);
-  --c-running:       var(--amber);
-  --c-done:          var(--mint);
-  --c-failed:        var(--coral);
-  --c-retrying:      var(--amber);
-  --c-awaiting-user: var(--violet);
-  --c-hook-failed:   var(--c-failed);
-  --c-paused:        var(--amber);
 
   /* legacy aliases */
   --text:     var(--ink);

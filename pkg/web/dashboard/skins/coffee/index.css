@@ -29,7 +29,7 @@
   --ink-dim:   #a07d4f;
 
   /* accents */
-  --mint:      #e8b25e;   /* карамель — ready/done/planning */
+  --mint:      #e8b25e;   /* карамель — done (единственный зелёный/успешный статус) */
   --mint-soft: rgba(255, 154, 52, 0.22);
   --grid:      rgba(255, 180, 90, 0.05);
   --amber:     #ff9a34;   /* нить накала — running/attention/retrying */
@@ -44,20 +44,6 @@
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
      одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
-
-  /* status map */
-  --c-pending:        var(--ink-dim);
-  --c-planning:       var(--mint);
-  --c-awaiting:       var(--amber);
-  --c-revising:       var(--amber);
-  --c-ready:          var(--mint);
-  --c-running:        var(--amber);
-  --c-done:           var(--mint);
-  --c-failed:         var(--coral);
-  --c-retrying:       var(--amber);
-  --c-awaiting-user:  var(--violet);
-  --c-hook-failed:    var(--c-failed);
-  --c-paused:         var(--amber);
 
   /* legacy aliases */
   --text:     var(--ink);
@@ -94,20 +80,6 @@
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
   --overlay-scrim-rgb: 0, 0, 0;
-
-  /* status map */
-  --c-pending:        var(--ink-dim);
-  --c-planning:       var(--mint);
-  --c-awaiting:       var(--amber);
-  --c-revising:       var(--amber);
-  --c-ready:          var(--mint);
-  --c-running:        var(--amber);
-  --c-done:           var(--mint);
-  --c-failed:         var(--coral);
-  --c-retrying:       var(--amber);
-  --c-awaiting-user:  var(--violet);
-  --c-hook-failed:    var(--c-failed);
-  --c-paused:         var(--amber);
 
   /* legacy aliases */
   --text:     var(--ink);

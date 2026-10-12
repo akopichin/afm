@@ -601,6 +601,34 @@ describe('StagesList', () => {
       expect(badge).toHaveAttribute('title', expect.stringContaining('accepted (stalemate)'))
     })
 
+    test('a terminal stage never renders a pulsing "running" verify badge (stale phase is hidden)', () => {
+      for (const status of ['done', 'failed'] as const) {
+        const staleRunning: Stage = { ...stage, status, verify: { step: 1, command: 'codex', phase: 'running' } }
+        const { container, unmount } = render(
+          <StagesList stages={[staleRunning]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
+        )
+        expect(container.querySelector('.verify-badge[data-phase="running"]')).toBeNull()
+        expect(container.querySelector('.verify-badge')).toBeNull()
+        unmount()
+      }
+    })
+
+    test('a terminal stage still shows a finished-outcome verify badge', () => {
+      const donePass: Stage = { ...stage, status: 'done', verify: { step: 1, command: 'codex', phase: 'pass' } }
+      const { container } = render(
+        <StagesList stages={[donePass]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
+      )
+      expect(container.querySelector('.verify-badge')).toHaveAttribute('data-phase', 'pass')
+    })
+
+    test('a non-terminal stage with a running verify still pulses (behavior preserved)', () => {
+      const running: Stage = { ...stage, status: 'running', verify: { step: 1, command: 'codex', phase: 'running' } }
+      const { container } = render(
+        <StagesList stages={[running]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
+      )
+      expect(container.querySelector('.verify-badge[data-phase="running"]')).not.toBeNull()
+    })
+
     test('pause/kebab actions remain available on a stage with a verify badge', () => {
       const running: Stage = { ...stage, status: 'running', verify: { step: 1, command: 'codex', phase: 'running' } }
       const onPause = vi.fn()

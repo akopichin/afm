@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,49 @@ func TestApply_RejectsWrongFrom(t *testing.T) {
 	err := store.Apply(&tr)
 	if err == nil {
 		t.Fatal("Apply with wrong From: want error, got nil")
+	}
+}
+
+// TestApply_StaleFromAgainstDone_RejectedAndStaysDone proves the Store CAS protects an already-done stage:
+// a transition carrying a stale From (running) applied against a live done stage is rejected with
+// ErrConcurrentChange and the snapshot stays done. This is the storage-level half of the "a Done stage
+// must not become not-Done" invariant (the no-exit-from-done half lives in the FSM — see fsm_test.go).
+func TestApply_StaleFromAgainstDone_RejectedAndStaysDone(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := Open(dir, []string{"a"})
+	defer store.Close()
+
+	if err := store.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusDone, Event: "complete"}); err != nil {
+		t.Fatalf("setup to done: %v", err)
+	}
+
+	err := store.Apply(&Transition{StageID: "a", From: StatusRunning, To: StatusFailed, Event: "fail"})
+	if !errors.Is(err, ErrConcurrentChange) {
+		t.Fatalf("stale From against done: err = %v, want ErrConcurrentChange", err)
+	}
+	if got := store.Get("a"); got != StatusDone {
+		t.Errorf("after rejected transition Get(a) = %q, want %q (done must stay done)", got, StatusDone)
+	}
+}
+
+// TestOpen_ReplayEndingInDone_YieldsDone confirms replay is monotonic for a terminal stage: a log whose
+// last transition lands on done restores to done.
+func TestOpen_ReplayEndingInDone_YieldsDone(t *testing.T) {
+	dir := t.TempDir()
+
+	store1, _ := Open(dir, []string{"a"})
+	_ = store1.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusRunning, Event: "start_run"})
+	_ = store1.Apply(&Transition{StageID: "a", From: StatusRunning, To: StatusDone, Event: "complete"})
+	store1.Close()
+
+	store2, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store2.Close()
+
+	if got := store2.Get("a"); got != StatusDone {
+		t.Errorf("after replay Get(a) = %q, want %q", got, StatusDone)
 	}
 }
 

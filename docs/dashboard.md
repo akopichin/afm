@@ -11,8 +11,11 @@ right (there is no three-column layout or bottom progress bar).
   run progress (`done / total`). A stage using [AI-verify](verify.md) shows a small
   verify-status badge next to its status line; it's a durable field computed
   server-side from the stage's own notices, so — unlike the feed it used to be
-  derived from — it stays visible for as long as the stage exists, regardless of
-  how much other event activity has happened since. On narrow viewports the rail
+  derived from — a completed verify outcome stays visible for as long as the stage
+  exists, regardless of how much other event activity has happened since. (One
+  exception: a stale `running` verify badge is hidden once the stage itself is
+  terminal — `done`/`failed` — so it can't pulse beside a finished dot.) On narrow
+  viewports the rail
   collapses into a slide-over drawer (open with the ☰ toggle next to the tabs).
   Run metrics (Started / Elapsed / Idle / Backoff) live in the header, center.
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the

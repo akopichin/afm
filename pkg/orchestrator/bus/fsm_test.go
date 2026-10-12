@@ -258,6 +258,78 @@ func TestFSM_HookFailedTransitions(t *testing.T) {
 	}
 }
 
+// setStatus forces stage "a" into status s via a raw store transition (bypassing FSM rules), so the
+// invariant tests below can start from a terminal status.
+func setStatus(t *testing.T, store *state.Store, s state.StageStatus) {
+	t.Helper()
+	if err := store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: s, Event: "test_setup"}); err != nil {
+		t.Fatalf("setup to %s: %v", s, err)
+	}
+}
+
+// TestFSM_DoneIsAbsoluteSink encodes the real terminal contract for done: NO event in the rule table can
+// move a stage out of done. Guards against a future edit that adds StatusDone to any rule's From set —
+// that would reintroduce the "a Done stage becomes not-Done" regression this fix targets.
+func TestFSM_DoneIsAbsoluteSink(t *testing.T) {
+	for ev := range NewFSM(nil).rules {
+		t.Run(string(ev), func(t *testing.T) {
+			fsm, store := newTestFSM(t, []string{"a"})
+			defer store.Close()
+			setStatus(t, store, state.StatusDone)
+
+			from, to, _, ok, err := fsm.Apply("a", ev, GuardCtx{Phase: "implementation"}, "")
+			if err != nil {
+				t.Fatalf("Apply(%s) from done: %v", ev, err)
+			}
+			if ok {
+				t.Errorf("event %s applied from done (to=%v): done must be an absolute terminal sink", ev, to)
+			}
+			if from != state.StatusDone || store.Get("a") != state.StatusDone {
+				t.Errorf("event %s mutated a done stage: from=%v live=%v", ev, from, store.Get("a"))
+			}
+		})
+	}
+}
+
+// TestFSM_FailedTerminalExceptManualRetry encodes the asymmetry: failed is terminal for every event EXCEPT
+// EvManualRetry, whose failed -> pending contract is the one intended way out. Guards against anyone adding
+// StatusFailed to another rule's From, or dropping the manual-retry escape hatch.
+func TestFSM_FailedTerminalExceptManualRetry(t *testing.T) {
+	for ev := range NewFSM(nil).rules {
+		t.Run(string(ev), func(t *testing.T) {
+			fsm, store := newTestFSM(t, []string{"a"})
+			defer store.Close()
+			setStatus(t, store, state.StatusFailed)
+
+			_, to, _, ok, err := fsm.Apply("a", ev, GuardCtx{Phase: "implementation"}, "")
+			if err != nil {
+				t.Fatalf("Apply(%s) from failed: %v", ev, err)
+			}
+			if ev == EvManualRetry {
+				if !ok || to != state.StatusPending {
+					t.Errorf("EvManualRetry from failed: got (%v, %v), want (pending, true)", to, ok)
+				}
+				return
+			}
+			if ok {
+				t.Errorf("event %s applied from failed (to=%v): failed is terminal except EvManualRetry", ev, to)
+			}
+		})
+	}
+}
+
+// TestRuleAllowsFrom_TerminalGuardsNilFrom locks the EvFail From:nil guard: ruleAllowsFrom with an empty
+// allow-set must still refuse both terminal statuses, so EvFail (and any future From:nil event) can never
+// fire from done/failed.
+func TestRuleAllowsFrom_TerminalGuardsNilFrom(t *testing.T) {
+	if ruleAllowsFrom(nil, state.StatusDone) {
+		t.Error("ruleAllowsFrom(nil, done) = true, want false (EvFail must not fire from done)")
+	}
+	if ruleAllowsFrom(nil, state.StatusFailed) {
+		t.Error("ruleAllowsFrom(nil, failed) = true, want false (EvFail must not fire from failed)")
+	}
+}
+
 func newTestFSMRapid(t *rapid.T, stages []string) (*FSM, *state.Store) {
 	dir, err := os.MkdirTemp("", "fsm-rapid-*")
 	if err != nil {

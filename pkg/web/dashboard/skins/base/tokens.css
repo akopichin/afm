@@ -30,6 +30,24 @@
   --danger:             var(--coral);
   --danger-rgb:         240, 107, 120;
 
+  /* status map — single source of truth for the stage-rail dot color (was copy-pasted in all 4 skins).
+     Resolves against each skin's raw palette (--mint/--amber/…) at use-time, so skins only supply the
+     palette. Rule: success-green (--mint) is reserved for the terminal `done` status ONLY; every active or
+     queued state (planning/ready/running/awaiting/revising/retrying/paused) is the active amber family, so
+     a stage's dot no longer flips green↔amber during forward progress. */
+  --c-pending:       var(--ink-dim);
+  --c-planning:      var(--amber);
+  --c-awaiting:      var(--amber);
+  --c-revising:      var(--amber);
+  --c-ready:         var(--amber);
+  --c-running:       var(--amber);
+  --c-done:          var(--mint);
+  --c-failed:        var(--coral);
+  --c-retrying:      var(--amber);
+  --c-awaiting-user: var(--violet);
+  --c-hook-failed:   var(--c-failed);
+  --c-paused:        var(--amber);
+
   /* chrome */
   --focus-ring:     rgba(95, 120, 255, 0.5);
   --overlay-scrim:  rgba(0, 0, 0, 0.55);

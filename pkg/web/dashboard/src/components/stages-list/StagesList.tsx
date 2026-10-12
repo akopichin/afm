@@ -48,6 +48,14 @@ function verifyPhaseLabel(phase: StageVerify['phase']): string {
   }
 }
 
+// isStaleRunningVerify — defensive gate: a terminal (done/failed) stage must never render the pulsing
+// "running" verify badge. A real verify pass ends on a terminal phase (pass/accepted_stalemate/…), so a
+// `running` phase lingering on an already-terminal stage is stale; hide the badge rather than pulse amber
+// beside a green done dot.
+function isStaleRunningVerify(status: Stage['status'], phase: StageVerify['phase']): boolean {
+  return (status === 'done' || status === 'failed') && phase === 'running'
+}
+
 // Статусы, для которых имеет смысл плейсхолдер «оценка ожидается» — стадия
 // реально гоняет агента ПРЯМО СЕЙЧАС (а не просто ждёт человека/бэкоффа).
 const COST_PENDING_STATUSES: ReadonlySet<Stage['status']> = new Set(['planning', 'running', 'revising'])
@@ -264,7 +272,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
               </span>
             )}
             {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
-            {stage.verify !== undefined && (
+            {stage.verify !== undefined && !isStaleRunningVerify(stage.status, stage.verify.phase) && (
               <span
                 className="verify-badge"
                 data-phase={stage.verify.phase}

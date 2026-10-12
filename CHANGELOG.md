@@ -3,6 +3,28 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-12
+
+### Fix: stage-rail dots stop blinking green↔amber during normal progress
+
+A stage dot in the [dashboard](https://github.com/akopichin/afm/blob/main/docs/dashboard.md)
+stage rail no longer flips between green and amber while the stage is simply making
+forward progress. Success-green is now reserved strictly for the terminal `done`
+status; every queued or active state (`planning`, `ready`, `running`, `awaiting`,
+`revising`, `retrying`, `paused`) uses the active amber color. Previously `planning`
+and `ready` were green, so a stage changed color back and forth on its way through
+those states, and a queued/active dot could be mistaken for a finished one — now a
+`done` dot is the only green one and sits cleanly beside its still-active amber
+siblings. A terminal (`done`/`failed`) stage also no longer shows a stale pulsing
+`running` verify badge.
+
+### Improvement: single source of truth for stage-dot status colors
+
+The per-status dot color map, previously copy-pasted into every skin
+(`graphite`/`coffee`/`goga`/`novacorps`), now lives once in the base token layer and
+resolves against each skin's own palette at use-time. Skins only supply the raw
+palette; the status→color rule is shared, so the four skins can no longer drift apart.
+
 ## 2026-10-11
 
 ### Improvement: disable the dashboard side agent with a toggle
