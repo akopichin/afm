@@ -14,6 +14,10 @@ import (
 	"github.com/akopichin/afm/pkg/worktree"
 )
 
+// parentDir is the ".." path segment, named so goconst (min-occurrences: 2) does not flag its reuse
+// across this package (isSubPath here and resolveExplicitRunDir in memory_rebuild.go).
+const parentDir = ".."
+
 // flowLocksDir holds one flock file per flow (worktree.FlowLock), separate from any run directory so
 // it survives a run restarting into a fresh run dir.
 func flowLocksDir() string {
@@ -145,5 +149,5 @@ func isSubPath(parent, child string) bool {
 	if err != nil {
 		return false
 	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return rel != parentDir && !strings.HasPrefix(rel, parentDir+string(filepath.Separator))
 }

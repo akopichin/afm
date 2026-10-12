@@ -508,7 +508,7 @@ func newMemoryRebuildCmd() *cobra.Command {
 // resolveExplicitRunDir проверяет id, явно переданный через --run, и возвращает путь к его run-директории
 // под runsBase.
 func resolveExplicitRunDir(runsBase, flowName, id string) (string, error) {
-	if id == "" || filepath.Base(id) != id || id == "." || id == ".." ||
+	if id == "" || filepath.Base(id) != id || id == "." || id == parentDir ||
 		strings.ContainsAny(id, `/\`) {
 		return "", fmt.Errorf("invalid run id %q: must be a bare run directory name", id)
 	}
