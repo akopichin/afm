@@ -26,6 +26,7 @@ func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 			StageID:     spec.StageID,
 			Phase:       spec.Phase,
 			OnUsage:     onUsage,
+			Reasoning:   cfg.Reasoning,
 			// fresh context: SessionID/Resume/StageDir intentionally unset
 			// (AFM_STAGE_DIR is stripped by the executor even if inherited).
 		})

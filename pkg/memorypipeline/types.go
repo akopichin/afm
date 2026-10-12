@@ -47,6 +47,9 @@ type AgentConfig struct {
 	RunDir      string
 	IdleTimeout time.Duration
 	Debug       bool
+	// Reasoning is client.reasoning, forwarded to the executor; emitted as claude --effort only for the
+	// default claude command (the executor guards non-claude commands).
+	Reasoning string
 	// OnUsage, if set, builds the executor.Config.OnUsage callback for one agent call given its attribution —
 	// the exact signature of.recordUsage, which is what production wires in.
 	OnUsage func(stageID, phase, scope string) func(accounting.Observation)

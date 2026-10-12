@@ -149,6 +149,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		UsageHint:      o.usageHintFor(cmd),
 		OnUsage:        o.recordUsage(s.ID, phase, ""),
 		BrowserMCP:     o.browserForStage(s, cmd),
+		Reasoning:      o.opts.Config.Client.Reasoning,
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
@@ -185,6 +186,7 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		UsageHint:  o.usageHintFor(cmd),
 		OnUsage:    o.recordUsage(s.ID, phase, ""),
 		BrowserMCP: o.browserForStage(s, cmd),
+		Reasoning:  o.opts.Config.Client.Reasoning,
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})

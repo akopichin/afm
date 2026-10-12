@@ -26,6 +26,7 @@ fi
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"
 OPENAI_AGENT_MAX_TURNS="${OPENAI_AGENT_MAX_TURNS:-40}"
+OPENAI_REASONING_EFFORT="${OPENAI_REASONING_EFFORT:-}"
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
     echo "error: OPENAI_API_KEY is not set" >&2
@@ -157,8 +158,9 @@ while :; do
         break
     fi
 
-    jq -nc --slurpfile msgs "$messages_file" --arg model "$OPENAI_MODEL" --argjson tools "$tools_json" \
-        '{model: $model, stream: true, stream_options: {include_usage: true}, tool_choice: "auto", tools: $tools, messages: $msgs[0]}' > "$request_file"
+    jq -nc --slurpfile msgs "$messages_file" --arg model "$OPENAI_MODEL" --arg re "$OPENAI_REASONING_EFFORT" --argjson tools "$tools_json" \
+        '{model: $model, stream: true, stream_options: {include_usage: true}, tool_choice: "auto", tools: $tools, messages: $msgs[0]}
+         + (if $re != "" then {reasoning_effort: $re} else {} end)' > "$request_file"
 
     set +e
     response=$(curl -sS -w '\n%{http_code}' \

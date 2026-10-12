@@ -338,6 +338,7 @@ func New(opts Options) *Orchestrator {
 			WrapperDir:     executor.WrapperDirFor(opts.Config.Client.Command, opts.WrapperDir, opts.GeneratedAgents),
 			Debug:          opts.Debug,
 			RunDir:         opts.RunDir,
+			Reasoning:      opts.Config.Client.Reasoning,
 		})
 	}
 
@@ -378,6 +379,7 @@ func New(opts Options) *Orchestrator {
 		IdleTimeout: opts.Config.Executor.IdleTimeout,
 		Debug:       opts.Debug,
 		OnUsage:     o.recordUsage,
+		Reasoning:   opts.Config.Client.Reasoning,
 	})
 	return o
 }

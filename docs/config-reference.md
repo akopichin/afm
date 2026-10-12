@@ -17,6 +17,9 @@ client:
   # extra_args: [--my-flag] # extra arguments
   # claude_bare: false      # true → add --bare to generated wrappers (lighter load,
                             #        but disables skill auto-discovery). Default: false
+  # reasoning: medium       # reasoning effort for the default claude client, mapped to
+                            #        --effort. Levels: minimal, low, medium, high, xhigh, max
+                            #        (clamped to claude's set). Empty → not passed. See below
 
 executor:
   idle_timeout: 30m         # agent idle timeout
@@ -66,6 +69,30 @@ docker:
   #   glm51: { model: glm-5.1, url: https://api.z.ai/api/anthropic,
   #            auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" } }
 ```
+
+## Reasoning effort
+
+`client.reasoning` sets the reasoning (thinking) effort for the default claude
+client. afm maps the level to claude's `--effort` flag for the author (stage) agents,
+the dashboard side agent, the interactive JSON-repair helper, and `afm memory
+rebuild`. The independent AI `verify:` reviewer does **not** receive it — verifier
+agents run without the effort flag. It works both on the host and in Docker (the
+default claude is exec'd directly in both).
+
+The level is one of `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Each is
+clamped to claude's actual set before it reaches the flag — claude has no `minimal`,
+so `minimal` becomes `low`; every other level passes through unchanged. Leave
+`reasoning` empty (the default) to pass no flag and let claude use its own default.
+
+The field is **not** an enum: a value afm doesn't recognize is not rejected by afm's
+own `afm run` preflight — it is forwarded to `--effort` verbatim and `afm run` prints
+a one-line `warning:` at startup. afm itself never turns an unknown level into a hard
+error, but the claude backend may reject an `--effort` value it doesn't accept and
+fail that invocation. (The preflight warning is emitted by `afm run` only; `afm
+memory rebuild` forwards the value the same way but does not print the warning.)
+
+Non-claude agents configured as Docker recipes take their own per-recipe
+`reasoning` knob instead — see [Docker mode → autoShim recipes](docker.md#non-claude-agents-in-docker-autoshim).
 
 See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and

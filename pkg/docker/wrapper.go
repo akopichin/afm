@@ -37,6 +37,7 @@ type WrapperSpec struct {
 	HasSysPrompt bool   // emit sysprompt block (claude type only)
 	Bare         bool   // prepend --bare to claude exec (skip CLAUDE.md/hooks/skills auto-context)
 	MaxTurns     int    // openai-agent only: OPENAI_AGENT_MAX_TURNS; 0 → omit (script default)
+	Reasoning    string // configured reasoning level (raw, may be non-canonical); clamped to the family mechanism and emitted per type; "" → omit
 }
 
 // CreateWrappers creates a temp dir with one executable script per spec, named after spec.Command, and
@@ -91,6 +92,14 @@ func CreateWrappers(specs []WrapperSpec) (string, error) {
 // decide", same value ParseFile/config.AgentRecipe.Validate accept as a no-op.
 const codexDefaultModel = "default"
 
+// shellSingleQuote wraps s in POSIX single quotes so the value is forwarded to the generated wrapper's shell
+// VERBATIM — no parameter expansion ($VAR), command substitution ($(...)/backticks), or word-splitting.
+// An embedded single quote is emitted as the standard '\” sequence (close-quote, escaped quote, reopen).
+// Used for reasoning values, which may be non-canonical (passed through as-is per the feature contract).
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, error) {
 	if s.Command == "" {
 		return "", errors.New("empty command")
@@ -112,6 +121,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		if s.Model != "" {
 			fmt.Fprintf(&b, "export OPENAI_MODEL=%q\n", s.Model)
 		}
+		if v, _ := config.ResolveReasoning(config.MechanismOpenAI, s.Reasoning); v != "" {
+			fmt.Fprintf(&b, "export OPENAI_REASONING_EFFORT=%s\n", shellSingleQuote(v))
+		}
 		b.WriteString("exec /usr/local/bin/openai-as-claude \"$@\"\n")
 		return b.String(), nil
 	}
@@ -131,6 +143,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		}
 		if s.MaxTurns != 0 {
 			fmt.Fprintf(&b, "export OPENAI_AGENT_MAX_TURNS=%q\n", strconv.Itoa(s.MaxTurns))
+		}
+		if v, _ := config.ResolveReasoning(config.MechanismOpenAI, s.Reasoning); v != "" {
+			fmt.Fprintf(&b, "export OPENAI_REASONING_EFFORT=%s\n", shellSingleQuote(v))
 		}
 		b.WriteString("exec /usr/local/bin/openai-agent-as-claude \"$@\"\n")
 		return b.String(), nil
@@ -169,6 +184,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		if hasModel {
 			fmt.Fprintf(&b, "export CODEX_MODEL=%q\n", s.Model)
 		}
+		if v, _ := config.ResolveReasoning(config.MechanismCodex, s.Reasoning); v != "" {
+			fmt.Fprintf(&b, "export CODEX_REASONING=%s\n", shellSingleQuote(v))
+		}
 		b.WriteString("exec /usr/local/bin/codex-as-claude \"$@\"\n")
 		return b.String(), nil
 	}
@@ -177,6 +195,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		// claude proxy-shim: BASE_URL only.
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export ANTHROPIC_BASE_URL=%q\n", s.BaseURL)
+		}
+		if v, _ := config.ResolveReasoning(config.MechanismClaude, s.Reasoning); v != "" {
+			fmt.Fprintf(&b, "set -- \"$@\" --effort %s\n", shellSingleQuote(v))
 		}
 		fmt.Fprintf(&b, "exec %s \"$@\"\n", realClaude)
 		return b.String(), nil
@@ -202,6 +223,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	// skills-listing, auto-memory. Управляется config client.claude_bare (default on).
 	if s.Bare {
 		b.WriteString("set -- \"$@\" --bare\n")
+	}
+	if v, _ := config.ResolveReasoning(config.MechanismClaude, s.Reasoning); v != "" {
+		fmt.Fprintf(&b, "set -- \"$@\" --effort %s\n", shellSingleQuote(v))
 	}
 	// Стриминг обязателен для всех claude-обёрток. --output-format добавляем только при отсутствии
 	// (interactive уже получает его через executor ExtraArgs), чтобы не дублировать флаг.

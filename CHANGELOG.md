@@ -5,6 +5,25 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-12
 
+### Improvement: configure agent reasoning effort
+
+A new `client.reasoning` knob in
+[`config.yaml`](https://github.com/akopichin/afm/blob/main/docs/config-reference.md#reasoning-effort)
+sets the reasoning (thinking) effort for the default claude client. afm maps the
+level — `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` — to claude's
+`--effort` flag for the author (stage) agents, the dashboard side agent, the
+interactive JSON-repair helper, and `afm memory rebuild`, on the host and in Docker
+alike. The independent AI `verify:` reviewer does not receive it. Each level is
+clamped to claude's native set (claude has no `minimal`, so `minimal` becomes `low`);
+leaving the field empty passes no flag. Non-claude
+[Docker autoShim recipes](https://github.com/akopichin/afm/blob/main/docs/docker.md#non-claude-agents-in-docker-autoshim)
+take an equivalent per-recipe `reasoning` field, clamped to each family's own control
+(`codex` → `model_reasoning_effort`, `openai`/`openai-agent` → `reasoning_effort`,
+`claude` → `--effort`; `cursor` has no control and ignores it). The field is not an
+enum: an unrecognized value is not rejected by afm's `afm run` preflight — it is
+forwarded verbatim and `afm run` prints a one-line startup warning (the provider
+backend may still reject it and fail that invocation).
+
 ### Fix: stage-rail dots stop blinking green↔amber during normal progress
 
 A stage dot in the [dashboard](https://github.com/akopichin/afm/blob/main/docs/dashboard.md)

@@ -25,6 +25,7 @@ fi
 
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"
+OPENAI_REASONING_EFFORT="${OPENAI_REASONING_EFFORT:-}"
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
     echo "error: OPENAI_API_KEY is not set" >&2
@@ -87,8 +88,9 @@ content=$(build_user_content "$prompt")
 # corruption.
 request_file=$(mktemp)
 trap 'rm -f "$request_file"' EXIT
-printf '%s' "$content" | jq -c --arg model "$OPENAI_MODEL" \
-    '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: .}]}' > "$request_file"
+printf '%s' "$content" | jq -c --arg model "$OPENAI_MODEL" --arg re "$OPENAI_REASONING_EFFORT" \
+    '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: .}]}
+     + (if $re != "" then {reasoning_effort: $re} else {} end)' > "$request_file"
 
 # Один SSE-ответ читаем для текста и usage/model; после сбоя curl всё равно эмитим частичный или пустой
 # конверт.

@@ -35,6 +35,9 @@ type ClientConfig struct {
 	Command    string   `yaml:"command"`
 	ExtraArgs  []string `yaml:"extra_args"`
 	ClaudeBare *bool    `yaml:"claude_bare"` // nil → --bare OFF (default, нужны skills); true → --bare on
+	// Reasoning задаёт уровень рассуждения (minimal..max) для дефолтного claude-клиента; afm клампит его в
+	// claude --effort. Пусто → не передаётся. Работает на host и в Docker (default claude exec'ается напрямую).
+	Reasoning string `yaml:"reasoning"`
 }
 
 // IsClaudeBare сообщает, добавлять ли --bare в генерируемые claude-врапперы. По умолчанию (nil) → false:
@@ -158,6 +161,10 @@ type AgentRecipe struct {
 	SystemPrompt string     `yaml:"system_prompt"` // optional; "file:<path>" → --append-system-prompt-file content
 	Auth         RecipeAuth `yaml:"auth"`          // required
 	MaxTurns     int        `yaml:"max_turns"`     // openai-agent only: max tool-call iterations per stage invocation; 0 → script default (40)
+	// Reasoning задаёт уровень рассуждения (minimal..max) для этого рецепта; afm клампит его в механизм семьи
+	// (codex model_reasoning_effort / claude --effort / openai reasoning_effort). Docker-only: врапперы
+	// генерируются только в контейнере. Пусто → не передаётся; cursor игнорирует (нет API).
+	Reasoning string `yaml:"reasoning"`
 }
 
 // RecipeAuth describes where afm reads the secret on the host (From) and which
@@ -611,6 +618,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Client.ClaudeBare != nil {
 		dst.Client.ClaudeBare = overlay.Client.ClaudeBare
+	}
+	if overlay.Client.Reasoning != "" {
+		dst.Client.Reasoning = overlay.Client.Reasoning
 	}
 	if overlay.Executor.IdleTimeout != 0 {
 		dst.Executor.IdleTimeout = overlay.Executor.IdleTimeout

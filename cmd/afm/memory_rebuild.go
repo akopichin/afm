@@ -176,6 +176,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		RootDir:     agentRoot,
 		IdleTimeout: cfg.Executor.IdleTimeout,
 		Debug:       debugEnabled,
+		Reasoning:   cfg.Client.Reasoning,
 	}
 
 	work, err := memorypipeline.NewUniqueAttemptDir(filepath.Join(runDir, "memory-rebuild"), newAttemptID)

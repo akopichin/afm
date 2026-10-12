@@ -430,6 +430,7 @@ func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan st
 		Phase:       phaseJSONFix,
 		UsageHint:   o.usageHintFor(cmd),
 		OnUsage:     o.recordUsage(s.ID, phaseJSONFix, ""),
+		Reasoning:   o.opts.Config.Client.Reasoning,
 	}
 	ex := executor.New(cfg)
 	prompt := buildJSONFixPrompt(qPath, id)

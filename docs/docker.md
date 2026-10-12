@@ -107,6 +107,29 @@ Supported recipe `type`s:
 | `cursor` | Cursor Cloud Agents API |
 | `codex` | OpenAI Codex CLI — auth via a mounted `~/.codex` OAuth state, no secret in config |
 
+Each recipe can also set a per-recipe **`reasoning`** level (`minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`):
+
+```yaml
+docker:
+  agents:
+    glm51:
+      model: glm-5.1
+      reasoning: high
+      url: https://api.z.ai/api/anthropic
+      auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" }
+```
+
+afm clamps the level to each family's native control and bakes it into the generated
+wrapper: `claude` recipes get `--effort`, `codex` gets `model_reasoning_effort`, and
+`openai`/`openai-agent` get `reasoning_effort` in the request body. `cursor` has no
+such control and ignores the field. Because the wrappers are generated inside the
+container, `reasoning` on a recipe is **Docker-only**. As with the top-level
+[`client.reasoning`](config-reference.md#reasoning-effort), an unrecognized value is
+not rejected by afm's `afm run` preflight — it is forwarded to the wrapper as-is and
+`afm run` prints a startup warning. The provider backend may still reject a value it
+doesn't accept and fail that invocation.
+
 Full recipes and per-provider notes are in
 [`config.example.yaml`](https://github.com/akopichin/afm/blob/main/config.example.yaml)
 and the [`examples/cursor-agent/`](https://github.com/akopichin/afm/tree/main/examples/cursor-agent)

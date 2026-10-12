@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -96,6 +97,12 @@ type Config struct {
 	InterruptCh <-chan struct{}
 	// VerifyMode enables the adapter's verification mode through CODEX_VERIFY; set only by RunVerifyAgent.
 	VerifyMode bool
+	// Reasoning is the configured reasoning level (from client.reasoning; raw, may be non-canonical). It is
+	// emitted as claude's --effort
+	// ONLY for the default claude command (isClaudeCommand: "" or "claude"); other commands silently ignore
+	// it (they may not accept the flag — recipes get reasoning via their wrapper). Empty → nothing added.
+	// Callers forward the raw value unconditionally.
+	Reasoning string
 	// BrowserMCP, if set, injects the managed Chrome DevTools MCP for this author runner: a per-invocation
 	// descriptor file + --mcp-config, plus the non-secret AFM_BROWSER_* env.
 	BrowserMCP *BrowserMCP
@@ -138,6 +145,21 @@ func ResolveArgs(extra []string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+// isClaudeCommand reports whether cmd is the default claude CLI (the only command that accepts --effort).
+// Empty is accepted defensively as claude; in practice New already rewrites an empty Command to
+// config.ClaudeCommand before it reaches here, so the "" case does not arise at the production call site.
+func isClaudeCommand(cmd string) bool {
+	return cmd == "" || cmd == config.ClaudeCommand
+}
+
+// hasEffortFlag reports whether args already carries an --effort flag in either the space or equals form,
+// so client.reasoning does not append a duplicate over a caller-supplied one.
+func hasEffortFlag(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool {
+		return a == "--effort" || strings.HasPrefix(a, "--effort=")
+	})
 }
 
 // Executor spawns AI client subprocesses.
@@ -750,6 +772,14 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			args = append(args, "--resume", e.cfg.SessionID)
 		} else {
 			args = append(args, "--session-id", e.cfg.SessionID)
+		}
+	}
+	// client.reasoning → claude --effort, for the default claude command only. Non-claude commands (recipes,
+	// shell adapters) get reasoning via their generated wrapper, not this flag. Skip if the caller already
+	// passed --effort in ExtraArgs.
+	if isClaudeCommand(e.cfg.Command) {
+		if v, _ := config.ResolveReasoning(config.MechanismClaude, e.cfg.Reasoning); v != "" && !hasEffortFlag(args) {
+			args = append(args, "--effort", v)
 		}
 	}
 

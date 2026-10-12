@@ -47,7 +47,7 @@ func writeFakeCodex(t *testing.T, jsonlOutput string, exitCode int) string {
 
 // codexControlVars are the environment variables scripts/codex-as-claude.sh reads to decide its behavior.
 var codexControlVars = []string{
-	"AFM_IN_DOCKER", "CODEX_BIN", "CODEX_HOME", "CODEX_MODEL",
+	"AFM_IN_DOCKER", "CODEX_BIN", "CODEX_HOME", "CODEX_MODEL", "CODEX_REASONING",
 	"CODEX_SANDBOX", "CODEX_VERBOSE", "CODEX_VERIFY",
 }
 

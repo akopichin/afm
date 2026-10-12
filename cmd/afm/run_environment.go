@@ -155,5 +155,6 @@ func buildWrapperSpec(cmd string, recipe config.AgentRecipe, bare bool) docker.W
 		HasSysPrompt: recipe.SystemPrompt != "",
 		Bare:         bare,
 		MaxTurns:     recipe.MaxTurns,
+		Reasoning:    recipe.Reasoning,
 	}
 }

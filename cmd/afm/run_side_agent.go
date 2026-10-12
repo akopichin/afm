@@ -80,6 +80,7 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment) (*sideA
 		Dir:         env.RootDir,
 		WrapperDir:  executor.WrapperDirFor(cfg.Client.Command, env.WrapperDir, env.GeneratedAgents),
 		IdleTimeout: cfg.Executor.IdleTimeout,
+		Reasoning:   cfg.Client.Reasoning,
 		Context:     sideagent.ContextBuilder{ByteLimit: sideAgentContextByteLimit},
 		Secrets:     func() []string { return protected },
 		OnUsage:     onUsage,

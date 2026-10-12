@@ -68,6 +68,9 @@ type Config struct {
 	Dir         string
 	WrapperDir  string
 	IdleTimeout time.Duration
+	// Reasoning — client.reasoning; уходит в executor.Config. Executor эмитит claude --effort только для
+	// дефолтной команды claude, прочие команды его игнорируют.
+	Reasoning string
 	// Context — сборщик промпта из истории + текущего сообщения.
 	Context ContextBuilder
 	// Secrets — поставщик значений секретов для редакции пользовательского текста. nil → без редакции.
@@ -102,6 +105,7 @@ type Manager struct {
 	dir         string
 	wrapperDir  string
 	idleTimeout time.Duration
+	reasoning   string
 	ctxBuilder  ContextBuilder
 	secrets     func() []string
 	onUsage     func(accounting.Observation)
@@ -146,6 +150,7 @@ func New(cfg Config) *Manager {
 		dir:         cfg.Dir,
 		wrapperDir:  cfg.WrapperDir,
 		idleTimeout: cfg.IdleTimeout,
+		reasoning:   cfg.Reasoning,
 		ctxBuilder:  cfg.Context,
 		secrets:     cfg.Secrets,
 		onUsage:     cfg.OnUsage,
@@ -281,6 +286,7 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 		Phase:       sideAgentType,
 		InterruptCh: at.interrupt,
 		OnUsage:     m.onUsage,
+		Reasoning:   m.reasoning,
 		OnAction: func(tool, detail string) {
 			// Уже провалилась durable-запись — не плодим новые (ход останавливается).
 			if at.storeFail.Load() {

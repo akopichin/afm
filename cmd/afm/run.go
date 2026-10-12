@@ -71,6 +71,13 @@ func newRunCmd() *cobra.Command {
 				return reexecFlow(rootDir, f, cfg, hooks)
 			}
 
+			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
+			// after the Docker re-exec branch so it prints exactly once: on a Docker run the in-container
+			// afm reaches this point, not the host (which returned above).
+			for _, w := range cfg.ReasoningWarnings() {
+				fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+			}
+
 			// CLI > flow YAML > config.
 			if maxParallel == 0 && f.MaxParallel > 0 {
 				cfg.Executor.MaxParallel = f.MaxParallel

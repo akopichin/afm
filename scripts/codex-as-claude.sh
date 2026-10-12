@@ -27,6 +27,7 @@ if [[ -z "$prompt" ]]; then
 fi
 
 CODEX_MODEL="${CODEX_MODEL:-}"
+CODEX_REASONING="${CODEX_REASONING:-}"
 CODEX_SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
 CODEX_VERIFY="${CODEX_VERIFY:-0}"
 
@@ -56,6 +57,8 @@ else
     codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox -s "$CODEX_SANDBOX")
 fi
 [[ -n "$CODEX_MODEL" ]] && codex_args+=(-m "$CODEX_MODEL")
+# afm clamps the reasoning level when generating this wrapper (autoShim, in-container); forward it as codex's effort override.
+[[ -n "$CODEX_REASONING" ]] && codex_args+=(-c "model_reasoning_effort=$CODEX_REASONING")
 
 # Author-only browser MCP passes a descriptor path, never its token. jq escapes command/args for Codex's
 # TOML overrides.

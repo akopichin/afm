@@ -24,6 +24,13 @@ client:
   # claude_bare: whether to add --bare to generated claude wrappers. Enable claude_bare: true only for
   # flows WITHOUT skills.
 
+  # reasoning: reasoning (thinking) effort for the default claude client, mapped to claude's --effort for
+  # the author stages, side agent, JSON-repair helper and memory rebuild (the AI verify reviewer does not
+  # get it). Levels: minimal, low, medium, high, xhigh, max (minimal is clamped to low — claude has no
+  # minimal). Empty → not passed. An unrecognized value is forwarded as-is; `afm run` warns but does not
+  # fail on it — the claude backend may still reject it and fail that invocation.
+  # reasoning: medium
+
 # Execution parameters executor: Maximum idle time with no output from the agent before killing the
 # process. Default: 30m idle_timeout: 30m
 

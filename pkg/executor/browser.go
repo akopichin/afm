@@ -27,6 +27,10 @@ type BrowserMCP struct {
 // lets callers/tests confirm whether this runner received the browser capability.
 func (e *Executor) BrowserMCPConfig() *BrowserMCP { return e.cfg.BrowserMCP }
 
+// ReasoningConfig returns the configured reasoning level ("" = none). It lets tests confirm whether a
+// runner received client.reasoning through to its executor.Config.
+func (e *Executor) ReasoningConfig() string { return e.cfg.Reasoning }
+
 // IsBrowserTransportEnv reports whether an env entry is a managed-browser transport variable.
 func IsBrowserTransportEnv(kv string) bool {
 	return browser.IsTransportEnv(kv)

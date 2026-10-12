@@ -129,6 +129,10 @@
         "claude_bare": {
           "type": "boolean",
           "description": "Add --bare to generated claude wrappers (lighter, but disables skill auto-discovery). Default false."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning effort for the default claude client, mapped to --effort (author stages, side agent, JSON-repair helper and memory rebuild; the AI verify reviewer does not get it). Levels: minimal, low, medium, high, xhigh, max (clamped to claude's set). Works on host and in Docker. Not an enum: an unknown value is not rejected by afm run's preflight (which forwards it and prints a warning), but the backend may reject it and fail that invocation. afm memory rebuild forwards the value without the preflight warning."
         }
       }
     },
@@ -238,6 +242,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "openai-agent only: max tool-call iterations per invocation (0 = default 40)."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning effort for this recipe, clamped to the family mechanism (codex model_reasoning_effort / claude --effort / openai reasoning_effort). Levels: minimal, low, medium, high, xhigh, max. Docker-only (wrappers are generated in the container); cursor ignores it. Not an enum: an unknown value is not rejected by afm run's preflight (which forwards it and prints a warning), but the backend may reject it and fail that invocation."
         }
       }
     },

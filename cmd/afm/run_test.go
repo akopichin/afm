@@ -13,6 +13,7 @@ func TestBuildWrapperSpec(t *testing.T) {
 		URL:          "https://api2.cursor.sh/v1",
 		Auth:         config.RecipeAuth{From: "env:X", To: "env:OPENAI_API_KEY"},
 		SystemPrompt: "file:prompts/cursor.md",
+		Reasoning:    "high",
 	}
 
 	t.Run("openai fields wiring", func(t *testing.T) {
@@ -32,6 +33,9 @@ func TestBuildWrapperSpec(t *testing.T) {
 		}
 		if !spec.HasSysPrompt {
 			t.Errorf("HasSysPrompt: got %t, want true (SystemPrompt is non-empty)", spec.HasSysPrompt)
+		}
+		if spec.Reasoning != "high" {
+			t.Errorf("Reasoning: got %q, want %q (sole bridge recipe.Reasoning → WrapperSpec)", spec.Reasoning, "high")
 		}
 	})
 
