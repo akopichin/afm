@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/gitcmd"
 	"github.com/aymanbagabas/go-udiff"
 )
 
@@ -225,7 +227,9 @@ func runGit(ctx context.Context, gitDir string, args ...string) (out []byte, ok 
 	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	full := append([]string{"--git-dir=" + gitDir}, args...)
-	out, err = exec.CommandContext(cctx, "git", full...).Output()
+	cmd := exec.CommandContext(cctx, "git", full...)
+	cmd.Env = gitcmd.SanitizeEnv(os.Environ())
+	out, err = cmd.Output()
 	if err == nil {
 		return out, true, nil
 	}

@@ -372,12 +372,14 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 	return res
 }
 
-// FindLatestRunDir возвращает самую свежую run-директорию для flowName под base. Чтобы "foo" не матчил
-// "foo-bar", после префикса требуется цифра (начало timestamp'а).
-func FindLatestRunDir(base, flowName string) (string, error) {
+// findAllRunDirs возвращает ВСЕ run-директории для flowName под base, отсортированные по возрастанию
+// (старые первыми). Чтобы "foo" не матчил "foo-bar", после префикса требуется цифра (начало timestamp'а).
+// Several run dirs for one flow can coexist: resolveRun creates a fresh dir whenever the latest one is
+// locked by a still-live `afm run`.
+func findAllRunDirs(base, flowName string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return "", fmt.Errorf("read runs dir: %w", err)
+		return nil, fmt.Errorf("read runs dir: %w", err)
 	}
 	prefix := flowName + "-"
 	var names []string
@@ -388,10 +390,23 @@ func FindLatestRunDir(base, flowName string) (string, error) {
 		}
 	}
 	if len(names) == 0 {
-		return "", fmt.Errorf("no run found for flow %q", flowName)
+		return nil, fmt.Errorf("no run found for flow %q", flowName)
 	}
 	slices.Sort(names)
-	return filepath.Join(base, names[len(names)-1]), nil
+	dirs := make([]string, len(names))
+	for i, n := range names {
+		dirs[i] = filepath.Join(base, n)
+	}
+	return dirs, nil
+}
+
+// FindLatestRunDir возвращает самую свежую run-директорию для flowName под base.
+func FindLatestRunDir(base, flowName string) (string, error) {
+	dirs, err := findAllRunDirs(base, flowName)
+	if err != nil {
+		return "", err
+	}
+	return dirs[len(dirs)-1], nil
 }
 
 // ErrNoRun означает, что под base не нашлось ни одной подходящей run-директории для flowName (ни одной

@@ -95,9 +95,10 @@ stages:
 ## Flow fields (top level)
 
 `name`, `description`, `prompt` (global instruction for all stages), `max_parallel`,
-`root_dir` (project root = agents' working directory, see below),
+`root_dir` (project root and, unless worktrees are enabled, agents' working
+directory; see below),
 `memory` ([agent-memory config](agent-memory.md)), `hooks`
-([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `stages`.
+([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `worktrees`, `stages`.
 
 `side_agent: true|false` overrides the dashboard
 [side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) toggle for
@@ -121,3 +122,44 @@ for example, in a Docker setup where the sources are mounted at `/workspace` but
 resolve to different roots for different stages: one stage writes a file, another
 can't find it. `root_dir` fixes a single root for all stages. Dialog paths
 (`AFM_STAGE_DIR`) stay anchored to the afm root regardless of `root_dir`.
+When worktrees are enabled, `root_dir` instead anchors the worktree location;
+stages run inside that worktree.
+
+### Per-flow git worktrees
+
+Set `worktrees: true` at the top of a flow to run its stages in a dedicated git
+worktree. This is off by default. A flow setting overrides `AFM_WORKTREES` and
+`config.yaml`'s `worktrees.enabled` in either direction.
+
+```yaml
+name: my-feature
+worktrees: true
+stages: ...
+```
+
+The project root is `root_dir` when set (relative paths resolve from `--dir`),
+otherwise the parent of `.afm/`. It must be a git repository. afm creates
+`<project-root>/.worktrees/my-feature` on branch `my-feature`, starting at the
+project root's current `HEAD`. The flow name must be a single safe path component
+and git branch name (letters, digits, `.`, `_`, `-`; it cannot start with `.` or
+`-`, end with `.` or `.lock`, or contain `..`). Existing matching worktrees are
+reused, including their uncommitted changes. If the branch is checked out
+elsewhere, the target path belongs to another worktree, or the branch exists
+without its worktree, afm stops with an error instead of overwriting it.
+
+Agents and script stages use the worktree as their project root. Run state and
+dialog files remain under the original `.afm/`; afm adds `.worktrees/` to the
+repository's local `.git/info/exclude` when possible. Repeating `afm run` can
+resume the latest unfinished run against the same worktree.
+
+To reset a flow's worktree, run `afm run --worktree-clear` to discard uncommitted
+changes while keeping its branch and commits. Use
+`afm run --worktree-clear-force` to discard the branch and its commits too, then
+create it again from the project root's current `HEAD`. Both flags start a fresh
+run, require worktrees to be enabled, and cannot be combined. If another
+`afm run` is already using this flow's worktree, the new invocation exits with
+a lock error; retry after the active run finishes.
+
+With automatic Docker mode, afm prepares the worktree on the host and passes its
+path into the container. The project root must be inside the directory mounted
+from `--dir`; an external `root_dir` is rejected before Docker starts.

@@ -1767,3 +1767,126 @@ func TestSideAgent_ProjectOverridesGlobal(t *testing.T) {
 		t.Errorf("project side_agent.enabled: false should override global true, got %v", cfg.SideAgent.Enabled)
 	}
 }
+
+// TestWorktrees_DefaultsDisabled — в отличие от SideAgent (default ON), nil
+// Worktrees.Enabled должен давать IsEnabled() == false. Это инверсия дефолта —
+// самое вероятное место для опечатки.
+func TestWorktrees_DefaultsDisabled(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name    string
+		enabled *bool
+		want    bool
+	}{
+		{name: "nil defaults OFF", enabled: nil, want: false},
+		{name: "explicit false", enabled: &f, want: false},
+		{name: "explicit true", enabled: &tr, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_WORKTREES", "") // treated as unset (envBool: empty => not set)
+			c := config.WorktreesConfig{Enabled: tc.enabled}
+			if got := c.IsEnabled(); got != tc.want {
+				t.Errorf("IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorktrees_EnvOverridesConfig(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name    string
+		env     string // "" = не задавать (unset)
+		enabled *bool
+		want    bool
+	}{
+		{name: "env off overrides config on", env: "0", enabled: &tr, want: false},
+		{name: "env off overrides config nil", env: "0", enabled: nil, want: false},
+		{name: "env on overrides config off", env: "1", enabled: &f, want: true},
+		{name: "env true, config off", env: "true", enabled: &f, want: true},
+		{name: "env false, config nil", env: "false", enabled: nil, want: false},
+		{name: "env unset falls back to config off", env: "", enabled: &f, want: false},
+		{name: "env unset falls back to config nil (default OFF)", env: "", enabled: nil, want: false},
+		{name: "env unset falls back to config on", env: "", enabled: &tr, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_WORKTREES", tc.env)
+			c := config.WorktreesConfig{Enabled: tc.enabled}
+			if got := c.IsEnabled(); got != tc.want {
+				t.Errorf("IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoadFrom_WorktreesMergesAcrossLayers — модель
+// TestLoadFrom_FileBrowserEnabledMergesAcrossLayers, но с инвертированным
+// дефолтом (both unset -> disabled). Ловит забытую ветку в mergeFile.
+func TestLoadFrom_WorktreesMergesAcrossLayers(t *testing.T) {
+	cases := []struct {
+		name        string
+		globalYAML  string
+		projectYAML string
+		want        bool
+	}{
+		{
+			name:        "both unset -> disabled (default off)",
+			globalYAML:  ``,
+			projectYAML: ``,
+			want:        false,
+		},
+		{
+			name: "global true, project unset -> enabled",
+			globalYAML: `
+worktrees:
+  enabled: true
+`,
+			projectYAML: ``,
+			want:        true,
+		},
+		{
+			name:       "global unset, project true -> enabled",
+			globalYAML: ``,
+			projectYAML: `
+worktrees:
+  enabled: true
+`,
+			want: true,
+		},
+		{
+			name: "global true, project false -> disabled (project overrides)",
+			globalYAML: `
+worktrees:
+  enabled: true
+`,
+			projectYAML: `
+worktrees:
+  enabled: false
+`,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_WORKTREES", "")
+			globalDir := t.TempDir()
+			projectDir := t.TempDir()
+			if tc.globalYAML != "" {
+				writeYAML(t, globalDir, "config.yaml", tc.globalYAML)
+			}
+			if tc.projectYAML != "" {
+				writeYAML(t, projectDir, "config.yaml", tc.projectYAML)
+			}
+			cfg, err := config.LoadFrom(globalDir, projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Worktrees.IsEnabled(); got != tc.want {
+				t.Errorf("Worktrees.IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

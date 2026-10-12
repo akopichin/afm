@@ -5,6 +5,19 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-12
 
+### Improvement: optional per-flow git worktrees
+
+Flows can run in `<project-root>/.worktrees/<flow-name>` on a branch named after
+the flow, keeping stage changes separate from the main checkout while `.afm/`
+run state stays in its original location. Opt in with top-level `worktrees: true`
+in `flow.yaml`, `AFM_WORKTREES=1`, or `worktrees.enabled: true` in `config.yaml`
+(flow > environment > config; off by default). afm reuses an existing matching
+worktree, including uncommitted changes, and prepares it on the host for Docker
+runs. `afm run --worktree-clear` discards uncommitted changes while keeping branch
+commits; `--worktree-clear-force` also recreates the branch from the project
+root's current `HEAD`. Both flags start a fresh run. See the
+[flow reference](https://github.com/akopichin/afm/blob/main/docs/flow-reference.md#per-flow-git-worktrees).
+
 ### Fix: a transient AI-verify crash no longer fails the stage
 
 An AI [`verify:`](https://github.com/akopichin/afm/blob/main/docs/verify.md) step

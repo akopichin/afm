@@ -35,6 +35,11 @@ Notes on the flags:
 Automatic Docker mode (`docker.enabled: true`) sets all of this — the port mapping,
 `AFM_IN_DOCKER`, and the forwarded token — for you.
 
+When [per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) are enabled
+with automatic Docker mode, afm creates or reuses the worktree on the host and
+passes its path into the container. The effective project root (`root_dir`, or
+the parent of `.afm/`) must be inside the directory mounted from `--dir`.
+
 Or enable automatic Docker mode in the config — then the plain `afm run` command
 restarts itself inside the container:
 

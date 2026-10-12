@@ -4,6 +4,7 @@
 .afm/
   flows/           # flow.yaml files
   runs/
+    .worktree-locks/  # one run-lifetime lock per flow when worktrees are enabled
     <flow>-<ts>-<rand>/    # data for a single run (rand — avoids collisions)
       events.jsonl   # event log of transitions — SOURCE OF TRUTH (append + fsync)
       state.json     # derived status snapshot (cache; readers take the truth from the log)
@@ -32,5 +33,9 @@
       .lock          # flock of the active side-agent writer
   config.yaml      # project config (optional)
 ```
+
+When enabled, a flow's git worktree lives at `<project-root>/.worktrees/<flow>`;
+`<project-root>` is `flow.root_dir` if set, otherwise the parent of `.afm/`.
+The worktree contains the source checkout, while run records stay under `.afm/`.
 
 See [the event log](event-log.md) for the guarantees behind `events.jsonl`.

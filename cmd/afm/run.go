@@ -23,13 +23,23 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/pkg/worktree"
 )
+
+// runOptions carries per-invocation choices into executeFlow.
+type runOptions struct {
+	requireApproval bool
+	worktreeDir     string // "" = agents run in the main checkout
+	forceNewRun     bool   // set by the clear flags: never resume
+}
 
 func newRunCmd() *cobra.Command {
 	var maxParallel int
 	var idleTimeout time.Duration
 	var port int
 	var requireApproval bool
+	var worktreeClear bool
+	var worktreeClearForce bool
 
 	cmd := &cobra.Command{
 		Use:   "run [flow.yaml]",
@@ -67,8 +77,34 @@ func newRunCmd() *cobra.Command {
 			}
 			// Combine before re-exec: host and container must use identical secret indices.
 			hooks := combineRunHooks(cfg, f)
+
+			mode, err := clearModeFromFlags(worktreeClear, worktreeClearForce)
+			if err != nil {
+				return err
+			}
+			wtDir, wtLock, err := resolveWorktree(context.Background(), rootDir, f, cfg, mode)
+			if err != nil {
+				return err // resolveWorktree's own errors already carry a "worktree: " prefix
+			}
+			// Held for the entire run so a concurrent --worktree-clear always sees this flow's lock held
+			// — never released right after resolveWorktree returns, which would leave the run's whole
+			// lifetime unprotected. docker.ReExec spawns `docker run` as a child process and blocks on
+			// it (not a process-image replacement), so this defer spans the container's whole lifetime
+			// too when Docker is enabled; the re-exec'd container's own resolveWorktree call always
+			// returns a nil lock (see its doc comment), so wtLock is only ever non-nil on the host.
+			if wtLock != nil {
+				defer wtLock.Close() //nolint:errcheck
+			}
+			// In Docker mode the host process re-execs into the container, which re-runs RunE and
+			// reaches this point a second time (resolveWorktree's ReExecedIntoContainer branch just
+			// reads the transport env) — skip the print there so it isn't shown twice.
+			if wtDir != "" && !config.ReExecedIntoContainer() {
+				// Plan.Branch is always the flow name; no need to return it separately.
+				fmt.Printf("afm: worktree %s (branch %s)\n", wtDir, f.Name)
+			}
+
 			if cfg.Docker.IsDockerEnabled() {
-				return reexecFlow(rootDir, f, cfg, hooks)
+				return reexecFlow(rootDir, f, cfg, hooks, wtDir)
 			}
 
 			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
@@ -82,23 +118,29 @@ func newRunCmd() *cobra.Command {
 			if maxParallel == 0 && f.MaxParallel > 0 {
 				cfg.Executor.MaxParallel = f.MaxParallel
 			}
-			return executeFlow(f, cfg, hooks, requireApproval)
+			return executeFlow(f, cfg, hooks, runOptions{
+				requireApproval: requireApproval,
+				worktreeDir:     wtDir,
+				forceNewRun:     mode != worktree.ClearNone,
+			})
 		},
 	}
 	cmd.Flags().IntVar(&maxParallel, "max-parallel", 0, "max parallel stages (0=unlimited)")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "agent idle timeout")
 	cmd.Flags().IntVar(&port, "port", 0, "dashboard port (0=use config)")
 	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "fail if a stage plan needs approval but no dashboard is running")
+	cmd.Flags().BoolVar(&worktreeClear, "worktree-clear", false, "recreate the flow worktree, discarding uncommitted changes but keeping its branch and commits; also starts a fresh run")
+	cmd.Flags().BoolVar(&worktreeClearForce, "worktree-clear-force", false, "recreate the flow worktree AND its branch from HEAD, discarding the branch's commits; also starts a fresh run")
 	return cmd
 }
 
 // executeFlow owns run resources. Each resource is released on every return path.
-func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, requireApproval bool) error {
+func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, opts runOptions) error {
 	prompts, err := loadPrompts(cfg.PromptsDir)
 	if err != nil {
 		return err
 	}
-	runDir, store, err := resolveRun(f)
+	runDir, store, err := resolveRun(f, opts.forceNewRun)
 	if err != nil {
 		return err
 	}
@@ -124,7 +166,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	fmt.Printf("afm: running %q\n", f.Name)
 	fmt.Printf("  run dir: %s\n", runDir)
 
-	env, err := prepareRunEnvironment(rootDir, f, cfg)
+	env, err := prepareRunEnvironment(rootDir, f, cfg, opts.worktreeDir)
 	if err != nil {
 		return err
 	}
@@ -177,7 +219,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		GeneratedAgents:   env.GeneratedAgents,
 		GlobalPrompt:      f.Prompt,
 		RootDir:           env.RootDir,
-		RequireApproval:   requireApproval,
+		RequireApproval:   opts.requireApproval,
 		Debug:             debugEnabled,
 		Memory:            f.Memory,
 		MemoryDir:         env.MemoryDir,
@@ -273,7 +315,9 @@ func resolveFlowPath(args []string) (string, error) {
 	return "", fmt.Errorf("multiple flow files found; specify one: %v", yamls)
 }
 
-func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
+// resolveRun opens the latest resumable run for f, unless forceNew is set — the clear flags imply a fresh
+// worktree, which has no business resuming a run that may reference the previous checkout's state.
+func resolveRun(f *flow.Flow, forceNew bool) (runDir string, store *state.Store, err error) {
 	base := runsDir()
 
 	stageIDs := make([]string, len(f.Stages))
@@ -281,20 +325,22 @@ func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
 		stageIDs[i] = s.ID
 	}
 
-	existing, lookErr := state.FindLatestRunDir(base, f.Name)
-	if lookErr == nil {
-		store, err = state.Open(existing, stageIDs)
-		if err == nil {
-			snap := store.Snapshot()
-			if !snap.AllDone() {
-				fmt.Printf("afm: resuming run %s\n", filepath.Base(existing))
-				return existing, store, nil
+	if !forceNew {
+		existing, lookErr := state.FindLatestRunDir(base, f.Name)
+		if lookErr == nil {
+			store, err = state.Open(existing, stageIDs)
+			if err == nil {
+				snap := store.Snapshot()
+				if !snap.AllDone() {
+					fmt.Printf("afm: resuming run %s\n", filepath.Base(existing))
+					return existing, store, nil
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: failed to open existing run %s: %v; starting new run\n", filepath.Base(existing), err)
 			}
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: failed to open existing run %s: %v; starting new run\n", filepath.Base(existing), err)
-		}
-		if store != nil {
-			store.Close()
+			if store != nil {
+				store.Close()
+			}
 		}
 	}
 

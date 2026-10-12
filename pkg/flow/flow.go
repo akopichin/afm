@@ -309,7 +309,10 @@ type Flow struct {
 	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
 	// SideAgent, when set, overrides config/env for the dashboard side-agent
 	// (nil = no opinion → defer to AFM_SIDEAGENT / config). Highest precedence.
-	SideAgent *bool   `yaml:"side_agent,omitempty"`
+	SideAgent *bool `yaml:"side_agent,omitempty"`
+	// Worktrees, when set, overrides env/config for per-flow git worktrees
+	// (nil = no opinion → defer to AFM_WORKTREES / config). Highest precedence.
+	Worktrees *bool   `yaml:"worktrees,omitempty"`
 	Stages    []Stage `yaml:"stages"`
 }
 

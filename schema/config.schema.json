@@ -36,7 +36,8 @@
     },
     "verify": { "$ref": "#/definitions/verify" },
     "browser": { "$ref": "#/definitions/browser" },
-    "side_agent": { "$ref": "#/definitions/sideAgent" }
+    "side_agent": { "$ref": "#/definitions/sideAgent" },
+    "worktrees": { "$ref": "#/definitions/worktrees" }
   },
   "definitions": {
     "sideAgent": {
@@ -47,6 +48,17 @@
         "enabled": {
           "type": "boolean",
           "description": "Enable the side-agent. ON by default; explicit false / env AFM_SIDEAGENT=0 disables it."
+        }
+      }
+    },
+    "worktrees": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-flow git worktrees: each flow runs in a dedicated worktree on a branch named after the flow. Precedence: flow.yaml worktrees > env AFM_WORKTREES > this > default OFF.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable per-flow git worktrees. OFF by default; env AFM_WORKTREES overrides; flow.yaml worktrees overrides both."
         }
       }
     },

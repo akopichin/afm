@@ -64,9 +64,11 @@ func TestArtifactAndInputMarshal_OmitZeroValueFields(t *testing.T) {
 }
 
 func TestFlowMarshal_RoundTripsThroughParseFile(t *testing.T) {
+	worktrees := true
 	f := Flow{
 		Name:        "roundtrip-test",
 		Description: "d",
+		Worktrees:   &worktrees,
 		Stages: []Stage{
 			{ID: "implementation", Name: "Implementation", Description: "do it",
 				Agents: []AgentType{AgentPlanning, AgentImplementation}},
@@ -87,5 +89,8 @@ func TestFlowMarshal_RoundTripsThroughParseFile(t *testing.T) {
 	}
 	if parsed.Name != f.Name || len(parsed.Stages) != 1 {
 		t.Errorf("round-trip mismatch: %+v", parsed)
+	}
+	if parsed.Worktrees == nil || *parsed.Worktrees != worktrees {
+		t.Errorf("worktrees round-trip mismatch: got %v, want pointer to %v", parsed.Worktrees, worktrees)
 	}
 }

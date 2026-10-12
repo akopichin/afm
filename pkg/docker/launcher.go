@@ -22,6 +22,12 @@ import (
 // containerHome — домашний каталог non-root пользователя внутри контейнера.
 const containerHome = "/home/afm"
 
+// WorktreeEnvVar — имя переменной окружения, через которую хост передаёт путь к уже подготовленному git
+// worktree в контейнер. Следует паттерну FileRootsEnvVar (хост считает значение, форвардит через env,
+// контейнер потребляет под AFM_IN_DOCKER=1), а не AFM_SIDEAGENT (переразрешение тоггла в контейнере) —
+// создать worktree может только хост.
+const WorktreeEnvVar = "AFM_DOCKER_WORKTREE"
+
 // CommandMount описывает нестандартный агент для монтирования в контейнер.
 type CommandMount struct {
 	HostPath      string
@@ -46,6 +52,12 @@ type ReExecConfig struct {
 	// FileRoots — манифест корней file browser (см. BuildFileRootManifest), закодированный и передаваемый в
 	// контейнер только когда FileBrowserEnabled и Roots непусты.
 	FileRoots FileRootManifest
+
+	// WorktreeDir — абсолютный путь к git worktree, уже подготовленному ХОСТОМ (resolveWorktree в cmd/afm)
+	// до вызова ReExec. Пусто — worktree выключен, агенты в контейнере работают в основном чекауте. Путь
+	// лежит под ProjectDir (containment-гейт — обязанность вызывающего кода), поэтому отдельный bind-mount
+	// не нужен: ProjectDir уже смонтирован по идентичному пути.
+	WorktreeDir string
 
 	// Hooks — итоговый список lifecycle-хуков, собранный ВЫЗЫВАЮЩИМ КОДОМ ДО этой докер-ветки.
 	Hooks []lifecyclehooks.RegisteredHook
@@ -345,6 +357,11 @@ func ReExec(cfg ReExecConfig) error {
 		if enc, encErr := EncodeFileRootManifest(cfg.FileRoots); encErr == nil {
 			args = append(args, "-e", FileRootsEnvVar+"="+enc)
 		}
+	}
+	// Worktree: путь (не секрет — виден и так через bind-mount) передаём значением, чтобы resolveWorktree
+	// внутри контейнера знало, куда указывать CWD агентов, не повторяя git-работу хоста.
+	if cfg.WorktreeDir != "" {
+		args = append(args, "-e", WorktreeEnvVar+"="+cfg.WorktreeDir)
 	}
 	// Передаём секреты только в bare-форме `-e KEY`: docker-клиент наследует окружение afm и сам подставит
 	// значение.

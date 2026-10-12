@@ -38,6 +38,10 @@ server:
 #   enabled: false          # dashboard side agent; ON by default. env AFM_SIDEAGENT overrides,
 #                           # and flow.yaml side_agent overrides both. See dashboard.md
 
+# worktrees:
+#   enabled: true           # per-flow git worktrees; OFF by default. env AFM_WORKTREES
+#                           # overrides, and flow.yaml worktrees overrides both
+
 accounting:
   enabled: false            # hide cost display everywhere (dashboard + afm check/report);
                             # ON by default, env AFM_ACCOUNTING overrides. Data is still
@@ -93,6 +97,15 @@ memory rebuild` forwards the value the same way but does not print the warning.)
 
 Non-claude agents configured as Docker recipes take their own per-recipe
 `reasoning` knob instead — see [Docker mode → autoShim recipes](docker.md#non-claude-agents-in-docker-autoshim).
+
+## Per-flow git worktrees
+
+Set `worktrees.enabled: true` in `.afm/config.yaml` (or globally in
+`~/.afm/config.yaml`) to opt in. `AFM_WORKTREES=1` enables and
+`AFM_WORKTREES=0` disables it for a run. A top-level `worktrees: true|false` in
+`flow.yaml` takes priority over both. The default is off. See
+[Per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) for paths,
+reuse, and the `--worktree-clear` flags.
 
 See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and

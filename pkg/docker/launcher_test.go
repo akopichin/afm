@@ -1153,3 +1153,123 @@ func containsBareEnv(argv []string, name string) bool {
 	}
 	return false
 }
+
+func TestReExec_ForwardsWorktreeEnv(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:       "img",
+		ProjectDir:  "/p",
+		ExtraArgs:   []string{"run", "flow.yaml"},
+		WorktreeDir: "/p/.worktrees/f",
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	if !hasEnvKey(capturedArgs, docker.WorktreeEnvVar) {
+		t.Fatalf("expected -e %s, got: %s", docker.WorktreeEnvVar, strings.Join(capturedArgs, " "))
+	}
+	if !strings.Contains(strings.Join(capturedArgs, " "), docker.WorktreeEnvVar+"=/p/.worktrees/f") {
+		t.Fatalf("expected %s=/p/.worktrees/f, got: %s", docker.WorktreeEnvVar, strings.Join(capturedArgs, " "))
+	}
+}
+
+func TestReExec_NoWorktreeEnvWhenEmpty(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:      "img",
+		ProjectDir: "/p",
+		ExtraArgs:  []string{"run", "flow.yaml"},
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	if strings.Contains(strings.Join(capturedArgs, " "), docker.WorktreeEnvVar) {
+		t.Fatalf("%s must not appear when WorktreeDir is empty, got: %s", docker.WorktreeEnvVar, strings.Join(capturedArgs, " "))
+	}
+}
+
+// TestReExec_WorktreeNeedsNoExtraMount pairs with TestReExec_ForwardsWorktreeEnv and is sound only together
+// with resolveWorktree's host-side containment guard (cmd/afm/run_worktree.go), which refuses any
+// worktree path outside ProjectDir before this code ever runs. Given that guarantee, a worktree under
+// ProjectDir needs no bind-mount of its own: ProjectDir is already mounted at the identical container path,
+// so the container sees the worktree for free. This test only proves "no new -v flag"; it does not and
+// cannot prove containment itself — that's resolveWorktree's job.
+func TestReExec_WorktreeNeedsNoExtraMount(t *testing.T) {
+	countFlag := func(argv []string, flag string) int {
+		n := 0
+		for _, a := range argv {
+			if a == flag {
+				n++
+			}
+		}
+		return n
+	}
+
+	run := func(t *testing.T, worktreeDir string) []string {
+		var capturedArgs []string
+		docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+			capturedArgs = argv
+			return nil
+		})
+		defer docker.ResetExecFunc()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+		err := docker.ReExec(docker.ReExecConfig{
+			Image:       "img",
+			ProjectDir:  "/p",
+			ExtraArgs:   []string{"run", "flow.yaml"},
+			WorktreeDir: worktreeDir,
+		})
+		if err != nil {
+			t.Fatalf("ReExec: %v", err)
+		}
+		return capturedArgs
+	}
+
+	without := run(t, "")
+	with := run(t, "/p/.worktrees/f")
+
+	mountsWithout := countFlag(without, "-v")
+	mountsWith := countFlag(with, "-v")
+	if mountsWith != mountsWithout {
+		t.Fatalf("expected no extra -v mount for an in-ProjectDir worktree: without=%d with=%d\nwithout=%s\nwith=%s",
+			mountsWithout, mountsWith, strings.Join(without, " "), strings.Join(with, " "))
+	}
+
+	// The only difference between the two argv's should be the worktree -e pair.
+	if hasEnvKey(without, docker.WorktreeEnvVar) {
+		t.Fatalf("baseline run must not carry %s: %s", docker.WorktreeEnvVar, strings.Join(without, " "))
+	}
+	if !hasEnvKey(with, docker.WorktreeEnvVar) {
+		t.Fatalf("worktree run must carry %s: %s", docker.WorktreeEnvVar, strings.Join(with, " "))
+	}
+}

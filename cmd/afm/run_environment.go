@@ -26,12 +26,16 @@ func (e runEnvironment) Close() {
 	}
 }
 
-func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config) (runEnvironment, error) {
+func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, worktreeDir string) (runEnvironment, error) {
 	var env runEnvironment
 	var err error
-	env.RootDir, err = resolveAgentRoot(afmRoot, f)
-	if err != nil {
-		return env, err
+	if worktreeDir != "" {
+		env.RootDir = worktreeDir // the worktree IS the effective project root
+	} else {
+		env.RootDir, err = resolveAgentRoot(afmRoot, f)
+		if err != nil {
+			return env, err
+		}
 	}
 	env.MemoryDir, err = resolveMemoryDir(afmRoot, env.RootDir, f)
 	if err != nil {
@@ -73,7 +77,7 @@ func normalizeInteractiveStages(stages []flow.Stage, dashboardEnabled bool) []fl
 	return stages
 }
 
-func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook) error {
+func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string) error {
 	absDir, err := filepath.Abs(afmRoot)
 	if err != nil {
 		return fmt.Errorf("resolve project dir: %w", err)
@@ -131,6 +135,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		MountCodexState:    docker.UsesCodex(f, cfg.Client.Command, recipes),
 		FileBrowserEnabled: browserEnabled,
 		FileRoots:          fileRoots,
+		WorktreeDir:        worktreeDir,
 	}
 	if browserDesc != nil {
 		rc.BrowserEnabled = true

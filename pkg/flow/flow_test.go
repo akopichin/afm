@@ -1362,3 +1362,44 @@ stages:
 		t.Errorf("side_agent true: got %v, want pointer to true", f.SideAgent)
 	}
 }
+
+func TestParseFile_WorktreesTriState(t *testing.T) {
+	const base = `
+name: f
+description: "worktrees tri-state"
+stages:
+  - id: s
+    name: "S"
+    description: "d"
+    agents: [planning, implementation]
+`
+	t.Run("absent", func(t *testing.T) {
+		f, err := flow.ParseFile(writeTemp(t, base))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Worktrees != nil {
+			t.Errorf("worktrees absent: got %v, want nil", *f.Worktrees)
+		}
+	})
+
+	t.Run("true", func(t *testing.T) {
+		f, err := flow.ParseFile(writeTemp(t, "worktrees: true\n"+base))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Worktrees == nil || !*f.Worktrees {
+			t.Errorf("worktrees true: got %v, want pointer to true", f.Worktrees)
+		}
+	})
+
+	t.Run("false", func(t *testing.T) {
+		f, err := flow.ParseFile(writeTemp(t, "worktrees: false\n"+base))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Worktrees == nil || *f.Worktrees {
+			t.Errorf("worktrees false: got %v, want pointer to false", f.Worktrees)
+		}
+	})
+}

@@ -50,6 +50,11 @@ client:
 
 # Dashboard side agent — the free-form chat alongside the run. ON by default.
 
+# Per-flow git worktrees — run each flow on its own branch/worktree under .worktrees/<flow>. OFF by
+# default; opt in here with worktrees.enabled: true, or set AFM_WORKTREES=1.
+# worktrees:
+#   enabled: true
+
 # Accounting DISPLAY switch. Controls only whether cost is SHOWN: the dashboard cost tile/tab/rail, the
 # TOKENS/CACHE/EST.
 

@@ -150,6 +150,38 @@ func TestFindLatestRunDir_NotFound(t *testing.T) {
 	}
 }
 
+func TestFindAllRunDirs(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "runs")
+
+	old := filepath.Join(base, "myflow-20260101-100000")
+	os.MkdirAll(old, 0755)
+	newer := filepath.Join(base, "myflow-20260101-120000")
+	os.MkdirAll(newer, 0755)
+	// A different flow's run dir must not match myflow's prefix.
+	os.MkdirAll(filepath.Join(base, "myflow-other-20260101-100000"), 0755)
+
+	got, err := findAllRunDirs(base, "myflow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{old, newer}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("findAllRunDirs: got %v, want %v (ascending, oldest first)", got, want)
+	}
+}
+
+func TestFindAllRunDirs_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "runs")
+	os.MkdirAll(base, 0755)
+
+	_, err := findAllRunDirs(base, "noflow")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
 func TestVersionPlan(t *testing.T) {
 	dir := t.TempDir()
 	stageDir := filepath.Join(dir, "s1")

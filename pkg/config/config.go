@@ -301,6 +301,23 @@ func (c SideAgentConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// WorktreesConfig gates per-flow git worktrees. nil/absent Enabled = OFF by
+// default — the inverse of SideAgentConfig's default (nil/true = ON there).
+// env AFM_WORKTREES wins over this field; flow.yaml worktrees overrides both.
+type WorktreesConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled сообщает, включены ли git worktrees на флоу. Приоритет: env
+// AFM_WORKTREES > config > по умолчанию ВЫКЛЮЧЕНО. Только явный enabled: true
+// (или AFM_WORKTREES=1) включает их.
+func (c WorktreesConfig) IsEnabled() bool {
+	if v, set := envBool("AFM_WORKTREES"); set {
+		return v
+	}
+	return c.Enabled != nil && *c.Enabled
+}
+
 // IsEnabled сообщает, включён ли файловый браузер. Приоритет: env AFM_FILE_BROWSER > config > по умолчанию
 // ВКЛЮЧЕНО. Только явный enabled: false (или AFM_FILE_BROWSER=0) выключает его.
 func (c DockerFileBrowserConfig) IsEnabled() bool {
@@ -469,6 +486,10 @@ type Config struct {
 	// SideAgent gates the dashboard side-agent. nil/true = ON by default;
 	// explicit false / AFM_SIDEAGENT=0 disables it. flow.yaml side_agent overrides.
 	SideAgent SideAgentConfig `yaml:"side_agent,omitempty"`
+	// Worktrees gates per-flow git worktrees. nil/false = OFF by default (the
+	// inverse of SideAgent's default-ON); explicit true / AFM_WORKTREES=1
+	// enables it. flow.yaml worktrees overrides both.
+	Worktrees WorktreesConfig `yaml:"worktrees,omitempty"`
 }
 
 // Default returns the built-in default configuration.
@@ -660,6 +681,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.SideAgent.Enabled != nil {
 		dst.SideAgent.Enabled = overlay.SideAgent.Enabled
+	}
+	if overlay.Worktrees.Enabled != nil {
+		dst.Worktrees.Enabled = overlay.Worktrees.Enabled
 	}
 	if overlay.Docker.AutoShim != nil {
 		dst.Docker.AutoShim = overlay.Docker.AutoShim

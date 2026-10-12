@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/akopichin/afm/pkg/gitcmd"
 )
 
 // nameStatusRec is one record of `git diff --name-status -z` (rename/copy
@@ -133,21 +135,8 @@ func gitCmd(ctx context.Context, gitDir, workTree string, args ...string) *exec.
 	cmd := exec.CommandContext(ctx, "git", full...)
 	// Strip ambient GIT_* selectors: --git-dir/--work-tree do not override external index/object/config paths
 	// from env.
-	cmd.Env = append(sanitizeGitEnv(cmd.Environ()), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(gitcmd.SanitizeEnv(cmd.Environ()), "GIT_OPTIONAL_LOCKS=0")
 	return cmd
-}
-
-// sanitizeGitEnv removes ambient GIT_* overrides so explicit root flags and -c options govern child git
-// access.
-func sanitizeGitEnv(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "GIT_") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 // runGitChanges runs a git command that MUST succeed. stdout is byte-capped; stderr is discarded (never

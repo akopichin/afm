@@ -40,6 +40,10 @@
       "type": "boolean",
       "description": "Enable the dashboard side-agent for this flow. Highest precedence: overrides env AFM_SIDEAGENT and config side_agent.enabled. Omitted = defer to env/config (default ON)."
     },
+    "worktrees": {
+      "type": "boolean",
+      "description": "Enable per-flow git worktrees for this flow. Highest precedence: overrides env AFM_WORKTREES and config worktrees.enabled. Omitted = defer to env/config (default OFF)."
+    },
     "stages": {
       "type": "array",
       "description": "The stages of the flow.",
