@@ -1,15 +1,5 @@
-/* pkg/web/dashboard/public/side-agent.css — структурный слой «бокового» агента
-   (Side agent): модалка-оверлей, история беседы, композер.
-
-   Доставляется ПОСТОЯННЫМ <link href="/side-agent.css"> из index.dev.html (его
-   добавляет сборка в index.html), а НЕ через skin @import: skin_dir заменяет
-   весь основной stylesheet целиком, поэтому base-партиал под кастомным скином не
-   подключился бы. Отдельная ссылка присутствует и для встроенных тем, и для
-   skin_dir.
-
-   Только СЕМАНТИЧЕСКИЕ токены (из активной темы) — никаких хардкод-цветов:
-   тема-агностика бесплатна, skin_dir обязан соблюдать тот же token-контракт, что
-   и прочие партиалы. */
+/* pkg/web/dashboard/public/side-agent.css — структурный слой «бокового» агента: модалка-оверлей, история
+   беседы, композер. Отдельная ссылка присутствует и для встроенных тем, и для skin_dir. */
 
 .side-agent-overlay {
   position: fixed;
@@ -22,17 +12,14 @@
   background: var(--overlay-scrim);
 }
 
-/* `hidden` is implemented by a user-agent `display: none`, which the author
-   rule above (`display: flex`) otherwise overrides. Closed SideAgentModal nodes
-   stay mounted to preserve conversation UI state, so they need an explicit
-   author-level hide rule; `inert` alone blocks input but does not hide pixels. */
+/* `hidden` is implemented by a user-agent `display: none`, which the author rule above otherwise
+   overrides. */
 .side-agent-overlay[hidden] {
   display: none;
 }
 
-/* Открытие: scrim проявляется, окно поднимается и слегка увеличивается. Только
-   opacity/transform (дёшево, без layout). Закрытие — обратный, более быстрый
-   переход; класс .side-agent-closing держит окно видимым, пока доигрывает. */
+/* Открытие: scrim проявляется, окно поднимается и слегка увеличивается. Только opacity/transform (дёшево,
+   без layout). */
 .side-agent-overlay.side-agent-open {
   animation: side-agent-scrim-in 200ms ease-out;
 }

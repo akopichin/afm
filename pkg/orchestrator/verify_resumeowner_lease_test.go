@@ -15,10 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// doneWritingRunner is a minimal executor.Runner stub used only by
-// TestResumeOwner_RegistersLeaseForVerifierSlotSwap: RunAgent writes .done
-// next to the log file (satisfying stagefiles.CheckCompletion's file probe)
-// without spawning a real subprocess.
+// doneWritingRunner writes .done without spawning an agent, satisfying the completion file probe.
 type doneWritingRunner struct{}
 
 func (doneWritingRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
@@ -33,25 +30,6 @@ func (doneWritingRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byt
 	return nil, nil
 }
 
-// TestResumeOwner_RegistersLeaseForVerifierSlotSwap is a regression for a
-// review finding: resumeOwner (the ACTIVELY-USED review-pause resume
-// dispatcher — any execution stage resuming after a review pause) used to
-// call the bare concurrency.SpawnAgent directly, bypassing spawnKind's
-// lease-registration wrapper entirely. RunVerification then found no lease
-// for the stage (o.stageLeases.Load returned ok=false) and ran the verifier
-// subprocess WITHOUT any command-slot accounting — a real max_parallel
-// violation for the verify command on this path, not just a missed
-// optimization. Fixed by extracting spawnAgentLeased (used by spawnKind AND
-// by resumeOwner AND by recovery.go's resumeInteractiveAgent) as the single
-// control point that always registers a lease.
-//
-// This test drives resumeOwner's REAL spawn path (no o.testRunnerHook stub)
-// with two real concurrency.ChannelSemaphores standing in for the author's
-// command ("" -> resolved to the manager's default "claude") and the
-// verifier's command ("codex"): while the verify agent step runs, the codex
-// slot must be held (len==1) and the claude slot must be released (len==0) —
-// proving the lease was registered by resumeOwner's spawn and really swapped,
-// not silently absent.
 func TestResumeOwner_RegistersLeaseForVerifierSlotSwap(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "s1")
@@ -67,16 +45,12 @@ func TestResumeOwner_RegistersLeaseForVerifierSlotSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	// Situation #2 from resumeOwner's own doc comment: the FSM transition out
-	// of paused already committed (crash/replay before its spawn ran) — the
-	// stage is simply Running with no live agent behind it, resumeOwner just
-	// re-spawns. seedStageStatus bypasses the FSM guard (raw Pending->target),
-	// same technique the neighboring tests in this file already use.
+	// Situation #2 from resumeOwner's own doc comment: the FSM transition out of paused already committed —
+	// the stage is simply Running with no live agent behind it, resumeOwner just re-spawns.
 	seedStageStatus(t, store, "s1", state.StatusRunning)
 
-	// Command "" on the stage resolves to the manager's defaultCmd ("claude")
-	// via resolveCmd — this also keeps runnerFor's fake-Runner substitution
-	// path active (it only fires for s.Command == "").
+	// Command "" on the stage resolves to the manager's defaultCmd ("claude") via resolveCmd — this also
+	// keeps runnerFor's fake-Runner substitution path active (it only fires for s.Command == "").
 	stage := flow.Stage{ID: "s1", Name: "S1",
 		Agents: []flow.AgentType{flow.AgentImplementation},
 		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}},

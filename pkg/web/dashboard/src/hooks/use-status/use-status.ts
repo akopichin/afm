@@ -3,9 +3,7 @@ import type { Stage, StageStatus, StageVerify } from '../../types'
 import { STAGE_STATUSES } from '../../types'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 
-// Периодический опрос состояния флоу. Соответствует loadState в текущем app.js,
-// но в React-форме: поллинг по таймеру + возможность немедленного обновления через
-// refresh() (WS-события — канал обновления состояния, см. корневую композицию).
+// Периодический опрос состояния флоу.
 const POLL_INTERVAL_MS = 3000
 const STATUS_STALE_MS = 2 * POLL_INTERVAL_MS
 
@@ -17,44 +15,25 @@ export type FlowStatus = {
   endedAt: string | null
   elapsedAccumulatedMs: number | null
   elapsedSince: string | null
-  // Описание флоу (из корня flow.yaml) — опциональное поле GET /api/status для
-  // подзаголовка в шапке (см. FlowHeader). Бэкенд пока его не отдаёт, поле
-  // читается защитно (undefined, если отсутствует), без нового API-вызова —
-  // как только бэкенд начнёт присылать description, подзаголовок появится сам.
+  // Описание флоу — опциональное поле GET /api/status для подзаголовка в шапке.
   description?: string
-  // version — версия afm, отдаваемая GET /api/status (ключ `version`): 'dev'
-  // для локальных/dev-сборок, 'vX.Y.Z' для релизов. Читается защитно ('', если
-  // бэкенд не прислал поле) — как только бэкенд начнёт присылать version, строка
-  // в футере рейла появится сама, без нового API-вызова.
+  // version — версия afm, отдаваемая GET /api/status: 'dev' для локальных/dev-сборок, 'vX.Y.Z' для
+  // релизов.
   version: string
-  // idle/backoff — накопленное на бэкенде время (пережившее restart) плюс
-  // необязательный анкер ТЕКУЩЕГО открытого периода/эпизодов, см.
-  // useIdleMs/useBackoffMs. idleSince — null, если флоу не простаивает
-  // прямо сейчас; backoffOpenSince — по одному значению на каждую стадию,
-  // сейчас находящуюся в retrying (может быть пустым).
+  // idle/backoff — накопленное на бэкенде время плюс необязательный анкер ТЕКУЩЕГО открытого
+  // периода/эпизодов, см. useIdleMs/useBackoffMs.
   idleAccumulatedMs: number
   idleSince: string | null
   backoffAccumulatedMs: number
   backoffOpenSince: string[]
-  // capabilities — фичефлаги бэкенда для текущего запуска (см. Go
-  // Server.Capabilities): включён ли файловый браузер проекта (Task 13 UI) и
-  // подключён ли «боковой» агент (side agent). Отсутствие поля/флага в ответе —
-  // как на старом бэкенде без этого API — трактуется как выключено, а не как
-  // ошибка.
+  // capabilities — фичефлаги бэкенда для текущего запуска: включён ли файловый браузер проекта и подключён
+  // ли «боковой» агент.
   capabilities: { fileBrowser: boolean; sideAgent: boolean }
-  // runId — id текущего разговора бокового агента (== run_id, ключ GET /api/status
-  // `run_id`, omitempty на бэкенде). Непусто только когда боковой агент подключён;
-  // читается защитно ('' при отсутствии) — как только бэкенд начнёт присылать
-  // run_id, он станет доступен без нового API-вызова. Используется хуком бокового
-  // агента как поколение: смена run_id инвалидирует прежний разговор.
+  // runId — id текущего разговора бокового агента. Используется хуком бокового агента как поколение: смена
+  // run_id инвалидирует прежний разговор.
   runId: string
-  // flowPauseState/flowPausedStages — состояние flow-wide review-pause (см.
-  // Go handlers.go's statusResponse.FlowPauseState/FlowPausedStages): 'none' —
-  // обычная работа; 'paused' — активные стадии приостановлены для сбора
-  // ревью-заметок (flowPausedStages — их id); 'resuming' — заметки уже
-  // инжектированы/отменены, флоу возобновляется. Любое незнакомое значение
-  // (в т.ч. отсутствие поля — старый бэкенд без этой фичи) трактуется как
-  // 'none', а не как ошибка.
+  // flowPauseState: none — работа, paused — сбор notes для flowPausedStages, resuming — возобновление;
+  // неизвестное значение даёт none.
   flowPauseState: 'none' | 'paused' | 'resuming'
   flowPausedStages: string[]
   // runCost/runOverheadCost — сводки по затратам флоу (omitempty, если
@@ -90,22 +69,16 @@ const EMPTY_STATUS: FlowStatus = {
   accounting: { supported: false },
 }
 
-// Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages —
-// уже упорядоченный массив StageView (см. pkg/server/stageview.go), маппинг 1:1
-// через toStage.
+// Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages — уже упорядоченный массив
+// StageView (см. pkg/server/stageview.go), маппинг 1:1 через toStage.
 
 export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable: boolean } {
   const [status, setStatus] = useState<FlowStatus>(EMPTY_STATUS)
   const [statusAvailable, setStatusAvailable] = useState(false)
   const lastStatusSuccessAt = useRef<number | null>(null)
   const cancelledRef = useRef(false)
-  // Поллинг и WS-триггерный refresh() issue независимые fetch('/api/status') —
-  // несколько запросов могут быть в полёте одновременно (напр. burst значимых
-  // событий), а сетевые ответы приходят не обязательно в порядке отправки.
-  // latestRequestId — счётчик поколений: каждый load() запоминает свой номер
-  // ДО await и применяет ответ, только если он всё ещё самый свежий issued
-  // запрос — иначе более старый (но позже резолвившийся) ответ откатил бы
-  // состояние назад (реальный баг: пропущенный auto-advance стадии в App).
+  // Поллинг и WS-триггерный refresh issue независимые fetch — несколько запросов могут быть в полёте
+  // одновременно, а сетевые ответы приходят не обязательно в порядке отправки.
   const latestRequestId = useRef(0)
 
   const load = useCallback(async () => {
@@ -163,11 +136,8 @@ export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable
     }
   }, [load])
 
-  // Фоновая/свёрнутая вкладка троттлит setInterval сильнее, чем доставку
-  // WS-сообщений (см. use-event-feed.ts) — поэтому долгий флоу может
-  // завершиться, пока опрос выше не тикнул ни разу. Возврат вкладки в фокус —
-  // сигнал незамедлительно подтянуть актуальный статус, а не ждать следующего
-  // (возможно, отложенного браузером) тика.
+  // Фоновая/свёрнутая вкладка троттлит setInterval сильнее, чем доставку WS-сообщений — поэтому долгий
+  // флоу может завершиться, пока опрос выше не тикнул ни разу.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') void load()
@@ -294,10 +264,8 @@ function toStage(raw: unknown): Stage | null {
   }
 }
 
-// toVerifyView normalizes GET /api/status's stage.verify (Go StageView.Verify,
-// pkg/server/stageview.go) defensively — the server shape isn't blindly
-// trusted: an unrecognized/missing phase or a wrong-typed step/command falls
-// back rather than producing a malformed StageVerify.
+// toVerifyView validates the API's verify fields and falls back for missing, unknown, or wrongly typed
+// values.
 const VERIFY_PHASES = new Set(['running', 'pass', 'accepted_stalemate', 'needs_changes', 'inconclusive', 'error'])
 
 function toVerifyView(raw: unknown): StageVerify | undefined {

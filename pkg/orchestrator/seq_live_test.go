@@ -34,11 +34,6 @@ func (alwaysSucceedsRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, e
 
 var _ executor.Runner = alwaysSucceedsRunner{}
 
-// TestLiveEvent_CarriesRealSeq подтверждает фикс "seq доходит до фронта":
-// Trigger публикует EventStageStatusChanged с реальным seq применённой
-// transition (не нулём), и этот seq совпадает с тем, что лежит в
-// store.History() для той же transition — фронт может дедуплицировать live-
-// событие с его историческим двойником из /api/events по этому ключу.
 func TestLiveEvent_CarriesRealSeq(t *testing.T) {
 	runDir := t.TempDir()
 	stages := []flow.Stage{{ID: "a", Name: "a", Agents: []flow.AgentType{flow.AgentAuto}}}

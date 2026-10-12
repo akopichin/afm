@@ -17,15 +17,11 @@ import (
 	"github.com/akopichin/afm/pkg/memory"
 )
 
-// AtomicWriter is the seam over memory.AtomicWrite used by Finalize's
-// promotion step (review #8): a test injects a recording/failing writer to
-// observe or interrupt the durable rename of a final target/dataset. It
-// receives (path, bytes) so it can FULLY replace the write, not just observe.
+// AtomicWriter replaces the durable promotion write in tests, allowing failures and write order to be
+// observed.
 type AtomicWriter func(path string, data []byte) error
 
-// CaptureRequest — parameters for CaptureAll: which run's stage dirs to read,
-// the offline work dir to stage datasets into, the flow stages, whether to
-// force a fresh reflect for every stage, and the manifest to advance.
+// CaptureRequest configures source stages, staging directory, forced reflection, and manifest updates.
 type CaptureRequest struct {
 	RunDir       string
 	WorkDir      string
@@ -34,9 +30,8 @@ type CaptureRequest struct {
 	ManifestPath string
 }
 
-// FinalizeRequest — parameters for Finalize. The caller MUST already hold the
-// memory lock for MemoryDir (Finalize never takes it, review #2). writer is a
-// test seam; nil -> memory.AtomicWrite.
+// FinalizeRequest configures Finalize; the caller must hold MemoryDir's lock. A nil writer uses
+// memory.AtomicWrite.
 type FinalizeRequest struct {
 	Meta         OperationMeta
 	RunDir       string
@@ -54,22 +49,12 @@ type FinalizeRequest struct {
 // agent specs are distinguishable from per-stage ones (spec.StageName).
 const projectTargetName = "flow-memory"
 
-// CaptureStage is the single low-level capture primitive (review #3): it
-// writes (or reuses) ONE stage's dataset at the caller-chosen datasetOut.
-// The offline pass passes a staging path; the live orchestrator passes the
-// canonical path directly. This is the explicit "output mode" the first plan
-// lacked.
-//
-// Reuse fires ONLY when the caller targets the canonical path AND !force AND
-// the canonical file already validates — otherwise the reflect agent runs and
-// writes datasetOut fresh.
+// CaptureStage is the single low-level capture primitive: it writes ONE stage's dataset at the
+// caller-chosen datasetOut. This is the explicit "output mode" the first plan lacked.
 func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir, datasetOut, logDir string, force bool) (DatasetResult, error) {
 	canonical := filepath.Join(stageDir, "reflect_dataset.yaml")
 
-	// Reuse a valid canonical dataset by default — INDEPENDENT of datasetOut
-	// (spec §7.1): the offline pass targets a staging datasetOut that can never
-	// equal canonical, yet must still avoid re-running the reflect agent when a
-	// good canonical already exists. Only --force-reflect (force) regenerates.
+	// Reuse valid canonical datasets even when staging elsewhere; only force-reflect regenerates them.
 	if !force {
 		if data, err := os.ReadFile(canonical); err == nil {
 			if verr := ValidateDataset(data); verr == nil {
@@ -145,12 +130,8 @@ func (p *Pipeline) CaptureStage(ctx context.Context, stage flow.Stage, stageDir,
 	}, nil
 }
 
-// CaptureAll iterates CaptureStage over eligible write-reflect stages
-// (declaration order), always writing generated datasets into
-// <WorkDir>/stages/<id>/reflect_dataset.yaml (canonical untouched until
-// promotion). No shared memory lock is needed. Requires a non-empty
-// ManifestPath (the CLI creates the running manifest first) and advances it
-// to "capturing".
+// CaptureAll iterates CaptureStage over eligible write-reflect stages, always writing generated datasets
+// into <WorkDir>/stages/<id>/reflect_dataset.yaml. No shared memory lock is needed.
 func (p *Pipeline) CaptureAll(ctx context.Context, req CaptureRequest) ([]DatasetResult, error) {
 	if req.ManifestPath == "" {
 		return nil, errors.New("CaptureAll requires a non-empty ManifestPath")
@@ -187,30 +168,21 @@ func (p *Pipeline) CaptureAll(ctx context.Context, req CaptureRequest) ([]Datase
 	return results, nil
 }
 
-// isWriteReflect reports whether a stage participates in the memory write
-// chain: it declares reflect with a write mode and is not a script stage
-// (there is no agent session to reflect on).
+// isWriteReflect reports whether a stage participates in the memory write chain: it declares reflect with
+// a write mode and is not a script stage (there is no agent session to reflect on).
 func isWriteReflect(s flow.Stage) bool {
 	return s.Reflect != nil && s.Reflect.CanWrite() && !s.IsScript()
 }
 
-// stageGroup — one final memory file shared by ≥1 write-reflect stage,
-// resolved from reflect.File. Stages within a group are chained: each
-// distills from the prior stage's candidate (see Finalize step 2).
+// stageGroup — one final memory file shared by ≥1 write-reflect stage, resolved from reflect.File.
 type stageGroup struct {
 	file      string
 	finalPath string
 	stages    []flow.Stage
 }
 
-// buildStageGroups groups eligible write-reflect stages by their RESOLVED
-// final path (memory.StageFile(memoryDir, s.Reflect.File)), not the raw
-// reflect.File string — two stages declaring "a.md" and "./a.md" both pass
-// flow validation but are different raw strings that resolve to the SAME
-// file; keying by the raw string would put them in separate groups whose
-// finalPath collides, and the second group's promotion would silently
-// clobber the first's memory instead of chaining onto it. Preserves
-// first-declaration order both across groups and within a group.
+// buildStageGroups groups by resolved final path to merge equivalent reflect.File paths, preserving
+// declaration order.
 func buildStageGroups(stages []flow.Stage, memoryDir string) []stageGroup {
 	idx := map[string]int{}
 	var groups []stageGroup
@@ -233,13 +205,8 @@ func buildStageGroups(stages []flow.Stage, memoryDir string) []stageGroup {
 	return groups
 }
 
-// Finalize distills the captured datasets into candidate memory files,
-// computes per-target diffs, and (unless DryRun) promotes changed candidates
-// to their final paths. It ASSUMES the caller already holds the memory lock
-// for MemoryDir. It writes/updates ManifestPath at each step and NEVER writes
-// "completed" or commits — the CLI does that after the commit decision
-// (review #2). The step ORDER is load-bearing (containment pre-check ->
-// distill -> diff -> ctx check -> promote); see the inline step comments.
+// Finalize distills the captured datasets into candidate memory files, computes per-target diffs, and
+// promotes changed candidates to their final paths.
 func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, error) {
 	man, err := loadManifestIfSet(req.ManifestPath)
 	if err != nil {
@@ -274,9 +241,8 @@ func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, e
 	projFinal := memory.ProjectFile(req.MemoryDir)
 	projectApplies := len(projectDatasets) > 0
 
-	// --- Step 0: containment pre-check under lock (review #5) ---------------
-	// Validate every final target BEFORE seeding — an external process may
-	// have swapped a parent to a symlink after Task 3's lexical check.
+	// Recheck target containment under lock before seeding: a parent may have become a symlink since
+	// preflight.
 	for _, g := range groups {
 		if err := validateTargetUnderMemoryDir(req.MemoryDir, g.finalPath); err != nil {
 			return report(), err
@@ -357,7 +323,7 @@ func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, e
 		}
 	}
 
-	// --- Step 5: last interruption point (review #15) ----------------------
+	// Last cancellation check before promotion.
 	if err := ctx.Err(); err != nil {
 		_ = writeManifest(StatusCancelled)
 		return report(), err
@@ -371,17 +337,8 @@ func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, e
 		return report(), nil
 	}
 
-	// --- Step 7: promotion (review #6/#8) ----------------------------------
-	// Once we start, we drive the short rename loop to a consistent state; ctx
-	// is no longer consulted. On a mid-promotion error we leave the manifest
-	// "promoting" with accurate Published flags (no rollback) so recovery can
-	// resume from disk.
-	//
-	// Only the real publish path needs MemoryDir to exist on disk — dry run
-	// (handled above) distills into WorkDir and only READS real targets (a
-	// missing target is treated as empty), so it must never create an empty
-	// memory dir as a side effect (final-review Fix 1: "writes nothing" must
-	// hold literally, including "creates nothing").
+	// --- Step 7: promotion ---------------------------------- Once we start, we drive the short rename loop
+	// to a consistent state; ctx is no longer consulted.
 	if err := os.MkdirAll(req.MemoryDir, 0755); err != nil {
 		return report(), err
 	}
@@ -398,7 +355,7 @@ func (p *Pipeline) Finalize(ctx context.Context, req FinalizeRequest) (Report, e
 		if !tr.Changed {
 			continue
 		}
-		// Final guard immediately before the write (review #5).
+		// Recheck containment immediately before writing.
 		if err := validateTargetUnderMemoryDir(req.MemoryDir, tr.FinalPath); err != nil {
 			return report(), err
 		}
@@ -457,9 +414,8 @@ func loadManifestIfSet(path string) (*Manifest, error) {
 	return LoadManifest(path)
 }
 
-// computeTargetDiff fills OldSHA256/NewSHA256/Changed/Diff for one pending
-// target by comparing its candidate bytes against the current final file (a
-// missing final counts as changed).
+// computeTargetDiff fills OldSHA256/NewSHA256/Changed/Diff for one pending target by comparing its
+// candidate bytes against the current final file (a missing final counts as changed).
 func computeTargetDiff(tr *TargetResult) error {
 	cand, err := os.ReadFile(tr.CandidatePath)
 	if err != nil {
@@ -483,9 +439,8 @@ func computeTargetDiff(tr *TargetResult) error {
 	return nil
 }
 
-// computeDatasetChanged marks a generated dataset changed when its candidate
-// (staging) bytes differ from the canonical file (a missing canonical counts
-// as changed). Reused datasets already point at canonical — nothing to do.
+// computeDatasetChanged marks a generated dataset changed when its candidate bytes differ from the
+// canonical file. Reused datasets already point at canonical — nothing to do.
 func computeDatasetChanged(d *DatasetResult) error {
 	if d.Source != SourceGenerated {
 		return nil
@@ -506,9 +461,8 @@ func computeDatasetChanged(d *DatasetResult) error {
 	return nil
 }
 
-// backupOldTarget copies the current final bytes (if any) into
-// <workDir>/backup/<oldSHA>.bak before it is overwritten, so a promotion can
-// be inspected/undone. A missing final has nothing to back up.
+// backupOldTarget copies the current final bytes into <workDir>/backup/<oldSHA>.bak before it is
+// overwritten, so a promotion can be inspected/undone. A missing final has nothing to back up.
 func backupOldTarget(workDir string, tr *TargetResult) error {
 	oldBytes, err := os.ReadFile(tr.FinalPath)
 	if err != nil {
@@ -521,9 +475,8 @@ func backupOldTarget(workDir string, tr *TargetResult) error {
 	return memory.AtomicWrite(bak, oldBytes)
 }
 
-// nonEmptyDatasetPaths returns the DatasetPath of each dataset that has at
-// least one project_level or session_level item (empties are filtered so the
-// project aggregate never runs on nothing, review #11).
+// nonEmptyDatasetPaths returns the DatasetPath of each dataset that has at least one project_level or
+// session_level item.
 func nonEmptyDatasetPaths(datasets []DatasetResult) ([]string, error) {
 	var out []string
 	for _, d := range datasets {
@@ -548,14 +501,8 @@ func datasetPathForStage(datasets []DatasetResult, stageID string) (string, bool
 	return "", false
 }
 
-// validateTargetUnderMemoryDir rejects a final target whose real location
-// escapes memoryDir or whose deepest-existing path component is a symlink
-// (review #5). memoryDir itself need NOT exist (Fix 1, final review: dry run
-// no longer MkdirAll's it) — its deepest-existing ancestor is resolved with
-// the same splitAtExisting technique used below for the target's ancestor,
-// so a fresh memory.path still containment-checks correctly, and a dangling
-// symlink ancestor of memoryDir is still rejected rather than silently
-// swallowed.
+// validateTargetUnderMemoryDir rejects a final target whose real location escapes memoryDir or whose
+// deepest-existing path component is a symlink.
 func validateTargetUnderMemoryDir(memoryDir, target string) error {
 	mdExisting, mdMissing := splitAtExisting(memoryDir)
 	md, err := filepath.EvalSymlinks(mdExisting)
@@ -569,11 +516,7 @@ func validateTargetUnderMemoryDir(memoryDir, target string) error {
 		return fmt.Errorf("target %s is a symlink", target)
 	}
 
-	// Resolve the deepest EXISTING ancestor of the target's parent. A failure
-	// to EvalSymlinks an ancestor that DOES exist means a dangling/broken
-	// symlink component (review #2) — treat it as a containment rejection with
-	// a clean diagnostic, rather than letting it fall through to a generic
-	// mkdir/ENOENT deep inside AtomicWrite.
+	// Resolve the deepest EXISTING ancestor of the target's parent.
 	existing, missing := splitAtExisting(filepath.Dir(target))
 	resolved, err := filepath.EvalSymlinks(existing)
 	if err != nil {
@@ -590,11 +533,8 @@ func validateTargetUnderMemoryDir(memoryDir, target string) error {
 	return nil
 }
 
-// splitAtExisting walks up from abs until it hits a path that exists on disk
-// (Lstat succeeds — a symlink counts as existing, it is not followed here),
-// returning that deepest-existing ancestor plus the trailing components that
-// do NOT exist, in reverse order (base-first). The filesystem root always
-// exists, so existing is never empty in practice.
+// splitAtExisting walks up from abs until it hits a path that exists on disk, returning that
+// deepest-existing ancestor plus the trailing components that do NOT exist, in reverse order.
 func splitAtExisting(abs string) (existing string, missing []string) {
 	cur := abs
 	for {
@@ -610,14 +550,8 @@ func splitAtExisting(abs string) (existing string, missing []string) {
 	}
 }
 
-// canonicalizeExistingAncestor walks up from abs until it hits an existing
-// path, resolves that with EvalSymlinks (following any symlinked ancestors),
-// then re-joins the missing trailing components. It returns abs unchanged if
-// EvalSymlinks fails (e.g. a dangling symlink ancestor) — callers that must
-// REJECT such a case use validateTargetUnderMemoryDir, which detects the
-// EvalSymlinks failure explicitly. This helper lets containment checks see
-// through a parent that is a symlink even when the final target file does not
-// exist yet. (Defined here; Task 9 reuses it.)
+// canonicalizeExistingAncestor walks up from abs until it hits an existing path, resolves that with
+// EvalSymlinks, then re-joins the missing trailing components.
 func canonicalizeExistingAncestor(abs string) string {
 	existing, missing := splitAtExisting(abs)
 	resolved, err := filepath.EvalSymlinks(existing)

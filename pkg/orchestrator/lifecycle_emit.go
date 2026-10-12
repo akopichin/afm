@@ -9,10 +9,6 @@ import (
 )
 
 // fsmLifecycleEvents мапит FSM-переходы на публичные lifecycle-события.
-// EvReady/EvBlockedByDep — внутренняя планировка (pending→ready и т.п.), им
-// нет публичного аналога; EvHookFailed/EvHookResolved относятся к
-// script_before/after, чьи события эмитятся на своих границах (Task 10) —
-// здесь их нет, чтобы не задваивать.
 var fsmLifecycleEvents = map[bus.FSMEvent]lifecyclehooks.EventType{
 	bus.EvStartPlanning:    lifecyclehooks.EventStagePlanningStarted,
 	bus.EvPlanReady:        lifecyclehooks.EventStagePlanReady,
@@ -28,8 +24,7 @@ var fsmLifecycleEvents = map[bus.FSMEvent]lifecyclehooks.EventType{
 	bus.EvContinue:         lifecyclehooks.EventStageResumed,
 	bus.EvComplete:         lifecyclehooks.EventStageFinished,
 	bus.EvFail:             lifecyclehooks.EventStageFailed,
-	// EvVerifyFail — атомарный verify-driven аналог EvFail (H1, 6-е
-	// код-ревью, см. bus/fsm.go): тот же публичный исход stage_failed для
+	// EvVerifyFail — атомарный verify-driven аналог EvFail: тот же публичный исход stage_failed для
 	// потребителей lifecycle-хуков, просто с другим FSM-событием внутри.
 	bus.EvVerifyFail: lifecyclehooks.EventStageFailed,
 }
@@ -99,10 +94,8 @@ func phaseForStatus(st state.StageStatus) string {
 	return ""
 }
 
-// PublishLifecycleHookFailure — dashboard-warning о финальном сбое lifecycle
-// хука: live в ui-шину + durable в notices.jsonl (тот же one-map-two-sinks
-// паттерн, что publishHookNotice). Вызывается из OnError-callback dispatcher
-// (cmd/afm/run.go), поэтому метод публичный.
+// PublishLifecycleHookFailure — dashboard-warning о финальном сбое lifecycle хука: live в ui-шину +
+// durable в notices.jsonl.
 func (o *Orchestrator) PublishLifecycleHookFailure(hookID, eventID string, err error) {
 	const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
 	data := map[string]string{"hook_id": hookID, "event_id": eventID, keyError: err.Error()}

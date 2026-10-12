@@ -9,11 +9,7 @@ import (
 	"github.com/akopichin/afm/pkg/server/workspace"
 )
 
-// routeFiles dispatches GET /api/files/<action> to the matching read-only
-// handler. The whole capability is off (404, indistinguishable from an
-// unknown route) when no workspace.FS is configured or it has zero roots —
-// this is how host-mode afm (no Docker project mount) hides the endpoints
-// entirely instead of exposing an empty/erroring API surface.
+// routeFiles dispatches GET /api/files/<action> to the matching read-only handler.
 func (s *Server) routeFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet || s.workspace == nil || len(s.workspace.Roots()) == 0 {
 		http.NotFound(w, r)
@@ -40,19 +36,16 @@ func (s *Server) routeFiles(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeFilesError writes the scoped JSON error shape used only by the
-// /api/files/* handlers — {"error": "<code>"}. It never includes the
-// underlying error's text, so an absolute filesystem path from a
-// workspace.FS error can't leak into the response body.
+// writeFilesError writes the scoped JSON error shape used only by the /api/files/* handlers — {"error":
+// "<code>"}.
 func writeFilesError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
 
-// filesErrStatus maps a workspace.FS sentinel error to an HTTP status and a
-// stable machine-readable error code. workspace.ErrReadFailed and any other
-// unrecognized error fall into the default 500 read_failed case.
+// filesErrStatus maps a workspace.FS sentinel error to an HTTP status and a stable machine-readable error
+// code.
 func filesErrStatus(err error) (int, string) {
 	switch {
 	case errors.Is(err, workspace.ErrInvalidRootOrPath):

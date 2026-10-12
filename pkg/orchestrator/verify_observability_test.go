@@ -14,17 +14,15 @@ import (
 )
 
 // verifyNotice mirrors the on-disk shape stagefiles.AppendNotice writes (see
-// TestExecScript_PersistsOutputToNotices in hooks_test.go for the established
-// pattern this file follows).
+// TestExecScript_PersistsOutputToNotices in hooks_test.go for the established pattern this file follows).
 type verifyNotice struct {
 	Type    string         `json:"type"`
 	StageID string         `json:"stage_id"`
 	Data    map[string]any `json:"data"`
 }
 
-// readVerifyNotices reads every line of <runDir>/notices.jsonl and parses it —
-// "" (no file yet) returns an empty slice, matching "a stage that never
-// verifies emits none".
+// readVerifyNotices reads every line of <runDir>/notices.jsonl and parses it — "" (no file yet) returns an
+// empty slice, matching "a stage that never verifies emits none".
 func readVerifyNotices(t *testing.T, runDir string) []verifyNotice {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(runDir, "notices.jsonl"))
@@ -48,9 +46,7 @@ func readVerifyNotices(t *testing.T, runDir string) []verifyNotice {
 	return out
 }
 
-// drainUIBus non-blockingly consumes every event currently buffered on ch —
-// RunVerification publishes live events synchronously before returning, so by
-// the time it returns every live event for this call is already queued.
+// drainUIBus consumes buffered events; RunVerification publishes them synchronously before returning.
 func drainUIBus(ch <-chan bus.Event, fn func(bus.Event)) {
 	for {
 		select {
@@ -72,10 +68,6 @@ func noticesOfType(notices []verifyNotice, typ bus.EventType) []verifyNotice {
 	return out
 }
 
-// TestRunVerification_EmitsStartAndResultNotices_AgentPass is V5a.3's core
-// case: a passing agent step emits exactly one verify_started and one
-// verify_result (verdict=pass, with a report_path), live on the UI bus AND
-// durably in notices.jsonl (EventAutoAnswered pattern, see AGENTS.md).
 func TestRunVerification_EmitsStartAndResultNotices_AgentPass(t *testing.T) {
 	stage := flow.Stage{ID: verifyTestStageID,
 		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
@@ -147,9 +139,6 @@ func TestRunVerification_EmitsStartAndResultNotices_AgentPass(t *testing.T) {
 	}
 }
 
-// TestRunVerification_EmitsResultNotice_AgentRejected covers the
-// needs_changes path (persistVerifyRejection is the shared commit point for
-// both agent and shell rejections).
 func TestRunVerification_EmitsResultNotice_AgentRejected(t *testing.T) {
 	stage := flow.Stage{ID: verifyTestStageID,
 		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
@@ -237,10 +226,6 @@ func TestRunVerification_EmitsResultNotice_Interrupted(t *testing.T) {
 	}
 }
 
-// TestRunVerification_EmitsNoticesForShellSteps covers both shell outcomes:
-// a passing shell step (verdict=pass, no report_path) and a failing one
-// (routed through the same persistVerifyRejection commit point as an agent
-// rejection, so it DOES get a report_path).
 func TestRunVerification_EmitsNoticesForShellSteps(t *testing.T) {
 	stage := flow.Stage{ID: verifyTestStageID,
 		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyShell, Run: "exit 1"}}}}
@@ -263,9 +248,6 @@ func TestRunVerification_EmitsNoticesForShellSteps(t *testing.T) {
 	}
 }
 
-// TestRunVerification_EmitsNoticeForPassingShellStep covers the shell-pass
-// case specifically — no report.md is written for it, so report_path must be
-// omitted.
 func TestRunVerification_EmitsNoticeForPassingShellStep(t *testing.T) {
 	stage := flow.Stage{ID: verifyTestStageID,
 		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyShell, Run: "true"}}}}

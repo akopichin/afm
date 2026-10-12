@@ -276,11 +276,8 @@
 /* Override dialog-pending hidden */
 .dialog-pending.hidden { display: none !important; }
 
-/* === Workspace document mode: Question = wide document + sticky answer bar ===
-   Scoped under .workspace-body so the boxed dialog styling above stays intact
-   in every other context. The section becomes a flex column; #dialog-scroll is
-   the scroll area on a comfortable measure; the answer bar sticks to the bottom
-   of that scroll so SEND/CANCEL stay visible while the question scrolls. */
+/* === Workspace document mode: Question = wide document + sticky answer bar === Scoped under
+   .workspace-body so the boxed dialog styling above stays intact in every other context. */
 .workspace-body #dialog-section {
   flex: 1;
   min-height: 0;
@@ -310,10 +307,8 @@
   overflow: visible;
 }
 
-/* Вопрос — чистая проза (sans), а не код: макет показывает текст вопроса обычным
-   шрифтом. Текст рендерится блочным markdown (.md-блоки с data-line якорями);
-   ставим UI-шрифт и крупнее, блоки кода внутри остаются mono. Клик по строке
-   (якорю data-line) для комментария работает через delegated-хендлер. */
+/* Вопрос — чистая проза, а не код: макет показывает текст вопроса обычным шрифтом. Клик по строке (якорю
+   data-line) для комментария работает через delegated-хендлер. */
 .workspace-body .dialog-question .md {
   font-family: var(--font-ui);
   font-size: 15px;

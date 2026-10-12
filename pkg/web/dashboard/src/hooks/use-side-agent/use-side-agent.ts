@@ -15,10 +15,8 @@ import {
   type SideAgentEvent,
 } from '../../types/side-agent'
 
-// StreamHandlers/StreamHandle/StreamOpener — SSE-подписка за инъектируемой
-// функцией: прод открывает EventSource, тесты (jsdom без EventSource) подставляют
-// управляемый опенер и «присылают» события вручную. onEvent получает СЫРОЙ кадр
-// (хук сам зовёт parseSideAgentEvent) — опенеру не нужно знать схему.
+// StreamHandlers/StreamHandle/StreamOpener — SSE-подписка за инъектируемой функцией: прод открывает
+// EventSource, тесты подставляют управляемый опенер и «присылают» события вручную.
 export type StreamHandlers = {
   onEvent: (raw: unknown) => void
   onError: () => void
@@ -33,9 +31,7 @@ export type SideAgentDeps = {
   openStream: StreamOpener
 }
 
-// defaultStreamOpener — прод-подписка через EventSource. Сервер шлёт ИМЕНОВАННЫЕ
-// SSE-события (event: <type>), поэтому onmessage не срабатывает — слушатель
-// вешается на каждый известный тип. EventSource сам переподключается, отдавая
+// defaultStreamOpener — прод-подписка через EventSource. EventSource сам переподключается, отдавая
 // Last-Event-ID (у сервера он в приоритете над after_seq).
 export function defaultStreamOpener(afterSeq: number, handlers: StreamHandlers): StreamHandle {
   const es = new EventSource(streamUrl(afterSeq))
@@ -58,11 +54,8 @@ const DEFAULT_DEPS: SideAgentDeps = {
   openStream: defaultStreamOpener,
 }
 
-// SideAgentApi — то, что потребляет F-wave (модалка/шорткат/App): читаемый
-// разговор (events/requestState/unavailable/command), черновик композера
-// (draft/setDraft), окно (isOpen/open/close), флаг непросмотренного результата
-// (unseenResult) и действия (send/interrupt). error — последняя человекочитаемая
-// ошибка (для показа в UI), null если ошибок нет.
+// SideAgentApi — то, что потребляет F-wave: читаемый разговор, черновик композера, окно, флаг
+// непросмотренного результата и действия.
 export type SideAgentApi = {
   events: SideAgentEvent[]
   requestState: 'idle' | 'running'
@@ -85,15 +78,8 @@ function newClientMessageId(): string {
   return `m-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-// useSideAgent — app-level source of truth для «бокового» разговора. Держит
-// черновик, события, состояние запроса, курсор, флаг непросмотренного результата,
-// клиентский id сообщения (идемпотентность) и поколение, привязанное к run_id.
-//
-// Ленивое соединение: SSE живёт, пока окно открыто ИЛИ идёт запрос. Закрытие окна
-// при простое рвёт соединение (но НЕ инвалидирует принятую сервером работу — курсор
-// и события сохраняются); следующее открытие догоняет хвост журнала через
-// getConversation и переоткрывает стрим с курсора. Смена run_id инвалидирует
-// прежний разговор целиком (поколение, чистка состояния).
+// useSideAgent — app-level source of truth для «бокового» разговора. Ленивое соединение: SSE живёт, пока
+// окно открыто ИЛИ идёт запрос.
 export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDeps = DEFAULT_DEPS): SideAgentApi {
   const [events, setEvents] = useState<SideAgentEvent[]>([])
   const [requestState, setRequestState] = useState<'idle' | 'running'>('idle')
@@ -106,16 +92,11 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
 
   const cursorRef = useRef(0)
   const genRef = useRef(0)
-  // opRef — монотонная ревизия операций в пределах ОДНОЙ беседы. Каждый принятый
-  // send её поднимает; асинхронный догон истории (syncHistory) запоминает op на
-  // старте и применяет снапшот, только если op ещё актуален — иначе протухший
-  // idle-снапшот мог бы перезатереть уже начавшийся новый running-ход (gen один
-  // и тот же, поэтому gen-проверки недостаточно).
+  // opRef — монотонная ревизия операций в пределах ОДНОЙ беседы.
   const opRef = useRef(0)
   const runIdRef = useRef(runId)
-  // Клиентский id текущего (ещё не подтверждённого сервером) сообщения. Держится до
-  // успешного POST — повтор после сетевой ошибки переиспользует тот же id, бэкенд
-  // возвращает тот же ход без дубля.
+  // Клиентский id текущего (ещё не подтверждённого сервером) сообщения. Держится до успешного POST —
+  // повтор после сетевой ошибки переиспользует тот же id, бэкенд возвращает тот же ход без дубля.
   const inflightIdRef = useRef<string | null>(null)
   const lastTurnIdRef = useRef('')
   const streamRef = useRef<StreamHandle | null>(null)
@@ -128,9 +109,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   const requestStateRef = useRef(requestState)
   requestStateRef.current = requestState
 
-  // Смена run_id = другой прогон → другой разговор. Поднимаем поколение (хвосты
-  // старых запросов/стрима отбросятся по проверке gen), закрываем стрим и чистим всё
-  // состояние прежнего разговора. layout-эффект (а не passive) — чтобы инвалидация
+  // Смена run_id = другой прогон → другой разговор. layout-эффект (а не passive) — чтобы инвалидация
   // случилась ДО connection-эффекта ниже.
   useLayoutEffect(() => {
     if (runIdRef.current === runId) return
@@ -150,9 +129,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     setError(null)
   }, [runId])
 
-  // ingest — применяет пачку событий с дедупом по монотонному seq (курсор).
-  // Обновляет requestState по стартовым/терминальным событиям хода; терминал при
-  // закрытом окне поднимает флаг непросмотренного результата.
+  // ingest — применяет пачку событий с дедупом по монотонному seq.
   const ingest = useCallback((incoming: SideAgentEvent[]): void => {
     const fresh = incoming.filter((e) => e.seq > cursorRef.current)
     if (fresh.length === 0) return
@@ -171,18 +148,11 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     }
   }, [])
 
-  // syncHistory догоняет хвост журнала с курсора и применяет авторитетное
-  // состояние из ответа (unavailable/command/события/requestState). shouldApply
-  // гейтит запись устаревшего ответа (смена поколения / размонтирование / более
-  // новый локальный send через op). Единый примитив для connection-эффекта И для
-  // догона после idle-идемпотентного send.
+  // syncHistory догоняет хвост журнала с курсора и применяет авторитетное состояние из ответа. Единый
+  // примитив для connection-эффекта И для догона после idle-идемпотентного send.
   const syncHistory = useCallback(async (shouldApply: () => boolean): Promise<void> => {
     const resp = await depsRef.current.getConversation(cursorRef.current)
-    // Протухший снапшот: его хвост (lastSeq) ПОЗАДИ уже применённого курсора —
-    // значит live-события (SSE) ушли вперёд (новый ход пришёл по стриму раньше,
-    // чем вернулся его POST — op тогда ещё не поднят, одного op-гейта мало).
-    // Применять resp.state было бы вредно (откатило бы running→idle); сами
-    // события всё равно отсеялись бы дедупом по seq в ingest.
+    // Протухший снапшот: его хвост ПОЗАДИ уже применённого курсора — значит live-события ушли вперёд.
     if (!shouldApply() || resp.lastSeq < cursorRef.current) return
     setUnavailable(resp.unavailable)
     setCommand(resp.command)
@@ -217,9 +187,8 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
         },
       })
     }
-    // Догоняем хвост журнала с курсора, затем открываем live-подписку. Догон не
-    // удался — всё равно поднимаем подписку (деградация), чтобы события доходили.
-    // op-проверка: снапшот не применяем, если его обогнал новый send.
+    // Догоняем хвост журнала с курсора, затем открываем live-подписку. Догон не удался — всё равно
+    // поднимаем подписку (деградация), чтобы события доходили.
     syncHistory(() => active && gen === genRef.current && op === opRef.current)
       .catch(() => {})
       .finally(() => {
@@ -250,27 +219,22 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
         // летящий догон истории (начатый до этого send) не применил свой снапшот.
         opRef.current += 1
         const op = opRef.current
-        // Принято сервером: ход заведён. Запоминаем turn_id из ответа СРАЗУ —
-        // чтобы Stop адресовал именно этот ход, не дожидаясь первого SSE/GET-
-        // события (иначе клик Stop сразу после 202 был бы no-op).
+        // Принято сервером: ход заведён.
         if (resp.turnId !== '') lastTurnIdRef.current = resp.turnId
         // Чистим id (следующий свежий send возьмёт новый).
         inflightIdRef.current = null
-        // Чистим ТОЛЬКО черновик, равный отправленному: если пользователь успел
-        // напечатать следующее сообщение, пока 202 был в полёте, его текст
-        // сохраняется (поле редактируемо во время работы агента).
+        // Чистим ТОЛЬКО черновик, равный отправленному: если пользователь успел напечатать следующее
+        // сообщение, пока 202 был в полёте, его текст сохраняется (поле редактируемо во время работы агента).
         setDraft((cur) => (cur === text ? '' : cur))
-        // Состояние берём ИЗ ОТВЕТА, не форсируя running: идемпотентный повтор
-        // уже ЗАВЕРШЁННОГО хода возвращает state:'idle' — агент не запускался,
-        // нового терминального события не будет.
+        // Состояние берём ИЗ ОТВЕТА, не форсируя running: идемпотентный повтор уже ЗАВЕРШЁННОГО хода
+        // возвращает state:'idle' — агент не запускался, нового терминального события не будет.
         setRequestState(resp.state)
         if (resp.state === 'running') {
           // keepAlive поднимется (running) → connection-эффект догонит историю и
           // откроет стрим. Отдельный догон тут не нужен.
         } else {
-          // idle: терминал SSE не придёт — догоняем историю сами, чтобы
-          // восстановить пропущенный хвост/вывод завершённого хода. op-проверка:
-          // если следующий send обгонит этот догон, его idle-снапшот не применится.
+          // idle: терминал SSE не придёт — догоняем историю сами, чтобы восстановить пропущенный
+          // хвост/вывод завершённого хода.
           void syncHistory(() => gen === genRef.current && op === opRef.current)
         }
       } catch (err: unknown) {

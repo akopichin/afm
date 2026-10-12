@@ -37,11 +37,9 @@ type ClientConfig struct {
 	ClaudeBare *bool    `yaml:"claude_bare"` // nil → --bare OFF (default, нужны skills); true → --bare on
 }
 
-// IsClaudeBare сообщает, добавлять ли --bare в генерируемые claude-врапперы.
-// По умолчанию (nil) → false: --bare ВЫКЛЮЧЕН, т.к. он skip'ает skills
-// auto-discovery — Skill-tool перестаёт резолвить goga-* skills (агент имитирует
-// их сам). claude_bare: true включает --bare (body ~4 KB вместо ~127 KB, ниже
-// нагрузка на шлюз/z.ai и шанс 529) — имеет смысл для stages БЕЗ skills.
+// IsClaudeBare сообщает, добавлять ли --bare в генерируемые claude-врапперы. По умолчанию (nil) → false:
+// --bare ВЫКЛЮЧЕН, т.к. он skip'ает skills auto-discovery (Skill-tool перестаёт резолвить goga-* skills).
+// claude_bare: true включает --bare (body ~4 KB вместо ~127 KB, ниже нагрузка на шлюз) — для stages без skills.
 func (c ClientConfig) IsClaudeBare() bool {
 	return c.ClaudeBare != nil && *c.ClaudeBare
 }
@@ -53,31 +51,20 @@ type ExecutorConfig struct {
 	TruncateOutput int           `yaml:"truncate_output"`
 }
 
-// defaultVerifyMaxFailures — сколько отклонений (needs_changes) verify допускает
-// по умолчанию: N = число retry-коррекций автора. 1 сохраняет прежнее поведение
-// (ровно одна коррекция, затем провал).
+// defaultVerifyMaxFailures — сколько отклонений verify допускает по умолчанию: N = число retry-коррекций
+// автора. 1 сохраняет прежнее поведение (ровно одна коррекция, затем провал).
 const defaultVerifyMaxFailures = 1
 
-// defaultVerifyReviewPatience — дефолт review_patience: 0 = ВЫКЛЮЧЕНО (сегодняшнее
-// поведение). В отличие от max_failures (дефолт 1), stalemate-бэкстоп опционален:
-// без явного значения verify-цикл работает ровно как раньше.
+// defaultVerifyReviewPatience — дефолт review_patience: 0 = ВЫКЛЮЧЕНО.
 const defaultVerifyReviewPatience = 0
 
 // VerifyConfig — глобальные настройки verify-гейта.
 type VerifyConfig struct {
-	// MaxFailures — сколько отклонений verify допускать до провала стадии.
-	// Указатель, чтобы отличить «не задано» (nil → дефолт 1) от явного значения,
-	// включая 0. Per-stage override — flow.VerifySpec.MaxFailures.
+	// MaxFailures — сколько отклонений verify допускать до провала стадии. Указатель, чтобы отличить «не
+	// задано» (nil → дефолт 1) от явного значения, включая 0.
 	MaxFailures *int `yaml:"max_failures"`
-	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших
-	// рабочее дерево (автор ничего не правит в ответ на ревью), допустить, прежде
-	// чем принять стадию как завершённую (reviewer/author stalemate). Указатель,
-	// чтобы отличить «не задано» (nil → дефолт 0 = выключено) от явного значения.
-	// Per-stage override — flow.VerifySpec.ReviewPatience. ВАЖНО: чтобы stalemate
-	// вообще сработал, нужно max_failures >= review_patience — иначе стадия
-	// провалится по бюджету отклонений РАНЬШЕ, чем счётчик неизменных раундов
-	// дойдёт до review_patience, и настройка станет тихим no-op (безопасная
-	// сторона: никогда не принимает ошибочно, просто не включается).
+	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших рабочее дерево, допустить,
+	// прежде чем принять стадию как завершённую.
 	ReviewPatience *int `yaml:"review_patience"`
 }
 
@@ -105,23 +92,16 @@ type ServerConfig struct {
 	OpenBrowser *bool `yaml:"open_browser"`
 }
 
-// AccountingConfig controls the cost/usage accounting DISPLAY surfaces
-// (the dashboard cost tile/tab/rail, `afm check`'s cost columns, and `afm
-// report`). It is a display switch only: collection into usage.jsonl keeps
-// running regardless, so the data is still there when display is re-enabled.
+// AccountingConfig controls the cost/usage accounting DISPLAY surfaces.
 type AccountingConfig struct {
 	Enabled *bool `yaml:"enabled"` // nil = отображение включено по умолчанию; env AFM_ACCOUNTING имеет приоритет
-	// ShowMoney управляет показом денежных ($) величин. nil/false = скрыты,
-	// показываем только токены; true = показываем и деньги. Указатель, чтобы
-	// проектный слой мог перекрыть глобальный (см. mergeFile). env
-	// AFM_ACCOUNTING_SHOW_MONEY имеет приоритет.
+	// ShowMoney управляет показом денежных величин. nil/false = скрыты, показываем только токены; true =
+	// показываем и деньги.
 	ShowMoney *bool `yaml:"show_money"`
 }
 
-// IsEnabled сообщает, показывать ли accounting (стоимость/токены).
-// Приоритет: env AFM_ACCOUNTING > config > по умолчанию ВКЛЮЧЕНО.
-// Только явный enabled: false (или AFM_ACCOUNTING=0) прячет отображение;
-// сбор usage.jsonl при этом продолжается.
+// IsEnabled сообщает, показывать ли accounting. Только явный enabled: false (или AFM_ACCOUNTING=0) прячет
+// отображение; сбор usage.jsonl при этом продолжается.
 func (c AccountingConfig) IsEnabled() bool {
 	if v, set := envBool("AFM_ACCOUNTING"); set {
 		return v
@@ -129,10 +109,8 @@ func (c AccountingConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// ShowMoneyEnabled сообщает, показывать ли денежные величины.
-// Приоритет: env AFM_ACCOUNTING_SHOW_MONEY > config > по умолчанию СКРЫТО.
-// Влияет только на отображение (dashboard, `afm check`/`report`) — сбор
-// стоимости в usage.jsonl продолжается независимо.
+// ShowMoneyEnabled сообщает, показывать ли денежные величины. Влияет только на отображение (dashboard,
+// `afm check`/`report`) — сбор стоимости в usage.jsonl продолжается независимо.
 func (c AccountingConfig) ShowMoneyEnabled() bool {
 	if v, set := envBool("AFM_ACCOUNTING_SHOW_MONEY"); set {
 		return v
@@ -156,21 +134,13 @@ func (s ServerConfig) GetPort() int {
 	return *s.Port
 }
 
-// AgentRecipe describes how to generate a claude-compatible wrapper for a custom
-// agent command (e.g. glm51) inside Docker, so the host binary is not mounted.
-// See docs/superpowers/specs/2026-07-14-docker-autoshim-design.md.
+// AgentRecipe describes how to generate a claude-compatible wrapper for a custom agent command inside
+// Docker, so the host binary is not mounted.
 
-// ClaudeCommand — каноническое имя CLI-агента по умолчанию. Одновременно:
-// (а) имя реального бинарника, который ищется в PATH/exec'ается, когда
-// команда стадии не указана явно; (б) значение AgentRecipe.Type/
-// WrapperSpec.Type для «claude»-рецепта (пустой Type тоже означает claude) —
-// это не совпадение, а один и тот же референт: recipe-тип "claude" в
-// буквальном смысле означает «сгенерировать враппер, exec'ающий этот бинарник».
+// ClaudeCommand — каноническое имя CLI-агента по умолчанию.
 const ClaudeCommand = "claude"
 
-// RecipeTypeOpenAI/RecipeTypeCursor — остальные допустимые значения
-// AgentRecipe.Type/WrapperSpec.Type (экспортированы, чтобы pkg/docker/wrapper.go
-// могло их переиспользовать вместо собственных WrapperTypeOpenAI/WrapperTypeCursor).
+// RecipeTypeOpenAI/RecipeTypeCursor — остальные допустимые значения AgentRecipe.Type/WrapperSpec.Type.
 const (
 	RecipeTypeOpenAI      = "openai"
 	RecipeTypeOpenAIAgent = "openai-agent" // OpenAI-совместимый function calling + реальный tool-loop (см. scripts/openai-agent-as-claude.sh)
@@ -217,28 +187,14 @@ func isClaudeAuthEnvVar(name string) bool {
 	return false
 }
 
-// reservedRecipeAuthVars — execution-control переменные генерируемых
-// врапперов (pkg/docker/wrapper.go), которые НИКОГДА не должны быть целью
-// auth.to ни у одного рецепта (E1, третье код-ревью AI-verify). CODEX_VERIFY
-// переключает scripts/codex-as-claude.sh между read-only verify-режимом и
-// полным доступом (--dangerously-bypass-approvals-and-sandbox) — рецепт с
-// auth.to: env:CODEX_VERIFY заставил бы враппер экспортировать секрет ПОСЛЕ
-// того, как CODEX_VERIFY=1 уже стоит в окружении процесса (см. wrapper.go),
-// затирая контрольный флаг значением секрета: адаптер трактует любое
-// значение != "1" как полный доступ, так что AI-verify тихо перестал бы быть
-// read-only.
+// reservedRecipeAuthVars — execution-control переменные генерируемых врапперов, которые НИКОГДА не должны
+// быть целью auth.to ни у одного рецепта.
 var reservedRecipeAuthVars = []string{
 	"CODEX_VERIFY",
 }
 
-// isReservedAuthVarName сообщает, что имя переменной окружения зарезервировано
-// афм-инфраструктурой (транспорт секретов/системного промпта — AFM_*, см.
-// AGENTS.md "Phase 3" — или control-флаг адаптера, см. reservedRecipeAuthVars)
-// и не может быть целью auth.to ни одного рецепта — иначе сгенерированный
-// враппер экспортировал бы в неё секрет вместо ожидаемого значения. Сравнение
-// регистронезависимое: окружение Windows само по себе регистронезависимо, а
-// case-sensitive проверка позволила бы обойти запрет вариантом типа
-// env:codex_verify.
+// isReservedAuthVarName запрещает auth.to перезаписывать AFM-транспорт и управляющие флаги; сравнение
+// регистронезависимое.
 func isReservedAuthVarName(name string) bool {
 	up := strings.ToUpper(name)
 	if strings.HasPrefix(up, "AFM_") {
@@ -261,11 +217,8 @@ func (r AgentRecipe) Validate() error {
 	default:
 		return fmt.Errorf("recipe: type must be \"\", \"claude\", \"openai\", \"openai-agent\", \"cursor\", or \"codex\"; got %q", r.Type)
 	}
-	// codex: model опционален ("" / "default" → CODEX_MODEL не выставляется, решает
-	// сам codex/~/.codex/config.toml); auth опционален — авторизация идёт через
-	// смонтированную ~/.codex (ChatGPT-plan OAuth), а не через AFM_SECRET_<CMD>.
-	// Если auth всё же задан (задел на будущий API-key режим) — валидируем как
-	// openai/cursor (env:, без ограничения ClaudeAuthEnvVars).
+	// codex: model опционален; auth опционален — авторизация идёт через смонтированную ~/.codex, а не через
+	// AFM_SECRET_<CMD>.
 	if r.Type == RecipeTypeCodex {
 		if r.Auth == (RecipeAuth{}) {
 			return nil
@@ -306,18 +259,16 @@ func (r AgentRecipe) Validate() error {
 type DockerConfig struct {
 	Enabled *bool  `yaml:"enabled"` // nil = смотрим AFM_USE_DOCKER
 	Image   string `yaml:"image"`
-	// AutoShim включает генерацию claude-совместимых обёрток для recipe-агентов
-	// внутри контейнера, чтобы не монтировать хостовый бинарник :ro.
-	// nil = выключено (монтирование :ro как раньше).
+	// AutoShim включает генерацию claude-совместимых обёрток для recipe-агентов внутри контейнера, чтобы не
+	// монтировать хостовый бинарник :ro. nil = выключено (монтирование :ro как раньше).
 	AutoShim *bool `yaml:"autoShim"`
 	// Agents — recipe-агенты: имя команды → рецепт генерации обёртки.
 	Agents map[string]AgentRecipe `yaml:"agents"`
 	// SecretsFile — опц. путь к файлу с секретами; по умолчанию global ~/.afm
 	// + project .afm.
 	SecretsFile string `yaml:"secrets_file"`
-	// ExtraMounts — дополнительные хост-пути (можно с ~), которые пробрасываются
-	// в контейнер по тому же пути только для чтения. Нужно кастомным агентам,
-	// хранящим токены/конфиги вне ~/.claude (напр. ~/.ai-free).
+	// ExtraMounts — дополнительные хост-пути, которые пробрасываются в контейнер по тому же пути только для
+	// чтения.
 	ExtraMounts ExtraMounts `yaml:"extra_mounts"`
 	// FileBrowser настраивает встроенный файловый браузер проекта в dashboard.
 	FileBrowser DockerFileBrowserConfig `yaml:"file_browser"`
@@ -334,9 +285,8 @@ type SideAgentConfig struct {
 	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
-// IsEnabled сообщает, включён ли боковой агент дашборда.
-// Приоритет: env AFM_SIDEAGENT > config > по умолчанию ВКЛЮЧЕНО.
-// Зеркалит DockerFileBrowserConfig.IsEnabled.
+// IsEnabled сообщает, включён ли боковой агент дашборда. Приоритет: env AFM_SIDEAGENT > config > по
+// умолчанию ВКЛЮЧЕНО. Зеркалит DockerFileBrowserConfig.IsEnabled.
 func (c SideAgentConfig) IsEnabled() bool {
 	if v, set := envBool("AFM_SIDEAGENT"); set {
 		return v
@@ -344,9 +294,8 @@ func (c SideAgentConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// IsEnabled сообщает, включён ли файловый браузер.
-// Приоритет: env AFM_FILE_BROWSER > config > по умолчанию ВКЛЮЧЕНО.
-// Только явный enabled: false (или AFM_FILE_BROWSER=0) выключает его.
+// IsEnabled сообщает, включён ли файловый браузер. Приоритет: env AFM_FILE_BROWSER > config > по умолчанию
+// ВКЛЮЧЕНО. Только явный enabled: false (или AFM_FILE_BROWSER=0) выключает его.
 func (c DockerFileBrowserConfig) IsEnabled() bool {
 	if v, set := envBool("AFM_FILE_BROWSER"); set {
 		return v
@@ -354,19 +303,15 @@ func (c DockerFileBrowserConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// ExtraMount — один дополнительный хост-путь, монтируемый в контейнер.
-// Path может начинаться с ~. Name — опц. отображаемое имя (для file browser).
-// Browse включает показ этого пути в file browser (по умолчанию — false,
-// т.к. большинство extra_mounts — служебные токены/конфиги агентов).
+// ExtraMount — один дополнительный хост-путь, монтируемый в контейнер. Path может начинаться с ~.
 type ExtraMount struct {
 	Path   string `yaml:"path"`
 	Name   string `yaml:"name,omitempty"`
 	Browse bool   `yaml:"browse,omitempty"`
 }
 
-// ExtraMounts — список доп. хост-путей. Каждый элемент YAML-списка может
-// быть либо строкой (legacy-форма "~/path", Browse:false), либо мапой
-// {path, name, browse}.
+// ExtraMounts — список доп. хост-путей. Каждый элемент YAML-списка может быть либо строкой (legacy-форма
+// "~/path", Browse:false), либо мапой {path, name, browse}.
 type ExtraMounts []ExtraMount
 
 // UnmarshalYAML принимает как строковые (legacy), так и объектные элементы
@@ -424,23 +369,17 @@ func (d DockerConfig) ValidateAgents() error {
 	return nil
 }
 
-// containerMarkerPresent reports whether a conventional container marker file
-// exists on disk: /.dockerenv (Docker) or /run/.containerenv (Podman). It is a
-// package var so tests can substitute it without touching the real host paths
-// (a test running inside a CI container would otherwise see the real markers).
+// containerMarkerPresent reports whether a conventional container marker file exists on disk: /.dockerenv
+// or /run/.containerenv.
 var containerMarkerPresent = defaultContainerMarkerPresent
 
-// containerMarkerPaths are the well-known marker files a container runtime
-// leaves behind: /.dockerenv (Docker), /run/.containerenv (Podman). A package
-// var so a focused test can point defaultContainerMarkerPresent at a temp path.
+// containerMarkerPaths are the well-known marker files a container runtime leaves behind: /.dockerenv,
+// /run/.containerenv.
 var containerMarkerPaths = []string{"/.dockerenv", "/run/.containerenv"}
 
 func defaultContainerMarkerPresent() bool {
-	// Any existing marker path counts — file or directory. These are
-	// well-known conventions written by the container runtime, not guarantees:
-	// a runtime that omits them yields a false negative, a manually-created
-	// file a false positive. That's an accepted limit of marker-based
-	// detection (см. дизайн: только Docker+Podman маркеры).
+	// Any existing marker path counts — file or directory. That's an accepted limit of marker-based detection
+	// (см. дизайн: только Docker+Podman маркеры).
 	for _, p := range containerMarkerPaths {
 		if _, err := os.Stat(p); err == nil {
 			return true
@@ -449,29 +388,16 @@ func defaultContainerMarkerPresent() bool {
 	return false
 }
 
-// SwapContainerMarkerPresent replaces the container-marker detector used by
-// InContainer and returns a function that restores the previous one. It lets a
-// test in ANY package make container detection hermetic: a suite that itself
-// runs inside a container (e.g. afm's own Docker image, where /.dockerenv
-// exists) must not consult the real marker, or it would flip InContainer and
-// defeat tests that exercise the host-only Docker re-exec path. Production code
-// never calls this; it deliberately takes no *testing.T so this file stays free
-// of the testing import. Pair it with t.Setenv("AFM_IN_DOCKER", "") to also
-// neutralize the re-exec signal.
+// SwapContainerMarkerPresent replaces the container-marker detector used by InContainer and returns a
+// function that restores the previous one.
 func SwapContainerMarkerPresent(fn func() bool) (restore func()) {
 	prev := containerMarkerPresent
 	containerMarkerPresent = fn
 	return func() { containerMarkerPresent = prev }
 }
 
-// InContainer reports whether afm is running inside ANY container — either
-// because afm re-exec'd itself into its own managed container (AFM_IN_DOCKER=1,
-// see ReExecedIntoContainer) or because it was placed into a foreign container
-// that leaves a conventional marker file. This is the generic "am I
-// containerized?" predicate: it governs the re-exec recursion guard
-// (IsDockerEnabled) and the browser-open skip. It must NOT gate the transport
-// consumers — those need ReExecedIntoContainer instead (a foreign container has
-// none of afm's own transport env).
+// InContainer detects managed or foreign containers. Use ReExecedIntoContainer to gate afm transport
+// consumers.
 func InContainer() bool {
 	if ReExecedIntoContainer() {
 		return true
@@ -479,22 +405,13 @@ func InContainer() bool {
 	return containerMarkerPresent()
 }
 
-// ReExecedIntoContainer reports whether THIS process is afm's own Docker
-// re-exec — i.e. docker.ReExec launched it and set AFM_IN_DOCKER=1 together
-// with the transport env (autoShim secrets, hook secrets, the file-root
-// manifest). ONLY those transport consumers may key off it; generic containment
-// (InContainer) is deliberately insufficient, because a foreign container sets
-// the marker file but none of that transport.
+// ReExecedIntoContainer reports whether THIS process is afm's own Docker re-exec — i.e. docker.ReExec
+// launched it and set AFM_IN_DOCKER=1 together with the transport env.
 func ReExecedIntoContainer() bool {
 	return os.Getenv("AFM_IN_DOCKER") == "1"
 }
 
-// IsDockerEnabled returns true if Docker mode should be used. It returns false
-// whenever afm is already inside any container (InContainer) — afm's own
-// re-exec OR a foreign container — so a marker-detected foreign container never
-// triggers a nested Docker re-exec, even with an explicit docker.enabled: true
-// or AFM_USE_DOCKER=1 (auto-detect wins, matching the long-standing
-// AFM_IN_DOCKER=1 behavior).
+// IsDockerEnabled returns true if Docker mode should be used.
 func (d DockerConfig) IsDockerEnabled() bool {
 	if InContainer() {
 		return false
@@ -525,20 +442,16 @@ type Config struct {
 	PromptsDir string         `yaml:"prompts_dir"`
 	Theme      string         `yaml:"theme"`
 	SkinDir    string         `yaml:"skin_dir"`
-	// AutoRecover controls whether failed stages are automatically reset to
-	// pending when a run starts/resumes (e.g. after a killed process/container
-	// left stages in failed). nil/true = enabled (default); explicit false disables.
+	// AutoRecover controls whether failed stages are automatically reset to pending when a run
+	// starts/resumes. nil/true = enabled (default); explicit false disables.
 	AutoRecover *bool `yaml:"auto_recover"`
 	// Pricing overrides/extends the built-in accounting rate table (list-price
 	// USD per 1M tokens, an estimate — not a bank charge). Empty = builtins only.
 	Pricing accounting.PricingConfig `yaml:"pricing"`
-	// Accounting toggles the cost/usage DISPLAY (dashboard cost UI, `afm check`
-	// cost columns, `afm report`). Collection into usage.jsonl is unaffected.
-	// nil/true = shown (default); explicit false / AFM_ACCOUNTING=0 hides it.
+	// Accounting toggles the cost/usage DISPLAY. Collection into usage.jsonl is unaffected.
 	Accounting AccountingConfig `yaml:"accounting"`
-	// Hooks — lifecycle-хуки глобального и проектного слоёв (Phase 1).
-	// mergeFile мёржит их keyed по id: проектный слой заменяет одноимённый
-	// глобальный хук, остальные складываются. См. pkg/lifecyclehooks.
+	// Hooks — lifecycle-хуки глобального и проектного слоёв. mergeFile мёржит их keyed по id: проектный слой
+	// заменяет одноимённый глобальный хук, остальные складываются.
 	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
 	// Verify — глобальные настройки verify-гейта (число допустимых отклонений).
 	// Per-stage override — flow.VerifySpec.MaxFailures.
@@ -564,9 +477,8 @@ func Default() Config {
 	}
 }
 
-// IsAutoRecover reports whether failed stages should be auto-retried when a
-// run starts or resumes. Defaults to true; only an explicit
-// `auto_recover: false` disables it.
+// IsAutoRecover reports whether failed stages should be auto-retried when a run starts or resumes.
+// Defaults to true; only an explicit `auto_recover: false` disables it.
 func (c Config) IsAutoRecover() bool {
 	return c.AutoRecover == nil || *c.AutoRecover
 }
@@ -581,11 +493,8 @@ const (
 	ThemeCoffee = "coffee"
 )
 
-// EffectiveTheme returns the normalized dashboard theme name.
-// "goga"/"novacorps" activate those built-in skins; empty or unknown values
-// fall back to the default "graphite". The legacy "coffee" value is accepted as
-// a compatibility alias that normalizes to "graphite" (with a one-line
-// deprecation warning) — an old flow with `theme: coffee` must not fail to start.
+// EffectiveTheme returns the normalized dashboard theme name. "goga"/"novacorps" activate those built-in
+// skins; empty or unknown values fall back to the default "graphite".
 func (c Config) EffectiveTheme() string {
 	switch strings.ToLower(strings.TrimSpace(c.Theme)) {
 	case ThemeGoga:
@@ -643,10 +552,8 @@ func validateVerify(v VerifyConfig) error {
 	return nil
 }
 
-// validatePricing rejects a PricingConfig containing any negative rate.
-// An unparseable rate (e.g. a non-numeric YAML scalar) never reaches here —
-// yaml.Unmarshal already fails earlier in mergeFile, since Rate is a plain
-// float64 alias. Explicit 0 is a valid rate (disables that category).
+// validatePricing rejects a PricingConfig containing any negative rate. Explicit 0 is a valid rate
+// (disables that category).
 func validatePricing(p accounting.PricingConfig) error {
 	for model, rc := range p.Models {
 		if err := validateRateCard(fmt.Sprintf("pricing.models.%s", model), rc); err != nil {

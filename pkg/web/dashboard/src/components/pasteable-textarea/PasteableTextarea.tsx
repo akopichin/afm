@@ -14,52 +14,25 @@ type PasteableTextareaProps = {
   disabled?: boolean
   maxHeight?: number
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void
-  // onFocus/onBlur — прокидываются во внутренний <textarea> как есть. Нужны
-  // «pause on focus» композеру (фокус ставит стадию на паузу, blur снимает).
-  // Существующие потребители их не передают — поведение не меняется.
+  // onFocus/onBlur — прокидываются во внутренний <textarea> как есть. Нужны «pause on focus» композеру
+  // (фокус ставит стадию на паузу, blur снимает).
   onFocus?: () => void
   onBlur?: () => void
-  // onSubmit — отправка по Cmd/Ctrl+Enter (единообразно для ВСЕХ полей ввода:
-  // комментарий плана/вопроса, ответ, заметка агенту). Встроено в
-  // PasteableTextarea, чтобы каждый потребитель не дублировал обработчик и это
-  // не «отваливалось» при рефакторингах. Не вызывается, когда поле disabled.
+  // onSubmit — отправка по Cmd/Ctrl+Enter. Встроено в PasteableTextarea, чтобы каждый потребитель не
+  // дублировал обработчик и это не «отваливалось» при рефакторингах.
   onSubmit?: () => void
-  // Показывает кнопку "Attach project file" (Task 14, файловый браузер —
-  // Task 13): открывает пикер файлов проекта и вставляет собранные референсы
-  // в текущую позицию каретки. По умолчанию выключено — большинство мест, где
-  // используется PasteableTextarea (custom-answer в DialogChannel,
-  // AgentNoteModal, pre-note), не должны предлагать вложение файлов проекта —
-  // только per-line комментарии в PlanPanel/DialogChannel (см. бриф Task 14).
-  // Компонент остаётся пригодным для использования ВНЕ FileBrowserProvider,
-  // пока этот проп выключен: см. AttachFileButton ниже — вызов useFileBrowser()
-  // живёт в отдельном компоненте, монтируемом только когда allowFileReferences=true.
-  // Кнопка также не рендерится, когда FileBrowserProvider отключён
-  // (capabilities.file_browser=false — Finding 5): PlanPanel/DialogChannel
-  // передают этот проп безусловно, реальный гейт живёт в провайдере/
-  // useFileBrowserEnabled(), а не разбросан по каждой панели.
+  // Показывает кнопку "Attach project file": открывает пикер файлов проекта и вставляет собранные
+  // референсы в текущую позицию каретки.
   allowFileReferences?: boolean
-  // attachInline — кнопка Attach (и её скрытый file-input) рендерится ВНУТРИ
-  // строки ввода рядом с textarea, а не на верхней полосе. Превью-миниатюры
-  // по-прежнему остаются на полосе НАД строкой ввода — переезжает только кнопка.
-  // По умолчанию выключено: дефолтная раскладка (полоса с кнопкой над textarea)
-  // не меняется ни на байт. Включает FeedComposer, где строка ввода —
-  // `[attach] [textarea] [✈]`.
+  // attachInline — кнопка Attach рендерится ВНУТРИ строки ввода рядом с textarea, а не на верхней полосе.
+  // Включает FeedComposer, где строка ввода — `[attach] [textarea] [✈]`.
   attachInline?: boolean
-  // rows — начальное число строк <textarea>. По умолчанию не задано (браузерный
-  // дефолт rows=2). FeedComposer передаёт rows={1}, чтобы пустое поле было
-  // ровно в одну строку (autoGrow растит по мере ввода) — иначе scrollHeight
-  // пустого поля = 2 строки и в pill-раскладке текст «уезжает» вверх от иконок.
+  // rows — начальное число строк <textarea>. По умолчанию не задано (браузерный дефолт rows=2).
   rows?: number
 }
 
-// Drop-in replacement for a plain <textarea>, used everywhere a user writes
-// text that ends up in front of the agent (AgentNoteModal, DialogChannel's
-// custom-answer and line-comment boxes, PlanPanel's line-comment box).
-// Composes the existing auto-grow behavior with clipboard-image paste — Cmd+V
-// with a screenshot on the clipboard uploads it and inserts a
-// "[Screenshot: <path>]" reference at the caret; the agent reads the file
-// itself when it decides to (see
-// docs/superpowers/specs/2026-08-11-clipboard-image-paste-design.md).
+// Drop-in replacement for a plain <textarea>, used everywhere a user writes text that ends up in front of
+// the agent.
 export function PasteableTextarea({
   stageId,
   value,
@@ -81,15 +54,8 @@ export function PasteableTextarea({
   const { nodeRef, attachments, onPaste, uploadFiles, retryAttachment, removeAttachment } = useImagePaste(stageId, value, onChange)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const { nodeRef: caretNodeRef, insertAtCaret } = useCaretInsert(value, onChange)
-  // Скрепка (Finding #6a второго раунда): поле, включившее allowFileReferences,
-  // всегда получает загрузку изображения — attachment endpoint работает и в
-  // host-режиме, не только в Docker. Проект-пикер («Choose project file…»)
-  // дополнительно требует включённого файлового браузера (capability), но его
-  // отсутствие БОЛЬШЕ не прячет весь Attach вместе с «Upload image…».
-  // Скрепка не показывается, когда поле disabled (Finding #6b) — иначе можно
-  // было вставить ссылку в задизейбленное поле (напр. allow_custom:false), и
-  // сервер отвечал 400. allowFileReferences уже подразумевает FileBrowserProvider
-  // (см. инвариант ниже), поэтому AttachMenu безопасно зовёт useFileBrowser().
+  // Скрепка: поле, включившее allowFileReferences, всегда получает загрузку изображения — attachment
+  // endpoint работает и в host-режиме, не только в Docker.
   const showAttachButton = allowFileReferences && disabled !== true
 
   const setRefs = useCallback(
@@ -117,9 +83,8 @@ export function PasteableTextarea({
     onKeyDown?.(event)
   }
 
-  // Кнопка Attach + её скрытый file-input — единый блок, рендерится РОВНО один
-  // раз: либо на полосе (дефолт), либо во входной строке (attachInline). Общий
-  // JSX-фрагмент гарантирует единственный `<input type=file>`.
+  // Кнопка Attach + её скрытый file-input — единый блок, рендерится РОВНО один раз: либо на полосе, либо
+  // во входной строке. Общий JSX-фрагмент гарантирует единственный `<input type=file>`.
   const attachControls = showAttachButton ? (
     <>
       <AttachMenu
@@ -219,19 +184,8 @@ export function PasteableTextarea({
   )
 }
 
-// Отдельный подкомпонент, а не инлайн-кнопка внутри PasteableTextarea: useFileBrowser()
-// бросает исключение вне FileBrowserProvider (см. FileBrowserProvider.tsx), а
-// PasteableTextarea обязан оставаться пригодным для использования без провайдера,
-// пока allowFileReferences=false. Вынеся вызов хука в компонент, который монтируется
-// ТОЛЬКО когда allowFileReferences=true, мы просто не вызываем useFileBrowser(),
-// когда он не нужен — вместо того чтобы пытаться вызвать хук условно внутри одного
-// компонента (что нарушило бы Rules of Hooks).
-//
-// Скрепка-меню (Finding #6): раньше здесь была одна кнопка «Attach project file»,
-// ведущая только в pickFiles — изображение с компьютера можно было добавить лишь
-// неочевидной вставкой из буфера. Теперь скрепка раскрывает два явных пути:
-// «Choose project file…» (тот же pickFiles) и «Upload image…» (нативный выбор
-// файла → uploadFiles, реюз пути загрузки вставки из буфера).
+// Отдельный компонент вызывает useFileBrowser только при allowFileReferences, сохраняя textarea пригодной
+// без провайдера.
 function AttachMenu({
   onInsertFileReference,
   onUploadImage,
@@ -247,13 +201,7 @@ function AttachMenu({
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const attachBtnRef = useRef<HTMLButtonElement | null>(null)
 
-  // Гвард от вставки в уже неактуальную цель (бриф Task 14, п.6 — "stale-picker
-  // guard"): пока модалка пикера открыта, пользователь может уйти с этой конкретной
-  // строки-комментария (сменить стадию/вопрос, закрыть форму комментария) —
-  // PasteableTextarea (и это меню) тогда размонтируется, но callback, сохранённый в
-  // FileBrowserProvider (onInsertRef), всё равно будет вызван по клику "Insert
-  // references" — это обычная функция, не привязанная к рендер-циклу React.
-  // mountedRef отличает "цель всё ещё та же" от "цель уже пропала".
+  // mountedRef запрещает picker-callback вставлять ссылки после размонтирования целевого редактора.
   const mountedRef = useRef(true)
   useEffect(
     () => () => {
@@ -279,18 +227,9 @@ function AttachMenu({
     }
   }, [open])
 
-  // enabled (fileBrowserEnabled) гейтит ТОЛЬКО проект-пикер; «Upload image…»
-  // доступен всегда (Finding #6a). Само меню монтируется вызывающим при
-  // allowFileReferences (внутри FileBrowserProvider), поэтому useFileBrowser()
-  // выше безопасен.
+  // enabled гейтит ТОЛЬКО проект-пикер; «Upload image…» доступен всегда.
   function chooseProjectFile(): void {
-    // Finding #7 (второй раунд): FileBrowserProvider запоминает opener как
-    // document.activeElement на момент pickFiles(). Если бы мы просто закрыли
-    // меню, активным был бы ПУНКТ меню «Choose project file…», который тут же
-    // размонтируется → provider на закрытии увидит isConnected===false и не
-    // вернёт фокус. Поэтому СНАЧАЛА возвращаем фокус на стабильную кнопку Attach
-    // (она остаётся в DOM), и только потом открываем пикер — provider захватит
-    // именно её, и фокус корректно вернётся на неё после закрытия оверлея.
+    // FileBrowserProvider сохраняет document.activeElement как opener при pickFiles.
     attachBtnRef.current?.focus()
     setOpen(false)
     // Пункт рендерится только при enabled → fb гарантированно не null.

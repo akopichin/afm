@@ -14,12 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestButton_DeliversPromptViaRevise — сквозной сценарий: у running-стадии
-// объявлена кнопка «Run linter»; orch.Button резолвит её prompt из флоу и
-// доставляет его живому агенту тем же путём, что и свободная заметка (Revise):
-// FSM уходит в revising, feedback.md получает prompt кнопки, блокирующийся
-// RunAgent перезапускается с фидбеком и стадия доходит до done. Переиспользует
-// blockingThenFeedbackRunner из agent_suggest_test.go.
 func TestButton_DeliversPromptViaRevise(t *testing.T) {
 	runDir := t.TempDir()
 	const buttonPrompt = "Запусти golangci-lint и почини все замечания"

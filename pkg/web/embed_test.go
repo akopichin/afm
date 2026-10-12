@@ -9,15 +9,6 @@ import (
 	"github.com/akopichin/afm/pkg/web"
 )
 
-// TestEmbed_ServesReactDashboardAtRootPaths фиксирует контракт встраивания
-// React-дашборда: после миграции с vanilla (app.js + markdown-it.min.js) на
-// React/Vite раздаётся точка входа index.html, собранный бандл в assets/ и
-// статические стили/иконки. markdown-it теперь упакован внутрь бандла, поэтому
-// отдельный markdown-it.min.js больше не раздаётся.
-//
-// fs.Sub(embedded, "dashboard") ре-рутит embed: потребители работают с корневыми
-// веб-путями (index.html, skins/<name>/index.css, assets/...) и не знают про
-// on-disk подкаталог.
 func TestEmbed_ServesReactDashboardAtRootPaths(t *testing.T) {
 	files := []string{
 		"index.html",

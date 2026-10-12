@@ -10,17 +10,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestRunVerification_SwapsLeaseToVerifierCommandAndBackToAuthor — V4b: when a
-// lease exists for the stage (the normal path after spawnKind), RunVerification
-// must temporarily move the single held command-semaphore slot to the verify
-// agent step's command (SwapTo, release-before-acquire — never two slots at
-// once) while the step actually runs. G1 (5-е код-ревью) changed what happens
-// AFTER the step returns: a PASS outcome no longer swaps the lease back to the
-// author's command (see verify.go's defer) — run(ctx,s) is about to return
-// (the stage is finishing), so the lease is simply released, same as any other
-// non-needs_changes outcome. Only VerifyRejectedError (needs_changes)
-// reacquires the author slot — covered separately by
-// TestRunVerification_NeedsChangesReacquiresAuthorLease.
 func TestRunVerification_SwapsLeaseToVerifierCommandAndBackToAuthor(t *testing.T) {
 	claudeSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	codexSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
@@ -69,14 +58,6 @@ func TestRunVerification_SwapsLeaseToVerifierCommandAndBackToAuthor(t *testing.T
 	}
 }
 
-// TestRunVerification_SameCommandAsAuthorNeverReleasesLease — the author and
-// the verify agent step share the same command: SwapTo must be a no-op WHILE
-// THE STEP RUNS (the slot stays held throughout, never released-then-
-// reacquired) — a real release+reacquire on max_parallel=1 could self-deadlock
-// racing another waiter for the very slot the lease already owns. G1 (5-е
-// код-ревью): after the step returns with a pass outcome, the lease is still
-// released like any other non-needs_changes outcome (run(ctx,s) is finishing)
-// — same-command only matters for the no-op fast path DURING the step.
 func TestRunVerification_SameCommandAsAuthorNeverReleasesLease(t *testing.T) {
 	sem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	mgr := concurrency.NewWithSemaphores(bus.NewCriticalBus(1), map[string]concurrency.Semaphore{"claude": sem}, "claude")
@@ -109,10 +90,6 @@ func TestRunVerification_SameCommandAsAuthorNeverReleasesLease(t *testing.T) {
 	}
 }
 
-// TestRunVerification_NoLeaseIsSafeNoop — a caller that never registered a
-// lease for the stage (recovery paths bypassing spawnKind, e.g.
-// resumeInteractiveAgent) must not crash — RunVerification simply doesn't
-// participate in slot transfer, same as before V3/V4b.
 func TestRunVerification_NoLeaseIsSafeNoop(t *testing.T) {
 	s := flow.Stage{ID: "s1", Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
 	o, _ := newVerifyTestOrchestrator(t, s)

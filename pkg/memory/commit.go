@@ -8,18 +8,7 @@ import (
 	"strings"
 )
 
-// Commit adds and commits changes in the given directory.
-// It runs:
-// 1. git -C <dir> add . (to stage changes)
-// 2. git -C <dir> diff --cached --quiet (to check if there are staged changes)
-// 3. git -C <dir> commit -m message (if there are changes)
-//
-// Returns:
-// - committed=true, err=nil if changes were committed
-// - committed=false, err=nil if there were no changes to commit
-// - committed=false, err=<error> if git operations failed
-//
-// Never pushes changes. Uses os/exec.
+// Commit stages and commits only changes under dir, leaving staged files elsewhere untouched.
 func Commit(dir, message string) (committed bool, err error) {
 	// Step 1: Add all changes in the directory
 	addCmd := exec.Command("git", "-C", dir, "add", ".")
@@ -27,9 +16,7 @@ func Commit(dir, message string) (committed bool, err error) {
 		return false, err
 	}
 
-	// Step 2: Check if there are staged changes under dir only
-	// "git diff --cached --quiet -- ." exits with 0 if no changes, 1 if there are changes
-	// The "-- ." pathspec ensures we only check changes under this directory
+	// Check staged changes only under dir: git diff --quiet returns 0 for no changes, 1 for a diff.
 	diffCmd := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet", "--", ".")
 	err = diffCmd.Run()
 
@@ -55,25 +42,8 @@ func Commit(dir, message string) (committed bool, err error) {
 	return true, nil
 }
 
-// CommitPaths adds and, if there is a resulting diff, commits exactly the
-// given paths under dir — narrower than Commit (which stages/commits the
-// whole directory tree, `-- .`): the caller passes only the files it
-// actually published this run, so an unrelated staged file elsewhere under
-// dir is never swept into the commit.
-//
-// paths are deduped and filepath.Clean'd first. An empty result (nil/empty
-// input) is a no-op: (false, "", nil).
-//
-// "git diff --cached --quiet -- <paths>" exit code is interpreted strictly:
-// 0 means nothing staged changed (no-op, not an error); exactly 1 means
-// there is a diff (proceed to commit); any other outcome — a non-1 exit
-// code (typically 128, e.g. dir is not a git repo) or a launch failure —
-// is a real error and is never mistaken for "has diff".
-//
-// On success with a real commit, the new commit SHA is returned. If the
-// commit itself succeeds but `git rev-parse HEAD` fails to report it, that
-// is returned as a strict error (the caller should not silently treat this
-// as an unknown-SHA success).
+// CommitPaths stages and commits only the supplied paths, returning the SHA. Empty input/no diff is a
+// no-op; other git failures are errors.
 func CommitPaths(dir, message string, paths []string) (committed bool, sha string, err error) {
 	paths = dedupeCleanPaths(paths)
 	if len(paths) == 0 {

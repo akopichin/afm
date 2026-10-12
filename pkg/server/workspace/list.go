@@ -16,13 +16,8 @@ import (
 // directory with more entries than this is paginated via NextCursor.
 const listPageSize = 500
 
-// maxDirEntries bounds how many raw directory entries List will read into
-// memory per call, regardless of how many the directory actually contains —
-// without this, f.ReadDir(-1) on a pathologically large directory would read
-// everything, sort everything, and only then trim to a page, unboundedly on
-// every single page request. A directory bigger than this is truncated; the
-// caller learns via Page.Truncated. A var (not const) so tests can shrink it
-// instead of building a real 50000-entry directory.
+// maxDirEntries caps entries read before sorting; oversized directories report Page.Truncated. Mutable for
+// tests.
 var maxDirEntries = 50000
 
 // dirReadBatch is how many entries a single f.ReadDir call reads while
@@ -36,16 +31,8 @@ const (
 	kindSymlink   = "symlink"
 )
 
-// List returns a lazily-paginated, sorted listing of relPath inside rootID:
-// directories first, then files and symlinks together, both groups sorted
-// case-insensitively (original name as tie-break). `.git`/`.afm` entries are
-// hidden. A symlink is classified as kind "symlink" and is never selectable —
-// its target is never followed (the directory itself is opened securely via
-// rootHandle.openat, so a symlinked directory component can't be entered
-// either; here it's only ever a leaf classification). The raw directory scan
-// itself is capped at maxDirEntries (Page.Truncated signals it), independent
-// of the listPageSize/NextCursor pagination applied to the (already capped)
-// sorted result.
+// List returns a lazily-paginated, sorted listing of relPath inside rootID: directories first, then files
+// and symlinks together, both groups sorted case-insensitively.
 func (fs *fsImpl) List(ctx context.Context, rootID, relPath, cursor string) (Page, error) {
 	if err := ctx.Err(); err != nil {
 		return Page{}, err
@@ -92,17 +79,8 @@ func (fs *fsImpl) List(ctx context.Context, rootID, relPath, cursor string) (Pag
 	return page, nil
 }
 
-// readDirBounded reads up to max entries from f in bounded batches of
-// dirReadBatch, instead of a single f.ReadDir(-1) that reads the entire
-// directory regardless of size. It stops as soon as either the directory is
-// exhausted (truncated=false) or max is reached (truncated=true, meaning
-// entries beyond max were left unread). Per os.File.ReadDir's contract, a
-// non-nil, non-EOF error is only guaranteed once the returned slice would
-// otherwise be empty, so the loop keeps requesting batches until it actually
-// observes io.EOF rather than inferring end-of-directory from a short batch.
-// ctx is checked before each batch so a cancelled request (e.g. the frontend
-// aborting a superseded search) stops reading a huge directory promptly rather
-// than draining it to the end.
+// readDirBounded reads up to max entries from f in bounded batches of dirReadBatch, instead of a single
+// f.ReadDir that reads the entire directory regardless of size.
 func readDirBounded(ctx context.Context, f *os.File, limit int) (entries []os.DirEntry, truncated bool, err error) {
 	for len(entries) < limit {
 		if cerr := ctx.Err(); cerr != nil {
@@ -154,10 +132,7 @@ func buildEntry(dirRelPath string, d os.DirEntry, name string) Entry {
 		kind = kindSymlink
 		regular = false
 	case t&os.ModeType != 0:
-		// Anything else non-zero here is a special file — FIFO, socket,
-		// device, char device. It's still listed (kind stays "file" for
-		// display) but never selectable: Read/Reference reject it outright,
-		// and opening a FIFO O_RDONLY without O_NONBLOCK can block forever.
+		// Anything else non-zero here is a special file — FIFO, socket, device, char device.
 		regular = false
 	default:
 		// A regular file: kind and regular already hold their zero-value
@@ -181,10 +156,8 @@ func buildEntry(dirRelPath string, d os.DirEntry, name string) Entry {
 	return e
 }
 
-// sortEntries orders directories before files/symlinks, then
-// case-insensitively by name within each group, with the original name as a
-// stable tie-break (filenames are unique within a directory, so this is a
-// total order).
+// sortEntries orders directories before files/symlinks, then case-insensitively by name within each group,
+// with the original name as a stable tie-break.
 func sortEntries(entries []Entry) {
 	slices.SortFunc(entries, func(a, b Entry) int {
 		if ad, bd := a.Kind == kindDirectory, b.Kind == kindDirectory; ad != bd {
@@ -200,11 +173,7 @@ func sortEntries(entries []Entry) {
 	})
 }
 
-// applyCursor drops entries up to and including the one named after, giving
-// resume-after semantics. A name that no longer exists in the current listing
-// (e.g. deleted between pages) is not an error — the listing simply resumes
-// from the start, matching the cursor's binding contract enforced separately
-// by decodeCursor.
+// applyCursor drops entries up to and including the one named after, giving resume-after semantics.
 func applyCursor(entries []Entry, after string) []Entry {
 	if after == "" {
 		return entries
@@ -217,24 +186,17 @@ func applyCursor(entries []Entry, after string) []Entry {
 	return entries
 }
 
-// cursorSep separates the rootID/relPath/name fields of an opaque cursor. It
-// can't appear in any of the three fields: relPath is validated by
-// validateRelPath (which rejects NUL bytes), and root ids/file names never
-// contain NUL either.
+// cursorSep separates the rootID/relPath/name fields of an opaque cursor.
 const cursorSep = "\x00"
 
-// encodeCursor binds a resume position to the exact root+relPath it was
-// produced from, so a cursor accidentally (or maliciously) reused against a
-// different listing is cheaply detectable in decodeCursor.
+// encodeCursor binds a resume position to the exact root+relPath it was produced from, so a cursor
+// accidentally reused against a different listing is cheaply detectable in decodeCursor.
 func encodeCursor(rootID, relPath, name string) string {
 	return rootID + cursorSep + relPath + cursorSep + name
 }
 
-// decodeCursor validates that cursor was produced for this exact
-// rootID+relPath and returns the resume-after name. Any structural mismatch —
-// wrong shape, wrong root, wrong path — is rejected as ErrInvalidRootOrPath
-// rather than silently ignored, since a mismatched cursor almost always means
-// the client is paging through the wrong listing.
+// decodeCursor validates that cursor was produced for this exact rootID+relPath and returns the
+// resume-after name.
 func decodeCursor(cursor, rootID, relPath string) (string, error) {
 	parts := strings.SplitN(cursor, cursorSep, 3)
 	if len(parts) != 3 || parts[0] != rootID || parts[1] != relPath {

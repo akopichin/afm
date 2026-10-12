@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// TestAutonomousDialog_FindAppendRead проверяет полную mcp-цепочку для autonomous
-// фазы: агент пишет autonomous_execution.q<N>.question.json → poller находит его
-// (FindUnansweredQuestions), пишет в <phase>.dialog.jsonl (AppendQuestion) → UI
-// читает (ReadDialog). Регрессия на случай, когда autonomous-вопрос не виден в UI
-// из-за того, что dialog.jsonl не формировался.
 func TestAutonomousDialog_FindAppendRead(t *testing.T) {
 	dir := t.TempDir()
 

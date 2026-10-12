@@ -15,9 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// captureStdout redirects os.Stdout for the duration of fn and returns
-// everything written to it. check.go/list.go print via fmt.Printf directly
-// (not cmd.OutOrStdout()), so capturing the real os.Stdout is required.
+// captureStdout redirects os.Stdout for the duration of fn and returns everything written to it.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -40,9 +38,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// writeEventsLog writes a sequence of transitions to <runDir>/events.jsonl,
-// the authoritative source state.LoadRunState (and thus `afm check`) reads
-// from — mirroring makeRunState but allowing several transitions per stage.
+// writeEventsLog writes authoritative stage transitions, including multiple transitions per stage.
 func writeEventsLog(t *testing.T, runDir string, transitions []state.Transition) {
 	t.Helper()
 	if err := os.MkdirAll(runDir, 0755); err != nil {
@@ -62,12 +58,6 @@ func writeEventsLog(t *testing.T, runDir string, transitions []state.Transition)
 	}
 }
 
-// TestCheckReadsStatusFromLogNotSnapshot verifies that `afm check` derives
-// stage status from events.jsonl (via state.LoadRunState), not from the
-// cached state.json snapshot. A couple of transitions are seeded in the log
-// (pending -> running -> done), while a deliberately stale state.json claims
-// the stage is "failed" — check must report the log's truth ("done"), never
-// the stale snapshot's "failed".
 func TestCheckReadsStatusFromLogNotSnapshot(t *testing.T) {
 	chdirTemp(t)
 
@@ -108,11 +98,6 @@ func TestCheckReadsStatusFromLogNotSnapshot(t *testing.T) {
 	}
 }
 
-// TestCheckDoesNotBlockOnActiveRunLock is the load-bearing guarantee from
-// CLAUDE.md: `afm check` is read-only and must NOT take the run's flock, so
-// it keeps working while a live `afm run` (or any process holding state.Open)
-// has the lock. We hold the lock ourselves via state.Open for the whole test
-// and assert check still succeeds and reports the correct status.
 func TestCheckDoesNotBlockOnActiveRunLock(t *testing.T) {
 	chdirTemp(t)
 
@@ -191,9 +176,7 @@ func TestLastLogAction_ReviewOnly(t *testing.T) {
 	}
 }
 
-// writeUsageLog writes the given accounting.UsageRecords as usage.jsonl in
-// runDir, mirroring what accounting.Store.Append persists during a real run
-// — `afm check` reads this file read-only via accounting.Load.
+// writeUsageLog writes usage.jsonl fixtures for read-only accounting checks.
 func writeUsageLog(t *testing.T, runDir string, recs []accounting.UsageRecord) {
 	t.Helper()
 	if err := os.MkdirAll(runDir, 0755); err != nil {
@@ -213,10 +196,6 @@ func writeUsageLog(t *testing.T, runDir string, recs []accounting.UsageRecord) {
 	}
 }
 
-// TestCheckShowsCostColumnsAndTotal verifies that when a run has recorded
-// usage (usage.jsonl present with priced records), `afm check` renders the
-// TOKENS/CACHE/EST. COST columns for the stage and a TOTAL summary line
-// derived from accounting.Ledger.RunSummary — never computed by hand in cmd.
 func TestCheckShowsCostColumnsAndTotal(t *testing.T) {
 	chdirTemp(t)
 	// Деньги показываются только при show_money (дефолт — скрыто); эта проверка
@@ -265,11 +244,6 @@ func TestCheckShowsCostColumnsAndTotal(t *testing.T) {
 	}
 }
 
-// TestCheck_ShowMoneyOffKeepsTokensDropsCost verifies the default presentation
-// gate: accounting enabled (tokens collected and shown) but money hidden
-// (show_money defaults to false). The TOKENS/CACHE columns and the TOTAL token
-// figure must still render, while the EST. COST column and every "$" amount are
-// dropped.
 func TestCheck_ShowMoneyOffKeepsTokensDropsCost(t *testing.T) {
 	chdirTemp(t)
 
@@ -305,10 +279,6 @@ func TestCheck_ShowMoneyOffKeepsTokensDropsCost(t *testing.T) {
 	}
 }
 
-// TestCheckWithoutUsageDataRendersCleanly verifies the backward-compat path:
-// a run with no usage.jsonl at all (accounting.Load returns an empty ledger,
-// nil error) must render without the cost columns and without a misleading
-// $0.00 anywhere — just a plain "No usage data" note.
 func TestCheckWithoutUsageDataRendersCleanly(t *testing.T) {
 	chdirTemp(t)
 
@@ -337,11 +307,6 @@ func TestCheckWithoutUsageDataRendersCleanly(t *testing.T) {
 	}
 }
 
-// TestCheck_AccountingDisabledHidesCost verifies the display switch: with
-// AFM_ACCOUNTING=0 the ledger is not read at all, so even a run WITH recorded
-// usage renders the pre-accounting table — no cost columns, no TOTAL, and no
-// misleading "No usage data" note (the data exists, it's just hidden). The
-// stage table itself must still render. Exit 0.
 func TestCheck_AccountingDisabledHidesCost(t *testing.T) {
 	chdirTemp(t)
 	t.Setenv("AFM_ACCOUNTING", "0")
@@ -378,10 +343,7 @@ func TestCheck_AccountingDisabledHidesCost(t *testing.T) {
 	}
 }
 
-// captureOutput redirects both os.Stdout and os.Stderr for the duration of
-// fn and returns everything written to each SEPARATELY — the load-error
-// matrix below must assert stdout and stderr independently (check.go prints
-// via fmt.Printf/os.Stderr directly, not cmd.OutOrStdout()/ErrOrStderr()).
+// captureOutput captures stdout and stderr separately; check writes directly to process streams.
 func captureOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	t.Helper()
 	outR, outW, err := os.Pipe()
@@ -414,11 +376,6 @@ func captureOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	return outBuf.String(), errBuf.String()
 }
 
-// TestCheck_LoadErrorMatrix exercises accounting.Load's four outcomes for
-// `afm check`, asserting stdout, stderr and the exit code (via the RunE's
-// returned *ExitError, translated to a real process exit by cmd/afm/exit.go
-// — see TestExitError_ProcessExitCode for the process-level proof) totally
-// independently, per the CLI-consistency contract in the design spec.
 func TestCheck_LoadErrorMatrix(t *testing.T) {
 	exitCodeOf := func(t *testing.T, err error) int {
 		t.Helper()
@@ -488,9 +445,8 @@ func TestCheck_LoadErrorMatrix(t *testing.T) {
 	t.Run("other read error", func(t *testing.T) {
 		chdirTemp(t)
 		runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
-		// usage.jsonl as a DIRECTORY is a portable way to force a read
-		// error (EISDIR) without chmod, which is unstable across users/CI
-		// (e.g. root always bypasses permission bits).
+		// usage.jsonl as a DIRECTORY is a portable way to force a read error (EISDIR) without chmod, which is
+		// unstable across users/CI (e.g. root always bypasses permission bits).
 		if err := os.MkdirAll(filepath.Join(runDir, "usage.jsonl"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -549,11 +505,6 @@ func TestCheck_LoadErrorMatrix(t *testing.T) {
 	})
 }
 
-// TestCoverageNote_SumsCountNotGroups is the CLI-level companion to
-// pkg/accounting's TestLedger_CoverageIssues_SumsCountAcrossIdenticalRecords:
-// two identical unpriced records must render as "2 unpriced" in `afm
-// check`'s coverage note, not "1" (which a naive len(issues) would produce,
-// since aggregateIssues groups identical gaps into one issue with Count==2).
 func TestCoverageNote_SumsCountNotGroups(t *testing.T) {
 	led := &accounting.Ledger{}
 	rec := accounting.UsageRecord{
@@ -570,9 +521,8 @@ func TestCoverageNote_SumsCountNotGroups(t *testing.T) {
 }
 
 func TestStatusColor_PausedGetsItsOwnColor(t *testing.T) {
-	// paused needs a human decision (Continue), same class as
-	// awaiting_approval — it must not fall into the same colorGray bucket as
-	// genuinely inert statuses like pending/ready.
+	// paused needs a human decision (Continue), same class as awaiting_approval — it must not fall into the
+	// same colorGray bucket as genuinely inert statuses like pending/ready.
 	if got := statusColor(state.StatusPaused); got == colorGray {
 		t.Error("statusColor(paused) = colorGray, want a distinct attention color")
 	}

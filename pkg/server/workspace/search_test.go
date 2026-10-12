@@ -102,11 +102,6 @@ func TestSearch_TruncatesAtScanBudget(t *testing.T) {
 	}
 }
 
-// TestSearch_Top200IsGloballyRanked guards finding #1: the returned window must
-// be the globally best-ranked matches, not the first maxSearchResults met in
-// filesystem order. A strong prefix match is placed DEEP (visited last by the
-// breadth-first walk) behind many weak path-only matches; it must still appear,
-// and appear first.
 func TestSearch_Top200IsGloballyRanked(t *testing.T) {
 	dir := t.TempDir()
 	// A depth-1 directory whose NAME contains the query → every file inside is
@@ -144,9 +139,6 @@ func TestSearch_Top200IsGloballyRanked(t *testing.T) {
 	}
 }
 
-// TestSearch_ScanBudgetBoundary guards finding #3: an entry landing exactly on
-// the scan budget is still processed (no off-by-one), and a tree that fits
-// exactly within the budget is NOT falsely flagged truncated.
 func TestSearch_ScanBudgetBoundary(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"amatch.go", "bmatch.go", "cmatch.go"} {

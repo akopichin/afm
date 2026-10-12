@@ -1,17 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
-// useLineComments — слой ВЗАИМОДЕЙСТВИЯ поверх заякоренного markdown-рендера
-// (renderAnchoredSections в markdown.ts). Владелец состояния (LineCommentedDocument)
-// держит comments/activeCommentLine/rovingLine и вызывает этот хук; хук:
-//   • привязывается к markdown-контейнеру через callback-ref (контейнер монтируется
-//     условно — #plan-content/.dialog-question появляются только после загрузки),
-//   • делегирует click/hover/keyboard на контейнер (scoped),
-//   • держит роллинг tabindex по ВИДИМЫМ якорям (стрелки двигают, Enter/Space
-//     открывают форму только когда фокус на самом якоре),
-//   • навешивает императивный класс-слой (has-comment/is-active + roving tabindex)
-//     через useLayoutEffect — идемпотентно, только атрибуты/классы, без вставок узлов.
-// is-hover принадлежит pointer-хендлерам (НЕ императивному слою) — иначе при смене
-// roving/state под неподвижным курсором подсветка пропала бы до следующего движения.
+// useLineComments — слой ВЗАИМОДЕЙСТВИЯ поверх заякоренного markdown-рендера.
 
 export type UseLineCommentsArgs = {
   comments: Record<number, string>
@@ -70,9 +59,7 @@ function visibleAnchors(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>('[data-line]')).filter((a) => !isHidden(a))
 }
 
-// selectionIntersectsAnchor — есть ли непустое выделение, пересекающее якорь. Если
-// пользователь выделил текст внутри якоря (двойной клик/протяжка), клик, завершающий
-// выделение, НЕ должен открывать форму.
+// selectionIntersectsAnchor — есть ли непустое выделение, пересекающее якорь.
 function selectionIntersectsAnchor(anchor: HTMLElement): boolean {
   const sel = typeof window.getSelection === 'function' ? window.getSelection() : null
   if (sel === null || sel.isCollapsed || sel.rangeCount === 0) return false
@@ -224,10 +211,8 @@ export function useLineComments(args: UseLineCommentsArgs): UseLineComments {
     }
   }, [node])
 
-  // Императивный класс-слой: снять и заново навесить has-comment/is-active + roving
-  // tabindex. is-hover НЕ трогаем (владение у pointer-хендлеров). useLayoutEffect
-  // идёт ПОСЛЕ коммита → если React заменил innerHTML (сменился текст/сборка),
-  // классы восстановятся до paint; идемпотентно (StrictMode-safe).
+  // Императивный класс-слой: снять и заново навесить has-comment/is-active + roving tabindex. is-hover НЕ
+  // трогаем (владение у pointer-хендлеров).
   useLayoutEffect(() => {
     if (node === null) return
     const anchors = Array.from(node.querySelectorAll<HTMLElement>('[data-line]'))

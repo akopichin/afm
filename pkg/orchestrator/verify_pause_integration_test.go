@@ -14,26 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestIntegration_PauseDuringVerifier_StopsSubprocessAndStaysPaused —
-// V5a.1(a): Pause() во время РЕАЛЬНО работающего verify-субпроцесса должен
-// оставить стадию в paused, а не done — верификатор прерван (через wired
-// InterruptCh, runnerForVerify), а не успешно завершился с вердиктом.
-// Использует настоящий bash-скрипт как verify-шаг (не инъектированный
-// o.runVerifyAgent), чтобы проверить реальную доставку сигнала, а не только
-// FSM-логику на фейковом раннере.
-//
-// Не проверяет доставку именно SIGINT отдельным маркером/trap'ом в скрипте —
-// живое исследование на реальной машине показало, что доставка SIGINT
-// процессной группе с graceful-trap'ом в дочернем bash иногда (не всегда)
-// проигрывает гонку с завершением заведомо untrapped-потомка (sleep) в той
-// же группе, а изредка сам сигнал попросту не долетает до процесса вовсе —
-// известная особенность взаимодействия ОС/bash/сигналы/wait(), не имеющая
-// отношения к корректности executor.run: он ВСЕГДА в итоге возвращает
-// ErrUserInterrupted — либо быстрым путём, либо гарантированным
-// SIGKILL-фолбэком после interruptGracePeriod (executor.go, 15s). Поэтому
-// единственное, что стадия обязана делать по итогу verify.Interrupted —
-// остаться paused — и есть предмет проверки здесь, с таймаутом, комфортно
-// перекрывающим худший случай (SIGKILL-фолбэк).
 func TestIntegration_PauseDuringVerifier_StopsSubprocessAndStaysPaused(t *testing.T) {
 	scriptDir := t.TempDir()
 	ready := filepath.Join(scriptDir, "ready.txt")
@@ -52,17 +32,15 @@ func TestIntegration_PauseDuringVerifier_StopsSubprocessAndStaysPaused(t *testin
 
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, &autonomousSummaryRunner{})
 
-	// Generous timeouts throughout: real subprocess + real signal delivery,
-	// worst case bounded by executor.go's interruptGracePeriod (15s
-	// SIGKILL fallback) plus scheduling slack under `go test -race`.
+	// Generous timeouts throughout: real subprocess + real signal delivery, worst case bounded by
+	// executor.go's interruptGracePeriod plus scheduling slack under `go test -race`.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "auto1", state.StatusRunning, 20*time.Second)
 
-	// Дождаться, что верификатор реально стартовал, прежде чем ставить на
-	// паузу — иначе SIGINT мог бы уйти раньше, чем процесс успеет
-	// запуститься.
+	// Дождаться, что верификатор реально стартовал, прежде чем ставить на паузу — иначе SIGINT мог бы уйти
+	// раньше, чем процесс успеет запуститься.
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		if _, err := os.Stat(ready); err == nil {
@@ -89,13 +67,6 @@ func TestIntegration_PauseDuringVerifier_StopsSubprocessAndStaysPaused(t *testin
 	}
 }
 
-// TestIntegration_PauseAfterVerifyPassBeforeCompletion_StaysPaused —
-// V5a.1(c): a Pause() landing durably WHILE the verify agent step is
-// computing its verdict (but before RunVerification returns to runWithRetry)
-// must not be overridden by the pass that follows — completion must never
-// land on a stage that's already durably paused. The fake verify runner
-// itself calls orch.Pause synchronously to reproduce the exact race
-// deterministically, no sleeps required.
 func TestIntegration_PauseAfterVerifyPassBeforeCompletion_StaysPaused(t *testing.T) {
 	stages := []flow.Stage{{
 		ID:     "auto1",
@@ -106,10 +77,7 @@ func TestIntegration_PauseAfterVerifyPassBeforeCompletion_StaysPaused(t *testing
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, &autonomousSummaryRunner{})
 
 	orchestrator.SetVerifyAgentRunnerForTest(orch, func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
-		// Симулирует пользователя, нажавшего "Pause" ровно в момент, когда
-		// верификатор уже посчитал вердикт, но ДО того, как RunVerification
-		// вернёт управление runWithRetry — та же горутина, детерминированно,
-		// без сна.
+		// Вызываем Pause после вердикта, но до возврата RunVerification, детерминированно в той же горутине.
 		if err := orch.Pause(context.Background(), "auto1"); err != nil {
 			t.Errorf("Pause: %v", err)
 		}

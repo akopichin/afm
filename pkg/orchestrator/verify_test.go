@@ -18,10 +18,8 @@ import (
 
 const verifyTestStageID = "s1"
 
-// newVerifyTestOrchestrator строит минимальный Orchestrator для тестов
-// RunVerification напрямую (без New()) — движок не трогает FSM/store/UI,
-// ему достаточно opts.RunDir/Stages и инъектируемого o.runVerifyAgent
-// (тот же приём, что approve_test.go применяет для approveStage).
+// newVerifyTestOrchestrator собирает минимальный verify fixture с RunDir/Stages и подменяемым
+// runVerifyAgent.
 func newVerifyTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrator, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -50,10 +48,6 @@ func readManifest(t *testing.T, stageDir, verID string) stagefiles.Manifest {
 	return m
 }
 
-// TestRunVerification_ShellRejectedCarriesLegacyTail — relocated legacy shell
-// exec/exit-code/output coverage (see TestCheckCompletion_Verify in
-// pkg/orchestrator/stagefiles/completion_test.go, which no longer runs
-// verify at all): первый shell-шаг падает, второй не запускается вовсе.
 func TestRunVerification_ShellRejectedCarriesLegacyTail(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,
@@ -92,9 +86,6 @@ func TestRunVerification_ShellRejectedCarriesLegacyTail(t *testing.T) {
 	}
 }
 
-// TestRunVerification_ShellPassThenAgentNeedsChanges — commit order (V2a
-// §6.3): accepted result + report + manifest persisted BEFORE feedback.md,
-// feedback.md written BEFORE the typed rejection is returned.
 func TestRunVerification_ShellPassThenAgentNeedsChanges(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,
@@ -191,10 +182,6 @@ func TestRunVerification_AgentPassAllSteps_ClearsFeedback(t *testing.T) {
 	}
 }
 
-// TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses — the model's
-// own text is never authoritative: a non-OK process outcome must reject,
-// even if Result somehow ended up non-nil (defensive: real executor never
-// does this, but the engine must not trust Result unless ProcessOK).
 func TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,
@@ -204,10 +191,8 @@ func TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses(t *testing.T)
 	}
 	o, stageDir := newVerifyTestOrchestrator(t, stage)
 	o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
-		// Result is non-nil despite ProcessOK:false — the point of this test
-		// is that a non-OK process outcome rejects EVEN IF the model's text
-		// somehow decoded to a "pass" (the engine must check ProcessOK
-		// before ever looking at Result).
+		// Result is non-nil despite ProcessOK:false — the point of this test is that a non-OK process outcome
+		// rejects EVEN IF the model's text somehow decoded to a "pass".
 		return verify.RunOutcome{ProcessOK: false, Result: &verify.ModelResult{
 			SchemaVersion: verify.SupportedSchemaVersion,
 			Verdict:       verify.VerdictPass,
@@ -227,9 +212,7 @@ func TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses(t *testing.T)
 	if _, _, ok := stagefiles.LoadActiveFeedback(stageDir); ok {
 		t.Error("a failed process must never leave a defect feedback behind")
 	}
-	// Ищем ЛЮБОЙ accepted result.json под настоящим verify-каталогом стадии
-	// (verID у движка случайный — фиксированный "whatever" здесь заведомо не
-	// существовал бы независимо от корректности кода и ничего не проверял).
+	// Ищем ЛЮБОЙ accepted result.json под настоящим verify-каталогом стадии.
 	matches, globErr := filepath.Glob(filepath.Join(stagefiles.VerifyDir(stageDir), "*", "step-*", "result.json"))
 	if globErr != nil {
 		t.Fatalf("glob accepted results: %v", globErr)
@@ -289,9 +272,6 @@ func TestRunVerification_AgentInconclusive_ExecError(t *testing.T) {
 	}
 }
 
-// TestRunVerification_StorageFailureFailsClosed — a persist failure during
-// the needs_changes commit chain must surface as VerifyExecError, never as
-// a silent pass and never as a (partially-written) VerifyRejectedError.
 func TestRunVerification_StorageFailureFailsClosed(t *testing.T) {
 	stage := flow.Stage{
 		ID:     verifyTestStageID,
@@ -326,10 +306,6 @@ func TestRunVerification_StorageFailureFailsClosed(t *testing.T) {
 	}
 }
 
-// TestRunVerification_StaleAcceptedResultNotReused — a NEW invocation must
-// never treat an old, on-disk accepted result (from a previous pass) as
-// this pass's verdict: it always mints a fresh verification id and decides
-// purely from THIS call's outcome.
 func TestRunVerification_StaleAcceptedResultNotReused(t *testing.T) {
 	stage := flow.Stage{
 		ID:     verifyTestStageID,
@@ -365,9 +341,6 @@ func TestRunVerification_StaleAcceptedResultNotReused(t *testing.T) {
 	}
 }
 
-// TestRunVerification_Interrupted_PropagatesUserInterrupted — an external
-// interruption must be handed to the caller as-is, never converted into a
-// needs_changes rejection.
 func TestRunVerification_Interrupted_PropagatesUserInterrupted(t *testing.T) {
 	stage := flow.Stage{
 		ID:     verifyTestStageID,

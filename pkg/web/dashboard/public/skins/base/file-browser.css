@@ -1,18 +1,5 @@
-/* pkg/web/dashboard/skins/base/file-browser.css
-   Файловый браузер проекта: провайдер + полноэкранная модалка + дерево +
-   просмотр файла (highlight.js) + дифф.
-
-   Только СЕМАНТИЧЕСКИЕ токены (--surface-*, --text-*, --accent-primary(-rgb),
-   --attention(-rgb), --success(-rgb), --danger(-rgb), --separator-subtle,
-   --radius-*, --font-*, --focus-ring, --overlay-scrim, --shadow-overlay) — ни
-   одного захардкоженного цвета (кроме rgba(var(--x-rgb), α) для тонировок), так
-   что браузер читается во всех скинах и обеих темах "из коробки": graphite задаёт
-   эти токены нативно per-theme, старые скины получают их через мост tokens.css.
-
-   .modal-overlay/.modal-content — общие с agent-note-modal.css (затемняющий
-   scrim + центрирование). Здесь только то, что специфично для полноэкранной
-   модалки файлового браузера: двойной класс .modal-content.file-browser-modal
-   побеждает базовый max-width по специфичности (два класса против одного). */
+/* pkg/web/dashboard/skins/base/file-browser.css Файловый браузер проекта: провайдер + полноэкранная
+   модалка + дерево + просмотр файла + дифф. */
 
 /* Затемняющий фон под модалкой (scrim) — свой токен, чтобы не зависеть от
    значения в базовом .modal-overlay. */
@@ -59,12 +46,10 @@
   align-items: center;
   gap: 12px;
 }
-/* Tree toggle + scrim exist only on the narrow (mobile) modal — hidden by
-   default, revealed by the max-width:720px block below (Finding #3). */
+/* Show the tree toggle and scrim only below 720px. */
 .file-browser-tree-toggle { display: none; }
 .file-browser-tree-scrim { display: none; }
-/* Attention shortcut (Finding #4): a glowing pill that jumps from Files to the
-   waiting action so a pending question/approval is never lost behind the overlay. */
+/* Attention shortcut closes Files and opens the waiting question or approval. */
 .file-browser-attention-shortcut {
   display: inline-flex;
   align-items: center;
@@ -102,10 +87,7 @@
 
 /* === Левая колонка: root'ы + дерево === */
 .file-browser-roots {
-  /* flex-basis is set inline from React state (resizable width); grow/shrink 0
-     keep it at exactly that width. min-width:0 is essential — without it a flex
-     item's default min-width:auto lets a long, nowrap row's min-content width
-     override the basis and blow the column up to fit the widest path. */
+  /* flex-basis is set inline from React state; grow/shrink 0 keep it at exactly that width. */
   flex: 0 0 260px;
   min-width: 0;
   display: flex;
@@ -170,16 +152,7 @@
   font-size: 12.5px;
 }
 
-/* Обёртка дерева (.file-browser-tree-wrap, FileBrowserModal.tsx) держит FileTree
-   смонтированным при переключении на поиск/changed-view (hidden вместо
-   размонтирования — раскрытые каталоги не теряются). Но по умолчанию это обычный
-   блок — он рвал flex-цепочку: .file-tree рассчитан на flex-родителя с
-   ограниченной высотой (flex:1; min-height:0; overflow-y:auto), а получал блок
-   без высоты и переполнял колонку — дерево уезжало за пределы модалки, без
-   скролла (реальный баг с большим числом файлов). Делаем обёртку flex-колонкой
-   на всю оставшуюся высоту — но ТОЛЬКО когда она НЕ hidden: иначе display:flex у
-   класса победил бы display:none из [hidden] (UA-стиль), и скрытие при поиске
-   сломалось бы. */
+/* Обёртка дерева держит FileTree смонтированным при переключении на поиск/changed-view. */
 .file-browser-tree-wrap:not([hidden]) {
   flex: 1;
   min-height: 0;
@@ -396,15 +369,8 @@
   overflow-x: auto;
 }
 
-/* === Построчный рендер файла (Task 20) ===
-   Один div на строку исходника — по образцу .plan-line (plan-panel.css): та же
-   grid-раскладка "номер / контент / маркер", тот же ●-маркер и та же инлайновая
-   .line-comment-form (класс переиспользован без изменений — форма комментария
-   не зависит от того, план это или файл). Отдельные .file-line-* классы (не
-   .plan-line/.line-num/.line-content/.line-comment-marker) — потому что здесь
-   контент preformatted-код (white-space: pre), а не обтекающий markdown, как
-   в плане: делить один класс между двумя разными white-space-режимами через
-   !important было бы более хрупко, чем завести короткий отдельный набор. */
+/* === Построчный рендер файла === Один div на строку исходника — по образцу .plan-line: та же
+   grid-раскладка "номер / контент / маркер", тот же ●-маркер и та же инлайновая .line-comment-form. */
 .file-line {
   display: grid;
   grid-template-columns: 48px 1fr 20px;
@@ -470,9 +436,8 @@
   opacity: 1;
 }
 
-/* Shared form styles come from plan-panel.css. Span all three file-line grid
-   columns so the editor sits below the source instead of in the 48px gutter.
-   The form must not inherit the source code's preformatted whitespace. */
+/* Shared form styles come from plan-panel.css. Span all three file-line grid columns so the editor sits
+   below the source instead of in the 48px gutter. */
 .file-line .line-comment-form {
   grid-column: 1 / -1;
   white-space: normal;
@@ -487,10 +452,7 @@
   color: var(--danger);
 }
 
-/* Task 21: конфирм "поставить флоу на паузу?" — показывается вместо формы
-   комментария на первый клик по строке, пока flowPauseState === 'none'.
-   .comment-actions/.btn-send/.btn-cancel переиспользованы из plan-panel.css,
-   как и .line-comment-form выше. */
+/* При flowPauseState=none первый клик по строке предлагает поставить флоу на паузу. */
 .file-line .review-pause-confirm {
   white-space: normal;
   margin-left: 48px;
@@ -505,9 +467,7 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
-/* The pause-confirm reuses .comment-actions but sits outside .line-comment-form,
-   so plan-panel.css's `.line-comment-form .comment-actions { gap }` doesn't reach
-   it — give it its own flex+gap so the buttons don't touch. */
+/* Pause confirmation sits outside .line-comment-form and needs its own button gap. */
 .file-line .review-pause-confirm .comment-actions {
   display: flex;
   gap: 8px;
@@ -600,10 +560,7 @@
   color: var(--danger);
 }
 
-/* Основное действие футера (Copy/Insert references) — акцентная primary-кнопка.
-   .btn/.btn-approve приходят из plan-panel.css (общие); здесь их роль иная —
-   это не «одобрить план», а главное действие браузера, поэтому скоупим под
-   футер акцентную заливку + просторные отступы, не трогая общий компонент. */
+/* Основное действие футера — акцентная primary-кнопка. */
 .file-browser-footer .btn-approve {
   padding: 9px 20px;
   font-size: 13px;
@@ -635,11 +592,8 @@
   box-shadow: var(--shadow-overlay);
 }
 
-/* === Минимальная, тема-осознанная подсветка синтаксиса (hljs) ===
-   Своя палитра токенов вместо готовой темы highlight.js (github/atom-one-…):
-   те так или иначе хардкодят цвета и не реагируют на смену скина/темы. Здесь
-   — только семантические токены текущего скина, поэтому подсветка остаётся
-   читаемой в любом скине и в light/dark без единого исключения. */
+/* === Минимальная, тема-осознанная подсветка синтаксиса === Своя палитра токенов вместо готовой темы
+   highlight.js: те так или иначе хардкодят цвета и не реагируют на смену скина/темы. */
 .hljs-keyword,
 .hljs-built_in,
 .hljs-type,
@@ -670,9 +624,8 @@
 .hljs-attr {
   color: var(--danger);
 }
-/* markdown-заголовки и ссылки, bash-переменные ($var) — классы, которые
-   дают yaml/markdown/bash поверх базовой четвёрки. Те же семантические токены
-   скина, поэтому подсветка остаётся тема-осознанной. */
+/* markdown-заголовки и ссылки, bash-переменные — классы, которые дают yaml/markdown/bash поверх базовой
+   четвёрки. Те же семантические токены скина, поэтому подсветка остаётся тема-осознанной. */
 .hljs-section,
 .hljs-link {
   color: var(--accent-primary);
@@ -758,12 +711,8 @@
   margin-left: 8px;
 }
 
-/* The scrollable content region of the left column, shared by the changed-files
-   list AND the search results (both render .file-search-results in place of the
-   tree). Without this it has no height/overflow of its own, so a long list (the
-   changed view can return up to maxChangesEntries rows) spills past the fixed
-   modal instead of scrolling within it — the tree (.file-tree) already scrolls
-   this way. */
+/* The scrollable content region of the left column, shared by the changed-files list AND the search
+   results. */
 .file-search-results {
   flex: 1;
   min-height: 0;
@@ -794,9 +743,8 @@
   cursor: default;
   overflow: hidden;
 }
-/* The name shrinks (with ellipsis via .file-tree-name) so the row never widens
-   the 260px column; without min-width:0 a flex item refuses to shrink below its
-   content and pushes the reason text into the right pane. */
+/* The name shrinks so the row never widens the 260px column; without min-width:0 a flex item refuses to
+   shrink below its content and pushes the reason text into the right pane. */
 .file-change-row-disabled .file-search-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -812,9 +760,8 @@
   color: var(--text-muted);
 }
 
-/* Visually hidden but exposed to assistive tech (screen-reader-only). Used to
-   voice the change status word that the decorative, aria-hidden badge letter
-   cannot. */
+/* Visually hidden but exposed to assistive tech (screen-reader-only). Used to voice the change status word
+   that the decorative, aria-hidden badge letter cannot. */
 .file-browser-sr-only {
   position: absolute;
   width: 1px;
@@ -886,10 +833,7 @@
   }
 }
 
-/* === Narrow (mobile) modal: the file tree becomes a slide-over over the preview
-   (Finding #3, second review round). On a 390px viewport a two-column tree +
-   preview left the preview near-zero; here the preview gets the full width and
-   the tree slides in on demand via the header ☰ toggle. === */
+/* === Narrow modal: the file tree becomes a slide-over over the preview. === */
 @media (max-width: 720px) {
   .file-browser-modal {
     width: calc(100vw - 20px);

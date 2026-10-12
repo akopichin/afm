@@ -45,12 +45,6 @@ func TestAppendNotice(t *testing.T) {
 	}
 }
 
-// TestAppendNotice_ConcurrentWritesNoCorruption reproduces the real race
-// script stages now create: independent stdout- and stderr-reader
-// goroutines (executor.RunScript) both call AppendNotice for the same run
-// concurrently. Every appended line must remain valid, complete JSON — no
-// interleaved/torn writes — and the total line count must match the number
-// of concurrent callers.
 func TestAppendNotice_ConcurrentWritesNoCorruption(t *testing.T) {
 	runDir := t.TempDir()
 

@@ -64,9 +64,8 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 	return srv, runDir
 }
 
-// fakeStageActions is the StageActions test double — every method is
-// backed by an overridable func field; the zero value succeeds and does
-// nothing, matching what most handler tests need.
+// fakeStageActions is the StageActions test double — every method is backed by an overridable func field;
+// the zero value succeeds and does nothing, matching what most handler tests need.
 type fakeStageActions struct {
 	approve   func(ctx context.Context, stageID string) error
 	revise    func(ctx context.Context, stageID, feedback string) (applied bool, seq uint64, err error)
@@ -118,9 +117,7 @@ func (f fakeStageActions) Button(ctx context.Context, stageID, name string) erro
 	return f.button(ctx, stageID, name)
 }
 
-// fakeSecondaryActions is the SecondaryActions test double. Tests that only
-// care about one method (e.g. TestHandleRetryHook_Success) leave the rest nil
-// — those methods simply aren't called by the code path under test.
+// fakeSecondaryActions is the SecondaryActions test double.
 type fakeSecondaryActions struct {
 	retryHook    func(stageID string) error
 	skipHook     func(stageID string) error
@@ -206,11 +203,6 @@ func TestHandleStatus_IncludesStageNames(t *testing.T) {
 	}
 }
 
-// TestHandleStatus_IncludesFlowName guards the root cause of a real bug:
-// RunState.FlowName was declared and read here, but nothing in production
-// code ever called a setter for it (unlike the parallel, correctly-wired
-// SetStageNames right above) — /api/status's flow_name was silently "" for
-// every real run, CLI or otherwise.
 func TestHandleStatus_IncludesFlowName(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	srv.store.SetFlowName("demo-flow")
@@ -231,10 +223,6 @@ func TestHandleStatus_IncludesFlowName(t *testing.T) {
 	}
 }
 
-// TestHandleStatus_IncludesFlowPauseState guards the wiring between
-// Config.ReviewState (the orchestrator's lock-free closure over reviewMarker,
-// see pkg/orchestrator/reviewpause.go's ReviewState) and /api/status's
-// flow_pause_state/flow_paused_stages fields.
 func TestHandleStatus_IncludesFlowPauseState(t *testing.T) {
 	srv := newTestServer(t, Config{
 		ReviewState: func() (string, []string) { return "paused", []string{"s1"} },
@@ -249,10 +237,6 @@ func TestHandleStatus_IncludesFlowPauseState(t *testing.T) {
 	}
 }
 
-// TestHandleStatus_FlowPauseStateDefaultsToNone guards the nil-ReviewState
-// fallback: a Config without ReviewState wired (e.g. an older caller) must
-// not silently omit the field or leave it at Go's zero value in a way the
-// dashboard could confuse with a real state — it must read exactly "none".
 func TestHandleStatus_FlowPauseStateDefaultsToNone(t *testing.T) {
 	srv := newTestServer(t, Config{})
 
@@ -867,14 +851,6 @@ func TestDialogGet(t *testing.T) {
 	}
 }
 
-// TestDialogGet_SkipsMalformedPendingQuestion covers the "guarantee
-// visibility" fallback in handleDialog (reads *.question.json directly when
-// dialog.jsonl hasn't been written yet): a question.json unparseable even
-// after jsonrepair must NOT leak into the response while afm's poller is
-// still deciding whether it's a transient torn read or a genuine mistake
-// worth nudging the agent about (dialog_poller.go's retry state machine) —
-// showing it here would bypass that decision entirely and expose
-// in-progress internal state to the user.
 func TestDialogGet_SkipsMalformedPendingQuestion(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -1077,9 +1053,6 @@ func TestDialogAnswer(t *testing.T) {
 	}
 }
 
-// TestHandleDialogAnswer_InvalidID verifies that a question id containing path
-// separators / traversal sequences is rejected before it is embedded in a
-// filename. Guards against path traversal via a crafted id.
 func TestHandleDialogAnswer_InvalidID(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 	stageDir := filepath.Join(runDir, testStageID)
@@ -1205,11 +1178,6 @@ func TestHandleDialogAnswer_WritesAnswerFile(t *testing.T) {
 	}
 }
 
-// TestHandleDialogAnswer_AppendAnswerFailureStillNotifies verifies that when
-// the dialog.jsonl append fails (here: the path is a directory), the handler
-// still writes answer.json and calls NotifyAnswer (the critical notify),
-// returning 200. Failing the request here would leave the stage stuck in
-// awaiting_user_input with the answer already delivered.
 func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)

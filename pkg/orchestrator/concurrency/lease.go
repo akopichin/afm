@@ -3,21 +3,13 @@ package concurrency
 import "context"
 
 // Lease владеет не более чем одним слотом командного семафора одновременно.
-// Нужен для перехода исполнения автор→верификатор (другая команда): чтобы
-// afm никогда не держал два слота сразу (классический AB-BA/self-дедлок),
-// слот на старую команду освобождается ДО захвата слота на новую (см.
-// SwapTo). Не потокобезопасен сам по себе — как и агентская горутина,
-// которой он принадлежит, используется одним владельцем последовательно.
 type Lease struct {
 	m    *Manager
 	cmd  string
 	held bool
 }
 
-// AcquireLease захватывает слот для cmd (отменяемо через ctx). cmd
-// резолвится той же семантикой, что и Stage.Command в semForCmd: "" → дефолтная
-// команда Manager'а, неизвестная команда → общий noop-семафор (без лимита).
-// Lease хранит УЖЕ нормализованное имя — см. resolveCmd/SwapTo.
+// AcquireLease захватывает слот для cmd. Lease хранит УЖЕ нормализованное имя — см. resolveCmd/SwapTo.
 func (m *Manager) AcquireLease(ctx context.Context, cmd string) (*Lease, error) {
 	resolved := m.resolveCmd(cmd)
 	if err := m.semForCmd(resolved).acquireCtx(ctx); err != nil {
@@ -26,25 +18,11 @@ func (m *Manager) AcquireLease(ctx context.Context, cmd string) (*Lease, error) 
 	return &Lease{m: m, cmd: resolved, held: true}, nil
 }
 
-// SwapTo переводит lease на другую команду. Та же команда — no-op: слот
-// остаётся у владельца, повторного acquire/release нет (иначе на
-// max_parallel=1 lease мог бы отпустить единственный слот и тут же
-// проиграть гонку за него другому ожидающему — self-дедлок на пустом
-// месте). Другая команда — сначала освобождается ТЕКУЩИЙ слот, затем
-// отменяемо захватывается новый: если во время ожидания нового слота ctx
-// отменяется, lease не держит НИЧЕГО (симметрично с "мы уже отпустили
-// старый") и возвращается ошибка — вызывающий не должен считать переход
-// частично успешным.
+// SwapTo переводит lease на другую команду.
 func (l *Lease) SwapTo(ctx context.Context, cmd string) error {
 	resolved := l.m.resolveCmd(cmd)
 	if l.held && l.cmd == resolved {
-		// C5 код-ревью: fast path ничего не захватывает и не освобождает, но
-		// обязан уважать УЖЕ отменённый ctx — иначе вызывающий код (verify.go)
-		// увидел бы nil-успех даже когда Pause/Revise отменили ctx до вызова
-		// (author == verifier command — самый частый случай для этого пути),
-		// и запустил бы верификатор на стадии, уже ушедшей в paused/revising.
-		// ctx.Err() сам по себе nil для живого ctx — совпадает с прежним
-		// поведением "нет ошибки" без отдельной ветки.
+		// Fast path тоже проверяет ctx, чтобы отменённый Pause/Revise не запустил verify на прежней команде.
 		return ctx.Err()
 	}
 	l.Release()

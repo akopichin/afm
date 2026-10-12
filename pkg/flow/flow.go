@@ -55,11 +55,8 @@ func (inp *Input) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*plain)(inp))
 }
 
-// Reflect — конфиг отражения (reflection) стадии для agent-памяти v3.
-// File — путь (относительно memory.path) к ЦЕЛЕВОМУ файлу памяти этой стадии:
-// шаг update конвейера пишет туда смёрженные High-паттерны, а Mode с CanRead()
-// инъецирует его как указатель в промпт стадии; обязателен.
-// Mode — r|w|rw, режим доступа агентов к памяти (0 → по умолчанию rw).
+// Reflect — конфиг отражения стадии для agent-памяти v3. Mode — r|w|rw, режим доступа агентов к памяти (0
+// → по умолчанию rw).
 type Reflect struct {
 	File string `yaml:"file"`
 	Mode string `yaml:"mode,omitempty"`
@@ -82,17 +79,15 @@ func (r *Reflect) CanWrite() bool {
 	return r.Mode == ReflectModeW || r.Mode == ReflectModeRW
 }
 
-// Button — предопределённая кнопка кебаб-меню стадии: Label — и отображаемая
-// подпись, и ключ поиска; Prompt — инструкция, которая доставляется живому
-// агенту через Revise при клике.
+// Button — предопределённая кнопка кебаб-меню стадии: Label — и отображаемая подпись, и ключ поиска;
+// Prompt — инструкция, которая доставляется живому агенту через Revise при клике.
 type Button struct {
 	Label  string
 	Prompt string
 }
 
-// Buttons сохраняет порядок объявления кнопок из YAML (плоский
-// map[string]string итерировался бы случайно, тасуя меню). Декодируется из
-// mapping-узла обходом value.Content попарно.
+// Buttons сохраняет порядок объявления кнопок из YAML (плоский map[string]string итерировался бы случайно,
+// тасуя меню). Декодируется из mapping-узла обходом value.Content попарно.
 type Buttons []Button
 
 // UnmarshalYAML декодирует Buttons из YAML-mapping'а label: prompt, сохраняя
@@ -140,9 +135,8 @@ type Stage struct {
 	Agents      []AgentType `yaml:"agents,omitempty,flow"`
 	Skills      []string    `yaml:"skills,omitempty,flow"`
 	DependsOn   []string    `yaml:"depends_on,omitempty,flow"`
-	// EagerPlanning starts the planning agent immediately without
-	// waiting for depends_on stages to finish (the default before
-	// the planning-by-deps gate was introduced).
+	// EagerPlanning starts the planning agent immediately without waiting for depends_on stages to finish
+	// (the default before the planning-by-deps gate was introduced).
 	EagerPlanning bool `yaml:"eager_planning,omitempty"`
 	// Plan is an optional path to an existing plan file.
 	// If set, the planning agent is skipped.
@@ -154,54 +148,34 @@ type Stage struct {
 	Artifacts   []Artifact `yaml:"artifacts,omitempty"`
 	Inputs      []Input    `yaml:"inputs,omitempty"`
 	Interactive bool       `yaml:"interactive,omitempty"`
-	// Verify описывает один или несколько шагов проверки завершённости стадии
-	// (shell-команда и/или делегирование агенту), выполняемых в проектной
-	// директории после того как стадия заявила о завершении. Провал шага
-	// означает, что стадия на самом деле не готова, что бы ни утверждал агент.
-	// См. pkg/flow/verify.go.
+	// Verify описывает один или несколько шагов проверки завершённости стадии, выполняемых в проектной
+	// директории после того как стадия заявила о завершении. См. pkg/flow/verify.go.
 	Verify VerifySpec `yaml:"verify,omitempty"`
 	// Prompt is an optional explicit instruction delivered to the agent
 	// after the <stage> context block.
 	Prompt string `yaml:"prompt,omitempty"`
-	// Script, if set, makes this a script-only stage: it runs the given shell
-	// script (via sh -c) instead of any agent, with no planning/approval gate.
-	// Mutually exclusive with Agents/Command/Interactive/Plan/Verify.
+	// Script, if set, makes this a script-only stage: it runs the given shell script instead of any agent,
+	// with no planning/approval gate.
 	Script        string        `yaml:"script,omitempty"`
 	ScriptTimeout time.Duration `yaml:"script_timeout,omitempty"`
-	// ScriptBefore/ScriptAfter run a shell script immediately before/after this
-	// stage's own main content (agent, script, or interactive). Legal on any
-	// stage type, alongside its other fields.
+	// ScriptBefore/ScriptAfter run a shell script immediately before/after this stage's own main content
+	// (agent, script, or interactive). Legal on any stage type, alongside its other fields.
 	ScriptBefore        string        `yaml:"script_before,omitempty"`
 	ScriptBeforeTimeout time.Duration `yaml:"script_before_timeout,omitempty"`
 	ScriptAfter         string        `yaml:"script_after,omitempty"`
 	ScriptAfterTimeout  time.Duration `yaml:"script_after_timeout,omitempty"`
-	// AutoApprove, if true, approves this stage's plan automatically the
-	// instant it's ready (awaiting_approval), with no human interaction —
-	// regardless of whether a dashboard is attached and regardless of
-	// --require-approval. Default false. Intended for CI runs where some
-	// stages need human review and others don't.
+	// AutoApprove approves a ready plan regardless of dashboard or --require-approval; default false.
 	AutoApprove bool `yaml:"auto_approve,omitempty"`
-	// AutoRun, если явно false, приостанавливает стадию сразу при первой
-	// активации (когда её depends_on выполнены) вместо немедленного старта —
-	// стадия уходит в paused с PausedFrom=pending и ждёт Continue. nil (не
-	// задано) или true — прежнее поведение, немедленный старт. Гейт
-	// срабатывает один раз: см. state.StageState.PausedFrom.
+	// AutoRun, если явно false, приостанавливает стадию сразу при первой активации вместо немедленного старта
+	// — стадия уходит в paused с PausedFrom=pending и ждёт Continue.
 	AutoRun *bool `yaml:"auto_run,omitempty"`
-	// Buttons — предопределённые пункты кебаб-меню этой стадии: label → prompt.
-	// Клик доставляет prompt живому агенту через Revise (тот же путь, что и
-	// свободная заметка). Порядок сохраняется из YAML. Недопустимо на скриптовой
-	// стадии (нет агента). См.
-	// docs/superpowers/specs/2026-08-27-stage-custom-buttons-design.md.
+	// Buttons — предопределённые пункты кебаб-меню этой стадии: label → prompt. Клик доставляет prompt живому
+	// агенту через Revise (тот же путь, что и свободная заметка).
 	Buttons Buttons `yaml:"buttons,omitempty"`
-	// Reflect (v3): конфиг отражения этой стадии для agent-памяти.
-	// nil (не задано) — reflect отключен. Непусто требует непустой memory.path на уровне флоу.
-	// На script-стадии допустимо, но во время выполнения тихо пропускается (нет
-	// агентской сессии). Обязателен reflect.file; reflect.mode опционален (дефолт rw).
+	// Reflect: конфиг отражения этой стадии для agent-памяти. nil (не задано) — reflect отключен.
 	Reflect *Reflect `yaml:"reflect,omitempty"`
-	// MemoryUse (v3): переопределяет глобальный memory.memory_use для ЭТОЙ стадии.
-	// nil — наследует глобальное значение; true/false — задаёт явно. Управляет
-	// только участием стадии в ЧТЕНИИ памяти (инъекции memory.md и своего файла),
-	// не влияет на запись (та управляется reflect / memory.mode).
+	// MemoryUse: переопределяет глобальный memory.memory_use для ЭТОЙ стадии. nil — наследует глобальное
+	// значение; true/false — задаёт явно.
 	MemoryUse *bool `yaml:"memory_use,omitempty"`
 	// Hooks — lifecycle-хуки, ограниченные этой стадией (flow-события в них
 	// запрещены валидацией).
@@ -274,9 +248,8 @@ func (s Stage) AutoRunDisabled() bool {
 	return s.AutoRun != nil && !*s.AutoRun
 }
 
-// BrowserDisabled reports whether this stage explicitly opts out of the managed
-// Chrome DevTools browser capability (browser: false). nil inherits the global
-// policy.
+// BrowserDisabled reports whether this stage explicitly opts out of the managed Chrome DevTools browser
+// capability (browser: false). nil inherits the global policy.
 func (s Stage) BrowserDisabled() bool {
 	return s.Browser != nil && !*s.Browser
 }
@@ -287,15 +260,10 @@ type MemoryConfig struct {
 	// Path — директория для хранения памяти (project-wide <path>/memory.md +
 	// per-stage файлы из Reflect.File), относительно root_dir. Непусто = фича включена.
 	Path string `yaml:"path,omitempty"`
-	// Mode — режим ГЛОБАЛЬНОГО memory.md: r (только читать/инъектить), w (только
-	// писать в конце рана), rw (оба). "" → дефолт "rw" (ставится в ParseFile).
-	// Не путать с Reflect.Mode, который про per-stage файл конкретной стадии.
+	// Mode — режим ГЛОБАЛЬНОГО memory.md: r, w, rw. "" → дефолт "rw" (ставится в ParseFile).
 	Mode string `yaml:"mode,omitempty"`
-	// MemoryUse — глобальный выключатель УЧАСТИЯ стадий в чтении памяти. Дефолт
-	// false: по умолчанию память никуда не подмешивается, пока не включишь true
-	// (глобально или на стадии через Stage.MemoryUse). Управляет ТОЛЬКО чтением
-	// (инъекцией); запись per-stage файлов управляется Reflect, запись memory.md
-	// — полем Mode выше.
+	// MemoryUse — глобальный выключатель УЧАСТИЯ стадий в чтении памяти. Управляет ТОЛЬКО чтением
+	// (инъекцией); запись per-stage файлов управляется Reflect, запись memory.md — полем Mode выше.
 	MemoryUse bool `yaml:"memory_use,omitempty"`
 	// MaxRules — максимальное количество паттернов на файл (project и per-stage).
 	// 0 → дефолт 25 (ставится в ParseFile).
@@ -316,9 +284,8 @@ func (c MemoryConfig) CanWriteProject() bool {
 	return c.Mode == ReflectModeW || c.Mode == ReflectModeRW
 }
 
-// UseFor resolves the effective per-stage memory participation: the stage's own
-// MemoryUse override if set, otherwise the global MemoryUse. When false, the
-// stage's prompt gets no memory injected at all.
+// UseFor resolves the effective per-stage memory participation: the stage's own MemoryUse override if set,
+// otherwise the global MemoryUse.
 func (c MemoryConfig) UseFor(stageMemoryUse *bool) bool {
 	if stageMemoryUse != nil {
 		return *stageMemoryUse
@@ -330,16 +297,12 @@ func (c MemoryConfig) UseFor(stageMemoryUse *bool) bool {
 type Flow struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
-	// Prompt is shared text added to the system prompt of every stage and
-	// every phase (planning/implementation/review). Empty value does not
-	// change behavior.
+	// Prompt is shared text added to the system prompt of every stage and every phase
+	// (planning/implementation/review). Empty value does not change behavior.
 	Prompt      string `yaml:"prompt,omitempty"`
 	MaxParallel int    `yaml:"max_parallel,omitempty"`
-	// RootDir — корень проекта, в котором выполняются агенты (их CWD). Нужен,
-	// когда рабочая директория процесса afm не совпадает с корнем проекта
-	// (напр. Docker-сетап: исходники в /workspace, а .afm — в другом каталоге).
-	// Без него агенты наследуют CWD afm и резолвят относительные пути проекта
-	// (docs/arch и т.п.) в чужом корне. Пусто → поведение не меняется.
+	// RootDir — корень проекта, в котором выполняются агенты. Без него агенты наследуют CWD afm и резолвят
+	// относительные пути проекта (docs/arch и т.п.) в чужом корне.
 	RootDir string       `yaml:"root_dir,omitempty"`
 	Memory  MemoryConfig `yaml:"memory,omitempty"`
 	// Hooks — lifecycle-хуки флоу-слоя: получают события всех стадий.
@@ -397,14 +360,8 @@ type memorySettingsProbe struct {
 	Commit    *bool   `yaml:"commit"`
 }
 
-// warnMemorySettingsWithoutPath best-effort re-parses the raw YAML and warns if
-// any memory.* setting (mode/memory_use/max_rules/commit) is present while
-// memory.path is empty. Without a path the whole agent-memory feature is
-// disabled (MemoryEnabled() == false), so those settings are silently ignored —
-// this makes the likely footgun ("I set mode/memory_use but forgot path")
-// visible instead of quietly turning memory off. Unlike a stage-level reflect
-// without a path (a hard error), these flow-level knobs stay non-fatal: a flow
-// that merely carries stale memory settings keeps working.
+// warnMemorySettingsWithoutPath best-effort re-parses the raw YAML and warns if any memory.* setting is
+// present while memory.path is empty.
 func warnMemorySettingsWithoutPath(data []byte, path string) {
 	var probe struct {
 		Memory *memorySettingsProbe `yaml:"memory"`
@@ -443,15 +400,8 @@ type deprecatedSupervisorStageProbe struct {
 	SupervisorPrompt *string `yaml:"supervisor_prompt"`
 }
 
-// warnDeprecatedSupervisorFields best-effort re-parses the raw YAML looking
-// for the removed LLM-supervisor keys (supervisor/supervisor_prompt on a
-// stage; supervisor_command at the flow root) and prints a non-fatal WARN to
-// stderr naming the affected stage id and key. The LLM supervisor was
-// removed (agents: [auto] replaces it for autonomous stages); ParseFile's
-// primary decode silently drops these now-unknown keys (yaml.Unmarshal isn't
-// KnownFields-strict), so a flow.yaml built for the old supervisor keeps
-// working exactly as it does today when the supervisor is unconfigured —
-// this only makes that behavior change visible instead of silent.
+// warnDeprecatedSupervisorFields best-effort re-parses the raw YAML looking for the removed LLM-supervisor
+// keys and prints a non-fatal WARN to stderr naming the affected stage id and key.
 func warnDeprecatedSupervisorFields(data []byte, path string) {
 	var probe struct {
 		SupervisorCommand *string                          `yaml:"supervisor_command"`
@@ -473,17 +423,12 @@ func warnDeprecatedSupervisorFields(data []byte, path string) {
 	}
 }
 
-// defaultScriptTimeout is applied to script/script_before/script_after when
-// the corresponding *_timeout field is left unset (zero value) in YAML — the
-// documented 300s (5min) default bound against a hung or noisily-looping
-// script that would otherwise only be caught by the 24h idle timeout.
+// defaultScriptTimeout bounds scripts and lifecycle before/after scripts to 300s when no timeout is
+// configured.
 const defaultScriptTimeout = 5 * time.Minute
 
-// applyScriptTimeoutDefaults fills in defaultScriptTimeout for any script
-// field that is set but whose timeout was left at the Go zero value. An
-// explicit timeout in YAML (any non-zero duration) is never overridden.
-// Mutates f.Stages in place — f.Stages is a []Stage value slice, so the loop
-// indexes into it directly rather than ranging over a copy.
+// applyScriptTimeoutDefaults fills in defaultScriptTimeout for any script field that is set but whose
+// timeout was left at the Go zero value.
 func (f *Flow) applyScriptTimeoutDefaults() {
 	for i := range f.Stages {
 		s := &f.Stages[i]
@@ -499,13 +444,8 @@ func (f *Flow) applyScriptTimeoutDefaults() {
 	}
 }
 
-// stageIDSafe сообщает, безопасен ли s как stage.ID. Кроме пути на диске
-// (<runDir>/<stageID>) id попадает в URL managed-browser сессии
-// (/session/<epoch>/<stageID>) и в имя профиля Chrome.
-// Символы вроде '#', '?', ':' или '@' там молча схлопываются или обрезаются
-// (напр. '#' делает остаток фрагментом URL, а ':'/'@' дают один профиль на два
-// разных id → два Chrome поверх одной --user-data-dir). Поэтому id ограничен
-// [A-Za-z0-9._-] — тем же набором, что и sanitizeComponent в pkg/browser.
+// stageIDSafe сообщает, безопасен ли s как stage.ID. Кроме пути на диске (<runDir>/<stageID>) id попадает
+// в URL managed-browser сессии (/session/<epoch>/<stageID>) и в имя профиля Chrome.
 func stageIDSafe(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
@@ -522,11 +462,8 @@ func stageIDSafe(s string) bool {
 
 func (f *Flow) validate() error {
 	ids := make(map[string]bool, len(f.Stages))
-	// folded tracks ids after ASCII case-folding: on a case-INSENSITIVE filesystem
-	// (macOS APFS default) two ids that differ only in case (e.g. "Build"/"build")
-	// map to the SAME Chrome profile dir (profileDirName), so two Chromes would
-	// share one --user-data-dir. Reject such collisions up front; depends_on still
-	// resolves against the exact-case `ids` set below.
+	// Reject case-folded ID collisions: case-insensitive filesystems would share Chrome profiles;
+	// dependencies remain case-sensitive.
 	folded := make(map[string]string, len(f.Stages))
 	for _, s := range f.Stages {
 		if ids[s.ID] {
@@ -540,10 +477,7 @@ func (f *Flow) validate() error {
 		folded[fold] = s.ID
 	}
 
-	// stage.ID используется как компонент пути на диске (директория стадии внутри
-	// рана), как часть URL managed-browser сессии и как имя профиля Chrome —
-	// значение вне [A-Za-z0-9._-] (включая пусто, ".", "..") должно быть отклонено
-	// до того, как оно попадёт в filepath.Join / URL / имя профиля.
+	// stage.ID входит в пути и URL; допускаем только [A-Za-z0-9._-], исключая пустую строку, "." и "..".
 	for _, s := range f.Stages {
 		if !stageIDSafe(s.ID) {
 			return fmt.Errorf("stage %q: id must match [A-Za-z0-9._-] (non-empty, not \".\"/\"..\")", s.ID)
@@ -601,12 +535,8 @@ func (f *Flow) validate() error {
 		}
 	}
 
-	// verify: сами шаги (взаимоисключение run/command, обязательность одного
-	// из них, неотрицательный timeout — см. VerifySpec.validate) и требование
-	// исполняемой стадии. "script"+verify уже отклонён отдельно выше — сюда
-	// такая комбинация не доходит. Стадия без implementation/review/auto
-	// (только planning) не создаёт .done и никогда не "заявляет о
-	// завершении" — проверять там нечего.
+	// verify: сами шаги и требование исполняемой стадии. Стадия без implementation/review/auto (только
+	// planning) не создаёт .done и никогда не "заявляет о завершении" — проверять там нечего.
 	for _, s := range f.Stages {
 		if s.Verify.IsEmpty() {
 			continue
@@ -691,9 +621,7 @@ func (f *Flow) validate() error {
 		return errors.New("memory.mode must be r, w, or rw")
 	}
 
-	// memory.max_rules must be non-negative. 0 means "unset" (ParseFile then
-	// applies the default 25); a negative value would silently leak into the
-	// <MAX_RULES> substitution of the update prompt, so reject it up front.
+	// memory.max_rules must be non-negative.
 	if f.Memory.MaxRules < 0 {
 		return errors.New("memory.max_rules must be >= 0")
 	}
@@ -711,9 +639,8 @@ func (f *Flow) validate() error {
 		if s.Reflect.File == "" {
 			return fmt.Errorf("stage %q: reflect.file is required", s.ID)
 		}
-		// reflect.file must be a local relative path — no ".." escaping the
-		// memory directory and no absolute path (it's joined onto
-		// memory.path, see memory.StageFile).
+		// reflect.file must be a local relative path — no ".." escaping the memory directory and no absolute
+		// path (it's joined onto memory.path, see memory.StageFile).
 		if !filepath.IsLocal(s.Reflect.File) {
 			return fmt.Errorf("stage %q: reflect.file %q must be a local relative path (no .. or absolute)", s.ID, s.Reflect.File)
 		}

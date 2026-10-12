@@ -11,19 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestRunVerification_AgentStepDeadlineExpiredMasksNeedsChangesAsTimeout — F3
-// (4-е код-ревью): раньше stepCtx.Err() (DeadlineExceeded) проверялся ТОЛЬКО
-// внутри ветки VerdictPass (verifyStepDeadlineRace) — needs_changes/
-// inconclusive принимались как есть, даже если st.Timeout уже истёк к
-// моменту получения результата (subprocess completion и ctx.Done() могут
-// стать готовы одновременно). Итог должен быть VerifyExecError с меткой
-// таймаута, а не VerifyRejectedError/бесплатный author-retry — иначе поздний
-// результат, пришедший ПОСЛЕ дедлайна, мог триггернуть коррекцию автора по
-// фактически просроченной проверке.
-//
-// Фейковый o.runVerifyAgent дожидается <-ctx.Done() (истечения st.Timeout)
-// ПЕРЕД тем как вернуть needs_changes — воспроизводит гонку детерминированно,
-// без polling на реальном времени выполнения executor'а.
 func TestRunVerification_AgentStepDeadlineExpiredMasksNeedsChangesAsTimeout(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,
@@ -56,9 +43,6 @@ func TestRunVerification_AgentStepDeadlineExpiredMasksNeedsChangesAsTimeout(t *t
 	}
 }
 
-// TestRunVerification_AgentStepDeadlineExpiredMasksInconclusiveAsTimeout —
-// то же самое (F3), но для вердикта inconclusive — вторая ветка switch'а,
-// которая раньше тоже не перепроверяла дедлайн.
 func TestRunVerification_AgentStepDeadlineExpiredMasksInconclusiveAsTimeout(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,

@@ -20,48 +20,32 @@ import { visibleFocusables } from '../../lib/focus-trap'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
 
-// sameLine matches the backend's note-dedup key semantics: two line pointers
-// denote the same note iff both are file-level (null) or both the same number.
-// Strict equality already covers all three cases (null/null, null/number,
-// number/number).
+// sameLine matches the backend's note-dedup key semantics: two line pointers denote the same note iff both
+// are file-level or both the same number.
 function sameLine(a: number | null, b: number | null): boolean {
   return a === b
 }
 
-// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — см. её же
-// комментарий в FileViewer.tsx/ReviewBanner.tsx для семантики. Продублирован
-// намеренно тем же приёмом: эта клетка не должна тянуть весь модуль use-status
-// ради одного литерала.
+// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — см. её же комментарий в
+// FileViewer.tsx/ReviewBanner.tsx для семантики.
 type FlowPauseState = 'none' | 'paused' | 'resuming'
 
 export type FileBrowserModalProps = {
-  // 'browse' — свободный просмотр проекта, кнопка снизу копирует референсы в
-  // буфер. 'picker' — вызвано из pickFiles(onInsert), кнопка снизу отдаёт
-  // референсы вызывающему (обычно PasteableTextarea, Task 14) и закрывает модалку.
+  // 'browse' — свободный просмотр проекта, кнопка снизу копирует референсы в буфер.
   mode: 'browse' | 'picker'
   selection: SelectedFile[]
   onToggleSelect: (root: string, entry: TreeEntry) => void
   onRemoveSelect: (root: string, path: string) => void
   onClose: () => void
   onSubmit: () => void
-  // Шорткат к ждущему действию (Finding #4 второго раунда): когда во время
-  // открытого оверлея появляется/висит ожидание, в шапке показывается кнопка
-  // «Question waiting»/«Approval waiting», закрывающая Files и открывающая его.
-  // null/undefined — ожидания нет, кнопка не рендерится.
+  // Кнопка ждущего действия закрывает Files и открывает вопрос или approval; без ожидания скрыта.
   attentionShortcut?: { label: string; onActivate: () => void } | null
-  // Флоу-wide review-pause состояние (см. use-status.ts) — проброшено сюда из
-  // App.tsx через FileBrowserProvider, чтобы FileViewer мог показывать
-  // кликабельные строки/маркер комментария только пока флоу реально на паузе
-  // (см. её же гейт canAnnotate). По умолчанию 'none' — те же вызывающие
-  // (тесты), что не передают этот проп, получают прежнее поведение "аннотации
-  // выключены".
+  // flowPauseState разрешает аннотации только на review-паузе; по умолчанию none.
   flowPauseState?: FlowPauseState
 }
 
-// Resizable left panel: the file list/tree column can be dragged wider/narrower
-// via the divider between it and the preview pane. LEFT_MIN keeps it usable,
-// RIGHT_MIN reserves room for the preview so the drag can't collapse it, and
-// KEY_STEP is the keyboard (Arrow) increment. The width persists across opens.
+// Resizable left panel: the file list/tree column can be dragged wider/narrower via the divider between it
+// and the preview pane. The width persists across opens.
 const LEFT_MIN = 220
 const RIGHT_MIN = 300
 const KEY_STEP = 24
@@ -78,23 +62,16 @@ function loadLeftWidth(): number {
   return DEFAULT_LEFT_WIDTH
 }
 
-// Живой файл может прийти с невалидной/пустой modified_at (см. бэкенд —
-// content.go отдаёт то, что вернул stat()) — тогда просто ничего не
-// показываем вместо "Invalid Date" в заголовке.
+// Живой файл может прийти с невалидной/пустой modified_at (см. бэкенд — content.go отдаёт то, что вернул
+// stat()) — тогда просто ничего не показываем вместо "Invalid Date" в заголовке.
 function formatModifiedAt(modifiedAt: string): string | null {
   if (modifiedAt === '') return null
   const d = new Date(modifiedAt)
   return Number.isNaN(d.getTime()) ? null : d.toLocaleString()
 }
 
-// Полноэкранная модалка файлового браузера: слева — список root'ов проекта +
-// ленивое дерево (FileTree) выбранного root'а, справа — хлебная крошка (с
-// меткой root'а — см. бриф: "identical relative paths from different roots
-// don't look like one file") + таб FILE/DIFF, снизу — чипы выбранных файлов и
-// кнопка Copy/Insert references. Владеет только своим UI-состоянием (root/дерево/
-// таб/превью) — саму selection и mode ей передаёт FileBrowserProvider, чтобы
-// выбор переживал закрытие/переоткрытие модалки (Modal размонтируется, когда
-// закрыта — см. бриф "Renders FileBrowserModal when open").
+// FileBrowserModal владеет деревом и preview; FileBrowserProvider хранит selection между закрытиями
+// модалки.
 type ViewMode = 'all' | 'index' | 'head'
 
 export function FileBrowserModal({
@@ -119,9 +96,8 @@ export function FileBrowserModal({
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const draggingRef = useRef(false)
 
-  // Мобильный режим модалки (Finding #3 второго раунда): узкий вьюпорт → дерево
-  // становится слайд-овером над превью (иначе на 390px превью сжато почти в
-  // ноль). treeOpen управляет шторкой; на десктопе дерево всегда в колонке.
+  // Мобильный режим модалки: узкий вьюпорт → дерево становится слайд-овером над превью. treeOpen управляет
+  // шторкой; на десктопе дерево всегда в колонке.
   const [isNarrowModal, setIsNarrowModal] = useState(false)
   const [treeOpen, setTreeOpen] = useState(false)
   useEffect(() => {
@@ -132,17 +108,14 @@ export function FileBrowserModal({
     return () => mq.removeEventListener('change', update)
   }, [])
 
-  // Finding #4: закрытое mobile-дерево — inert (его root-кнопки/поиск/treeitem'ы
-  // не должны оставаться в tab-order за экраном). На desktop / при открытой
-  // шторке — интерактивно.
+  // Закрытое mobile-дерево inert, чтобы скрытые элементы не попадали в tab-order.
   useEffect(() => {
     const el = asideRef.current
     if (el === null) return
     el.inert = isNarrowModal && !treeOpen
   }, [isNarrowModal, treeOpen])
 
-  // Управление фокусом шторки дерева (Finding #4): открытие → фокус на первый
-  // фокусируемый элемент дерева; закрытие → возврат на тумблер. Только на мобиле.
+  // На мобиле открытие фокусирует первый элемент дерева, закрытие возвращает фокус на тумблер.
   const prevTreeOpen = useRef(false)
   useEffect(() => {
     if (!isNarrowModal) { prevTreeOpen.current = treeOpen; return }
@@ -155,11 +128,8 @@ export function FileBrowserModal({
     prevTreeOpen.current = treeOpen
   }, [treeOpen, isNarrowModal])
 
-  // Переключатель вида левой панели: 'all' — дерево + поиск (как раньше),
-  // 'index'/'head' — плоский список изменённых файлов (git-статус относительно
-  // индекса/HEAD). changesRevision — ручной инкремент кнопкой Refresh, не
-  // связанный ни с чем ещё — тот же приём, что нигде в файле не был нужен
-  // раньше, потому что раньше нечего было "перезапрашивать по кнопке".
+  // Переключатель вида левой панели: 'all' — дерево + поиск, 'index'/'head' — плоский список изменённых
+  // файлов.
   const [viewMode, setViewMode] = useState<ViewMode>('all')
   const [changesRevision, setChangesRevision] = useState(0)
   const [changes, setChanges] = useState<ChangeList | null>(null)
@@ -169,18 +139,11 @@ export function FileBrowserModal({
 
   const { content, contentLoading, contentError, diff, diffLoading, diffError, reloading, reloadError, reload: handleReload } = useFilePreview(activeFile, activeTab)
 
-  // Optimistic-concurrency rev для FileViewer's addNote (см. её проп
-  // expectedRev): flow-wide, а не per-file — тот же rev, что ReviewNotesModal
-  // (Task 23) читает/пишет через listNotes/addNote/updateNote/deleteNote.
-  // Загружается один раз при открытии модалки как базовая точка отсчёта;
-  // best-effort (нет активного review-раунда/бэкенд без поддержки заметок —
-  // остаётся 0, тот же дефолт, с которым стартует свежий стор на бэкенде).
-  // Каждый успешный addNote корректирует её значением из ответа сервера, без
-  // отдельного повторного listNotes() на каждую заметку.
+  // Optimistic-concurrency rev для FileViewer's addNote: flow-wide, а не per-file — тот же rev, что
+  // ReviewNotesModal читает/пишет через listNotes/addNote/updateNote/deleteNote.
   const [notesRev, setNotesRev] = useState(0)
-  // The authoritative note list for the round, kept so FileViewer can rehydrate
-  // a reopened file's saved markers/prefill (review-finding P2 #5). Loaded once
-  // on open and kept in sync by every successful addNote below.
+  // The authoritative note list for the round, kept so FileViewer can rehydrate a reopened file's saved
+  // markers/prefill. Loaded once on open and kept in sync by every successful addNote below.
   const [notes, setNotes] = useState<ReviewNote[]>([])
   useEffect(() => {
     let cancelled = false
@@ -204,9 +167,8 @@ export function FileBrowserModal({
   async function handleAddNote(body: AddNoteRequest): Promise<{ note: ReviewNote; rev: number }> {
     const result = await addNote(body)
     setNotesRev(result.rev)
-    // Keep the authoritative list in sync so FileViewer's saved-note hydration
-    // survives a file switch: replace a note with the same root/path/line
-    // (the backend dedups on that key), otherwise append.
+    // Keep the authoritative list in sync so FileViewer's saved-note hydration survives a file switch:
+    // replace a note with the same root/path/line, otherwise append.
     setNotes((prev) => {
       const i = prev.findIndex(
         (n) => n.root === result.note.root && n.path === result.note.path && sameLine(n.line, result.note.line),
@@ -223,10 +185,7 @@ export function FileBrowserModal({
   const [searchResult, setSearchResult] = useState<SearchResult | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
-  // Поколение поиска: инкрементируется на КАЖДЫЙ запуск эффекта (смена запроса
-  // или root'а). Поздний ответ устаревшего запроса/root'а сверяется с текущим
-  // поколением и отбрасывается — та же техника, что rootGenerationRef в
-  // FileTree и useFilePreview.
+  // Поколение поиска: инкрементируется на КАЖДЫЙ запуск эффекта.
   const searchGenRef = useRef(0)
 
   const modalRef = useRef<HTMLDivElement | null>(null)
@@ -250,21 +209,12 @@ export function FileBrowserModal({
     }
   }, [])
 
-  // Поиск с debounce ~250мс и отменой устаревшего запроса. Пустой запрос —
-  // немедленно сбрасываем результаты (дерево показывается снова), без сетевого
-  // вызова. Смена root'а при непустом запросе повторяет поиск в новом root'е
-  // (эффект зависит и от selectedRoot).
+  // Поиск с debounce ~250мс и отменой устаревшего запроса. Пустой запрос — немедленно сбрасываем
+  // результаты (дерево показывается снова), без сетевого вызова.
   useEffect(() => {
-    // Bump the generation on EVERY run — including the empty-query and
-    // null-root branches — so clearing the query (or switching root) invalidates
-    // any request still in flight from a prior non-empty run: its late
-    // .then/.catch see a stale generation and bail, even if the aborted fetch
-    // still resolves.
+    // Bump generation even for empty queries or null roots so every prior request becomes stale.
     const generation = ++searchGenRef.current
-    // Вне 'all' поисковая панель скрыта (см. рендер ниже) — не даём скрытому
-    // in-flight запросу дописать searchResult поверх невидимой (но по-прежнему
-    // смонтированной ветки) панели изменений: как только режим переключился,
-    // результат/ошибка/loading этого эффекта немедленно очищаются.
+    // При смене режима очищаем скрытый поиск и инвалидируем его запросы.
     if (selectedRoot === null || viewMode !== 'all') {
       setSearchResult(null)
       setSearchError(null)
@@ -279,11 +229,8 @@ export function FileBrowserModal({
       return
     }
     const controller = new AbortController()
-    // Сбрасываем результаты СРАЗУ, а не только при ошибке/успехе — иначе при
-    // смене root'а (или запроса) устаревшие строки предыдущего root'а остаются
-    // на экране под loading=true, и клик по строке в этом окне мог открыть файл
-    // из ЧУЖОГО root'а. Generation guard/abort ниже не спасают от этого:
-    // они лишь не дают ЗАПИСАТЬ устаревший ответ, но не чистят уже показанное.
+    // Сразу очищаем старые результаты при смене root/query: иначе клик во время loading откроет файл из
+    // прежнего root.
     setSearchResult(null)
     setSearchLoading(true)
     setSearchError(null)
@@ -307,9 +254,7 @@ export function FileBrowserModal({
     }
   }, [query, selectedRoot, viewMode])
 
-  // Загрузка списка изменений для index/head. Как и поиск: generation растёт на
-  // КАЖДОМ запуске (включая ветки all/null-root), поздний ответ устаревшего
-  // режима/root'а отбрасывается по generation, старый список чистится сразу.
+  // Загрузка списка изменений для index/head.
   useEffect(() => {
     const generation = ++changesGenRef.current
     if (viewMode === 'all' || selectedRoot === null) {
@@ -340,21 +285,15 @@ export function FileBrowserModal({
     return () => controller.abort()
   }, [viewMode, selectedRoot, changesRevision])
 
-  // Стартовый фокус — на гарантированно ВИДИМУЮ кнопку Close (Finding #3), но
-  // ТОЛЬКО при монтировании (deps []). Finding #1 раунда 4: раньше этот initial
-  // focus жил в том же эффекте, что и keydown-ловушка (с зависимостью от
-  // treeOpen), поэтому при открытии/закрытии mobile-дерева эффект перезапускался
-  // и переносил фокус обратно на Close, перебивая фокус-эффект шторки. Теперь
-  // начальный фокус отделён и не реагирует на смену состояния шторки.
+  // Стартовый фокус — на гарантированно ВИДИМУЮ кнопку Close, но ТОЛЬКО при монтировании. Теперь начальный
+  // фокус отделён и не реагирует на смену состояния шторки.
   useEffect(() => {
     const modal = modalRef.current
     ;(closeBtnRef.current ?? (modal !== null ? visibleFocusables(modal)[0] : undefined))?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Esc закрывает, Tab крутит фокус по кругу внутри модалки. Актуальные
-  // isNarrowModal/treeOpen читаем через ref, чтобы слушатель не переподписывался
-  // на их смену (и не тянул за собой повторный initial focus, см. выше).
+  // Esc закрывает, Tab крутит фокус по кругу внутри модалки.
   const isNarrowModalRef = useRef(isNarrowModal)
   isNarrowModalRef.current = isNarrowModal
   const treeOpenRef = useRef(treeOpen)
@@ -364,8 +303,7 @@ export function FileBrowserModal({
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
         e.preventDefault()
-        // Finding #4 (раунд 3): открытый mobile-слайдовер дерева Escape закрывает
-        // СНАЧАЛА его, а не весь оверлей Files.
+        // Escape сначала закрывает mobile-дерево, затем оверлей Files.
         if (isNarrowModalRef.current && treeOpenRef.current) {
           setTreeOpen(false)
           return
@@ -400,10 +338,8 @@ export function FileBrowserModal({
     }
   }, [leftWidth])
 
-  // Document-level drag listeners: attached once, gated by draggingRef so they
-  // only act while a drag is in progress. Anchoring to bodyRef's left edge keeps
-  // the math correct regardless of where the centered modal sits. The right pane
-  // is kept at least RIGHT_MIN wide so a drag can't collapse the preview.
+  // Document-level drag listeners: attached once, gated by draggingRef so they only act while a drag is in
+  // progress.
   useEffect(() => {
     function onMove(e: MouseEvent): void {
       if (!draggingRef.current || bodyRef.current === null) return
@@ -432,9 +368,8 @@ export function FileBrowserModal({
     document.body.style.userSelect = 'none' // no text selection mid-drag
   }
 
-  // Keyboard resize (the divider is a focusable separator): Left/Right nudge the
-  // width by KEY_STEP. The dynamic max needs the body width; fall back to a
-  // static upper bound when it isn't measurable (jsdom / before first layout).
+  // Keyboard resize: Left/Right nudge the width by KEY_STEP. The dynamic max needs the body width; fall
+  // back to a static upper bound when it isn't measurable (jsdom / before first layout).
   function onResizeKey(e: React.KeyboardEvent): void {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()

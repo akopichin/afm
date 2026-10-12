@@ -63,10 +63,7 @@ describe('splitHighlightedLines', () => {
     ])
   })
 
-  // Review-finding P2 #4: a file that ends in a trailing newline must NOT
-  // produce a phantom empty final line — the backend counts only real lines
-  // (TrimSuffix(content,"\n")), so a note on the phantom line always fails
-  // stale_line. Line count here must match the backend's exactly.
+  // Ignore one trailing newline so displayed line counts match the backend's note validation.
   test('drops the phantom trailing line for a file ending in a newline', () => {
     expect(splitHighlightedLines('a\nb\n', 'a\nb\n')).toEqual(['a', 'b'])
   })
@@ -79,11 +76,8 @@ describe('splitHighlightedLines', () => {
     expect(splitHighlightedLines('', '')).toEqual([])
   })
 
-  // Re-review P2: the trailing-line decision must come from the SOURCE, not the
-  // HTML. A source ending in a newline whose final newline sits INSIDE a
-  // multi-line token highlights to HTML that does NOT end in '\n'
-  // ('<span ...>/* hi\n</span>'), so an html.endsWith('\n') check would wrongly
-  // keep a phantom second line. With the source known, it collapses to one line.
+  // Re-review P2: the trailing-line decision must come from the SOURCE, not the HTML. With the source
+  // known, it collapses to one line.
   test('multi-line token with a trailing source newline yields one line, not two', () => {
     const html = '<span class="hljs-comment">/* hi\n</span>'
     expect(splitHighlightedLines(html, '/* hi\n')).toEqual(['<span class="hljs-comment">/* hi</span>'])

@@ -11,14 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRunVerification_ShellStep_PreSignalledInterrupt_NeverStarts — E2
-// (третье код-ревью): уже буферизованный (пришедший ДО начала шага) сигнал
-// Pause()/Revise() на o.interruptChans должен предотвратить сам старт
-// shell-verify команды — синхронно, независимо от асинхронной горутины-
-// наблюдателя pauseAwareVerifyCtx (её отмена shellCtx происходит из отдельной
-// горутины, которая на момент cmd.Start() могла ещё не получить CPU — см.
-// verifyShellInterruptPending). o.runVerifyShell — фейк, считающий вызовы: он
-// не должен быть вызван вовсе.
 func TestRunVerification_ShellStep_PreSignalledInterrupt_NeverStarts(t *testing.T) {
 	stage := flow.Stage{
 		ID:     verifyTestStageID,
@@ -45,10 +37,6 @@ func TestRunVerification_ShellStep_PreSignalledInterrupt_NeverStarts(t *testing.
 	}
 }
 
-// TestRunVerification_ShellStep_AlreadyPausedStatus_NeverStarts — та же
-// гарантия, вторая половина E2: стадия уже durable ушла в paused/revising
-// (Store), но БЕЗ сигнала на interruptChans (например, восстановление после
-// рестарта afm) — тоже должно предотвратить старт shell-команды.
 func TestRunVerification_ShellStep_AlreadyPausedStatus_NeverStarts(t *testing.T) {
 	stage := flow.Stage{
 		ID:     verifyTestStageID,

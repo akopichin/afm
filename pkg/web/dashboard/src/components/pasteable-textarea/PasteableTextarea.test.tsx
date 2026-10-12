@@ -257,9 +257,8 @@ describe('PasteableTextarea', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
     fireEvent.click(await screen.findByRole('checkbox', { name: /a\.go/ }))
 
-    // The user navigated away from this comment (e.g. switched stage/question)
-    // while the picker modal was still open — the target textarea unmounts,
-    // but the provider (and hence the still-open modal) stays mounted.
+    // The user navigated away from this comment while the picker modal was still open — the target
+    // textarea unmounts, but the provider stays mounted.
     rerender(<Harness show={false} />)
 
     const insertButton = await screen.findByRole('button', { name: /insert references/i })
@@ -367,13 +366,8 @@ describe('PasteableTextarea', () => {
     )
   })
 
-  // Kept last deliberately: vi.spyOn(..., 'get').mockRestore() on this jsdom/
-  // tinyspy version does not fully restore the accessor on
-  // window.HTMLTextAreaElement.prototype — any later test in this file that
-  // reads scrollHeight (useAutoGrowTextarea does, on every render) hits a
-  // corrupted getter that recurses into itself and blows the call stack.
-  // AgentNoteModal.test.tsx's equivalent test avoids this only by accident
-  // (it happens to already be the last test in that file).
+  // Keep last: this jsdom/tinyspy version does not fully restore scrollHeight's getter, breaking later
+  // textarea renders.
   it('forwards the rows prop to the textarea', () => {
     render(<PasteableTextarea stageId="s1" value="" onChange={vi.fn()} rows={1} />)
     expect(screen.getByRole('textbox')).toHaveAttribute('rows', '1')

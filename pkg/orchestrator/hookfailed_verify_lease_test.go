@@ -16,23 +16,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestStartPlanningForPending_HookFailedRecovery_RegistersLeaseForVerifierSlotSwap
-// — регрессия на находку финального ревью AI-verify: recovery.go резюмировал
-// стадию в StatusHookFailed через голый concurrency.SpawnAgent, минуя
-// spawnAgentLeased. Как только before-hook разрешался (Retry/Skip),
-// resumeHookFailedWait диспетчеризовал в runImplementationAgent (через
-// dispatchMainAfterBeforeHook), который мог вызвать RunVerification — а без
-// зарегистрированного lease в o.stageLeases верификатор запускался бы БЕЗ
-// учёта командного слота (max_parallel-дыра именно на этом пути восстановления
-// после краха, см. TestResumeOwner_RegistersLeaseForVerifierSlotSwap — тот же
-// класс бага на соседнем пути StatusAwaitingUserInput).
-//
-// Тест гоняет РЕАЛЬНый спавн startPlanningForPending (без o.testRunnerHook) с
-// двумя настоящими concurrency.ChannelSemaphore для команды автора ("claude",
-// дефолт для s.Command=="") и команды верификатора ("codex"): пока выполняется
-// verify-шаг, слот codex должен быть занят (len==1), а слот claude — уже
-// освобождён (len==0), что доказывает: lease был зарегистрирован спавном
-// resumeHookFailedWait и реально переключился на верификатора.
 func TestStartPlanningForPending_HookFailedRecovery_RegistersLeaseForVerifierSlotSwap(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "s1")
@@ -42,9 +25,8 @@ func TestStartPlanningForPending_HookFailedRecovery_RegistersLeaseForVerifierSlo
 	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("## Tasks\n- x\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Стадия крашнулась, ожидая решения по before-hook — hook_pending.json на
-	// диске, статус StatusHookFailed (та самая комбинация, которую recovery.go
-	// находит при рестарте afm run).
+	// Стадия крашнулась, ожидая решения по before-hook — hook_pending.json на диске, статус StatusHookFailed
+	// (та самая комбинация, которую recovery.go находит при рестарте afm run).
 	if err := writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: "exit 1", Timeout: time.Second}); err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +72,7 @@ func TestStartPlanningForPending_HookFailedRecovery_RegistersLeaseForVerifierSlo
 		}}, nil
 	}
 
-	// startPlanningForPending — то, что recovery вызывает при рестарте
-	// afm run; для нашей стадии в StatusHookFailed она попадает во вторую
-	// switch-ветку и спавнит resumeHookFailedWait, который блокируется в
-	// waitForHookDecision.
+	// Запускаем recovery из hook_failed до ожидания Retry/Skip.
 	o.startPlanningForPending(context.Background())
 
 	// Дожидаемся регистрации waiter'а и шлём Skip — hook не должен

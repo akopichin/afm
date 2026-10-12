@@ -17,10 +17,8 @@ function textResponse(text: string): Response {
   return { ok: true, text: async () => text } as Response
 }
 
-// PlanPanel's line-comment textarea now renders with allowFileReferences
-// (Task 14) — its "Attach project file" button calls useFileBrowser(), which
-// throws outside a FileBrowserProvider. Every render in this file goes
-// through this wrapper, same as App.tsx wraps the whole dashboard in prod.
+// PlanPanel's line-comment textarea now renders with allowFileReferences — its "Attach project file"
+// button calls useFileBrowser, which throws outside a FileBrowserProvider.
 function renderPlanPanel(ui: ReactElement, enabled = true) {
   return render(
     <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={enabled}>
@@ -86,10 +84,8 @@ describe('PlanPanel', () => {
   })
 
   test('awaiting_approval: a special section plus a list renders both correctly, and each stays commentable (block segmentation)', async () => {
-    // Список внутри спецсекции и после неё рендерятся целыми <ul>-блоками (не
-    // построчной мешаниной), а КАЖДЫЙ пункт <li> заякорен на своей строке
-    // (data-line на под-элементе). Клик по пункту открывает форму-sibling ПОД
-    // блоком (компромисс: форма контейнера появляется под всем блоком).
+    // Список внутри спецсекции и после неё рендерятся целыми <ul>-блоками, а КАЖДЫЙ пункт <li> заякорен на
+    // своей строке.
     const plan = ['## Assumptions', '- risk one', '- risk two', '## Next', '- item a', '- item b'].join('\n')
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(plan))
 
@@ -219,9 +215,8 @@ describe('PlanPanel', () => {
   })
 
   test('Send revision is disabled while a new, empty comment form is open (even with an already-submitted comment), and re-enables once it is closed', async () => {
-    // Bug repro: opening a comment form (even empty) on ANOTHER line while a
-    // comment is already submitted must still gate Send revision — the old
-    // `hasOpenDraft` (open AND non-empty) let an open-but-empty form through.
+    // Bug repro: opening a comment form on ANOTHER line while a comment is already submitted must still
+    // gate Send revision — the old `hasOpenDraft` let an open-but-empty form through.
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
@@ -485,9 +480,7 @@ describe('PlanPanel', () => {
     expect(screen.getByRole('menuitem', { name: /upload image/i })).toBeInTheDocument()
   })
 
-  // Finding 5: capabilities.file_browser=false must hide the comment picker
-  // too, not just the header button — otherwise host mode still shows
-  // "Attach project file" and clicking it hits the disabled /api/files/*.
+  // Disabled file_browser must hide the comment picker as well as the header action.
   test('capabilities.file_browser=false: the line-comment textarea offers Upload image but no project picker and never calls the files API (R2 #6a)', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
 
@@ -506,12 +499,8 @@ describe('PlanPanel', () => {
     expect(filesCalls).toHaveLength(0)
   })
 
-  // Kept before the scrollHeight-spying test below, not after: vi.spyOn(...,
-  // 'get').mockRestore() on this jsdom/tinyspy version does not fully restore
-  // the accessor on window.HTMLTextAreaElement.prototype — any later test in
-  // this file that renders a textarea (useAutoGrowTextarea reads scrollHeight
-  // on every render) hits a corrupted getter that recurses into itself and
-  // blows the call stack (see the identical note in PasteableTextarea.test.tsx).
+  // Keep before the scrollHeight spy: this jsdom/tinyspy version fails to restore its getter for later
+  // textarea renders.
   test('the comment textarea grows to fit its content via the auto-grow hook', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line\n# Second line'))
     const scrollHeightSpy = vi

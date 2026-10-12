@@ -7,9 +7,7 @@ import (
 	"testing"
 )
 
-// writeUsageFixture writes one full, valid usage.jsonl record line followed
-// by a partial JSON fragment with NO trailing newline — a torn tail, as if a
-// crash or a concurrent live writer caught the file mid-append.
+// writeUsageFixture appends a valid record and an unterminated JSON tail to model a torn write.
 func writeUsageFixture(t *testing.T, path string) {
 	t.Helper()
 	full := `{"record_version":1,"stage_id":"backend","phase":"implementation","metered":true,"priced":false,"tokens":{"uncached_input":48583,"cache_read":47616,"output":1130}}` + "\n"
@@ -65,10 +63,6 @@ func TestLoadTornTailTolerated(t *testing.T) {
 	}
 }
 
-// TestLoadCorruptInteriorLineErrors covers the other half of the torn-tail
-// contract: a COMPLETE (newline-terminated) line that fails to parse is a
-// real corruption, not a benign torn tail, and must surface as
-// ErrCorruptUsage without touching the file on disk.
 func TestLoadCorruptInteriorLineErrors(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
@@ -96,12 +90,6 @@ func TestLoadCorruptInteriorLineErrors(t *testing.T) {
 	}
 }
 
-// TestOpenPreExistingCorruptFileReturnsUsableUnavailableStore is a
-// regression test for the "never block FSM resume" contract: Open must
-// return a USABLE, non-nil *Store together with a non-nil error when the
-// pre-existing usage.jsonl has a corrupt interior line — a caller that did
-// `if err != nil { return err }` and discarded the store would silently
-// reintroduce a resume-blocking bug.
 func TestOpenPreExistingCorruptFileReturnsUsableUnavailableStore(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
@@ -145,9 +133,8 @@ func TestOpenPreExistingCorruptFileReturnsUsableUnavailableStore(t *testing.T) {
 	}
 }
 
-// openTestStore opens a fresh Store over a temp dir with a plain (no
-// config-override) Resolver — the common setup every CostSnapshot test
-// needs.
+// openTestStore opens a fresh Store over a temp dir with a plain (no config-override) Resolver — the
+// common setup every CostSnapshot test needs.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	r := NewResolver(PricingConfig{})
@@ -158,9 +145,8 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
-// unmeteredObs is an Observation for a process that produced no usable
-// usage at all (Metered=false) — still one invocation, still attributable
-// to a stage, just with nothing to price.
+// unmeteredObs is an Observation for a process that produced no usable usage at all (Metered=false) —
+// still one invocation, still attributable to a stage, just with nothing to price.
 func unmeteredObs() Observation {
 	return Observation{
 		Metered: false,
@@ -168,9 +154,8 @@ func unmeteredObs() Observation {
 	}
 }
 
-// sameBundleIdentity reports whether both CostBundles were produced by the
-// same CostSnapshot build (i.e. the second call reused the cache instead of
-// re-aggregating), by comparing the Store revision each was built from.
+// sameBundleIdentity reports whether both CostBundles were produced by the same CostSnapshot build, by
+// comparing the Store revision each was built from.
 func sameBundleIdentity(a, b CostBundle) bool {
 	return a.builtAt == b.builtAt
 }
@@ -195,10 +180,6 @@ func TestCostSnapshot_RevisionCacheReusesBuild(t *testing.T) {
 	}
 }
 
-// TestCostSnapshot_CacheInvalidatesOnUnavailableLatch covers the other
-// revision-bump trigger besides Append: a write failure that latches the
-// store unavailable must also invalidate any cached bundle, so Health
-// flips to HealthUnavailable on the very next CostSnapshot call.
 func TestCostSnapshot_CacheInvalidatesOnUnavailableLatch(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
@@ -243,9 +224,6 @@ func TestCostSnapshot_AllUnmeteredIsData(t *testing.T) {
 	}
 }
 
-// TestCostSnapshot_NoDataYieldsNilRun covers the opposite edge: a Store with
-// no records at all must report HasData=false and a nil Run, not a
-// zero-value CostView masquerading as real coverage.
 func TestCostSnapshot_NoDataYieldsNilRun(t *testing.T) {
 	s := openTestStore(t)
 	b := s.CostSnapshot()
@@ -260,10 +238,6 @@ func TestCostSnapshot_NoDataYieldsNilRun(t *testing.T) {
 	}
 }
 
-// TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot is the
-// immutability guarantee: a caller that mutates the map/slice it got back
-// from CostSnapshot must never affect what a later CostSnapshot call
-// returns, cached or freshly built.
 func TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
@@ -292,11 +266,6 @@ func TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot(t *testing.T) {
 	}
 }
 
-// TestCostSnapshot_CallerMutatingNestedCostViewDoesNotCorrupt covers one
-// level deeper than TestCostSnapshot_CallerMutationDoesNotCorruptLaterSnapshot:
-// a caller that reaches INTO a returned *CostView (its Phases map, Models
-// slice, or the value behind CacheHitRatio) and mutates it must not corrupt
-// the cached bundle a later cache-hit snapshot serves to someone else.
 func TestCostSnapshot_CallerMutatingNestedCostViewDoesNotCorrupt(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
@@ -331,13 +300,6 @@ func TestCostSnapshot_CallerMutatingNestedCostViewDoesNotCorrupt(t *testing.T) {
 	}
 }
 
-// TestCostSnapshot_ColdBuildMatchesDirectLedgerAggregation guards the
-// lock-scope change in CostSnapshot: on a cache miss it now copies only the
-// raw records under s.mu and aggregates them into byStage/run afterwards,
-// via a throwaway *Ledger wrapping that copy — instead of calling
-// s.ledger.SummaryByStage()/RunSummary() while still holding the lock. Both
-// approaches must produce identical results, since Ledger's aggregation
-// methods are a pure function of the records slice.
 func TestCostSnapshot_ColdBuildMatchesDirectLedgerAggregation(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Append(obsGLM(), "backend", "implementation", ""); err != nil {
@@ -353,9 +315,8 @@ func TestCostSnapshot_ColdBuildMatchesDirectLedgerAggregation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Compute the expected byStage/run the old way, directly against the
-	// live ledger, for comparison against what CostSnapshot (cache miss)
-	// actually built.
+	// Compute the expected byStage/run the old way, directly against the live ledger, for comparison against
+	// what CostSnapshot (cache miss) actually built.
 	wantByStage := s.ledger.SummaryByStage()
 	wantRun := s.ledger.RunSummary()
 	wantBundle := buildCostBundle(s.ledger.Records(), wantByStage, wantRun, s.unavailable, s.revision)
@@ -430,20 +391,6 @@ func TestStoreUnavailableAfterWriteFailureStopsWrites(t *testing.T) {
 	}
 }
 
-// TestCostSnapshot_VerifyUsageAggregatesUnderParentStagePhaseWithoutDoubleCounting
-// is the accounting/cost-UI half of V5b.4. AI-verify invocations are recorded
-// under the STAGE that owns them (orchestrator's recordUsage(s.ID,
-// verifyExecutionLabel, ""), same stage id — no separate "verify stage"),
-// tagged with the "verify" phase. CostView.Phases is a plain map keyed by
-// whatever phase string a record carries (no fixed enum here or in the
-// dashboard's CostPanel, which renders every Phases entry generically) — so
-// "verify" usage surfaces under the parent stage's cost breakdown with no
-// code change needed on either side. The second half of the concern —
-// "never double-counts on reload" — is the pre-existing CostSnapshot
-// revision-cache contract (see TestCostSnapshot_RevisionCacheReusesBuild
-// above); this test exercises it specifically for a verify record: repeated
-// CostSnapshot calls (== repeated GET /api/status polls a dashboard reload
-// triggers) with no Append in between must keep returning the same count.
 func TestCostSnapshot_VerifyUsageAggregatesUnderParentStagePhaseWithoutDoubleCounting(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Append(obsGLM(), "build", "verify", ""); err != nil {

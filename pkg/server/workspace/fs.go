@@ -14,8 +14,6 @@ const (
 )
 
 // FS is the secure-filesystem backend for the Docker project file browser.
-// Implementations resolve a root ID + relative path pair to real files on
-// disk, keeping every access confined to the declared roots.
 type FS interface {
 	Roots() []RootView
 	List(ctx context.Context, rootID, relPath, cursor string) (Page, error)

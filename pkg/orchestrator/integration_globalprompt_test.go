@@ -12,9 +12,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestIntegration_GlobalPromptReachesAssembledPrompt verifies that
-// Options.GlobalPrompt (set from Flow.Prompt at the CLI entrypoint)
-// reaches the assembled system prompt of a stage via prompts.Build.
 func TestIntegration_GlobalPromptReachesAssembledPrompt(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "s1", Name: "S1", Description: "do thing", Agents: []flow.AgentType{flow.AgentPlanning}},

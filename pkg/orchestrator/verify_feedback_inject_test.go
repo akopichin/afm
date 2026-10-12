@@ -12,9 +12,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestVerifyFeedbackBlock_ReadsActiveFeedback — unit coverage for the small
-// helper itself: empty when there is no active verify feedback, otherwise the
-// heading + the full stagefiles.WriteActiveFeedback text.
 func TestVerifyFeedbackBlock_ReadsActiveFeedback(t *testing.T) {
 	o := &Orchestrator{}
 	stageDir := t.TempDir()
@@ -40,10 +37,7 @@ func TestVerifyFeedbackBlock_ReadsActiveFeedback(t *testing.T) {
 	}
 }
 
-// fakeAgentRunner is a minimal executor.Runner stub that just records the
-// prompt passed to RunAgent and returns nil (success) without touching disk —
-// enough to inspect the RetryContext assembly of a single runner call without
-// spinning up a real subprocess.
+// fakeAgentRunner records prompts and returns success without subprocesses or file writes.
 type fakeAgentRunner struct {
 	onAgent func(prompt string)
 }
@@ -63,11 +57,6 @@ func (r *fakeAgentRunner) RunJSONQuery(ctx context.Context, prompt string) ([]by
 	return nil, nil
 }
 
-// TestRunImplementationWithFeedback_InjectsVerifyFeedbackAlongsideHumanNote —
-// V4b.5: the manual-retry/WithFeedback path must inject BOTH the human note
-// (feedback.md, agent_suggest/Revise) and the machine verify feedback
-// (verify/feedback.md) into the same prompt, and must NEVER overwrite the
-// human file — only stagefiles.LoadActiveFeedback (read), never SaveFeedback.
 func TestRunImplementationWithFeedback_InjectsVerifyFeedbackAlongsideHumanNote(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")

@@ -96,11 +96,8 @@ func TestRevise_SendsFeedbackBody(t *testing.T) {
 func TestStageIDIsPathEscaped(t *testing.T) {
 	var gotEscapedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// r.URL.Path is always the *decoded* path (a real "/" and an escaped
-		// "%2F" both decode to the same "/", so .Path can't distinguish
-		// them) — only .EscapedPath() (or .RawPath) preserves the encoding
-		// that was actually on the wire, which is what this test needs to
-		// verify.
+		// r.URL.Path is always the *decoded* path — only .EscapedPath preserves the encoding that was actually
+		// on the wire, which is what this test needs to verify.
 		gotEscapedPath = r.URL.EscapedPath()
 		w.WriteHeader(http.StatusOK)
 	}))

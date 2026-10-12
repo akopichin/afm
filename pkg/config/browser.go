@@ -19,13 +19,9 @@ const defaultBrowserAppPort = 18080
 // defaultChromePath is the macOS Chrome location used when ExecutablePath is unset.
 const defaultChromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-// BrowserConfig configures the managed Chrome DevTools browser capability:
-// afm drives a real Chrome on the host via a managed afm_chrome MCP so that a
-// stage agent can run the app for real ("живой прогон") both in Docker and native.
+// BrowserConfig configures host Chrome access through afm_chrome for native and Docker stage agents.
 type BrowserConfig struct {
-	// Enabled is a tri-state switch: nil → auto (offer tools on a supported host
-	// with Chrome; launch Chrome only on first use), true → on (preflight must
-	// succeed or the run fails), false → fully off.
+	// Enabled is a tri-state switch: nil → auto, true → on, false → fully off.
 	Enabled *bool `yaml:"enabled,omitempty"`
 	// Headless, if true, launches Chrome without a visible window. Default visible.
 	Headless *bool `yaml:"headless,omitempty"`
@@ -64,9 +60,7 @@ type browserSeam struct {
 // browserDefaultSeam is the production seam; tests swap it to avoid the real host.
 var browserDefaultSeam = browserSeam{
 	lookPath: exec.LookPath,
-	// statFile must reject a path that exists but could never launch: a directory
-	// or a non-executable file would pass a bare os.Stat and defer the failure to
-	// the first browser tool call instead of a clean startup error.
+	// Reject directories and non-executable paths at startup, before the first browser tool call.
 	statFile: func(p string) error {
 		fi, err := os.Stat(p)
 		if err != nil {
@@ -86,10 +80,7 @@ var browserDefaultSeam = browserSeam{
 	},
 }
 
-// EffectiveEnable resolves the AFM_BROWSER env override (1→on, 0→off) over the
-// yaml `enabled` tri-state (nil→auto, true→on, false→off). This is the single
-// source of truth: no other code dereferences *Enabled, which removes the
-// nil-deref when AFM_BROWSER=1 and `enabled` is unset.
+// EffectiveEnable resolves the AFM_BROWSER env override over the yaml `enabled` tri-state.
 func (b BrowserConfig) EffectiveEnable() EnableState {
 	if v, set := envBool("AFM_BROWSER"); set {
 		if v {
@@ -133,11 +124,8 @@ func (b BrowserConfig) ChromePath() string {
 	return defaultChromePath
 }
 
-// BrowserSupportedFor reports whether a command can drive the afm_chrome MCP:
-// true for claude-family agents (bare claude or a docker.agents recipe whose
-// type is claude) and the codex adapter — those speak the MCP tool-loop. OpenAI/
-// cursor adapters do not. Resolution reuses ResolveAgentCommand (no alias
-// string-matching).
+// BrowserSupportedFor reports whether a command can drive the afm_chrome MCP: true for claude-family
+// agents and the codex adapter — those speak the MCP tool-loop.
 func (c Config) BrowserSupportedFor(command string) bool {
 	resolved, _ := ResolveAgentCommand(command, c)
 	if recipe, ok := c.Docker.Agents[resolved]; ok {
@@ -151,10 +139,8 @@ func (c Config) BrowserSupportedFor(command string) bool {
 	return resolved == ClaudeCommand || resolved == codexAdapterCommand
 }
 
-// ValidateBrowser checks only the always-safe static field sanity (app_port
-// range). It is a no-op when the capability is off. The server.port==app_port
-// collision is NOT checked here — it moves into BrowserPreflight so it only
-// fires when the manager will actually start.
+// ValidateBrowser checks only the always-safe static field sanity. It is a no-op when the capability is
+// off.
 func (c Config) ValidateBrowser() error {
 	if c.Browser.EffectiveEnable() == EnableOff {
 		return nil
@@ -170,9 +156,7 @@ func (c Config) BrowserPreflight(mode browser.BrowserMode) (BrowserStatus, error
 	return c.preflightWithSeam(mode, browserDefaultSeam)
 }
 
-// preflightWithSeam is the testable core. Severity keys off EffectiveEnable():
-// EnableOn + missing prerequisite → hard error; EnableAuto + missing → degraded
-// (Available:false, nil error); EnableOff → never checks deps.
+// preflightWithSeam is the testable core.
 func (c Config) preflightWithSeam(mode browser.BrowserMode, seam browserSeam) (BrowserStatus, error) {
 	state := c.Browser.EffectiveEnable()
 	if state == EnableOff {

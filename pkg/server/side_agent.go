@@ -10,10 +10,8 @@ import (
 	"github.com/akopichin/afm/pkg/sideagent"
 )
 
-// SideAgentService — узкий интерфейс «бокового» разговора, потребляемый сервером
-// вместо конкретного *sideagent.Manager (ради тест-даблов). nil-значение в
-// Server.sideAgent означает, что фича выключена (как workspace): маршруты
-// /api/side-agent/* не регистрируются, capability в /api/status = false.
+// SideAgentService — узкий интерфейс «бокового» разговора, потребляемый сервером вместо конкретного
+// *sideagent.Manager.
 type SideAgentService interface {
 	History() []sideagent.Event
 	Send(clientMessageID, text string) (string, error)
@@ -27,15 +25,11 @@ type SideAgentService interface {
 // *sideagent.Manager удовлетворяет интерфейсу — проверка на этапе компиляции.
 var _ SideAgentService = (*sideagent.Manager)(nil)
 
-// maxSideAgentBodyBytes ограничивает тело POST-запроса. Берётся с запасом над
-// sideagent.MaxMessageBytes, чтобы сообщение ровно на пределе дошло до Send и
-// получило типизированный 413 message_too_large, а не обрезалось MaxBytesReader
-// как invalid_body.
+// maxSideAgentBodyBytes ограничивает тело POST-запроса.
 const maxSideAgentBodyBytes = sideagent.MaxMessageBytes + (16 << 10)
 
-// sideAgentStateResponse — форма GET /api/side-agent (поллинг-состояние, когда
-// SSE недоступен/просрочен). Курсор продвигается ТОЛЬКО по возвращённым
-// событиям, а last_seq отражает весь журнал.
+// sideAgentStateResponse — форма GET /api/side-agent (поллинг-состояние, когда SSE недоступен/просрочен).
+// Курсор продвигается ТОЛЬКО по возвращённым событиям, а last_seq отражает весь журнал.
 type sideAgentStateResponse struct {
 	ConversationID string            `json:"conversation_id"`
 	RunID          string            `json:"run_id"`
@@ -60,9 +54,7 @@ const (
 	sideStateRunning = "running"
 )
 
-// routeSideAgent диспетчеризует все /api/side-agent[/...] запросы. Регистрируется
-// в New ТОЛЬКО когда s.sideAgent != nil — иначе маршрутов нет и запрос доходит до
-// статики (404), старый сервер не затронут.
+// routeSideAgent диспетчеризует все /api/side-agent[/...] запросы.
 func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/api/side-agent" && r.Method == http.MethodGet:
@@ -78,9 +70,8 @@ func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSideAgentState отдаёт текущее состояние разговора и страницу событий
-// после курсора. Состояние (idle/running) считается по ВСЕЙ истории, а не только
-// по странице.
+// handleSideAgentState отдаёт текущее состояние разговора и страницу событий после курсора. Состояние
+// (idle/running) считается по ВСЕЙ истории, а не только по странице.
 func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 	history := s.sideAgent.History()
 	lastSeq := uint64(0)
@@ -118,9 +109,8 @@ func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleSideAgentSend принимает сообщение пользователя. Клиент управляет ТОЛЬКО
-// client_message_id и text — команда/аргументы/CWD задаются сервером (D1), тело
-// их не содержит и не читается.
+// handleSideAgentSend принимает сообщение пользователя. Клиент управляет ТОЛЬКО client_message_id и text —
+// команда/аргументы/CWD задаются сервером (D1), тело их не содержит и не читается.
 func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		writeSideAgentErrCode(w, http.StatusForbidden, "forbidden_origin")
@@ -131,9 +121,8 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 		Text            string `json:"text"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSideAgentBodyBytes)).Decode(&req); err != nil {
-		// Тело превысило HTTP-кап (MaxBytesReader) — это сообщение, которое слишком
-		// велико: типизированный 413 message_too_large, а не 400 invalid_body
-		// (который остаётся для битого JSON).
+		// Тело превысило HTTP-кап (MaxBytesReader) — это сообщение, которое слишком велико: типизированный 413
+		// message_too_large, а не 400 invalid_body (который остаётся для битого JSON).
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeSideAgentErrCode(w, http.StatusRequestEntityTooLarge, string(sideagent.ErrCodeMessageTooLarge))
@@ -147,9 +136,8 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 		writeSideAgentError(w, err)
 		return
 	}
-	// Состояние — РЕАЛЬНОЕ состояние возвращённого хода, не хардкод "running":
-	// идемпотентный повтор уже завершённого хода возвращает его id, и клиент не
-	// должен считать неактивный ход активным (Stop целил бы в протухший ход).
+	// Состояние — РЕАЛЬНОЕ состояние возвращённого хода, не хардкод "running": идемпотентный повтор уже
+	// завершённого хода возвращает его id, и клиент не должен считать неактивный ход активным.
 	h := s.sideAgent.History()
 	cursor := uint64(0)
 	if len(h) > 0 {
@@ -186,11 +174,8 @@ func (s *Server) handleSideAgentInterrupt(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "interrupting"})
 }
 
-// turnStateInHistory возвращает "running", если последнее FSM-событие хода
-// turnID не терминально, иначе "idle" (ход не найден → idle). В отличие от
-// deriveSideAgentState (состояние ВСЕЙ беседы по последнему ходу), здесь —
-// состояние КОНКРЕТНОГО возвращённого хода (идемпотентный повтор может вернуть
-// завершённый ход, пока последний ход беседы — другой).
+// turnStateInHistory возвращает "running", если последнее FSM-событие хода turnID не терминально, иначе
+// "idle".
 func turnStateInHistory(history []sideagent.Event, turnID string) string {
 	var st sideagent.TurnState
 	found := false
@@ -233,9 +218,8 @@ func deriveSideAgentState(history []sideagent.Event) string {
 	return sideStateRunning
 }
 
-// sameOriginOK — defence-in-depth проверка Origin для мутирующих POST'ов. Это НЕ
-// авторизация: реальная граница — loopback-bind (инвариант 9, dashboardListenAddr).
-// Отсутствующий или чужой Origin отклоняется; одинаковый host с r.Host проходит.
+// sameOriginOK — defence-in-depth проверка Origin для мутирующих POST'ов. Это НЕ авторизация: реальная
+// граница — loopback-bind (инвариант 9, dashboardListenAddr).
 func sameOriginOK(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

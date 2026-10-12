@@ -1,10 +1,8 @@
 import { describe, expect, test } from 'vitest'
 import { splitImageMarkers, MAX_FEED_IMAGES, type Segment } from './split-image-markers'
 
-// splitImageMarkers — сегментирует текст сообщения агента на md-текст и img-маркеры
-// `[AFM image: <name>]` (отдельной строкой, вне fenced-кода, валидный charset).
-// Всё сомнительное (маркер в коде / посреди строки / с невалидным именем) остаётся
-// текстом. Cap MAX_FEED_IMAGES img-сегментов на сообщение.
+// splitImageMarkers — сегментирует текст сообщения агента на md-текст и img-маркеры `[AFM image: <name>]`.
+// Cap MAX_FEED_IMAGES img-сегментов на сообщение.
 
 const imgNames = (segs: Segment[]): string[] =>
   segs.filter((s): s is { type: 'img'; name: string } => s.type === 'img').map((s) => s.name)
@@ -64,9 +62,7 @@ describe('splitImageMarkers', () => {
   })
 
   test('маркер внутри indented (4 пробела) code-block → остаётся текстом', () => {
-    // markdown-it трактует блок с отступом ≥4 как код; маркер там — пример, не
-    // картинка (codex-ревью F1). Нужна пустая строка до блока, иначе markdown-it
-    // сделает это lazy-continuation параграфа, а не indented code.
+    // markdown-it трактует блок с отступом ≥4 как код; маркер там — пример, не картинка.
     const text = 'intro\n\n    [AFM image: nope.png]\n\noutro'
     const segs = splitImageMarkers(text)
     expect(imgNames(segs)).toEqual([])

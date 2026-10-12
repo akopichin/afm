@@ -1,8 +1,4 @@
 // Типизированный клиент к /api/side-agent[/...] — «боковой» разговор с агентом.
-// Чистые функции: вызывать их должен только код, у которого capability
-// side_agent включён (гейт держит хук/провайдер, см. use-side-agent); сам клиент
-// это не проверяет. На не-2xx читается {error:<code>} и бросается типизированная
-// ошибка, несущая код, чтобы UI смог смапить его в текст (errorCodeToMessage).
 
 import { parseSideAgentEvent, type SideAgentEvent } from '../types/side-agent'
 
@@ -20,9 +16,7 @@ export class SideAgentApiError extends Error {
 
 export type SideAgentConversationState = 'idle' | 'running'
 
-// ConversationResponse — форма GET /api/side-agent. next_cursor продвигается ТОЛЬКО
-// по возвращённым событиям (с него возобновляют поллинг); last_seq — хвост журнала;
-// has_more = next_cursor < last_seq.
+// ConversationResponse — форма GET /api/side-agent.
 export type ConversationResponse = {
   conversationId: string
   runId: string
@@ -65,9 +59,8 @@ export async function getConversation(afterSeq = 0, limit = 0): Promise<Conversa
   return normalizeConversation(await response.json())
 }
 
-// normalizeConversation — единственная точка приведения внешнего JSON к
-// ConversationResponse. События проходят через parseSideAgentEvent (битые/с
-// неизвестным типом отбрасываются).
+// normalizeConversation — единственная точка приведения внешнего JSON к ConversationResponse. События
+// проходят через parseSideAgentEvent (битые/с неизвестным типом отбрасываются).
 export function normalizeConversation(raw: unknown): ConversationResponse {
   const obj = isRecord(raw) ? raw : {}
   const events = Array.isArray(obj.events)
@@ -86,10 +79,8 @@ export function normalizeConversation(raw: unknown): ConversationResponse {
   }
 }
 
-// sendMessage отправляет сообщение пользователя. Клиент управляет ТОЛЬКО
-// client_message_id и text — команда/CWD задаются сервером. Same-origin Origin
-// браузер проставляет сам. Повтор с тем же client_message_id идемпотентен (бэкенд
-// вернёт тот же ход).
+// sendMessage отправляет сообщение пользователя. Клиент управляет ТОЛЬКО client_message_id и text —
+// команда/CWD задаются сервером.
 export async function sendMessage(clientMessageId: string, text: string): Promise<SendResponse> {
   const response = await fetch('/api/side-agent/messages', {
     method: 'POST',
@@ -115,9 +106,8 @@ export async function interrupt(turnId: string): Promise<void> {
   if (!response.ok) throw new SideAgentApiError(response.status, await readErrorCode(response))
 }
 
-// streamUrl — адрес SSE-потока журнала. after_seq добирает пропущенный хвост при
-// первичном подключении; при реконнекте EventSource шлёт Last-Event-ID (он у
-// сервера в приоритете над after_seq).
+// streamUrl — адрес SSE-потока журнала. after_seq добирает пропущенный хвост при первичном подключении;
+// при реконнекте EventSource шлёт Last-Event-ID (он у сервера в приоритете над after_seq).
 export function streamUrl(afterSeq = 0): string {
   return afterSeq > 0 ? `/api/side-agent/stream?after_seq=${afterSeq}` : '/api/side-agent/stream'
 }

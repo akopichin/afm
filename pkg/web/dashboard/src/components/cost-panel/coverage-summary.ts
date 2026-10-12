@@ -1,15 +1,10 @@
 import type { AccountingState, Attribution, CoverageIssue } from '../../types/cost'
 
-// Вынесено из RunMetrics.tsx (Task 11): и тайл Est. cost в шапке, и CostPanel
-// строят строку покрытия по одним и тем же группам issues — единая логика
-// живёт здесь, а не дублируется/не импортируется компонент-из-компонента.
+// Вынесено из RunMetrics.tsx: и тайл Est.
 const MAX_COVERAGE_GROUPS_SHOWN = 3
 
-// summarizeCoverageGroups — общий ограниченный билдер сводки по пробелам
-// покрытия: первые MAX_COVERAGE_GROUPS_SHOWN групп как есть, остаток сворачивается
-// в одну фразу «and K more groups (M invocations)» (K — число скрытых групп,
-// M — сумма их count, а не количество групп) — тайл/панель не должны раздуваться
-// на десятки строк при большом числе разных пробелов.
+// summarizeCoverageGroups ограничивает число групп; остаток суммирует как число скрытых групп и их
+// invocations.
 export function summarizeCoverageGroups(issues: CoverageIssue[]): string {
   const shown = issues.slice(0, MAX_COVERAGE_GROUPS_SHOWN).map(describeCoverageIssue)
   const rest = issues.slice(MAX_COVERAGE_GROUPS_SHOWN)
@@ -18,10 +13,8 @@ export function summarizeCoverageGroups(issues: CoverageIssue[]): string {
   return `${shown.join('; ')}; and ${rest.length} more groups (${invocations} invocations)`
 }
 
-// attributionLabel — owner of a coverage gap: a stage id, run overhead, or
-// unknown when neither is resolvable. Codex#2/opus#2 review: the coverage line
-// used to drop this entirely, leaving no way to tell "this stage's invocations
-// aren't priced" from "run overhead isn't priced" — both rendered identically.
+// attributionLabel — owner of a coverage gap: a stage id, run overhead, or unknown when neither is
+// resolvable.
 function attributionLabel(attribution: Attribution): string {
   switch (attribution.kind) {
     case 'stage':
@@ -41,10 +34,8 @@ function describeCoverageIssue(issue: CoverageIssue): string {
   return `${label} — ${attrLabel}/${issue.phase} — ${model}${reasonSuffix} (×${issue.count})`
 }
 
-// costReason — составляет пояснение маркера по ДВУМ независимым осям (round-6
-// #3 спеки): недоступность accounting-хранилища и пробелы покрытия. Если
-// сработали обе — обе фразы идут подряд, ни одна не перекрывает другую (это
-// разные факты: упавший writer и непрайсед модель).
+// costReason — составляет пояснение маркера по ДВУМ независимым осям: недоступность accounting-хранилища и
+// пробелы покрытия.
 export function costReason(coverageIssues: CoverageIssue[], accounting: AccountingState): string {
   const parts: string[] = []
   if (accounting.supported && accounting.health === 'unavailable') {

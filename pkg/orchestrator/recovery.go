@@ -15,67 +15,21 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// errReviewPausePoisoned marks a corrupt, un-recoverable resuming review-pause
-// round (see recoverReviewPause). Run() checks for it via errors.Is to skip
-// normal bootstrap entirely — a poisoned run must not run any scheduling side
-// effects, only stay alive (dashboard + question poller) for manual operator
-// recovery.
+// errReviewPausePoisoned marks a corrupt, un-recoverable resuming review-pause round.
 var errReviewPausePoisoned = errors.New("review-pause resume transaction poisoned")
 
-// enterReviewPausePoison puts the orchestrator into the in-memory fail-closed
-// poison state: hold new activations AND cache a synthetic resuming marker so
-// reviewTxnActive()/ReviewState()/shouldExit()/rejectIfReviewPaused all treat
-// the round as active. Paired with a durable state.WritePoisonMarker so the
-// state survives restarts.
+// enterReviewPausePoison holds activation and caches a synthetic resuming marker; WritePoisonMarker
+// persists the hold across restarts.
 func (o *Orchestrator) enterReviewPausePoison() {
 	o.activationHeld.Store(true)
 	o.reviewMarker.Store(&state.PauseMarker{Version: 1, State: state.PauseStateResuming})
 }
 
-// recoverReviewPause re-establishes review-pause state from disk BEFORE
-// ordinary bootstrap (startPlanningForPending) runs — otherwise the normal
-// scheduler could resume a stage a review round had frozen, racing the
-// review operator. It reads the durable notes-pause.json marker
-// (state.ReadNotesPauseMarker) and reacts per state:
-//
-//   - absent: no review pause was in flight — nil, nothing to do.
-//   - paused: PauseFlow committed the hold but afm restarted before an
-//     operator finished the round — re-establish activationHeld and cache
-//     the marker (o.reviewMarker) exactly as PauseFlow itself would; the
-//     owned stages are already durably StatusPaused in the event log, so
-//     nothing else needs to happen here.
-//   - resuming: InjectNotesAndResume/CancelNotesAndResume committed the
-//     durable state=resuming transition (and, for inject, wrote
-//     feedback.md) but crashed before finishing the actual resume —
-//     runResumeTransaction is idempotent (SaveFeedbackOnce's op-id
-//     sentinel, per-owner Trigger CAS, delete-if-exists on notes/marker), so
-//     re-running it to completion is always safe, including a repeat call
-//     against a transaction that had actually already finished.
-//
-// A corrupt marker (state.ErrCorruptPauseMarker: ReadNotesPauseMarker already
-// quarantined the bad file into notes-pause.json.corrupt-<ts> and returns
-// found=true with a best-effort State guess) is handled asymmetrically:
-//
-//   - corrupt paused: fail OPEN. The owned stages are durably StatusPaused
-//     in the event log regardless of the marker (PauseFlow committed EvPause
-//     before ever writing the marker file) — they simply wait for a manual
-//     Continue. There's no marker left to re-cache, but nothing is lost
-//     either. Logged and returns nil so ordinary bootstrap proceeds.
-//   - corrupt resuming: fail CLOSED. This marker may be the ONLY record that
-//     a resume transaction was in flight — e.g. feedback.md may already have
-//     been delivered to the target — and we cannot safely guess which
-//     owners were already resumed from a best-effort state guess alone. We
-//     keep activationHeld set (blocking new activations) and return an
-//     error instead of silently falling through to normal scheduling, so
-//     the caller can surface it prominently and leave the hold in place for
-//     an operator to resolve by hand.
+// recoverReviewPause restores the hold before scheduling or resumes an interrupted transaction. Corrupt
+// paused fails open; corrupt resuming stays held.
 func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
-	// A durable poison breadcrumb from a PRIOR startup that found a corrupt
-	// resuming marker: re-establish the fail-closed poison state on EVERY
-	// restart until an operator clears the breadcrumb. Without this the poison
-	// was in-memory only and evaporated on the next restart (the corrupt
-	// canonical marker having already been quarantined), silently returning the
-	// run to normal scheduling.
+	// A durable poison breadcrumb from a PRIOR startup that found a corrupt resuming marker: re-establish the
+	// fail-closed poison state on EVERY restart until an operator clears the breadcrumb.
 	if state.HasPoisonMarker(o.opts.RunDir) {
 		o.enterReviewPausePoison()
 		return fmt.Errorf("review-pause: %w (poison breadcrumb present in %q; clear it after manual recovery)", errReviewPausePoisoned, o.opts.RunDir)
@@ -88,16 +42,7 @@ func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
 	switch {
 	case errors.Is(err, state.ErrCorruptPauseMarker):
 		if m.State == state.PauseStateResuming {
-			// Fail CLOSED with a DURABLE poison breadcrumb (survives restarts) plus
-			// a real in-memory poison marker. The in-memory marker keeps
-			// reviewTxnActive() true this process — so /api/status reports
-			// "resuming", every public control action is rejected with
-			// ErrFlowPaused, and shouldExit() refuses to finalize. The durable
-			// breadcrumb makes recovery re-enter this state on every subsequent
-			// restart (the corrupt canonical marker itself was already quarantined
-			// by ReadNotesPauseMarker and would otherwise be gone). The run stays
-			// visible to control policy and finalization until an operator resolves
-			// it by hand and clears the breadcrumb.
+			// Fail CLOSED with a DURABLE poison breadcrumb plus a real in-memory poison marker.
 			_ = state.WritePoisonMarker(o.opts.RunDir, "corrupt resuming review-pause marker; owners may be partially resumed")
 			o.enterReviewPausePoison()
 			return fmt.Errorf("review-pause: %w (corrupt resuming marker quarantined in %q; owners may be partially resumed)", errReviewPausePoisoned, o.opts.RunDir)
@@ -116,10 +61,7 @@ func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
 	case state.PauseStateResuming:
 		o.reviewMarker.Store(&m)
 		o.activationHeld.Store(false)
-		// Idempotent: SaveFeedbackOnce sentinel + per-owner status dispatch +
-		// delete-if-exists. On failure keep the hold and the marker so ordinary
-		// bootstrap doesn't resume owners a second time and the run stays
-		// fail-closed until a later start retries the (now no-op) transaction.
+		// Idempotent: SaveFeedbackOnce sentinel + per-owner status dispatch + delete-if-exists.
 		if err := o.runResumeTransaction(ctx, m); err != nil {
 			o.activationHeld.Store(true)
 			return fmt.Errorf("review-pause: resume transaction incomplete (hold retained): %w", err)
@@ -130,15 +72,8 @@ func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
 	}
 }
 
-// autoRecoverFailedStages resets every stage currently in StatusFailed back
-// to Pending when auto_recover is enabled (default true), so a run
-// interrupted by a killed process/container resumes automatically instead of
-// requiring manual `afm retry` on each failed stage. All failed stages are
-// reset regardless of failure reason (context canceled vs a genuine bug are
-// treated identically — see the design doc for why). Order does not matter
-// here: the reset stages re-enter the Pending flow in startPlanningForPending
-// below, which already gates on depsDone(), so depends_on order falls out on
-// its own without any extra bookkeeping.
+// autoRecoverFailedStages resets all failed stages to pending when enabled; normal activation reapplies
+// dependencies.
 func (o *Orchestrator) autoRecoverFailedStages() {
 	if !o.opts.Config.IsAutoRecover() {
 		return
@@ -279,8 +214,8 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	}
 }
 
-// resumeExecutionStage probes the author's output once. A configured verify
-// gate always requires a fresh execution pass, even when the output exists.
+// resumeExecutionStage probes the author's output once. A configured verify gate always requires a fresh
+// execution pass, even when the output exists (guard: completionErr == nil && s.Verify.IsEmpty()).
 // Retrying without output may instead be an interrupted planning attempt.
 func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, status state.StageStatus) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -315,9 +250,7 @@ func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, s
 	o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 }
 
-// resumeInteractiveAgent re-runs the agent of the phase whose
-// session.json exists most recently. The phase is detected by looking at
-// mtimes of <phase>.session.json files in the stage directory.
+// resumeInteractiveAgent re-runs the agent of the phase whose session.json exists most recently.
 func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	phase := o.detectInterruptedPhase(stageDir)
@@ -327,9 +260,8 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "resume interactive")
 		o.runPlanningAgent(ctx, s)
 	case phaseReview:
-		// Review runs after implementation completes; if we see review session
-		// open, the stage was paused inside review. Fall through to implementation
-		// agent which will re-trigger review at the end.
+		// Review runs after implementation completes; if we see review session open, the stage was paused inside
+		// review. Fall through to implementation agent which will re-trigger review at the end.
 		fallthrough
 	default:
 		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "resume interactive")

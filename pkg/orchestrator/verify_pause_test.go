@@ -13,12 +13,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestRunVerification_LeaseWaitAbortsOnPause_VerifierNeverStarts — V5a.1(b):
-// pause/revise во время ОЖИДАНИЯ занятого командного слота верификатора
-// (лизинг переходит автор->верификатор через Lease.SwapTo) должно прервать
-// само ожидание, а не оставлять стадию висеть до тех пор, пока слот не
-// освободится сам по себе. Верификатор при этом вообще не должен успеть
-// запуститься.
 func TestRunVerification_LeaseWaitAbortsOnPause_VerifierNeverStarts(t *testing.T) {
 	// codex-слот занят кем-то посторонним — Lease.SwapTo("codex") будет ждать.
 	codexSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
@@ -53,10 +47,7 @@ func TestRunVerification_LeaseWaitAbortsOnPause_VerifierNeverStarts(t *testing.T
 	done := make(chan error, 1)
 	go func() { done <- o.RunVerification(context.Background(), s, phaseImplementation) }()
 
-	// Дать горутине реально дойти до ожидания занятого семафора (тот же
-	// приём, что TestSpawnAgent_BlocksOnFullSemaphore/
-	// TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore в
-	// pkg/orchestrator/concurrency).
+	// Дать горутине реально дойти до ожидания занятого семафора.
 	time.Sleep(20 * time.Millisecond)
 
 	select {

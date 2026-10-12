@@ -1,7 +1,5 @@
-// Типы «бокового» разговора с агентом (side agent): форма события журнала,
-// типизированные нагрузки по типу события, состояние разговора и коды ошибок.
-// Зеркалит контракт pkg/sideagent (Go) — единственная точка приведения внешнего
-// JSON к типам фронта (как normalizeStatus/toEvent для /api/status и /ws).
+// Типы «бокового» разговора с агентом: форма события журнала, типизированные нагрузки по типу события,
+// состояние разговора и коды ошибок.
 
 // Каталог типов событий журнала. Неизвестный тип приходящего события → событие
 // отбрасывается (parseSideAgentEvent → null), поток при этом не рвётся.
@@ -17,9 +15,8 @@ export const SIDE_AGENT_EVENT_TYPES = [
 
 export type SideAgentEventType = (typeof SIDE_AGENT_EVENT_TYPES)[number]
 
-// Коды отказа запроса — часть контракта API (pkg/sideagent ErrorCode плюс коды,
-// которые может нести turn_failed.data.code: agent_error/no_answer). Любой
-// незнакомый код трактуется errorCodeToMessage как общий отказ, а не как ошибка.
+// Коды отказа запроса — часть контракта API. Любой незнакомый код трактуется errorCodeToMessage как общий
+// отказ, а не как ошибка.
 export const SIDE_AGENT_ERROR_CODES = [
   'busy',
   'invalid_message',
@@ -34,10 +31,7 @@ export const SIDE_AGENT_ERROR_CODES = [
 
 export type SideAgentErrorCode = (typeof SIDE_AGENT_ERROR_CODES)[number]
 
-// errorCodeToMessage — короткий человекочитаемый текст для кода ошибки. Принимает
-// строку (сервер может прислать и транспортные коды forbidden_origin/invalid_body/
-// internal, и совсем незнакомые), не только SideAgentErrorCode; неизвестный код →
-// общий текст.
+// errorCodeToMessage — короткий человекочитаемый текст для кода ошибки.
 export function errorCodeToMessage(code: string): string {
   switch (code) {
     case 'busy':
@@ -128,9 +122,7 @@ function parseEventData(type: SideAgentEventType, raw: unknown): SideAgentEvent[
   }
 }
 
-// parseSideAgentEvent приводит один сырой конверт (из SSE-кадра или GET-ответа) к
-// SideAgentEvent. Неизвестный type или не-число seq → null: событие без стабильного
-// seq нельзя дедупить/курсорить, поэтому его отбрасываем, а не аппендим вслепую.
+// parseSideAgentEvent приводит один сырой конверт к SideAgentEvent.
 export function parseSideAgentEvent(raw: unknown): SideAgentEvent | null {
   const obj = isRecord(raw) ? raw : null
   if (obj === null) return null

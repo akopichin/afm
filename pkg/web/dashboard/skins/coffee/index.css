@@ -1,10 +1,5 @@
-/* pkg/web/dashboard/public/skins/coffee/index.css — Coffee skin
-   Кофейно-ламповая тема: тёплый тёмный фон и янтарное «свечение радиолампы»
-   (dark), кремовое латте (light). Структура — из ../base/*.css; этот файл даёт
-   только палитру токенов + тёплую перекраску захардкоженных заливок.
-
-   Правила после @import при равной специфичности с base побеждают за счёт более
-   позднего порядка в каскаде (как в goga) — .theme-скоупинг не нужен. */
+/* pkg/web/dashboard/public/skins/coffee/index.css — Coffee skin Кофейно-ламповая тема: тёплый тёмный фон и
+   янтарное «свечение радиолампы», кремовое латте. */
 
 @import url("../base/tokens.css");
 @import url("../base/reset.css");
@@ -46,9 +41,8 @@
   --dialog-option-text:     #c2d6a6;
   --btn-cancel-dialog-text: #ff8a5a;
 
-  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет,
-     чёрная затемняющая вуаль, одинаковая во всех темах/скинах (не тонируется
-     под палитру, как --bg) */
+  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
+     одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
 
   /* status map */
@@ -120,12 +114,8 @@
   --text-dim: var(--ink-dim);
 }
 
-/* === coffee-специфика поверх base ===
-   Захардкоженные в base neon-заливки перекрашиваем под кофейную палитру.
-   novacorps-исходники:  rgba(111,212,204,X)=teal mint · rgba(229,212,66,X)=жёлтый amber
-                         · rgba(183,135,255,X)=violet.
-   coffee-акценты (rgb): карамель 232,178,94 · накал 255,154,52 · матча 166,193,136.
-   Правила после @import побеждают base по порядку каскада. */
+/* === coffee-специфика поверх base === Захардкоженные в base neon-заливки перекрашиваем под кофейную
+   палитру. Правила после @import побеждают base по порядку каскада. */
 
 ::selection { background: rgba(255, 154, 52, 0.30); }
 
@@ -185,9 +175,7 @@
   40%  { box-shadow: 0 0 0 1px rgba(166, 193, 136, 0.6), 0 0 30px rgba(166, 193, 136, 0.5), inset 0 0 20px rgba(166, 193, 136, 0.15); }
   100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent, inset 0 0 0 transparent; }
 }
-/* base/dialog-channel.css — доп. захардкоженные заливки, не покрытые grep-списком
-   из брифа (найдены при верификации Step 2): фон .dialog-pending и hover/selected
-   состояния кнопок-опций были на чистом rgba(183,135,255,X), без var(--*). */
+/* base/dialog-channel.css — доп. */
 .dialog-pending { background: linear-gradient(180deg, rgba(166, 193, 136, 0.10), rgba(166, 193, 136, 0.02)); }
 .dialog-pending .dialog-options button:hover { box-shadow: 0 0 8px rgba(166, 193, 136, 0.45); }
 .dialog-pending .dialog-options button.selected {

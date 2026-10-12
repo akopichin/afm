@@ -19,16 +19,8 @@ type scoredEntry struct {
 // fine for our filenames; a dedicated name documents intent at call sites.
 func toLowerASCII(s string) string { return strings.ToLower(s) }
 
-// rankMatch classifies how well needle (already lowercased) matches a file,
-// returning a tier and whether it matched at all:
-//
-//	0 — basename equals the query exactly
-//	1 — basename starts with the query
-//	2 — basename contains the query
-//	3 — the query appears only elsewhere in the relative path
-//
-// name is the basename, fullPath the root-relative path; both are lowercased
-// here for the comparison.
+// rankMatch ranks case-insensitive matches: exact basename, basename prefix, basename substring, then path
+// substring.
 func rankMatch(needle, name, fullPath string) (int, bool) {
 	ln := strings.ToLower(name)
 	switch {
@@ -45,9 +37,7 @@ func rankMatch(needle, name, fullPath string) (int, bool) {
 	}
 }
 
-// sortScored orders results by tier, then by shorter path, then lexically —
-// the full path is the final tie-break and paths are unique within a root,
-// so this is a total order over distinct paths and the result is deterministic.
+// sortScored orders by match tier, shorter path, then lexical path for deterministic results.
 func sortScored(rs []scoredEntry) {
 	slices.SortFunc(rs, func(a, b scoredEntry) int {
 		if a.score != b.score {
@@ -60,15 +50,11 @@ func sortScored(rs []scoredEntry) {
 	})
 }
 
-// Search bounds and the search-only heavy-dir skip set. These dirs are skipped
-// ONLY by search (to keep the scan budget on files the user is likely after) —
-// List/tree still lets you browse into them by hand.
+// Search bounds and the search-only heavy-dir skip set.
 const maxSearchQueryBytes = 256
 
-// maxSearchScan bounds how many directory entries one Search walks before
-// giving up (Truncated=true); maxSearchResults caps the ranked window returned.
-// Both are vars so tests can shrink them instead of building 100000-entry or
-// 200-match trees.
+// maxSearchScan bounds how many directory entries one Search walks before giving up; maxSearchResults caps
+// the ranked window returned.
 var (
 	maxSearchScan    = 100_000
 	maxSearchResults = 200
@@ -83,18 +69,8 @@ var searchSkipDirs = map[string]bool{
 	"target":       true,
 }
 
-// Search walks rootID iteratively (a queue of root-relative dir paths, no Go
-// recursion), matching query case-insensitively against each file's full
-// relative path. It reuses the secure openat2 path (rootHandle.openat) so
-// containment/symlink policy stays the kernel's job. Only regular selectable
-// files are returned; `.git`/`.afm` and the heavy-dir skip set are pruned.
-//
-// ALL matches within the scan budget are collected first, then ranked, then
-// cut to the top maxSearchResults — so the returned list is the globally
-// best-ranked window, never just the first N encountered in filesystem order.
-// The scan itself is bounded by maxSearchScan entries; hitting that budget, or
-// having more matches than maxSearchResults, sets Truncated. Ranking is
-// rankMatch/sortScored (see above).
+// Search walks rootID iteratively, matching query case-insensitively against each file's full relative
+// path. Ranking is rankMatch/sortScored (see above).
 func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return SearchResult{}, err
@@ -129,10 +105,8 @@ func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResul
 		}
 		f := os.NewFile(uintptr(fd), dirRel)
 		remaining := maxSearchScan - scanned
-		// readDirBounded reads at most `remaining` entries and checks ctx
-		// between batches; dirTruncated means this directory had MORE entries
-		// than the remaining budget allowed (i.e. the global budget ran out
-		// inside it).
+		// readDirBounded reads at most `remaining` entries and checks ctx between batches; dirTruncated means
+		// this directory had MORE entries than the remaining budget allowed.
 		dirents, dirTruncated, rerr := readDirBounded(ctx, f, remaining)
 		_ = f.Close()
 		if rerr != nil {
@@ -163,9 +137,8 @@ func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResul
 				}
 				continue
 			}
-			// Rank on name/path BEFORE buildEntry, so buildEntry's per-file
-			// stat (DirEntry.Info for size) runs only for actual matches, not
-			// for every scanned file.
+			// Rank on name/path BEFORE buildEntry, so buildEntry's per-file stat (DirEntry.Info for size) runs only
+			// for actual matches, not for every scanned file.
 			relPath := path.Join(dirRel, name)
 			score, ok := rankMatch(needle, name, relPath)
 			if !ok {
@@ -178,11 +151,8 @@ func (fs *fsImpl) Search(ctx context.Context, rootID, query string) (SearchResul
 			results = append(results, scoredEntry{entry: e, score: score})
 		}
 
-		// The budget is checked AFTER fully processing the directory (whose
-		// entries readDirBounded already capped at the remaining budget), so an
-		// entry landing exactly on the boundary is still ranked — no off-by-one.
-		// A directory that fit exactly within the budget (dirTruncated=false)
-		// is only "truncated" if there are still more directories to visit.
+		// The budget is checked AFTER fully processing the directory, so an entry landing exactly on the
+		// boundary is still ranked — no off-by-one.
 		if dirTruncated {
 			truncated = true
 			break

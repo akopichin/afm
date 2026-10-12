@@ -44,9 +44,8 @@ func TestMemoryLockPath_SymlinkAliasSameKey_EvenWhenMemoryDirDoesNotExist(t *tes
 		t.Fatal(err)
 	}
 
-	// memoryDir itself does not exist under either path — only the ancestor
-	// (real/link) exists. MemoryLockPath must still canonicalize to the same
-	// key via the existing ancestor.
+	// memoryDir itself does not exist under either path — only the ancestor (real/link) exists.
+	// MemoryLockPath must still canonicalize to the same key via the existing ancestor.
 	viaReal := filepath.Join(realDir, "notyet", "memdir")
 	viaLink := filepath.Join(link, "notyet", "memdir")
 
@@ -108,9 +107,8 @@ func TestAcquireMemoryLock_NonBusyErrorPropagatesImmediately(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	memDir := t.TempDir()
 
-	// Prime ~/.afm/locks (created as a side effect of MemoryLockPath), then
-	// strip write permission so the underlying TryLock's O_CREATE open fails
-	// with a real I/O error — not lock contention.
+	// Prime ~/.afm/locks (created as a side effect of MemoryLockPath), then strip write permission so the
+	// underlying TryLock's O_CREATE open fails with a real I/O error — not lock contention.
 	lockPath, err := MemoryLockPath(memDir)
 	if err != nil {
 		t.Fatal(err)

@@ -12,20 +12,14 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// fakeFlowActions is the FlowActions test double: each method returns a
-// preconfigured result/error, letting tests drive both the success path and
-// every mapped orchestrator sentinel without a real orchestrator.
+// fakeFlowActions returns configured results/errors without a real orchestrator.
 type fakeFlowActions struct {
 	pauseIDs  []string
 	pauseErr  error
 	injectErr error
 	cancelErr error
 
-	// reviewState backs the review() method value below, wired into
-	// Config.ReviewState by tests that need handleNotesAdd/Update/Delete's
-	// currentReviewState() gate to see something other than the "" zero
-	// value (which review() reports as "none", matching the real nil-func
-	// default in handleStatus).
+	// reviewState configures the handlers' review-pause gate; empty state maps to none.
 	reviewState string
 
 	addNoteResult state.ReviewNote
@@ -151,11 +145,6 @@ func TestFlowInject_InvalidBody(t *testing.T) {
 	}
 }
 
-// TestFlowNotes_AddRequiresPaused verifies the handler-level pause gate:
-// adding a note while the flow isn't paused for review must 409
-// flow_not_paused, even though the fake's AddNote itself would happily
-// succeed (addNoteErr is unset) — the check has to happen in the handler via
-// currentReviewState(), not rely on the orchestrator/fake to reject it.
 func TestFlowNotes_AddRequiresPaused(t *testing.T) {
 	fa := &fakeFlowActions{reviewState: "none"}
 	srv := newTestServer(t, Config{FlowActions: fa, ReviewState: fa.review})
@@ -244,9 +233,6 @@ func TestFlowNotes_List(t *testing.T) {
 	}
 }
 
-// TestFlowNotes_UpdateAndDelete smoke-tests the {id}-path routes end to end
-// (PUT/DELETE), including the id-extraction from the URL and the
-// flow_not_paused gate mirrored from Add.
 func TestFlowNotes_UpdateAndDelete(t *testing.T) {
 	fa := &fakeFlowActions{reviewState: "paused", updateNoteRev: 2, deleteNoteRev: 3}
 	srv := newTestServer(t, Config{FlowActions: fa, ReviewState: fa.review})

@@ -17,9 +17,8 @@ import (
 
 type fakeAction struct{ tool, detail string }
 
-// fakeRunner имитирует один ход: эмитит заранее заданные действия через
-// cfg.OnAction, затем (опционально) блокируется до close(block) / сигнала
-// InterruptCh / отмены ctx и возвращает retErr.
+// fakeRunner имитирует один ход: эмитит заранее заданные действия через cfg.OnAction, затем (опционально)
+// блокируется до close(block) / сигнала InterruptCh / отмены ctx и возвращает retErr.
 type fakeRunner struct {
 	cfg     executor.Config
 	actions []fakeAction
@@ -647,9 +646,8 @@ func containsRaw(data []byte, secret string) bool {
 	return len(data) > 0 && strings.Contains(string(data), secret)
 }
 
-// Идемпотентность client_message_id — на всю беседу и durable: повтор id после
-// промежуточного хода возвращает исходный ход без нового запуска агента, и это
-// переживает «рестарт» (новый Manager над тем же журналом).
+// Идемпотентность client_message_id — на всю беседу и durable: повтор id после промежуточного хода
+// возвращает исходный ход без нового запуска агента, и это переживает «рестарт».
 func TestManager_IdempotencyIsConversationWideAndDurable(t *testing.T) {
 	store := newTestStore(t)
 	ff := &fakeFactory{fakes: []*fakeRunner{
@@ -699,9 +697,7 @@ func TestManager_IdempotencyIsConversationWideAndDurable(t *testing.T) {
 	}
 }
 
-// Сбой журнала во время хода останавливает боковой запрос (мягкий interrupt),
-// не трогая flow. Журнал закрывается ПОСЛЕ turn_started, но ДО первого действия
-// (beforeActions) — так record() действия падает в середине хода.
+// Сбой журнала во время хода останавливает боковой запрос, не трогая flow.
 func TestManager_StorageFailureMidTurnStopsAgent(t *testing.T) {
 	store := newTestStore(t)
 	fr := &fakeRunner{actions: []fakeAction{{"text", "answer"}}, block: make(chan struct{})}

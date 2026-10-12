@@ -23,9 +23,8 @@ type Transition struct {
 	Reason  string      `json:"reason,omitempty"`
 }
 
-// ErrRunLocked означает, что run-директория уже открыта другим процессом afm.
-// flock освобождается ОС при завершении процесса, поэтому упавший ранее run
-// не оставляет «залипшей» блокировки.
+// ErrRunLocked означает, что run-директория уже открыта другим процессом afm. flock освобождается ОС при
+// завершении процесса, поэтому упавший ранее run не оставляет «залипшей» блокировки.
 var ErrRunLocked = errors.New("run directory is locked by another afm process")
 
 // ErrCorruptLog означает битую строку в середине events.jsonl (есть валидные
@@ -177,9 +176,8 @@ func (s *Store) Get(stageID string) StageStatus {
 	return StatusPending
 }
 
-// PausedFrom returns the status a paused stage was paused from (empty if the
-// stage has never been paused). See StageState.PausedFrom for why this value
-// survives after the stage leaves paused.
+// PausedFrom returns the status a paused stage was paused from (empty if the stage has never been paused).
+// See StageState.PausedFrom for why this value survives after the stage leaves paused.
 func (s *Store) PausedFrom(stageID string) StageStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -214,14 +212,8 @@ func (s *Store) Snapshot() RunState {
 	return out
 }
 
-// History returns stage transitions accumulated during Open's replay and
-// extended by Apply; run boundary records are excluded. Read-only — it reads
-// the already-replayed in-memory log, it never re-opens events.jsonl. The slice
-// is ordered by ascending Seq (the append order of the event log, which also
-// guarantees non-decreasing Time). A defensive copy is returned so callers
-// cannot mutate the store's internal log. A run with zero transitions returns
-// an empty slice, never an error — the error is reserved for a future failure
-// mode (currently always nil).
+// History returns stage transitions accumulated during Open's replay and extended by Apply; run boundary
+// records are excluded.
 func (s *Store) History() ([]Transition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,21 +222,15 @@ func (s *Store) History() ([]Transition, error) {
 	return out, nil
 }
 
-// SetStageNames stores the display name for each stage. Names are flow metadata
-// (sourced from the flow file), not runtime state — they are not part of the
-// event log. Empty values are stored as-is; the UI handles them gracefully.
-// The map is copied so later mutations by the caller cannot corrupt the store.
+// SetStageNames stores the display name for each stage. Empty values are stored as-is; the UI handles them
+// gracefully.
 func (s *Store) SetStageNames(names map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshot.StageNames = maps.Clone(names)
 }
 
-// SetFlowName stores the flow's display name. Like SetStageNames, this is flow
-// metadata sourced from the flow file, not runtime state — it is not part of
-// the event log, and is expected to be (re-)set from the current flow file on
-// every Open, fresh or resumed, so it stays correct even if the flow was
-// renamed between runs.
+// SetFlowName stores the flow's display name.
 func (s *Store) SetFlowName(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -331,12 +317,8 @@ func SetApplyHook(h func(Transition)) {
 	applyHookMu.Unlock()
 }
 
-// Apply принимает *Transition (не значение): помимо CAS-проверки и durable-
-// записи, заполняет t.Seq/t.Time присвоенными значениями ДО возврата — это
-// единственный безопасный способ узнать реальный seq конкретной transition
-// (нужен вызывающему коду, чтобы приложить его к live-событию для дедупа на
-// фронте). Читать snapshot.LastSeq ПОСЛЕ Apply было бы гонкой: конкурентный
-// Apply другой стадии мог успеть увеличить lastSeq между вызовами.
+// Apply делает durable CAS-переход и заполняет t.Seq/t.Time до возврата; отдельное чтение LastSeq
+// подвержено гонке.
 func (s *Store) Apply(t *Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -373,12 +355,8 @@ func (s *Store) Apply(t *Transition) error {
 		hook(*t)
 	}
 
-	// SetStageStatusAt(t.Time), не SetStageStatus(time.Now()): t.Time уже
-	// зафиксирован выше (до fsync) и это именно то время, которое попадёт в
-	// events.jsonl. Второй, более поздний time.Now() здесь развёл бы живой
-	// снапшот с replay (parseEventLog всегда берёт t.Time) на длительность
-	// fsync — и ту же дельту накопил бы accountIdleAndBackoff при следующем
-	// переходе, ломая гарантию "resume даёт то же самое, что живой прогон".
+	// SetStageStatusAt, не SetStageStatus: t.Time уже зафиксирован выше и это именно то время, которое
+	// попадёт в events.jsonl.
 	accountIdleAndBackoff(s.snapshot, t.StageID, t.To, t.Time)
 	s.snapshot.SetStageStatusAt(t.StageID, t.To, t.Time)
 	s.snapshot.LastSeq = s.lastSeq

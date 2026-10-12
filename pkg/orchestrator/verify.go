@@ -23,33 +23,20 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// verifyExecutionLabel — execution-purpose метка AI-verify для логов/usage
-// (accounting.Observation.Phase, executor.Config.Phase). НЕ входит в
-// flow.Phases() — verify не рантайм-фаза стадии (planning/implementation/
-// review/autonomous_execution), а отдельный, ортогональный проход ПОСЛЕ
-// того как стадия уже заявила о завершении по file-probe.
+// verifyExecutionLabel — execution-purpose метка AI-verify для логов/usage.
 const verifyExecutionLabel = "verify"
 
-// verifyShellOutputLimit — тот же лимит хвоста вывода, что был у удалённого
-// legacy stagefiles.RunVerify (constant вынесена в stagefiles.VerifyOutputLimit
-// до его удаления и переиспользуется здесь), сохраняет прежний текст ошибки
-// shell-шага один в один.
+// verifyShellOutputLimit — тот же лимит хвоста вывода, что был у удалённого legacy stagefiles.RunVerify,
+// сохраняет прежний текст ошибки shell-шага один в один.
 const verifyShellOutputLimit = stagefiles.VerifyOutputLimit
 
-// verifyOutcomePass/verifyOutcomeError — значения ManifestStep.Outcome для
-// успешно пройденного шага и для шага, который не удалось оценить
-// (инфраструктурная/storage-ошибка) — единая точка определения вместо
-// разбросанных строковых литералов "pass"/"error" (goconst).
+// verifyOutcomePass/verifyOutcomeError обозначают успех шага или невозможность его оценить.
 const (
 	verifyOutcomePass  = "pass"
 	verifyOutcomeError = "error"
 )
 
-// verifyTimedOutReason — единый текст VerifyExecError.Reason для истёкшего
-// per-step таймаута (C3 код-ревью, flow.VerifyStep.Timeout) — единая точка
-// вместо разбросанных строковых литералов "verify timed out" (goconst); та
-// же метка, что и раньше использовалась только для executor'ского
-// idle-timeout (см. runVerifyAgentStep).
+// verifyTimedOutReason — общий текст ошибки step-таймаута и idle-таймаута verify.
 const verifyTimedOutReason = "verify timed out"
 
 // Ключи payload'а observer-событий EventVerifyStarted/EventVerifyResult
@@ -65,24 +52,14 @@ const (
 	keyReportPath     = "report_path"
 )
 
-// execErrorKindExecFailure/execErrorKindInterrupted — грубая классификация
-// "почему у шага нет вердикта" для payload'а EventVerifyResult: interrupted —
-// шаг прерван извне (Pause/Revise/отмена рана), exec_failure — любая другая
-// причина не получить вердикт (транспорт/протокол/таймаут/сбой сохранения/
-// ненулевой exit shell-команды уже нормализован в needs_changes и сюда не
-// попадает).
+// execErrorKindInterrupted обозначает Pause/Revise/cancel; exec_failure — прочие сбои проверки. Ненулевой
+// shell exit даёт needs_changes.
 const (
 	execErrorKindInterrupted = "interrupted"
 	execErrorKindExecFailure = "exec_failure"
 )
 
-// emitVerifyStarted публикует наблюдательное событие "шаг verify начал
-// выполняться" — ТОЧНО тот же паттерн, что EventAutoAnswered (см. AGENTS.md
-// "Auto-answering questions"): live через o.ui.Publish И durable через
-// stagefiles.AppendNotice в notices.jsonl, чтобы клиент, подключившийся или
-// перезагрузивший страницу ПОСЛЕ события, всё равно увидел его в ленте
-// (server's reconstructNotices реплеит notices.jsonl). НЕ FSM-событие: не
-// входит в events.jsonl и не входит в flow.Phases().
+// emitVerifyStarted публикует событие live и в notices.jsonl; оно не входит в FSM-лог или flow.Phases.
 func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, command string) {
 	data := map[string]any{
 		keyVerificationID: verID,
@@ -93,12 +70,7 @@ func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, c
 	o.publishNotice(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: data})
 }
 
-// emitVerifyResult публикует наблюдательное событие "шаг verify завершился" —
-// см. emitVerifyStarted. Ровно один из (verdict, execErrorKind) непустой:
-// verdict — когда модель/shell-код реально произвели вердикт (pass/
-// needs_changes/inconclusive); execErrorKind — когда шаг вообще не удалось
-// оценить. reportPath — "" если для этого исхода report.md не пишется
-// (проходящий shell-шаг, любая exec-ошибка).
+// emitVerifyResult публикует наблюдательное событие "шаг verify завершился" — см. emitVerifyStarted.
 func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, command string, verdict verify.Verdict, execErrorKind, reason, reportPath string) {
 	data := map[string]any{
 		keyVerificationID: verID,
@@ -125,67 +97,26 @@ func verifyReportPath(stageDir, verID string) string {
 	return filepath.Join(stagefiles.VerifyDir(stageDir), verID, "report.md")
 }
 
-// verifyAgentRunner — сигнатура функции, реально исполняющей один agent-шаг
-// AI-verify. Инъектируемый seam (тот же приём, что o.spawnJSONFix и
-// memorypipeline.AgentRunner): продакшн — execVerifyAgent (runner_factory.go),
-// тесты подменяют o.runVerifyAgent напрямую, без реального subprocess.
+// verifyAgentRunner — сигнатура функции, реально исполняющей один agent-шаг AI-verify.
 type verifyAgentRunner func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error)
 
-// verifyShellRunner — сигнатура функции, реально исполняющей один shell-шаг
-// AI-verify. Инъектируемый seam, тот же приём, что verifyAgentRunner выше:
-// продакшн — runVerifyShellCommand, тесты (D3a/D4 гоночные сценарии)
-// подменяют o.runVerifyShell фейком, управляющим таймингом детерминированно,
-// без завязки на реальный OS-уровневый race в select.
+// verifyShellRunner — сигнатура функции, реально исполняющей один shell-шаг AI-verify.
 type verifyShellRunner func(ctx context.Context, dir, command string) (string, error)
 
-// RunVerification выполняет ОДИН последовательный fail-fast проход по
-// s.Verify.Steps для стадии, уже прошедшей file-probe (CheckCompletion/
-// CheckAutonomousCompletion). Первый непройденный шаг ОСТАНАВЛИВАЕТ проход —
-// остальные шаги остаются "not-run" в манифесте, никакого внутреннего
-// цикла коррекции/повторного запуска автора здесь нет (одна попытка на
-// вызов; повтор — забота вызывающего кода через существующую incomplete-
-// retry политику, см. VerifyRejectedError).
-//
-// Возвращает:
-//   - nil                  — все шаги пройдены; активный feedback очищен;
-//   - *VerifyRejectedError — шаг вернул needs-changes-эквивалент (durable
-//     feedback уже записан на диск);
-//   - *VerifyExecError     — шаг не удалось оценить (транспорт/протокол/
-//     таймаут/inconclusive/сбой сохранения/ненулевой exit верификатора);
-//   - executor.ErrUserInterrupted — проход прерван извне (см. вызывающий код).
+// RunVerification выполняет ОДИН последовательный fail-fast проход по s.Verify.Steps для стадии, уже
+// прошедшей file-probe.
 func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase string) (err error) {
 	if s.Verify.IsEmpty() {
 		return nil
 	}
 
-	// lease — общий с раннером-автором слот командного семафора (V4b, см.
-	// Orchestrator.stageLeases): если стадия заспавнена обычным путём
-	// (spawnKind), lease сейчас удерживает слот Stage.Command. Каждый
-	// agent-шаг verify временно переводит его на свою команду
-	// (runVerifyAgentStep → Lease.SwapTo). Отсутствие lease (ok=false — путь
-	// резюма стадии в обход spawnKind, см. комментарий поля) — безопасная
-	// деградация: просто не участвуем в переносе слота.
+	// lease — общий с раннером-автором слот командного семафора: если стадия заспавнена обычным путём, lease
+	// сейчас удерживает слот Stage.Command.
 	if lease, ok := o.stageLeases.Load(s.ID); ok {
 		l := lease.(*concurrency.Lease)
 		defer func() {
-			// G1 (5-е код-ревью): своп ОБРАТНО на команду автора нужен ТОЛЬКО
-			// на исходе needs_changes — единственном, после которого
-			// runWithRetry перезапустит АВТОРА в ТОМ ЖЕ вызове, на ЭТОМ ЖЕ
-			// lease (без нового spawnAgentLeased/acquire, см. retry.go's
-			// incomplete-retry continue). На любом другом исходе (pass/
-			// exec-error/inconclusive/timeout/прерывание) run(ctx,s) вот-вот
-			// вернётся, и SpawnAgentLease сам release'нет ЧТО БЫ lease ни
-			// держал (Release идемпотентен) — блокирующий swap-обратно здесь
-			// был бы ошибкой: к моменту, когда шаг вернулся, ОДНОРАЗОВЫЙ
-			// interrupt УЖЕ поглощён исполнителем самого шага (executor'ом
-			// для agent-шага, ~executor.go's InterruptCh select; shell-
-			// наблюдателем pauseAwareVerifyCtx для shell-шага) — свежий
-			// pauseAwareVerifyCtx, построенный здесь заново, никогда не
-			// получит повторный сигнал; а таймаут шага (stepCtx) отменяет
-			// только сам шаг, не run-scoped ctx. SwapTo(ctx, author),
-			// ожидающий занятый ДРУГОЙ стадией слот автора, мог бы зависнуть
-			// НАВСЕГДА — именно это и было 5-м код-ревью найдено. Освобождаем
-			// слот верификатора немедленно вместо этого.
+			// G1: своп ОБРАТНО на команду автора нужен ТОЛЬКО на исходе needs_changes — единственном, после
+			// которого runWithRetry перезапустит АВТОРА в ТОМ ЖЕ вызове, на ЭТОМ ЖЕ lease.
 			var rejected *VerifyRejectedError
 			if !errors.As(err, &rejected) {
 				l.Release()
@@ -239,16 +170,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		command := verifyStepManifestCommand(st)
 		o.emitVerifyStarted(s.ID, verID, idx, kind, command)
 
-		// C3 код-ревью: flow.VerifyStep.Timeout парсился и валидировался, но
-		// никогда не применялся. Ограничивает И ожидание слота командного
-		// семафора (lease wait внутри runVerifyAgentStep), И само исполнение
-		// (shell/agent) — деривация ДО ветвления agent/shell, единая точка
-		// для обоих. Executor'ский idle-timeout продолжает действовать
-		// независимо (см. бриф §3.4 — кто раньше сработает). Timeout==0 —
-		// поведение не меняется (stepCtx==ctx). defer вместо явного вызова
-		// на каждом return: шагов в одном проходе мало, накопление defer'ов
-		// в цикле безопасно и проще, чем дублировать cancel() перед каждым
-		// из многих return этой функции.
+		// Step timeout и idle-timeout действуют независимо; срабатывает первый истёкший.
 		stepCtx := ctx
 		if st.Timeout > 0 {
 			var cancelStep context.CancelFunc
@@ -280,17 +202,8 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				return err
 			}
 
-			// F3 (4-е код-ревью): перепроверка дедлайна ОДИН РАЗ здесь, СРАЗУ
-			// после возврата из runVerifyAgentStep и ДО ветвления по вердикту —
-			// раньше stepCtx.Err() проверялся ТОЛЬКО внутри ветки VerdictPass
-			// (D3a код-ревью), так что needs_changes/inconclusive принимались
-			// как есть, даже если st.Timeout уже истёк к моменту получения
-			// результата (гоночный select "успешное завершение subprocess vs.
-			// истечение дедлайна" внутри executor.RunVerifyAgent может выбрать
-			// ветку успеха ПОСЛЕ истечения срока — err==nil сам по себе этого
-			// не исключает). Ненулевой вердикт НИКОГДА не принимается на веру
-			// без этой перепроверки, независимо от того, какой именно вердикт
-			// модель успела произвести.
+			// Перепроверяем stepCtx до любого вердикта: executor может вернуть успешный результат одновременно с
+			// истечением дедлайна.
 			if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
 				manifestSteps[i].Outcome = verifyOutcomeError
 				_ = persistManifest()
@@ -329,10 +242,8 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictInconclusive, "", result.Summary, "")
 				return &VerifyExecError{Reason: "verify inconclusive: " + result.Summary, Step: idx}
 			default:
-				// Недостижимо при исправном executor.RunVerifyAgent
-				// (DecodeModelResult допускает только три вердикта) —
-				// защитная ветка на случай нестандартного фейкового
-				// раннера в тестах: неизвестный вердикт НИКОГДА не pass.
+				// Недостижимо при исправном executor.RunVerifyAgent — защитная ветка на случай нестандартного
+				// фейкового раннера в тестах: неизвестный вердикт НИКОГДА не pass.
 				manifestSteps[i].Outcome = verifyOutcomeError
 				_ = persistManifest()
 				reason := fmt.Sprintf("verify produced unknown verdict %q", result.Verdict)
@@ -342,18 +253,8 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			continue
 		}
 
-		// E2 (третье код-ревью): синхронная проверка ДО того, как вообще
-		// создан pauseAwareVerifyCtx и стартован shell-процесс. shellCtx.Err()
-		// внутри runVerifyShellCommand — недостаточная гарантия сама по себе:
-		// его отмена по сигналу Pause()/Revise() происходит АСИНХРОННО, из
-		// горутины-наблюдателя pauseAwareVerifyCtx, которую RunVerification не
-		// дожидается ДО старта команды (stop() вызывается только ПОСЛЕ
-		// o.runVerifyShell — иначе длинная команда не успела бы прерваться
-		// серединой исполнения, см. комментарий ниже). Если сигнал паузы уже
-		// лежит в канале, а горутина-наблюдатель ещё не получила CPU,
-		// shellCtx.Err() к моменту cmd.Start() всё ещё nil — read-only
-		// верификатор всё равно стартовал бы. verifyShellInterruptPending
-		// закрывает именно уже-случившийся к МОМЕНТУ ВЫЗОВА случай.
+		// E2: синхронная проверка ДО того, как вообще создан pauseAwareVerifyCtx и стартован shell-процесс.
+		// verifyShellInterruptPending закрывает именно уже-случившийся к МОМЕНТУ ВЫЗОВА случай.
 		if o.verifyShellInterruptPending(s.ID) {
 			manifestSteps[i].Outcome = execErrorKindInterrupted
 			_ = persistManifest()
@@ -361,12 +262,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return executor.ErrUserInterrupted
 		}
 
-		// Shell-шаг: отменяемый процесс (honor ctx) — CWD legacy "." (тот же
-		// literal, что CheckCompletion передавал в RunVerify до V4a.1 — см.
-		// CWD note брифа: не "чинить" контракт здесь). C4 код-ревью: команда
-		// исполняется под ТЕМ ЖЕ pause-aware ctx, что и agent-шаг (см.
-		// pauseAwareVerifyCtx) — иначе Pause()/Revise() не могли бы прервать
-		// зависший shell-verify, а только полную отмену рана.
+		// Shell-шаг: отменяемый процесс — CWD legacy ".".
 		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
 		out, runErr := o.runVerifyShell(shellCtx, ".", st.Run)
 		interruptedByPause := stop()
@@ -387,26 +283,15 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return &VerifyExecError{Reason: reason, Step: idx}
 		}
 		if interruptedByPause {
-			// Сигнал Pause()/Revise() пришёл во время исполнения shell-шага —
-			// процесс уже убит (killProcessGroup, см. runVerifyShellCommand);
-			// ненулевой exit в этом случае — следствие прерывания, а НЕ
-			// needs-changes-эквивалент, и не должен пройти через
-			// persistVerifyRejection (см. агентскую ветку выше — тот же
-			// принцип: прерывание извне никогда не превращается в отказ
-			// автора).
+			// Ненулевой exit после Pause/Revise означает прерывание, а не needs_changes; отказ автора не сохраняем.
 			manifestSteps[i].Outcome = execErrorKindInterrupted
 			_ = persistManifest()
 			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
 			return executor.ErrUserInterrupted
 		}
 		if runErr != nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
-			// C3 код-ревью: у stepCtx (не shellCtx — тот всегда отменён
-			// после stop(), см. ниже) свой собственный дедлайн, отдельный от
-			// родительского ctx: DeadlineExceeded здесь означает ИМЕННО
-			// истечение st.Timeout, а не отмену всего рана или сигнал паузы
-			// (оба уже обработаны ветками выше). Таймаут НИКОГДА не
-			// проходит через persistVerifyRejection — иначе истекший
-			// timeout маскировался бы под needs_changes-эквивалент.
+			// DeadlineExceeded у stepCtx означает истечение st.Timeout; отмена рана и пауза обрабатываются
+			// отдельно.
 			manifestSteps[i].Outcome = verifyOutcomeError
 			_ = persistManifest()
 			reason := verifyTimedOutReason
@@ -414,17 +299,8 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return &VerifyExecError{Reason: reason, Step: idx}
 		}
 		if runErr != nil && ctx.Err() != nil {
-			// ВАЖНО: проверяем ИСХОДНЫЙ (родительский) ctx, а НЕ shellCtx —
-			// stop() САМ безусловно отменяет производный shellCtx как часть
-			// своей очистки (см. pauseAwareVerifyCtx), так что shellCtx.Err()
-			// здесь был бы non-nil ВСЕГДА, когда для стадии зарегистрирован
-			// interrupt-канал, независимо от того, было ли реальное
-			// прерывание — ложно превращая обычный отказ shell-команды в
-			// exec-ошибку (найдено интеграционным тестом free-retry). ctx —
-			// родительский (run-scoped) ctx: отменён здесь — значит, это
-			// отмена ВСЕГО рана (сигнал паузы ЭТОЙ стадии уже обработан
-			// веткой interruptedByPause выше), и ненулевой exit — следствие
-			// убитого процесса, а не needs-changes-эквивалент.
+			// Проверяем родительский ctx: stop сам отменяет shellCtx, поэтому его Err не доказывает прерывание
+			// рана.
 			manifestSteps[i].Outcome = verifyOutcomeError
 			_ = persistManifest()
 			reason := "verify execution failed: " + ctx.Err().Error()
@@ -432,11 +308,8 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return &VerifyExecError{Reason: reason, Step: idx}
 		}
 		if runErr != nil {
-			// Ненулевой exit == needs-changes-эквивалент: нормализуем в тот
-			// же verify.ModelResult, что и agent-шаг, и проводим через ТОТ
-			// ЖЕ commit order — единый путь persist+return для обеих форм
-			// verify-отказа. Текст legacy-ошибки (для IncompleteWorkError.Reason)
-			// сохраняем байт-в-байт как раньше делал stagefiles.RunVerify.
+			// Ненулевой shell exit нормализуем в needs_changes и сохраняем тем же путём, что отказ AI; legacy
+			// reason сохраняется.
 			tail := stagefiles.TailOutput(out, verifyShellOutputLimit)
 			legacyReason := fmt.Sprintf("verify command failed (%v):\n%s", runErr, tail)
 			result := shellRejectionResult(st.Run, tail)
@@ -444,11 +317,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return o.persistVerifyRejection(stageDir, verID, idx, kind, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
 		}
 		if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
-			// D3a код-ревью: select между done-каналом исполнения и
-			// <-stepCtx.Done() внутри runVerifyShellCommand, когда оба готовы
-			// одновременно, может выбрать ветку успеха ДАЖЕ ПОСЛЕ истечения
-			// собственного дедлайна шага — runErr==nil здесь НЕ означает "успели
-			// в срок", нужна отдельная перепроверка ПОСЛЕ получения результата.
+			// Перепроверяем дедлайн после успеха: select может выбрать done, когда stepCtx уже истёк.
 			manifestSteps[i].Outcome = verifyOutcomeError
 			_ = persistManifest()
 			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
@@ -468,78 +337,43 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	return nil
 }
 
-// runVerifyAgentStep запускает один agent-шаг через инъектируемый
-// o.runVerifyAgent и переводит verify.RunOutcome в либо провалидированный
-// verify.ModelResult (готовый к дальнейшей обработке в RunVerification),
-// либо СРАЗУ типизированную ошибку (VerifyExecError/executor.ErrUserInterrupted) —
-// вызывающий код в этом случае просто возвращает err как есть. alias —
-// команда агента (для отчёта/manifest).
+// runVerifyAgentStep возвращает валидный ModelResult или typed error; alias идентифицирует агента в
+// report/manifest.
 func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st flow.VerifyStep, idx int, verID string, in prompts.VerifyInputs) (verify.ModelResult, string, error) {
-	// Перед запуском agent-шага переводим lease на его команду (см.
-	// RunVerification: тот же lease будет возвращён автору в defer, каким бы
-	// ни оказался исход). Тот же командный слот, той же семантики SwapTo:
-	// та же команда, что у автора, — no-op; другая — release-before-acquire.
-	//
-	// Ожидание слота (если команда верификатора занята max_parallel'ом)
-	// обёрнуто o.pauseAwareVerifyCtx (V5a): ctx здесь — run-scoped ctx,
-	// который Pause() НЕ отменяет (см. control_api.go's Pause — он только
-	// долговечно переводит FSM и сигналит o.interruptChans, ctx не трогает).
-	// Без этого пауза во время ожидания busy-семафора верификатора не
-	// прерывала бы ожидание — стадия оставалась бы занятой этим ожиданием
-	// до тех пор, пока слот не освободится сам по себе.
+	// Перед запуском agent-шага переводим lease на его команду. Тот же командный слот, той же семантики
+	// SwapTo: та же команда, что у автора, — no-op; другая — release-before-acquire.
 	if lease, ok := o.stageLeases.Load(s.ID); ok {
 		waitCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
 		swapErr := lease.(*concurrency.Lease).SwapTo(waitCtx, st.Command)
 		interruptedDuringWait := stop()
 		if swapErr != nil {
 			if ctx.Err() == nil {
-				// Родительский (run-scoped) ctx жив — ждать перестали именно
-				// из-за сигнала паузы/ревизии ЭТОЙ стадии (interruptChans), а
-				// не из-за отмены всего рана. Тот же сентинел, что и
-				// прерывание уже запущенного verify-субпроцесса ниже —
-				// runWithRetry (retry.go) обрабатывает оба источника
-				// прерывания одинаково.
+				// Родительский ctx жив — ждать перестали именно из-за сигнала паузы/ревизии ЭТОЙ стадии, а не из-за
+				// отмены всего рана.
 				return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
 			}
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				// C3 код-ревью: истёк timeout шага, ещё ожидая слот
-				// командного семафора — тот же принцип, что и ниже (истёкший
-				// таймаут никогда не маскируется под другую причину).
+				// Timeout шага может истечь при ожидании слота; сохраняем именно эту причину.
 				return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
 			}
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify lease swap failed: " + swapErr.Error(), Step: idx}
 		}
 		if interruptedDuringWait {
-			// C5 код-ревью: SwapTo вернул nil (noop-семафор/одинаковая
-			// команда — их fast path не блокируется и потому сам по себе не
-			// видит отмену), но за время ожидания сигнал паузы/ревизии
-			// РЕАЛЬНО пришёл и был поглощён именно этим ожиданием — не даём
-			// верификатору стартовать на стадии, которая уже считается
-			// прерванной, даже если формально lease "успешно" переведён.
+			// После SwapTo учитываем сигнал Pause/Revise даже при успешном fast path; прерванную стадию проверять
+			// нельзя.
 			return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
 		}
 	}
 
-	// C5 код-ревью: последняя точка ПЕРЕД стартом verify-субпроцесса — даже
-	// если lease вообще не участвовал (safe no-op деградация выше) или своп
-	// прошёл гладко без единого сигнала во время ожидания, отдельно
-	// перепроверяем ctx/статус стадии прямо перед запуском. Закрывает окно
-	// между "lease переведён" и "субпроцесс стартовал", в котором Pause()
-	// мог durable перевести стадию в paused уже ПОСЛЕ того, как мы перестали
-	// ждать lease.
+	// Перед verify-subprocess повторно проверяем ctx и статус: Pause мог случиться после успешного swap
+	// lease.
 	if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID, idx); aborted {
 		return verify.ModelResult{}, st.Command, abortErr
 	}
 
 	stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
-	// Найдено этой задачей (V5a): в отличие от shell-шага чуть выше по файлу
-	// (который явно создаёт stepDir перед записью command.log), agent-шаг
-	// никогда не создавал stepDir сам — progress.NewLogger просто
-	// os.OpenFile'ит agentLog без MkdirAll родителя. В продакшне ЛЮБОЙ
-	// реальный agent-шаг verify падал бы с "open log file: ... no such file
-	// or directory" ещё до первого запуска verify-субпроцесса; это было
-	// незаметно во всех прежних тестах, потому что все они подменяют
-	// o.runVerifyAgent фейком, минуя реальную файловую систему.
+	// Найдено этой задачей: в отличие от shell-шага чуть выше по файлу, agent-шаг никогда не создавал stepDir
+	// сам — progress.NewLogger просто os.OpenFile'ит agentLog без MkdirAll родителя.
 	if mkErr := os.MkdirAll(stepDir, 0755); mkErr != nil {
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify storage failure: " + mkErr.Error(), Step: idx}
 	}
@@ -566,11 +400,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 			// брифа "кто раньше сработает") — та же текстовая метка.
 			reason = verifyTimedOutReason
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			// C3 код-ревью: наш собственный st.Timeout истёк — реальный
-			// executor.RunVerifyAgent в этом случае возвращает
-			// ProcessOK=false без ни одного из флагов TimedOut/Interrupted
-			// (ctx.Done() — "прочая ошибка запуска", см. executor.go), так
-			// что различать нужно ИМЕННО по ctx, а не по outcome.
+			// Step-таймаут определяем по ctx: executor может вернуть ProcessOK=false без TimedOut/Interrupted.
 			reason = verifyTimedOutReason
 		default:
 			// Прочая инфраструктурная ошибка запуска (не idle-timeout, не
@@ -582,29 +412,15 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify protocol error: " + outcome.ProtocolErr.Error(), Step: idx}
 	}
 	if outcome.Result == nil {
-		// Недостижимо при исправном executor.RunVerifyAgent (ProcessOK &&
-		// ProtocolErr==nil ⇒ Result!=nil) — защитная ветка на случай
-		// нестандартного фейкового раннера в тестах.
+		// Недостижимо при исправном executor.RunVerifyAgent (ProcessOK && ProtocolErr==nil ⇒ Result!=nil) —
+		// защитная ветка на случай нестандартного фейкового раннера в тестах.
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify produced no result", Step: idx}
 	}
 	return *outcome.Result, st.Command, nil
 }
 
-// pauseAwareVerifyCtx возвращает ctx, отменяемый ЛИБО отменой родителя, ЛИБО
-// сигналом на o.interruptChans[stageID] (Pause()/Revise(), см. control_api.go)
-// — что наступит раньше, — и функцию stop, которую вызывающий код ОБЯЗАН
-// вызвать сразу после того, как перестал ждать (успешно или нет), ДО того как
-// канал снова понадобится реальному verify-субпроцессу (см. runnerForVerify).
-// stop синхронно дожидается выхода горутины-наблюдателя (без этого могла бы
-// возникнуть гонка, в которой наблюдатель, ещё не заметивший отмену, украл бы
-// ПОЗДНЕЙШИЙ сигнал паузы, адресованный уже запущенному verify-процессу) и
-// возвращает true, если ctx был отменён ИМЕННО сигналом на ic (а не тем, что
-// вызывающий код сам прекратил ждать) — см. C5: SwapTo для noop-семафора/
-// одинаковой команды не проверяет ctx во время самого ожидания (там нечего
-// ждать), так что только этот флаг говорит вызывающему коду "сигнал реально
-// пришёл, даже хотя SwapTo этого не заметил". Нет зарегистрированного канала
-// для стадии (например, вызов вне runWithRetry) — безопасная деградация: ctx
-// прокидывается как есть, stop всегда возвращает false.
+// pauseAwareVerifyCtx отменяется родителем или interruptCh. Вызови stop до передачи канала subprocess: он
+// ждёт observer и сообщает о сигнале.
 func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID string) (ctx context.Context, stop func() bool) {
 	ch, ok := o.interruptChans.Load(stageID)
 	if !ok {
@@ -616,14 +432,7 @@ func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID strin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Приоритетная неблокирующая проверка ПЕРЕД основным select: если
-		// сигнал паузы уже лежит в канале (буферизован) к моменту, когда эта
-		// горутина реально получает CPU, он ДОЛЖЕН быть замечен — иначе
-		// возможен ложноотрицательный результат: если вызывающий код к этому
-		// моменту уже вызвал stop() (который сам делает cancel()), основной
-		// select ниже увидел бы ОБА case'а одновременно готовыми (<-ic И
-		// <-cctx.Done()) и мог бы псевдослучайно выбрать cctx.Done(),
-		// потеряв реальный, уже пришедший сигнал паузы.
+		// Сначала проверяем буфер interruptCh: иначе одновременный stop/cancel может скрыть уже пришедшую паузу.
 		select {
 		case <-ic:
 			interrupted <- true
@@ -646,15 +455,8 @@ func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID strin
 	}
 }
 
-// verifyLaunchAborted — последняя проверка ПЕРЕД стартом verify-субпроцесса
-// (C5 код-ревью): true, если родительский ctx уже отменён (полная отмена
-// рана либо истёкший таймаут шага, C3 — различаются по errors.Is(...,
-// context.DeadlineExceeded), чтобы таймаут никогда не маскировался под
-// прерывание) ИЛИ (когда доступен Store) стадия уже durable ушла в
-// paused/revising. o.opts.Store может быть nil в модульных тестах, строящих
-// Orchestrator напрямую без полноценного Store (см. newVerifyTestOrchestrator)
-// — деградация: проверяем только ctx. idx — только для Step у VerifyExecError
-// в ветке таймаута.
+// verifyLaunchAborted — последняя проверка ПЕРЕД стартом verify-субпроцесса: true, если родительский ctx
+// уже отменён ИЛИ стадия уже durable ушла в paused/revising.
 func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string, idx int) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -673,32 +475,8 @@ func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string, 
 	}
 }
 
-// verifyShellInterruptPending — E2 (третье код-ревью): синхронная,
-// неблокирующая проверка ИМЕННО канала прерывания (а не производного ctx)
-// ПЕРЕД тем, как вообще создавать pauseAwareVerifyCtx и стартовать
-// shell-verify процесс.
-//
-// У agent-шага (executor.RunVerifyAgent) та же гарантия обеспечена ВНУТРИ
-// самого executor'а: e.cfg.InterruptCh — тот же канал o.interruptChans[id],
-// подключённый напрямую (см. runner_factory.go), без промежуточного ctx —
-// executor.run делает синхронный неблокирующий select на этом канале
-// НЕПОСРЕДСТВЕННО перед cmd.Start() (D4 код-ревью). У shell-шага такого
-// прямого канала нет: единственный способ прервать его — производный
-// shellCtx, чью отмену выполняет ОТДЕЛЬНАЯ горутина-наблюдатель
-// (pauseAwareVerifyCtx), а RunVerification намеренно НЕ дожидается её ДО
-// старта команды (stop() вызывается только ПОСЛЕ o.runVerifyShell — иначе
-// длинная команда не успела бы прерваться серединой исполнения, ей ещё
-// предстоит слушать shellCtx.Done() всё время своей работы). Значит уже
-// буферизованный к МОМЕНТУ ВЫЗОВА сигнал Pause()/Revise() мог бы остаться
-// незамеченным shellCtx.Err(), если горутина-наблюдатель ещё не получила
-// CPU, — и read-only-верификатор всё равно стартовал бы.
-//
-// Вызывается ДО pauseAwareVerifyCtx, пока горутина-наблюдатель для этого шага
-// ещё не создана — неблокирующий receive здесь никогда не конкурирует с ней
-// за один и тот же буферизованный сигнал: либо мы забираем сигнал здесь и
-// вообще не создаём shellCtx/не стартуем shell, либо канал пуст и всё идёт
-// как раньше (последующую гонку ВНУТРИ самого исполнения по-прежнему
-// закрывает pauseAwareVerifyCtx).
+// verifyShellInterruptPending — E2: синхронная, неблокирующая проверка ИМЕННО канала прерывания ПЕРЕД тем,
+// как вообще создавать pauseAwareVerifyCtx и стартовать shell-verify процесс.
 func (o *Orchestrator) verifyShellInterruptPending(stageID string) bool {
 	if ch, ok := o.interruptChans.Load(stageID); ok {
 		select {
@@ -718,20 +496,8 @@ func (o *Orchestrator) verifyShellInterruptPending(stageID string) bool {
 	}
 }
 
-// persistVerifyRejection выполняет commit order для needs_changes-эквивалента
-// (V2a §6.3), общий для agent-шага и synthetic-результата shell-шага:
-//  1. вердикт уже готов и провалидирован (result);
-//  2. SaveAcceptedResult + WriteReport + WriteManifest;
-//  3. WriteActiveFeedback атомарно;
-//  4. ТОЛЬКО после успеха всех предыдущих — emitVerifyResult (V5a.3) и
-//     типизированный VerifyRejectedError.
-//
-// Сбой ЛЮБОЙ персистентности на этом пути — VerifyExecError (fail closed):
-// стадия не должна быть ни молча принята, ни отклонена с недописанными на
-// диск файлами (частично записанный проход хуже отсутствующего). kind —
-// "agent"|"shell", для payload'а observer-события EventVerifyResult; alias —
-// команда агента либо shell-строка (используется и как WriteReport'овский
-// alias, и как payload'овский command).
+// persistVerifyRejection сохраняет result → report → manifest → feedback до emit и typed rejection; ошибка
+// записи даёт VerifyExecError.
 func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, kind, alias, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
 	if err := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
@@ -760,17 +526,7 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, k
 	}
 }
 
-// verifyStepDeadlineRace — D3a код-ревью: перепроверка ПОСЛЕ того, как шаг
-// (shell или agent) вернул успешный исход (нулевой exit / вердикт pass), на
-// предмет гонки между этим успехом и истечением СОБСТВЕННОГО дедлайна шага
-// (flow.VerifyStep.Timeout → stepCtx). select между done-каналом исполнения
-// и <-stepCtx.Done() (внутри runVerifyShellCommand для shell-шага; внутри
-// executor.RunVerifyAgent для agent-шага), когда оба готовы одновременно,
-// может выбрать ветку успеха, ДАЖЕ ЕСЛИ дедлайн уже истёк — err==nil от
-// исполнения сам по себе НЕ доказывает, что уложились в срок. Возвращает nil,
-// если дедлайн ещё не истёк (успеху можно доверять); иначе — типизированный
-// *VerifyExecError с той же меткой таймаута, что и остальные timeout-ветки
-// этого файла (единая точка вместо разбросанного текста).
+// verifyStepDeadlineRace перепроверяет собственный дедлайн шага после успешного результата.
 func verifyStepDeadlineRace(stepCtx context.Context, idx int) error {
 	if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
 		return &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
@@ -787,10 +543,7 @@ func verifyManifestErrorOutcome(err error) string {
 	return verifyOutcomeError
 }
 
-// shellRejectionResult нормализует провал shell-команды в тот же
-// verify.ModelResult, каким отвечает agent-шаг с вердиктом needs_changes —
-// единый формат result.json/report.md для обеих форм verify независимо от
-// того, кто их произвёл.
+// shellRejectionResult нормализует shell-отказ в needs_changes для общего формата result.json/report.md.
 func shellRejectionResult(command, tail string) verify.ModelResult {
 	return verify.ModelResult{
 		SchemaVersion: verify.SupportedSchemaVersion,
@@ -806,11 +559,7 @@ func shellRejectionResult(command, tail string) verify.ModelResult {
 	}
 }
 
-// sanitizedShellVerifyEnv возвращает окружение процесса afm БЕЗ транспортных
-// секретов ЧУЖИХ агентов/хуков (D2a код-ревью) — та же функция-фильтр, что
-// pkg/executor использует в VerifyMode (executor.IsCrossAgentTransportSecret),
-// единая точка вместо второй копии списка префиксов AFM_SECRET_*/
-// AFM_HOOK_SECRET_*/AFM_SYSPROMPT_*.
+// sanitizedShellVerifyEnv удаляет чужие транспортные секреты тем же фильтром, что executor.VerifyMode.
 func sanitizedShellVerifyEnv() []string {
 	env := os.Environ()
 	filtered := make([]string, 0, len(env))
@@ -823,40 +572,13 @@ func sanitizedShellVerifyEnv() []string {
 	return filtered
 }
 
-// runVerifyShellCommand запускает shell-verify команду отменяемо (honor
-// ctx) — в отличие от legacy stagefiles.RunVerify (exec.Command без ctx),
-// движок обязан уметь прервать зависшую команду по отмене контекста рана
-// (полная отмена, pause-aware сигнал стадии — см. вызывающий код в
-// RunVerification — или таймаут шага). НЕ переиспользует runScriptWithRetry
-// (hooks.go) — у того своя, независимая retry-политика, которая не должна
-// применяться здесь (ОДИН проход, без внутреннего цикла коррекции).
-//
-// C4 код-ревью: НАРОЧНО не exec.CommandContext+cmd.Cancel (как
-// pkg/lifecyclehooks) — тот способ не помогает именно в целевом сценарии
-// "command порождает неexec'нутого потомка (`sleep N &`) и САМ завершается
-// быстро": Go's ctx-watcher вызывает Cancel только если ctx истёк ДО того,
-// как os/exec посчитал прямой процесс завершённым (Process.Wait()) — если
-// "sh" уже вышел раньше дедлайна, Cancel никогда не вызывается, а
-// CombinedOutput() всё равно висит на внутреннем io-копировании из
-// stdout/stderr-пайпа, который держит открытым осиротевший потомок
-// (проверено экспериментально). Поэтому здесь — тот же ручной паттерн, что
-// pkg/executor.run(): Start + Wait в отдельной горутине + явный select на
-// ctx.Done(), с БЕЗУСЛОВНЫМ killProcessGroup по отрицательному PID —
-// работает независимо от того, успел ли прямой процесс уже завершиться:
-// группа (pgid) переживает лидера, пока жив хоть один её член.
+// runVerifyShellCommand запускает shell-verify команду отменяемо — в отличие от legacy
+// stagefiles.RunVerify, движок обязан уметь прервать зависшую команду по отмене контекста рана.
 func runVerifyShellCommand(ctx context.Context, dir, command string) (string, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
-	// D2a код-ревью: shell-verify раньше исполнялся с cmd.Env==nil, что для
-	// exec.Cmd означает "унаследовать os.Environ() целиком" — включая
-	// AFM_SECRET_*/AFM_HOOK_SECRET_*/AFM_SYSPROMPT_* транспортные секреты
-	// ЧУЖИХ агентов/хуков, живущие в окружении самого afm-процесса только
-	// транзитом. Они попадали бы в command.log и (при needs_changes) в
-	// evidence отчёта. Переиспользуем ТОТ ЖЕ фильтр, что VerifyMode-путь
-	// executor'а (executor.IsCrossAgentTransportSecret) — единая точка
-	// вместо второй копии списка префиксов; в отличие от executor'а, у
-	// shell-шага нет собственного recipe-секрета, который надо было бы
-	// сохранить (D2b касается только agent-верификаторов).
+	// Shell-verify не наследует транспортные секреты агентов и хуков; собственного recipe-секрета у shell
+	// нет.
 	cmd.Env = sanitizedShellVerifyEnv()
 	setProcessGroup(cmd)
 
@@ -864,13 +586,7 @@ func runVerifyShellCommand(ctx context.Context, dir, command string) (string, er
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
-	// D4 код-ревью: последняя неблокирующая проверка ПЕРЕД стартом процесса —
-	// если ctx уже отменён (полная отмена рана, истёкший таймаут шага или
-	// сигнал Pause()/Revise(), уже долетевший до pause-aware ctx до того, как
-	// мы сюда дошли), НИКОГДА не запускаем subprocess. Полная TOCTOU-
-	// атомарность невозможна (сигнал может прийти на долю секунды позже), но
-	// закрыть уже-случившийся случай дёшево и правильно для read-only
-	// верификатора.
+	// Перед запуском процесса повторно проверяем ctx и interrupt, чтобы не спавнить уже отменённый вызов.
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -892,11 +608,8 @@ func runVerifyShellCommand(ctx context.Context, dir, command string) (string, er
 	}
 }
 
-// previousVerifyReport читает report.md прохода, чей feedback ещё активен
-// (verify/feedback.md), чтобы agent-шаг мог оценить закрытие прежних
-// blockers, а не искать их заново. Пусто, если активного feedback нет или
-// report.md прочитать не удалось (лучше пустой контекст, чем упавший engine
-// из-за отсутствующего вспомогательного файла).
+// previousVerifyReport читает report.md прохода, чей feedback ещё активен, чтобы agent-шаг мог оценить
+// закрытие прежних blockers, а не искать их заново.
 func previousVerifyReport(stageDir string) string {
 	_, verID, ok := stagefiles.LoadActiveFeedback(stageDir)
 	if !ok || verID == "" {
@@ -913,19 +626,8 @@ func previousVerifyReport(stageDir string) string {
 // AI-verify (verify/feedback.md) вклеивается в RetryContext автора (V4b.5).
 const verifyFeedbackHeading = "## Замечания автоматической проверки"
 
-// verifyFeedbackBlock читает АКТИВНЫЙ machine-feedback от AI-verify
-// (verify/feedback.md, см. stagefiles.LoadActiveFeedback/WriteActiveFeedback)
-// и оборачивает его в блок для RetryContext автора — "" если активного
-// feedback нет (обычное состояние стадии без отклонённого прохода). Текст
-// уже содержит вердикт, путь к полному report.md и блокирующие finding'и
-// (см. stagefiles.renderActiveFeedback), здесь только читаем и оформляем
-// заголовком — НИКОГДА не пишем через state.SaveFeedback/SaveFeedbackOnce:
-// человеческий feedback.md (agent_suggest/Revise) и машинный
-// verify/feedback.md — намеренно РАЗНЫЕ файлы, и оба должны остаться в
-// RetryContext рядом, не затирая друг друга. Вызывается заново на КАЖДОЙ
-// попытке (внутри closure agentFn, а не один раз до o.runWithRetry) — иначе
-// коррекционная попытка (attempt 1), написанная в ТОТ ЖЕ вызов runWithRetry,
-// не увидела бы feedback, который сам verify только что записал на attempt 0.
+// verifyFeedbackBlock читает АКТИВНЫЙ machine-feedback от AI-verify и оборачивает его в блок для
+// RetryContext автора — "" если активного feedback нет.
 func (o *Orchestrator) verifyFeedbackBlock(stageDir string) string {
 	text, _, ok := stagefiles.LoadActiveFeedback(stageDir)
 	if !ok {
@@ -934,21 +636,8 @@ func (o *Orchestrator) verifyFeedbackBlock(stageDir string) string {
 	return "\n\n" + verifyFeedbackHeading + "\n\n" + text
 }
 
-// gateWithVerify оборачивает существующий completionCheck (чистая file-проба
-// — CheckCompletion/CheckAutonomousCompletion) AI-verify проходом (V4b):
-// baseCheck выполняется ПЕРВЫМ, и если он не прошёл — его ошибка возвращается
-// как есть, verify вообще не запускается (GET/status/refresh не должны
-// триггерить AI — вызывающий completionCheck() код регулярно дёргает эту
-// функцию, в т.ч. из веток, не связанных с реальным завершением агента, см.
-// retry.go). Только когда проба прошла И у стадии есть непустой verify-
-// манифест И фаза — одна из исполнительских (implementation/review/
-// autonomous_execution), запускается RunVerification, чей typed error/nil
-// становится итоговым результатом completionCheck.
-//
-// Планировочные раннеры (runPlanningAgent/runPlanningWithFeedback) НИКОГДА
-// не оборачиваются этим хелпером — см. agents.go. Проверка phase здесь —
-// belt-and-suspenders: V1 уже запрещает verify на planning-only стадии на
-// этапе flow.ParseFile (см. flow.go's validate).
+// gateWithVerify запускает verify только после успешной file-пробы исполнительской фазы; planning и
+// status-чтения его не вызывают.
 func (o *Orchestrator) gateWithVerify(ctx context.Context, s flow.Stage, phase string, baseCheck func() error) func() error {
 	return func() error {
 		if err := baseCheck(); err != nil {
@@ -966,9 +655,7 @@ func (o *Orchestrator) gateWithVerify(ctx context.Context, s flow.Stage, phase s
 	}
 }
 
-// verifyKindAgent/verifyKindShell — строковые значения ManifestStep.Kind и
-// payload'ового ключа "kind" в EventVerifyStarted/EventVerifyResult (V5a.3) —
-// единая точка вместо разбросанных строковых литералов "agent"/"shell" (goconst).
+// verifyKindAgent/verifyKindShell — значения kind для manifest и verify-событий.
 const (
 	verifyKindAgent = "agent"
 	verifyKindShell = "shell"

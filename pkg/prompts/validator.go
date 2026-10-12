@@ -11,17 +11,8 @@ type PlanIssues struct {
 
 var headingRE = regexp.MustCompile(`(?m)^##\s+(.+?)\s*$`)
 
-// sectionAliases сопоставляет канонический (английский) раздел плана набору
-// заголовков в нижнем регистре, которые его удовлетворяют.
-//
-// Планирующий агент пишет разделы на рабочем языке проекта: для русскоязычных
-// флоу это «Задачи»/«Допущения»/«Критерии приёмки». Жёсткая проверка только
-// английских названий приводила к ложным ошибкам «plan missing sections» и
-// бесполезным повторным запросам — поэтому валидатор принимает локализованные
-// эквиваленты наравне с каноническим именем.
-//
-// Для раздела, которого нет в карте, единственным допустимым вариантом остаётся
-// сам канонический заголовок.
+// sectionAliases сопоставляет канонический раздел плана набору заголовков в нижнем регистре, которые его
+// удовлетворяют.
 var sectionAliases = map[string][]string{
 	"tasks":               {"tasks", "задачи"},
 	"assumptions":         {"assumptions", "допущения", "предположения"},
@@ -44,9 +35,8 @@ func ValidatePlan(md string, required []string) PlanIssues {
 	return PlanIssues{MissingSections: missing}
 }
 
-// anyHeadingPresent reports whether the plan contains any heading that satisfies
-// the required canonical section name (the canonical name itself or a known
-// localized alias).
+// anyHeadingPresent reports whether the plan contains any heading that satisfies the required canonical
+// section name (the canonical name itself or a known localized alias).
 func anyHeadingPresent(seen map[string]bool, canonical string) bool {
 	key := strings.ToLower(canonical)
 	for _, alias := range sectionAliases[key] {

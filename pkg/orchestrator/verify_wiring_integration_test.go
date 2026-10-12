@@ -15,10 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// autonomousSummaryRunner writes execution_summary.md on every RunAgent call
-// (idempotent — a correction attempt just rewrites the same file) and
-// otherwise does nothing; it models an [auto] agent that always claims it
-// finished, so completion is decided purely by AI-verify (V4b.2).
+// autonomousSummaryRunner writes execution_summary.md on each call so verify alone decides completion.
 type autonomousSummaryRunner struct{}
 
 func (r *autonomousSummaryRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
@@ -34,12 +31,6 @@ func (r *autonomousSummaryRunner) RunJSONQuery(ctx context.Context, prompt strin
 	return nil, nil
 }
 
-// TestIntegration_AutonomousVerifyRejectionHoldsThenCorrects is V4b.2's
-// "[auto]+verify" scenario: an [auto] stage's own completion probe
-// (execution_summary.md) is satisfied on every attempt, but AI-verify is now
-// actually invoked (new behavior — see runAutonomousAgent's doc comment) and
-// its rejection holds completion — the stage does NOT reach done after the
-// first attempt. On the second attempt verify passes and the stage completes.
 func TestIntegration_AutonomousVerifyRejectionHoldsThenCorrects(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "auto1", Name: "Auto1",
@@ -80,9 +71,8 @@ func TestIntegration_AutonomousVerifyRejectionHoldsThenCorrects(t *testing.T) {
 	}
 }
 
-// implAgentPromptCapturingRunner wraps a Runner and records every prompt
-// passed to RunAgent (not RunPlanning) — needed to inspect the RetryContext
-// text V4b.5 injects into the correction attempt.
+// implAgentPromptCapturingRunner wraps a Runner and records every prompt passed to RunAgent — needed to
+// inspect the RetryContext text V4b.5 injects into the correction attempt.
 type implAgentPromptCapturingRunner struct {
 	delegate executor.Runner
 	onAgent  func(prompt string)
@@ -103,11 +93,6 @@ func (r *implAgentPromptCapturingRunner) RunJSONQuery(ctx context.Context, promp
 	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
-// TestIntegration_VerifyFeedbackInjectedIntoCorrectionPrompt is V4b.5's core
-// scenario: after a needs_changes verdict, the SAME (fresh) runner's
-// correction attempt (attempt 1, still inside runImplementationAgent) must
-// see the blocking findings and the report path in its prompt, read via
-// stagefiles.LoadActiveFeedback — not a new write path.
 func TestIntegration_VerifyFeedbackInjectedIntoCorrectionPrompt(t *testing.T) {
 	planFile := filepath.Join(t.TempDir(), "plan.md")
 	if err := os.WriteFile(planFile, []byte("# Plan\n- step 1\n"), 0644); err != nil {
@@ -164,15 +149,6 @@ func TestIntegration_VerifyFeedbackInjectedIntoCorrectionPrompt(t *testing.T) {
 	}
 }
 
-// TestIntegration_PlanningOnlyStageNeverInvokesVerify is V4b.2's
-// belt-and-suspenders check: a planning-only stage (no implementation agent,
-// so it completes right on approval — see approveStage's
-// !HasAgent(AgentImplementation) fast path) constructed with a non-empty
-// agent-step Verify (bypassing flow.ParseFile's own "verify requires an
-// execution stage" validation, which is the real, primary guard) must still
-// never invoke the verify agent — proving the wrapper genuinely isn't
-// attached to the planning runners, not just that YAML validation happens to
-// forbid the combination.
 func TestIntegration_PlanningOnlyStageNeverInvokesVerify(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "p", Name: "P", AutoApprove: true,

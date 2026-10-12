@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
-# afm lifecycle-hook notifier: превращает событие жизненного цикла флоу/стадии в
-# дружелюбное Telegram-сообщение (parse_mode=HTML). Устанавливается в образ как
-# /usr/local/bin/afm-telegram-notify (см. Dockerfile.runtime) и симлинком на
-# хостовый PATH — поэтому hook-команда одинакова в Docker и на хосте.
-#
-# Секреты берутся из окружения (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — afm
-# резолвит их из hook `env: file:` и передаёт транспортом), либо, как фолбэк,
-# читаются напрямую из read-only файлов ~/.afm/secrets/* (см. read_secret_file).
-#
-# Подключается ТОЛЬКО во flow, объявившем hook (dev-pipeline.yaml → hooks:),
-# поэтому уведомления приходят лишь для этого флоу.
+# Отправляет lifecycle-события в Telegram; секреты берёт из hook env или ~/.afm/secrets.
 
 set -Eeuo pipefail
 

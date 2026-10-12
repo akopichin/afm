@@ -25,16 +25,8 @@ func agentScriptPath(t *testing.T) string {
 	return p
 }
 
-// writeStatefulFakeCurl creates a fake curl on PATH that returns responses[n]
-// (clamped to the last entry once exhausted) on its (n+1)-th invocation —
-// the real script calls curl once per loop turn, so this lets a test control
-// what each successive turn sees. Each invocation's request body is
-// captured to <captureDir>/call_<n>.args so a test can inspect exactly what
-// request body a given turn sent (proving real tool output made it back into
-// history, not just that the script printed something plausible). Each
-// response body must be complete SSE text (including "data: [DONE]"); this
-// helper appends the "\n<httpCode>" suffix mirroring the script's own
-// `curl -w '\n%{http_code}'` usage.
+// writeStatefulFakeCurl serves successive SSE responses and captures each request body; the final response
+// repeats.
 func writeStatefulFakeCurl(t *testing.T, responses []string, httpCode string) (fakeCurlDir, captureDir string) {
 	t.Helper()
 	fakeCurlDir = t.TempDir()
@@ -91,14 +83,6 @@ func countCaptures(t *testing.T, captureDir string) int {
 	return len(entries)
 }
 
-// TestOpenAIAgentAsClaude_SingleToolCallThenFinalAnswer запускает РЕАЛЬНЫЙ
-// scripts/openai-agent-as-claude.sh с поддельным curl (без сети). Первый
-// ответ — стримингом (по чанкам, как настоящий IdeaLab) переданный tool_call
-// для bash("echo hello-from-tool"), второй — финальный текст без tool_calls.
-// Проверяет: скрипт реально выполняет команду (не просто печатает текст),
-// передаёт её вывод обратно в историю следующего запроса, эмитит live
-// tool_use конверт формы, которую понимает ParseToolAction/дашборд, и
-// завершается success-конвертом.
 func TestOpenAIAgentAsClaude_SingleToolCallThenFinalAnswer(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -174,11 +158,6 @@ data: [DONE]
 	}
 }
 
-// TestOpenAIAgentAsClaude_MaxTurnsReached: поддельный curl всегда возвращает
-// новый tool_call и никогда не завершает работу — проверяет, что скрипт
-// останавливается ровно после OPENAI_AGENT_MAX_TURNS обращений (не крутится
-// бесконечно), и что это не считается ошибкой скрипта (exit 0, а не 1) —
-// afm's существующий retry для незавершённой autonomous-стадии уже это покрывает.
 func TestOpenAIAgentAsClaude_MaxTurnsReached(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -208,12 +187,6 @@ data: [DONE]
 	}
 }
 
-// TestOpenAIAgentAsClaude_APIFailureExitsNonZero: поддельный curl возвращает
-// HTTP 500 на первом же обращении — скрипт обязан завершиться с ошибкой (в
-// отличие от openai-as-claude.sh, который проглатывает сбой curl в пустой
-// success: здесь "тихий успех" означал бы, что afm принимает пустой/
-// незавершённый tool-loop за штатный незавершённый прогон вместо немедленно
-// видимого сбоя).
 func TestOpenAIAgentAsClaude_APIFailureExitsNonZero(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -230,10 +203,6 @@ func TestOpenAIAgentAsClaude_APIFailureExitsNonZero(t *testing.T) {
 	}
 }
 
-// TestOpenAIAgentAsClaude_ScreenshotInInitialPromptEmbedsImage: a [Screenshot: <path>]
-// in the initial prompt (Path A) must produce a multimodal seed user message —
-// same mechanism as openai-as-claude.sh, verified here through the tool-loop script.
-// Also checks the system prompt was updated to mention the convention.
 func TestOpenAIAgentAsClaude_ScreenshotInInitialPromptEmbedsImage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -327,11 +296,6 @@ data: [DONE]
 	}
 }
 
-// TestOpenAIAgentAsClaude_ScreenshotInToolOutputInjectsFollowupMessage: when a
-// tool call's real output happens to contain [Screenshot: <path>] (e.g. cat'ing
-// a dialog answer.json that references a pasted image), the NEXT request must
-// carry both the unmodified tool-role message and a separate user-role message
-// with the image — Path B.
 func TestOpenAIAgentAsClaude_ScreenshotInToolOutputInjectsFollowupMessage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

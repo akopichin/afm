@@ -12,9 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/sideagent"
 )
 
-// fakeSideAgent — тест-дабл SideAgentService: все методы подменяемы через
-// поля-замыкания; каждый вызов Subscribe/History протоколируется в callOrder,
-// а аргументы Send фиксируются для проверки «клиент не управляет командой».
+// fakeSideAgent подменяет методы сервиса, записывает порядок Subscribe/History и аргументы Send.
 type fakeSideAgent struct {
 	mu sync.Mutex
 
@@ -187,9 +185,8 @@ func TestSideAgent_SendSuccessAndIdempotent(t *testing.T) {
 	}
 }
 
-// Идемпотентный повтор уже ЗАВЕРШЁННОГО хода должен отдавать state:"idle" (не
-// хардкод "running"): агент не запускался, ход неактивен — клиент не должен
-// считать его активным. Свежий send того же хендлера — "running".
+// Идемпотентный повтор уже ЗАВЕРШЁННОГО хода должен отдавать state:"idle": агент не запускался, ход
+// неактивен — клиент не должен считать его активным. Свежий send того же хендлера — "running".
 func TestSideAgent_SendStateReflectsReturnedTurn(t *testing.T) {
 	ev := func(typ sideagent.EventType, turnID string, seq uint64) sideagent.Event {
 		return sideagent.Event{Type: typ, TurnID: turnID, Seq: seq}

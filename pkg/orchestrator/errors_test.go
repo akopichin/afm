@@ -44,11 +44,6 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// TestVerifyRejectedError_UnwrapsToIncompleteWorkError проверяет, что
-// errors.As(&IncompleteWorkError{}) находит встроенный *IncompleteWorkError
-// через Unwrap — именно это делает возможным ClassIncomplete в Classify выше
-// и повторное использование СУЩЕСТВУЮЩЕЙ once-retry политики (runWithRetry,
-// IsIncompleteWorkError) для отказа verify, без отдельной ветки кода.
 func TestVerifyRejectedError_UnwrapsToIncompleteWorkError(t *testing.T) {
 	rejected := &VerifyRejectedError{
 		IncompleteWorkError: &IncompleteWorkError{Reason: "blocking findings"},
@@ -64,11 +59,6 @@ func TestVerifyRejectedError_UnwrapsToIncompleteWorkError(t *testing.T) {
 	}
 }
 
-// TestClassify_VerifyExecErrorFreeTextDoesNotTriggerTransportRetry защищает
-// правило из брифа: свободный текст Reason у VerifyExecError (напр. "rate
-// limit" внутри summary верификатора) НЕ должен пройти через substring-скан
-// Classify как ретраебельная транспортная ошибка — типизированная проверка
-// errors.As срабатывает раньше сканирования текста.
 func TestClassify_VerifyExecErrorFreeTextDoesNotTriggerTransportRetry(t *testing.T) {
 	err := &VerifyExecError{Reason: "verify inconclusive: model reported a rate limit warning", Step: 1}
 	if got := Classify(err); got == ClassRetryable {

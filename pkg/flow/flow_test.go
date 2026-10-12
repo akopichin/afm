@@ -119,9 +119,7 @@ func TestValidateMissingPlan(t *testing.T) {
 }
 
 func TestValidateStageIDCharset(t *testing.T) {
-	// An id outside [A-Za-z0-9._-] must be rejected: it feeds filesystem paths,
-	// the managed-browser session URL, and a Chrome profile dir name, where chars
-	// like ':' or '@' or '#' silently collide or truncate.
+	// Reject unsafe stage IDs before they reach paths, session URLs, or Chrome profile names.
 	for _, bad := range []string{"a:b", "a@b", "ui#one", "has space", "кирилл"} {
 		yaml := "name: f\nstages:\n  - id: \"" + bad + "\"\n    name: s\n    agents: [auto]\n"
 		if _, err := flow.ParseFile(writeTemp(t, yaml)); err == nil {
@@ -647,12 +645,6 @@ stages:
 	}
 }
 
-// TestValidateVerify_TableAtParseFileLevel покрывает V1.2 целиком: verify в
-// объектной и списочной форме на script-стадии (обе отклоняются той же
-// проверкой, что и скалярная — уже покрыта TestValidateScriptCannotCombineWithVerify
-// выше), verify на чисто планировочной стадии (нет
-// implementation/review/auto/script — проверять после "готово" нечего) и
-// обычная стадия с verify, которая должна успешно распарситься.
 func TestValidateVerify_TableAtParseFileLevel(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1086,11 +1078,8 @@ stages:
       file: build.md
     agents: [planning, implementation]
 `
-	// The stage needs a valid id: here — without one, validate()'s mandatory
-	// safePathComponent(s.ID) check (which runs BEFORE the reflect checks)
-	// fires first and masks the assertion this test claims to verify (it
-	// used to pass for the wrong reason: any parse error satisfied err==nil
-	// check, including "id must be a safe path component").
+	// The stage needs a valid id: here — without one, validate's mandatory safePathComponent check fires
+	// first and masks the assertion this test claims to verify.
 	_, err := flow.ParseFile(writeTemp(t, yaml))
 	if err == nil {
 		t.Fatal("expected error: reflect without memory.path")

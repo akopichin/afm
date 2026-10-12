@@ -13,32 +13,20 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// verifySuccessScript is a real (bash) verify agent step: it emits a final
-// assistant text block that IS itself the bare JSON verify.ModelResult
-// contract (schema_version/verdict/summary, no findings — a plain pass), plus
-// a terminal "result" event carrying usage — exactly what a real Codex/Claude
-// verify invocation would stream. Goes through the REAL executor
-// (runnerForVerify), not an injected o.runVerifyAgent, so Config.OnUsage
-// actually fires.
+// verifySuccessScript emits a JSON pass and usage through the real executor so OnUsage fires.
 const verifySuccessScript = `#!/bin/bash
 echo '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"{\"schema_version\":1,\"verdict\":\"pass\",\"summary\":\"ok\"}"}]}}'
 echo '{"type":"result","subtype":"success","usage":{"input_tokens":9,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}'
 `
 
-// verifyErrorScript simulates a genuinely failed verify invocation (nonzero
-// exit after streaming a usage-bearing "result" line, no valid final text) —
-// RunVerifyAgent's Config.OnUsage must still fire exactly once even though
-// the process itself did not succeed (see executor.RunVerifyAgent: OnUsage is
-// called unconditionally, before ProcessOK is even determined).
+// verifyErrorScript simulates a genuinely failed verify invocation — RunVerifyAgent's Config.OnUsage must
+// still fire exactly once even though the process itself did not succeed.
 const verifyErrorScript = `#!/bin/bash
 echo '{"type":"result","subtype":"error","usage":{"input_tokens":3,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}'
 exit 1
 `
 
-// setupVerifyUsageOrchestrator builds a real (non-injected-Runner)
-// orchestrator: the author stage completes via usageAgentScript-style planning
-// + implementation (see usage_accounting_test.go), and the stage's verify
-// step runs verifyScript through the REAL runnerForVerify.
+// setupVerifyUsageOrchestrator runs author and verify scripts through real executors.
 func setupVerifyUsageOrchestrator(t *testing.T, verifyScript string) (orch *orchestrator.Orchestrator, runDir, stateFile string, acct *accounting.Store) {
 	t.Helper()
 	runDir = t.TempDir()
@@ -66,9 +54,8 @@ func setupVerifyUsageOrchestrator(t *testing.T, verifyScript string) (orch *orch
 		t.Fatalf("accounting.Open: %v", err)
 	}
 
-	// Author: a plain autonomous stage whose own agent is injected (Runner) —
-	// only the VERIFY step goes through the real executor/subprocess here,
-	// keeping the test focused on verify-only usage accounting.
+	// Author: a plain autonomous stage whose own agent is injected — only the VERIFY step goes through the
+	// real executor/subprocess here, keeping the test focused on verify-only usage accounting.
 	orch = orchestrator.New(orchestrator.Options{
 		RunDir:     runDir,
 		Stages:     stages,
@@ -81,10 +68,6 @@ func setupVerifyUsageOrchestrator(t *testing.T, verifyScript string) (orch *orch
 	return orch, runDir, filepath.Join(runDir, "state.json"), acct
 }
 
-// TestIntegration_VerifyAgentInvocationRecordsUsageOnce is V5a.4's core case:
-// a real verify agent invocation is recorded exactly once, attributed to the
-// PARENT stage id, with the "verify" execution-purpose phase (distinct from
-// planning/implementation/review/autonomous_execution — never a flow.Phase).
 func TestIntegration_VerifyAgentInvocationRecordsUsageOnce(t *testing.T) {
 	orch, runDir, stateFile, acct := setupVerifyUsageOrchestrator(t, verifySuccessScript)
 	defer acct.Close()
@@ -120,18 +103,11 @@ func TestIntegration_VerifyAgentInvocationRecordsUsageOnce(t *testing.T) {
 	}
 }
 
-// TestIntegration_VerifyAgentErroredInvocationStillCountedOnce proves an
-// errored (nonzero-exit / no valid verdict) verify invocation is STILL
-// counted exactly once — usage accounting must not skip a failed call, and
-// must not double-count it either (e.g. via a retry of the SAME invocation).
 func TestIntegration_VerifyAgentErroredInvocationStillCountedOnce(t *testing.T) {
 	orch, runDir, stateFile, acct := setupVerifyUsageOrchestrator(t, verifyErrorScript)
 	defer acct.Close()
 
-	// VerifyExecError is NOT an IncompleteWorkError (see AGENTS.md: "no free
-	// author retry"), so the stage fails after exactly one verify invocation
-	// — this test only cares that usage IS recorded for that one invocation
-	// despite it having failed, not that the stage ultimately succeeds.
+	// VerifyExecError fails after one invocation; usage must still be recorded.
 	_ = orch.Run(context.Background())
 
 	recs := readUsageRecords(t, runDir)
@@ -149,9 +125,6 @@ func TestIntegration_VerifyAgentErroredInvocationStillCountedOnce(t *testing.T) 
 	t.Logf("final stage status (informational only): %v, verify usage records: %d", final.Stages["backend"].Status, verifyRecs)
 }
 
-// TestIntegration_VerifyShellStepProducesNoAgentUsage confirms a shell-only
-// verify step never touches usage accounting at all — there is no agent
-// invocation to meter.
 func TestIntegration_VerifyShellStepProducesNoAgentUsage(t *testing.T) {
 	runDir := t.TempDir()
 	stages := []flow.Stage{{

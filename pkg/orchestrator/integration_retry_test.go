@@ -84,9 +84,8 @@ func (r *rateLimitThenSuccessRunner) RunJSONQuery(ctx context.Context, prompt st
 	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
-// noDoneRunner wraps a Runner and does NOT create .done, simulating an agent
-// that exits successfully without completing work.
-// After retryAfter calls it starts creating .done.
+// noDoneRunner wraps a Runner and does NOT create .done, simulating an agent that exits successfully
+// without completing work. After retryAfter calls it starts creating .done.
 type noDoneRunner struct {
 	delegate   executor.Runner
 	retryAfter int // create .done after this many RunAgent calls
@@ -363,18 +362,6 @@ func TestIntegration_VerifyPass(t *testing.T) {
 	}
 }
 
-// TestIntegration_VerifyShellRejectionFailsStageAfterOneFreeRetry — V4b wires
-// RunVerification into the real completion path (gateWithVerify), so a stage
-// whose declared verify command always fails now behaves like any other
-// incomplete-work rejection: baseCheck (.done + artifacts) passes, verify
-// then rejects, the author gets ONE free retry (attempt==0, no backoff), and
-// once the second attempt is ALSO rejected the stage fails — exactly the
-// existing incomplete-retry budget, just fed by verify's typed error instead
-// of a missing .done. Before V4b this test (named
-// TestIntegration_VerifyDoesNotGateCompletionYet) asserted the OPPOSITE
-// (verify wasn't wired into any execution path yet, task V4a); the shell
-// rejection semantics itself was already covered at the engine level, see
-// TestRunVerification_ShellRejectedCarriesLegacyTail (verify_test.go).
 func TestIntegration_VerifyShellRejectionFailsStageAfterOneFreeRetry(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "unverified", Name: "Unverified", Description: "verify always fails",
@@ -414,9 +401,6 @@ func TestIntegration_VerifyShellRejectionFailsStageAfterOneFreeRetry(t *testing.
 	}
 }
 
-// TestIntegration_ManualRetryWaitsForDeps verifies that manual retry of a
-// failed dependent stage keeps it pending instead of starting planning while
-// its dependency is still failed.
 func TestIntegration_ManualRetryWaitsForDeps(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "first", Name: "First", Description: "fails at planning", Agents: []flow.AgentType{flow.AgentPlanning}},

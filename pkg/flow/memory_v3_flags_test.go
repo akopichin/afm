@@ -174,9 +174,8 @@ stages:
 	}
 }
 
-// parseCapturingStderr parses body via ParseFile and returns whatever ParseFile
-// wrote to os.Stderr (WARN lines), mirroring the os.Pipe pattern used for the
-// deprecated-supervisor-keys warning test.
+// parseCapturingStderr parses body via ParseFile and returns whatever ParseFile wrote to os.Stderr,
+// mirroring the os.Pipe pattern used for the deprecated-supervisor-keys warning test.
 func parseCapturingStderr(t *testing.T, body string) (*flow.Flow, string, error) {
 	t.Helper()
 	dir := t.TempDir()

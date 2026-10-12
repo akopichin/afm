@@ -12,21 +12,11 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
-// flowMemoryLabel — имя, под которым пайплайн памяти помечает шаги/нотисы,
-// относящиеся к общей project-wide памяти (а не к конкретной стадии). Общая
-// константа, а не разбросанные строковые литералы (goconst) — используется в
-// нотисах runEndOfRunMemory ниже; memorypipeline держит свой собственный
-// (неэкспортируемый) аналог для меток целей внутри Finalize.
+// flowMemoryLabel — имя, под которым пайплайн памяти помечает шаги/нотисы, относящиеся к общей
+// project-wide памяти.
 const flowMemoryLabel = "flow-memory"
 
-// maybeRunReflection в фоне ТОЛЬКО каптурит сессию завершившейся стадии в
-// reflect_dataset.yaml (memorypipeline.Pipeline.CaptureStage, запись сразу в
-// канонический путь — офлайн-каптура через staging здесь не нужна, см. Task
-// 10 brief review #3). Сама сборка памяти (aggregate → prioritize → update)
-// перенесена в конец рана (runEndOfRunMemory): после каждой стадии ничего не
-// строится — так память видит все стадии вместе, а сборка бежит один раз, а не
-// N раз по ходу флоу. No-op, если память выключена, стадия без reflect (или
-// reflect без write), или это script-стадия (нет агентской сессии).
+// maybeRunReflection в фоне ТОЛЬКО каптурит сессию завершившейся стадии в reflect_dataset.yaml.
 // Best-effort: НИКОГДА не трогает FSM.
 func (o *Orchestrator) maybeRunReflection(ctx context.Context, stageID string) {
 	if o.opts.MemoryDir == "" {
@@ -63,16 +53,8 @@ func (o *Orchestrator) reflectNotice(stageName, msg string) {
 	o.publishNotice(bus.Event{Type: bus.EventReflectFailed, Data: data})
 }
 
-// eligibleMemoryDatasets returns the write-reflect, non-script stages whose
-// reflect_dataset.yaml was actually captured on disk during this run (see
-// maybeRunReflection above), paired with the memorypipeline.DatasetResult
-// Finalize needs for each. Built EXPLICITLY from o.opts.Stages rather than a
-// filepath.Glob over the run dir (review #13 in Task 10 brief) — a stale
-// reflect_dataset.yaml left in a stage dir whose stage was since removed from
-// flow.yaml (or that never wrote a valid dataset this run) never enters the
-// project aggregate. Source is "reused": CaptureStage already wrote the
-// dataset directly to its canonical path (datasetOut == canonical), so
-// Finalize's dataset-publish step has nothing further to promote.
+// eligibleMemoryDatasets returns captured datasets from configured write-reflect stages; stale directories
+// are excluded.
 func (o *Orchestrator) eligibleMemoryDatasets() ([]flow.Stage, []memorypipeline.DatasetResult) {
 	var stages []flow.Stage
 	var datasets []memorypipeline.DatasetResult
@@ -95,15 +77,8 @@ func (o *Orchestrator) eligibleMemoryDatasets() ([]flow.Stage, []memorypipeline.
 	return stages, datasets
 }
 
-// runEndOfRunMemory прогоняет конвейер памяти ОДИН раз по ВСЕМ eligible-
-// датасетам рана (reflect_dataset.yaml каждой write-reflect стадии, уже
-// написанные во время рана) через memorypipeline.Pipeline.Finalize — под
-// межпроцессным memory-lock (см. AcquireMemoryLock) плюс внутрипроцессный
-// reflectMu (на случай двух горутин в одном процессе — Finalize сам считает,
-// что лок уже взят вызывающим). Синхронный — Run() дожидается его перед
-// завершением. Идемпотентен (finalReflectDone). No-op, если память выключена
-// или ни одна стадия не оставила eligible-датасет. Best-effort: ошибка любого
-// шага — нотис, FSM не трогается.
+// runEndOfRunMemory прогоняет конвейер памяти ОДИН раз по ВСЕМ eligible- датасетам рана через
+// memorypipeline.Pipeline.Finalize — под межпроцессным memory-lock плюс внутрипроцессный reflectMu.
 func (o *Orchestrator) runEndOfRunMemory(ctx context.Context) {
 	if o.finalReflectDone {
 		return
@@ -128,10 +103,8 @@ func (o *Orchestrator) runEndOfRunMemory(ctx context.Context) {
 	}
 	defer lock.Close()
 
-	// A unique staging dir per finalize attempt — NOT a reused stage dir, so
-	// Finalize's own freshness checks (requireFreshFile inside DistillTarget)
-	// can never mistake a stale leftover from a prior attempt for this
-	// attempt's real output.
+	// A unique staging dir per finalize attempt — NOT a reused stage dir, so Finalize's own freshness checks
+	// can never mistake a stale leftover from a prior attempt for this attempt's real output.
 	workDir, err := memorypipeline.NewUniqueAttemptDir(filepath.Join(o.opts.RunDir, ".memory-finalize"), newOperationID)
 	if err != nil {
 		o.reflectFailed(flowMemoryLabel, "workdir", err)
@@ -156,8 +129,7 @@ func (o *Orchestrator) runEndOfRunMemory(ctx context.Context) {
 		Stages:    stages,
 		Memory:    o.opts.Memory,
 		Datasets:  datasets,
-		// DryRun:false, ManifestPath:"" — the live path publishes directly and
-		// writes no manifest (that's an offline-rebuild artifact, Task 11).
+		// The live path publishes directly without an offline-rebuild manifest.
 	})
 	if err != nil {
 		o.reflectFailed(flowMemoryLabel, "finalize", err)

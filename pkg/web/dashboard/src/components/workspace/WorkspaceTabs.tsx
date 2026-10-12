@@ -1,9 +1,7 @@
 import { useRef, type ReactElement, type KeyboardEvent } from 'react'
 import type { AttentionKind } from '../../hooks/use-workspace-view'
 
-// WorkspaceTabDescriptor — одна вкладка воркспейса. kind/count/glow заполняются
-// только у контекстной attention-вкладки (approval/question/paused/failed/
-// hook_failed); у постоянной «Feed» их нет.
+// WorkspaceTabDescriptor — одна вкладка воркспейса.
 export type WorkspaceTabDescriptor = {
   id: string
   label: string
@@ -18,12 +16,8 @@ type WorkspaceTabsProps = {
   onSelect: (id: string) => void
 }
 
-// WorkspaceTabs — верхние вкладки единого воркспейса (role=tablist). Тупой
-// презентационный компонент: набор вкладок и активная вкладка вычисляются
-// вызывающим (App.tsx). Постоянная «Feed» плюс контекстная вкладка выбранной
-// стадии, которая при статусе, требующем действия, получает подпись по виду
-// (Approval/Question/…), счётчик «· N» и glow-подсветку. Стрелки влево/вправо —
-// перемещение фокуса и выбор между вкладками (план §11, a11y).
+// WorkspaceTabs — верхние вкладки единого воркспейса. Тупой презентационный компонент: набор вкладок и
+// активная вкладка вычисляются вызывающим (App.tsx).
 export function WorkspaceTabs({ tabs, activeId, onSelect }: WorkspaceTabsProps): ReactElement {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({})
 

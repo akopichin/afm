@@ -58,9 +58,7 @@ func TestIntegration_AutoRunGatesRegularStage(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(runDir, "state.json")
 
-	// No Runner injected: the gate must fire before any agent would ever be
-	// spawned. If it doesn't, orch.Run would hang on a nil Runner and this
-	// test would time out instead of failing cleanly on the wrong status.
+	// No Runner injected: the gate must fire before any agent would ever be spawned.
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir: runDir, Stages: stages, Store: store, Config: config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
@@ -72,10 +70,6 @@ func TestIntegration_AutoRunGatesRegularStage(t *testing.T) {
 	waitForStatus(t, stateFile, "s1", state.StatusPaused, 3*time.Second)
 }
 
-// TestIntegration_AutoRunGateFiresOnceOnly locks in the "только при первой
-// активации" requirement: a stage that already completed one pause/continue
-// cycle (PausedFrom permanently non-empty, see state.SetStageStatusAt) must
-// not re-pause when a later failure sends it back through Pending.
 func TestIntegration_AutoRunGateFiresOnceOnly(t *testing.T) {
 	runDir := t.TempDir()
 	disabled := false
@@ -147,9 +141,6 @@ func TestIntegration_ResumeLeavesPausedStageUntouched(t *testing.T) {
 	}
 }
 
-// TestContinue_FromPending_StartsScriptStage covers cases 1/3: a stage
-// gated by auto_run:false (never actually started — PausedFrom=pending) is
-// resumed by Continue exactly like a normal first activation.
 func TestContinue_FromPending_StartsScriptStage(t *testing.T) {
 	runDir := t.TempDir()
 	stages := []flow.Stage{{ID: "s1", Name: "S1", Script: "true"}}
@@ -180,9 +171,6 @@ func TestContinue_FromPending_StartsScriptStage(t *testing.T) {
 	waitForStatus(t, stateFile, "s1", state.StatusDone, 3*time.Second)
 }
 
-// TestContinue_FromRevising_ResumesWithFeedback covers case 2: a stage
-// paused mid-revision resumes via resumeStageAtStatus, exactly like an afm
-// restart would.
 func TestContinue_FromRevising_ResumesWithFeedback(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "revise-stuck")
@@ -222,14 +210,8 @@ func TestContinue_FromRevising_ResumesWithFeedback(t *testing.T) {
 	cancel := autoApprove(orch)
 	defer cancel()
 
-	// Полный двухфазный resume (Continue → planning-with-feedback → approve →
-	// implementation → done) — самый тяжёлый сценарий в этом файле. Дедлайны
-	// намеренно щедрые: исход детерминирован (изолированно тест делает ~0.3s
-	// работы), но под -race на загруженном 2-ядерном CI цепочка агентских
-	// горутин/семафоров/fsync голодает по CPU и wall-clock ожидание легко
-	// переваливает за прежние 25s (см. флейк-класс в AGENTS.md; основной фикс —
-	// `-p 1` в CI, это второй слой защиты). Широкий дедлайн убирает ложное
-	// падение, не маскируя реальную ошибку.
+	// Полный двухфазный resume — самый тяжёлый сценарий в этом файле. Широкий дедлайн убирает ложное падение,
+	// не маскируя реальную ошибку.
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 90*time.Second)
 	runOrchestratorAsync(ctx, t, orch, ctxCancel)
 
@@ -276,14 +258,8 @@ func TestContinue_NotPaused_IsNoOp(t *testing.T) {
 	}
 }
 
-// blockingRunner: RunPlanning writes a minimally valid plan.md so the stage
-// reaches running (headless auto-approve carries it from
-// awaiting_approval->ready->running); RunAgent blocks on the same
-// interruptChans channel Revise() already uses for a running stage (see
-// orchestrator.InterruptChanForTest, used identically in
-// agent_suggest_test.go's blockingThenFeedbackRunner) and returns
-// executor.ErrUserInterrupted when signaled — simulating what a real
-// executor does after SIGINT.
+// blockingRunner writes a valid plan, then waits for the real interrupt channel and returns
+// ErrUserInterrupted.
 type blockingRunner struct {
 	orch    *orchestrator.Orchestrator
 	stageID string
@@ -349,9 +325,8 @@ func TestPause_RunningStage_StopsAgentAndTransitionsToPaused(t *testing.T) {
 	}
 }
 
-// alwaysRetryableAgentRunner: planning succeeds via delegate; every RunAgent
-// call fails with a retryable error, keeping the stage in the
-// running->retrying backoff loop so the test can Pause it mid-backoff.
+// alwaysRetryableAgentRunner plans successfully but always fails execution, keeping retry backoff
+// available to Pause.
 type alwaysRetryableAgentRunner struct {
 	delegate executor.Runner
 }
@@ -459,18 +434,6 @@ func (r *autonomousDoneCreatingRunner) RunJSONQuery(ctx context.Context, prompt 
 
 var _ executor.Runner = (*autonomousDoneCreatingRunner)(nil)
 
-// TestContinue_RecoveredCompletion_UnblocksDependent is a regression test for
-// a bug found live: resumeStageAtStatus's "already complete, recovered from
-// disk" fast paths (autonomous execution_summary.md / script .done) finalize
-// the resumed stage via a bare Trigger(EvComplete) + maybeRunAfterHook,
-// skipping the failBlockedStages/startPlanningForUnblocked/startReadyStages/
-// tryActivatePrePlanned cascade that completeStage (used by the normal
-// onAgentCompleted path) always runs afterward. Called from
-// startPlanningForPending that's harmless — the bootstrap loop runs that
-// cascade once after processing every stage regardless. But Continue()
-// resumes exactly one stage and returns — if that stage happens to hit the
-// recovered-from-disk fast path, nothing ever re-evaluates stages waiting on
-// it, and they hang in pending forever.
 func TestContinue_RecoveredCompletion_UnblocksDependent(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "s1")
@@ -480,9 +443,7 @@ func TestContinue_RecoveredCompletion_UnblocksDependent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
 		t.Fatal(err)
 	}
-	// The agent already wrote its completion artifact before Pause() landed —
-	// exactly the race a real run hit: Pause fires after the file is written
-	// but before the FSM would have naturally reached done on its own.
+	// Seed completion before Pause to model a file-written/FSM-not-completed race.
 	if err := os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -513,14 +474,8 @@ func TestContinue_RecoveredCompletion_UnblocksDependent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
-	// Let Run's synchronous startPlanningForPending bootstrap finish and the
-	// event loop settle into its select before calling Continue — otherwise
-	// this test races: if Continue ran first (plausible, since go func()
-	// doesn't guarantee the new goroutine starts before this one continues),
-	// the bootstrap's OWN post-loop scheduling cascade (called once after it
-	// finishes processing every stage) would see s1 already done and activate
-	// s2 itself, passing for the wrong reason and masking the real bug this
-	// test targets: Continue's single-stage resume path skipping that cascade.
+	// Wait for bootstrap before Continue so only Continue's completion cascade can activate the dependent
+	// stage.
 	time.Sleep(200 * time.Millisecond)
 
 	if err := orch.Continue(ctx, "s1"); err != nil {
@@ -528,18 +483,10 @@ func TestContinue_RecoveredCompletion_UnblocksDependent(t *testing.T) {
 	}
 
 	waitForStatus(t, stateFile, "s1", state.StatusDone, 3*time.Second)
-	// The real assertion: s2 depends on s1 and must be unblocked by s1's
-	// completion, exactly like it would be after any other stage's natural
-	// completion — a hang here means Continue's fast path skipped scheduling.
+	// Completion through Continue must unblock s2's dependency on s1.
 	waitForStatus(t, stateFile, "s2", state.StatusDone, 5*time.Second)
 }
 
-// TestContinue_FromRetrying_AutonomousStage is a regression test for a bug
-// found live: resumeStageAtStatus's StatusRetrying branch didn't check for
-// autonomous stages the way its StatusRunning branch already does — Continue
-// after a manual pause during retrying misrouted an agents:[auto] stage into
-// EvStartPlanning + runPlanningAgent (a real planning agent, even though
-// autonomous stages have no plan.md and never go through planning at all).
 func TestContinue_FromRetrying_AutonomousStage(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "auto-retry")
@@ -579,15 +526,8 @@ func TestContinue_FromRetrying_AutonomousStage(t *testing.T) {
 
 	waitForStatus(t, stateFile, "auto-retry", state.StatusDone, 8*time.Second)
 
-	// The critical assertion: reaching "done" alone isn't proof of the fix —
-	// the buggy path (EvStartPlanning -> runPlanningAgent -> auto-approve ->
-	// ready -> EvStartRun) also eventually reaches "done", because
-	// startReadyStages (a different, already-correct call site) detects
-	// autonomous.flag and spawns runAutonomousAgent regardless of how the
-	// stage arrived at "ready". What distinguishes the buggy path is that it
-	// writes a real plan.md along the way — something an autonomous stage
-	// must never do. Its absence proves resumeStageAtStatus's Retrying branch
-	// routed straight to runAutonomousAgent instead of through planning.
+	// Absence of plan.md proves autonomous retry skipped planning; reaching done alone would also pass the
+	// broken path.
 	if _, err := os.Stat(filepath.Join(stageDir, "plan.md")); err == nil {
 		t.Error("plan.md was created — autonomous stage was incorrectly routed through planning on resume from retrying")
 	}

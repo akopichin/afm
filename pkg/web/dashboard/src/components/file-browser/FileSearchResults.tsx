@@ -22,12 +22,8 @@ function dirPrefix(path: string): string {
   return slash === -1 ? '' : path.slice(0, slash + 1)
 }
 
-// Плоский список результатов поиска: переиспользует классы дерева ради единого
-// вида. Имя файла — основной текст, каталог — приглушённый префикс. Открывающая
-// часть строки — настоящая <button> (нативный фокус + Enter/Space), чтобы поиск
-// не терял клавиатурную доступность дерева; чекбокс — отдельный сосед. В
-// aria-label чекбокса — полный путь: одинаковые basename из разных каталогов
-// иначе неразличимы для скринридера.
+// Плоский список результатов поиска: переиспользует классы дерева ради единого вида. Имя файла — основной
+// текст, каталог — приглушённый префикс.
 export function FileSearchResults({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: FileSearchResultsProps): ReactElement {
   if (error !== null) return <div className="file-tree-hint file-tree-error">{error}</div>
   if (loading && result === null) return <div className="file-tree-hint">Searching…</div>

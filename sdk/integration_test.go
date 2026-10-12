@@ -9,12 +9,7 @@ import (
 	"time"
 )
 
-// resolveAfmBinary locates a pre-built afm binary for integration tests. It's
-// a real, separately-built binary (not something `go test` builds itself,
-// since cmd/afm embeds the dashboard's compiled assets via go:embed and
-// building those requires npm/node — see the repo root Makefile's `web`
-// target). Set AFM_SDK_TEST_BINARY to override, or run `make build` at the
-// repo root first (produces ../bin/afm relative to this module).
+// resolveAfmBinary locates a pre-built afm binary for integration tests.
 func resolveAfmBinary(t *testing.T) string {
 	t.Helper()
 	if bin := os.Getenv("AFM_SDK_TEST_BINARY"); bin != "" {
@@ -77,14 +72,7 @@ stages:
     script: "echo done-output"
 `)
 
-	// Isolate the afm subprocess from the developer's real global
-	// ~/.afm/config.yaml: afm resolves it via os.UserHomeDir() (== $HOME) and
-	// merges it before parsing the flow, regardless of what the flow's stages
-	// actually need. On a machine with docker.enabled: true set there (e.g.
-	// for unrelated Docker-mode development on this same repo), this
-	// script-only flow would otherwise get redirected into a Docker re-exec
-	// that fails validating claude auth for an agent it never uses. Pointing
-	// HOME at an empty temp dir keeps this test hermetic.
+	// Isolate HOME so the developer's global Docker config cannot redirect this script-only integration run.
 	t.Setenv("HOME", t.TempDir())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -95,9 +83,8 @@ stages:
 		t.Fatalf("Start: %v", err)
 	}
 
-	// notify is the only stage in this flow, so reaching StageDone here
-	// already proves the whole run is done (RunStatus.Done requires every
-	// stage to be done) — no need for a separate poll loop on status.Done.
+	// notify is the only stage in this flow, so reaching StageDone here already proves the whole run is done
+	// — no need for a separate poll loop on status.Done.
 	waitForStageStatus(ctx, t, run, "notify", StageDone, 30*time.Second)
 
 	if err := run.Wait(ctx); err != nil {
@@ -156,11 +143,7 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\
 echo '{"type":"result","subtype":"success"}'
 `
 
-// writeFakePlanningAgent writes an executable stand-in for a real AI agent
-// that always produces the same valid plan (Tasks/Assumptions/Acceptance
-// Criteria sections, required by prompts.ValidatePlan) on its first and only
-// invocation, so a stage with `agents: [planning]` deterministically reaches
-// awaiting_approval.
+// writeFakePlanningAgent emits a valid plan so planning-only stages deterministically await approval.
 func writeFakePlanningAgent(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "fake-plan-agent.sh")
@@ -207,10 +190,7 @@ stages:
     command: %s
 `, agentPath))
 
-	// See TestIntegration_HappyPath for why this is needed: isolates the afm
-	// subprocess from the developer's real global ~/.afm/config.yaml, which
-	// may have docker.enabled: true and would otherwise redirect this run
-	// into an unrelated Docker re-exec.
+	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
 	t.Setenv("HOME", t.TempDir())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -250,10 +230,7 @@ stages:
     script: "test -f %s && echo done-output || exit 1"
 `, gateFile))
 
-	// See TestIntegration_HappyPath for why this is needed: isolates the afm
-	// subprocess from the developer's real global ~/.afm/config.yaml, which
-	// may have docker.enabled: true and would otherwise redirect this run
-	// into an unrelated Docker re-exec.
+	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
 	t.Setenv("HOME", t.TempDir())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -298,10 +275,7 @@ stages:
     command: %s
 `, agentPath))
 
-	// See TestIntegration_HappyPath for why this is needed: isolates the afm
-	// subprocess from the developer's real global ~/.afm/config.yaml, which
-	// may have docker.enabled: true and would otherwise redirect this run
-	// into an unrelated Docker re-exec.
+	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
 	t.Setenv("HOME", t.TempDir())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -322,17 +296,8 @@ stages:
 		t.Fatalf("Revise: %v", err)
 	}
 
-	// StageRevising is real (confirmed in afm's durable event log) but too
-	// transient to catch over HTTP: afm's re-plan goroutine races the HTTP
-	// response for this very POST and reliably wins on real hardware — the
-	// whole revising->planning->awaiting_approval cycle can resolve in
-	// under 150ms, faster than a normal 200ms poll interval samples. Poll
-	// tightly and briefly right after Revise() returns to catch ANY
-	// departure from awaiting_approval — proving Revise() had a real
-	// effect — without asserting which specific intermediate status was
-	// observed (a vacuous no-op Revise() would never leave
-	// awaiting_approval at all, so this still rules out the failure mode
-	// that matters).
+	// Poll for departure from awaiting_approval: revising may finish before HTTP returns, but a no-op never
+	// leaves approval.
 	{
 		deadline := time.Now().Add(2 * time.Second)
 		left := false
@@ -375,10 +340,7 @@ stages:
 		return
 	}
 
-	// See TestIntegration_HappyPath for why this is needed: isolates the afm
-	// subprocess from the developer's real global ~/.afm/config.yaml, which
-	// may have docker.enabled: true and would otherwise redirect this run
-	// into an unrelated Docker re-exec.
+	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
 	t.Setenv("HOME", t.TempDir())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

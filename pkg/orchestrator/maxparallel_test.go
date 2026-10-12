@@ -1,30 +1,5 @@
 package orchestrator_test
 
-// TestMaxParallelThrottling закрывает пробел покрытия: stage.MaxParallel
-// (per-command семафор, см. pkg/orchestrator/concurrency/concurrency.go
-// semFor и New()'s sems-построение) ограничивает число ОДНОВРЕМЕННО
-// исполняющихся стадий, разделяющих одну команду агента.
-//
-// Модель: N независимых (без DependsOn) auto-стадий (Agents: [flow.AgentAuto])
-// с общей (пустой, т.е. дефолтной) командой и MaxParallel=2 на каждой стадии —
-// concurrency.New берёт САМЫЙ строгий MaxParallel среди всех стадий с данной
-// эффективной командой (сбор limits[cmd] = min(...) перед построением
-// семафоров); здесь все стадии задают одно и то же значение, так что тест не
-// различает "строже из всех" от прежнего "первая встретившаяся" — про это
-// различие см. TestMaxParallelThrottling_NonFirstStageLimitApplies ниже.
-// auto-стадии не требуют planning.md
-// (runAutonomousAgent, agents.go) — все они становятся Ready в одном проходе
-// startPlanningForPending→startReadyStages при старте Run и спавнятся
-// параллельно (по одной горутине на стадию), так что тест реально бьётся
-// за общий семафор, а не исполняется последовательно по другой причине.
-//
-// Детерминизм без sleep-as-sync: blockingAutoRunner.RunAgent сигнализирует
-// вход через небуферизованный acquired-канал и блокируется на release-канале,
-// пока тест явно не отпустит ровно нужное число вызовов. Единственный таймер
-// в тесте — короткое окно "убедиться, что НИКТО ТРЕТИЙ не вошёл, пока держим
-// первых двух" (защитная проверка верхней границы, а не механизм синхронизации
-// прогресса: семафор физически не пускает acquire() сверх ёмкости раньше
-// release, поэтому этот вызов detect'ит нарушение, а не ждёт прогресса).
 import (
 	"context"
 	"fmt"
@@ -40,12 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// blockingAutoRunner — mock executor.Runner для стадий flow.AgentAuto
-// (runAutonomousAgent вызывает RunAgent с agentType "autonomous_execution").
-// Каждый вызов RunAgent: увеличивает inFlight, публикует свой stageDir на
-// acquired (небуферизованный — приёмник читает ровно по одному входу за раз),
-// блокируется на release, затем пишет execution_summary.md (completion-
-// артефакт, см. checkAutonomousCompletion) и уменьшает inFlight.
+// blockingAutoRunner — mock executor.Runner для стадий flow.AgentAuto.
 type blockingAutoRunner struct {
 	acquired chan string   // сигнал входа (stageDir) — читается тестом
 	release  chan struct{} // тест шлёт по одному сигналу на каждый выпускаемый вызов
@@ -155,12 +125,7 @@ func TestMaxParallelThrottling(t *testing.T) {
 			}
 		}
 
-		// Защитная проверка верхней границы: пока держим текущую волну
-		// заблокированной (никто не released), НИКТО ЕЩЁ не должен был войти
-		// сверх ёмкости семафора — короткое окно ожидания лишнего входа, а не
-		// синхронизация прогресса (semFor.acquire() физически блокирует
-		// сверхкомплектные горутины до release, так что "тишина" здесь —
-		// прямое следствие throttling, а не гонка со временем).
+		// Пока волна заблокирована, дополнительные агенты не должны входить сверх ёмкости семафора.
 		select {
 		case extra := <-runner.acquired:
 			t.Fatalf("stage %q entered RunAgent while semaphore should have been full (wave size %d)", extra, waveSize)
@@ -199,16 +164,6 @@ func TestMaxParallelThrottling(t *testing.T) {
 	}
 }
 
-// TestMaxParallelThrottling_NonFirstStageLimitApplies воспроизводит найденный
-// при аудите баг: New строил per-command семафор из MaxParallel ПЕРВОЙ
-// стадии, встретившей эффективную команду ("if _, exists := sems[cmd];
-// exists { continue }") — MaxParallel любой последующей стадии с той же
-// командой молча игнорировался. Здесь первая стадия ("loose") не задаёт
-// MaxParallel вовсе (а глобальный Executor.MaxParallel тоже 0 — безлимит),
-// а вторая и третья ("strict1"/"strict2") явно просят MaxParallel: 1. До
-// фикса это давало неограниченный параллелизм (первая стадия "выигрывала"
-// пустым лимитом); после фикса действует самый строгий лимит среди всех
-// стадий команды — не более 1 одновременно, независимо от порядка в YAML.
 func TestMaxParallelThrottling_NonFirstStageLimitApplies(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "loose", Name: "Loose", Agents: []flow.AgentType{flow.AgentAuto}},

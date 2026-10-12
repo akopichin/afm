@@ -17,31 +17,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// pauseInjectRunner drives TestIntegration_PauseInjectResume's two stages
-// through a REAL orchestrator run (real FSM, real scheduling, real
-// concurrency.Manager) without a real AI client subprocess:
-//
-//   - RunPlanning always succeeds with a minimal valid plan.md, for any
-//     stage — both s1 and s2 go through an ordinary planning phase, and
-//     headless auto-approve (Options.RequireApproval defaults to false)
-//     carries each straight from awaiting_approval to running, exactly the
-//     way blockingRunner does in pause_continue_test.go.
-//   - RunAgent for the target stage (targetStage, "s1") blocks on the SAME
-//     interruptChans channel PauseFlow signals (via
-//     orchestrator.InterruptChanForTest — the same test seam
-//     blockingRunner/blockingThenFeedbackRunner already use elsewhere in
-//     this package) on its FIRST call, returning
-//     executor.ErrUserInterrupted — simulating a real subprocess reacting to
-//     SIGINT. Every later call (i.e. the resumed runImplementationWithFeedback
-//     call InjectNotesAndResume triggers) captures the prompt it received (so
-//     the test can assert the rendered review note actually reached the real
-//     prompt) and completes normally by writing .done.
-//   - RunAgent for any OTHER stage (s2) always succeeds immediately.
-//
-// planCalls/agentCalls are keyed by stage name so the test can assert s1 was
-// planned exactly once — a SECOND RunPlanning call for s1 would mean the
-// resume incorrectly went through the planning (not implementation)
-// WithFeedback runner.
+// pauseInjectRunner plans both stages, interrupts s1's first execution, then captures feedback on resume;
+// s2 succeeds immediately.
 type pauseInjectRunner struct {
 	orch        *orchestrator.Orchestrator
 	targetStage string
@@ -79,9 +56,8 @@ func (r *pauseInjectRunner) RunAgent(ctx context.Context, _, stageName, prompt, 
 	r.mu.Unlock()
 
 	if n == 1 {
-		// First call: this is the stage's ORIGINAL run, still in flight when
-		// PauseFlow fires. Block on the real interrupt channel and return
-		// exactly what a SIGINT'd subprocess would.
+		// First call: this is the stage's ORIGINAL run, still in flight when PauseFlow fires. Block on the real
+		// interrupt channel and return exactly what a SIGINT'd subprocess would.
 		ch, ok := orchestrator.InterruptChanForTest(r.orch, r.targetStage)
 		if !ok {
 			<-ctx.Done()
@@ -121,12 +97,7 @@ func (r *pauseInjectRunner) getResumedPrompt() string {
 	return r.resumedPrompt
 }
 
-// pauseInjectResolveFile is a stub Options.ResolveFile that always resolves
-// successfully with a fixed content_sha — AddNote below drives staleness
-// purely through the clientSHA it's called with, not through this stub (same
-// pattern as reviewpause_test.go's stubResolveFile, duplicated here because
-// that helper lives in the internal orchestrator package, not
-// orchestrator_test).
+// pauseInjectResolveFile returns a fixed SHA so clientSHA alone controls staleness.
 func pauseInjectResolveFile(root, path string, _ *int) (orchestrator.ResolvedFile, bool) {
 	return orchestrator.ResolvedFile{
 		DisplayPath: root + "/" + path,
@@ -136,10 +107,8 @@ func pauseInjectResolveFile(root, path string, _ *int) (orchestrator.ResolvedFil
 	}, true
 }
 
-// pollUntil polls cond every 20ms until it returns true or the deadline
-// passes, failing the test on timeout. Local equivalent of reviewpause_test.go's
-// waitFor (unexported, internal-package helper) — duplicated here for the same
-// reason as pauseInjectResolveFile above.
+// pollUntil polls cond every 20ms until it returns true or the deadline passes, failing the test on
+// timeout.
 func pollUntil(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -154,22 +123,6 @@ func pollUntil(t *testing.T, timeout time.Duration, cond func() bool) {
 	}
 }
 
-// TestIntegration_PauseInjectResume drives a REAL orchestrator (real FSM,
-// real scheduling, a scripted mock Runner — no real AI client) through the
-// full review-pause round trip end-to-end: PauseFlow pauses the one active
-// stage, a review note is added via the real AddNote path, InjectNotesAndResume
-// delivers it and resumes, and the dependent stage that was held behind it
-// eventually completes too.
-//
-// Chosen approach: a full runOrchestratorAsync run (Option A from the task
-// brief) rather than the testRunnerHook-stubbed focused variant. The focused
-// variant lives in package orchestrator (reviewpause_test.go) and stubs
-// resumeOwner's own Trigger+SpawnAgent entirely — it can prove WHICH runner
-// kind gets picked, but it can't prove that s2 (whose activation is gated by
-// s1 actually reaching StatusDone through the real graph, not just by
-// activationHeld) really unblocks, because testRunnerHook short-circuits
-// before any real FSM transition happens. Only a real run exercises the
-// production code path far enough to observe that end-to-end.
 func TestIntegration_PauseInjectResume(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
@@ -243,15 +196,13 @@ func TestIntegration_PauseInjectResume(t *testing.T) {
 		t.Fatalf("feedback.md missing the rendered review-notes header:\n%s", feedbackBody)
 	}
 
-	// --- Step 4: s1 resumes via the IMPLEMENTATION WithFeedback runner (not
-	// planning), the note reaches its real prompt, and s2 — held behind s1 —
-	// eventually completes too. ---
+	// --- Step 4: s1 resumes via the IMPLEMENTATION WithFeedback runner (not planning), the note reaches its
+	// real prompt, and s2 — held behind s1 — eventually completes too. ---
 	waitForStatus(t, stateFile, "s1", state.StatusDone, 10*time.Second)
 	waitForStatus(t, stateFile, "s2", state.StatusDone, 10*time.Second)
 
-	// s1 was planned exactly once: a second RunPlanning call would mean the
-	// resume mistakenly went through the PLANNING WithFeedback runner instead
-	// of the implementation one.
+	// s1 was planned exactly once: a second RunPlanning call would mean the resume mistakenly went through
+	// the PLANNING WithFeedback runner instead of the implementation one.
 	if n := runner.planCallCount("s1"); n != 1 {
 		t.Fatalf("s1 RunPlanning call count = %d, want 1 (no re-planning on resume)", n)
 	}

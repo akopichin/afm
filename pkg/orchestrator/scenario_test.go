@@ -8,19 +8,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestScenarios прогоняет таблицу неинтерактивных сценариев через единый
-// scenario-харнесс (scriptedRunner + runScenario, см. scenario_harness_test.go).
-//
-// Судьба Plan-стадий (см. task-1-brief.md, Step 4): resolvePlanSource
-// подставляет путь зависимости только для Plan вида "./...", а буквальный
-// путь вроде "plan-stage-plan" не резолвится в файл соседней стадии и не
-// существует на диске — copyFile упал бы. Поэтому impl-stage и flaky здесь
-// НЕ используют Plan-как-путь-к-чужому-плану, а вместо этого сами проходят
-// planning+implementation (Agents: [planning, implementation]):
-// scriptedRunner.RunPlanning пишет валидный plan.md для каждой такой стадии
-// самостоятельно — не нужен ни внешний файл плана, ни завязка на
-// resolvePlanSource. depends_on между plan-stage и impl-stage сохранён, чтобы
-// проверить многостадийный happy-path с зависимостью.
 func TestScenarios(t *testing.T) {
 	scenarios := []Scenario{
 		{
@@ -53,9 +40,8 @@ func TestScenarios(t *testing.T) {
 			Expect: Expectation{Statuses: map[string]state.StageStatus{"flaky": state.StatusDone}},
 		},
 		{
-			// Happy path: интерактивная planning-стадия задаёт вопрос по
-			// каноническому пути, пользователь отвечает — стадия дописывает
-			// plan.md и (headless auto-approve) доходит до done.
+			// Happy path: интерактивная planning-стадия задаёт вопрос по каноническому пути, пользователь отвечает
+			// — стадия дописывает plan.md и (headless auto-approve) доходит до done.
 			Name:   "interactive-dialog-happy",
 			Stages: []flow.Stage{{ID: "dialog-stage", Agents: []flow.AgentType{flow.AgentPlanning}}},
 			Agents: map[string]AgentSpec{
@@ -64,11 +50,7 @@ func TestScenarios(t *testing.T) {
 			Expect: Expectation{Statuses: map[string]state.StageStatus{"dialog-stage": state.StatusDone}},
 		},
 		{
-			// Агент пишет question.json внутри stageDir, но с префиксом id
-			// стадии вместо канонической фазы — poller нормализует к
-			// planning.q1.question.json (см. relocateMisplacedQuestions),
-			// стадия проходит через awaiting_user_input и всё равно
-			// доходит до done после ответа.
+			// Poller исправляет stage-id префикс на planning; после ответа стадия завершается.
 			Name:   "misprefixed-question",
 			Stages: []flow.Stage{{ID: "misprefixed-stage", Agents: []flow.AgentType{flow.AgentPlanning}}},
 			Agents: map[string]AgentSpec{
@@ -80,10 +62,7 @@ func TestScenarios(t *testing.T) {
 			},
 		},
 		{
-			// Агент пишет question.json ВНЕ stageDir (GLM-4.7-style баг) —
-			// poller релоцирует файл внутрь stageDir и создаёт dangling-
-			// symlink на answer.json по неверному пути; стадия проходит
-			// через awaiting_user_input и доходит до done после ответа.
+			// Poller переносит misplaced-вопрос в stageDir и создаёт answer-симлинк по старому пути.
 			Name:   "wrong-folder-question",
 			Stages: []flow.Stage{{ID: "wrongfolder-stage", Agents: []flow.AgentType{flow.AgentPlanning}}},
 			Agents: map[string]AgentSpec{
@@ -95,10 +74,7 @@ func TestScenarios(t *testing.T) {
 			},
 		},
 		{
-			// Пользователь никогда не отвечает (Answer==""): стадия
-			// достигает awaiting_user_input и остаётся там — synth-агент
-			// сдаётся после ограниченного поллинга (~20с), не подвешивая
-			// субпроцесс; сценарий завершается по ctx-таймауту харнесса.
+			// Без ответа стадия остаётся awaiting_user_input до таймаута харнесса.
 			Name:   "hung-dialog",
 			Stages: []flow.Stage{{ID: "hung-stage", Agents: []flow.AgentType{flow.AgentPlanning}}},
 			Agents: map[string]AgentSpec{
@@ -110,27 +86,15 @@ func TestScenarios(t *testing.T) {
 			},
 		},
 		{
-			// InjectNoDone: RunAgent "отрабатывает" (err==nil), но не пишет .done —
-			// имитирует агента, который вышел, не закончив работу. checkCompletion
-			// возвращает IncompleteWorkError: runWithRetry (retry.go) даёт ОДИН
-			// бесплатный повтор без backoff (attempt==0 → continue), но на втором
-			// заходе (attempt==1, снова incomplete) считает это исчерпанным и
-			// фейлит стадию — EvFail("missing artifact or incomplete"). Планирование
-			// не затронуто (scriptedRunner.RunPlanning всегда пишет валидный
-			// plan.md), поэтому стадия доходит до approval и до реализации, и
-			// именно implementation-фаза уходит в failed.
+			// InjectNoDone: RunAgent "отрабатывает", но не пишет .done — имитирует агента, который вышел, не
+			// закончив работу.
 			Name:   "incomplete-work-fails",
 			Stages: []flow.Stage{{ID: "no-done", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}}},
 			Agents: map[string]AgentSpec{"no-done": {Inject: InjectNoDone}},
 			Expect: Expectation{Statuses: map[string]state.StageStatus{"no-done": state.StatusFailed}},
 		},
 		{
-			// Предзасеянный events.jsonl с битой строкой В СЕРЕДИНЕ (валидная
-			// строка после неё) — модель точь-в-точь TestOpen_MidCorruptionQuarantines
-			// (pkg/state/store_replay_test.go): state.Open обязан вернуть
-			// ErrCorruptLog ("events.jsonl is corrupted mid-log"), что уже
-			// покрывается веткой RunErrSubstr в runScenario (см. Task 3,
-			// scenario_harness_test.go).
+			// Полная битая строка между валидными событиями должна вернуть ErrCorruptLog.
 			Name:   "corrupt-log-recovery",
 			Stages: []flow.Stage{{ID: "a", Agents: []flow.AgentType{flow.AgentPlanning}}},
 			PreSeedEventsLog: []byte(
@@ -145,33 +109,6 @@ func TestScenarios(t *testing.T) {
 	}
 }
 
-// TestScenarioHarness_FailsOnWrongExpectation — негативный само-тест харнесса.
-//
-// Все остальные тесты в этом пакете доказывают, что сценарии проходят. Но
-// это ничего не говорит о том, действительно ли assertExpectation детектирует
-// расхождение, если оно есть — если бы assertExpectation была случайно
-// выхолощена (например, кто-то убрал бы t.Errorf, оставив пустые циклы),
-// TestScenarios продолжал бы зелёным, и никто бы не заметил, что харнесс
-// перестал что-либо проверять.
-//
-// Наивный вариант — обернуть заведомо неверный сценарий в t.Run и проверить
-// возвращённый bool — НЕ работает: провал вложенного subtest'а через
-// t.Errorf/t.Fatalf безусловно помечает и родительский *testing.T как
-// проваленный (это стандартное поведение пакета testing), независимо от
-// того, что делает код после t.Run. Поэтому вместо настоящего *testing.T
-// сюда передаётся recordingT — тестовый двойник expectationReporter
-// (scenario_harness_test.go), который лишь накапливает сообщения Errorf, не
-// трогая состояние текущего теста.
-//
-// План: прогнать заведомо рабочий сценарий (тот же паттерн, что и
-// "auto-phase" в TestScenarios — стадия с flow.AgentAuto реально доходит до
-// state.StatusDone через scriptedRunner) через runScenarioUpToAssert с
-// НАСТОЯЩИМ t (сам прогон обязан пройти штатно), получить orch/runDir/reached,
-// затем вызвать assertExpectation НАПРЯМУЮ с заведомо неверным Expectation
-// (StatusFailed вместо фактического StatusDone) и recordingT. Если
-// assertExpectation работает — recordingT.errors непуст. Если её
-// когда-нибудь выхолостят — errors останется пустым, и здесь сработает
-// t.Fatal: само-тест ОБНАРУЖИТ, что харнесс перестал детектировать провалы.
 func TestScenarioHarness_FailsOnWrongExpectation(t *testing.T) {
 	sc := Scenario{
 		Name:   "self-test-base",
@@ -194,12 +131,8 @@ func TestScenarioHarness_FailsOnWrongExpectation(t *testing.T) {
 	}
 }
 
-// recordingT — тестовый двойник expectationReporter (scenario_harness_test.go):
-// вместо того чтобы безусловно валить вызывающий тест (как Errorf настоящего
-// *testing.T), просто собирает сообщения. Используется ТОЛЬКО в
-// TestScenarioHarness_FailsOnWrongExpectation, чтобы вызвать assertExpectation
-// с заведомо неверным Expectation и убедиться, что она реально сообщает о
-// провале, не заваливая сам тестовый процесс.
+// recordingT — тестовый двойник expectationReporter: вместо того чтобы безусловно валить вызывающий тест,
+// просто собирает сообщения.
 type recordingT struct {
 	errors []string
 }

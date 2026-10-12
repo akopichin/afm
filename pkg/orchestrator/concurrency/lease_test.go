@@ -11,9 +11,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
-// orderedSemaphore — семафор-шпион для юнит-тестов Lease: не блокирует, а
-// детерминированно записывает порядок acquire/release в общий лог (по имени
-// команды), без горутин/таймингов — прямая проверка "release раньше acquire".
+// orderedSemaphore записывает acquire/release без блокировки для проверки release-before-acquire.
 type orderedSemaphore struct {
 	name string
 	mu   *sync.Mutex
@@ -88,13 +86,6 @@ func TestLease_SwapTo_SameCommand_NoReacquireNoRelease(t *testing.T) {
 	}
 }
 
-// TestLease_SwapTo_SameCommand_AlreadyCancelledCtxReturnsErr — C5 код-ревью:
-// быстрый путь "та же команда" раньше возвращал nil безусловно, не глядя на
-// ctx — Pause/Revise, отменившие ctx ДО вызова SwapTo (например author ==
-// verifier command), теряли сигнал: слот оставался held, а вызывающий код
-// (verify.go) считал переход успешным и запускал верификатор на стадии,
-// которая уже должна была остановиться. Слот при этом должен остаться held
-// (fast path сам ничего не освобождает).
 func TestLease_SwapTo_SameCommand_AlreadyCancelledCtxReturnsErr(t *testing.T) {
 	var log []string
 	semA, _ := newOrderedSemaphores(&log)
@@ -159,11 +150,6 @@ func TestLease_Release_IsIdempotent(t *testing.T) {
 	}
 }
 
-// TestLease_SwapTo_EmptyCommandNormalizesToDefault_NoOp — стадия-автор без
-// явной Stage.Command (использует дефолтную команду Manager'а через "").
-// SwapTo с ЯВНЫМ именем той же дефолтной команды должен распознаться как
-// "та же команда" и остаться no-op — иначе сравнение НЕнормализованных строк
-// ("" != "claude") лишний раз дёрнуло бы release+acquire того же семафора.
 func TestLease_SwapTo_EmptyCommandNormalizesToDefault_NoOp(t *testing.T) {
 	var log []string
 	semA, _ := newOrderedSemaphores(&log)
@@ -181,12 +167,6 @@ func TestLease_SwapTo_EmptyCommandNormalizesToDefault_NoOp(t *testing.T) {
 	}
 }
 
-// TestNew_PreCreatesSemaphoreForVerifyOnlyCommand — codex НЕ является
-// Stage.Command ни одной стадии, только команда агентского verify-шага. New
-// должен предсоздать для него реальный семафор с лимитом globalMaxParallel
-// (то же правило, что и для любой нелимитированной команды) — иначе
-// AcquireLease/SwapTo на codex молча откатились бы на noopSemaphore
-// (semForCmd) и переход автор→верификатор не ограничивался бы вовсе.
 func TestNew_PreCreatesSemaphoreForVerifyOnlyCommand(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "s1", Command: "claude", Verify: flow.VerifySpec{
@@ -214,9 +194,6 @@ func equalLogs(got, want []string) bool {
 	return slices.Equal(got, want)
 }
 
-// TestSpawnAgentLease_PassesHeldLeaseForStageCommand — базовая проверка
-// проводки: callback получает lease, изначально держащий слот Stage.Command,
-// а не пустой/nil.
 func TestSpawnAgentLease_PassesHeldLeaseForStageCommand(t *testing.T) {
 	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
 	done := make(chan struct{})
@@ -230,10 +207,6 @@ func TestSpawnAgentLease_PassesHeldLeaseForStageCommand(t *testing.T) {
 	m.WaitAgents()
 }
 
-// TestSpawnAgentLease_SameCommandSwapTo_NoSelfDeadlock — на
-// max_parallel=1 SwapTo на ТУ ЖЕ команду не должен освобождать+заново
-// захватывать единственный слот (иначе это была бы гонка сама с собой —
-// self-дедлок, если бы кто-то другой успел перехватить слот в промежутке).
 func TestSpawnAgentLease_SameCommandSwapTo_NoSelfDeadlock(t *testing.T) {
 	sem := ChannelSemaphore(make(chan struct{}, 1))
 	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"a": sem}, "")
@@ -254,19 +227,6 @@ func TestSpawnAgentLease_SameCommandSwapTo_NoSelfDeadlock(t *testing.T) {
 	m.WaitAgents()
 }
 
-// TestLease_SwapTo_CrossCommandReleasesBeforeAcquiring доказывает порядок
-// "release старого слота СТРОГО до acquire нового" через цепочку каналов,
-// без единого sleep: слот "B" изначально занят посторонним — SwapTo(B)
-// может завершиться, только когда кто-то его освободит; этим "кем-то"
-// выступает waiterA, который сам может захватить "A" только после того, как
-// SwapTo реально освободил "A". Захват "A" исходным lease делается
-// синхронно ДО запуска waiterA (иначе оба захвата "A" — исходный и
-// waiterA — гонялись бы за одним и тем же изначально пустым каналом:
-// SpawnAgentLease здесь намеренно не используется, т.к. его собственный
-// AcquireLease не синхронизирован с тестом никаким барьером). Порядок
-// событий:
-//
-//	SwapTo релизит A → waiterA захватывает A → waiterA освобождает B → SwapTo захватывает B
 func TestLease_SwapTo_CrossCommandReleasesBeforeAcquiring(t *testing.T) {
 	semA := ChannelSemaphore(make(chan struct{}, 1))
 	semB := ChannelSemaphore(make(chan struct{}, 1))
@@ -306,11 +266,6 @@ func TestLease_SwapTo_CrossCommandReleasesBeforeAcquiring(t *testing.T) {
 	}
 }
 
-// TestSpawnAgentLease_ABBA_NoDeadlock — классический AB-BA: одна горутина
-// держит A и меняет на B, другая держит B и меняет на A, оба лимита — 1.
-// Поскольку SwapTo сначала release, потом acquire (не "hold and wait"),
-// цикл ожидания невозможен в принципе — обе горутины обязаны завершиться в
-// ограниченное время.
 func TestSpawnAgentLease_ABBA_NoDeadlock(t *testing.T) {
 	semA := ChannelSemaphore(make(chan struct{}, 1))
 	semB := ChannelSemaphore(make(chan struct{}, 1))
@@ -345,12 +300,6 @@ func TestSpawnAgentLease_ABBA_NoDeadlock(t *testing.T) {
 	m.WaitAgents()
 }
 
-// TestLease_SwapTo_CancelWhileWaitingForFullTarget — целевой слот "B"
-// постоянно занят (никто его не освобождает во время попытки): отмена ctx
-// должна вернуть ошибку без захвата B, и удерживаемый ранее слот "A" должен
-// быть уже освобождён (release-before-acquire срабатывает и на неудачном
-// свопе). После теста оба слота проверяются напрямую на канале — ни один не
-// "утёк" в фоновой горутине.
 func TestLease_SwapTo_CancelWhileWaitingForFullTarget(t *testing.T) {
 	semA := ChannelSemaphore(make(chan struct{}, 1))
 	semB := ChannelSemaphore(make(chan struct{}, 1))
@@ -389,9 +338,8 @@ func TestLease_SwapTo_CancelWhileWaitingForFullTarget(t *testing.T) {
 		t.Error("slot A must have been released by the failed SwapTo attempt")
 	}
 
-	// Неудавшийся SwapTo не "украл" B: когда исходный держатель B
-	// освобождает слот, он остаётся пустым и доступным — не занят фоновой
-	// утечкой от отменённой попытки.
+	// Неудавшийся SwapTo не "украл" B: когда исходный держатель B освобождает слот, он остаётся пустым и
+	// доступным — не занят фоновой утечкой от отменённой попытки.
 	<-semB
 	select {
 	case semB <- struct{}{}:

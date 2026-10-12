@@ -11,12 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 )
 
-// TestRunAgentResolvesWrapperCommand verifies the executor resolves a generated
-// wrapper command via WrapperDir (absolute path), not just the child env PATH.
-// Regression: exec.Command("glm47") does LookPath against the PARENT process's
-// PATH, which does NOT contain the wrapper-dir (WrapperDir is only added to
-// the child's cmd.Env). Without resolving the command to WrapperDir/<cmd>
-// first, a generated wrapper command fails with "executable file not found".
 func TestRunAgentResolvesWrapperCommand(t *testing.T) {
 	wrapDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "ran")

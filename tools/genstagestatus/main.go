@@ -1,8 +1,5 @@
-// Command genstagestatus generates
-// pkg/web/dashboard/src/types/stage-status.generated.ts from
-// state.AllStatuses(), the single Go source of truth for stage status names.
-// Run via `make generate`; `make lint-ci` fails the build if the committed
-// file is stale relative to pkg/state/state.go.
+// Command genstagestatus generates pkg/web/dashboard/src/types/stage-status.generated.ts from
+// state.AllStatuses, the single Go source of truth for stage status names.
 package main
 
 import (

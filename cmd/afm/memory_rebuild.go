@@ -28,31 +28,21 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// rebuildOptions — параметры `afm memory rebuild`, собранные из флагов
-// команды. CommitSet отличает "флаг --commit/--no-commit реально передан" от
-// "не передан вовсе" — Commit сам по себе (bool) этого не умеет: значение
-// по умолчанию false неотличимо от явного --no-commit (review #12).
+// rebuildOptions — параметры `afm memory rebuild`, собранные из флагов команды.
 type rebuildOptions struct {
 	FlowArg, RunID       string
 	DryRun, ForceReflect bool
 	CommitSet, Commit    bool
 }
 
-// newRebuildPipeline — seam over memorypipeline.New: тесты подменяют её на
-// memorypipeline.New(p, a, memorypipeline.WithRunner(stub)), чтобы не
-// запускать реального агента.
+// newRebuildPipeline — seam over memorypipeline.New: тесты подменяют её на memorypipeline.New(p, a,
+// memorypipeline.WithRunner(stub)), чтобы не запускать реального агента.
 var newRebuildPipeline = func(p memorypipeline.Prompts, a memorypipeline.AgentConfig) *memorypipeline.Pipeline {
 	return memorypipeline.New(p, a)
 }
 
-// rebuildHandler — единственная точка входа в реализацию `afm memory
-// rebuild`: preflight (конфиг флоу, доступность цели, целостность
-// завершённого рана), последовательность локов (run-лок сначала, лок памяти
-// только на время Finalize), двухфазный запуск (CaptureAll без лока памяти,
-// затем AcquireMemoryLock + Finalize), и жизненный цикл манифеста попытки
-// (running -> ... -> completed/failed/cancelled). Var, а не func — тесты
-// подменяют её целиком в самых верхнеуровневых тестах (напр. проверке
-// регистрации команды); сама реализация использует seam newRebuildPipeline.
+// rebuildHandler выполняет preflight, capture и finalize, соблюдая порядок run-lock → memory-lock и
+// lifecycle манифеста.
 var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -82,11 +72,8 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		return errors.New("no writable memory target (need a stage with reflect.mode w|rw)")
 	}
 
-	// rebuild нужен стабильный АБСОЛЮТНЫЙ корень (манифест, Executor.Dir "с
-	// нуля", лок памяти) — в отличие от `afm run`, который может отдать
-	// агентам унаследованный CWD процесса при пустом root_dir. Вычисляется
-	// ДО резолва runDir — обе величины зависят только от f/rootDir, а Docker
-	// re-exec ниже нужны все три (agentRoot/memDir/runDir) ДО захвата лока.
+	// rebuild нужен стабильный АБСОЛЮТНЫЙ корень — в отличие от `afm run`, который может отдать агентам
+	// унаследованный CWD процесса при пустом root_dir.
 	agentRoot, err := absoluteAgentRoot(rootDir, f)
 	if err != nil {
 		return err
@@ -107,12 +94,8 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		return err
 	}
 
-	// Docker self-re-exec: если включён Docker-режим и мы не внутри
-	// контейнера — перезапускаем себя в Docker ДО захвата любого лока (лок
-	// должен быть взят внутри контейнера, тем же процессом, что его
-	// реально держит). На успехе ReExec либо не возвращает управление вовсе,
-	// либо возвращает *docker.SubprocessExitError — пробрасываем как есть,
-	// main.go уже умеет превращать её в правильный os.Exit.
+	// Docker self-re-exec: если включён Docker-режим и мы не внутри контейнера — перезапускаем себя в Docker
+	// ДО захвата любого лока.
 	absFlowPath, err := filepath.Abs(flowPath)
 	if err != nil {
 		return fmt.Errorf("resolve flow path: %w", err)
@@ -134,9 +117,8 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	if err != nil {
 		return err
 	}
-	// Явный --run не фильтруется резолвером завершённых ранов, поэтому
-	// полнота (AllDone) и точное множество стадий (checkStageSetMatchesExact)
-	// проверяются НЕЗАВИСИМО — это ортогональные условия.
+	// Явный --run не фильтруется резолвером завершённых ранов, поэтому полнота (AllDone) и точное множество
+	// стадий (checkStageSetMatchesExact) проверяются НЕЗАВИСИМО — это ортогональные условия.
 	if !rs.AllDone() {
 		return fmt.Errorf("run %s is not completed (some stages are not done)", filepath.Base(runDir))
 	}
@@ -162,11 +144,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		return err
 	}
 
-	// Единый wrapper-dir: generated-врапперы (autoShim) существуют только
-	// ВНУТРИ собственного re-exec-контейнера afm (ReExecedIntoContainer), не в
-	// чужом контейнере — зеркалит блок run.go (cmd/afm/run.go). rebuild не
-	// выполняет стадий флоу, поэтому единственная релевантная команда —
-	// глобальный cfg.Client.Command (UsedRecipeCommands(nil, ...) — Task 13).
+	// Generated wrapper'ы доступны только внутри собственного Docker re-exec, где есть afm-транспорт.
 	var wrapperSpecs []docker.WrapperSpec
 	generatedAgents := map[string]bool{}
 	// Job A: врапперы зависят от транспорта docker.ReExec — только собственный
@@ -213,9 +191,8 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	manifestPath := filepath.Join(work, "manifest.json")
 	meta := buildOperationMeta(cfg, f, flowPath, runDir, agentRoot, memDir, prompts, commit)
 
-	// CLI создаёт манифест (статус "running", полные метаданные) и
-	// центральным defer'ом переводит любой ещё нетерминальный манифест в
-	// failed/cancelled при любом раннем возврате.
+	// CLI создаёт манифест (статус "running", полные метаданные) и центральным defer'ом переводит любой ещё
+	// нетерминальный манифест в failed/cancelled при любом раннем возврате.
 	if err := memorypipeline.WriteManifest(manifestPath, memorypipeline.NewRunningManifest(meta)); err != nil {
 		return err
 	}
@@ -266,12 +243,8 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	return memorypipeline.MarkManifestCompleted(manifestPath) // CLI пишет ФИНАЛЬНЫЙ "completed"
 }
 
-// hasWritableTarget сообщает, есть ли у флоу хотя бы одна стадия с
-// reflect.mode w|rw (не script) — единственный способ, которым что-либо
-// реально публикуется. Голый memory.mode:w без единой такой стадии НЕ
-// делает флоу "writable": end-of-run проход пишет project-wide memory.md
-// только из датасетов write-reflect стадий (review #12) — без них писать
-// нечего.
+// hasWritableTarget проверяет наличие non-script стадии с write-reflect; одного memory.mode:w
+// недостаточно.
 func hasWritableTarget(f *flow.Flow) bool {
 	for _, s := range f.Stages {
 		if s.Reflect != nil && s.Reflect.CanWrite() && !s.IsScript() {
@@ -290,11 +263,8 @@ func stageIDsOf(f *flow.Flow) []string {
 	return ids
 }
 
-// checkStageSetMatchesExact сообщает ошибку с отсортированными списками
-// missing/extra, если множество стадий в rs (реально запускавшихся в этом
-// ране) не совпадает ТОЧНО с stageIDs (текущий флоу) — независимая от
-// AllDone проверка (review #1): явный --run не проходит фильтр
-// FindLatestCompletedRunDir, который делает то же самое неявно.
+// checkStageSetMatchesExact проверяет совпадение стадий рана и флоу; ошибка содержит отсортированные
+// missing/extra.
 func checkStageSetMatchesExact(rs state.RunState, stageIDs []string) error {
 	want := make(map[string]bool, len(stageIDs))
 	for _, id := range stageIDs {
@@ -335,9 +305,8 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// buildOperationMeta собирает OperationMeta для манифеста этой попытки:
-// хэширование содержимого флоу и промптов (провенанс — что конкретно
-// сгенерировало этот результат) — забота CLI, не пакета конвейера.
+// buildOperationMeta собирает OperationMeta для манифеста этой попытки: хэширование содержимого флоу и
+// промптов — забота CLI, не пакета конвейера.
 func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agentRoot, memDir string, prompts orchestrator.Prompts, effectiveCommit bool) memorypipeline.OperationMeta {
 	flowSHA := ""
 	if data, err := os.ReadFile(flowPath); err == nil {
@@ -364,10 +333,8 @@ func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agent
 	}
 }
 
-// printReport печатает сводку прогона: счётчики плюс unified diff для
-// изменённых (или потенциально изменённых, в dry-run) целей. НИКОГДА не
-// печатает stdout агента/промпты/диалог — Report их и не содержит, только
-// пути/хэши/diff.
+// printReport печатает сводку прогона: счётчики плюс unified diff для изменённых целей. НИКОГДА не
+// печатает stdout агента/промпты/диалог — Report их и не содержит, только пути/хэши/diff.
 func printReport(report memorypipeline.Report, dryRun bool) {
 	changed := 0
 	for _, t := range report.Targets {
@@ -395,9 +362,8 @@ func printReport(report memorypipeline.Report, dryRun bool) {
 	}
 }
 
-// effectiveCommit разрешает итоговое решение "коммитить ли": явный флаг
-// --commit/--no-commit важнее flow.yaml; --dry-run всегда выключает коммит
-// (нечего коммитить, ничего не опубликовано).
+// effectiveCommit разрешает итоговое решение "коммитить ли": явный флаг --commit/--no-commit важнее
+// flow.yaml; --dry-run всегда выключает коммит (нечего коммитить, ничего не опубликовано).
 func effectiveCommit(o rebuildOptions, f *flow.Flow) bool {
 	if o.DryRun {
 		return false
@@ -408,14 +374,8 @@ func effectiveCommit(o rebuildOptions, f *flow.Flow) bool {
 	return f.Memory.Commit
 }
 
-// commitPreflight проверяет, что коммит в memDir возможен ДО дорогостоящей
-// работы конвейера: memDir может ещё не существовать на диске (memory.path
-// на первом ране), поэтому git-worktree ищется от ближайшего СУЩЕСТВУЮЩЕГО
-// предка. Если предок не внутри git-репозитория — коммит просто не
-// проверяется здесь (реальная git-ошибка всплывёт позже, при самом
-// коммите); если внутри — staged-изменения под memDir должны отсутствовать,
-// иначе rebuild рискует закоммитить что-то постороннее, уже поставленное в
-// индекс пользователем.
+// commitPreflight ищет git от существующего предка memDir и запрещает чужие staged-изменения до запуска
+// конвейера.
 func commitPreflight(memDir string) error {
 	ancestor := nearestExistingAncestor(memDir)
 	if err := exec.Command("git", "-C", ancestor, "rev-parse", "--show-toplevel").Run(); err != nil {
@@ -432,9 +392,8 @@ func commitPreflight(memDir string) error {
 	return nil
 }
 
-// nearestExistingAncestor walks up from p until it finds a path that exists
-// on disk (p itself, if it exists) — memDir may not have been created yet
-// (a fresh memory.path).
+// nearestExistingAncestor walks up from p until it finds a path that exists on disk (p itself, if it
+// exists) — memDir may not have been created yet (a fresh memory.path).
 func nearestExistingAncestor(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
@@ -453,20 +412,8 @@ func nearestExistingAncestor(p string) string {
 	}
 }
 
-// maybeCommit коммитит ТОЛЬКО опубликованные изменённые цели — явным
-// списком путей через memory.CommitPaths, а не весь memDir целиком (который
-// может содержать посторонние staged файлы, уже поставленные в индекс
-// пользователем вне этого rebuild). Ничего опубликовано не было -> no-op,
-// манифест не трогается.
-//
-// На успехе патчит манифест CommitCreated/CommitSHA. На ОШИБКЕ (review #5) —
-// переводит манифест в терминальный failed с добавленной в Errors причиной и
-// проставленным FinishedAt ПРЯМО ЗДЕСЬ: к этому моменту манифест уже в
-// StatusAwaitingCommit/StatusPublished (Finalize сам довёл его до этого
-// терминального-для-Finalize статуса), которого нет в nonTerminalStatuses —
-// деferred FinalizeManifestOnExit в rebuildHandler такой манифест НЕ
-// трогает, так что без явного патча здесь упавший коммит навсегда читался
-// бы как "awaiting_commit", а не "failed".
+// maybeCommit коммитит ТОЛЬКО опубликованные изменённые цели — явным списком путей через
+// memory.CommitPaths, а не весь memDir целиком. На успехе патчит манифест CommitCreated/CommitSHA.
 func maybeCommit(memDir string, report memorypipeline.Report, manifestPath string) error {
 	var paths []string
 	for _, t := range report.Targets {
@@ -482,9 +429,8 @@ func maybeCommit(memDir string, report memorypipeline.Report, manifestPath strin
 
 	m, lerr := memorypipeline.LoadManifest(manifestPath)
 	if lerr != nil {
-		// Манифест нечитаем — сама попытка коммита уже произошла (или
-		// провалилась) независимо от этого; сообщаем об исходной ошибке
-		// коммита, если она есть, иначе о невозможности записать исход.
+		// Манифест нечитаем — сама попытка коммита уже произошла (или провалилась) независимо от этого; сообщаем
+		// об исходной ошибке коммита, если она есть, иначе о невозможности записать исход.
 		if commitErr != nil {
 			return fmt.Errorf("memory files updated but commit failed: %w", commitErr)
 		}
@@ -506,15 +452,8 @@ func maybeCommit(memDir string, report memorypipeline.Report, manifestPath strin
 	return nil
 }
 
-// parseCommitFlags resolves --commit/--no-commit symmetrically: EACH flag
-// only actually forces its side when it was both passed (Changed()) AND its
-// value is true — mirroring how --commit already behaved (it reads
-// GetBool("commit"), so "--commit=false" does not force a commit).
-// Previously --no-commit forced Commit=false on bare Changed() alone,
-// making "--no-commit=false" (explicitly passed but false) wrongly force
-// no-commit instead of being a no-op. commitSet is true iff either flag
-// actually forces its side; --commit and --no-commit both forcing is a
-// mutual-exclusion error (review #12's original contract, preserved).
+// parseCommitFlags resolves --commit/--no-commit symmetrically: EACH flag only actually forces its side
+// when it was both passed AND its value is true — mirroring how --commit already behaved.
 func parseCommitFlags(cmd *cobra.Command) (commitSet, commit bool, err error) {
 	var commitForced, noCommitForced bool
 	if cmd.Flags().Changed("commit") {
@@ -565,11 +504,8 @@ func newMemoryRebuildCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveExplicitRunDir проверяет id, явно переданный через --run, и
-// возвращает путь к его run-директории под runsBase. id обязан быть голым
-// именем директории (без разделителей пути, без ".."/"." — Lstat вместо Stat,
-// чтобы отклонить симлинк на run-директорию (review #7): подмена через
-// симлинк не должна давать доступ за пределы runsBase.
+// resolveExplicitRunDir проверяет id, явно переданный через --run, и возвращает путь к его run-директории
+// под runsBase.
 func resolveExplicitRunDir(runsBase, flowName, id string) (string, error) {
 	if id == "" || filepath.Base(id) != id || id == "." || id == ".." ||
 		strings.ContainsAny(id, `/\`) {
@@ -580,7 +516,7 @@ func resolveExplicitRunDir(runsBase, flowName, id string) (string, error) {
 		return "", fmt.Errorf("run id %q does not belong to flow %q", id, flowName)
 	}
 	dir := filepath.Join(runsBase, id)
-	info, err := os.Lstat(dir) // Lstat: отклонить симлинкованную run-директорию (review #7)
+	info, err := os.Lstat(dir) // Отклоняем симлинкованную run-директорию.
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("run %q not found (or not a real directory) under %s", id, runsBase)
 	}

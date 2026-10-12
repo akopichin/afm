@@ -21,11 +21,8 @@ import (
 const planningContract = `## Output Contract (mandatory)
 The plan MUST contain sections: "## Tasks", "## Assumptions", "## Acceptance Criteria".`
 
-// verifyStageNote форматирует подсказку про verify-команду, добавляемую к
-// промпту реализации: перечисляет shell-шаги, которые агент должен прогнать
-// сам перед созданием .done. Agent-шаги (Kind==VerifyAgent) в V1 ничего сюда
-// не добавляют — они станут исполняемыми в V4 (см.
-// stagefiles.CheckCompletion, "V1: только shell-шаги").
+// verifyStageNote форматирует подсказку про verify-команду, добавляемую к промпту реализации: перечисляет
+// shell-шаги, которые агент должен прогнать сам перед созданием .done.
 func verifyStageNote(v flow.VerifySpec) string {
 	var cmds []string
 	for _, st := range v.Steps {
@@ -40,12 +37,8 @@ func verifyStageNote(v flow.VerifySpec) string {
 		"so run it yourself before creating .done):\n%s", strings.Join(cmds, "\n"))
 }
 
-// preNoteBlock читает prenote.md стадии и возвращает блок для добавления в
-// контекст агента, либо "" если заметки нет. Вклеивается на ПЕРВОМ (свежем)
-// старте любой агентской стадии (planning/implementation/review/autonomous):
-// заметка, прикреплённая пользователем пока стадия была pending, становится
-// частью исходного задания, а не поправкой по ходу (ср. feedback.md в
-// *WithFeedback-раннерах — «User note (added while this stage was running)»).
+// preNoteBlock читает prenote.md стадии и возвращает блок для добавления в контекст агента, либо "" если
+// заметки нет.
 func (o *Orchestrator) preNoteBlock(stageDir string) string {
 	note := state.LoadPreNote(stageDir)
 	if note == "" {
@@ -54,12 +47,8 @@ func (o *Orchestrator) preNoteBlock(stageDir string) string {
 	return "\n\n## User note (added before this stage started)\n\n" + note
 }
 
-// feedbackNoteBlock читает feedback.md стадии и возвращает блок для добавления
-// в контекст агента, либо "" если файла нет или он пуст. Зеркалит
-// preNoteBlock, но для уже ЗАПУЩЕННОЙ стадии — вызывается в *WithFeedback-
-// раннерах ДО retry-цикла (agent_suggest перезапускает агента с этой
-// заметкой как поправкой по ходу работы, в отличие от preNoteBlock, где
-// заметка — часть исходного задания на первом старте).
+// feedbackNoteBlock читает feedback.md стадии и возвращает блок для добавления в контекст агента, либо ""
+// если файла нет или он пуст.
 func (o *Orchestrator) feedbackNoteBlock(stageDir string) string {
 	feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 	if len(feedbackData) == 0 {
@@ -72,10 +61,8 @@ func (o *Orchestrator) feedbackNoteBlock(stageDir string) string {
 // distinct from the before/after hook logs.
 const phaseScript = "script"
 
-// runScriptStage executes a script-only stage (Stage.IsScript()): no plan.md,
-// no approval, no LLM agent — just Stage.Script via execScript, retried with
-// the same fixed 3x/1-2-3s policy as hooks (a script failure is just as
-// deterministic and fast as a hook failure).
+// runScriptStage executes a script-only stage: no plan.md, no approval, no LLM agent — just Stage.Script
+// via execScript, retried with the same fixed 3x/1-2-3s policy as hooks.
 func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
@@ -91,20 +78,8 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	if err != nil {
 		o.emitStageEvent(lifecyclehooks.EventStageScriptFailed, s.ID, err.Error())
 		_, failSeq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
-		// script_failed — a durable dashboard-feed notice (distinct from the
-		// lifecycle-only stage_script_failed above, which only reaches
-		// observer hook commands). Published AFTER the transition: the durable
-		// FSM transition to failed is already committed, this only adds context
-		// (the exit error + a stderr tail) for the feed — never threaded back
-		// into the FSM transition itself. dataKeySeq carries the applied
-		// transition's seq as a per-occurrence discriminator: script_failed is
-		// content-deduped on ingest (see CONTENT_DEDUPE_ON_INGEST in
-		// use-event-feed.ts) because it's published both live and via
-		// AppendNotice without its own bus.Event.Seq — without a discriminator
-		// in the payload, two genuinely distinct failures with the same
-		// error/stderr_tail (e.g. a manual Retry failing identically) would
-		// collapse into one row. Same seq in both live+notice for the SAME
-		// occurrence keeps the intended dedup working.
+		// script_failed — a durable dashboard-feed notice. Same seq in both live+notice for the SAME occurrence
+		// keeps the intended dedup working.
 		const keyError = "error" // matches the existing "error" key used by publishHookNotice (hooks.go)
 		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
 		data := map[string]string{keyError: err.Error(), dataKeyStderrTail: tail, dataKeySeq: strconv.FormatUint(failSeq, 10)}
@@ -118,27 +93,19 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: s.ID, Data: phaseScript})
 }
 
-// sectionAssumptions зеркалит одну из секций stagefiles.RequiredPlanSections
-// (используется тестами errors_test.go для MissingSectionsError — сам список
-// секций для валидации плана теперь живёт в stagefiles, см. RequiredPlanSections).
+// sectionAssumptions зеркалит одну из секций stagefiles.RequiredPlanSections.
 const sectionAssumptions = "Assumptions"
 
-// collectDependencyPlansNoticing — тонкая обёртка над
-// stagefiles.CollectDependencyPlans: колбэк дублирует предупреждение о
-// недостающей зависимости и live (o.ui.Publish), и durable
-// (stagefiles.AppendNotice). Этот колбэк был дословно продублирован в
-// каждом attempt-теле (planning/implementation/autonomous/review) —
-// вынесен сюда одной точкой (Задача 1.6/1.4, финальный дедуп).
+// collectDependencyPlansNoticing — тонкая обёртка над stagefiles.CollectDependencyPlans: колбэк дублирует
+// предупреждение о недостающей зависимости и live, и durable.
 func (o *Orchestrator) collectDependencyPlansNoticing(s flow.Stage) string {
 	return stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
 		o.publishNotice(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 	})
 }
 
-// collectArtifactsNoticing — тонкая обёртка над stagefiles.CollectArtifacts:
-// ошибка сбора не фатальна, только WARN в лог afm (не стадии). label —
-// текст, идентифицирующий вызывающую попытку в сообщении (сохраняет
-// дословный текст исходных WARN-сообщений каждого раннера).
+// collectArtifactsNoticing — тонкая обёртка над stagefiles.CollectArtifacts: ошибка сбора не фатальна,
+// только WARN в лог afm.
 func (o *Orchestrator) collectArtifactsNoticing(s flow.Stage, label string) string {
 	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
 	if artErr != nil {
@@ -155,20 +122,16 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 		return
 	}
 
-	// Планирование = стандартный (не автономный) трек. Если от предыдущей попытки
-	// (или от неудавшегося autonomous-запуска до retry) остался autonomous.flag —
-	// он теперь устарел: стадия пройдёт planning и получит настоящий plan.md с
-	// approve/revise. Без снятия флага stage_autonomous в /api/status оставался бы
-	// true, а дашборд прятал бы plan-панель (нет approve-кнопки на awaiting_approval).
+	// Планирование = стандартный трек. Без снятия флага stage_autonomous в /api/status оставался бы true, а
+	// дашборд прятал бы plan-панель (нет approve-кнопки на awaiting_approval).
 	clearStaleAutonomousFlag(stageDir)
 
 	// Defensive: may be a no-op if the caller already transitioned
 	// the stage to "planning" (e.g. startPlanningForUnblocked).
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
 
-	// preNote читается ДО retry-цикла — это часть исходного задания на первом
-	// старте стадии, а не поправка "по месту" на каждой попытке (в отличие от
-	// feedback.md в runPlanningWithFeedback, см. runPlanningAttempt).
+	// preNote читается ДО retry-цикла — это часть исходного задания на первом старте стадии, а не поправка
+	// "по месту" на каждой попытке.
 	preNote := o.preNoteBlock(stageDir)
 
 	o.runPlanningAttempt(ctx, s, stageDir, flow.PhaseLogFile(flow.PhasePlanning), "planning",
@@ -201,23 +164,8 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 	return nil
 }
 
-// runPlanningAttempt — общее тело попытки планирования: собирает контекст
-// зависимостей и артефактов, делегирует fillInputs заполнение
-// специфичных для fresh/feedback полей prompts.Inputs (RetryContext/
-// Feedback/PreviousPlan), строит промпт, запускает RunPlanning и
-// валидирует результат (ValidatePlan → AdoptWrittenPlan / interactive
-// short-circuit / rePromptMissingSections) — байт-в-байт хвост, общий для
-// runPlanningAgent (fresh) и runPlanningWithFeedback (feedback).
-//
-// fillInputs вызывается на КАЖДОЙ попытке ДО сбора depPlans/artCtx — это
-// сохраняет момент чтения feedback.md/LatestPlanVersion "по месту" ровно
-// там, где он был в исходном runPlanningWithFeedback (до сбора контекста:
-// ошибка LatestPlanVersion возвращалась раньше, чем depPlans/artCtx вообще
-// собирались — CollectDependencyPlans иначе успел бы опубликовать лишние
-// EventContextWarning перед бесполезной попыткой). preNote для fresh уже
-// прочитан ДО retry-цикла (см. runPlanningAgent) и просто дописывается в
-// RetryContext внутри fillInputs — сам fillInputs побочных эффектов не
-// имеет и порядка не меняет.
+// runPlanningAttempt строит контекст, запускает и проверяет план; fillInputs обновляет feedback до сбора
+// контекста на каждой попытке.
 func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, stageDir, logFileName, artifactsWarnLabel string, fillInputs func(retryContext string, in *prompts.Inputs) error) {
 	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
 		in := prompts.Inputs{
@@ -275,10 +223,8 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 
 	o.runPlanningAttempt(ctx, s, stageDir, "planning-revision.log", "revise",
 		func(_ string, in *prompts.Inputs) error {
-			// feedback.md и LatestPlanVersion читаются ЗАНОВО на КАЖДОЙ
-			// попытке (а не один раз до цикла, как preNote у fresh) — так
-			// было в исходном runPlanningWithFeedback, момент чтения
-			// сохранён дословно.
+			// feedback.md и LatestPlanVersion читаются ЗАНОВО на КАЖДОЙ попытке — так было в исходном
+			// runPlanningWithFeedback, момент чтения сохранён дословно.
 			feedbackData, _ := os.ReadFile(filepath.Join(stageDir, "feedback.md"))
 			_, prevPlan, err := state.LatestPlanVersion(stageDir)
 			if err != nil {
@@ -298,18 +244,11 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 	o.runImplementationAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseImplementation), "impl")
 }
 
-// runEmbeddedReview — review-шаг, встроенный в implementation-попытку
-// (Задача 1.7). Это НЕ отдельная scheduler-фаза: ошибка возвращается как
-// есть в объемлющий implementation-runWithRetry — нет собственного
-// spawnKind/семафора/transition/lease/completion-gate/независимого retry.
-// Переиспользует уже собранные текущей implementation-попыткой
-// depPlans/artCtx/verifyNote (не пересобирает их); memoryBlockForStage
-// пересчитывается отдельно для review-промпта. runnerFor вызывается здесь,
-// внутри вызывающей per-attempt closure — не хоистится наружу.
+// runEmbeddedReview — review-шаг, встроенный в implementation-попытку. runnerFor вызывается здесь, внутри
+// вызывающей per-attempt closure — не хоистится наружу.
 func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stageDir, depPlans, artCtx, verifyNote string) error {
-	// Инлайн-ревью тоже должен видеть замечания AI-verify предыдущего
-	// прохода (владелец коррекции остаётся implementation — ревью здесь
-	// не гейтится отдельно, это просто дополнительный контекст).
+	// Инлайн-ревью тоже должен видеть замечания AI-verify предыдущего прохода (владелец коррекции остаётся
+	// implementation — ревью здесь не гейтится отдельно, это просто дополнительный контекст).
 	reviewPrompt := prompts.Build(prompts.Inputs{
 		Template:        o.opts.Prompts.Review,
 		Stage:           s,
@@ -328,14 +267,8 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 	return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 }
 
-// runImplementationAttempt — общее тело implementation-попытки: читает
-// plan.md, собирает контекст, строит промпт, запускает implementation-агента
-// и (если стадия объявляет AgentReview) встроенный review сразу после
-// успешного implementation-запуска. Общий и для fresh (runImplementationAgent),
-// и для feedback (runImplementationWithFeedback) раннеров. note — уже
-// прочитанный до цикла блок (preNoteBlock для fresh, feedbackNoteBlock для
-// feedback); logFileName — имя лога implementation-попытки;
-// artifactsWarnLabel — текст WARN-сообщения при ошибке сбора артефактов.
+// runImplementationAttempt выполняет fresh/feedback-попытку и встроенный review; note читается до
+// retry-цикла.
 func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
 	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
 		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
@@ -415,16 +348,8 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 	o.runReviewAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseReview), depPlans, artCtx)
 }
 
-// runReviewAttempt — общее тело review-попытки (standalone review): строит
-// промпт и запускает существующий runWithRetry. Общий и для fresh
-// (runReviewAgent), и для feedback (runReviewWithFeedback) раннеров.
-//
-// В отличие от implementation/autonomous, depPlans/artCtx для review
-// собираются ОДИН РАЗ ДО retry-цикла (а не заново на каждой попытке внутри
-// closure) — так было в исходных runReviewAgent/runReviewWithFeedback,
-// момент сбора сохранён: адаптер собирает их сам и передаёт сюда уже
-// готовыми. note — уже прочитанный до цикла блок (preNoteBlock для fresh,
-// feedbackNoteBlock для feedback); logFileName — имя лога попытки.
+// runReviewAttempt — общее тело review-попытки: строит промпт и запускает существующий runWithRetry. Общий
+// и для fresh (runReviewAgent), и для feedback (runReviewWithFeedback) раннеров.
 func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, depPlans, artCtx string) {
 	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
 		verifyNote := o.verifyFeedbackBlock(stageDir)
@@ -449,28 +374,8 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 	}), func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
 }
 
-// runAutonomousAgent выполняет стадию в автономном треке — без plan.md и approval.
-// Агент использует прикреплённые скиллы и обязан написать execution_summary.md
-// по завершении (проверяется completion-check'ом stagefiles.CheckAutonomousCompletion).
-//
-// Трек отличается от runImplementationAgent: нет чтения plan.md, нет .done,
-// фаза — "autonomous_execution", используется Autonomous-шаблон промпта.
-//
-// MkdirAll + запись autonomous.flag в начале — тот же защитный паттерн, что
-// уже есть в runPlanningAgent/runReviewAgent (см. их начало): стадия могла
-// быть каскадно помечена failed через failBlockedStages/blocked_by_dep, так и
-// не получив stageDir на диске (директория создаётся только при реальной
-// активации). Без этого ручной retry такой стадии падал с
-// "open log file: ... no such file or directory" — фикс в единой точке
-// покрывает retry, resume-после-рестарта (recovery.go) и любой будущий caller.
-//
-// AI-verify (V4b): completionCheck обёрнут gateWithVerify, который запускает
-// RunVerification ПОСЛЕ того, как CheckAutonomousCompletion (проба на
-// execution_summary.md) реально прошла. Это НОВОЕ поведение — раньше
-// [auto]-стадия с непустым verify: агент-шаги verify молча игнорировались
-// (V1: только shell-шаги успевали исполняться внутри самого агента, см.
-// verifyStageNote), теперь [auto]+verify реально проверяется тем же
-// движком, что implementation/review.
+// runAutonomousAgent запускает автономный трек без plan.md/approval; completion требует
+// execution_summary.md.
 func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -484,15 +389,8 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	o.runAutonomousAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseAutonomous), "autonomous")
 }
 
-// runAutonomousAttempt — общее тело autonomous-попытки: собирает контекст,
-// строит промпт и запускает существующий runWithRetry. Общий и для fresh
-// (runAutonomousAgent), и для feedback (runAutonomousWithFeedback) раннеров —
-// они отличаются только setup ДО вызова (MkdirAll+autonomous.flag против
-// EvStartRun) и тремя параметрами: note — уже прочитанный до цикла блок
-// (preNoteBlock для fresh, feedbackNoteBlock для feedback); logFileName — имя
-// лога попытки; artifactsWarnLabel — текст WARN-сообщения при ошибке сбора
-// артефактов (сохраняет дословный текст исходных runAutonomousAgent/
-// runAutonomousWithFeedback).
+// runAutonomousAttempt — общее тело autonomous-попытки: собирает контекст, строит промпт и запускает
+// существующий runWithRetry.
 func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
 	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
 		artCtx := o.collectArtifactsNoticing(s, artifactsWarnLabel)
@@ -522,18 +420,13 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 	}), func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
 }
 
-// runImplementationWithFeedback перезапускает implementation-фазу с фидбеком
-// пользователя (agent_suggest) — как runImplementationAgent, но с добавленной
-// в контекст фразой из feedback.md. Идёт через тот же runnerFor: если стадия
-// Interactive, автоматически получает --resume <session-id> (существующий
-// stagefiles.SessionExists/LoadOrCreateSession в runnerFor не меняется).
+// runImplementationWithFeedback перезапускает implementation-фазу с фидбеком пользователя — как
+// runImplementationAgent, но с добавленной в контекст фразой из feedback.md.
 func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindImplementation)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	// Возвращаемся в Running (могли прийти из Revising — Revise() перевёл
-	// сюда стадию, чтобы доставить прерывание). Без этого onAgentCompleted и
-	// EvComplete не увидели бы подходящий статус, и стадия зависла бы в
-	// Revising даже после успешного завершения агента.
+	// Возвращаемся в Running. Без этого onAgentCompleted и EvComplete не увидели бы подходящий статус, и
+	// стадия зависла бы в Revising даже после успешного завершения агента.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
@@ -554,11 +447,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	o.runReviewAttempt(ctx, s, stageDir, feedbackNote, "review-feedback.log", depPlans, artCtx)
 }
 
-// runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в
-// контексте. Зеркалит тело runAutonomousAgent один в один (лог, аргументы
-// RunAgent, текст summaryNote) и добавляет только feedbackNote поверх
-// RetryContext; MkdirAll/autonomous.flag не повторяются — стадия уже была
-// активирована исходным runAutonomousAgent до прерывания.
+// runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в контексте.
 func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)

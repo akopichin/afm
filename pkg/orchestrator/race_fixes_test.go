@@ -17,13 +17,6 @@ import (
 
 // --- Fix #3: completeStage must not run side effects when EvComplete loses CAS ---
 
-// TestCompleteStage_LostCASSkipsSideEffects reproduces the race where a Pause
-// lands between the status snapshot read by onAgentCompleted and the
-// Trigger(EvComplete) inside completeStage. Before the fix, completeStage
-// ignored the CAS result and ran maybeRunAfterHook regardless — which, on a
-// now-paused stage, incremented pendingAfterHooks but had its decrementing
-// callback dropped by SpawnAgent's shouldRun skip, leaking the counter forever
-// (shouldExit never returns true → run never exits).
 func TestCompleteStage_LostCASSkipsSideEffects(t *testing.T) {
 	runDir := t.TempDir()
 	stages := []flow.Stage{
@@ -62,13 +55,8 @@ func TestCompleteStage_LostCASSkipsSideEffects(t *testing.T) {
 
 // --- Fix #1: Pause→Continue during script_before must launch the agent once ---
 
-// barrierAutoRunner counts how many agent invocations ENTER RunAgent and holds
-// each one in-flight until release is closed. Holding the first agent open is
-// what makes a double-launch observable: runWithRetry short-circuits on the
-// execution_summary.md completion marker, so if the first launch were allowed
-// to write it and finish, the second launch would skip RunAgent entirely and
-// the double-launch would be masked. By blocking before writing the marker, a
-// concurrent second launch also reaches RunAgent and bumps entered to 2.
+// barrierAutoRunner counts how many agent invocations ENTER RunAgent and holds each one in-flight until
+// release is closed.
 type barrierAutoRunner struct {
 	mu      sync.Mutex
 	entered int
@@ -138,10 +126,7 @@ func TestPauseContinue_DuringBeforeHook_LaunchesOnce(t *testing.T) {
 		t.Fatalf("Continue: %v", err)
 	}
 
-	// Wait past the before-hook's sleep window (1.5s): by now the original
-	// before-hook goroutine has woken and, in the buggy code, would have run
-	// mainFn a SECOND time (agent B) — which, with agent A still blocked, also
-	// reaches RunAgent. With the fix it abdicates (pause generation changed).
+	// Wait past before-hook completion to prove its stale generation cannot start a second agent.
 	time.Sleep(2500 * time.Millisecond)
 	entered := runner.enteredCount()
 	close(runner.release) // let the in-flight agent(s) finish and the stage complete
@@ -155,11 +140,6 @@ func TestPauseContinue_DuringBeforeHook_LaunchesOnce(t *testing.T) {
 
 // --- Fix #5: a losing concurrent Retry must not clear the winner's fresh run ---
 
-// TestRetry_LostCASDoesNotClearInteractiveSessions models two concurrent
-// retries: the injected barrier fires between retryStage's failed-status check
-// and its CAS, moving the stage out of failed (as the winning retry would),
-// so THIS call loses the CAS. Before the fix, clearInteractiveSessions ran
-// before the CAS — the loser wiped the session the winner had just recreated.
 func TestRetry_LostCASDoesNotClearInteractiveSessions(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "s1")

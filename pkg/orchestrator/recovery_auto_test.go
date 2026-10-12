@@ -14,12 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestAutoRecover_ResumesFailedStageWithoutManualRetry simulates the exact
-// scenario the feature targets: a stage genuinely failed (e.g. the process
-// was killed mid-run, leaving reason "context canceled"), then a fresh
-// Orchestrator.Run resumes the same run dir. With auto_recover enabled
-// (the default), the stage must actually re-run and reach done — no manual
-// `afm retry` call anywhere in this test.
 func TestAutoRecover_ResumesFailedStageWithoutManualRetry(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -69,9 +63,6 @@ func TestAutoRecover_ResumesFailedStageWithoutManualRetry(t *testing.T) {
 	<-runDone
 }
 
-// TestAutoRecover_Disabled_LeavesFailedStageUntouched is the regression guard:
-// an explicit auto_recover: false must reproduce today's behavior exactly —
-// a failed stage stays failed until a manual retry.
 func TestAutoRecover_Disabled_LeavesFailedStageUntouched(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -122,12 +113,6 @@ func TestAutoRecover_Disabled_LeavesFailedStageUntouched(t *testing.T) {
 	<-runDone
 }
 
-// TestAutoRecover_RespectsDependsOnOrder covers the exact cascade shape the
-// feature targets: stage a genuinely failed, stage b failed only because a
-// failed (blocked_by_dep) — both are "failed" on disk, but auto-recover must
-// not let b start before a actually finishes. This is not new orchestrator
-// logic: resetting both to pending just re-enters the same depsDone() gate
-// every never-yet-run pending stage goes through.
 func TestAutoRecover_RespectsDependsOnOrder(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -195,11 +180,6 @@ func TestAutoRecover_RespectsDependsOnOrder(t *testing.T) {
 	<-runDone
 }
 
-// TestAutoRecover_OnlyTouchesFailedStages is the selectivity guard: a stage
-// already in a terminal StatusDone must be left completely untouched by
-// auto-recover, while a genuinely failed stage in the same run is still
-// reset and re-run as usual. auto_recover must be a strict no-op for
-// anything that isn't StatusFailed.
 func TestAutoRecover_OnlyTouchesFailedStages(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -260,14 +240,6 @@ func TestAutoRecover_OnlyTouchesFailedStages(t *testing.T) {
 	<-runDone
 }
 
-// TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry covers the
-// interactive-stage edge case: a leftover <phase>.session.json from before
-// the crash would otherwise make the retried agent fail with "No
-// conversation found" (the same reason retryStage's manual path clears
-// sessions in scheduling.go). autoRecoverFailedStages must clear it too.
-// This only checks the cleanup itself (which happens synchronously, before
-// any agent spawns) — it does not wait for the interactive stage to fully
-// complete, since that is already covered by the dialog-specific tests.
 func TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -318,18 +290,7 @@ func TestAutoRecover_ClearsStaleInteractiveSessionBeforeRetry(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- orch.Run(ctx) }()
 
-	// Command "true" never produces real implementation output, so
-	// runImplementationAgent's own completion check can legitimately retry
-	// and re-fail this stage on its own (no artifact ever appears) — that
-	// outcome is unrelated to what this test verifies and must not be
-	// asserted on; it's what made this test flaky in CI (a slower runner let
-	// that unrelated retry-then-fail cycle run to completion inside the poll
-	// window). What this test actually checks is that the STALE phantom
-	// content never survives: whether the file is deleted outright or
-	// promptly replaced by a fresh session for the retried stage (both are
-	// correct), the old "stale-phantom" id must be gone. Checking content
-	// rather than mere non-existence avoids racing against however fast a
-	// legitimate new session gets written back to the same path.
+	// Assert stale session content disappears, not file absence: a legitimate retry may already replace it.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(staleSession)

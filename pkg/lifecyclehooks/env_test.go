@@ -151,10 +151,6 @@ func TestUnsetTransportVars_RemovesOnlyHookSecretPrefix(t *testing.T) {
 	}
 }
 
-// TestSecretValues_FeedsRedactor — регрессия на Hook-специфичный glue после
-// выноса примитива в pkg/redact: secretValues извлекает значения ResolvedEnv, а
-// пропущенная через redact строка их маскирует (поведение lifecyclehooks не
-// изменилось). Байт-в-байт семантику самого редактора покрывает pkg/redact.
 func TestSecretValues_FeedsRedactor(t *testing.T) {
 	h := Hook{ResolvedEnv: map[string]string{"A": "s3cr3t", "B": "topsecret"}}
 	vals := secretValues(h)

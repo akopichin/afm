@@ -11,11 +11,6 @@ import (
 
 // --- scripts/openai-as-claude.sh -------------------------------------------------
 
-// TestOpenAIAsClaude_UsageEnvelopeEmitted: a final SSE chunk carrying .usage
-// (with the nested prompt_tokens_details.cached_tokens OpenAI actually sends)
-// must produce a synthetic result line with the exact field names/shape
-// pkg/accounting's Collector parses, and it must normalize into real tokens
-// through the REAL collector — not just look right by string matching.
 func TestOpenAIAsClaude_UsageEnvelopeEmitted(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -75,10 +70,6 @@ printf 'data: [DONE]\n'`)
 	}
 }
 
-// TestOpenAIAsClaude_NoUsageInResponseStaysBareResult: without a usage-bearing
-// chunk (e.g. the provider doesn't honor stream_options, or a test double
-// omits it) the result line must stay the original bare shape — no fabricated
-// usage_contract_version — so Collector.Finish reports unmetered, not $0.
 func TestOpenAIAsClaude_NoUsageInResponseStaysBareResult(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -114,9 +105,6 @@ func TestOpenAIAsClaude_NoUsageInResponseStaysBareResult(t *testing.T) {
 	}
 }
 
-// TestOpenAIAsClaude_NoSecretOrPromptLeakage: neither the API key nor the
-// prompt text may appear anywhere in the emitted synthetic result — the usage
-// envelope is numbers-only by contract.
 func TestOpenAIAsClaude_NoSecretOrPromptLeakage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -156,10 +144,6 @@ printf 'data: [DONE]\n'`)
 
 // --- scripts/openai-agent-as-claude.sh --------------------------------------------
 
-// TestOpenAIAgentAsClaude_UpstreamUsagesArrayNotSummed: two internal turns
-// each report their own usage; the script must attach BOTH raw objects to
-// upstream_usages (no jq-side summation), and the REAL accounting.Collector
-// must sum them into the correct total tokens.
 func TestOpenAIAgentAsClaude_UpstreamUsagesArrayNotSummed(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -212,10 +196,6 @@ data: [DONE]
 	}
 }
 
-// TestOpenAIAgentAsClaude_APIFailureEmitsGatheredUsageBeforeExit: the first
-// turn reports usage and a tool call; the second turn's request fails
-// outright (HTTP 500) — the script must still emit the usage gathered from
-// turn 1 (with a non-success subtype) before exiting non-zero.
 func TestOpenAIAgentAsClaude_APIFailureEmitsGatheredUsageBeforeExit(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -228,10 +208,7 @@ func TestOpenAIAgentAsClaude_APIFailureEmitsGatheredUsageBeforeExit(t *testing.T
 data: {"choices":[],"model":"gpt-x","usage":{"prompt_tokens":30,"completion_tokens":5}}
 data: [DONE]
 `
-	// writeStatefulFakeCurl returns the SAME http code for every invocation, so
-	// turn 2's failure (a different http code than turn 1's 200) needs a
-	// hand-rolled fake curl instead: call 0 succeeds with turn1's SSE body,
-	// any later call returns a bare HTTP 500.
+	// Use a custom curl stub: turn 1 returns 200, later calls return 500.
 	fakeCurlDir := t.TempDir()
 	counterFile := fakeCurlDir + "/counter"
 	respOK := fakeCurlDir + "/ok"

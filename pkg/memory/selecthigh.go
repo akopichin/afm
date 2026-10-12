@@ -4,10 +4,8 @@ import (
 	"strings"
 )
 
-// SelectHigh extracts the text under the "## High" heading from prioritized content.
-// It returns the text from the "## High" heading up to the next "## " heading (case-insensitive).
-// If no "## High" section is found, it returns an empty string.
-// The result is trimmed of leading/trailing whitespace.
+// SelectHigh extracts the text under the "## High" heading from prioritized content. It returns the text
+// from the "## High" heading up to the next "## " heading (case-insensitive).
 func SelectHigh(prioritized string) string {
 	lines := strings.Split(prioritized, "\n")
 

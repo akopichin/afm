@@ -11,11 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestReportRendersCostForRunWithUsage verifies `afm report` (no args, so it
-// picks the latest run — same rule `afm check` uses) resolves the run
-// directory, loads status via state.LoadRunState and usage via
-// accounting.Load, and prints a markdown report to stdout carrying the
-// stage, its cost, and the run total.
 func TestReportRendersCostForRunWithUsage(t *testing.T) {
 	chdirTemp(t)
 	// Деньги показываются только при show_money (дефолт — скрыто); эта проверка
@@ -67,10 +62,6 @@ func TestReportRendersCostForRunWithUsage(t *testing.T) {
 	}
 }
 
-// TestReportNoUsageData covers a run with no usage.jsonl at all (accounting
-// disabled, or a run predating this feature): `afm report` must still
-// produce a valid report that plainly says so, not crash and not show a
-// bogus $0.00.
 func TestReportNoUsageData(t *testing.T) {
 	chdirTemp(t)
 
@@ -93,11 +84,6 @@ func TestReportNoUsageData(t *testing.T) {
 	}
 }
 
-// TestReport_AccountingDisabledEmitsHintExit0 verifies the display switch:
-// with AFM_ACCOUNTING=0, `afm report` on a VALID run writes nothing to stdout
-// (so a redirected report stays empty) and a one-line hint on stderr, exiting
-// 0 — even with recorded usage present. The gate runs after resolving the run
-// and loading its state, so a bad run id still errors (see the sibling test).
 func TestReport_AccountingDisabledEmitsHintExit0(t *testing.T) {
 	chdirTemp(t)
 	t.Setenv("AFM_ACCOUNTING", "0")
@@ -131,10 +117,6 @@ func TestReport_AccountingDisabledEmitsHintExit0(t *testing.T) {
 	}
 }
 
-// TestReport_AccountingDisabledStillErrorsOnBadRun verifies the display gate
-// does NOT mask invalid input: with AFM_ACCOUNTING=0, a nonexistent run id
-// still fails (resolution happens before the gate), matching `afm report`'s
-// behavior with the display on and `afm check`'s run validation.
 func TestReport_AccountingDisabledStillErrorsOnBadRun(t *testing.T) {
 	chdirTemp(t)
 	t.Setenv("AFM_ACCOUNTING", "0")
@@ -159,9 +141,8 @@ func TestReportExplicitRunID(t *testing.T) {
 	chdirTemp(t)
 
 	makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
-	// A second, newer run must NOT be picked when an explicit id names the
-	// first one — otherwise "explicit id" would be indistinguishable from
-	// "latest" in this test.
+	// A second, newer run must NOT be picked when an explicit id names the first one — otherwise "explicit
+	// id" would be indistinguishable from "latest" in this test.
 	makeRunState(t, "flow-20260202-120000", cmdInit, state.StatusRunning)
 
 	out := captureStdout(t, func() {
@@ -216,11 +197,6 @@ func TestReportNoRuns(t *testing.T) {
 	}
 }
 
-// TestReport_LoadErrorMatrix mirrors TestCheck_LoadErrorMatrix for `afm
-// report`: missing/corrupt/other/normal, asserting stdout, stderr and exit
-// code separately. The corrupt/other-error stdout must be self-contained —
-// distinguishing the two causes entirely within the markdown, since a
-// caller doing `afm report run > out.md` never sees stderr.
 func TestReport_LoadErrorMatrix(t *testing.T) {
 	exitCodeOf := func(t *testing.T, err error) int {
 		t.Helper()

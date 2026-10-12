@@ -1,27 +1,5 @@
 #!/usr/bin/env bash
-# cursor-as-claude.sh — адаптер Cursor Cloud Agents API → claude stream-json.
-#
-# Cursor Cloud API (api.cursor.com) НЕ имеет синхронного /chat/completions — это
-# асинхронный run-based Cloud Agents API. Поэтому адаптер работает иначе, чем
-# openai-as-claude: он не делает одного запроса «промпт → ответ», а запускает
-# Cloud Agent и дожидается его результата:
-#
-#   1. создаёт no-repo Cloud Agent (POST /v1/agents) с промптом из stdin;
-#   2. опрашивает run до терминального статуса (FINISHED/ERROR/CANCELLED/EXPIRED);
-#   3. эмитит claude stream-json: assistant-конверт с итоговым текстом + result event;
-#   4. архивирует агента (best-effort), чтобы не плодить мусор в аккаунте.
-#
-# Переменные (ставятся сгенерированным враппером autoShim при type: cursor):
-#   CURSOR_API_KEY   — токен авторизации (обязателен)
-#   CURSOR_BASE_URL  — базовый URL API (дефолт: https://api.cursor.com/v1)
-#   CURSOR_MODEL     — model.id (пусто / "auto" → поле model опускается → Cursor default)
-#
-# Особенности:
-#   - Создание агента включает старт cloud-VM (enqueuing) и может занимать до
-#     минуты и более — отсюда длинный timeout на create (300с).
-#   - Результат эмитится одним агрегированным конвертом в конце (как openai-as-claude):
-#     pkg/executor/parseStreamEvent парсит {type:"assistant", message:{...}}, а
-#     стриминговые дельты игнорирует, поэтому копим текст целиком.
+# Адаптер Cursor Cloud Agents API: создаёт агента, ждёт терминальный статус и отдаёт Claude stream-json.
 
 set -euo pipefail
 

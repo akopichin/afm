@@ -15,41 +15,26 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// hookMaxRetries/hookRetryBackoff — fixed retry policy for script_before/
-// script_after/script-stage failures, deliberately separate from
-// runWithRetry's 15x/5s LLM rate-limit backoff (retry.go:56-63): these
-// failures are deterministic shell-command errors, not rate limits, so a
-// short fixed schedule is the right fit.
+// hookMaxRetries/hookRetryBackoff define short shell retries, independent of LLM rate-limit backoff.
 const hookMaxRetries = 3
 
 var hookRetryBackoff = []time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second}
 
-// stderrTailMaxLines/stderrTailMaxBytes bound the stderr excerpt attached to
-// a script_failed notice (agents.go's runScriptStage) and, later, the
-// analogous notice for a failed script_before/script_after hook — a single
-// shared cap so both paths show the same amount of context, passed straight
-// into executor.ReadStderrTail.
+// stderrTailMaxLines/stderrTailMaxBytes bound stderr excerpts for script and hook failure notices.
 const (
 	stderrTailMaxLines = 20
 	stderrTailMaxBytes = 4096
 )
 
-// dataKeyStderrTail is the shared notice-data key for a stderr excerpt,
-// reused by runScriptStage's script_failed (agents.go) and runBeforeHook/
-// runAfterHook's hook_failed (this file) — a single constant, not a string
-// literal at each of the 3 call sites (golangci-lint's goconst).
+// dataKeyStderrTail identifies stderr excerpts in script_failed and hook_failed notices.
 const dataKeyStderrTail = "stderr_tail"
 
-// dataKeySeq is the notice-data key runScriptStage (agents.go) uses to embed
-// the applied EvFail transition's seq into the script_failed payload — a
-// per-occurrence discriminator for the frontend's content-based ingest dedup
-// (see the CONTENT_DEDUPE_ON_INGEST comment in use-event-feed.ts).
+// dataKeySeq carries EvFail's sequence to distinguish separate script_failed notices during frontend
+// deduplication.
 const dataKeySeq = "seq"
 
-// runScriptWithRetry runs fn up to hookMaxRetries+1 times (1 initial attempt
-// + up to 3 retries), waiting hookRetryBackoff[attempt] between attempts.
-// Returns the last error if every attempt fails, or ctx.Err() if cancelled
-// while waiting between attempts.
+// runScriptWithRetry runs fn up to hookMaxRetries+1 times, waiting hookRetryBackoff[attempt] between
+// attempts.
 func runScriptWithRetry(ctx context.Context, fn func() error) error {
 	var lastErr error
 	for attempt := 0; attempt <= hookMaxRetries; attempt++ {
@@ -74,9 +59,8 @@ const (
 	hookAfter  = "after"
 )
 
-// hookPending records which hook is currently blocked on a user decision, so
-// a crash mid-wait can be resumed (recovery.go) without losing which
-// script/timeout to re-run.
+// hookPending records which hook is currently blocked on a user decision, so a crash mid-wait can be
+// resumed (recovery.go) without losing which script/timeout to re-run.
 type hookPending struct {
 	Hook    string        `json:"hook"` // hookBefore or hookAfter
 	Script  string        `json:"script"`
@@ -92,11 +76,8 @@ func writeHookPending(stageDir string, p hookPending) error {
 	if err != nil {
 		return err
 	}
-	// Атомарная durable-запись (temp+fsync+rename+fsync каталога), не голый
-	// os.WriteFile: recovery резюмит hook_failed (before) и pending-решение
-	// after-hook'а исключительно по этому файлу, а после-hook при этом не двигает
-	// FSM — потеря или torn-запись при крахе оставила бы стадию без данных для
-	// Retry/Skip, причём для after-hook — незаметно после рестарта (finding #11).
+	// Durable temp+fsync+rename сохраняет данные Retry/Skip для recovery; after-hook не имеет отдельного
+	// FSM-перехода.
 	path := hookPendingPath(stageDir)
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
@@ -152,21 +133,13 @@ const (
 	hookDecisionSkip
 )
 
-// waitForHookDecision blocks until RetryHook/SkipHook resolves stageID, or
-// ctx is cancelled (full-run shutdown — the stage resumes waiting on the
-// next `afm run` via recovery.go). Only one waiter per stageID at a time.
+// waitForHookDecision blocks until RetryHook/SkipHook resolves stageID, or ctx is cancelled. Only one
+// waiter per stageID at a time.
 func (o *Orchestrator) waitForHookDecision(ctx context.Context, stageID string) (hookDecision, bool) {
 	return o.waitOnHookChan(ctx, stageID, o.registerHookWaiter(stageID))
 }
 
-// registerHookWaiter creates and registers the channel a hook decision will
-// arrive on for stageID. Split out from waitForHookDecision so a caller (see
-// runBeforeHook) can register the waiter BEFORE making the stage's
-// hook_failed status observable (FSM transition + event publish) — otherwise
-// a fast resolver (dashboard, automation hitting the HTTP API) could see
-// hook_failed and call resolveHook in the narrow window before the waiter
-// exists, which would silently drop the decision (resolveHook returns false
-// with nobody to retry).
+// registerHookWaiter creates and registers the channel a hook decision will arrive on for stageID.
 func (o *Orchestrator) registerHookWaiter(stageID string) chan hookDecision {
 	ch := make(chan hookDecision, 1)
 	o.hookWaiters.Store(stageID, ch)
@@ -185,11 +158,8 @@ func (o *Orchestrator) waitOnHookChan(ctx context.Context, stageID string, ch ch
 	}
 }
 
-// execScript runs a shell script for stage s in its project root_dir,
-// streaming output into logFile via progress.Logger and publishing one
-// EventScriptOutput per line so the dashboard event feed can show it live.
-// Deliberately bypasses runnerFor/executor.Runner: script stages need no
-// per-phase LLM command routing, only Dir/StageDir plumbing.
+// execScript runs in root_dir, streams its log, and publishes EventScriptOutput per line without LLM
+// command routing.
 func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, script string, timeout time.Duration, logFile string) error {
 	ex := executor.New(executor.Config{
 		Command:     "sh",
@@ -205,45 +175,23 @@ func (o *Orchestrator) execScript(ctx context.Context, s flow.Stage, hook, scrip
 	return ex.RunScript(ctx, timeout, logFile)
 }
 
-// publishHookNotice publishes a hook_failed/hook_resolved event live to the UI
-// bus AND mirrors it to notices.jsonl so it survives a reload/reconnect. These
-// events have no durable FSM backing of their own: runAfterHook never touches
-// the FSM at all (the stage stays done through the failure), and runBeforeHook's
-// status transition reconstructs only as a generic stage_status_changed —
-// transitionToFeedEvents has no hook_failed/hook_resolved case, so the actual
-// error/resolution text was lost on reload. Mirrors the EventAutoAnswered /
-// EventScriptOutput persistence pattern. seq is the FSM transition seq where one
-// exists (before-hook), 0 otherwise (after-hook, no FSM transition).
+// publishHookNotice publishes a hook_failed/hook_resolved event live to the UI bus AND mirrors it to
+// notices.jsonl so it survives a reload/reconnect.
 func (o *Orchestrator) publishHookNotice(stageID string, evType bus.EventType, seq uint64, data map[string]string) {
 	o.publishNotice(bus.Event{Type: evType, StageID: stageID, Data: data, Seq: seq})
 }
 
-// runBeforeHook runs s.ScriptBefore with retries; on exhaustion it blocks the
-// stage in hook_failed until the user retries or skips via the dashboard.
-// Returns true once the stage should proceed to its main content (hook
-// succeeded or was skipped), false if ctx was cancelled while waiting for a
-// decision (full-run shutdown — recovery.go resumes the wait on next start).
-//
-// Retry-tail semantics: before.log is opened O_APPEND (execScript/RunScript)
-// and a hook retries up to hookMaxRetries times into the SAME file, so the
-// stderr_tail attached to the eventual hook_failed notice is the last N lines
-// ACROSS ALL attempts of this series, not just the final one — in practice
-// this means the tail shows the final (fatal) attempt's stderr, which is
-// exactly what's wanted. Intentionally cumulative; no per-attempt log
-// segmentation.
+// runBeforeHook runs s.ScriptBefore with retries; on exhaustion it blocks the stage in hook_failed until
+// the user retries or skips via the dashboard.
 func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	// Best-effort: runBeforeHook is the first thing to touch the stage
-	// directory (mirrors the MkdirAll done by every other stage-content
-	// entry point — agents.go, scheduling.go, recovery.go). If it genuinely
-	// fails, execScript below will surface the real error through the normal
-	// hook_failed retry path.
+	// Best-effort: runBeforeHook is the first thing to touch the stage directory. If it genuinely fails,
+	// execScript below will surface the real error through the normal hook_failed retry path.
 	_ = os.MkdirAll(stageDir, 0755)
 	logFile := filepath.Join(stageDir, "before.log")
 
 	for {
-		// started на каждую серию попыток — пользовательский Retry начинает
-		// новую серию (codex MAJ#11), и она получает свой started.
+		// Публикуем started для каждой серии попыток; пользовательский Retry начинает новую серию.
 		o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeStarted, s.ID, "")
 		err := runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookBefore, s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
@@ -254,22 +202,16 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 		}
 		o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeFailed, s.ID, err.Error())
 
-		// Register the waiter BEFORE the transition/event below make
-		// hook_failed observable — closes the race where a fast resolver
-		// (dashboard, automation) could call resolveHook before anyone is
-		// listening (see registerHookWaiter's doc comment).
+		// Register the waiter BEFORE the transition/event below make hook_failed observable — closes the race
+		// where a fast resolver could call resolveHook before anyone is listening.
 		waitCh := o.registerHookWaiter(s.ID)
 
 		if werr := writeHookPending(stageDir, hookPending{Hook: hookBefore, Script: s.ScriptBefore, Timeout: s.ScriptBeforeTimeout}); werr != nil {
 			log.Printf("WARN: persist hook_pending (before) for %s: %v", s.ID, werr)
 		}
 		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvHookFailed, bus.GuardCtx{}, err.Error())
-		// o.ui, not o.critical: this is a dashboard notice, not an FSM-relevant
-		// signal — the transition already happened via triggerWithSeq above.
-		// o.critical has exactly one consumer (Run()'s event loop), and
-		// handleEvent's switch doesn't handle EventHookFailed, so publishing
-		// it there silently discarded it. publishHookNotice also mirrors it to
-		// notices.jsonl so the error text survives reload (see its comment).
+		// o.ui, not o.critical: this is a dashboard notice, not an FSM-relevant signal — the transition already
+		// happened via triggerWithSeq above.
 		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
 		o.publishHookNotice(s.ID, bus.EventHookFailed, seq, map[string]string{"hook": hookBefore, "error": err.Error(), dataKeyStderrTail: tail})
 
@@ -287,30 +229,17 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 	}
 }
 
-// runAfterHook runs s.ScriptAfter after the stage has already completed
-// successfully. Failure here does NOT touch the FSM — the stage stays done
-// regardless (no Trigger/triggerWithSeq call anywhere in this function). It
-// only surfaces a dismissable EventHookFailed notice with a retry/skip
-// decision, mirroring runBeforeHook's UI but never blocking the stage's
-// status.
-//
-// Retry-tail semantics: same as runBeforeHook's — after.log is O_APPEND and
-// a hook retries up to hookMaxRetries times into the SAME file, so the
-// stderr_tail attached to hook_failed is the last N lines ACROSS ALL attempts
-// of this series (the final/fatal attempt's stderr lands at the tail).
-// Intentionally cumulative; no per-attempt log segmentation.
+// runAfterHook runs s.ScriptAfter after the stage has already completed successfully. Intentionally
+// cumulative; no per-attempt log segmentation.
 func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	// Best-effort, mirrors runBeforeHook: the stage directory may not exist
-	// yet if this hook is the first thing to touch it. If MkdirAll genuinely
-	// fails, execScript below surfaces the real error through the normal
-	// hook_failed retry path.
+	// Best-effort, mirrors runBeforeHook: the stage directory may not exist yet if this hook is the first
+	// thing to touch it.
 	_ = os.MkdirAll(stageDir, 0755)
 	logFile := filepath.Join(stageDir, "after.log")
 
 	for {
-		// started на каждую серию попыток — симметрично runBeforeHook: Retry
-		// начинает новую серию и получает свой started (codex MAJ#11).
+		// Публикуем started для каждой серии попыток; пользовательский Retry начинает новую серию.
 		o.emitStageEvent(lifecyclehooks.EventStageScriptAfterStarted, s.ID, "")
 		err := runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookAfter, s.ScriptAfter, s.ScriptAfterTimeout, logFile)
@@ -321,17 +250,11 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 		}
 		o.emitStageEvent(lifecyclehooks.EventStageScriptAfterFailed, s.ID, err.Error())
 
-		// Register the waiter BEFORE writing hook_pending.json/publishing
-		// EventHookFailed below make the failure observable — closes the
-		// same TOCTOU race documented on registerHookWaiter/runBeforeHook: a
-		// fast resolver could otherwise call resolveHook before anyone is
-		// listening and silently lose the decision.
+		// Register the waiter before persisting or publishing failure, so a fast user decision cannot be lost.
 		waitCh := o.registerHookWaiter(s.ID)
 
 		if werr := writeHookPending(stageDir, hookPending{Hook: hookAfter, Script: s.ScriptAfter, Timeout: s.ScriptAfterTimeout}); werr != nil {
-			// after-hook НЕ двигает FSM, значит pending-решение живёт только в
-			// этом файле — потеря делает Retry/Skip невосстановимым после
-			// рестарта (finding #11), поэтому логируем явно.
+			// Решение after-hook хранится только в pending-файле; ошибка записи лишает recovery данных Retry/Skip.
 			log.Printf("WARN: persist hook_pending (after) for %s: %v", s.ID, werr)
 		}
 		tail := executor.ReadStderrTail(logFile, stderrTailMaxLines, stderrTailMaxBytes)
@@ -350,22 +273,8 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	}
 }
 
-// maybeRunAfterHook fires the stage's script_after hook (if any) in a tracked
-// goroutine via concurrency.Manager.SpawnAgent, reusing its semaphore/agentWG
-// bookkeeping — the hook may block for an arbitrarily long time waiting on a
-// user decision, so it must never run inline in its callers
-// (onAgentCompleted/approveStage — event-loop callbacks that must return
-// promptly). A no-op when the stage has no ScriptAfter: no goroutine is
-// spawned, so a stage without the hook behaves unchanged.
-//
-// pendingAfterHooks is incremented here (synchronously, before SpawnAgent
-// returns to the caller — completeStage/approveStage, both running on Run()'s
-// own goroutine) and decremented from the wrapper below once runAfterHook
-// actually returns, so shouldExit() (scheduling.go) never observes a stage
-// as fully done while its after-hook is still in flight or awaiting a
-// RetryHook/SkipHook decision. Scoped to just this one spawn — see
-// SpawnAgent's doc comment on why the general agent-spawn path doesn't carry
-// this bookkeeping too.
+// maybeRunAfterHook spawns a tracked goroutine to keep the event loop responsive; increment
+// pendingAfterHooks before spawning.
 func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 	stage := o.graph.Stage(stageID)
 	if stage == nil || stage.ScriptAfter == "" {
@@ -381,16 +290,8 @@ func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 	})
 }
 
-// maybeRunAfterHookThen runs script_after (if any) and then invokes cont —
-// inside the SAME tracked goroutine, AFTER runAfterHook returns — so a
-// consumer of cont (agent memory reflection, see completeStage) sees
-// after.log on disk. With no ScriptAfter, cont runs inline (the unchanged
-// fast path maybeRunAfterHook itself has no equivalent of — there, "no hook"
-// means "nothing at all runs"; here it means "cont runs synchronously").
-// cont must be cheap/non-blocking (it only spawns a detached reflection
-// agent, see maybeRunReflection) since it runs either inline on the caller's
-// goroutine (no hook) or on the hook's own tracked goroutine (hook present) —
-// never inline within a blocking wait.
+// maybeRunAfterHookThen runs script_after and then invokes cont — inside the SAME tracked goroutine, AFTER
+// runAfterHook returns — so a consumer of cont sees after.log on disk.
 func (o *Orchestrator) maybeRunAfterHookThen(ctx context.Context, stageID string, cont func(context.Context)) {
 	stage := o.graph.Stage(stageID)
 	if stage == nil || stage.ScriptAfter == "" {
@@ -410,17 +311,8 @@ func (o *Orchestrator) maybeRunAfterHookThen(ctx context.Context, stageID string
 	})
 }
 
-// withBeforeHook wraps a stage's fresh-activation run function with
-// script_before: if the stage has no ScriptBefore, mainFn runs unchanged. If
-// the hook fails and is blocked in hook_failed, ctx cancellation during the
-// wait (full shutdown) skips mainFn entirely — the stage resumes via
-// recovery.go on the next `afm run`.
-//
-// Used only at genuine "fresh activation" spawn sites (startReadyStages,
-// retryStage's non-planning branches, recovery.go's startPlanningForPending)
-// — NOT at resumeInteractiveAgent (already past its before-hook) or at
-// Revise/onUserAnswered/onAgentCompleted's revising branch (mid-flight
-// continuations of an already-hooked run).
+// withBeforeHook wraps a stage's fresh-activation run function with script_before: if the stage has no
+// ScriptBefore, mainFn runs unchanged.
 func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) func(context.Context, flow.Stage) {
 	return func(ctx context.Context, s flow.Stage) {
 		// Захватываем generation паузы ДО хука; любой Pause за время его
@@ -431,17 +323,11 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 				return
 			}
 		}
-		// script_before runs as a bare shell script with no InterruptCh (only
-		// the main agent gets one, inside runWithRetry) — so a manual Pause()
-		// can succeed (durable EvPause transition) while the hook is still
-		// executing in the background, unnoticed. A plain currentStatus==paused
-		// check catches "paused and still paused", but NOT the ABA
-		// running->paused->running that a Pause immediately followed by Continue
-		// produces: by the time the hook returns, status is running again and
-		// Continue has ALREADY spawned the agent independently (via
-		// resumeStageAtStatus) — running mainFn here too would double-launch.
-		// The generation guard catches both: any pause during the hook changed
-		// pauseGen, so we abdicate and let Continue own the (single) relaunch.
+		// script_before runs as a bare shell script with no InterruptCh — so a manual Pause can succeed while
+		// the hook is still executing in the background, unnoticed. The status check catches "paused and still
+		// paused"; the generation check catches the ABA running->paused->running (Pause then Continue): status
+		// reads running again, but Continue has ALREADY relaunched the agent, so running mainFn here would
+		// double-launch. Any pause during the hook bumped pauseGen → we abdicate and let Continue own the relaunch.
 		if o.loadPauseGen(s.ID) != gen || o.currentStatus(s.ID) == state.StatusPaused {
 			return
 		}
@@ -449,13 +335,7 @@ func (o *Orchestrator) withBeforeHook(mainFn func(context.Context, flow.Stage)) 
 	}
 }
 
-// resumeHookFailedWait resumes a stage that crashed while blocked in
-// hook_failed: re-reads the persisted hook_pending.json (written by
-// runBeforeHook before blocking) and re-enters the wait for a user decision,
-// WITHOUT silently re-attempting the hook — matching runBeforeHook's own
-// retry-decision loop from that point on. Called from recovery.go via
-// concurrency.Manager.SpawnAgent, so it's tracked the same way as any other
-// resumed agent.
+// resumeHookFailedWait restores the persisted Retry/Skip wait without rerunning the hook automatically.
 func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	pending, ok := readHookPending(stageDir)
@@ -484,16 +364,8 @@ func (o *Orchestrator) resumeHookFailedWait(ctx context.Context, s flow.Stage) {
 	}
 }
 
-// dispatchMainAfterBeforeHook runs a stage's real content after its
-// before-hook resolved during a resume (script/autonomous/implementation),
-// mirroring the branch startReadyStages/retryStage use for a fresh
-// activation (withBeforeHook(mainFn) — not reused directly here since the
-// hook already failed once and is being resumed mid-wait, not started fresh).
-// The autonomous check matches startReadyStages exactly: isAutonomousStage
-// (autonomous.flag on disk) re-derives the track from the persisted flag on
-// resume-after-restart, without re-parsing flow.yaml; s.IsAuto() (agents:
-// [auto]) covers the same stage on a fresh activation — either way its
-// before-hook ran ahead of runAutonomousAgent, never runImplementationAgent.
+// dispatchMainAfterBeforeHook runs a stage's real content after its before-hook resolved during a resume,
+// mirroring the branch startReadyStages/retryStage use for a fresh activation.
 func (o *Orchestrator) dispatchMainAfterBeforeHook(ctx context.Context, s flow.Stage) {
 	if s.IsScript() {
 		o.runScriptStage(ctx, s)
@@ -502,15 +374,8 @@ func (o *Orchestrator) dispatchMainAfterBeforeHook(ctx context.Context, s flow.S
 	o.plainRunner(o.executionKind(s))(ctx, s)
 }
 
-// resumeAfterHookWait resumes a stage that crashed while its script_after
-// hook was blocked on a retry/skip decision. Unlike script_before's
-// hook_failed, a pending after-hook decision leaves NO trace in the FSM —
-// runAfterHook never calls Trigger, so the stage stays StatusDone straight
-// through the crash. recovery.go finds it only by scanning every stage's
-// hook_pending.json for Hook == "after", regardless of status, and resumes
-// it via resumeAfterHook below (not called directly — see its doc comment).
-// Mirrors resumeHookFailedWait: re-enters the wait without re-running the
-// hook, and re-runs the full retry cycle only if the user asks to retry.
+// resumeAfterHookWait resumes a stage that crashed while its script_after hook was blocked on a retry/skip
+// decision.
 func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	decision, ok := o.waitForHookDecision(ctx, s.ID)
@@ -528,13 +393,7 @@ func (o *Orchestrator) resumeAfterHookWait(ctx context.Context, s flow.Stage) {
 	o.runAfterHook(ctx, s)
 }
 
-// resumeAfterHook wraps resumeAfterHookWait with the same pendingAfterHooks
-// bookkeeping maybeRunAfterHook uses: incremented synchronously here, BEFORE
-// SpawnAgent returns to the caller (recovery.go, running on Run()'s own
-// goroutine), so shouldExit() can never observe zero in-flight after-hooks
-// in the narrow window between spawning this goroutine and the goroutine's
-// own first instruction — see maybeRunAfterHook's doc comment for the full
-// race this closes.
+// resumeAfterHook increments pendingAfterHooks before spawning so shouldExit cannot miss a queued hook.
 func (o *Orchestrator) resumeAfterHook(ctx context.Context, s flow.Stage) {
 	o.pendingAfterHooks.Add(1)
 	o.concurrency.SpawnAgent(ctx, s, func(ctx context.Context, s flow.Stage) {

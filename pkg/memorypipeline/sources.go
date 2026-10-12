@@ -10,21 +10,15 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// Inventory — классификация реальных файлов stage-директории, которые может
-// прочитать reflect-агент: AgentSessions (логи/стрим агента, планы,
-// summary, диалог) против Supplemental (заметки пользователя, hook-логи).
-// Разделение важно потому, что скрипт-стадия (before.log/after.log/
-// script.log, без единого запуска агента) не должна считаться имеющей
-// агентскую сессию — см. HasAgentSession (review #9).
+// Inventory — классификация реальных файлов stage-директории, которые может прочитать reflect-агент:
+// AgentSessions против Supplemental.
 type Inventory struct {
 	AgentSessions []string
 	Supplemental  []string
 }
 
-// All возвращает источники в порядке: сначала агентская сессия, затем
-// supplemental — это намеренный, детерминированный порядок (обе группы уже
-// отсортированы внутри себя), чтобы reflect-промпт видел основной материал
-// сессии раньше заметок/hook-логов (review #12).
+// All возвращает отсортированную сессию перед supplemental-источниками, сохраняя порядок контекста
+// reflect.
 func (i Inventory) All() []string {
 	return append(append([]string{}, i.AgentSessions...), i.Supplemental...)
 }
@@ -35,8 +29,7 @@ func (i Inventory) HasAgentSession() bool {
 	return len(i.AgentSessions) > 0
 }
 
-// agentSessionNames строит множество имён файлов агентской сессии из
-// единого источника правды pkg/flow (Phases/PhaseLogFiles/PhaseStreamLogs) —
+// agentSessionNames строит множество имён файлов агентской сессии из единого источника правды pkg/flow —
 // чтобы список не расходился с реальными именами, которые пишет executor.
 func agentSessionNames() map[string]bool {
 	m := map[string]bool{"plan.md": true, "execution_summary.md": true}
@@ -75,10 +68,7 @@ func isDialog(n string) bool {
 		strings.HasSuffix(n, ".answer.json")
 }
 
-// artifactPrefixes — имена, которые сама memory-пайплайна пишет в
-// stage-директорию (reflect_dataset.yaml и промежуточные *.md шагов
-// aggregate/prioritize/update). Их нельзя скармливать reflect-агенту как
-// исходник — иначе конвейер читал бы собственный вывод предыдущих прогонов.
+// artifactPrefixes — имена, которые сама memory-пайплайна пишет в stage-директорию.
 var artifactPrefixes = []string{"reflect", "aggregate", "prioritize", "update", "patterns", "high"}
 
 func isArtifact(n string) bool {
@@ -93,12 +83,8 @@ func isArtifact(n string) bool {
 	return false
 }
 
-// SourceInventory классифицирует реальные файлы в stageDir на AgentSessions
-// и Supplemental для reflect-шага memory-пайплайны. Пути в результате —
-// абсолютные, каждая группа отсортирована. Отсутствующая stageDir — не
-// ошибка (пустой Inventory); любая другая ошибка чтения директории или
-// Lstat конкретной записи возвращается вызывающему коду как есть — путь
-// строгий, без сети, молча проглатывать такие ошибки нельзя (review #9).
+// SourceInventory классифицирует реальные файлы в stageDir на AgentSessions и Supplemental для
+// reflect-шага memory-пайплайны. Пути в результате — абсолютные, каждая группа отсортирована.
 func SourceInventory(stageDir string) (Inventory, error) {
 	entries, err := os.ReadDir(stageDir)
 	if err != nil {
@@ -120,7 +106,7 @@ func SourceInventory(stageDir string) (Inventory, error) {
 		}
 		info, err := os.Lstat(filepath.Join(stageDir, n))
 		if err != nil {
-			return Inventory{}, err // do not swallow (review #9)
+			return Inventory{}, err // Propagate the source-read error.
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			continue

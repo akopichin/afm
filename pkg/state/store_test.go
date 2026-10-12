@@ -222,10 +222,6 @@ func TestSnapshot_ReturnsCopy(t *testing.T) {
 	}
 }
 
-// TestSnapshot_IncludesFlowName guards the root cause of a real bug: RunState.FlowName
-// was declared and read (by /api/status) but never set anywhere in production code —
-// NewRunState never took it, and there was no SetFlowName to call, unlike the parallel
-// (and correctly wired) SetStageNames. flow_name was silently "" for every real run.
 func TestSnapshot_IncludesFlowName(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a"})
@@ -242,11 +238,6 @@ func TestSnapshot_IncludesFlowName(t *testing.T) {
 	}
 }
 
-// TestSnapshot_IncludesLastSeq guards a real bug (codex MAJ#6): Snapshot()'s
-// out := RunState{...} literal did not copy LastSeq, so Snapshot().LastSeq
-// was always 0 regardless of how many transitions were applied — and
-// production code that derives Resumed from it (cmd/afm/run.go) would never
-// detect a resumed run.
 func TestSnapshot_IncludesLastSeq(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a"})
@@ -290,9 +281,8 @@ func TestSnapshot_IncludesStageNames(t *testing.T) {
 	}
 }
 
-// SetStageNames must copy the caller's map: mutating the input after the call
-// must not leak into the store. Guards against an aliasing bug where the
-// snapshot would share the caller's backing map.
+// SetStageNames must copy the caller's map: mutating the input after the call must not leak into the
+// store.
 func TestSetStageNames_CopiesInput(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a"})
@@ -314,9 +304,6 @@ func TestSetStageNames_CopiesInput(t *testing.T) {
 	}
 }
 
-// TestStore_HistoryMethodExists is a contract test: it asserts that
-// (*Store).History exists with the signature () ([]Transition, error) and is
-// callable. It is expected to fail to compile until History() is implemented.
 func TestStore_HistoryMethodExists(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a"})
@@ -333,11 +320,6 @@ func TestStore_HistoryMethodExists(t *testing.T) {
 	var _ = transitions
 }
 
-// TestStore_HistoryReturnsOrderedTransitions asserts that replay of an existing
-// events.jsonl populates History with every transition in ascending Seq order.
-// The fixture is built with a real Store's Apply (the only way events.jsonl is
-// populated in production) then re-opened, so the test exercises both the
-// Apply→log path and the replay→history path.
 func TestStore_HistoryReturnsOrderedTransitions(t *testing.T) {
 	dir := t.TempDir()
 
@@ -394,9 +376,6 @@ func TestStore_HistoryReturnsOrderedTransitions(t *testing.T) {
 	}
 }
 
-// TestStore_HistoryEmptyRunReturnsEmptySlice asserts that a freshly created run
-// (no prior events.jsonl, every stage pending) yields an empty slice, not nil
-// and not an error.
 func TestStore_HistoryEmptyRunReturnsEmptySlice(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a", "b"})
@@ -417,9 +396,6 @@ func TestStore_HistoryEmptyRunReturnsEmptySlice(t *testing.T) {
 	}
 }
 
-// TestStore_HistoryReflectsInSessionApply asserts that Apply extends History
-// within a single Open session (no reopen), so a live caller observes newly
-// applied transitions immediately.
 func TestStore_HistoryReflectsInSessionApply(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a"})
@@ -457,9 +433,8 @@ func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 	SetApplyHook(func(tr Transition) {
 		if tr.Seq == 2 {
 			store1.eventsLog.Close()
-			// A real crash exits the process, and the OS releases the flock
-			// along with every fd. Release it here too so the simulated
-			// crash matches that behavior instead of leaving the lock held.
+			// A real crash exits the process, and the OS releases the flock along with every fd. Release it here
+			// too so the simulated crash matches that behavior instead of leaving the lock held.
 			store1.lock.Unlock()
 			panic("simulated crash")
 		}
@@ -483,10 +458,7 @@ func TestApply_CrashAfterFsync_Recovers(t *testing.T) {
 	}
 }
 
-// Живой прогон копит Idle через Apply; закрытие и повторное Open той же
-// run-директории должно восстановить ТОЧНО ТО ЖЕ значение через replay
-// (parseEventLog) — это и есть гарантия "восстановить при продолжении
-// работы afm" из спеки.
+// Проверяем равенство Idle, накопленного live через Apply и восстановленного replay после Open.
 func TestOpen_ResumeReconstructsIdleAndBackoffFromReplay(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a", "b"})
@@ -541,11 +513,6 @@ func TestOpen_ResumeReconstructsIdleAndBackoffFromReplay(t *testing.T) {
 	}
 }
 
-// TestOpen_RestoresStartedAtFromFirstEvent is a regression test for finding #6:
-// STARTED/ELAPSED must survive an afm restart. NewRunState stamps StartedAt =
-// time.Now(), so on a resume Open the value would be the moment of re-opening,
-// not the real run start — replaying the first logged event (EvStartRun) must
-// restore it.
 func TestOpen_RestoresStartedAtFromFirstEvent(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"s1"})

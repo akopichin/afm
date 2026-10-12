@@ -51,9 +51,8 @@ func TestAtomicWrite_TempCreateFailureSurfacesError(t *testing.T) {
 		t.Skip("root ignores directory permission bits")
 	}
 	dir := t.TempDir()
-	// Делаем директорию нерасширяемой: os.CreateTemp внутри неё должен
-	// упасть с permission denied, и эта ошибка обязана дойти до вызывающего
-	// кода (review #minor.1 — AtomicWrite больше не best-effort).
+	// Делаем директорию нерасширяемой: os.CreateTemp внутри неё должен упасть с permission denied, и эта
+	// ошибка обязана дойти до вызывающего кода.
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -69,9 +68,8 @@ func TestAtomicWrite_TempCreateFailureSurfacesError(t *testing.T) {
 	}
 }
 
-// assertNoLeftoverTemp проверяет, что после успешной или неуспешной записи
-// в dir не остаётся файлов вида tmp-* (os.CreateTemp с этим префиксом) —
-// иначе временные файлы будут копиться при каждом падении на середине.
+// assertNoLeftoverTemp проверяет, что после успешной или неуспешной записи в dir не остаётся файлов вида
+// tmp-* — иначе временные файлы будут копиться при каждом падении на середине.
 func assertNoLeftoverTemp(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)

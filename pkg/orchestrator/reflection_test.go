@@ -15,14 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// nonEmptyReflectDataset/emptyReflectDataset — canonical reflect_dataset.yaml
-// bodies used across this file's tests: the new engine (DistillTarget, see
-// pkg/memorypipeline/distill.go) actually PARSES dataset content and skips
-// the whole aggregate/prioritize/update chain when every dataset is empty
-// (datasetsAllEmpty) — unlike the old per-stage `distill` helper this task
-// replaces, which called aggregate unconditionally. Tests exercising the real
-// distill chain must feed it a non-empty dataset; tests exercising the
-// NoHigh/no-op path use the empty one on purpose.
+// Nonempty datasets exercise distillation; empty datasets intentionally skip aggregate/prioritize/update.
 const nonEmptyReflectDataset = `project_level:
   - prompt: "p1"
     chosen: "c1"
@@ -33,18 +26,14 @@ session_level: []
 
 const emptyReflectDataset = "project_level: []\nsession_level: []\n"
 
-// newReflectionTestOrchestrator builds an *Orchestrator over a real
-// *state.Store on a temp run dir with the given stage — reflection_test.go
-// needs a stage carrying a specific Reflect config, unlike the generic
-// newTestOrchestrator (memory_agent_test.go), which hardcodes a plain stage.
+// newReflectionTestOrchestrator builds a real Store with the supplied reflect stage.
 func newReflectionTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrator, string) {
 	t.Helper()
 	return newReflectionTestOrchestratorMulti(t, []flow.Stage{stage})
 }
 
-// newReflectionTestOrchestratorMulti is the multi-stage variant — needed by
-// tests exercising the project-wide aggregate (which spans several stages)
-// and stages sharing one reflect.File (chained per-group distill).
+// newReflectionTestOrchestratorMulti is the multi-stage variant — needed by tests exercising the
+// project-wide aggregate and stages sharing one reflect.File.
 func newReflectionTestOrchestratorMulti(t *testing.T, stages []flow.Stage) (*Orchestrator, string) {
 	t.Helper()
 	runDir := t.TempDir()
@@ -61,11 +50,7 @@ func newReflectionTestOrchestratorMulti(t *testing.T, stages []flow.Stage) (*Orc
 	return o, runDir
 }
 
-// stubMemoryPipeline builds a memorypipeline.Pipeline whose agent runner
-// simulates the v3 chain's file effects for each step and records the call
-// order — the o.mem injection point tests use instead of the removed
-// o.memRunner field (Task 10: o.mem is now a *memorypipeline.Pipeline, and
-// tests override its runner via memorypipeline.WithRunner).
+// stubMemoryPipeline simulates each step's files and records execution order.
 func stubMemoryPipeline(order *[]string) *memorypipeline.Pipeline {
 	return memorypipeline.New(memorypipeline.Prompts{}, memorypipeline.AgentConfig{}, memorypipeline.WithRunner(
 		func(_ context.Context, spec memorypipeline.AgentSpec) error {
@@ -85,10 +70,7 @@ func stubMemoryPipeline(order *[]string) *memorypipeline.Pipeline {
 		}))
 }
 
-// writeAgentSession drops a minimal recognizable agent-session artifact into
-// stageDir so memorypipeline.SourceInventory's HasAgentSession() is true —
-// CaptureStage StepErrors on a stage dir with nothing but a script log or
-// nothing at all (see rebuild.go's isWriteReflect/HasAgentSession gate).
+// writeAgentSession creates the session artifact CaptureStage requires.
 func writeAgentSession(t *testing.T, stageDir string) {
 	t.Helper()
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
@@ -114,11 +96,7 @@ func TestMaybeRunReflection_NoOpWhenDisabled(t *testing.T) {
 	}
 }
 
-// Per-stage теперь ТОЛЬКО каптурит датасет (reflect_dataset.yaml) через
-// memorypipeline.Pipeline.CaptureStage. Вся сборка (aggregate/prioritize/
-// update) перенесена в end-of-run — после каждой стадии ничего не строится,
-// поэтому память видит все стадии вместе, а сборка бежит один раз в конце
-// (см. runEndOfRunMemory).
+// Per-stage теперь ТОЛЬКО каптурит датасет через memorypipeline.Pipeline.CaptureStage.
 func TestMaybeRunReflection_CapturesDatasetOnly(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
 	o, runDir := newReflectionTestOrchestrator(t, stage)
@@ -172,10 +150,6 @@ func TestMaybeRunReflection_ScriptSkipped(t *testing.T) {
 	}
 }
 
-// TestEndOfRunMemory_BuildsPerStageFiles — собственный файл стадии с
-// reflect:write и общий memory.md оба строятся В КОНЦЕ рана (через
-// Pipeline.Finalize под memory-lock'ом), из уже накопленного на диске
-// датасета.
 func TestEndOfRunMemory_BuildsPerStageFiles(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
 	o, runDir := newReflectionTestOrchestrator(t, stage)
@@ -213,9 +187,6 @@ func TestEndOfRunMemory_BuildsPerStageFiles(t *testing.T) {
 	}
 }
 
-// TestEndOfRunMemory_WritesProjectFile — memory.md aggregates ALL eligible
-// stage datasets of the run (not just one), built explicitly from
-// o.opts.Stages (review #13) rather than a filesystem Glob.
 func TestEndOfRunMemory_WritesProjectFile(t *testing.T) {
 	s1 := flow.Stage{ID: "s1", Name: "Stage1", Reflect: &flow.Reflect{File: "s1.md", Mode: flow.ReflectModeRW}}
 	s2 := flow.Stage{ID: "s2", Name: "Stage2", Reflect: &flow.Reflect{File: "s2.md", Mode: flow.ReflectModeRW}}
@@ -274,10 +245,6 @@ func TestEndOfRunMemory_WritesProjectFile(t *testing.T) {
 	}
 }
 
-// TestEndOfRunMemory_ModeReadOnlyDoesNotWriteProject — memory.mode:r is a
-// READ-only gate on the shared project file specifically: a stage's OWN
-// reflect file is still governed by its own reflect.mode (independent axis,
-// see flow.Reflect/MemoryConfig doc comments) and is still built.
 func TestEndOfRunMemory_ModeReadOnlyDoesNotWriteProject(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
 	o, runDir := newReflectionTestOrchestrator(t, stage)
@@ -325,12 +292,6 @@ func TestEndOfRunMemory_NoOpWithoutDatasets(t *testing.T) {
 	}
 }
 
-// TestEndOfRunMemory_EmptyDatasetKeepsPriorRules — a stage whose captured
-// dataset has empty project_level AND session_level sections is a genuine
-// no-op through the new engine's datasetsAllEmpty short-circuit (see
-// DistillTarget in pkg/memorypipeline/distill.go): no aggregate/prioritize/
-// update call happens at all, and a pre-existing target file is left
-// byte-for-byte unchanged (Finalize only publishes Changed targets).
 func TestEndOfRunMemory_EmptyDatasetKeepsPriorRules(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
 	o, runDir := newReflectionTestOrchestrator(t, stage)
@@ -370,13 +331,6 @@ func TestEndOfRunMemory_EmptyDatasetKeepsPriorRules(t *testing.T) {
 	}
 }
 
-// TestEndOfRunMemory_SharedReflectFile_FirstNoHighPreservesPriorRules —
-// two stages chained onto the SAME reflect.File (see buildStageGroups in
-// pkg/memorypipeline/rebuild.go): the FIRST stage produces no High patterns
-// (NoHigh — its candidate stays == the seed unchanged), the SECOND does and
-// its update appends to the (chained) candidate. The shared target must end
-// up with BOTH the original prior rules (never wiped by the NoHigh stage)
-// AND the second stage's contribution.
 func TestEndOfRunMemory_SharedReflectFile_FirstNoHighPreservesPriorRules(t *testing.T) {
 	s1 := flow.Stage{ID: "s1", Name: "Stage1", Reflect: &flow.Reflect{File: "shared.md", Mode: flow.ReflectModeRW}}
 	s2 := flow.Stage{ID: "s2", Name: "Stage2", Reflect: &flow.Reflect{File: "shared.md", Mode: flow.ReflectModeRW}}
@@ -435,12 +389,6 @@ func TestEndOfRunMemory_SharedReflectFile_FirstNoHighPreservesPriorRules(t *test
 	}
 }
 
-// TestEndOfRunMemory_GhostDatasetExcludedFromProjectAggregate — a leftover
-// reflect_dataset.yaml under a stage id no longer present in o.opts.Stages
-// (e.g. removed from flow.yaml since a previous run) must NOT enter the
-// project aggregate. Task 10 brief review #13: this replaces the old
-// filepath.Glob(<run>/*/reflect_dataset.yaml), which picked up exactly this
-// kind of stale directory.
 func TestEndOfRunMemory_GhostDatasetExcludedFromProjectAggregate(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "Stage", Reflect: &flow.Reflect{File: "s.md", Mode: flow.ReflectModeRW}}
 	o, runDir := newReflectionTestOrchestrator(t, stage)

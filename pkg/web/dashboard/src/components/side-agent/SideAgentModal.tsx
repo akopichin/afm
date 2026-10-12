@@ -5,34 +5,26 @@ import { SideAgentComposer } from './SideAgentComposer'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
 import { visibleFocusables } from '../../lib/focus-trap'
 
-// Таймер (мс), после которого закрывающееся окно уходит из hit-testing/a11y
-// (phase closing → closed). Путь ЧИСТО таймерный — на transitionend/animationend
-// он не завязан (поэтому надёжен и в reduced-motion, и в фоновой вкладке),
-// значит значение ДОЛЖНО быть ≥ самой долгой закрывающей анимации в
-// side-agent.css (сейчас 160ms у *-out). 220 оставляет запас, чтобы фолбэк не
-// срезал анимацию.
+// Таймер, после которого закрывающееся окно уходит из hit-testing/a11y. 220 оставляет запас, чтобы фолбэк
+// не срезал анимацию.
 const CLOSE_ANIM_MS = 220
 
 type Phase = 'closed' | 'open' | 'closing'
 
 export type SideAgentModalProps = {
   api: SideAgentApi
-  // attentionShortcut — ждущее действие стадии (как у других оверлеев): кнопка в
-  // шапке СНАЧАЛА скрывает Side agent (работа агента продолжается под ctx
-  // менеджера), затем открывает нужный attention-воркспейс. null → нет ожидания.
+  // attentionShortcut — ждущее действие стадии: кнопка в шапке СНАЧАЛА скрывает Side agent, затем
+  // открывает нужный attention-воркспейс. null → нет ожидания.
   attentionShortcut?: { label: string; onActivate: () => void } | null
 }
 
-// SideAgentModal — центрированная модалка беседы поверх дашборда. Монтируется
-// один раз (порталом в document.body) и остаётся смонтированной: open/close
-// меняют только видимость (phase), сохраняя историю и позицию прокрутки. Крестик
-// = только скрытие (работа агента продолжается под ctx менеджера на бэкенде).
+// SideAgentModal — центрированная модалка беседы поверх дашборда. Крестик = только скрытие (работа агента
+// продолжается под ctx менеджера на бэкенде).
 export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModalProps): ReactElement {
   const { isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, error, unavailable } = api
 
-  // phase: closed (скрыто, inert) → open → closing (играет закрывающая анимация,
-  // уже inert) → closed. Разведение open/closing нужно, чтобы закрытие
-  // доигрывалось, но окно сразу переставало быть интерактивным.
+  // phase: closed → open → closing → closed. Разведение open/closing нужно, чтобы закрытие доигрывалось,
+  // но окно сразу переставало быть интерактивным.
   const [phase, setPhase] = useState<Phase>('closed')
   const overlayRef = useRef<HTMLDivElement | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
@@ -90,9 +82,8 @@ export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModal
   )
 
   function onScrimDown(e: MouseEvent): void {
-    // Закрытие по клику снаружи только если взаимодействие и началось, и
-    // закончилось на самом scrim (overlay === target). Выделение текста с
-    // отпусканием за окном (down внутри модалки) не закрывает.
+    // Закрытие по клику снаружи только если взаимодействие и началось, и закончилось на самом scrim.
+    // Выделение текста с отпусканием за окном (down внутри модалки) не закрывает.
     downOnScrim.current = e.target === e.currentTarget
   }
   function onScrimUp(e: MouseEvent): void {

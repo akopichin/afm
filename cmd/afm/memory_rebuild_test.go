@@ -33,11 +33,6 @@ func TestMemoryRebuildCmd_CommitFlagsMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// TestParseCommitFlags_NoCommitFalseDoesNotForceNoCommit covers the
-// symmetry fix: --commit already only forces a commit when its value is
-// true (GetBool("commit")); --no-commit used to force Commit=false on bare
-// Changed() alone, so an explicit "--no-commit=false" wrongly behaved like
-// "--no-commit". It must now be a no-op, exactly like "--commit=false" is.
 func TestParseCommitFlags_NoCommitFalseDoesNotForceNoCommit(t *testing.T) {
 	cmd := newMemoryRebuildCmd()
 	if err := cmd.Flags().Parse([]string{"--no-commit=false"}); err != nil {
@@ -74,10 +69,6 @@ func TestParseCommitFlags_NoCommitTrueForcesNoCommit(t *testing.T) {
 	}
 }
 
-// TestParseCommitFlags_MutualExclusionStillFires re-proves the mutual
-// exclusion at the parseCommitFlags level (not just through the full
-// command in TestMemoryRebuildCmd_CommitFlagsMutuallyExclusive above), for
-// the bare "--commit --no-commit" combination.
 func TestParseCommitFlags_MutualExclusionStillFires(t *testing.T) {
 	cmd := newMemoryRebuildCmd()
 	if err := cmd.Flags().Parse([]string{"--commit", "--no-commit"}); err != nil {
@@ -130,10 +121,7 @@ const nonEmptyDatasetYAML = `project_level:
 session_level: []
 `
 
-// fakeMemoryRunner — стаб AgentRunner, покрывающий все четыре шага
-// конвейера памяти (reflect/aggregate/prioritize/update) без запуска
-// реального агента: тесты подменяют newRebuildPipeline на
-// memorypipeline.New(p, a, memorypipeline.WithRunner(fakeMemoryRunner())).
+// fakeMemoryRunner подменяет reflect/aggregate/prioritize/update без реальных агентов.
 func fakeMemoryRunner() memorypipeline.AgentRunner {
 	return func(_ context.Context, spec memorypipeline.AgentSpec) error {
 		switch spec.Kind {
@@ -151,23 +139,14 @@ func fakeMemoryRunner() memorypipeline.AgentRunner {
 	}
 }
 
-// isolateHome points $HOME at an empty temp dir for the duration of the
-// test, so config.LoadFrom's global layer (~/.afm/config.yaml) can never
-// leak the developer's real, possibly Docker-enabled, machine config into a
-// rebuildHandler test (Task 13: rebuildHandler now actually reads
-// cfg.Docker to decide whether to re-exec — before that it was loaded but
-// never consulted, so a Docker-enabled global config was harmless here;
-// now, on a dev machine with `docker.enabled: true` in ~/.afm/config.yaml,
-// every test below would try to auth-check/re-exec into Docker instead of
-// exercising the behavior under test).
+// isolateHome prevents the developer's global Docker config from affecting rebuild tests.
 func isolateHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 }
 
-// withFakeMemoryPipeline overrides newRebuildPipeline for the duration of the
-// test so rebuildHandler never spawns a real agent process; restores the
-// original seam on cleanup (same pattern as TestFmDir's rootDir save/restore).
+// withFakeMemoryPipeline overrides newRebuildPipeline for the duration of the test so rebuildHandler never
+// spawns a real agent process; restores the original seam on cleanup.
 func withFakeMemoryPipeline(t *testing.T) {
 	t.Helper()
 	prev := newRebuildPipeline
@@ -188,11 +167,8 @@ func writeFlowFile(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-// mkRunCLI creates a run directory under base with real FSM transitions
-// (pending -> statuses[id]) for each given stage id, mirroring
-// pkg/state's own mkRun test helper (unexported there, so reimplemented
-// here against the exported state.Open/Apply API). Stages absent from
-// statuses never appear in the log, exactly like a stage that never ran.
+// mkRunCLI creates a run directory under base with real FSM transitions for each given stage id, mirroring
+// pkg/state's own mkRun test helper.
 func mkRunCLI(t *testing.T, base, name string, statuses map[string]state.StageStatus) string {
 	t.Helper()
 	runDir := filepath.Join(base, name)
@@ -219,10 +195,8 @@ func mkRunCLI(t *testing.T, base, name string, statuses map[string]state.StageSt
 	return runDir
 }
 
-// writeStageSession creates <runDir>/<stageID>/execution_summary.md — the
-// minimal artifact SourceInventory.HasAgentSession() recognizes as a real
-// agent session (see pkg/orchestrator/memory_integration_test.go's
-// newMemoryIntegrationOrchestrator, same fixture shape).
+// writeStageSession creates <runDir>/<stageID>/execution_summary.md — the minimal artifact
+// SourceInventory.HasAgentSession recognizes as a real agent session.
 func writeStageSession(t *testing.T, runDir, stageID string) {
 	t.Helper()
 	dir := filepath.Join(runDir, stageID)
@@ -304,10 +278,8 @@ func TestCheckStageSetMatchesExact_SortedMissingAndExtra(t *testing.T) {
 func TestRebuildHandler_StageSetMismatch(t *testing.T) {
 	isolateHome(t)
 	dir := chdirTemp(t)
-	// current flow declares TWO stages (s1, s2); the historical run only
-	// ever ran s1 — checkStageSetMatchesExact must catch this even though
-	// resolveExplicitRunDir (unlike FindLatestCompletedRunDir) does not
-	// filter by topology.
+	// current flow declares TWO stages; the historical run only ever ran s1 — checkStageSetMatchesExact must
+	// catch this even though resolveExplicitRunDir does not filter by topology.
 	flowPath := writeFlowFile(t, dir, "flow.yaml", `name: testflow
 memory:
   path: memory
@@ -487,9 +459,8 @@ func TestRebuildHandler_PersistentDirResolvesRunsDir(t *testing.T) {
 		t.Fatalf("rebuildHandler: %v", err)
 	}
 
-	// The attempt's work dir must have been allocated under the CUSTOM
-	// dir's run, proving runsDir()/resolveMemoryDir honored rootDir rather
-	// than the process's actual cwd.
+	// The attempt's work dir must have been allocated under the CUSTOM dir's run, proving
+	// runsDir()/resolveMemoryDir honored rootDir rather than the process's actual cwd.
 	matches, err := filepath.Glob(filepath.Join(runDir, "memory-rebuild", "*", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -501,9 +472,8 @@ func TestRebuildHandler_PersistentDirResolvesRunsDir(t *testing.T) {
 
 // --- Task 12: commit path hardening -----------------------------------
 
-// initGitRepoCLI initializes a git repo in a fresh t.TempDir() with a local
-// user.email/name configured, so commits work without touching global git
-// config. Returns the repo root.
+// initGitRepoCLI initializes a git repo in a fresh t.TempDir() with a local user.email/name configured, so
+// commits work without touching global git config. Returns the repo root.
 func initGitRepoCLI(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -598,10 +568,8 @@ func TestCommitPreflight_NonGitAncestorIsNoOp(t *testing.T) {
 	}
 }
 
-// newAwaitingCommitManifest writes a manifest already parked at
-// StatusAwaitingCommit (Finalize's terminal, non-"nonTerminalStatuses" exit
-// point before the CLI's own commit decision) — the exact state maybeCommit
-// receives it in from rebuildHandler.
+// newAwaitingCommitManifest writes a manifest already parked at StatusAwaitingCommit — the exact state
+// maybeCommit receives it in from rebuildHandler.
 func newAwaitingCommitManifest(t *testing.T, manifestPath, runID string) {
 	t.Helper()
 	m := memorypipeline.NewRunningManifest(memorypipeline.OperationMeta{RunID: runID})
@@ -635,11 +603,7 @@ func TestMaybeCommit_FailureMarksManifestFailed(t *testing.T) {
 	if lerr != nil {
 		t.Fatalf("LoadManifest: %v", lerr)
 	}
-	// Carried-forward fix (Task 11 review): a commit failure must leave the
-	// manifest terminally "failed" with the error recorded and FinishedAt
-	// set — not stuck at "awaiting_commit", which the deferred
-	// FinalizeManifestOnExit no-ops on (awaiting_commit is not in
-	// nonTerminalStatuses).
+	// Commit failure must mark the manifest failed with its error and FinishedAt.
 	if got.Status != memorypipeline.StatusFailed {
 		t.Fatalf("want manifest Status=%q, got %q", memorypipeline.StatusFailed, got.Status)
 	}

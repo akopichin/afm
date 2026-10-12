@@ -12,34 +12,25 @@ type StagesListProps = {
   stages: Stage[]
   selectedStageId: string | null
   onSelect: (stageId: string) => void
-  // Заметку живому агенту (running) шлют теперь из messenger-поля внизу ленты
-  // (FeedComposer), а не из кебаба — поэтому onAddNote убран. Кебаб оставляет
-  // pre-note (pending), кастомные кнопки стадии и Pause.
+  // Заметку живому агенту шлют теперь из messenger-поля внизу ленты, а не из кебаба — поэтому onAddNote
+  // убран. Кебаб оставляет pre-note (pending), кастомные кнопки стадии и Pause.
   onEditPreNote?: (stageId: string) => void // «Add note (before start)» (pending-стадия)
   onPause?: (stageId: string) => void
-  // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём
-  // только метку (= имя кнопки), сервер сам резолвит промпт и доставляет его
-  // живому агенту через Revise (тот же путь, что и «Add note for agent»).
+  // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём только метку, сервер сам
+  // резолвит промпт и доставляет его живому агенту через Revise.
   onButton?: (stageId: string, name: string) => void
-  // Прогресс прогона (доля done) — компактно в шапке рейла. Пришёл сюда из
-  // удалённого футера (план §5.2). Оба undefined — прогресс не рендерится
-  // (совместимость со старыми тестами StagesList без этих пропсов).
+  // Прогресс прогона — компактно в шапке рейла. Пришёл сюда из удалённого футера (план §5.2).
   progressDone?: number
   progressTotal?: number
-  // accounting — состояние учёта затрат с бэкенда (GET /api/status). Нужно
-  // railCost, чтобы решить, показывать ли плейсхолдер «…» для ещё не
-  // оценённой (cost==null) активной стадии — сама по себе стадия не знает,
-  // включён ли учёт затрат и жив ли прайсер.
+  // accounting — состояние учёта затрат с бэкенда.
   accounting: AccountingState
-  // version — версия afm (из GET /api/status): тихая моно-строка, прибитая к
-  // низу рейла. Опциональна, чтобы существующие вызовы/тесты без неё оставались
-  // валидными; пустая/undefined → футер не рендерится.
+  // version — версия afm: тихая моно-строка, прибитая к низу рейла. Опциональна, чтобы существующие
+  // вызовы/тесты без неё оставались валидными; пустая/undefined → футер не рендерится.
   version?: string
 }
 
-// verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора:
-// один нейтральный глиф "AI verify", цвет несёт data-phase (CSS), полный
-// текст — в title (доступен и мышке, и скринридеру через это же title на span).
+// verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора: один нейтральный глиф "AI
+// verify", цвет несёт data-phase, полный текст — в title.
 function verifyPhaseLabel(phase: StageVerify['phase']): string {
   switch (phase) {
     case 'running':
@@ -61,29 +52,17 @@ function verifyPhaseLabel(phase: StageVerify['phase']): string {
 // реально гоняет агента ПРЯМО СЕЙЧАС (а не просто ждёт человека/бэкоффа).
 const COST_PENDING_STATUSES: ReadonlySet<Stage['status']> = new Set(['planning', 'running', 'revising'])
 
-// Доступный (a11y) хвост описания стоимости по покрытию прайс-листа: полное
-// покрытие ничего не добавляет к «Estimated cost $X», частичное — уточняет,
-// что часть вызовов не покрыта прайсом, отсутствие покрытия — заменяет всю
-// фразу на «недоступно» (при coverage:'none' displayCost сам по себе '—').
+// Accessible cost description distinguishes full, partial, and absent pricing coverage.
 function costA11yText(displayCost: string, coverage: Coverage): string {
   if (coverage === 'none') return 'Estimated cost unavailable'
   const suffix = coverage === 'partial' ? ', partial pricing coverage' : ''
   return `Estimated cost ${displayCost}${suffix}`
 }
 
-// railCost — единая точка принятия решения «что показать в рейле для этой
-// стадии» (см. бриф increment2/task-10). Приоритет:
-//   1. stage.cost есть → ВСЕГДА показываем displayCost (даже на ещё бегущей
-//      стадии — запись уже посчитана и покрытие уже известно).
-//   2. cost==null, но стадия реально гоняет агента прямо сейчас, не скрипт, и
-//      бэкенд поддерживает учёт затрат и он жив (health:'ok') → плейсхолдер
-//      «…» (оценка ожидается).
-//   3. иначе — ничего (pending, скрипт, unsupported/unavailable — включая
-//      unavailable с историческими данными, retrying).
+// railCost показывает стоимость или pending-индикатор оценки, учитывая showMoney, health и статус стадии.
 function railCost(stage: Stage, accounting: AccountingState): { text: string; a11y: string; pending?: boolean } | null {
-  // show_money выключен → в рейле не показываем ни стоимость, ни плейсхолдер
-  // оценки: деньги спрятаны всюду в дашборде (токены в рейле не показываются
-  // вовсе, только в шапке/таблице Cost).
+  // show_money выключен → в рейле не показываем ни стоимость, ни плейсхолдер оценки: деньги спрятаны всюду
+  // в дашборде (токены в рейле не показываются вовсе, только в шапке/таблице Cost).
   if (!(accounting.supported && accounting.showMoney)) return null
   if (stage.cost != null) {
     return { text: stage.cost.displayCost, a11y: costA11yText(stage.cost.displayCost, stage.cost.coverage) }
@@ -99,11 +78,8 @@ function railCost(stage: Stage, accounting: AccountingState): { text: string; a1
 // Статусы, из которых можно поставить стадию на паузу вручную.
 const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying'])
 
-// Статусы, при которых у стадии есть ЖИВОЙ агент, которому Revise доставит
-// промпт: running/awaiting_approval и никогда скрипт (у скрипта нет агента, а
-// RunScript не принимает interrupt-канал). Гейтит кастомные кнопки стадии (см.
-// hasLiveAgent). Заметку живому агенту теперь шлют из messenger-поля ленты, а
-// не из кебаба, поэтому отдельного «Add note for agent» здесь больше нет.
+// Статусы, при которых у стадии есть ЖИВОЙ агент, которому Revise доставит промпт:
+// running/awaiting_approval и никогда скрипт. Гейтит кастомные кнопки стадии (см. hasLiveAgent).
 const LIVE_AGENT_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // Pre-note (заметка ДО старта) доступна только пока стадия pending и только у
@@ -124,41 +100,24 @@ function canPause(stage: Stage): boolean {
   return PAUSABLE_STATUSES.has(stage.status) && !(stage.isScript && stage.status === 'running')
 }
 
-// Кебаб показываем ТОЛЬКО если реально есть хоть один пункт меню — считаем из
-// тех же предикатов, что и сами пункты. Кнопки стадии есть лишь при живом
-// агенте И непустом buttons; плюс pre-note (pending) и Pause. Так у стадии без
-// пунктов (напр. awaiting_approval без кнопок, или running-скрипт) не рисуется
-// пустой ⋮.
+// Кебаб показываем ТОЛЬКО если реально есть хоть один пункт меню — считаем из тех же предикатов, что и
+// сами пункты.
 function hasKebab(stage: Stage): boolean {
   return (hasLiveAgent(stage) && stage.buttons.length > 0) || canPreNote(stage) || canPause(stage)
 }
 
-// Левая панель: список стадий с выбором активной. На переходе стадии в done
-// показываем one-shot анимацию точки (A1) и «пробегание» импульса по коннектору (D)
-// — для этого запоминаем предыдущий статус каждой стадии и держим transient-набор
-// just-done, который очищается через 700мс (чуть дольше 600мс-анимаций).
+// Левая панель: список стадий с выбором активной.
 export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting, version }: StagesListProps): ReactElement {
-  // useId() нельзя звать внутри stages.map (правила хуков запрещают хук в
-  // цикле) — берём одну базу на компонент и добавляем к ней индекс строки,
+  // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
   const costIdBase = useId()
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
-  // Какая стадия сейчас показывает открытое кебаб-меню (option (a) из брифа —
-  // маленькое выпадающее меню с одним пунктом, а не прямое открытие модалки:
-  // пользователь описал двухуровневое взаимодействие меню→пункт, рассчитанное
-  // на будущие пункты меню).
+  // Какая стадия сейчас показывает открытое кебаб-меню.
   const [openMenuStageId, setOpenMenuStageId] = useState<string | null>(null)
-  // .stages-scroll скроллится (overflow-y: auto) — абсолютно
-  // спозиционированное меню внутри него обрезалось бы краем панели, если
-  // строка стадии оказывается ближе к низу видимой области (реальный баг,
-  // замечен на живом флоу). Меню рендерится порталом в document.body с
-  // координатами, посчитанными от кнопки — тем же приёмом, что и полноэкранный
-  // Maximizable. menuPos живёт, пока меню открыто; закрывается кликом вне
-  // (mousedown-слушатель на document) или скроллом (иначе меню зависает
-  // визуально не на своём месте — перепозиционировать при скролле избыточно
-  // для меню с одним пунктом).
+  // .stages-scroll скроллится — абсолютно спозиционированное меню внутри него обрезалось бы краем панели,
+  // если строка стадии оказывается ближе к низу видимой области.
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const menuRef = useRef<HTMLUListElement | null>(null)
   const openButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -178,15 +137,8 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
     }
 
     document.addEventListener('mousedown', onMouseDown)
-    // Меню спозиционировано fixed относительно кнопки внутри списка стадий.
-    // Если прокручивается САМА скролл-область списка — кнопка уезжает, а меню
-    // нет: закрываем. Скроллит теперь .stages-scroll (сам #stages-panel —
-    // фиксированный фрейм с overflow:hidden, чтобы футер версии оставался
-    // прибитым к низу). Слушаем скролл ТОЛЬКО этого скроллера, а не window с
-    // capture:true — иначе любой посторонний скролл в документе (например
-    // автоскролл ленты событий вниз при новом событии, useStickToBottom дёргает
-    // scrollTop) ложно закрывал бы меню сразу после открытия. Скролл не
-    // всплывает, поэтому чужие контейнеры до этого слушателя не дойдут.
+    // Меню спозиционировано fixed относительно кнопки внутри списка стадий. Скролл не всплывает, поэтому
+    // чужие контейнеры до этого слушателя не дойдут.
     const scroller = document.querySelector('.stages-scroll')
     scroller?.addEventListener('scroll', close)
     return () => {
@@ -211,9 +163,8 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
       newly.forEach((id) => next.add(id))
       return next
     })
-    // Отдельный таймер на каждую стадию (в ref), чтобы повторный прогон эффекта
-    // от обычного поллинга (новый массив stages каждые 3с) не отменял отложенную
-    // очистку другой стадии — иначе just-done залипал бы навсегда.
+    // Отдельный таймер на каждую стадию, чтобы повторный прогон эффекта от обычного поллинга не отменял
+    // отложенную очистку другой стадии — иначе just-done залипал бы навсегда.
     newly.forEach((id) => {
       if (timers.current[id] !== undefined) window.clearTimeout(timers.current[id])
       timers.current[id] = window.setTimeout(() => {
@@ -255,8 +206,7 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
       <div className="stages-scroll">
         <ul id="stages-list" className="stages-list">
         {stages.map((stage, index) => {
-          // railCost — null означает «пустой рейл»: ни фигуры, ни описания
-          // (см. документацию функции выше). costId существует, только пока
+          // railCost — null означает «пустой рейл»: ни фигуры, ни описания. costId существует, только пока
           // есть что описывать — иначе aria-describedby указывал бы в никуда.
           const cost = railCost(stage, accounting)
           const costId = cost !== null ? `${costIdBase}-cost-${index}` : undefined

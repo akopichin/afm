@@ -8,11 +8,6 @@ import (
 	"testing"
 )
 
-// TestTryLock_Windows_BusyReturnsSentinel проверяет, что на Windows
-// TryLock маппит именно windows.ERROR_LOCK_VIOLATION (LOCKFILE_FAIL_IMMEDIATELY)
-// в ErrLockBusy, а не любую другую ошибку. Не запускается на этом хосте
-// (macOS) — только компилируется под GOOS=windows go vet, реально
-// выполняется в Windows-матрице CI (если есть).
 func TestTryLock_Windows_BusyReturnsSentinel(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".lock")
 	a, _ := NewLock(p)

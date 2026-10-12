@@ -8,25 +8,13 @@ import (
 )
 
 // VerifyInputs — входы для сборки ограниченного контекста AI-verify.
-//
-// Сознательно НЕ переиспользует Inputs/Build(): тот несёт builder-only
-// содержимое (skills, <image_output>, <interactive_rules>, <project_memory>) —
-// ни одно из этого не должно попадать проверяющему (§8 плана AI-verify,
-// tmp/AFM_AI_VERIFY_IMPLEMENTATION_PLAN_v2.md). Verify-контекст — отдельный,
-// узкий срез: требования стадии как данные, а не как команды, plus
-// артефакты/summary/предыдущий отчёт для проверки закрытия blockers.
 type VerifyInputs struct {
-	// Template — assets/prompts/verify.md: инструкция по машинному формату
-	// ответа и правилу blocker (§8.1). Единственный источник "что значит
-	// пройти проверку" — остальные поля ниже это только данные о задаче.
+	// Template — assets/prompts/verify.md: инструкция по машинному формату ответа и правилу blocker.
 	Template string
 
 	Stage flow.Stage
 
-	// GlobalPrompt/StagePrompt — глобальные/построчные инструкции реализации
-	// (Flow.Prompt / Stage.Prompt). Передаются как REQUIREMENTS CONTEXT, а не
-	// как команды проверяющему: иначе глобальное "реализуй и закоммить"
-	// превращает verifier во второго автора (§8).
+	// GlobalPrompt/StagePrompt — глобальные/построчные инструкции реализации.
 	GlobalPrompt string
 	StagePrompt  string
 
@@ -50,10 +38,7 @@ type VerifyInputs struct {
 	VerifyPrompt string
 }
 
-// BuildVerify собирает промпт для AI-verify агента. В отличие от Build(),
-// здесь нет ни skills, ни <image_output>, ни <interactive_rules>, ни
-// <project_memory> — проверяющий не строитель и не участник диалога, только
-// независимый читатель уже сделанной работы.
+// BuildVerify собирает промпт для AI-verify агента.
 func BuildVerify(in VerifyInputs) string {
 	var sb strings.Builder
 

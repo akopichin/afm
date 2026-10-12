@@ -271,10 +271,6 @@ func TestNewVerificationID_InjectableForTests(t *testing.T) {
 	}
 }
 
-// TestReportRelPath_MatchesWriteReportLocation закрывает контракт V5b.3:
-// путь, который ReportRelPath отдаёт pkg/server для резолва отчёта через
-// os.Root(runDir), должен указывать РОВНО туда, куда WriteReport реально
-// пишет report.md — иначе сервер искал бы отчёт не там, где он есть.
 func TestReportRelPath_MatchesWriteReportLocation(t *testing.T) {
 	stageDir := t.TempDir()
 	verID := "v-20260101-020304-abcd"

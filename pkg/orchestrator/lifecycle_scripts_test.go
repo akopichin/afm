@@ -1,20 +1,6 @@
 package orchestrator_test
 
-// Task 10: script-boundary lifecycle events emitted from runScriptStage
-// (agents.go) and runBeforeHook/runAfterHook (hooks.go). Lives in the
-// external orchestrator_test package alongside lifecycle_flow_test.go and
-// reuses its flowEventRecorder/newFlowRecorderDispatcher/containsEvent/
-// assertOrder instead of redefining them.
-//
-// task-10-brief.md's Step 1 pseudocode names helpers (newFlowRecorder,
-// newScriptFlowOrch, runOrchestratorAsync, waitForRunDone) that don't map
-// 1:1 onto the actual Task 8/9 infra: newScriptFlowOrch already exists with
-// a different signature (script string + resumed/withDashboard bools, no
-// before/after knobs), and runOrchestratorAsync already exists taking an
-// externally-owned ctx/cancel (testrun_helper_test.go) rather than a bare
-// *Orchestrator. The helpers below are the adaptation: same behavior, names
-// disambiguated where the brief's name is already taken by a different
-// signature.
+// Task 10: script-boundary lifecycle events emitted from runScriptStage and runBeforeHook/runAfterHook.
 
 import (
 	"context"
@@ -29,17 +15,13 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// stageScript returns a minimal single-stage flow.Stage running script as
-// its main body — the seed value newScriptStageOrch below layers
-// withBefore/withAfter on top of.
+// stageScript returns a minimal single-stage flow.Stage running script as its main body — the seed value
+// newScriptStageOrch below layers withBefore/withAfter on top of.
 func stageScript(script string) flow.Stage {
 	return flow.Stage{ID: "notify", Name: "Notify", Script: script}
 }
 
-// withBefore/withAfter set the stage's script_before/script_after. Tasks 8-9
-// build stages as Go literals rather than parsed YAML flow files, so no
-// flow-file/YAML step is needed to attach a hook — these are plain
-// functional options over flow.Stage.
+// withBefore/withAfter set the stage's script_before/script_after.
 func withBefore(script string) func(*flow.Stage) {
 	return func(s *flow.Stage) { s.ScriptBefore = script }
 }
@@ -48,28 +30,20 @@ func withAfter(script string) func(*flow.Stage) {
 	return func(s *flow.Stage) { s.ScriptAfter = script }
 }
 
-// newFlowRecorder is the bare rec constructor the brief's pseudocode calls
-// directly; the dispatcher itself is wired inside newScriptStageOrch via
-// lifecycle_flow_test.go's newFlowRecorderDispatcher.
+// newFlowRecorder constructs the recorder; newScriptStageOrch wires its dispatcher.
 func newFlowRecorder(t *testing.T) *flowEventRecorder {
 	t.Helper()
 	return &flowEventRecorder{}
 }
 
-// scriptTestOrch bundles the *Orchestrator, its state.json path, and its
-// Run's completion signal — the adapted shape of the bare "o" the brief's
-// pseudocode passes to runOrchestratorAsync/waitForRunDone.
+// scriptTestOrch holds the orchestrator, state path, and run completion channel.
 type scriptTestOrch struct {
 	orch      *orchestrator.Orchestrator
 	stateFile string
 	done      chan struct{}
 }
 
-// newScriptStageOrch builds a single-stage *orchestrator.Orchestrator wired
-// to rec's dispatcher, mirroring newScriptFlowOrch (lifecycle_flow_test.go)
-// but taking a flow.Stage + functional options instead of a bare script
-// string, so TestBeforeAfterHook_Events/TestBeforeHook_FailureEvent below can
-// attach ScriptBefore/ScriptAfter to the same stage.
+// newScriptStageOrch wires a single stage and recorder, allowing before/after hooks through options.
 func newScriptStageOrch(t *testing.T, rec *flowEventRecorder, stage flow.Stage, opts ...func(*flow.Stage)) *scriptTestOrch {
 	t.Helper()
 	for _, opt := range opts {
@@ -97,12 +71,8 @@ func newScriptStageOrch(t *testing.T, rec *flowEventRecorder, stage flow.Stage, 
 	return &scriptTestOrch{orch: orch, stateFile: filepath.Join(runDir, "state.json")}
 }
 
-// runOrchestratorAsync starts o.orch.Run in the background under a bounded
-// context and registers the same cancel+wait t.Cleanup pattern as
-// testrun_helper_test.go's runOrchestratorAsync — kept as a distinct
-// function (rather than overloading that name/signature, which Go doesn't
-// support) because it also stashes the done channel on scriptTestOrch for
-// waitForRunDone below to poll mid-test, not just at cleanup.
+// runOrchestratorAsync starts a bounded run, stores its done channel, and registers cancel-and-wait
+// cleanup.
 func runOrchestratorAsyncS(t *testing.T, o *scriptTestOrch) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -132,9 +102,7 @@ func waitForRunDone(t *testing.T, o *scriptTestOrch, timeout time.Duration) {
 	}
 }
 
-// waitForEvent polls rec.ordered() until want has been recorded, or fails
-// the test after timeout — same polling idiom as lifecycle_flow_test.go's
-// waitForFlowEvent, reproduced here under the name task-10-brief.md uses.
+// waitForEvent polls recorded events until want arrives or timeout fails the test.
 func waitForEvent(t *testing.T, rec *flowEventRecorder, want lifecyclehooks.EventType, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -161,9 +129,6 @@ func assertNotContains(t *testing.T, evs []lifecyclehooks.EventType, unwanted li
 	}
 }
 
-// TestScriptStage_Events: a plain script stage that succeeds emits
-// stage_script_started then stage_script_finished (never stage_script_failed),
-// alongside the ordinary FSM stage_finished event.
 func TestScriptStage_Events(t *testing.T) {
 	rec := newFlowRecorder(t)
 	o := newScriptStageOrch(t, rec, stageScript("true"))
@@ -176,10 +141,6 @@ func TestScriptStage_Events(t *testing.T) {
 	assertNotContains(t, evs, lifecyclehooks.EventStageScriptFailed)
 }
 
-// TestScriptStage_FailureEvents: a script stage that always exits 1 exhausts
-// runScriptWithRetry's built-in retries and emits stage_script_started then
-// stage_script_failed (never stage_script_finished), alongside the ordinary
-// FSM stage_failed event.
 func TestScriptStage_FailureEvents(t *testing.T) {
 	rec := newFlowRecorder(t)
 	o := newScriptStageOrch(t, rec, stageScript("exit 1"))
@@ -192,10 +153,6 @@ func TestScriptStage_FailureEvents(t *testing.T) {
 	assertNotContains(t, evs, lifecyclehooks.EventStageScriptFinished)
 }
 
-// TestBeforeAfterHook_Events: a script stage with both script_before and
-// script_after emits all four before/after started/finished events, with the
-// before hook strictly preceding the main script and the after hook strictly
-// following it.
 func TestBeforeAfterHook_Events(t *testing.T) {
 	rec := newFlowRecorder(t)
 	o := newScriptStageOrch(t, rec, stageScript("true"),
@@ -212,11 +169,6 @@ func TestBeforeAfterHook_Events(t *testing.T) {
 	assertOrder(t, evs, lifecyclehooks.EventStageScriptFinished, lifecyclehooks.EventStageScriptAfterStarted)
 }
 
-// TestBeforeHook_FailureEvent: a before-hook that always exits 1 exhausts
-// its retries and emits stage_script_before_failed; hook_failed then blocks
-// the stage (waiting on a RetryHook/SkipHook decision), so Run itself never
-// returns here — it's enough that the event is observed, followed by the
-// normal cleanup-driven cancellation.
 func TestBeforeHook_FailureEvent(t *testing.T) {
 	rec := newFlowRecorder(t)
 	o := newScriptStageOrch(t, rec, stageScript("true"), withBefore("exit 1"))

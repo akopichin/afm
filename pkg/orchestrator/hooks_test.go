@@ -168,13 +168,6 @@ func TestExecScript_RunsInRootDirAndPublishesOutput(t *testing.T) {
 	}
 }
 
-// TestExecScript_PersistsOutputToNotices verifies script/hook output survives
-// a client reconnecting after the script already finished: EventScriptOutput
-// must be durably recorded (via appendNotice, the same mechanism
-// EventAgentCompleted/EventContextWarning already use) in <runDir>/notices.jsonl,
-// not just published live to the ephemeral UI bus — otherwise a dashboard that
-// connects after a fast script/hook completes never sees its output in the
-// event feed (only the Log panel, which reads the log file directly).
 func TestExecScript_PersistsOutputToNotices(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -225,11 +218,6 @@ func TestExecScript_PersistsOutputToNotices(t *testing.T) {
 	}
 }
 
-// TestExecScript_PublishesStreamForStderrOutput verifies a script_output
-// notice for a line written to stderr carries "stream":"stderr" (and a
-// stdout line carries "stream":"stdout") — Task 2's RunScript already tags
-// OnAction calls with the stream; execScript must thread it through into the
-// published/persisted data, not drop it as it did before.
 func TestExecScript_PublishesStreamForStderrOutput(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -285,10 +273,6 @@ func TestExecScript_PublishesStreamForStderrOutput(t *testing.T) {
 	}
 }
 
-// TestScriptOutputNotice_LegacyLineWithoutStreamDefaultsToStdout verifies a
-// pre-upgrade notices.jsonl line (written before the "stream" field
-// existed) still decodes cleanly, and that a reader treats an absent
-// "stream" as "stdout" — backward compatibility for old run logs.
 func TestScriptOutputNotice_LegacyLineWithoutStreamDefaultsToStdout(t *testing.T) {
 	line := `{"time":"2026-09-23T10:00:00Z","type":"script_output","stage_id":"s1","data":{"hook":"before","line":"legacy output"}}`
 
@@ -444,16 +428,6 @@ func TestRunBeforeHook_BlocksThenSkip(t *testing.T) {
 	}
 }
 
-// TestRunBeforeHook_PublishesEventHookFailedOnUIBus regression-tests a bug
-// found during an architectural review of the event pipeline: the exhausted-
-// retries EventHookFailed for script_before was published to o.critical, a
-// bus with exactly one consumer (Run()'s own event loop), whose handleEvent
-// switch doesn't even handle this event type — so it was silently discarded,
-// and the dashboard never saw the error text for a failed script_before
-// hook, live or on reconnect (the FSM status itself still updated fine via
-// the Trigger call, so the stage didn't hang — only the diagnostic message
-// was lost). Fixed by publishing to o.ui instead, matching the other 3
-// sibling call sites (before-resolve, after-fail, after-resolve).
 func TestRunBeforeHook_PublishesEventHookFailedOnUIBus(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")
@@ -498,13 +472,6 @@ func TestRunBeforeHook_PublishesEventHookFailedOnUIBus(t *testing.T) {
 	}
 }
 
-// TestRunBeforeHook_PersistsHookEventsToNotices закрывает Finding #3: события
-// hook_failed/hook_resolved публиковались только живьём в UI-шину без durable-
-// backing (у before-hook FSM-переход реконструируется лишь как общий
-// stage_status_changed — transitionToFeedEvents не имеет case'а для hook-событий,
-// теряя текст ошибки/резолюции; у after-hook FSM не трогается вовсе). Клиент,
-// перезагрузивший страницу после падения хука, терял диагностику навсегда.
-// Теперь оба события дублируются в notices.jsonl (reconstructNotices реплеит их).
 func TestRunBeforeHook_PersistsHookEventsToNotices(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")
@@ -566,10 +533,6 @@ func TestRunBeforeHook_PersistsHookEventsToNotices(t *testing.T) {
 	}
 }
 
-// TestRunBeforeHook_PublishesStderrTailOnFail closes the same gap Task 4
-// (agents.go's runScriptStage) already closed for script: stages: a failed
-// script_before wrote no stderr excerpt into its hook_failed notice, so the
-// user could see THAT the hook failed but not WHY.
 func TestRunBeforeHook_PublishesStderrTailOnFail(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")
@@ -728,16 +691,6 @@ func TestRunAfterHook_PublishesStderrTailOnFail(t *testing.T) {
 	}
 }
 
-// TestWithBeforeHook_SkipsMainFnIfPausedDuringHook is a regression test for a
-// bug found live: script_before runs as a bare shell script with no
-// InterruptCh (only the main agent registers one, inside runWithRetry) — so
-// Pause() can succeed (durable EvPause transition) while the hook is still
-// executing in the background. Without this check, withBeforeHook would
-// unconditionally call mainFn once the hook finished, spawning a real agent
-// on a stage the user just paused — and a second agent again if they'd
-// already clicked Continue in the meantime (Continue's resumeStageAtStatus
-// spawns independently). withBeforeHook must check status after the hook
-// resolves and skip mainFn if the stage went to paused in the meantime.
 func TestWithBeforeHook_SkipsMainFnIfPausedDuringHook(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	s := flow.Stage{ID: "s1", ScriptBefore: "echo ok"}
@@ -747,9 +700,8 @@ func TestWithBeforeHook_SkipsMainFnIfPausedDuringHook(t *testing.T) {
 		called = true
 	})
 
-	// Simulate Pause() landing while the hook was still running in the
-	// background: by the time runBeforeHook returns (success), the stage is
-	// already paused.
+	// Simulate Pause() landing while the hook was still running in the background: by the time runBeforeHook
+	// returns (success), the stage is already paused.
 	if _, ok := o.Trigger("s1", bus.EvPause, bus.GuardCtx{}, "test"); !ok {
 		t.Fatal("EvPause should be allowed from running")
 	}
@@ -780,9 +732,6 @@ func TestWithBeforeHook_RunsMainFnWhenNotPaused(t *testing.T) {
 	}
 }
 
-// TestWriteHookPending_AtomicRoundTrip is a regression test for finding #11:
-// the atomic (temp+fsync+rename) write must produce a readable file, leave no
-// stray temp behind, and replace cleanly on overwrite.
 func TestWriteHookPending_AtomicRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	p := hookPending{Hook: hookAfter, Script: "echo hi", Timeout: 5 * time.Second}
@@ -812,10 +761,8 @@ func TestWriteHookPending_AtomicRoundTrip(t *testing.T) {
 
 // --- maybeRunAfterHookThen (Task 10: after-hook -> reflection ordering) ---
 
-// newFullHookOrch builds a real *Orchestrator via New() (unlike
-// setupHookOrch above, which hand-builds a bare struct with o.concurrency
-// left nil) — maybeRunAfterHookThen needs a working concurrency.Manager to
-// spawn its tracked goroutine.
+// newFullHookOrch builds a real *Orchestrator via New — maybeRunAfterHookThen needs a working
+// concurrency.Manager to spawn its tracked goroutine.
 func newFullHookOrch(t *testing.T, stage flow.Stage) (*Orchestrator, string) {
 	t.Helper()
 	runDir := t.TempDir()
@@ -828,9 +775,6 @@ func newFullHookOrch(t *testing.T, stage flow.Stage) (*Orchestrator, string) {
 	return o, runDir
 }
 
-// TestMaybeRunAfterHookThen_NoScriptAfter_RunsContInline is the unchanged
-// fast path: a stage with no ScriptAfter never spawns a goroutine at all —
-// cont runs synchronously, right where maybeRunAfterHookThen was called.
 func TestMaybeRunAfterHookThen_NoScriptAfter_RunsContInline(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "S1"} // no ScriptAfter
 	o, _ := newFullHookOrch(t, stage)
@@ -845,13 +789,6 @@ func TestMaybeRunAfterHookThen_NoScriptAfter_RunsContInline(t *testing.T) {
 	}
 }
 
-// TestMaybeRunAfterHookThen_ReflectionSeesAfterHookLog reproduces the Task
-// 10 brief's core ordering requirement: cont (here, maybeRunReflection) must
-// only run AFTER script_after has actually produced after.log on disk — not
-// merely after the two calls are sequenced in completeStage. It drives the
-// real CaptureStage primitive (via a stubbed memorypipeline runner) and
-// inspects the actual Sources list SourceInventory built, proving after.log
-// was already on disk by the time reflection captured the stage's session.
 func TestMaybeRunAfterHookThen_ReflectionSeesAfterHookLog(t *testing.T) {
 	stage := flow.Stage{
 		ID:          "s1",
@@ -907,11 +844,6 @@ func TestMaybeRunAfterHookThen_ReflectionSeesAfterHookLog(t *testing.T) {
 	}
 }
 
-// TestMaybeRunAfterHookThen_ShutdownDuringHook_SkipsCont reproduces the
-// brief's shutdown case: if ctx is cancelled while script_after is still
-// running, runAfterHook returns (it gives up waiting for a retry/skip
-// decision on a dead ctx) but cont must NOT run — a cancelled run must not
-// spawn a fresh detached reflection agent.
 func TestMaybeRunAfterHookThen_ShutdownDuringHook_SkipsCont(t *testing.T) {
 	stage := flow.Stage{ID: "s1", Name: "S1", ScriptAfter: "sleep 5"}
 	o, _ := newFullHookOrch(t, stage)

@@ -45,9 +45,6 @@ func countRetryNotices(t *testing.T, runDir string) int {
 	return n
 }
 
-// TestVerifyMaxFailures_DefaultOneCorrection — N=1 (дефолт): ровно одна
-// коррекция, второе отклонение проваливает стадию. Совпадает с прежним
-// однократным поведением.
 func TestVerifyMaxFailures_DefaultOneCorrection(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -136,9 +133,6 @@ func TestVerifyMaxFailures_StageOverrideBeatsGlobal(t *testing.T) {
 	}
 }
 
-// TestVerifyMaxFailures_TransportRetryDoesNotConsumeBudget — транспортный ретрай
-// (retryable-ошибка) тратит внешний attempt, но НЕ verify-бюджет: отклонение
-// после транспортного ретрая всё равно получает свою коррекцию.
 func TestVerifyMaxFailures_TransportRetryDoesNotConsumeBudget(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -148,9 +142,8 @@ func TestVerifyMaxFailures_TransportRetryDoesNotConsumeBudget(t *testing.T) {
 	o.runWithRetry(context.Background(), flow.Stage{ID: "s1"}, phaseImplementation,
 		func(string) error {
 			attempts++
-			// Попытка 1 — транспортная ошибка (retryable, съедает attempt,
-			// НЕ verify-бюджет). Дальше агент завершается штатно, вердикт
-			// решает completionCheck.
+			// Попытка 1 — транспортная ошибка (retryable, съедает attempt, НЕ verify-бюджет). Дальше агент
+			// завершается штатно, вердикт решает completionCheck.
 			if attempts == 1 {
 				return errors.New("overloaded")
 			}
@@ -170,9 +163,6 @@ func TestVerifyMaxFailures_TransportRetryDoesNotConsumeBudget(t *testing.T) {
 	}
 }
 
-// TestVerifyMaxFailures_PlanIncompleteAndVerifyIndependent — план-незавершёнка
-// на attempt 0 получает свою однократную коррекцию, а последующее
-// verify-отклонение — свою: политики независимы.
 func TestVerifyMaxFailures_PlanIncompleteAndVerifyIndependent(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -193,9 +183,8 @@ func TestVerifyMaxFailures_PlanIncompleteAndVerifyIndependent(t *testing.T) {
 		func() { t.Error("onUserInterrupted should not be called") },
 	)
 
-	// attempt 1: plan-incomplete → retry (attempt==0). attempt 2: verify reject
-	// → коррекция (verifyFailures 0<1). attempt 3: verify reject → бюджет
-	// исчерпан, fail. Итого 3 вызова агента.
+	// attempt 1: plan-incomplete → retry (attempt==0). attempt 2: verify reject → коррекция (verifyFailures
+	// 0<1). attempt 3: verify reject → бюджет исчерпан, fail. Итого 3 вызова агента.
 	if attempts != 3 {
 		t.Fatalf("expected 3 attempts (plan correction + verify correction), got %d", attempts)
 	}
@@ -227,9 +216,6 @@ func TestVerifyMaxFailures_ExecErrorNotRetried(t *testing.T) {
 	}
 }
 
-// TestVerifyMaxFailures_RetryEventsPerCorrection — на КАЖДУЮ разрешённую
-// коррекцию публикуется ровно один EventRetryScheduled; после исчерпания
-// бюджета — один финальный verify-fail без лишнего retry-события.
 func TestVerifyMaxFailures_RetryEventsPerCorrection(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -258,11 +244,6 @@ func TestVerifyMaxFailures_RetryEventsPerCorrection(t *testing.T) {
 	}
 }
 
-// TestVerifyMaxFailures_BudgetExceedsMaxRetries — когда бюджет verify (N) >=
-// MaxRetries, коррекции упираются в внешний потолок цикла (min(N, MaxRetries)),
-// и стадия ВСЁ РАВНО получает терминальный переход. Регрессия на баг: `continue`
-// на последней итерации (attempt == maxRetries) выходил из for без EvVerifyFail —
-// стадия зависала в активном статусе.
 func TestVerifyMaxFailures_BudgetExceedsMaxRetries(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 2 // мал специально: N=5 не влезает в потолок

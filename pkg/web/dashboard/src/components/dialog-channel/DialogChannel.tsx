@@ -12,26 +12,11 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 type DialogChannelProps = {
   stage: Stage | null
   attention?: boolean
-  // banner — attention-шапка («Agent needs your input»), рендерится ПЕРВЫМ
-  // ребёнком внутри скролл-области #dialog-scroll, а не над панелью: уезжает
-  // вместе с контентом при скролле и не съедает высоту у больших вопросов;
-  // sticky-панель ответа остаётся на месте.
+  // banner прокручивается с вопросами внутри #dialog-scroll; панель ответа остаётся sticky.
   banner?: ReactNode
-  // scrollTarget — переход из ленты (клик по dialog_question/dialog_answer
-  // элементу в FeedWorkspace, App.tsx's handleOpenDialogFromFeed): к какому
-  // именно Q&A прокрутить канал при открытии. /dialog грузится асинхронно —
-  // на момент маунта якорь обычно ещё не существует в DOM, поэтому цель
-  // сохраняется и попытка повторяется при каждом изменении entries/pending,
-  // пока скролл не удастся (см. эффект ниже). stageId — чья это цель: без неё
-  // цель, оставшаяся от предыдущей стадии (attention auto-advance, повторное
-  // открытие того же диалога), могла бы дождаться случайного совпадения
-  // phase/id на ДРУГОЙ стадии и проскроллить не туда (F6).
+  // scrollTarget — переход из ленты: к какому именно Q&A прокрутить канал при открытии.
   scrollTarget?: { stageId: string; phase: string; id: string } | null
-  // onTargetConsumed — вызывается ровно один раз, сразу после того как
-  // scrollTarget был успешно применён (скролл состоялся). Родитель должен
-  // сбросить свой scrollToDialogTarget в ответ — иначе цель переживёт своё
-  // назначение и повторное открытие того же диалога проиграет старый скролл
-  // заново (F6).
+  // onTargetConsumed — вызывается ровно один раз, сразу после того как scrollTarget был успешно применён.
   onTargetConsumed?: () => void
 }
 
@@ -47,24 +32,17 @@ type DialogEntry = {
   auto_answered?: boolean
 }
 
-// questionKey — составной ключ вопроса (phase,id): id уникален только В
-// ПРЕДЕЛАХ фазы (см. комментарий F4 ниже), поэтому сравнение «сменился ли
+// questionKey — составной ключ вопроса: id уникален только В ПРЕДЕЛАХ фазы, поэтому сравнение «сменился ли
 // pending-вопрос» по одному id путало planning/q1 и implementation/q1.
-// '/' — безопасный разделитель (фазы — фиксированные слова без '/'), в
-// отличие от литерального NUL, который пометил бы файл как бинарный.
 function questionKey(e: { phase?: string; id?: string } | null | undefined): string | undefined {
   return e == null ? undefined : `${e.phase ?? ''}/${e.id ?? ''}`
 }
 
-// R2: сколько ждём, что якорь прицельного скролла (scrollTarget) появится в
-// DOM, прежде чем сдаться. Опрос /dialog идёт раз в 2с — этого времени
-// хватает на несколько попыток, но цель не остаётся навязанной навсегда,
-// если якорь в принципе не существует (id не из этой стадии).
+// R2: сколько ждём, что якорь прицельного скролла появится в DOM, прежде чем сдаться.
 const TARGET_GIVE_UP_MS = 4000
 
-// Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос
-// (опции и/или свободный ответ), отмена. Поведение перенесено из loadDialog /
-// renderDialog / renderPendingQuestion в текущем app.js.
+// Диалоговый канал стадии: история вопросов/ответов по фазам, текущий вопрос, отмена. Поведение перенесено
+// из loadDialog / renderDialog / renderPendingQuestion в текущем app.js.
 export function DialogChannel({ stage, attention = false, banner, scrollTarget = null, onTargetConsumed }: DialogChannelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [entries, setEntries] = useState<DialogEntry[]>([])
@@ -74,60 +52,32 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   // исчез (ответили/история открыта), история раскрывается автоматически.
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
 
-  // Построчные комментарии к pending-вопросу живут внутри keyed-владельца
-  // LineCommentedDocument (см. рендер ниже): смена (stage,phase,id,текст вопроса)
-  // размонтирует его и атомарно сбрасывает комментарии/черновик. Поэтому в самом
-  // DialogChannel этого state больше нет — комментарии читаются из render-prop.
+  // Построчные комментарии к pending-вопросу живут внутри keyed-владельца LineCommentedDocument: смена
+  // размонтирует его и атомарно сбрасывает комментарии/черновик.
   const [clickedSend, setClickedSend] = useState(false)
-  // submitting/submitError гейтят двойную отправку и делают ошибку мутирующего
-  // действия видимой (finding #8): без них кнопка SEND не блокировалась на время
-  // POST, показывала «✓ Sent» до ответа сервера, а reject (напр. 409 на второй
-  // клик) оставался необработанным промисом.
+  // submitting блокирует повторную отправку; submitError показывает отказ POST вместо ложного Sent.
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [flash, setFlash] = useState(false)
 
-  // Автоскролл канала к хвосту при появлении новых сообщений/вопросов,
-  // пока пользователь сам не уехал вверх. Контейнер охватывает и историю,
-  // и pending-вопрос — кнопка «↓ к последнему» возвращает к актуальному.
+  // Автоскролл канала к хвосту при появлении новых сообщений/вопросов, пока пользователь сам не уехал
+  // вверх.
   const feed = useStickToBottom<HTMLDivElement>()
 
-  // Признак «панель dialog развёрнута на весь экран» берём прямо из контекста
-  // Maximizable (useMaximize уже экспортирован публично и предназначен именно для
-  // этого — см. его использование в PanelFrame) — расширять Maximizable не нужно.
+  // Признак «панель dialog развёрнута на весь экран» берём прямо из контекста Maximizable — расширять
+  // Maximizable не нужно.
   const { maximizedKey } = useMaximize()
   const maximized = maximizedKey === 'dialog'
 
-  // requestGenRef/lastPendingKeyRef — поколение живёт на уровне компонента (не
-  // локально внутри эффекта опроса), потому что reload() (вызывается после
-  // успешного ответа и на answer_out_of_order) — ОТДЕЛЬНАЯ точка входа,
-  // применяющая тот же /dialog поверх того же состояния. Без общих refs
-  // reload() не мог ни (а) отменить уже летящий poll-запрос предыдущего
-  // вопроса (тот применился бы ПОСЛЕ reload и откатил бы к старому pending),
-  // ни (б) сообщить следующему poll «pending уже сменился» — тот увидел бы
-  // смену ключа сам и второй раз стёр черновик, который пользователь только
-  // начал печатать на новом вопросе.
+  // requestGenRef/lastPendingKeyRef — поколение живёт на уровне компонента, потому что reload — ОТДЕЛЬНАЯ
+  // точка входа, применяющая тот же /dialog поверх того же состояния.
   const requestGenRef = useRef(0)
   const lastPendingKeyRef = useRef<string | undefined>(undefined)
 
   // currentStageIdRef — какая стадия сейчас смонтирована в этой панели.
-  // reload() (вызывается из sendAnswer/sendFeedback после успешного POST)
-  // замыкает stage.id того РЕНДЕРА, в котором был вызван, — то есть стадию A,
-  // на которой пользователь отправил ответ. Если пользователь переключился на
-  // стадию B ДО того, как POST зарезолвился, reload() всё равно выполнится (в
-  // рамках того же React-замыкания) и применит ответ A поверх уже
-  // смонтированной панели B — бампая ОБЩИЙ requestGenRef, что попутно
-  // инвалидирует легитимный поллинг B. Ref обновляется только в эффекте
-  // опроса (а не в reload — иначе он обновлял бы сам себя), поэтому reload()
-  // может сверить «стадия, для которой я вызван» с «стадия, которая сейчас
-  // реально смонтирована», и отказаться применять устаревший результат.
   const currentStageIdRef = useRef<string | null>(null)
 
-  // applyDialog — единая точка применения ответа /dialog, общая для опроса и
-  // reload(): пишет entries и сбрасывает черновик/выбор ТОЛЬКО когда
-  // (phase,id) pending-вопроса реально изменился — иначе повторное применение
-  // одного и того же pending (например, poll сразу после reload) не трогает
-  // то, что пользователь уже начал вводить.
+  // applyDialog сбрасывает черновик только при смене pending (phase,id), сохраняя ввод между poll/reload.
   const applyDialog = useCallback((data: DialogEntry[]) => {
     setEntries(data)
     const nextKey = questionKey(findPending(data))
@@ -139,11 +89,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }, [])
 
-  // Грузим диалог при открытии стадии и опрашиваем каждые 2 c — агент может
-  // дописать новый вопрос/answer в любой момент, и канал должен обновляться live.
-  // Без опроса новый вопрос виден только после ручной перезагрузки страницы.
-  // Выбор пользователя (option/customText) сбрасываем только при смене
-  // pending-вопроса, чтобы опрос не затирал ввод посреди ответа.
+  // Грузим диалог при открытии стадии и опрашиваем каждые 2 c — агент может дописать новый вопрос/answer в
+  // любой момент, и канал должен обновляться live.
   useEffect(() => {
     // stage === null: панель смонтирована для стабильности лейаута, но
     // реальной стадии нет — не гоняем пустые опросы GET /api/stages//dialog.
@@ -152,10 +99,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
     let cancelled = false
 
-    // Смена стадии инвалидирует любой ещё не резолвнувшийся запрос предыдущей
-    // стадии (общий requestGenRef — reload() тоже его бампает) и сбрасывает
-    // lastPendingKeyRef, чтобы первый ответ новой стадии не сравнивался с
-    // ключом чужого pending-вопроса.
+    // Смена стадии инвалидирует любой ещё не резолвнувшийся запрос предыдущей стадии и сбрасывает
+    // lastPendingKeyRef, чтобы первый ответ новой стадии не сравнивался с ключом чужого pending-вопроса.
     requestGenRef.current++
     lastPendingKeyRef.current = undefined
     currentStageIdRef.current = current.id
@@ -165,13 +110,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setCustomText('')
 
     const refresh = (): void => {
-      // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно
-      // в порядке отправки. requestGenRef — счётчик поколений (как
-      // latestRequestId в useStatus): каждый refresh запоминает свой номер ДО
-      // await и применяет ответ, только если он всё ещё самый свежий — иначе
-      // более старый (до-ответа) response, резолвнувшийся после более нового
-      // (уже применённого reload() или другим poll), снова открыл бы
-      // отвеченный вопрос.
+      // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно в порядке отправки.
       const requestId = ++requestGenRef.current
       void loadDialog(current.id).then((data) => {
         if (cancelled) return
@@ -187,42 +126,21 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     return () => {
       cancelled = true
       window.clearInterval(interval)
-      // Панель переключается на другую стадию (или размонтируется) —
-      // reload(), замкнувшийся на текущей стадии, больше не должен применять
-      // свой результат сюда.
+      // Панель переключается на другую стадию (или размонтируется) — reload(), замкнувшийся на текущей
+      // стадии, больше не должен применять свой результат сюда.
       currentStageIdRef.current = null
     }
   }, [stage?.id, applyDialog])
 
   const pending = useMemo(() => findPending(entries), [entries])
-  // stage.hasDialog — серверный сигнал «на диске уже есть хотя бы один
-  // <phase>.dialog.jsonl» (см. stage_has_dialog в /api/status): держим панель
-  // видимой, даже если локальный fetch дублирующего /dialog ещё не догнал
-  // (или в проде вернул пустой список из-за гонки с записью файла) — иначе
-  // возможна ложная секунда пустой панели/мигание для стадии, у которой
-  // диалоговая история уже реально есть.
+  // stage.hasDialog сохраняет видимость панели, пока локальный fetch истории не догнал сервер.
   const hasContent = stage !== null && (entries.length > 0 || stage.status === 'awaiting_user_input' || stage.hasDialog)
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
   const jumpToBottom = feed.jumpToBottom
   const releaseStick = feed.release
 
-  // Прицельный скролл к конкретному Q&A (переход из ленты). Целится в
-  // отдельный state (retainedTarget), а не напрямую в проп: /dialog грузится
-  // асинхронно, поэтому якорь (#dialog-pending либо #qa-<phase>-<id>) обычно
-  // отсутствует в DOM на момент прихода target — цель нужно удержать и
-  // повторить попытку на следующих изменениях entries/pending, а не бросать
-  // после первого промаха. Ресинк с пропом — на смену scrollTarget (в т.ч.
-  // повторный клик по тому же элементу ленты — App.tsx каждый раз создаёт
-  // новый объект-литерал) и на смену стадии (иначе цель, оставшаяся от
-  // предыдущей стадии, могла бы дождаться случайного совпадения id и
-  // проскроллить не туда). Объявлен ДО эффекта автопрыжка к pending ниже —
-  // тому эффекту (F5) нужно читать retainedTarget, чтобы уступить прицельной
-  // навигации.
-  //
-  // Адопция гейтится по stageId (F6): scrollTarget может пережить смену
-  // рендерящейся стадии (attention auto-advance, повторное открытие того же
-  // диалога) — если он предназначен ДРУГОЙ стадии, отбрасываем его вместо
-  // того чтобы ждать случайного совпадения phase/id на этой.
+  // Прицельный скролл к конкретному Q&A. Объявлен ДО эффекта автопрыжка к pending ниже — тому эффекту (F5)
+  // нужно читать retainedTarget, чтобы уступить прицельной навигации.
   const [retainedTarget, setRetainedTarget] = useState<{ stageId: string; phase: string; id: string } | null>(null)
   useEffect(() => {
     if (scrollTarget !== null && stage !== null && scrollTarget.stageId === stage.id) {
@@ -232,32 +150,16 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }, [scrollTarget, stage?.id])
 
-  // R1: pending-эффект ниже читает текущую цель через ref, а не как свою
-  // зависимость — иначе очистка retainedTarget эффектом попадания (ниже)
-  // сама пересоздаёт pending-эффект, и тот, увидев retainedTarget===null,
-  // планирует requestAnimationFrame(jumpToBottom) на пустом месте, стирая
-  // только что сделанный прицельный скролл на кадр позже. Присваивание в
-  // теле рендера (а не в отдельном эффекте) — стандартный паттерн «читать
-  // свежее значение без объявления зависимости»: коммитится к моменту, когда
-  // эффекты того же рендера начинают выполняться.
+  // Читаем цель через ref: её очистка не должна перезапускать pending-эффект и стирать прицельный скролл.
   const retainedTargetRef = useRef(retainedTarget)
   retainedTargetRef.current = retainedTarget
 
-  // onTargetConsumed читаем через ref по той же причине: таймер отказа (R2,
-  // ниже) не должен перезапускаться из-за смены идентичности колбэка
-  // родителя — только из-за смены самой цели (retainedTarget в его deps).
+  // onTargetConsumed читаем через ref по той же причине: таймер отказа не должен перезапускаться из-за
+  // смены идентичности колбэка родителя — только из-за смены самой цели.
   const onTargetConsumedRef = useRef(onTargetConsumed)
   onTargetConsumedRef.current = onTargetConsumed
 
-  // R2: если якорь цели никогда не появляется (id не существует в диалоге
-  // этой стадии), retainedTarget иначе оставался бы навязан навсегда — это
-  // не только держит скролл «застрявшим», но и (вместе с ref выше) подавляет
-  // обычный автопрыжок на ЛЮБОМ будущем pending-вопросе, а родитель никогда
-  // не получает onTargetConsumed, чтобы сбросить свою собственную цель.
-  // Даём цели ограниченное время на самостоятельную попытку найтись — опрос
-  // /dialog идёт раз в 2с, окна в TARGET_GIVE_UP_MS хватает на несколько
-  // попыток. Таймер отменяется/пересоздаётся при смене retainedTarget —
-  // в т.ч. когда эффект попадания (ниже) сам очищает цель при успехе.
+  // Ограничиваем поиск отсутствующего якоря по времени, затем освобождаем цель и обычный автоскролл.
   useEffect(() => {
     if (retainedTarget === null) return
     const timeoutId = window.setTimeout(() => {
@@ -267,21 +169,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     return () => window.clearTimeout(timeoutId)
   }, [retainedTarget])
 
-  // Ждущий ответа вопрос — всегда в конце истории. Проматываем к нему диалог:
-  // и при загрузке страницы (пользователь сразу видит опции ответа), и при
-  // появлении нового вопроса от агента. rAF — к следующему кадру, после layout
-  // (панель могла только что пересчитать высоту), чтобы scrollHeight был финальным.
-  //
-  // F5/R1: пока retainedTargetRef указывает НЕ на текущий pending (прицельная
-  // навигация из ленты ещё не доехала до своего Q&A), не перебиваем её этим
-  // автопрыжком — иначе он срабатывает на каждое изменение pending.id и
-  // перетягивает скролл обратно вниз, отменяя переход к более старому
-  // отвеченному вопросу. retainedTarget НЕ в зависимостях эффекта (R1) —
-  // только его ref: иначе очистка цели эффектом попадания (ниже) сама
-  // пересоздаёт этот эффект и планирует лишний прыжок в конец кадром позже.
-  // Once retainedTarget указывает на pending (или снят) — обычное поведение
-  // продолжает работать как раньше, потому что pending?.id меняется на
-  // следующий реальный pending-вопрос и заново триггерит этот эффект.
+  // Ждущий ответа вопрос — всегда в конце истории. rAF — к следующему кадру, после layout (панель могла
+  // только что пересчитать высоту), чтобы scrollHeight был финальным.
   useEffect(() => {
     if (pending === null) return
     const target = retainedTargetRef.current
@@ -290,9 +179,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     return () => cancelAnimationFrame(handle)
   }, [questionKey(pending), jumpToBottom])
 
-  // One-shot glow рамки диалога при появлении нового pending-вопроса (B3):
-  // класс dialog-flash навешивается на смену pending.id и снимается через 2.5s
-  // (совпадает с длительностью CSS-анимации .dialog-flash, чтобы глоу успевал доиграть).
+  // One-shot glow рамки диалога при появлении нового pending-вопроса: класс dialog-flash навешивается на
+  // смену pending.id и снимается через 2.5s.
   useEffect(() => {
     if (pending === null) return
     setFlash(true)
@@ -300,10 +188,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     return () => window.clearTimeout(t)
   }, [questionKey(pending)])
 
-  // При разворачивании панели на весь экран (меняется высота контейнера) канал
-  // должен показать хвост диалога, а не то место, на котором застал скролл в компактном
-  // режиме. rAF — после layout оверлея, чтобы scrollHeight уже отражал итоговую
-  // (полноэкранную) высоту.
+  // При разворачивании панели на весь экран канал должен показать хвост диалога, а не то место, на котором
+  // застал скролл в компактном режиме.
   useEffect(() => {
     if (!maximized) return
     const handle = requestAnimationFrame(() => jumpToBottom())
@@ -313,9 +199,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   useEffect(() => {
     if (retainedTarget === null) return
 
-    // F4: id уникален только В ПРЕДЕЛАХ фазы — сверяем И phase, И id, иначе
-    // клик по отвеченному planning/q1 при live-ожидающем implementation/q1
-    // ошибочно уводил бы к pending-вопросу вместо истории planning/q1.
+    // Сверяем phase и id: одинаковые id в разных фазах обозначают разные вопросы.
     if (pending !== null && pending.phase === retainedTarget.phase && pending.id === retainedTarget.id) {
       const el = document.getElementById('dialog-pending')
       if (el !== null) {
@@ -330,11 +214,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
     const el = document.getElementById(`qa-${retainedTarget.phase}-${retainedTarget.id}`)
     if (el !== null) {
-      // Отпускаем «прилипание» к низу ПЕРЕД скроллом: цель — исторический Q&A
-      // выше pending-вопроса, а stick-to-bottom (MutationObserver) на ближайшей
-      // мутации вернул бы scrollTop к низу и отменил бы переход. release() ставит
-      // stick=false синхронно, поэтому наблюдатель больше не докручивает вниз, и
-      // пользователь остаётся на выбранном вопросе/ответе.
+      // Отпускаем «прилипание» к низу ПЕРЕД скроллом: цель — исторический Q&A выше pending-вопроса, а
+      // stick-to-bottom на ближайшей мутации вернул бы scrollTop к низу и отменил бы переход.
       releaseStick()
       el.scrollIntoView({ block: 'start' })
       setRetainedTarget(null)
@@ -347,14 +228,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   if (!hasContent) return <></>
 
   async function reload() {
-    // stageId — стадия, ДЛЯ КОТОРОЙ вызван этот reload (замыкание на stage из
-    // рендера, где был нажат SEND). Если к моменту резолва fetch панель уже
-    // переключилась на другую стадию (currentStageIdRef изменился — обновляется
-    // только эффектом опроса выше), этот reload устарел вместе со своей
-    // стадией: бампать ОБЩИЙ requestGenRef и применять ответ стадии A поверх
-    // уже смонтированной панели стадии B — баг (codex MAJOR). Проверяем и до
-    // await (не тратим запрос впустую), и после (стадия могла смениться, пока
-    // fetch летел).
+    // stageId — стадия, ДЛЯ КОТОРОЙ вызван этот reload. Проверяем и до await (не тратим запрос впустую), и
+    // после (стадия могла смениться, пока fetch летел).
     const stageId = stage?.id
     if (stageId === undefined || stageId !== currentStageIdRef.current) return
     const requestId = ++requestGenRef.current
@@ -402,11 +277,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }
 
-  // Как только у вопроса есть хотя бы один комментарий, ответ пользователя —
-  // это сами комментарии (killer feature #2): опции и свободный ответ прячутся,
-  // единственное действие — отправить собранный feedback тем же эндпоинтом
-  // /dialog/answer, что и обычный ответ (from_options всегда false — это не
-  // выбор из options).
+  // При наличии комментариев отправляем их как feedback через /dialog/answer с from_options=false.
   async function sendFeedback(comments: Record<number, string>) {
     if (stage === null) return
     const question = pending
@@ -451,13 +322,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }
 
-  // renderPending — тело pending-вопроса, вызывается из render-prop
-  // LineCommentedDocument: doc.body — заякоренный вопрос (с формами построчных
-  // комментариев внутри), doc.commentCount переключает обычный UI ответа
-  // (опции + свободный текст + SEND) на «Send feedback», doc.activeCommentLine
-  // гейтит SEND/Send feedback — форма комментария ОТКРЫТА (add или edit),
-  // независимо от того, есть ли уже в ней текст (клик по строке вопроса, затем
-  // сразу SEND/Send feedback, иначе стирал бы начатый комментарий).
+  // renderPending переключает ответ на feedback при наличии комментариев; открытый редактор строки
+  // блокирует отправку.
   function renderPending(doc: LineCommentDocumentApi): ReactNode {
     if (pending === null) return null
     return (
@@ -469,9 +335,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
             <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
               {(pending.options ?? []).map((option, index) => {
                 const selected = selectedOption === option
-                // Опция вида "Заголовок — описание" разбивается на жирный
-                // заголовок + описание (как в макете-карточке). Без
-                // разделителя — вся строка как заголовок.
+                // Опция вида "Заголовок — описание" разбивается на жирный заголовок + описание (как в
+                // макете-карточке). Без разделителя — вся строка как заголовок.
                 const sep = option.indexOf(' — ')
                 const title = sep >= 0 ? option.slice(0, sep) : option
                 const desc = sep >= 0 ? option.slice(sep + 3) : ''
@@ -502,11 +367,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               value={customText}
               disabled={pending.allow_custom !== true}
               onChange={onCustomInput}
-              // M3: скрепка на основном поле ответа — прикрепить ссылку на
-              // файл проекта (Docker file browser) + вставленные скриншоты
-              // уже работают через use-image-paste. Гейтится capability
-              // внутри PasteableTextarea (showAttachButton), так что на
-              // host-прогоне без file browser кнопка не рендерится.
+              // M3: скрепка на основном поле ответа — прикрепить ссылку на файл проекта + вставленные
+              // скриншоты уже работают через use-image-paste.
               allowFileReferences
               onSubmit={() => {
                 // codex MEDIUM: Ctrl/Cmd+Enter is a keyboard-submit path that a
@@ -603,9 +465,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   )
 }
 
-// Собирает текст ответа из комментариев к строкам вопроса — аналог buildFeedback
-// в PlanPanel: для каждой прокомментированной строки цитата исходной строки
-// вопроса + «Line N: комментарий», отсортировано по номеру строки.
+// Собираем ответ из цитат строк и комментариев, отсортированных по номеру строки.
 function buildFeedback(comments: Record<number, string>, question: string): string {
   const lines = question.split('\n')
 
@@ -620,14 +480,8 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
   const nodes: ReactNode[] = []
   let lastPhase = ''
 
-  // Ключи по entry.phase/entry.id, а не по index в entries: buildDialogEntries
-  // (сервер) перепарсивает растущий stream-лог стадии на каждый опрос и
-  // условно пропускает вопрос, ещё не попавший в <phase>.dialog.jsonl (см.
-  // "emitted"-гейт в pkg/server/handlers.go) — как только он туда попадает на
-  // следующем опросе, он вставляется в исходную позицию, СДВИГАЯ index всех
-  // последующих записей. С key=index React считал бы уже отрисованные (и не
-  // изменившиеся по содержимому) qa-блоки новыми элементами и пересоздавал их
-  // DOM целиком на ровном месте — отсюда рывки скролла по ходу диалога.
+  // Ключ phase/id сохраняет DOM при вставке записей между опросами; index сдвигается и вызывает рывки
+  // скролла.
   entries.forEach((entry) => {
     if (entry.phase !== undefined && entry.phase !== lastPhase) {
       lastPhase = entry.phase
@@ -638,9 +492,8 @@ function renderHistory(entries: DialogEntry[]): ReactNode[] {
       )
     }
 
-    // «Мысли» агента (text-блоки из stream-json лога) не показываем в диалоге:
-    // для GLM это рассуждения вслух, которые дублируют панель log. Секция диалога
-    // — только вопросы/ответы. Контекст рассуждений остаётся в Log-режиме EventFeedPanel.
+    // «Мысли» агента не показываем в диалоге: для GLM это рассуждения вслух, которые дублируют панель log.
+    // Секция диалога — только вопросы/ответы.
     if (entry.type === 'agent_text') {
       return
     }
@@ -680,9 +533,7 @@ function findPending(entries: DialogEntry[]): DialogEntry | null {
   return null
 }
 
-// loadDialog возвращает null при транзиентной ошибке (сеть/не-OK), чтобы
-// вызывающий отличил её от реально пустого диалога ([]) и НЕ затирал последнее
-// успешное состояние пустотой на одну неудачную попытку опроса.
+// loadDialog возвращает null при временной ошибке, чтобы не затирать историю пустым списком.
 async function loadDialog(stageId: string): Promise<DialogEntry[] | null> {
   let response: Response
   try {

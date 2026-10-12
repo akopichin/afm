@@ -18,11 +18,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// retryOnceRunner делегирует РЕАЛЬНОМУ Runner'у (который реально исполняет
-// синтетический bash-агент и пишет настоящие .jsonl/.log), затем на первом
-// вызове RunAgent форсирует retryable-ошибку ПОСЛЕ того как скрипт уже
-// отработал — имитирует агента, который выполнил часть работы (записал
-// действия в поток) и затем словил, например, 529 overloaded.
+// retryOnceRunner выполняет реальный script-runner и форсирует retryable-ошибку после первого RunAgent.
 type retryOnceRunner struct {
 	delegate executor.Runner
 	mu       sync.Mutex
@@ -76,17 +72,6 @@ func (r *promptCapturingImplRunner) RunJSONQuery(ctx context.Context, prompt str
 	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
-// TestIntegration_RetryContextSurvivesTruncation — регрессионный e2e-тест на
-// Фикс #1 из docs/superpowers/specs/2026-07-23-context-loss-audit-design.md:
-// buildRetryContext раньше читал truncated .log (executor.Config.TruncateOutput),
-// из-за чего ретраящийся агент видел обрезанную версию собственных прошлых
-// действий вместо полной. Гоняет РЕАЛЬНЫЙ executor.New с синтетическим
-// bash-агентом, который эмитит длинную Bash-команду через настоящий
-// stream-json, при TruncateOutput=10 (намного меньше длины команды — как
-// продовый конфиг, урезающий лог/дашборд ради читаемости). Проверяет, что:
-// (a) .log реально обрезан (фича truncate_output продолжает работать для
-// дашборда), но (b) вторая (retry) попытка получает в промпте ПОЛНУЮ,
-// неурезанную команду первой попытки.
 func TestIntegration_RetryContextSurvivesTruncation(t *testing.T) {
 	origBackoff := orchestrator.RetryBackoff
 	origMax := orchestrator.MaxRetries
@@ -138,9 +123,8 @@ echo '{"type":"result","subtype":"success"}'`, longCmd)
 		t.Errorf("retry prompt should contain the FULL untruncated command from the first attempt, got:\n%s", prompts[1])
 	}
 
-	// Подтверждаем, что truncate_output продолжает делать своё дело для
-	// .log (иначе тест доказывал бы не "фикс сработал", а "truncation
-	// сломан целиком") — этого файла НЕ должно быть в полном виде.
+	// Подтверждаем, что truncate_output продолжает делать своё дело для .log (иначе тест доказывал бы не
+	// "фикс сработал", а "truncation сломан целиком") — этого файла НЕ должно быть в полном виде.
 	logData, err := os.ReadFile(filepath.Join(runDir, "impl", "implementation.log"))
 	if err != nil {
 		t.Fatalf("read implementation.log: %v", err)
@@ -150,15 +134,8 @@ echo '{"type":"result","subtype":"success"}'`, longCmd)
 	}
 }
 
-// upCompletesThenDeletesPlanRunner делегирует РЕАЛЬНОМУ Runner'у, создаёт
-// .done после успешного RunAgent (как doneCreatingRunner), и — специально
-// для стадии "Up" — удаляет её plan.md сразу после завершения. Симулирует
-// сценарий из аудита (Находка #2/#5): план зависимости пропадает/пустеет к
-// моменту, когда следующая стадия начинает собственное планирование
-// (например, гонка версионирования или диск). Порядок гарантирован: RunAgent
-// синхронно возвращается ДО того, как оркестратор помечает "Up" завершённой
-// и планирует "Down" — поэтому удаление всегда происходит раньше, чем "Down"
-// читает файл через CollectDependencyPlans.
+// upCompletesThenDeletesPlanRunner делегирует РЕАЛЬНОМУ Runner'у, создаёт .done после успешного RunAgent,
+// и — специально для стадии "Up" — удаляет её plan.md сразу после завершения.
 type upCompletesThenDeletesPlanRunner struct {
 	delegate executor.Runner
 }
@@ -185,14 +162,6 @@ func (r *upCompletesThenDeletesPlanRunner) RunJSONQuery(ctx context.Context, pro
 	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
-// TestIntegration_MissingDependencyPlanWarns — регрессионный e2e-тест на
-// Фикс #2 из docs/superpowers/specs/2026-07-23-context-loss-audit-design.md:
-// CollectDependencyPlans раньше молча деградировала до "(plan not available)"
-// без какого-либо сигнала наружу. Гоняет РЕАЛЬНЫЙ двухстадийный flow
-// (up → down) через orchestrator.Run с реальным executor+synth-агентом; к
-// моменту начала планирования "down" её зависимость "up" лишается plan.md.
-// Проверяет, что в event-фиде (o.ui) появляется EventContextWarning,
-// называющий именно стадию "up", и что "down" всё равно доводится до конца.
 func TestIntegration_MissingDependencyPlanWarns(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "up", Name: "Up", Description: "dependency stage", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},

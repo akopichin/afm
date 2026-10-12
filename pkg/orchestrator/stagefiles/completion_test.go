@@ -134,14 +134,6 @@ func TestCheckCompletion(t *testing.T) {
 	})
 }
 
-// TestCheckCompletion_Verify — CheckCompletion теперь ЧИСТЫЙ file-probe
-// (.done + артефакты) и не запускает verify вообще, даже если Verify задан.
-// Раньше этот тест гонял shell-verify через CheckCompletion (V1); та
-// exec/exit-code/вывод-в-ошибке семантика ПЕРЕЕХАЛА в движок
-// (TestRunVerification_ShellRejectedCarriesLegacyTail/…, pkg/orchestrator/
-// verify_test.go), а не удалена — см. отчёт задачи V4a. Здесь остаётся
-// только проверка, что наличие Verify на стадии НИЧЕГО не меняет для
-// file-probe: .done+артефакты решают всё, verify не запускается ни разу.
 func TestCheckCompletion_Verify(t *testing.T) {
 	t.Run("declared verify does not run from the probe", func(t *testing.T) {
 		dir := t.TempDir()

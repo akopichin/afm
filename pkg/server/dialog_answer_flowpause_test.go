@@ -15,12 +15,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestHandleDialogAnswer_RejectedWhileFlowPaused закрывает review-finding P1 #4:
-// пока flow держится на review-паузе, POST /dialog/answer обязан отклониться
-// ДО любой durable-мутации — answer.json НЕ должен появиться на диске, а ответ
-// должен быть машиночитаемым 409 {"error":"flow_paused"}. Иначе ответ пишется,
-// вопрос перестаёт считаться unanswered, но resume-событие не публикуется, и
-// не-owned стадия в awaiting_user_input зависает навсегда.
 func TestHandleDialogAnswer_RejectedWhileFlowPaused(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -76,13 +70,6 @@ func TestHandleDialogAnswer_RejectedWhileFlowPaused(t *testing.T) {
 	}
 }
 
-// TestHandleDialogAnswer_TOCTOURollsBackBothDurableWrites закрывает re-review
-// P1 (TOCTOU): если review pause стартует в окне МЕЖДУ up-front guard'ом и
-// NotifyAnswer (эмулируется NotifyAnswer → ErrFlowPaused при reviewState
-// "none"), handler обязан откатить answer.json И не оставить запись в
-// dialog.jsonl. Иначе вопрос числится answered в истории, но unanswered на
-// диске, и стадия зависает без формы. dialog.jsonl пишется ТОЛЬКО после успеха
-// NotifyAnswer, поэтому при отказе его вообще не должно существовать.
 func TestHandleDialogAnswer_TOCTOURollsBackBothDurableWrites(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -183,11 +170,6 @@ func TestHandleDialogAnswer_AllowedWhenNotPaused(t *testing.T) {
 	}
 }
 
-// TestHandleDialogAnswer_RejectsOutOfOrder закрывает iter3-M1: для интерактивной
-// стадии POST /dialog/answer должен принимать ответ ТОЛЬКО на текущий
-// (старейший unanswered) вопрос — ответ на более позднюю q2, пока q1 ещё не
-// отвечен, должен быть отклонён 409 без записи answer.json на диск, иначе
-// polling-цикл агента, который ждёт ответ именно на q1, зависает навсегда.
 func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -246,13 +228,6 @@ func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 	}
 }
 
-// TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock reproduces the
-// handler-side half of a real production hang (GogaRefinement...discover, the
-// python-qarium incident): an interactive stage wrote q1..q8.question.json
-// all at once, and the user answered q8 first while q1 (the one the agent's
-// bash loop actually polls for) was still unanswered. Answering q8 must be
-// rejected 409 answer_out_of_order and must not write q8.answer.json;
-// answering q1 (the actual current question) must succeed.
 func TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)

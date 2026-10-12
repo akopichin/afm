@@ -13,12 +13,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestIntegration_ScriptAfter_FailsThenSkip_StageStaysDone воспроизводит
-// требование Task 13: script_after — это "fire and forget" хук ПОСЛЕ того,
-// как стадия уже дошла до done. Его провал никогда не должен откатывать
-// стадию обратно — только завести hook_pending.json и ждать ручного решения
-// (RetryHook/SkipHook), пока стадия остаётся done для остальных потребителей
-// графа (зависимые стадии не блокируются неудачным after-hook).
 func TestIntegration_ScriptAfter_FailsThenSkip_StageStaysDone(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -80,15 +74,6 @@ func TestIntegration_ScriptAfter_FailsThenSkip_StageStaysDone(t *testing.T) {
 	<-runDone
 }
 
-// TestIntegration_PlanningOnlyStage_RunsScriptAfterOnApprove воспроизводит
-// код-ревью Finding 1: approveStage (control_api.go) для планировочной
-// стадии без implementation-агента триггерит EvComplete НАПРЯМУЮ, минуя
-// onAgentCompleted/completeStage целиком. script_after разрешён на любой
-// стадии (flow.go), так что этот путь тоже обязан запускать
-// maybeRunAfterHook — иначе хук молча никогда бы не выполнился для
-// планировочных стадий. Без DashboardURL планирование само уходит в
-// headless auto-approve (onAgentCompleted's phasePlanning case), который и
-// вызывает approveStage — тот самый путь.
 func TestIntegration_PlanningOnlyStage_RunsScriptAfterOnApprove(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()

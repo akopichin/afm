@@ -61,20 +61,15 @@
     var dialogEntries = [];
     var lastFlashedQuestionID = null;
 
-    // ---- Consumption panel state ----
-    // currentUsageMetric по умолчанию "tokens"; "cost" рендерится только если пробный
-    // запрос /api/usage?metric=cost вернул непустой массив (pricing не настроен → []).
+    // ---- Consumption panel state ---- currentUsageMetric по умолчанию "tokens"; "cost" рендерится только
+    // если пробный запрос /api/usage?metric=cost вернул непустой массив.
     var currentUsageMetric = "tokens";
     var currentUsageStage = "";     // "" = все стадии
     var usageInited = false;
     var usageStageSignature = null; // чтобы не перестраивать <select> на каждый апдейт
     var usageRefreshTimer = null;
 
-    // Палитра графика — читается из CSS-токенов активной темы, с fallback на
-    // mint-палитру Nova Corps. var() в SVG presentation attributes не работает,
-    // а генерить SVG удобнее строками — поэтому читаем computed values один раз.
-    // В Nova Corps --usage-grid не определён → fallback → график не меняется;
-    // в goga-теме --mint/--amber/--ink-dim/--usage-grid дают teal/blue палитру.
+    // Палитра графика — читается из CSS-токенов активной темы, с fallback на mint-палитру Nova Corps.
     var _cssVars = getComputedStyle(document.documentElement);
     function _cssVar(name, fallback) {
         var v = _cssVars.getPropertyValue(name).trim();
@@ -149,9 +144,8 @@
         xhr.send(body ? JSON.stringify(body) : null);
     }
 
-    // ---- Markdown helpers ----
-    // Инлайн-рендер одной строки для построчного режима ревью:
-    // bold, курсив, ссылки, code — через markdown-it; чекбоксы — свои спаны.
+    // ---- Markdown helpers ---- Инлайн-рендер одной строки для построчного режима ревью: bold, курсив,
+    // ссылки, code — через markdown-it; чекбоксы — свои спаны.
     function inlineFormat(text) {
         var html = md.renderInline(text);
         html = html.replace(/\[x\]/g, '<span class="cb cb-done">&#10003;</span>');
@@ -687,10 +681,8 @@
             : "▴ COLLAPSE HISTORY";
     };
 
-    // ---- Consumption panel ----
-    // Слайд-аут панель потребления: свич метрик (tokens/cost/kb), фильтр по стейджам
-    // (из уже загруженного списка state), hand-rolled SVG-график временного ряда по
-    // []UsageAggregate, сгруппированный по timeBucket. Источник: GET /api/usage.
+    // ---- Consumption panel ---- Слайд-аут панель потребления: свич метрик, фильтр по стейджам,
+    // hand-rolled SVG-график временного ряда по []UsageAggregate, сгруппированный по timeBucket.
 
     // Форматирование значения под метрику (итог и тултипы точек).
     function formatUsageValue(v, metric) {
@@ -834,9 +826,8 @@
         });
     }
 
-    // Перестраивает <select> стейджей, если состав списка изменился (не на каждый
-    // апдейт — чтобы не сбрасывать открытый пользователем dropdown). Источник — тот
-    // же state.stage_order/stages, что и у списка стадий, без нового API-вызова.
+    // Перестраивает <select> стейджей, если состав списка изменился. Источник — тот же
+    // state.stage_order/stages, что и у списка стадий, без нового API-вызова.
     function refreshUsageStageOptions() {
         if (!state) return;
         var ids = state.stage_order && state.stage_order.length > 0
@@ -1038,9 +1029,7 @@
         $detailStatus.textContent = statusLabels[st.status] || st.status;
         $detailStatus.dataset.status = st.status;
 
-        // Clear comments when switching stages
-        // (only if stage changed)
-        // show/hide actions
+        // Clear comments when switching stages (only if stage changed) show/hide actions
         if (st.status === "awaiting_approval") {
             $actionsSection.classList.remove("hidden");
             $btnApprove.disabled = false;

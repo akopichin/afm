@@ -8,13 +8,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestFindLatestRunDirCorrectFlow воспроизводит баг: findLatestRunDir
-// должна возвращать run dir для нужного флоу, а не просто последний по алфавиту.
-//
-// Сценарий: flow-b запущен позже (newer dir), flow-a запущен раньше (older dir).
-// approve/revise вызываются для stage из flow-a.
-// Старый код возвращал state.json flow-b → stage не найден → ошибка "not found".
-// Новый код ищет по stageID и возвращает правильный run dir.
 func TestFindLatestRunDirCorrectFlow(t *testing.T) {
 	chdirTemp(t)
 

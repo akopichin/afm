@@ -97,9 +97,6 @@ func runningNoteServer(t *testing.T, isScript bool, revise func(context.Context,
 	return srv, runDir, events
 }
 
-// TestHandleRevise_EmitsAgentNoteOnApplied: применённый Revise публикует РОВНО
-// одно событие agent_note живьём И дублирует ту же нагрузку {id,text} в
-// notices.jsonl, где text == mcp.DialogSnippet(feedback), а id == seq перехода.
 func TestHandleRevise_EmitsAgentNoteOnApplied(t *testing.T) {
 	srv, runDir, events := runningNoteServer(t, false, func(context.Context, string, string) (bool, uint64, error) {
 		return true, 42, nil
@@ -143,9 +140,6 @@ func TestHandleRevise_EmitsAgentNoteOnApplied(t *testing.T) {
 	}
 }
 
-// TestHandleRevise_NoOpDoesNotEmitAgentNote: если Revise не применился
-// (applied=false — стадия ушла из окна / проиграла CAS), хэндлер отвечает 409 и
-// НЕ публикует agent_note (ни живьём, ни в notices.jsonl).
 func TestHandleRevise_NoOpDoesNotEmitAgentNote(t *testing.T) {
 	srv, runDir, events := runningNoteServer(t, false, func(context.Context, string, string) (bool, uint64, error) {
 		return false, 0, nil

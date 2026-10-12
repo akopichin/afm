@@ -14,15 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRunWithRetry_VerifyGatedStaleOpenQuestion_RejectionNotSwallowed is the
-// V4b.4 counterpart of TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion
-// (retry_test.go) with a verify step present: the stale-open-question branch
-// (stage ALREADY in awaiting_user_input, agent exited cleanly) must still run
-// the gateWithVerify-wrapped completionCheck exactly ONCE, and a rejection
-// from it must NOT be swallowed into a fake EventAgentCompleted — the "do not
-// change the live/stale question rule" contract (see CLAUDE.md) means the
-// function just returns without publishing anything when completionCheck()
-// is non-nil, exactly as it did before verify existed.
 func TestRunWithRetry_VerifyGatedStaleOpenQuestion_RejectionNotSwallowed(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")
@@ -83,11 +74,6 @@ func TestRunWithRetry_VerifyGatedStaleOpenQuestion_RejectionNotSwallowed(t *test
 	}
 }
 
-// TestRunWithRetry_VerifyGatedLiveOpenQuestion_NeverInvokesVerify is the
-// V4b.4 counterpart for a GENUINELY live question (just written by this same
-// agent call, stage not yet in awaiting_user_input): runWithRetry must hold
-// the stage via EvAskUser and return WITHOUT ever calling completionCheck —
-// so verify must never run while a live question is still unanswered.
 func TestRunWithRetry_VerifyGatedLiveOpenQuestion_NeverInvokesVerify(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")

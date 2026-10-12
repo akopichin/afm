@@ -7,10 +7,6 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// TestBuildVerify_RequirementsAsContextNotCommand воспроизводит §8 плана
-// AI-verify: глобальный/построчный prompt реализации ("реализуй и закоммить")
-// должен попасть проверяющему как ТРЕБОВАНИЯ (справочный контекст), а не как
-// команда — иначе verifier превращается во второго автора.
 func TestBuildVerify_RequirementsAsContextNotCommand(t *testing.T) {
 	in := VerifyInputs{
 		Template:     "MACHINE FORMAT RULES: return only schema_version/verdict JSON.",
@@ -50,9 +46,6 @@ func TestBuildVerify_RequirementsAsContextNotCommand(t *testing.T) {
 	}
 }
 
-// TestBuildVerify_IncludesPreviousReportWhenPresent проверяет, что предыдущий
-// verification-report попадает в контекст (для проверки закрытия прежних
-// blockers), а при его отсутствии секция не появляется вовсе.
 func TestBuildVerify_IncludesPreviousReportWhenPresent(t *testing.T) {
 	base := VerifyInputs{
 		Template: "MACHINE FORMAT",
@@ -75,9 +68,6 @@ func TestBuildVerify_IncludesPreviousReportWhenPresent(t *testing.T) {
 	}
 }
 
-// TestBuildVerify_IncludesTaskDataAndPassedSteps проверяет, что plan,
-// artifacts, author summary, verify.prompt и результаты уже прошедших
-// shell-шагов действительно попадают в собранный контекст (§8 плана).
 func TestBuildVerify_IncludesTaskDataAndPassedSteps(t *testing.T) {
 	in := VerifyInputs{ //nolint:gosec // test fixture text, not a real secret
 		Template:      "MACHINE FORMAT",

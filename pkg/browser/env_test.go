@@ -20,9 +20,6 @@ func TestIsTransportEnv(t *testing.T) {
 	}
 }
 
-// TestUnsetTransportVars проверяет, что из окружения afm удаляются ВСЕ
-// AFM_BROWSER_* (включая секретный токен), а посторонние переменные остаются —
-// иначе прямой спавн (например git из memory.Commit) унаследовал бы токен.
 func TestUnsetTransportVars(t *testing.T) {
 	t.Setenv("AFM_BROWSER_TRANSPORT_TOKEN", "secret")
 	t.Setenv("AFM_BROWSER_ENDPOINT", "host.docker.internal:1234")

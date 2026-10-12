@@ -1,6 +1,5 @@
-/* skins/base/feed-workspace.css — Feed workspace (мессенджер-лента + Feed/Log)
-   Структурные правила; палитра — из семантических токенов (tokens.css), поэтому
-   тема-аварно во всех скинах. Пришёл на смену event-feed.css. */
+/* skins/base/feed-workspace.css — Feed workspace Структурные правила; палитра — из семантических токенов,
+   поэтому тема-аварно во всех скинах. Пришёл на смену event-feed.css. */
 
 .feed-workspace {
   display: flex;
@@ -95,17 +94,13 @@
   line-height: 1.5;
   border-radius: var(--radius-sm);
 }
-/* The newest message only (see useEnteringLast — animates when the last row's
-   content differs from the previous last). The row clears this class on
-   animationend so a later remount never replays. Small translate to not fight
-   stick-to-bottom autoscroll. Animate opacity/transform only. */
+/* The newest message only. The row clears this class on animationend so a later remount never replays. */
 .feed-item--enter {
   animation: feedItemIn var(--motion-base) var(--ease-out) backwards;
 }
 .feed-item-text { min-width: 0; overflow-wrap: anywhere; }
-/* Колонка сегментов markdown-сообщения (текст + картинки [AFM image: …]).
-   .feed-item — flex-РЯД (текст/timestamp), поэтому несколько сегментов
-   выкладываем вертикально в отдельном flex-элементе, а не как прямые дети ряда. */
+/* Колонка сегментов markdown-сообщения. .feed-item — flex-РЯД (текст/timestamp), поэтому несколько
+   сегментов выкладываем вертикально в отдельном flex-элементе, а не как прямые дети ряда. */
 .feed-item-segments {
   flex: 1 1 auto;
   min-width: 0;
@@ -124,10 +119,8 @@
 }
 .feed-right .feed-item { flex-direction: row-reverse; text-align: right; }
 
-/* mono (tool/script/auto-answer) — компактная подчинённая строка. Команды
-   намеренно бледнее «голоса» агента (нарратива ниже): приглушённый text-muted
-   вместо text-secondary. Плашка — прежний тема-зависимый surface-tool (не
-   трогаем, чтобы не ломать палитры скинов). */
+/* mono — компактная подчинённая строка. Команды намеренно бледнее «голоса» агента (нарратива ниже):
+   приглушённый text-muted вместо text-secondary. */
 .feed-item.mono .feed-item-text {
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -138,29 +131,20 @@
   padding: 4px 8px;
 }
 
-/* Нарратив агента (tool="text" → kind message) — «голос» агента: он должен
-   выделяться от механических mono-строк команд (Bash/Read/…). Ярче (полная
-   text-primary), средний вес, чуть крупнее и тонкая accent-полоса слева.
-   Таргетим ТОЛЬКО сторону агента (data-actor=agent), чтобы не задеть правые
-   пользовательские сообщения и заметки — они тоже kind message. Тон-строки
-   (kind status/success/dialog) и mono сюда не попадают. */
+/* Нарратив агента — «голос» агента: он должен выделяться от механических mono-строк команд. Ярче (полная
+   text-primary), средний вес, чуть крупнее и тонкая accent-полоса слева. */
 .feed-group[data-actor="agent"] .feed-item.feed-kind-message {
   font-weight: 500;
   font-size: 15px;
   color: var(--text-primary);
-  /* Сплошной per-skin акцент (var(--accent-primary)=--amber каждого скина), а НЕ
-     rgba(--accent-primary-rgb): последний переопределён только в graphite, в
-     остальных скинах откатился бы к дефолтному синему и не совпал бы с их
-     палитрой. Так полоса берёт реальный акцент каждой темы. */
+  /* Сплошной per-skin акцент, а НЕ rgba: последний переопределён только в graphite, в остальных скинах
+     откатился бы к дефолтному синему и не совпал бы с их палитрой. */
   border-left: 2px solid var(--accent-primary);
   padding-left: 10px;
 }
 
-/* Нарратив агента, отрендеренный как markdown (заголовки/таблицы/жирный/код).
-   .feed-item — flex со align-items:baseline; для многострочного блочного .md
-   выравнивание нужно по верху, иначе timestamp «уедет» к середине документа.
-   .feed-scroll имеет overflow-x:hidden, поэтому широкая таблица/код должны
-   скроллиться ВНУТРИ пузыря, а не срезаться и не распирать воркспейс. */
+/* Нарратив агента, отрендеренный как markdown. .feed-scroll имеет overflow-x:hidden, поэтому широкая
+   таблица/код должны скроллиться ВНУТРИ пузыря, а не срезаться и не распирать воркспейс. */
 .feed-item.feed-item-markdown { align-items: flex-start; }
 .feed-item-markdown .md { flex: 1 1 0; min-width: 0; max-width: 100%; }
 .feed-item-markdown .md table,
@@ -194,16 +178,14 @@
 /* Ошибка/провал — danger-поверхность. */
 .feed-item.tone-danger { background: rgba(var(--danger-rgb), 0.10); padding: 6px 10px; }
 
-/* navigable-элемент (dialog_question/dialog_answer, клик → открыть диалог
-   стадии, см. FeedWorkspace/onOpenDialog) — рендерится <button>, subtle
-   affordance поверх обычных стилей .feed-item. */
+/* navigable-элемент (dialog_question/dialog_answer, клик → открыть диалог стадии, см.
+   FeedWorkspace/onOpenDialog) — рендерится <button>, subtle affordance поверх обычных стилей .feed-item. */
 .feed-item-navigable {
   cursor: pointer;
   width: 100%;
   border: none;
-  /* background/color: сбрасываем UA-дефолты кнопки (buttonface ~ светло-серый +
-     buttontext), иначе в тёмной теме навигируемый элемент ленты получал светлую
-     плашку с почти невидимым текстом. Наследуем цвета ленты, тема-независимо. */
+  /* background/color: сбрасываем UA-дефолты кнопки, иначе в тёмной теме навигируемый элемент ленты получал
+     светлую плашку с почти невидимым текстом. Наследуем цвета ленты, тема-независимо. */
   background: transparent;
   color: inherit;
   text-align: inherit;
@@ -215,10 +197,7 @@
   outline-offset: 1px;
 }
 
-/* --- Репляибл-мысль агента (клик → ответ на мысль, см. FeedGroupView) ---
-   Строка мысли остаётся <div> (может содержать <a>), выбор — по клику/по кнопке
-   ↩. Ряд позиционируется relative, чтобы кнопка ↩ висела в правом верхнем углу
-   и проявлялась на hover/focus-within (всегда доступна с клавиатуры по Tab). */
+/* --- Репляибл-мысль агента --- Строка мысли остаётся <div>, выбор — по клику/по кнопке ↩. */
 .feed-thought-row { position: relative; }
 .feed-item-thought { cursor: pointer; }
 .feed-item-thought:hover { background: var(--surface-hover); }
@@ -256,11 +235,7 @@
 
 .empty-hint.hidden { display: none; }
 
-/* --- Verify report link (V5b.1/V5b.3) ---
-   Раскрывающаяся ссылка "Show full report" под verify_result-строкой; сам
-   item остаётся flex-РЯДом (текст + gap), отчёт — отдельный блок ПОД ним,
-   поэтому оборачиваем оба в колоночный .feed-item-with-report (тот же
-   приём, что feed-item-segments у markdown-нарратива). */
+/* Keep the verify report below its feed row in a column wrapper. */
 .feed-item-with-report { display: flex; flex-direction: column; gap: 4px; }
 .verify-report { align-self: flex-start; }
 .verify-report-toggle {
@@ -289,9 +264,8 @@
 .verify-report-body :where(h1, h2, h3) { margin: 6px 0 4px; line-height: 1.25; }
 .verify-report-body code { font-family: var(--font-mono); font-size: 12.5px; }
 
-/* --- Messenger-поле заметки живому агенту (FeedComposer) ---
-   Прибито к низу ленты (flex-shrink:0 под .feed-scroll{flex:1}). Показывается
-   только для running-стадии (см. FeedWorkspace/App). */
+/* --- Messenger-поле заметки живому агенту (FeedComposer) --- Прибито к низу ленты (flex-shrink:0 под
+   .feed-scroll{flex:1}). Показывается только для running-стадии (см. FeedWorkspace/App). */
 .feed-composer {
   flex-shrink: 0;
   /* Колонка: опциональный reply-чип сверху, затем строка ввода [textarea][✈]. */
@@ -302,10 +276,8 @@
   padding-top: 10px;
   border-top: 1px solid var(--separator-subtle);
 }
-/* Строка ввода — единое pill-поле [📎 textarea ✈] в стиле Telegram: обе кнопки
-   ЖИВУТ ВНУТРИ поля. align-items:flex-end + textarea с min-height, равной высоте
-   кнопок → при одной строке всё визуально по центру, при росте текста кнопки
-   прибиты к низу. Скругление 50% (pill) через большой радиус. */
+/* Строка ввода — единое pill-поле [📎 textarea ✈] в стиле Telegram: обе кнопки ЖИВУТ ВНУТРИ поля.
+   Скругление 50% (pill) через большой радиус. */
 .feed-composer-row {
   display: flex;
   align-items: flex-end;
@@ -328,9 +300,8 @@
   min-width: 0;
 }
 
-/* --- Reply-чип: ответ на мысль агента (FeedComposer) ---
-   Над строкой ввода, в стиле line-comment цитаты (левый акцент + приглушённый
-   исходник, кламп 2 строки). Токены тема-агностичны — работает в обеих темах. */
+/* --- Reply-чип: ответ на мысль агента --- Над строкой ввода, в стиле line-comment цитаты. Токены
+   тема-агностичны — работает в обеих темах. */
 .feed-reply-chip {
   display: flex;
   align-items: center;
@@ -386,10 +357,8 @@
   align-items: flex-end;
   gap: 2px;
 }
-/* Скрепка ВНУТРИ поля: без «таблеточной» рамки, только крупная иконка (label
-   скрыт), мятно-зелёная. Прибита к низу — при росте текста остаётся снизу, при
-   одной строке визуально по центру (высота кнопки == min-height textarea). Скоуп
-   .feed-composer не трогает остальных потребителей PasteableTextarea. */
+/* Скрепка ВНУТРИ поля: без «таблеточной» рамки, только крупная иконка, мятно-зелёная. Скоуп .feed-composer
+   не трогает остальных потребителей PasteableTextarea. */
 .feed-composer .pasteable-attach {
   align-self: flex-end;
 }
@@ -413,10 +382,8 @@
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  /* min-height == высота кнопок (38px), чтобы при одной строке ряд читался
-     по центру, а при росте кнопки прибивались к низу. rows={1} у textarea
-     гарантирует, что пустое поле — ровно одна строка (иначе scrollHeight=2 строки
-     и текст уезжает вверх от иконок). */
+  /* min-height == высота кнопок, чтобы при одной строке ряд читался по центру, а при росте кнопки
+     прибивались к низу. */
   min-height: 38px;
   padding: 8px 6px;
   font: inherit;

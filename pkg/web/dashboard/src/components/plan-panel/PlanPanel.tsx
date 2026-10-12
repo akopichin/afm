@@ -21,24 +21,16 @@ const EMPTY_DOC: LineCommentDocumentApi = {
 type PlanPanelProps = {
   stage: Stage | null
   attention?: boolean
-  // banner — attention-шапка («Plan needs your approval»), рендерится ПЕРВЫМ
-  // ребёнком внутри скролл-области #plan-section, а не над панелью. Так она
-  // уезжает вместе с контентом при скролле и не съедает высоту у больших планов;
-  // фиксированная нижняя панель действий остаётся на месте.
+  // banner — attention-шапка, рендерится ПЕРВЫМ ребёнком внутри скролл-области #plan-section, а не над
+  // панелью.
   banner?: ReactNode
 }
 
-// Панель плана стадии: загрузка markdown, рендер (обычный или review с построчными
-// комментариями поверх блочного markdown), действия Approve/Send revision/Retry.
-// Построчные комментарии живут внутри keyed-владельца LineCommentedDocument —
-// смена (stage.id, точный текст плана) размонтирует его и атомарно сбрасывает
-// комментарии (ревизия меняет текст → сброс, осиротевших комментариев нет).
+// Панель плана стадии: загрузка markdown, рендер, действия Approve/Send revision/Retry.
 export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [planMarkdown, setPlanMarkdown] = useState('')
-  // planLoaded — попытка загрузки плана ЗАВЕРШИЛАСЬ (успех/ошибка/пусто), не «идёт».
-  // Нужен, чтобы fallback-панель действий (Approve при пустом плане) показывалась
-  // только ПОСЛЕ оседания fetch, а не мигала в окне загрузки нормального плана.
+  // planLoaded — попытка загрузки плана ЗАВЕРШИЛАСЬ, не «идёт».
   const [planLoaded, setPlanLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | 'continue' | null>(null)
@@ -59,11 +51,8 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
   }
 
   useEffect(() => {
-    // stage === null: панель смонтирована для стабильности лейаута, но реальной
-    // стадии нет — не гоняем пустой fetch GET /api/stages//plan. Скрипт-стадия
-    // (script:) НИКОГДА не имеет plan.md — запрос всегда 404 и лишь засоряет
-    // консоль. Панель всё равно рендерится (для failed/paused-скриптов там живут
-    // кнопки Retry/Continue), просто с пустым планом.
+    // stage === null: панель смонтирована для стабильности лейаута, но реальной стадии нет — не гоняем
+    // пустой fetch GET /api/stages//plan.
     const current = stage
     if (current === null || current.isScript) return
 
@@ -126,10 +115,8 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
       await reviseStage(stage.id, feedback)
       clearComments()
     } catch (err) {
-      // Стадия могла уйти из awaiting_approval за время правки (409), либо сеть
-      // отвалилась — не теряем набранные комментарии (clearComments не вызовется,
-      // throw произошёл раньше) и логируем, чтобы отказ не ушёл в unhandled
-      // rejection (sendRevision зовётся из onClick).
+      // Стадия могла уйти из awaiting_approval за время правки, либо сеть отвалилась — не теряем набранные
+      // комментарии и логируем, чтобы отказ не ушёл в unhandled rejection.
       console.error('Failed to send plan revision:', err)
     } finally {
       setBusy(false)

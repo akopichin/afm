@@ -15,10 +15,6 @@ func writeWriteEvent(t *testing.T, sb *strings.Builder, path string) {
 	fmt.Fprintf(sb, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"%s","content":"..."}}]}}`+"\n", path)
 }
 
-// TestAdoptWrittenPlan: агент сохранил план в файл с произвольным именем
-// (описание стадии этого попросило), а в outFile попало текстовое резюме.
-// adoptWrittenPlan должен найти валидный план среди записанных файлов
-// и скопировать его в outFile.
 func TestAdoptWrittenPlan(t *testing.T) {
 	dir := t.TempDir()
 

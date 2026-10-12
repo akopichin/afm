@@ -16,29 +16,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// blockingThenFeedbackRunner: RunPlanning сразу пишет минимально валидный
-// plan.md (нужные секции для prompts.ValidatePlan/checkPlanCompletionFor),
-// чтобы стадия дошла до awaiting_approval — без DashboardURL в тесте
-// орхестратор авто-подтверждает план сам (headless-ветка в orchestrator.go,
-// RequireApproval=false по умолчанию), и стадия проходит approve → ready →
-// running без участия теста.
-//
-// Первый вызов RunAgent (implementation) блокируется и ждёт РЕАЛЬНЫЙ канал
-// прерывания стадии — тот же самый chan struct{}, в который Revise() пишет
-// для running-стадии (interruptChans в control_api.go). Мок читает его через
-// orchestrator.InterruptChanForTest (test-only accessor, см. orchestrator.go)
-// — это единственный способ для инъектированного мока увидеть сигнал без
-// прохождения через настоящий executor.Config.InterruptCh (тот работает
-// только для команд, запускаемых как реальный субпроцесс). Получив сигнал,
-// мок возвращает executor.ErrUserInterrupted — так же, как это сделал бы
-// настоящий executor после SIGINT — чтобы runWithRetry прошёл через ветку
-// onUserInterrupted (а не просто зафейлил стадию на context.Canceled).
-// Второй вызов (перезапуск с фидбеком) сразу читает feedback.md и завершает
-// стадию.
-//
-// Используется в TestAgentSuggest_InterruptRestartsWithFeedback (Task 5,
-// добавляется вместе с обработкой Revise для статуса running) — здесь только
-// тип, чтобы Task 4 компилировался без готового e2e-теста.
+// blockingThenFeedbackRunner пишет план, ждёт реальный interruptCh, возвращает ErrUserInterrupted и читает
+// feedback на втором вызове.
 type blockingThenFeedbackRunner struct {
 	calls   int
 	orch    *orchestrator.Orchestrator // выставляется тестом после New(), до Run()
@@ -54,9 +33,8 @@ func (r *blockingThenFeedbackRunner) RunAgent(ctx context.Context, _, _, _, logF
 	r.calls++
 	stageDir := filepath.Dir(logFile)
 	if r.calls == 1 {
-		// runWithRetry регистрирует interruptCh в реестре ДО вызова agentFn
-		// (следовательно, до этого RunAgent), поэтому Load здесь не гонится
-		// с Revise()/Store() — канал уже на месте.
+		// runWithRetry регистрирует interruptCh в реестре ДО вызова agentFn (следовательно, до этого RunAgent),
+		// поэтому Load здесь не гонится с Revise()/Store() — канал уже на месте.
 		ch, ok := orchestrator.InterruptChanForTest(r.orch, r.stageID)
 		if !ok {
 			<-ctx.Done()
@@ -73,9 +51,8 @@ func (r *blockingThenFeedbackRunner) RunAgent(ctx context.Context, _, _, _, logF
 	if len(feedback) == 0 {
 		return errors.New("expected feedback.md to be readable on the feedback restart")
 	}
-	// checkCompletion (completionCheck for runImplementationWithFeedback)
-	// требует .done, а не execution_summary.md — тот пишет только автономный
-	// трек (runAutonomousAgent), не задействованный в этом тесте.
+	// checkCompletion требует .done, а не execution_summary.md — тот пишет только автономный трек, не
+	// задействованный в этом тесте.
 	return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("done\n"), 0644)
 }
 
@@ -85,20 +62,6 @@ func (r *blockingThenFeedbackRunner) RunJSONQuery(_ context.Context, _ string) (
 
 var _ executor.Runner = (*blockingThenFeedbackRunner)(nil)
 
-// TestAgentSuggest_InterruptRestartsWithFeedback — сквозной сценарий:
-// стадия running → Revise с фидбеком → FSM сразу уходит в revising и
-// сохраняет feedback.md → сигнал доставляется в текущий (блокирующийся)
-// RunAgent через реальный interruptChans-реестр → тот возвращает
-// executor.ErrUserInterrupted → runWithRetry.onUserInterrupted перезапускает
-// runImplementationWithFeedback, который читает уже записанный feedback.md,
-// и стадия доходит до done.
-//
-// Примечание: этот тест проверяет ОРКЕСТРАЦИОННУЮ часть (Revise → реестр →
-// перезапуск с фидбеком на диске), а не сам SIGINT — SIGINT на реальном
-// subprocess'е уже отдельно покрыт TestRunAgent_InterruptSendsSIGINTNotKill
-// (Task 3, pkg/executor). Здесь мок сам слушает interruptChans через
-// InterruptChanForTest и переводит сигнал в ErrUserInterrupted, эмулируя то,
-// что в проде делает executor.Executor.Run вокруг настоящего subprocess'а.
 func TestAgentSuggest_InterruptRestartsWithFeedback(t *testing.T) {
 	runDir := t.TempDir()
 	stages := []flow.Stage{{

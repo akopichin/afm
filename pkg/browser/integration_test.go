@@ -30,9 +30,6 @@ func waitEvicted(t *testing.T, m *Manager, key string) {
 	}
 }
 
-// TestManager_ChromeDeathRelaunchesOnReconnect proves that when Chrome exits
-// mid-stage the session is torn down and evicted, so a retry/resume reconnect
-// launches a fresh Chrome instead of proxying to a dead one.
 func TestManager_ChromeDeathRelaunchesOnReconnect(t *testing.T) {
 	var launches int32
 	deaths := make(chan *os.File, 4) // Chrome stdout write-ends; close to simulate death
@@ -67,11 +64,8 @@ func TestManager_ChromeDeathRelaunchesOnReconnect(t *testing.T) {
 	}
 }
 
-// fakeCDPManager wires the Manager's launch seam to an in-process fake Chrome that
-// speaks the CDP pipe protocol: it reads NUL-terminated requests and echoes a
-// result for each id. This exercises the whole stack (listener → auth → session →
-// write queue → pipe framing → proxy id-remap → client delivery) without a real
-// browser, so it runs in CI.
+// fakeCDPManager wires the Manager's launch seam to an in-process fake Chrome that speaks the CDP pipe
+// protocol: it reads NUL-terminated requests and echoes a result for each id.
 func fakeCDPManager(t *testing.T) *Manager {
 	t.Helper()
 	m := newTestManager(t, nil)

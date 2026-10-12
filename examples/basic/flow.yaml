@@ -1,22 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
-# Example flow.yaml — adding JWT authentication as a feature
-#
-# Usage:
-#   afm run examples/basic/flow.yaml   # then approve each plan in the dashboard
-#   afm check                          # run status
-#
-# While `afm run` is active it holds an exclusive lock — approve via the dashboard.
-# The CLI `afm approve <stage>` is for headless use, after the run process stops.
-#
-# Or drop it in .afm/flows/ — then `afm run` (no argument) finds it.
+# JWT authentication example: run afm run examples/basic/flow.yaml and approve plans in the dashboard.
 
 name: jwt-auth
 description: "JWT authentication: middleware, login/logout endpoints, tests"
 
-# prompt — an optional global instruction. It's added to the system prompt of EVERY
-# stage and every phase (planning/implementation/review) as a <global_prompt> block
-# right after </system_rules>. An empty/absent field changes nothing. It can be a
-# single line (prompt: "...") or a block (|).
+# prompt — an optional global instruction. It can be a single line (prompt: "...") or a block (|).
 prompt: |
   Rules for the whole flow:
   - Go code in the project's style: gofmt + golangci-lint clean.
@@ -25,9 +13,7 @@ prompt: |
 
 stages:
 
-  # ──────────────────────────────────────────────────
   # Stage 1: backend — JWT middleware and endpoints
-  # ──────────────────────────────────────────────────
   - id: backend-auth
     name: "JWT Middleware & Auth Endpoints"
     description: |
@@ -47,10 +33,7 @@ stages:
         path: docs/api-contract.yaml
         description: "OpenAPI specification for the auth endpoints"
 
-  # ──────────────────────────────────────────────────
-  # Stage 2: frontend — login form
-  # Starts only after backend-auth completes
-  # ──────────────────────────────────────────────────
+  # Stage 2: frontend — login form Starts only after backend-auth completes
   - id: frontend-login
     name: "Login Form UI"
     description: |
@@ -68,10 +51,7 @@ stages:
     # This stage's planning starts after backend-auth completes;
     # eager_planning: true — plan immediately, without waiting.
 
-  # ──────────────────────────────────────────────────
-  # Stage 3: integration tests
-  # Starts after both previous stages
-  # ──────────────────────────────────────────────────
+  # Stage 3: integration tests Starts after both previous stages
   - id: integration-tests
     name: "E2E Integration Tests"
     description: |
@@ -86,30 +66,5 @@ stages:
     depends_on: [backend-auth, frontend-login]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Example of a stage with a ready-made plan (skips the planning agent):
-#
-#   - id: db-migration
-#     name: "Database Migration"
-#     description: "Apply the schema migration for the users table"
-#     agents: [implementation]
-#     plan: docs/plans/db-migration.md   # the planning agent does not run
-#
-# Example of parallel independent stages (no depends_on):
-#
-#   - id: update-docs
-#     name: "Update Docs"
-#     description: "Update the README and OpenAPI spec"
-#     agents: [planning, implementation]
-#
-# Example of a stage with a verify command (a gate against a false "done"):
-# the command runs in the project directory after the agent writes .done;
-# a non-zero exit → one agent retry with the command output, then the stage fails.
-#
-#   - id: fix-tests
-#     name: "Fix Tests"
-#     description: "Fix the failing tests"
-#     agents: [planning, implementation]
-#     verify: ".venv/bin/python -m pytest tests/ -q"
-#
-# ──────────────────────────────────────────────────────────────────────────────
+# Other stage patterns: plan: skips planning, no depends_on allows parallel execution, verify: gates
+# completion.

@@ -94,18 +94,12 @@ func TestReadStderrTail_LargeFile_MemoryBounded(t *testing.T) {
 	}
 }
 
-// TestReadStderrTail_MultiByteRuneAtCut_NeverSplitsRune builds a final line
-// whose byte-cap cut point lands in the middle of a real multi-byte UTF-8
-// character (Cyrillic + emoji) and asserts the returned tail never splits a
-// rune — the cut backs up to the nearest rune boundary instead of slicing
-// mid-character.
 func TestReadStderrTail_MultiByteRuneAtCut_NeverSplitsRune(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "script.log")
 
-	// ASCII padding + Cyrillic text + an emoji (4-byte UTF-8), so that a
-	// small maxBytes cut is very likely to fall inside one of the
-	// multi-byte characters rather than exactly on a boundary.
+	// ASCII padding + Cyrillic text + an emoji (4-byte UTF-8), so that a small maxBytes cut is very likely to
+	// fall inside one of the multi-byte characters rather than exactly on a boundary.
 	line := strings.Repeat("x", 10) + "привет мир 🎉 конец"
 	if err := os.WriteFile(filepath.Join(dir, "script.stderr.log"), []byte(line+"\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -119,19 +113,11 @@ func TestReadStderrTail_MultiByteRuneAtCut_NeverSplitsRune(t *testing.T) {
 	}
 }
 
-// TestReadStderrTail_HugeNewlineFreeLine_NonEmptyCapped is a regression test
-// for a bug where a stderr log larger than the seek window, whose window
-// contains NO '\n' at all (a single huge line with no newline), returned "".
-// The "drop the leading partial line" step dropped the ENTIRE window because
-// it unconditionally treated "no newline found" the same as "drop
-// everything" — but with no newline, the window IS the (still ongoing) line,
-// not a partial fragment to discard.
 func TestReadStderrTail_HugeNewlineFreeLine_NonEmptyCapped(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "script.log")
-	// 200KB single character, no trailing newline — file size (200KB) exceeds
-	// the seek window (maxBytes*4 + 64KiB) for a small maxBytes, and the
-	// window itself contains no '\n' anywhere.
+	// 200KB single character, no trailing newline — file size (200KB) exceeds the seek window (maxBytes*4 +
+	// 64KiB) for a small maxBytes, and the window itself contains no '\n' anywhere.
 	if err := os.WriteFile(filepath.Join(dir, "script.stderr.log"), []byte(strings.Repeat("x", 200*1024)), 0644); err != nil {
 		t.Fatal(err)
 	}

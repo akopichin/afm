@@ -11,35 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly — F2
-// (4-е код-ревью): деферренный своп lease обратно на команду автора
-// (RunVerification, "verify.go" defer) раньше блокировался на
-// Lease.SwapTo(ctx, ...) под ДОЛГОЖИВУЩИМ run-scoped ctx, который Pause() не
-// отменяет (Pause только долговечно переводит FSM и сигналит
-// o.interruptChans, см. control_api.go). Если слот команды автора в этот
-// момент занят ДРУГОЙ стадией, verify не мог вернуть управление вызывающему
-// коду — пауза переставала быть отзывчивой, per-step таймаут превышался.
-//
-// Барьер синхронизации — не time.Sleep: фейковый o.runVerifyAgent САМ, ещё
-// до возврата из шага verify (пока lease держит слот верификатора, а слот
-// автора уже физически свободен — SwapTo release-before-acquire), кладёт
-// "чужой" токен в claudeSem (симулируя другую стадию, успевшую занять
-// освободившийся слот автора) И сигналит на interruptCh. К моменту, когда
-// RunVerification доходит до дефера (после того как шаг единственный раз
-// пройден с pass), сигнал уже гарантированно лежит в буфере канала —
-// pauseAwareVerifyCtx детерминированно подхватывает его (см. приоритетную
-// неблокирующую проверку в его горутине-наблюдателе), никакой гонки с
-// реальным временем не остаётся. Промптность возврата проверяется через
-// select с таймаутом (channel-based), а не подсчётом прошедшего времени.
-// G1 (5-е код-ревью) примечание: для PASS-исхода (единственный, который эта
-// функция проверяет) дефер больше вообще не пытается своп обратно на автора —
-// просто Release()ит слот верификатора немедленно (см. verify.go). Тест
-// по-прежнему валиден как регрессия промптности возврата и того, что lease
-// ничего не захватывает лишнего, но теперь проходит по более простой причине.
-// Более узкие регрессии именно нового поведения (release вместо swap-back на
-// pass/exec-error/timeout/interrupt, swap-back только на needs_changes) — см.
-// TestRunVerification_NonRetryOutcomesReleaseLeasePromptly/
-// TestRunVerification_NeedsChangesReacquiresAuthorLease (verify_lease_release_test.go).
 func TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly(t *testing.T) {
 	claudeSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	codexSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
@@ -62,10 +33,8 @@ func TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly(t *testin
 	o.interruptChans.Store(s.ID, interruptCh)
 
 	o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
-		// Слот "claude" (автора) в этот момент уже release'нут SwapTo при
-		// переходе на верификатора — занимаем его чужим токеном И сигналим
-		// прерывание ДО того, как шаг вернётся. Оба события гарантированно
-		// произойдут раньше, чем RunVerification дойдёт до deferred swap-back.
+		// Слот "claude" в этот момент уже release'нут SwapTo при переходе на верификатора — занимаем его чужим
+		// токеном И сигналим прерывание ДО того, как шаг вернётся.
 		claudeSem <- struct{}{}
 		interruptCh <- struct{}{}
 		return verify.RunOutcome{ProcessOK: true, Result: &verify.ModelResult{
@@ -85,10 +54,8 @@ func TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly(t *testin
 		t.Fatal("RunVerification did not return promptly — swap-back to the author slot blocked on the busy semaphore despite the pause signal")
 	}
 
-	// Верификаторский слот должен быть освобождён (Release случился ДО
-	// попытки захватить занятый слот автора), а слот автора должен остаться
-	// занятым ровно "чужим" токеном — lease не мог его захватить (буфер
-	// полон) и не держит теперь НИЧЕГО.
+	// Верификаторский слот должен быть освобождён, а слот автора должен остаться занятым ровно "чужим"
+	// токеном — lease не мог его захватить и не держит теперь НИЧЕГО.
 	if len(codexSem) != 0 {
 		t.Errorf("verifier slot must be released, len=%d", len(codexSem))
 	}

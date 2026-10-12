@@ -1,9 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
-# Interactive demo flow — exercises the file-based dialog protocol
-#
-# Usage:
-#   afm run examples/interactive/flow.yaml
-#   # open the dashboard and answer the questions in the "Dialog" panel
+# File-dialog demo: run afm run examples/interactive/flow.yaml and answer questions in the dashboard.
 
 name: interactive-demo
 description: "Demo of an interactive stage"

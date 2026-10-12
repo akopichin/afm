@@ -135,9 +135,8 @@ describe('useStatus', () => {
     expect(byId.get('s5')?.verify).toEqual({ step: 0, command: '', phase: 'running' })
   })
 
-  // accepted_stalemate (B1 review_patience) — синтезированный afm терминальный
-  // ПРИНЯТЫЙ исход должен пережить нормализацию /api/status, иначе бейдж стадии
-  // пропадёт (его нет в allow-list VERIFY_PHASES).
+  // accepted_stalemate — синтезированный afm терминальный ПРИНЯТЫЙ исход должен пережить нормализацию
+  // /api/status, иначе бейдж стадии пропадёт.
   test('парсит verify phase accepted_stalemate (review_patience) без отбрасывания', () => {
     const raw = {
       flow_name: 'demo',
@@ -277,12 +276,7 @@ describe('useStatus', () => {
   })
 
   test('CRITICAL: discards a stale response that resolves after a newer request was issued', async () => {
-    // Живой баг: несколько значимых WS-событий подряд (напр. стадия A завершилась
-    // И стадия B тут же стала running) issue несколько независимых fetch('/api/status').
-    // Сетевые ответы могут прийти НЕ в порядке отправки — если более старый (issued
-    // раньше) запрос резолвится ПОСЛЕ более нового, он откатывает состояние назад
-    // (напр. стадия B снова выглядит pending) и одноразовый auto-advance в App
-    // навсегда теряет свой шанс сработать.
+    // Живой баг: несколько значимых WS-событий подряд issue несколько независимых fetch.
     let callIndex = 0
     const deferred: Array<(data: unknown) => void> = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(() => {

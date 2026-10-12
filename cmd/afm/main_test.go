@@ -29,10 +29,6 @@ func TestResolveRootDir(t *testing.T) {
 	}
 }
 
-// TestFmDir проверяет, что fmDir() собирает путь к .afm поверх rootDir.
-// rootDir — изменяемая глобальная переменная пакета, поэтому сохраняем и
-// восстанавливаем её, чтобы не влиять на остальные тести cmd/afm,
-// которые рассчитывают на значение по умолчанию ("").
 func TestFmDir(t *testing.T) {
 	prev := rootDir
 	t.Cleanup(func() { rootDir = prev })

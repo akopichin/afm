@@ -15,9 +15,7 @@ type ChangedFilesListProps = {
 }
 
 const BADGE: Record<ChangeStatus, string> = { modified: 'M', added: 'A', deleted: 'D' }
-// Full status word for screen readers — the visible badge letter is aria-hidden
-// (color is decorative), so the status must reach the accessible name some other
-// way, or an added file is indistinguishable from a modified/deleted one.
+// Include the full status in accessible names; the visible badge letter is aria-hidden.
 const STATUS_LABEL: Record<ChangeStatus, string> = { modified: 'Modified', added: 'Added', deleted: 'Deleted' }
 
 // dirPrefix возвращает каталог файла с завершающим слэшем ("pkg/server/") или
@@ -27,16 +25,8 @@ function dirPrefix(path: string): string {
   return slash === -1 ? '' : path.slice(0, slash + 1)
 }
 
-// Плоский список изменённых файлов. Цвет badge — не единственный сигнал: буква
-// статуса (M/A/D) всегда видна текстом. Selectable-строка открывается настоящей
-// кнопкой и имеет чекбокс (как FileSearchResults); неселектируемая
-// (deleted/vanished) строка приглушена, некликабельна и несёт доступный текст
-// причины вместо чекбокса/кнопки.
-// Контейнер с aria-label="Changed files" оборачивает ВСЕ состояния (loading/
-// error/пусто/список), а не только непустой список — иначе переключение на
-// Unstaged/vs HEAD в репозитории без изменений оставляло бы панель вообще без
-// доступного имени (FileBrowserModal ждёт именно эту метку, чтобы понять, что
-// панель изменений уже смонтирована и поисковая колонка ей уступила место).
+// Плоский список изменённых файлов. Цвет badge — не единственный сигнал: буква статуса (M/A/D) всегда
+// видна текстом.
 export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: ChangedFilesListProps): ReactElement {
   return (
     <div className="file-search-results" role="list" aria-label="Changed files">

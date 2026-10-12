@@ -2,9 +2,6 @@ package workspace
 
 import "testing"
 
-// TestDetectLanguage runs on every platform (pure function, no filesystem) —
-// unlike list_test.go's Linux-only end-to-end test, this gives real RED/GREEN
-// evidence on a non-Linux dev host.
 func TestDetectLanguage(t *testing.T) {
 	cases := map[string]string{
 		"main.go":        "go",

@@ -12,10 +12,8 @@ describe('useEnteringLast', () => {
     expect(result.current.animate).toBe(false)
   })
 
-  // The real useEventFeed starts events=[] (signature=null) and applies /api/events
-  // asynchronously, so the first non-empty render comes AFTER mount with the same
-  // token. null -> non-null must be a silent baseline, not an animation; a later
-  // live append then animates.
+  // The real useEventFeed starts events=[] and applies /api/events asynchronously, so the first non-empty
+  // render comes AFTER mount with the same token.
   it('does NOT animate the async initial history load (null -> history), then animates a live append', () => {
     const { result, rerender } = run(null, 's1')   // empty feed on mount
     rerender({ s: 'h2', t: 's1' })                 // /api/events resolves: history loaded

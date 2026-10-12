@@ -10,12 +10,6 @@ import (
 	"testing"
 )
 
-// TestList_OrderHidingSymlinkPagination exercises the real List
-// implementation end to end on a live temp root: directories sort before
-// files, `.git`/`.afm` are hidden, a symlink is classified and non-selectable,
-// and Language is detected for a real file. Pagination itself (cursor
-// round-trip across a page boundary) is covered separately in Docker E2E
-// (Task 16), where a root with >listPageSize entries is practical to build.
 func TestList_OrderHidingSymlinkPagination(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "zeta"))
@@ -98,10 +92,6 @@ func TestList_OrderHidingSymlinkPagination(t *testing.T) {
 	}
 }
 
-// TestList_TruncatesAtMaxDirEntries exercises finding 9's bounded scan
-// end-to-end through the real List/openat2 path, not just readDirBounded in
-// isolation (bounded_scan_test.go). maxDirEntries is a package var precisely
-// so a test can shrink it instead of building a real 50000-entry directory.
 func TestList_TruncatesAtMaxDirEntries(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 10; i++ {

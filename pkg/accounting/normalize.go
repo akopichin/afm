@@ -30,9 +30,8 @@ func deref(p *uint64) uint64 {
 	return *p
 }
 
-// normalize converts a raw vendor usage blob into normalized Tokens plus any
-// warnings (e.g. inclusive-input underflow). It never returns an error: bad
-// counters clamp to zero and surface as warnings.
+// normalize converts a raw vendor usage blob into normalized Tokens plus any warnings. It never returns an
+// error: bad counters clamp to zero and surface as warnings.
 func normalize(schema Schema, r rawUsage) (Tokens, []string) {
 	var warn []string
 	switch schema {

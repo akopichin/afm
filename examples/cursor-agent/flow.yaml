@@ -1,27 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
 # Demo flow for cursor — using Cursor as an agent via type: cursor.
-#
-# The Cursor Cloud API (api.cursor.com) has no synchronous /chat/completions — it's
-# the Cloud Agents API, so afm uses the cursor-as-claude adapter (creates a no-repo
-# Cloud Agent, polls the run, emits claude stream-json).
-#
-# Requires configuration in config.yaml:
-#   docker:
-#     autoShim: true
-#     agents:
-#       cursor:
-#         type: cursor
-#         model: auto
-#         url: https://api.cursor.com/v1
-#         auth:
-#           from: "file:<path to the crsr_… token>"
-#           to: "env:CURSOR_API_KEY"
-#
-# Usage (docker mode, an image with cursor-as-claude — v0.4.0+):
-#   afm run examples/cursor-agent/flow.yaml
-#
-# Note: the first response takes ~30–90s (a cloud VM starting when the Cloud Agent
-# is created).
 
 name: cursor-demo
 description: "Demo: cursor as an agent via type: cursor (Cursor Cloud Agents API)"

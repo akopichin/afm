@@ -17,10 +17,7 @@ type session struct {
 	launched chan struct{} // closed when the launch attempt completes (success or fail)
 	err      error
 
-	// mu guards conn and closed — the ownership handoff between the launch
-	// goroutine and close(). Whoever observes the other's flag owns killing Chrome,
-	// so a launch that finishes AFTER close() kills its own Chrome instead of
-	// leaking it, and close() after a finished launch kills the stored conn.
+	// mu guards conn and closed — the ownership handoff between the launch goroutine and close.
 	mu     sync.Mutex
 	conn   *chromeConn
 	closed bool
@@ -36,10 +33,7 @@ type session struct {
 	done      chan struct{}
 }
 
-// wsClient is one connected WebSocket, with its own bounded outbound queue.
-// send is NEVER closed — teardown signals via done instead, so deliver (which runs
-// on the readFromChrome goroutine) can never send on a closed channel. That removes
-// the send/close data race the recover() previously only masked.
+// wsClient owns a WebSocket and bounded outbound queue, serializing sends with close.
 type wsClient struct {
 	ws   *websocket.Conn
 	send chan []byte
@@ -52,9 +46,8 @@ func (s *session) serveClient(ws *websocket.Conn) {
 	c := &wsClient{ws: ws, send: make(chan []byte, writeQueueSize), done: make(chan struct{})}
 	s.clientsMu.Lock()
 	if s.clientsClosed {
-		// The session was torn down (Chrome died / run ending) between firstConnect
-		// succeeding and this registration. Don't attach to a dead session — close
-		// the socket so the client sees a clean disconnect instead of hanging.
+		// The session was torn down between firstConnect succeeding and this registration. Don't attach to a
+		// dead session — close the socket so the client sees a clean disconnect instead of hanging.
 		s.clientsMu.Unlock()
 		_ = ws.Close()
 		return
@@ -87,12 +80,7 @@ func (s *session) serveClient(ws *websocket.Conn) {
 			break
 		}
 		out := s.proxy.fromClient(c, msg)
-		// Real backpressure: block until Chrome's write queue accepts the request
-		// (or the session ends). Dropping here would strand the pending-request
-		// entry fromClient just recorded — Chrome would never answer and the
-		// agent's tool-call would hang forever. Blocking is bounded in practice by
-		// writeLoop, which tears the session down (closing s.done) the moment the
-		// CDP pipe write fails.
+		// Real backpressure: block until Chrome's write queue accepts the request.
 		select {
 		case s.writeCh <- out:
 		case <-s.done:
@@ -148,9 +136,8 @@ func (s *session) readFromChrome() {
 			}
 		}
 		if err != nil {
-			// EOF/read error = Chrome exited or crashed. Tear the session down and
-			// evict it (via close) so a retry/resume reconnect relaunches a fresh
-			// Chrome instead of proxying to a dead one forever.
+			// EOF/read error = Chrome exited or crashed. Tear the session down and evict it (via close) so a
+			// retry/resume reconnect relaunches a fresh Chrome instead of proxying to a dead one forever.
 			s.close()
 			return
 		}
@@ -158,17 +145,14 @@ func (s *session) readFromChrome() {
 }
 
 // route sends a Chrome message to its destination client, or broadcasts an event.
-// A nil result means the message is an unroutable (stale/duplicate) response that
-// must be dropped — never broadcast (see proxy.fromChrome).
 func (s *session) route(msg []byte) {
 	r := s.proxy.fromChrome(msg)
 	if r == nil {
 		return // unknown-id response: drop
 	}
 	if r.conn != nil {
-		// A response is owed to exactly one client: if its queue is full, close
-		// that slow client rather than drop the frame (a dropped response would
-		// hang the client's tool-call forever).
+		// A response is owed to exactly one client: if its queue is full, close that slow client rather than
+		// drop the frame (a dropped response would hang the client's tool-call forever).
 		s.deliver(r.conn, r.payload, true)
 		return
 	}
@@ -183,10 +167,8 @@ func (s *session) route(msg []byte) {
 	}
 }
 
-// deliver enqueues a message to a client without blocking the reader on a slow
-// client. When mustDeliver is true (a response), a full queue closes the client's
-// socket so its serveClient loop unblocks, disconnects, and the tool-call errors
-// instead of hanging. For a best-effort broadcast event, a full queue just drops.
+// deliver enqueues a message to a client without blocking the reader on a slow client. For a best-effort
+// broadcast event, a full queue just drops.
 func (s *session) deliver(c *wsClient, msg []byte, mustDeliver bool) {
 	select {
 	case c.send <- msg:
@@ -202,23 +184,20 @@ func (s *session) deliver(c *wsClient, msg []byte, mustDeliver bool) {
 	}
 }
 
-// close tears the session down once: signal done, close connected clients' sockets
-// (so their serveClient readers unblock instead of hanging on a dead session), kill
-// Chrome, and evict the session from the manager so a reconnect relaunches.
+// close tears the session down once: signal done, close connected clients' sockets, kill Chrome, and evict
+// the session from the manager so a reconnect relaunches.
 func (s *session) close() {
 	s.closeOnce.Do(func() {
-		// Mark closed and grab the conn under mu. If the launch goroutine has not
-		// stored conn yet, it will observe closed==true and kill its own Chrome;
-		// if it already stored one, we kill it here. Exactly one side cleans up.
+		// Mark closed and grab the conn under mu. If the launch goroutine has not stored conn yet, it will
+		// observe closed==true and kill its own Chrome; if it already stored one, we kill it here.
 		s.mu.Lock()
 		s.closed = true
 		c := s.conn
 		s.mu.Unlock()
 
 		close(s.done)
-		// Evict FIRST (before the blocking conn.close()/cmd.Wait()) so a reconnect
-		// arriving while Chrome is being reaped doesn't bind to this dead session;
-		// it will miss the map and relaunch a fresh one.
+		// Evict FIRST so a reconnect arriving while Chrome is being reaped doesn't bind to this dead session; it
+		// will miss the map and relaunch a fresh one.
 		if s.mgr != nil {
 			s.mgr.evictSession(s.key, s)
 		}

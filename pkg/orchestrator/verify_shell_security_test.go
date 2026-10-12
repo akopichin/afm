@@ -9,12 +9,6 @@ import (
 	"testing"
 )
 
-// TestRunVerifyShellCommand_StripsCrossAgentTransportSecrets — D2a код-ревью:
-// shell-verify раньше исполнялся с cmd.Env==nil (== "унаследовать
-// os.Environ() целиком"), включая транспортные секреты ЧУЖИХ агентов/хуков
-// (AFM_SECRET_*/AFM_HOOK_SECRET_*/AFM_SYSPROMPT_*), которые попадали бы в
-// command.log и (при needs_changes) в evidence отчёта. Проверяем, что они
-// вырезаны, а обычный (не транспортный) env верификатора выживает.
 func TestRunVerifyShellCommand_StripsCrossAgentTransportSecrets(t *testing.T) {
 	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
 	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
@@ -36,11 +30,6 @@ func TestRunVerifyShellCommand_StripsCrossAgentTransportSecrets(t *testing.T) {
 	}
 }
 
-// TestRunVerifyShellCommand_PreCancelledCtxNeverStarts — D4 код-ревью:
-// последняя неблокирующая проверка ctx.Err() ПЕРЕД cmd.Start(). Если ctx уже
-// отменён (напр. Pause() уже durable зафиксировал переход и просигналил ДО
-// того, как мы дошли сюда), subprocess не должен стартовать вовсе — маркер,
-// который команда создала бы первой строкой, должен остаться отсутствующим.
 func TestRunVerifyShellCommand_PreCancelledCtxNeverStarts(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")

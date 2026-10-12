@@ -8,21 +8,12 @@ type DashboardShellProps = {
   workspace: ReactNode
 }
 
-// DashboardShell — оболочка тела дашборда: слева рейл стадий, справа единый
-// воркспейс (вкладки + активное содержимое). Пришла на смену трёхколоночному
-// resizable DashboardLayout — план/диалог/лента больше не конкурируют в
-// одновременных колонках, поэтому ни ручки ресайза, ни maximize не нужны
-// (файловый браузер остаётся оверлеем).
-//
-// Раскладка — CSS grid. На узких вьюпортах (<900px, см. layout.css) рейл
-// перестаёт занимать колонку и превращается в слайд-овер (шторку) поверх
-// воркспейса: тумблер ☰ слева от вкладок открывает его, скрим/Escape/выбор
-// стадии — закрывают. Так на телефоне воркспейс получает всю ширину, а не ~150px.
+// DashboardShell — оболочка тела дашборда: слева рейл стадий, справа единый воркспейс. Раскладка — CSS
+// grid.
 const MOBILE_QUERY = '(max-width: 900px)'
 
-// Ширина рейла стадий — растягивается делителем между рейлом и воркспейсом.
-// Персистится, чтобы пережить перезагрузку. Клампится, чтобы рейл нельзя было
-// сузить в ноль или растянуть на пол-экрана.
+// Ширина рейла стадий — растягивается делителем между рейлом и воркспейсом. Клампится, чтобы рейл нельзя
+// было сузить в ноль или растянуть на пол-экрана.
 const RAIL_WIDTH_KEY = 'afm.railWidth'
 const RAIL_MIN = 190
 const RAIL_MAX = 560
@@ -51,9 +42,8 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
   const [railWidth, setRailWidth] = useState<number>(loadRailWidth)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const draggingRef = useRef(false)
-  // Мобильный режим (шторка) — по тому же брейкпоинту, что и CSS. Нужен в JS,
-  // чтобы делать закрытый рейл `inert` ТОЛЬКО на мобиле; на десктопе рейл всегда
-  // виден и интерактивен.
+  // Мобильный режим (шторка) — по тому же брейкпоинту, что и CSS. Нужен в JS, чтобы делать закрытый рейл
+  // `inert` ТОЛЬКО на мобиле; на десктопе рейл всегда виден и интерактивен.
   const [isMobile, setIsMobile] = useState(false)
   const railRef = useRef<HTMLElement | null>(null)
   const toggleRef = useRef<HTMLButtonElement | null>(null)
@@ -66,8 +56,7 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
     return () => mq.removeEventListener('change', update)
   }, [])
 
-  // Закрытая шторка на мобиле — `inert`: её кнопки (строки стадий, кебабы) не
-  // должны оставаться в tab-order за экраном (Finding #5 второго раунда). На
+  // Закрытая шторка на мобиле — `inert`: её кнопки не должны оставаться в tab-order за экраном. На
   // десктопе или при открытой шторке — интерактивна.
   useEffect(() => {
     const el = railRef.current
@@ -75,9 +64,7 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
     el.inert = isMobile && !railOpen
   }, [isMobile, railOpen])
 
-  // Управление фокусом (Finding #5): открытие шторки переносит фокус на первую
-  // строку стадии; закрытие возвращает фокус на тумблер, чтобы фокус не остался
-  // на кнопке, уехавшей за экран.
+  // Открытие шторки фокусирует первую стадию, закрытие возвращает фокус на тумблер.
   const prevOpen = useRef(false)
   useEffect(() => {
     if (!isMobile) { prevOpen.current = railOpen; return }
@@ -138,9 +125,8 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
     else if (e.key === 'ArrowRight') { e.preventDefault(); setRailWidth((w) => clampRail(w + RAIL_STEP)) }
   }
 
-  // Клик по строке стадии внутри шторки = выбор сделан → закрываем её. Клик по
-  // кебабу (и его меню) НЕ закрывает — иначе меню действий стадии схлопнулось бы
-  // вместе со шторкой. Делегирование, чтобы не прокидывать колбэк в StagesList.
+  // Клик по строке стадии внутри шторки = выбор сделан → закрываем её. Клик по кебабу (и его меню) НЕ
+  // закрывает — иначе меню действий стадии схлопнулось бы вместе со шторкой.
   function onRailClickCapture(e: MouseEvent<HTMLElement>): void {
     if (!railOpen) return
     const target = e.target as HTMLElement

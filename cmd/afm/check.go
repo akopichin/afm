@@ -70,23 +70,10 @@ func newCheckCmd() *cobra.Command {
 				return fmt.Errorf("load state: %w", err)
 			}
 
-			// Read-only: a run with no usage.jsonl at all (accounting
-			// disabled, or a run predating this feature) must never fail
-			// `check` — Load returns an empty ledger, nil error for that
-			// case. A CORRUPT or otherwise-unreadable ledger is different:
-			// the stage table still renders (best-effort), but the command
-			// now surfaces the problem on stderr and exits 3 instead of
-			// silently reading as "no usage data" (see the matrix below).
-			//
-			// display=false (accounting.enabled: false / AFM_ACCOUNTING=0)
-			// hides cost entirely: the ledger is not even read, so the table
-			// falls back to its pre-accounting columns and no cost/coverage
-			// line is printed. Collection into usage.jsonl is unaffected.
+			// Read-only: a run with no usage.jsonl at all must never fail `check` — Load returns an empty ledger,
+			// nil error for that case. Collection into usage.jsonl is unaffected.
 			display := accountingDisplayEnabled()
-			// showCost — показывать ли колонку EST. COST. Ортогонально display:
-			// accounting может быть включён (токены собираются и показываются),
-			// но деньги скрыты (accounting.show_money=false, дефолт). Токены и
-			// кэш показываются всегда при hasUsage.
+			// showCost — показывать ли колонку EST. COST.
 			showMoney := display && accountingShowMoney()
 			var (
 				led        *accounting.Ledger
@@ -175,9 +162,8 @@ func newCheckCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "cost unavailable (cannot read usage ledger): %v\n", loadErr)
 				return &ExitError{Code: 3, Silent: true}
 			case !hasUsage:
-				// Distinguish "accounting display off" (say nothing — the
-				// data may well exist on disk) from "display on but this run
-				// recorded no usage" (the informative note).
+				// Distinguish "accounting display off" (say nothing — the data may well exist on disk) from "display
+				// on but this run recorded no usage" (the informative note).
 				if display {
 					fmt.Println("No usage data")
 				}
@@ -198,9 +184,7 @@ func newCheckCmd() *cobra.Command {
 	}
 }
 
-// humanizeTokens renders a token count compactly for the fixed-width table,
-// e.g. 84900 -> "84.9k". Values under 1000 are shown as an exact integer; all
-// arithmetic (sums, ratios) stays in pkg/accounting — this only formats.
+// humanizeTokens renders a token count compactly for the fixed-width table, e.g. 84900 -> "84.9k".
 func humanizeTokens(n uint64) string {
 	if n < 1000 {
 		return fmt.Sprintf("%d", n)
@@ -208,9 +192,8 @@ func humanizeTokens(n uint64) string {
 	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
-// formatCache renders the cache read/write split, e.g. "R 47.6k / W 18.6k".
-// "—" when the stage recorded no cache activity at all, rather than a noisy
-// "R 0 / W 0" for every non-caching stage.
+// formatCache renders the cache read/write split, e.g. "R 47.6k / W 18.6k". "—" when the stage recorded no
+// cache activity at all, rather than a noisy "R 0 / W 0" for every non-caching stage.
 func formatCache(t accounting.Tokens) string {
 	read, write := t.CacheRead, t.CacheWriteTotal()
 	if read == 0 && write == 0 {
@@ -219,14 +202,8 @@ func formatCache(t accounting.Tokens) string {
 	return fmt.Sprintf("R %s / W %s", humanizeTokens(read), humanizeTokens(write))
 }
 
-// coverageNote reports partial pricing coverage (e.g. "2 unmetered, 1
-// unpriced") so a reader knows the TOTAL may understate the real cost. Empty
-// when every metered record in the run was priced.
-//
-// Totals are sum(issue.Count) over led.CoverageIssues() — the same grouping
-// `afm report`'s coverage appendix and the dashboard's cost tab use — NOT
-// len(issues): two identical unpriced invocations group into a single issue
-// with Count==2, and must still read as "2 unpriced", never "1".
+// coverageNote reports partial pricing coverage so a reader knows the TOTAL may understate the real cost.
+// Empty when every metered record in the run was priced.
 func coverageNote(led *accounting.Ledger) string {
 	var unmetered, unpriced int
 	for _, issue := range led.CoverageIssues() {

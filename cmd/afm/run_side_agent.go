@@ -26,10 +26,7 @@ func sideAgentEnabled(cfg config.Config, f *flow.Flow) bool {
 	return cfg.SideAgent.IsEnabled()
 }
 
-// sideAgentContextByteLimit — явный верхний предел размера собранного промпта
-// одного хода бокового агента (история разговора + текущее сообщение). Нужен,
-// чтобы длинный разговор не раздувал промпт бесконтрольно; само сообщение
-// отдельно ограничено sideagent.MaxMessageBytes.
+// sideAgentContextByteLimit — явный верхний предел размера собранного промпта одного хода бокового агента.
 const sideAgentContextByteLimit = 512 * 1024
 
 // sideAgentAcctLabel — атрибуция учёта стоимости side-ходов (stage/phase). Боковой
@@ -42,35 +39,24 @@ const sideAgentEmergencyDrain = 5 * time.Second
 
 const openAIProviderEnv = "OPENAI_API_KEY"
 
-// sideAgentRuntime владеет ресурсами бокового агента в пределах executeFlow:
-// менеджер (приём ходов + агентские горутины под процессным ctx), журнал
-// разговора (chat.jsonl) и учёт стоимости (usage.jsonl в том же namespace).
+// sideAgentRuntime владеет ресурсами бокового агента в пределах executeFlow: менеджер, журнал разговора и
+// учёт стоимости.
 type sideAgentRuntime struct {
 	manager *sideagent.Manager
 	store   *sideagent.Store
 	acct    *accounting.Store
 }
 
-// startSideAgent поднимает боковой агент дашборда. Журнал кладётся под afm-root
-// .afm (база fmDir()), keyed по runID — namespace анкорится к afm-root
-// независимо от flow.root_dir (то же правило, что у AFM_STAGE_DIR). Вызывается
-// только когда дашборд поднят И переключатель не выключен (гейт sideAgentEnabled
-// у вызывающего: flow.side_agent > AFM_SIDEAGENT > config side_agent.enabled >
-// по умолчанию ВКЛ).
-//
-// Жёсткий сбой открытия журнала (store == nil) возвращается ошибкой — вызывающий
-// решает, продолжать ли ран без бокового агента (он не должен ронять флоу).
-// Повреждённый журнал (store != nil вместе с ErrStorageUnavailable) — не ошибка
-// здесь: менеджер сам заблокирует новую работу через store.Unavailable().
+// startSideAgent хранит беседу под afm-root независимо от root_dir; сбой открытия отключает боковой агент,
+// не роняя флоу.
 func startSideAgent(runID string, cfg config.Config, env runEnvironment) (*sideAgentRuntime, error) {
 	store, err := sideagent.Open(fmDir(), runID)
 	if err != nil && store == nil {
 		return nil, err
 	}
 
-	// Учёт side-ходов пишется в usage.jsonl ТОГО ЖЕ namespace, что и журнал
-	// (store.Dir() → <dir>/usage.jsonl == store.UsagePath()). Переиспользуем тот
-	// же accounting.Store, что и флоу, вместо отдельной машинерии.
+	// Учёт side-ходов пишется в usage.jsonl ТОГО ЖЕ namespace, что и журнал. Переиспользуем тот же
+	// accounting.Store, что и флоу, вместо отдельной машинерии.
 	acct, acctErr := accounting.Open(store.Dir(), accounting.NewResolver(cfg.Pricing))
 	if acctErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: side-agent accounting: %v\n", acctErr)
@@ -101,9 +87,8 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment) (*sideA
 	return &sideAgentRuntime{manager: mgr, store: store, acct: acct}, nil
 }
 
-// service возвращает значение для server.Config.SideAgent. nil-получатель →
-// nil-интерфейс (capability off): боковой агент не поднялся, маршруты
-// /api/side-agent* не регистрируются.
+// service возвращает значение для server.Config.SideAgent. nil-получатель → nil-интерфейс (capability
+// off): боковой агент не поднялся, маршруты /api/side-agent* не регистрируются.
 func (r *sideAgentRuntime) service() server.SideAgentService {
 	if r == nil {
 		return nil
@@ -111,14 +96,8 @@ func (r *sideAgentRuntime) service() server.SideAgentService {
 	return r.manager
 }
 
-// shutdownNormal — штатное завершение (флоу закончился/упал, не Ctrl+C): ход НЕ
-// прерывается принудительно, ждём его естественного завершения БЕЗ верхней
-// границы (только Ctrl+C через ctx прерывает ожидание), чтобы не оборвать ход
-// пользователя 2-минутным UI-grace-колпаком. Приём закрываем ПЕРВЫМ
-// (CloseAdmission), ДО Drain: иначе между «Drain увидел, что активного хода нет»
-// и выключением сервера мог бы проскочить принятый 202 с новой горутиной, не
-// учтённой Drain, и closeStores закрыл бы журнал под ещё живым агентом.
-// Возвращает drained.
+// shutdownNormal закрывает admission до Drain, исключая новые ходы; ждёт завершения без лимита, пока ctx
+// не отменён.
 func (r *sideAgentRuntime) shutdownNormal(ctx context.Context) bool {
 	if r == nil {
 		return false
@@ -127,12 +106,7 @@ func (r *sideAgentRuntime) shutdownNormal(ctx context.Context) bool {
 	return r.manager.Drain(ctx)
 }
 
-// shutdownAfterFlow — штатное завершение с эскалацией. Обычно это shutdownNormal
-// (ждём активный ход без 2-минутного колпака). Но если ctx отменён (Ctrl+C пришёл
-// во время dashboard-drain или самого ожидания), Drain(ctx) возвращается сразу с
-// drained=false, НЕ прерывая подпроцесс — тогда эскалируем к shutdownEmergency со
-// свежим ограниченным контекстом (Shutdown → interrupt), иначе боковой агент
-// пережил бы возврат executeFlow. Возвращает финальный drained.
+// shutdownAfterFlow ждёт штатный drain; при Ctrl+C прерывает ход через bounded shutdownEmergency.
 func (r *sideAgentRuntime) shutdownAfterFlow(ctx context.Context, emergencyBound time.Duration) bool {
 	drained := r.shutdownNormal(ctx)
 	if !drained && ctx.Err() != nil {
@@ -141,11 +115,8 @@ func (r *sideAgentRuntime) shutdownAfterFlow(ctx context.Context, emergencyBound
 	return drained
 }
 
-// shutdownEmergency — аварийное завершение (Ctrl+C / сбой): закрываем приём и
-// мягко прерываем активный ход (Shutdown → SIGINT), ждём лишь ограниченное время.
-// Не дождались — журнал/учёт НЕ закрываем (см. closeStores): процесс всё равно
-// завершается, лучше утечка дескриптора, чем запись в закрытый файл из ещё живой
-// агентской горутины. Возвращает drained.
+// shutdownEmergency — аварийное завершение: закрываем приём и мягко прерываем активный ход, ждём лишь
+// ограниченное время. Возвращает drained.
 func (r *sideAgentRuntime) shutdownEmergency(bound time.Duration) bool {
 	if r == nil {
 		return false
@@ -156,10 +127,8 @@ func (r *sideAgentRuntime) shutdownEmergency(bound time.Duration) bool {
 	return r.manager.Drain(ctx)
 }
 
-// closeStores закрывает журнал разговора и учёт — ТОЛЬКО если агент действительно
-// дренирован (drained). Иначе пропускаем: агентская горутина может быть ещё жива
-// и писать в журнал. Вызывается после остановки HTTP-сервера (SSE-подписки уже
-// отцеплены), до освобождения wrappers и run-lock.
+// closeStores закрывает журнал разговора и учёт — ТОЛЬКО если агент действительно дренирован. Иначе
+// пропускаем: агентская горутина может быть ещё жива и писать в журнал.
 func (r *sideAgentRuntime) closeStores(drained bool) {
 	if r == nil || !drained {
 		return
@@ -170,20 +139,8 @@ func (r *sideAgentRuntime) closeStores(drained bool) {
 	}
 }
 
-// sideAgentProtectedValues собирает ЗНАЧЕНИЯ секретов, подлежащих редакции из
-// пользовательского текста бокового агента (инвариант 8). Боковой агент исполняет
-// ПРОИЗВОЛЬНУЮ `cfg.Client.Command` с унаследованным окружением, поэтому набор
-// должен покрывать не только claude. Резолвится один раз на сборке менеджера
-// (окружение и конфиг рана статичны в пределах процесса). Набор:
-//   - cross-agent transport-секреты (recipe/hook/sysprompt: AFM_SECRET_*,
-//     AFM_HOOK_SECRET_*, AFM_SYSPROMPT_*) — через executor.IsCrossAgentTransportSecret;
-//   - провайдеро-нативные credential env поддерживаемых агентов: claude
-//     (ClaudeAuthEnvVars), openai/openai-agent (OPENAI_API_KEY), cursor
-//     (CURSOR_API_KEY). Без них на нативном хосте (где transport-секретов нет)
-//     редакция была бы no-op, а живой токен утёк бы в durable chat.jsonl и UI;
-//   - для выбранной команды с docker-рецептом (cfg.Docker.Agents[command]) —
-//     резолвленный токен из auth.from (env:/file:) и значение auth.to env.
-//     ANTHROPIC_BASE_URL НЕ входит — это URL, а не секрет.
+// sideAgentProtectedValues собирает transport-, provider- и recipe-секреты для редакции; BASE_URL не
+// считается секретом.
 func sideAgentProtectedValues(cfg config.Config) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -223,9 +180,8 @@ func sideAgentProtectedValues(cfg config.Config) []string {
 	return out
 }
 
-// isProviderCredentialEnv — имена env-переменных, через которые поддерживаемые
-// провайдеры принимают токен: claude (ClaudeAuthEnvVars) + openai/cursor. Codex
-// авторизуется через OAuth (~/.codex), токена в env нет. ANTHROPIC_BASE_URL — URL.
+// isProviderCredentialEnv — имена env-переменных, через которые поддерживаемые провайдеры принимают токен:
+// claude + openai/cursor. Codex авторизуется через OAuth (~/.codex), токена в env нет.
 func isProviderCredentialEnv(name string) bool {
 	switch name {
 	case openAIProviderEnv, "CURSOR_API_KEY":

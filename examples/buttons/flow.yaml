@@ -1,18 +1,6 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
-# Demo flow — predefined stage buttons in the kebab menu.
-#
-# A stage can declare named one-click actions under `buttons:` (label → prompt).
-# Each button appears in the stage's kebab menu (the ⋮ next to the stage name)
-# while the stage is `running` or `awaiting_approval`. Clicking it delivers the
-# canned prompt to the live agent through the same mechanism as the free-text
-# "Add note for agent" (a Revise: the agent restarts with the prompt as feedback).
-#
-# How to try it:
-#   afm run examples/buttons/flow.yaml
-# then open the printed dashboard URL. When the stage reaches AWAITING APPROVAL,
-# open the ⋮ menu next to the stage — you'll see the three buttons below
-# "Add note for agent". Click one and watch the plan get re-generated with that
-# instruction folded in (the feed shows revising → planning → awaiting_approval).
+# Demo flow — predefined stage buttons in the kebab menu. A stage can declare named one-click actions
+# under `buttons:` (label → prompt).
 
 name: buttons-demo
 description: "Demo: predefined stage buttons in the kebab menu"
@@ -27,8 +15,6 @@ stages:
     command: claude          # ← swap for your agent if needed (glm51 / deepseek / …)
 
     # Predefined kebab-menu buttons. Order here = order in the menu.
-    # Each click sends its prompt to the live agent (a Revise) and restarts it —
-    # the plan is regenerated with the instruction taken into account.
     buttons:
       Add a testing section: "Add a detailed 'Testing' section to the plan describing how the greeting file will be verified."
       Make it minimal: "Cut the plan down to the bare minimum — a single task and a single acceptance criterion."

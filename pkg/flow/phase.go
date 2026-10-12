@@ -1,10 +1,7 @@
 package flow
 
-// Phase — имя фазы выполнения стадии в рантайме. В отличие от AgentType
-// (агенты, объявляемые в YAML: planning/implementation/review), множество фаз
-// включает autonomous_execution — это рантайм-решение супервизора, а НЕ
-// допустимое значение поля agents: в YAML. Единый источник правды для всех
-// пакетов (orchestrator/server/mcp/prompts).
+// Phase — имя фазы выполнения стадии в рантайме. Единый источник правды для всех пакетов
+// (orchestrator/server/mcp/prompts).
 type Phase string
 
 const (
@@ -55,9 +52,8 @@ func PhaseStreamLogs(p Phase) []string {
 	}
 }
 
-// PhaseLogFile returns the phase's canonical human-readable log file name.
-// autonomous logs to autonomous.log (not autonomous_execution.log),
-// mirroring PhaseJSONL's naming.
+// PhaseLogFile returns the phase's canonical human-readable log file name. autonomous logs to
+// autonomous.log (not autonomous_execution.log), mirroring PhaseJSONL's naming.
 func PhaseLogFile(p Phase) string {
 	if p == PhaseAutonomous {
 		return "autonomous.log"
@@ -65,9 +61,8 @@ func PhaseLogFile(p Phase) string {
 	return string(p) + ".log"
 }
 
-// PhaseLogFiles returns all human-readable log files a phase may produce,
-// in chronological/reading order: the canonical file first, then any
-// retry/revise variants. Mirrors PhaseStreamLogs but for *.log, not *.jsonl.
+// PhaseLogFiles returns all human-readable log files a phase may produce, in chronological/reading order:
+// the canonical file first, then any retry/revise variants.
 func PhaseLogFiles(p Phase) []string {
 	switch p {
 	case PhasePlanning:

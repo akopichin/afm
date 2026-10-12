@@ -31,12 +31,6 @@ func TestSpawnAgent_TracksActiveAndWaitGroup(t *testing.T) {
 	}
 }
 
-// TestSpawnDetached_TracksWaitGroupWithoutSemaphoreOrActiveMarker proves the
-// two properties the malformed-JSON fix agent depends on: a detached helper
-// runs even when the ONLY command semaphore slot is already taken (it must not
-// deadlock behind the blocked main agent), and it never marks the stage active
-// (so it can't clobber the main agent's active marker) — yet it is still
-// awaited by WaitAgents for clean shutdown.
 func TestSpawnDetached_TracksWaitGroupWithoutSemaphoreOrActiveMarker(t *testing.T) {
 	fullSem := ChannelSemaphore(make(chan struct{}, 1))
 	fullSem <- struct{}{} // occupy the only slot, as the blocked main agent would
@@ -95,12 +89,6 @@ func TestSpawnAgent_SkipsRunWhenShouldRunFalse(t *testing.T) {
 	}
 }
 
-// TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore is a regression
-// test for the exact race this centralization closes: a goroutine queues
-// behind a full command semaphore (e.g. a resumed stage landing in a
-// max_parallel bucket that's already full), the stage gets paused while
-// still queued, then the semaphore frees up — the queued call must not fire
-// run() for a stage that is no longer supposed to be running.
 func TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore(t *testing.T) {
 	blockSem := ChannelSemaphore(make(chan struct{}, 1))
 	blockSem <- struct{}{} // occupied
@@ -122,9 +110,6 @@ func TestSpawnAgent_SkipsRunWhenPausedWhileQueuedBehindSemaphore(t *testing.T) {
 	}
 }
 
-// TestChannelSemaphore_AcquireCtx_AlreadyCanceled — отменённый ДО вызова ctx
-// не должен захватывать слот: acquireCtx возвращает ctx.Err() немедленно, а
-// слот остаётся свободным для другого захватчика.
 func TestChannelSemaphore_AcquireCtx_AlreadyCanceled(t *testing.T) {
 	sem := ChannelSemaphore(make(chan struct{}, 1))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -141,10 +126,6 @@ func TestChannelSemaphore_AcquireCtx_AlreadyCanceled(t *testing.T) {
 	}
 }
 
-// TestChannelSemaphore_AcquireCtx_CancelWhileWaiting — семафор занят,
-// acquireCtx блокируется в ожидании; отмена ctx во время ожидания должна
-// вернуть управление БЕЗ захвата слота и без утечки горутины — слот остаётся
-// доступным оригинальному держателю для release.
 func TestChannelSemaphore_AcquireCtx_CancelWhileWaiting(t *testing.T) {
 	sem := ChannelSemaphore(make(chan struct{}, 1))
 	sem <- struct{}{} // занимаем единственный слот
@@ -185,13 +166,6 @@ func TestNoopSemaphore_AcquireCtx_LiveCtxReturnsNil(t *testing.T) {
 	}
 }
 
-// TestNoopSemaphore_AcquireCtx_AlreadyCancelledReturnsErr — C5 код-ревью:
-// noop-семафор (max_parallel не задан — Lease.SwapTo/AcquireLease на такую
-// команду не блокируются вовсе) должен всё равно уважать уже отменённый ctx,
-// а не молча "успевать" захватить несуществующий слот. Раньше acquireCtx
-// возвращал nil безусловно — Pause/Revise, отменившие ctx ДО вызова SwapTo,
-// теряли сигнал: переход lease на команду верификатора репортовал успех, хотя
-// стадия уже должна была остановиться (см. verify.go's C5-фикс).
 func TestNoopSemaphore_AcquireCtx_AlreadyCancelledReturnsErr(t *testing.T) {
 	var s noopSemaphore
 	ctx, cancel := context.WithCancel(context.Background())

@@ -14,18 +14,10 @@ import (
 // directly under the run directory (like events.jsonl / state.json).
 const usageFileName = "usage.jsonl"
 
-// ErrCorruptUsage is returned when a complete (newline-terminated) line in
-// usage.jsonl fails to parse as a UsageRecord. Unlike a torn tail (the
-// benign, expected shape of a crash or a concurrent live writer mid-append),
-// this means the file itself is damaged. The original file is never
-// modified when this happens — accounting for the run is simply treated as
-// unavailable from then on; this must never block FSM resume.
+// ErrCorruptUsage is returned when a complete line in usage.jsonl fails to parse as a UsageRecord.
 var ErrCorruptUsage = errors.New("accounting: corrupt usage.jsonl")
 
-// Store is the single live writer of a run's usage.jsonl. The run's own
-// .lock (held elsewhere by state.Store for the run directory) already
-// guarantees there is only ever one live writer at a time, so Store takes no
-// flock of its own — it just opens the file.
+// Store is the single live writer of a run's usage.jsonl.
 type Store struct {
 	mu          sync.Mutex
 	f           *os.File
@@ -34,26 +26,15 @@ type Store struct {
 	unavailable bool
 	lastErr     error
 
-	// revision counts every change that can affect a CostSnapshot result: a
-	// successful Append, or the store latching unavailable. CostSnapshot
-	// compares it against cachedRevision to decide whether the cached
-	// cachedBundle can be reused as-is (no re-aggregation) or must be
-	// rebuilt.
+	// revision counts every change that can affect a CostSnapshot result: a successful Append, or the store
+	// latching unavailable.
 	revision       uint64
 	cachedRevision uint64
 	cachedBundle   *CostBundle
 }
 
-// Open opens (creating if needed) <runDir>/usage.jsonl for append and
-// replays any existing content into an in-memory Ledger, so a resumed run's
-// Snapshot reflects everything recorded before the restart.
-//
-// A pre-existing torn tail (a crash mid-append, or a reader racing a live
-// writer) is tolerated silently, same as Load. A pre-existing CORRUPT
-// interior line is different: it means usage.jsonl itself is damaged, so the
-// returned Store starts Unavailable (further Append calls are no-ops) and
-// Open still returns the file handle open — accounting must never block the
-// run itself — along with the wrapped ErrCorruptUsage for the caller to log.
+// Open opens <runDir>/usage.jsonl for append and replays any existing content into an in-memory Ledger, so
+// a resumed run's Snapshot reflects everything recorded before the restart.
 func Open(runDir string, r *Resolver) (*Store, error) {
 	path := filepath.Join(runDir, usageFileName)
 
@@ -81,12 +62,8 @@ func Open(runDir string, r *Resolver) (*Store, error) {
 	return s, nil
 }
 
-// Load reads a run's usage.jsonl read-only and returns the Ledger it
-// describes. A missing file is not an error — it means no usage has been
-// recorded yet (or accounting was disabled for the run) — and yields an
-// empty Ledger. A torn tail (final line without a trailing newline) is
-// ignored. A complete-but-unparseable interior line returns ErrCorruptUsage;
-// the file itself is never touched.
+// Load reads a run's usage.jsonl read-only and returns the Ledger it describes. A complete-but-unparseable
+// interior line returns ErrCorruptUsage; the file itself is never touched.
 func Load(runDir string) (*Ledger, error) {
 	l, err := loadLedger(filepath.Join(runDir, usageFileName))
 	if err != nil {
@@ -134,13 +111,8 @@ func loadLedger(path string) (*Ledger, error) {
 	return l, nil
 }
 
-// Append builds the full UsageRecord for one observation, appends it to
-// usage.jsonl and fsyncs it, and ONLY THEN applies it to the in-memory
-// ledger — a crash between the write and the fsync must never leave the
-// ledger ahead of what's durably on disk. A write/fsync error marks the
-// store unavailable (all further Append calls become no-ops returning the
-// same error) and is returned to the caller for logging; this is
-// observability only — the caller must not treat it as an FSM/agent error.
+// Append writes and fsyncs usage before updating the ledger. Write failures disable accounting and must
+// not fail the stage.
 func (s *Store) Append(obs Observation, stageID, phase, scope string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,10 +174,7 @@ func (s *Store) Unavailable() bool {
 	return s.unavailable
 }
 
-// Close closes the underlying file handle. It does not fsync the parent
-// directory — usage.jsonl is a best-effort accounting artifact, not the
-// run's authoritative log (that durability guarantee belongs to
-// events.jsonl in pkg/state).
+// Close closes the underlying file handle.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -34,12 +34,8 @@ var dockerProtocolProbe = func(argv []string) (string, int) {
 	return string(out), code
 }
 
-// startBrowser builds and owns the managed browser Manager for a run. It returns
-// nil manager + nil descriptor + a no-op cleanup when the capability is off or
-// degraded; otherwise a live manager, a runtime descriptor, and a defer-able
-// cleanup. It generates its own random epoch (never a run id). Production callers
-// keep the manager alive solely via the returned cleanup closure and discard the
-// *Manager; it is returned for test assertions (see run_browser_test.go).
+// startBrowser builds and owns the managed browser Manager for a run. It generates its own random epoch
+// (never a run id).
 func startBrowser(cfg config.Config, mode browser.BrowserMode) (*browser.Manager, *browser.Descriptor, func(), error) {
 	noop := func() {}
 	st, err := browserPreflightFn(cfg, mode)
@@ -101,10 +97,8 @@ func degradeOrError(enable config.EnableState, err error) error {
 	return nil
 }
 
-// browserEndpointAndAppURL produces the WS endpoint host and the tested-app URL.
-// Docker: endpoint is host.docker.internal:<managerPort>, app URL is a fixed free
-// loopback host port published into the container. Native: loopback endpoint and
-// the app served on the host port directly.
+// browserEndpointAndAppURL produces the WS endpoint host and the tested-app URL. Native: loopback endpoint
+// and the app served on the host port directly.
 func browserEndpointAndAppURL(cfg config.Config, mode browser.BrowserMode, mgr *browser.Manager) (string, string, error) {
 	_, port, err := net.SplitHostPort(mgr.Addr())
 	if err != nil {
@@ -133,9 +127,8 @@ func checkImageProtocol(cfg config.Config) error {
 	return nil
 }
 
-// probeImageBrowserProtocol runs `docker run --rm <image> browser protocol-version`
-// — ARGS ONLY, no leading "afm": the image ENTRYPOINT already exec's
-// /usr/local/bin/afm "$@". Mismatch / unknown subcommand / non-zero exit → error.
+// probeImageBrowserProtocol runs `docker run --rm <image> browser protocol-version` — ARGS ONLY, no
+// leading "afm": the image ENTRYPOINT already exec's /usr/local/bin/afm "$@".
 func probeImageBrowserProtocol(image string) (int, error) {
 	out, code := dockerProtocolProbe([]string{"run", "--rm", image, "browser", "protocol-version"})
 	if code != 0 {
@@ -159,9 +152,8 @@ func pickFreeLoopbackPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// descriptorFromEnv rebuilds the runtime descriptor from the AFM_BROWSER_* env the
-// host forwarded into the container. The host must NEVER build a transport
-// descriptor from env (inContainer=false → nil).
+// descriptorFromEnv rebuilds the runtime descriptor from the AFM_BROWSER_* env the host forwarded into the
+// container.
 func descriptorFromEnv(inContainer bool) *browser.Descriptor {
 	if !inContainer {
 		return nil

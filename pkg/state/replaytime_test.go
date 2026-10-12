@@ -5,15 +5,6 @@ import (
 	"time"
 )
 
-// TestLoadRunState_PreservesTransitionTime гарантирует, что LoadRunState не
-// перештамповывает UpdatedAt текущим временем при replay events.jsonl:
-// afm check должен показывать реальное время транзакции (Transition.Time),
-// а не момент чтения лога. Регрессия: SetStageStatus всегда ставил
-// time.Now(), из-за чего UPDATED в afm check "ехал" вперёд при каждом вызове.
-//
-// Формулировка теста: два последовательных LoadRunState с небольшой паузой
-// между ними должны вернуть ОДИНАКОВЫЙ UpdatedAt — если бы replay
-// перештамповывал время, второй вызов дал бы более позднее значение.
 func TestLoadRunState_PreservesTransitionTime(t *testing.T) {
 	dir := t.TempDir()
 
@@ -68,9 +59,8 @@ func TestLoadRunState_PreservesTransitionTime(t *testing.T) {
 	}
 }
 
-// readEventsForTest читает events.jsonl через тот же путь replay, что
-// использует Store.Open, чтобы получить авторитетный Transition.Time для
-// сравнения. Использует новый Store.Open + History(), не дублируя парсинг.
+// readEventsForTest читает events.jsonl через тот же путь replay, что использует Store.Open, чтобы
+// получить авторитетный Transition.Time для сравнения.
 func readEventsForTest(t *testing.T, dir string) ([]Transition, error) {
 	t.Helper()
 	s, err := Open(dir, []string{"a"})

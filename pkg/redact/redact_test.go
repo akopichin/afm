@@ -151,12 +151,6 @@ func TestMarker_RejectsCandidateThatIsSubstringOfAnotherSecret(t *testing.T) {
 	}
 }
 
-// TestWriter_NoSynthesisAcrossFlushedBoundary воспроизводит утечку из
-// Finding #2: секрет "QR" редактируется на границе двух Write так, что
-// сброшенный в лог контекст "a" + маркер + "b" совпадает со значением
-// ДРУГОГО секрета "a[REDACTED]b". Правильный маркер должен исключать такое
-// совпадение — итоговый лог не должен содержать значение второго секрета
-// целиком.
 func TestWriter_NoSynthesisAcrossFlushedBoundary(t *testing.T) {
 	shortSecret := "QR"
 	overlapping := "a[REDACTED]b" // содержит дефолтный маркер как подстроку
@@ -165,9 +159,8 @@ func TestWriter_NoSynthesisAcrossFlushedBoundary(t *testing.T) {
 	if w.marker == DefaultMarker {
 		t.Fatalf("Writer must not pick a marker that is a substring of overlapping, got %q", w.marker)
 	}
-	// "aQ" flush-ит "a" (Q удержан как возможный префикс shortSecret), затем
-	// "Rb" достраивает "QR" -> marker, стыкуясь с уже сброшенным "a" и
-	// последующим "b" — именно граница, которую пропускала старая проверка.
+	// "aQ" flush-ит "a", затем "Rb" достраивает "QR" -> marker, стыкуясь с уже сброшенным "a" и последующим
+	// "b" — именно граница, которую пропускала старая проверка.
 	if _, err := w.Write([]byte("aQ")); err != nil {
 		t.Fatal(err)
 	}
@@ -186,9 +179,6 @@ func TestWriter_NoSynthesisAcrossFlushedBoundary(t *testing.T) {
 	}
 }
 
-// TestWriter_OverlappingSecrets — перекрывающиеся секреты ("ab" ⊂ "abc"):
-// длинный матчится первым (сортировка по убыванию длины), а fixed-point проход
-// добивает остатки — ни один секрет не утекает.
 func TestWriter_OverlappingSecrets(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewWriter(&buf, []string{"ab", "abc"})

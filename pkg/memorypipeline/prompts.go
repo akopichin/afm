@@ -6,9 +6,8 @@ import (
 	"strings"
 )
 
-// BuildPrompt оборачивает вкомпиленный шаблон (p.Reflect/Aggregate/
-// Prioritize/Update) конкретными абсолютными путями и инструкциями файлового
-// I/O.
+// BuildPrompt оборачивает вкомпиленный шаблон (p.Reflect/Aggregate/ Prioritize/Update) конкретными
+// абсолютными путями и инструкциями файлового I/O.
 func BuildPrompt(p Prompts, spec AgentSpec) string {
 	switch spec.Kind {
 	case KindReflect:

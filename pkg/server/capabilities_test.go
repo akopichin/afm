@@ -12,11 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// fakeFS is a workspace.FS test double: Roots() returns a configurable
-// number of entries. Read() serves from the files map keyed by path when
-// present (a "bin" key is used by tests to trigger workspace.ErrBinary);
-// every other method/miss is unused by these tests and returns
-// workspace.ErrNotFound / its zero value.
+// fakeFS is a workspace.FS test double: Roots returns a configurable number of entries.
 type fakeFS struct {
 	roots      int
 	files      map[string]workspace.File
@@ -70,9 +66,8 @@ func (f fakeFS) Close() error {
 	return nil
 }
 
-// newTestServer builds a minimal Server for capability tests, reusing the
-// same store/bus setup as setupTestServer but allowing the caller to
-// override Workspace (and other Config fields as needed later).
+// newTestServer builds a minimal Server for capability tests, reusing the same store/bus setup as
+// setupTestServer but allowing the caller to override Workspace.
 func newTestServer(t *testing.T, cfg Config) *Server {
 	t.Helper()
 	runDir := t.TempDir()

@@ -4,10 +4,7 @@ import type { AccountingState, CostSummary, CoverageIssue } from '../../types/co
 import { summarizeCoverageGroups } from './coverage-summary'
 
 export type CostPanelProps = {
-  // stages — полный список стадий флоу; панель сама отбирает только те, у
-  // которых есть cost (см. StageView.Cost/omitempty — стадия без записи об
-  // использовании ничего не потратила, показывать для неё пустую строку
-  // с прочерками незачем).
+  // stages — полный список стадий флоу; панель сама отбирает только те, у которых есть cost.
   stages: Stage[]
   runCost?: CostSummary
   runOverheadCost?: CostSummary
@@ -15,10 +12,7 @@ export type CostPanelProps = {
   accounting: AccountingState
 }
 
-// RowKey — дискриминированный ключ раскрываемой строки: стадия ИЛИ
-// run-overhead. Раздельные варианты (а не общий string id), потому что
-// стадия может быть буквально названа `__overhead__` — сравнение по голому
-// id столкнуло бы её состояние раскрытия с настоящей overhead-строкой.
+// RowKey — дискриминированный ключ раскрываемой строки: стадия ИЛИ run-overhead.
 type RowKey = { kind: 'stage'; id: string } | { kind: 'overhead' }
 
 function rowKeyToString(key: RowKey): string {
@@ -27,12 +21,8 @@ function rowKeyToString(key: RowKey): string {
 
 type CostRow = { key: RowKey; label: string; cost: CostSummary }
 
-// hasAccountingData — единственное место, где считается, «есть ли вообще
-// данные учёта затрат» (см. round-6 #2 спеки: has_data == len(Records())>0
-// на бэкенде). На старом бэкенде (accounting.supported===false) данных по
-// определению нет — сюда включаем и этот случай, чтобы порядок пустых
-// состояний ниже был единой веткой if/else, а не отдельным условием на
-// unsupported.
+// hasAccountingData — единственное место, где считается, «есть ли вообще данные учёта затрат» (см. round-6
+// #2 спеки: has_data == len>0 на бэкенде).
 function hasAccountingData(accounting: AccountingState): boolean {
   return accounting.supported && accounting.hasData
 }
@@ -45,11 +35,8 @@ function formatCacheHit(ratio: number | null): string {
   return ratio === null ? '—' : `${Math.round(ratio * 100)}%`
 }
 
-// CostPanel — постоянная вкладка «Cost»: таблица затрат по стадиям + run
-// overhead + Total, с раскрываемой по клику детализацией (token-mix бар +
-// сетка цифр) для каждой строки. Порядок пустых состояний и структура
-// колонок/детализации — см. task-11-brief.md / docs/superpowers/specs/
-// 2026-09-15-cost-ui-increment2-design.md.
+// CostPanel — постоянная вкладка «Cost»: таблица затрат по стадиям + run overhead + Total, с раскрываемой
+// по клику детализацией для каждой строки.
 export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, accounting }: CostPanelProps): ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const idBase = useId()
@@ -65,18 +52,13 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
 
   const hasData = hasAccountingData(accounting)
   const unavailable = accounting.supported && accounting.health === 'unavailable'
-  // showMoney — показывать ли колонку Cost. false (дефолт) прячет все денежные
-  // ($) значения, оставляя токены/кэш. Колонок тогда 4, а не 5 (важно для
-  // colSpan раскрываемой строки детализации).
+  // showMoney — показывать ли колонку Cost. false (дефолт) прячет все денежные ($) значения, оставляя
+  // токены/кэш. Колонок тогда 4, а не 5 (важно для colSpan раскрываемой строки детализации).
   const showMoney = accounting.supported && accounting.showMoney
   const detailColSpan = showMoney ? 5 : 4
 
-  // Порядок пустых состояний ТОЧНО в этом порядке (round-4 #5 спеки):
-  //   1. unavailable && !hasData → "Cost unavailable this run" (хранилище
-  //      реально сломано, и снапшота показать нечего).
-  //   2. !hasData (неподдержано, либо ok+нет данных) → "No usage data" —
-  //      нейтральный случай, не тревожный.
-  //   3. данные есть → таблица, плюс баннер неполноты, если unavailable.
+  // Порядок пустых состояний ТОЧНО в этом порядке: 1. unavailable && !hasData → "Cost unavailable this
+  // run" (хранилище реально сломано, и снапшота показать нечего).
   if (unavailable && !hasData) {
     return (
       <div className="cost-panel cost-panel-empty">
@@ -104,14 +86,8 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
   function renderRow(row: CostRow, index: number): ReactElement {
     const keyStr = rowKeyToString(row.key)
     const isExpanded = expanded.has(keyStr)
-    // Ids for aria-controls/aria-labelledby are derived from the row's
-    // POSITION, not from the raw stage id embedded in keyStr: stage ids
-    // legally contain spaces (flow validation only forbids `/`, `\`, `.`/`..`,
-    // NUL), and aria-controls/aria-labelledby are space-delimited IDREF-LIST
-    // attributes — an id with a space is parsed as two broken references by
-    // assistive tech. The `expanded` Set still keys off keyStr (discriminated,
-    // collision-free by construction); only the DOM id needed the index
-    // (same technique StagesList.tsx already uses for its cost figure ids).
+    // Derive ARIA IDs from row positions so identifiers remain valid IDREFs; expanded state still uses
+    // stable keyStr.
     const domSuffix = row.key.kind === 'overhead' ? 'overhead' : String(index)
     const regionId = `${idBase}-region-${domSuffix}`
     const labelId = `${idBase}-label-${domSuffix}`
@@ -191,10 +167,7 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
 }
 
 // TokenMixBar — сегментированная полоса токенов одной строки: доли
-// cacheRead/cacheWrite(total)/output/uncachedInput от totalTokens.
-// totalTokens===0 → нейтральный пустой трек БЕЗ процентов и без деления на
-// ноль (round-4 требование спеки) — вместо NaN%-сегментов рисуем один пустой
-// прямоугольник.
+// cacheRead/cacheWrite/output/uncachedInput от totalTokens.
 function TokenMixBar({ cost }: { cost: CostSummary }): ReactElement {
   const total = cost.totalTokens
   if (total <= 0) {
@@ -222,10 +195,8 @@ function TokenMixBar({ cost }: { cost: CostSummary }): ReactElement {
   )
 }
 
-// FigureGrid — детальная сетка цифр под баром: разбивка cache write по TTL
-// (бар их суммирует в один сегмент, здесь — раздельно), output, uncached
-// input, cache-hit ratio (null → «—», не «0%» — это разные факты, см.
-// types/cost.ts) и phases×count.
+// FigureGrid — детальная сетка цифр под баром: разбивка cache write по TTL, output, uncached input,
+// cache-hit ratio и phases×count.
 function FigureGrid({ cost }: { cost: CostSummary }): ReactElement {
   const phaseEntries = Object.entries(cost.phases)
   return (

@@ -1,19 +1,7 @@
 package orchestrator_test
 
-// Task 13: полный Phase-1 контур end-to-end — настоящие процессы sh,
-// настоящий dispatcher (не тестовый RunFunc-стаб), хук дописывает каждое
-// событие в файл через `cat >> capture`. Проверка идёт по фактическому
-// содержимому файла на диске, а не по in-memory рекордеру
-// (flowEventRecorder из lifecycle_flow_test.go) — этот тест страхует
-// именно ПРОДАКШЕН-путь (реальный Dispatcher.Start/Emit/Flush/Stop,
-// реальный runCommand), который run.go собирает из слоёв config+flow+stage
-// (см. cmd/afm/run.go, Task 13). Хелперы взяты из соседних интеграционных
-// тестов пакета (integration_test.go/integration_hooks_test.go): flow.Stage
-// строится Go-литералом, store через state.Open, orchestrator.New с
-// Hooks:disp, ожидание завершения через waitForStatus + ручной cancel/<-runDone
-// (тот же паттерн, что integration_hooks_test.go, а не отдельный внешний
-// хелпер newRunStoreForTest/newOrchestratorForFlow — в пакете он не
-// существовал, а заводить его специально под один тест избыточно).
+// Task 13: полный Phase-1 контур end-to-end — настоящие процессы sh, настоящий dispatcher, хук дописывает
+// каждое событие в файл через `cat >> capture`.
 
 import (
 	"context"

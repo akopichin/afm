@@ -24,10 +24,6 @@ const (
 )
 
 // handleWebSocket апгрейдит соединение и стримит UIBus-события клиенту.
-// readPump детектит «мёртвого» клиента по таймауту pong и рвёт соединение;
-// writePump — единственный писатель (gorilla требует одного писателя), шлёт
-// события, ping (control-фрейм → browser auto-pong) и app-level heartbeat
-// (text — JS-видимый сигнал для клиентского watchdog).
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -53,10 +49,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	<-writerDone
 }
 
-// readPump дренирует входящие фреймы. Нужны сами read-вызовы, чтобы gorilla
-// обрабатывала pong/close. PongHandler сбрасывает read-deadline; если pong
-// перестал приходить (клиент умер) — дедлайн срабатывает, ReadMessage вернёт
-// ошибку, readPump выйдет → соединение закроется.
+// readPump дренирует входящие фреймы. Нужны сами read-вызовы, чтобы gorilla обрабатывала pong/close.
 func (s *Server) readPump(conn *websocket.Conn) {
 	_ = conn.SetReadDeadline(time.Now().Add(s.wsPongWait))
 	conn.SetPongHandler(func(string) error {

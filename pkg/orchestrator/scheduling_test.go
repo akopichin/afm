@@ -13,8 +13,6 @@ import (
 )
 
 // An existing plan does not make a failed stage's dependencies optional.
-// Exercise both retry branches that reuse plan.md, including eager planning:
-// that flag permits early planning, but never early implementation.
 func TestRetryWithExistingPlanWaitsForDependencies(t *testing.T) {
 	for _, variant := range []string{"preplanned", "planned", "eager-planning"} {
 		for _, depStatus := range []state.StageStatus{state.StatusRunning, state.StatusFailed} {

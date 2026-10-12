@@ -8,23 +8,12 @@ export type SideAgentShortcutOptions = {
   onToggle: () => void
   // Скрыть Side agent (для Escape).
   onClose: () => void
-  // blocked — поверх воркспейса открыт ДРУГОЙ модальный ввод (Files / Review
-  // notes / pre-note). Тогда Cmd/Ctrl+` НЕ открывает Side agent — не крадём
-  // хоткей у чужого оверлея. Уже открытый Side agent всё равно закрывается (он
-  // и есть верхний слой).
+  // blocked — поверх воркспейса открыт ДРУГОЙ модальный ввод.
   blocked?: boolean
 }
 
-// useSideAgentShortcut — глобальный хоткей показа/скрытия Side agent.
-//
-// Toggle: Cmd+` (macOS; Shift-вариант, воспринимаемый как Cmd+~, тоже проходит)
-// или запасной Ctrl+`. Клавиша опознаётся по ФИЗИЧЕСКОМУ event.code
-// ('Backquote'), поэтому раскладка (RU/EN) не влияет. Повтор при удержании
-// (event.repeat), IME-composition и лишний Alt игнорируются.
-//
-// Escape скрывает ТОЛЬКО когда Side agent открыт, и потребляет событие
-// (preventDefault + stopPropagation), чтобы не закрыть нижележащую
-// максимизированную панель.
+// useSideAgentShortcut — глобальный хоткей показа/скрытия Side agent. Toggle: Cmd+` (macOS; Shift-вариант,
+// воспринимаемый как Cmd+~, тоже проходит) или запасной Ctrl+`.
 export function useSideAgentShortcut({ isOpen, onToggle, onClose, blocked = false }: SideAgentShortcutOptions): void {
   // Через ref, чтобы слушатель ставился один раз и не переподписывался на каждую
   // смену isOpen/blocked (иначе на каждый тик стейта — add/removeEventListener).

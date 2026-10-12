@@ -1,14 +1,7 @@
 import type { ReactElement } from 'react'
 
-// Плавающая круглая иконка-кнопка «вниз, к последнему» — единый вид для ленты,
-// лога и диалога (раньше в каждом месте была текстовая плашка «↓ Jump to latest»).
-// Класс .jump-latest (base/layout.css) делает её floating-иконкой; здесь — только
-// разметка + иконка + доступное имя. onClick прокручивает контейнер к низу.
-//
-// raised — приподнять кнопку выше низа контейнера: в диалоге снизу залипает
-// action-бар (SEND/CANCEL/«AGENT IS WAITING», .dialog-actions sticky bottom:0),
-// и обычный bottom:10px посадил бы иконку прямо на него. В ленте/логе такого
-// бара нет — там raised не нужен.
+// Плавающая круглая иконка-кнопка «вниз, к последнему» — единый вид для ленты, лога и диалога. onClick
+// прокручивает контейнер к низу.
 export function JumpToLatestButton({ onClick, raised = false }: { onClick: () => void; raised?: boolean }): ReactElement {
   return (
     <button

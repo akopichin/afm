@@ -14,9 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestIntegration_PreNoteReachesFreshPrompt проверяет, что заметка, прикреплённая
-// к стадии до старта (prenote.md), вклеивается в контекст агента на первом
-// (свежем) запуске — тот же механизм, что уже проверен для GlobalPrompt.
 func TestIntegration_PreNoteReachesFreshPrompt(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "s1", Name: "S1", Description: "do thing", Agents: []flow.AgentType{flow.AgentPlanning}},

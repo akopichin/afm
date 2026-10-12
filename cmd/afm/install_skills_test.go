@@ -83,11 +83,6 @@ func TestResolveSkillsDirDefault(t *testing.T) {
 	}
 }
 
-// TestNewInstallSkillsCmdWiring защищает от lint-ругани unused/staticcheck:
-// до Task 3 команда не регистрируется в root, поэтому конструктор
-// newInstallSkillsCmd обязан использоваться хотя бы в тесте. Заодно
-// проверяем, что флаги --skills-dir/--force зарегистрированы, а RunE
-// действительно устанавливает скиллы при вызове Execute.
 func TestNewInstallSkillsCmdWiring(t *testing.T) {
 	cmd := newInstallSkillsCmd()
 	if cmd.Use != "install-skills" {

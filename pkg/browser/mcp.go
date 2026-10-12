@@ -9,24 +9,16 @@ import (
 	"path/filepath"
 )
 
-// mcpExecutable is the pinned Chrome DevTools MCP binary name, resolved on PATH in
-// both modes (installed in the image for Docker, already-installed on the host for
-// native). Never npx, never an install.
+// mcpExecutable is the pinned Chrome DevTools MCP binary name, resolved on PATH in both modes. Never npx,
+// never an install.
 const mcpExecutable = "chrome-devtools-mcp"
 
-// PinnedChromeDevtoolsMCPVersion is the exact Chrome DevTools MCP version afm
-// supports. It is pinned in Dockerfile.runtime (ARG CHROME_DEVTOOLS_MCP_VERSION)
-// and required — same string — for the already-installed native executable.
-// Never @latest, never a runtime install.
+// PinnedChromeDevtoolsMCPVersion is the exact Chrome DevTools MCP version afm supports. Never @latest,
+// never a runtime install.
 const PinnedChromeDevtoolsMCPVersion = "1.10.1"
 
-// InvocationDescriptor is the per-invocation 0600 file the executor writes and
-// `afm browser mcp --descriptor <path>` reads. It carries the secret token, so it
-// is never placed in argv or env — only its path is non-secret. The JSON uses
-// camelCase to mirror the Chrome-DevTools-MCP config shape it feeds into
-// (mcpPrivateConfig), which mandates camelCase keys; this is afm-internal (written
-// and read only by afm), so the divergence from the snake_case Descriptor is
-// deliberate, not an inconsistency.
+// InvocationDescriptor is the per-invocation 0600 file the executor writes and `afm browser mcp
+// --descriptor <path>` reads.
 type InvocationDescriptor struct {
 	WSEndpoint string   `json:"wsEndpoint"` // full per-stage ws:// URL (Descriptor.StageEndpoint)
 	Token      string   `json:"token"`
@@ -34,14 +26,7 @@ type InvocationDescriptor struct {
 	Roots      []string `json:"roots"`
 }
 
-// mcpPrivateConfig is the Chrome-DevTools-MCP --config file. wsHeaders is a
-// JSON-encoded STRING (pinned 1.10.1 declares it as a string it JSON.parses), not
-// an object — a bare object makes config parsing fail before the MCP starts.
-// filesystemRoot is an ARRAY: pinned 1.10.1 declares it repeatable ("may be
-// specified more than once") and maps over the list, so afm passes EVERY requested
-// root (project root + the stage artifacts dir). In the common layout the project
-// root already contains the stage dir; in the divergent Docker layout (root_dir and
-// .afm on different mounts) carrying both keeps the stage dir writable by the MCP.
+// mcpPrivateConfig is the Chrome-DevTools-MCP --config file.
 type mcpPrivateConfig struct {
 	WSEndpoint     string   `json:"wsEndpoint"`
 	WSHeaders      string   `json:"wsHeaders"`
@@ -70,11 +55,7 @@ func ReadInvocationDescriptor(path string) (*InvocationDescriptor, error) {
 	return &d, nil
 }
 
-// ResolveMCP resolves the pinned Chrome DevTools MCP executable. Both modes look
-// it up on PATH; a missing executable is a clear error naming the required pinned
-// version (the Task 1 preflight blocks this earlier — this is defense in depth).
-// mode is currently unused (resolution is identical in both) but kept so the
-// resolver matches the mcpSeams.resolve seam signature and can diverge later.
+// ResolveMCP resolves the pinned Chrome DevTools MCP executable.
 func ResolveMCP(mode BrowserMode) (cmd string, args []string, err error) {
 	_ = mode
 	path, lerr := exec.LookPath(mcpExecutable)

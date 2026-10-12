@@ -1,10 +1,6 @@
 package orchestrator
 
-// Task 11: не-FSM lifecycle-события stage_question_asked/answered при
-// авто-ответе неинтерактивной стадии (pkg/orchestrator/dialog_poller.go).
-// Интерактивный путь (EvAskUser/EvUserAnswered) уже покрыт FSM-мапингом
-// Task 8 (fsmLifecycleEvents, lifecycle_emit.go) — здесь проверяется только
-// не-FSM ветка авто-ответа и её гейт против дублей для запаркованных стадий.
+// Task 11: не-FSM lifecycle-события stage_question_asked/answered при авто-ответе неинтерактивной стадии.
 
 import (
 	"path/filepath"
@@ -17,10 +13,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// drainCaptured non-blockingly drains every currently-buffered Payload from
-// capture.events into an ordered slice of event types (delivery order == the
-// order the dispatcher's per-hook queue processed them, which for a single
-// "all events" hook is the emission order — Task 8/9).
+// drainCaptured non-blockingly drains every currently-buffered Payload from capture.events into an ordered
+// slice of event types.
 func drainCaptured(capture *captureDispatcher) []lifecyclehooks.EventType {
 	var out []lifecyclehooks.EventType
 	for {
@@ -33,10 +27,7 @@ func drainCaptured(capture *captureDispatcher) []lifecyclehooks.EventType {
 	}
 }
 
-// firstAndLastIndex returns the index of the FIRST occurrence of before and
-// the LAST occurrence of after in evs — the same "before strictly earlier
-// than after" idiom used by assertOrder in lifecycle_flow_test.go, reimplemented
-// here because this file lives in the internal orchestrator package.
+// firstAndLastIndex locates the first before and last after event to check ordering.
 func firstAndLastIndex(evs []lifecyclehooks.EventType, before, after lifecyclehooks.EventType) (int, int) {
 	bi, ai := -1, -1
 	for i, e := range evs {
@@ -50,10 +41,6 @@ func firstAndLastIndex(evs []lifecyclehooks.EventType, before, after lifecycleho
 	return bi, ai
 }
 
-// TestPollQuestions_AutoAnswerEmitsLifecycleEvents покрывает основной случай:
-// не-interactive стадия жива (Running, агент опрашивает answer.json) — её
-// авто-ответ должен эмитить stage_question_asked строго ДО
-// stage_question_answered, с Reason = текст вопроса / текст выбранного ответа.
 func TestPollQuestions_AutoAnswerEmitsLifecycleEvents(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
@@ -126,13 +113,6 @@ drained:
 	}
 }
 
-// TestPollQuestions_AutoAnswerParkedStageSkipsLifecycleEvents — гейт против
-// дублей: если стадия уже запаркована в awaiting_user_input (агент задал
-// вопрос и вышел раньше), stage_question_asked уже случился через EvAskUser,
-// а stage_question_answered придёт через EvUserAnswered (Task 8's
-// fsmLifecycleEvents), когда resumeAfterAnswer/onUserAnswered прогонит FSM.
-// Не-FSM ветка авто-ответа здесь НЕ должна эмитить свою пару — иначе оба
-// события задваиваются.
 func TestPollQuestions_AutoAnswerParkedStageSkipsLifecycleEvents(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Autonomous", Agents: []flow.AgentType{flow.AgentAuto}}
@@ -167,11 +147,6 @@ func TestPollQuestions_AutoAnswerParkedStageSkipsLifecycleEvents(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_AutoAnswerDistinctQuestionsGetDistinctEventIDs — finding
-// #3 финального ревью: два РАЗНЫХ авто-ответа (q1, затем q2) в одной
-// стадии/фазе не должны схлопываться в один и тот же event_id
-// (<run>:<stage>:stage_question_answered без Key) — идемпотентный по
-// event_id получатель хука иначе потерял бы второе событие.
 func TestPollQuestions_AutoAnswerDistinctQuestionsGetDistinctEventIDs(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
@@ -222,9 +197,6 @@ drained:
 	}
 }
 
-// TestPollQuestions_AutoAnswerMalformedFallbackEmitsLifecycleEvents — та же
-// пара, но по симметричному пути autoAnswerMalformed (терминальный fallback
-// после исчерпания попыток fix-агента для non-interactive стадии).
 func TestPollQuestions_AutoAnswerMalformedFallbackEmitsLifecycleEvents(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, _ := setupMalformedTestOrchNI(t, broken)

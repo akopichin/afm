@@ -12,14 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/progress"
 )
 
-// MemoryLockPath returns the fixed path of the interprocess lock file that
-// guards a memory directory. The path is derived from the memory dir's
-// canonical absolute location (symlinks of the deepest EXISTING ancestor
-// resolved, review #14 — the memory dir itself may not exist yet), so two
-// different-looking paths that alias the same real directory (e.g. via a
-// symlink) hash to the same lock file. The lock lives under
-// ~/.afm/locks, not inside memoryDir itself — the memory dir may not exist
-// yet, and the lock must not become part of the content it's protecting.
+// MemoryLockPath returns the fixed path of the interprocess lock file that guards a memory directory.
 func MemoryLockPath(memoryDir string) (string, error) {
 	abs, err := filepath.Abs(memoryDir)
 	if err != nil {
@@ -47,14 +40,8 @@ type MemoryLock struct {
 	l *progress.Lock
 }
 
-// AcquireMemoryLock blocks (polling every 100ms) until it acquires the
-// exclusive lock for memoryDir, ctx is cancelled, or a genuine (non-busy)
-// I/O error occurs. Contention (progress.ErrLockBusy) is retried; any other
-// error from TryLock propagates immediately — it is not lock contention and
-// retrying it would just spin (review #8).
-//
-// The lock is acquired by the CALLER (CLI / orchestrator), not inside
-// Finalize — Finalize itself assumes the memory dir is already guarded.
+// AcquireMemoryLock blocks until it acquires the exclusive lock for memoryDir, ctx is cancelled, or a
+// genuine I/O error occurs.
 func AcquireMemoryLock(ctx context.Context, memoryDir string) (*MemoryLock, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

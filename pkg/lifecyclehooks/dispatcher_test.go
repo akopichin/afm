@@ -115,11 +115,6 @@ func TestDispatcher_NonFSMStageEventID(t *testing.T) {
 	}
 }
 
-// TestDispatcher_KeyedNonFSMStageEventID проверяет, что два разных
-// не-FSM stage-события с разным Key (например, авто-ответы на разные
-// вопросы q1/q2 одной стадии/фазы) получают РАЗНЫЕ event_id — иначе
-// идемпотентный по event_id получатель потерял бы второе событие
-// (finding #3 финального ревью lifecycle-hooks).
 func TestDispatcher_KeyedNonFSMStageEventID(t *testing.T) {
 	d, rec := newRecordingDispatcher(t, []RegisteredHook{{Hook: Hook{ID: "g", Events: EventSelector{Events: []EventType{EventStageQuestionAnswered}}, Command: "true"}}})
 	d.Start()

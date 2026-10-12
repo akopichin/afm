@@ -13,10 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// parseGeneratedFlow marshals f, writes it to a temp file, and parses it
-// back through flow.ParseFile — failing the test if the generated
-// flow.yaml doesn't pass real schema validation. Shared by later tasks'
-// tests in this package.
+// parseGeneratedFlow marshals f, writes it to a temp file, and parses it back through flow.ParseFile —
+// failing the test if the generated flow.yaml doesn't pass real schema validation.
 func parseGeneratedFlow(t *testing.T, f *flow.Flow) *flow.Flow {
 	t.Helper()
 	data, err := yaml.Marshal(f)
@@ -50,13 +48,11 @@ func TestBuildSingleChangeStages_ProducesValidFlow(t *testing.T) {
 }
 
 func TestBuildVerifyLoopStages_CheckDefaultsToScriptAndIsValid(t *testing.T) {
-	// build: id/name defaults, mode default (standard), description,
-	// plan mode default (agent), phases default (implementation), forced
-	// verify command, advanced -> no.
+	// build: id/name defaults, mode default (standard), description, plan mode default (agent), phases
+	// default (implementation), forced verify command, advanced -> no.
 	buildLines := []string{"", "", "", "implement the feature", "", "", "go test ./...", "n"}
-	// check: id/name defaults, mode default (script, per DefaultMode) —
-	// note the mode prompt itself still reads one line even though the
-	// answer is empty (accepting the default), script command, advanced -> no.
+	// check: id/name defaults, mode default — note the mode prompt itself still reads one line even though
+	// the answer is empty, script command, advanced -> no.
 	checkLines := []string{"", "", "", "go vet ./...", "n"}
 	full := strings.Join(buildLines, "\n") + "\n" + strings.Join(checkLines, "\n") + "\n"
 	scanner := bufio.NewScanner(strings.NewReader(full))

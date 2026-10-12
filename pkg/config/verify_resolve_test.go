@@ -73,11 +73,6 @@ func TestSupportedVerifyCommand(t *testing.T) {
 	}
 }
 
-// TestSupportedVerifyCommand_RecipeOverridesBareCodexName — регрессия на
-// находку код-ревью: голая проверка resolved == "codex-as-claude" не должна
-// затмевать собой recipe, если кто-то переопределил ключ "codex-as-claude" в
-// docker.agents ДРУГИМ типом (напр. openai). Recipe для резолвнутого имени
-// обязан быть решающим словом ПЕРЕД эвристикой "голое имя".
 func TestSupportedVerifyCommand_RecipeOverridesBareCodexName(t *testing.T) {
 	cfg := config.Config{
 		Docker: config.DockerConfig{
@@ -195,9 +190,7 @@ func TestValidateVerifySpecs(t *testing.T) {
 	})
 }
 
-// agentVerify строит однодшаговый агентский VerifySpec напрямую через YAML
-// (fromScalar/Kind собираются decoder'ом flow.VerifySpec, а не руками — в
-// pkg/config нет доступа к непубличным деталям построения VerifyStep).
+// agentVerify строит однодшаговый агентский VerifySpec напрямую через YAML.
 func agentVerify(t *testing.T, command, prompt string) flow.VerifySpec {
 	t.Helper()
 	src := "verify:\n  command: " + command + "\n"

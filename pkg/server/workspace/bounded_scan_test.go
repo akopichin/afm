@@ -28,12 +28,6 @@ func mkTempDirWithFiles(t *testing.T, n int) *os.File {
 	return f
 }
 
-// TestReadDirBounded exercises the finding-9 bounded scan directly against a
-// real directory (portable — os.File.ReadDir, no openat2 involved), so it
-// runs on darwin too. It uses a small injected cap rather than the real
-// maxDirEntries (50000) — building a directory that size in a unit test would
-// be slow and wasteful; the cap value itself doesn't change readDirBounded's
-// logic.
 func TestReadDirBounded(t *testing.T) {
 	t.Run("under cap reads everything, not truncated", func(t *testing.T) {
 		f := mkTempDirWithFiles(t, 3)
@@ -78,9 +72,8 @@ func TestReadDirBounded(t *testing.T) {
 	})
 
 	t.Run("cancelled context stops before reading", func(t *testing.T) {
-		// A context cancelled before the first batch must abort with the ctx
-		// error rather than draining the directory — this is what lets a
-		// superseded search stop promptly on a huge root.
+		// A context cancelled before the first batch must abort with the ctx error rather than draining the
+		// directory — this is what lets a superseded search stop promptly on a huge root.
 		f := mkTempDirWithFiles(t, 10)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

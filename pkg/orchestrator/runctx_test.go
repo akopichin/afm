@@ -14,10 +14,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// ctxCapturingRunner is a fake executor.Runner that records the ctx passed to
-// RunAgent and signals gotCtx. It also drops a .done file next to logFile so
-// runWithRetry's completion check passes on the first attempt (no retry loop,
-// no leaked goroutine trying to resend on the buffered channel).
+// ctxCapturingRunner is a fake executor.Runner that records the ctx passed to RunAgent and signals gotCtx.
 type ctxCapturingRunner struct {
 	gotCtx chan context.Context
 }
@@ -36,18 +33,6 @@ func (r *ctxCapturingRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, 
 	return nil, nil
 }
 
-// TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx is the regression lock-in
-// for the CRITICAL bug: HTTP-initiated Approve must spawn the implementation
-// agent under the long-lived orchestrator run ctx, NOT the HTTP request ctx.
-// net/http cancels the request ctx as soon as the handler returns its
-// response — if spawnAgent inherited that ctx, exec.CommandContext would kill
-// the just-started agent process immediately (before it can do any work).
-//
-// Simulates Run() having already set runCtx (as it does right after
-// context.WithCancel in Run), then calls Approve with a separate, cancelable
-// request ctx and cancels it right after Approve returns — mirroring a
-// handler returning its HTTP response. The fake runner's RunAgent must still
-// observe a live (non-Done) ctx.
 func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(dir, []string{"a"})

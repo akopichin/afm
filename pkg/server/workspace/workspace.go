@@ -1,22 +1,14 @@
 package workspace
 
-// fsImpl is the concrete FS backend. It keeps one open directory handle per
-// root (byID) and preserves the declared order (order) for stable Roots()
-// output. When the platform or kernel lacks openat2, byID is simply empty and
-// every lookup fails cleanly — the browser capability is off, nothing panics.
+// fsImpl is the concrete FS backend. It keeps one open directory handle per root (byID) and preserves the
+// declared order (order) for stable Roots() output.
 type fsImpl struct {
 	byID  map[string]*rootHandle
 	order []string
 }
 
-// New opens a secure filesystem backend over the given roots.
-//
-// On Linux with openat2 (kernel ≥ 5.6) it opens a directory fd per root and
-// records it. A root whose path can't be opened (missing mount) is skipped. If
-// openat2 itself is unavailable — ENOSYS on an old kernel, or any non-Linux OS
-// where the probe returns "unsupported" — New degrades gracefully: it returns a
-// backend with zero roots and no error, so the rest of the server runs normally
-// with the file browser simply disabled.
+// New opens a secure filesystem backend over the given roots. On Linux with openat2 (kernel ≥ 5.6) it
+// opens a directory fd per root and records it.
 func New(roots []Root) (FS, error) {
 	fs := &fsImpl{byID: map[string]*rootHandle{}}
 	for _, r := range roots {
@@ -35,10 +27,8 @@ func New(roots []Root) (FS, error) {
 	return fs, nil
 }
 
-// resolve is the single lookup+validation gate every read path shares (List,
-// Read, Reference, Diff). It maps a rootID to its handle and validates relPath,
-// returning the handle and the cleaned relative path. Tasks 7-9 build on this
-// and must not re-implement lookup or validation.
+// resolve is the single lookup+validation gate every read path shares. Tasks 7-9 build on this and must
+// not re-implement lookup or validation.
 func (fs *fsImpl) resolve(rootID, relPath string) (*rootHandle, string, error) {
 	h, ok := fs.byID[rootID]
 	if !ok {

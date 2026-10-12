@@ -1,14 +1,5 @@
-/* pkg/web/dashboard/public/skins/base/agent-note-modal.css
-   Модалка «Добавить поправку агенту» (agent_suggest, Task 8): кебаб-меню в
-   StagesList + центрированная модалка поверх всего (включая maximize-overlay,
-   z-index: 1000 в layout.css). Только токены переменных из skins/<name>/index.css —
-   без хардкода цвета, чтобы работать во всех скинах и обеих темах.
-
-   Затемняющий scrim и тень кебаб-меню используют общий --overlay-scrim-rgb
-   (RGB-триплет, определён в index.css каждого скина) вместо хардкода
-   rgba(0, 0, 0, X) — см. rgba(var(--overlay-scrim-rgb), <alpha>) ниже. Триплет,
-   а не готовый rgba(), чтобы сохранить обе исходные альфы (0.5 у оверлея,
-   0.35 у тени) одним общим токеном, не меняя внешний вид. */
+/* pkg/web/dashboard/public/skins/base/agent-note-modal.css Модалка «Добавить поправку агенту»: кебаб-меню
+   в StagesList + центрированная модалка поверх всего. */
 
 /* === Кебаб-кнопка на строке стадии === */
 .stage-kebab-wrap {
@@ -37,9 +28,8 @@
 }
 .stage-kebab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
-/* position: fixed + top/left вычисляются в JS (StagesList.tsx, от getBoundingClientRect
-   кнопки) и рендерятся порталом в document.body — .stages-scroll скроллится
-   (overflow-y: auto) и обрезал бы абсолютно спозиционированное меню. */
+/* position: fixed + top/left вычисляются в JS и рендерятся порталом в document.body — .stages-scroll
+   скроллится и обрезал бы абсолютно спозиционированное меню. */
 .stage-kebab-menu {
   list-style: none;
   min-width: 200px;
@@ -101,9 +91,8 @@
   width: 100%;
 }
 
-/* Attention shortcut row inside a modal (Finding #5, round 3): a glowing pill
-   that closes the modal and jumps to the waiting action, so a pending
-   question/approval is never lost behind AgentNote/ReviewNotes. Shared by both. */
+/* Attention shortcut row inside a modal: a glowing pill that closes the modal and jumps to the waiting
+   action, so a pending question/approval is never lost behind AgentNote/ReviewNotes. */
 .modal-attention-row {
   display: flex;
   justify-content: flex-end;

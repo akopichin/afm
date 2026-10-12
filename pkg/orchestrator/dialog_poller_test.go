@@ -30,9 +30,6 @@ func writeQuestionFile(t *testing.T, stageDir, phase, id string, options []strin
 	}
 }
 
-// TestPollQuestions_NonInteractiveStageAutoAnswers покрывает ядро фичи:
-// non-interactive стадия с открытым вопросом получает ответ от afm, не
-// переходя в awaiting_user_input.
 func TestPollQuestions_NonInteractiveStageAutoAnswers(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
@@ -91,9 +88,6 @@ func TestPollQuestions_NonInteractiveStageAutoAnswers(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_AutoStageAutoAnswers покрывает "agents: [auto]" стадию —
-// та же non-interactive обработка (Interactive: false у auto-стадий и так
-// по умолчанию, специальной проверки на IsAuto() коду не требуется).
 func TestPollQuestions_AutoStageAutoAnswers(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Autonomous", Agents: []flow.AgentType{flow.AgentAuto}}
@@ -121,15 +115,6 @@ func TestPollQuestions_AutoStageAutoAnswers(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_ParkedNonInteractiveStageIsUnparked закрывает постоянный
-// висяк: non-interactive/autonomous стадия, чей агент задал вопрос и завершился,
-// не дописав артефакт, паркуется в awaiting_user_input (retry.go при err==nil /
-// onAgentCompleted). Авто-ответ пишет answer.json, но раньше НЕ выводил стадию из
-// awaiting_user_input и не перезапускал вышедшего агента — единственный драйвер
-// выхода из этого статуса (EvUserAnswered) публиковался лишь human-путём
-// (NotifyAnswer через HTTP). Итог: стадия висела навсегда, даже рестарт afm не
-// спасал. Теперь авто-ответ симметричен human-пути: публикует EventUserAnswered
-// в critical-шину, откуда onUserAnswered перезапускает вышедшего агента.
 func TestPollQuestions_ParkedNonInteractiveStageIsUnparked(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Autonomous", Agents: []flow.AgentType{flow.AgentAuto}}
@@ -157,9 +142,8 @@ func TestPollQuestions_ParkedNonInteractiveStageIsUnparked(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stageDir, "autonomous_execution.q1.answer.json")); err != nil {
 		t.Fatalf("answer.json not written: %v", err)
 	}
-	// Ключевой инвариант фикса: авто-ответ опубликовал EventUserAnswered в
-	// critical-шину — сигнал, по которому onUserAnswered перезапускает вышедшего
-	// агента. Без него стадия зависла бы в awaiting_user_input навсегда.
+	// Ключевой инвариант фикса: авто-ответ опубликовал EventUserAnswered в critical-шину — сигнал, по
+	// которому onUserAnswered перезапускает вышедшего агента.
 	select {
 	case ev := <-o.critical.Recv():
 		if ev.Type != bus.EventUserAnswered {
@@ -173,12 +157,6 @@ func TestPollQuestions_ParkedNonInteractiveStageIsUnparked(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_FailedAutoAnswerWriteIsRetried закрывает баг порядка
-// "пометил-до-записи": раньше processed[key] ставился ДО WriteAnswer, поэтому
-// упавшая запись answer.json (ошибка диска / O_EXCL-гонка) навсегда оставляла
-// ключ помеченным без файла на диске — авто-ответ никогда не переретраивался, и
-// bash-loop агента ждал answer.json до idle-таймаута исполнителя (~30 мин) →
-// падение. Теперь ключ помечается только после успешной записи.
 func TestPollQuestions_FailedAutoAnswerWriteIsRetried(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("read-only каталог не ограничивает root — проверка бессмысленна")
@@ -242,15 +220,6 @@ type noticeEnvelope struct {
 	Data    noticeEnvelopeData `json:"data"`
 }
 
-// TestPollQuestions_AutoAnswerPersistsToNotices закрывает баг, найденный
-// вручную в браузере: EventAutoAnswered публикуется ТОЛЬКО живьём в UI-шину,
-// поэтому клиент, подключившийся ПОСЛЕ авто-ответа, никогда не видит эту
-// строку в ленте событий (durable events.jsonl эта фича сознательно не
-// трогает — FSM-переход отсутствует). Как и EventAgentCompleted/
-// EventContextWarning/EventScriptOutput (см. agents.go/retry.go/hooks.go),
-// авто-ответ должен ТАКЖЕ дублироваться в notices.jsonl через
-// stagefiles.AppendNotice — /api/events (reconstructNotices) реплеит его
-// оттуда для клиентов, подключившихся позже.
 func TestPollQuestions_AutoAnswerPersistsToNotices(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
@@ -344,13 +313,6 @@ func drainAllEvents(events <-chan bus.Event) []bus.Event {
 	}
 }
 
-// TestPollQuestions_NonInteractive_EmitsQuestionThenNavigableAutoAnswer is the
-// core producer-side guarantee of the auto-answer feed feature: when a
-// non-interactive stage auto-answers, the feed must show BOTH the question and
-// the auto-answer, both navigable to the full dialog, in the right order. On
-// the emission side this means: publish dialog_question FIRST, then a navigable
-// auto_answered (dialog:true, non-empty question_title) — live to the UI bus AND
-// durably to notices.jsonl so it survives reload/restart.
 func TestPollQuestions_NonInteractive_EmitsQuestionThenNavigableAutoAnswer(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}
@@ -451,10 +413,6 @@ func TestPollQuestions_NonInteractive_EmitsQuestionThenNavigableAutoAnswer(t *te
 	}
 }
 
-// TestPollQuestions_MalformedRepairProgress_NotNavigable guards the invariant
-// that the ⚙️ "fixing question.json" progress notice — which is also an
-// EventAutoAnswered — must NOT be navigable: it carries no dialog:true, so the
-// dashboard never tries to open a dialog for a repair-progress line.
 func TestPollQuestions_MalformedRepairProgress_NotNavigable(t *testing.T) {
 	o, _, _ := setupMalformedTestOrchNI(t, `not json at all {{{`)
 	injectFixStub(t, o, "") // stays broken → a fix agent is spawned + progress notice emitted
@@ -481,11 +439,6 @@ func TestPollQuestions_MalformedRepairProgress_NotNavigable(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_MalformedNonInteractive_TerminalFallbackNavigable covers the
-// non-interactive terminal fallback (autoAnswerMalformed): once no fix agent can
-// repair the file, afm still records a navigable dialog row — a synthetic
-// question plus its auto-answer — so the feed shows what happened, survives
-// reload, and points at the dialog.
 func TestPollQuestions_MalformedNonInteractive_TerminalFallbackNavigable(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrchNI(t, `not json at all {{{`)
 	injectFixStub(t, o, "") // never repairs → terminal fallback
@@ -541,13 +494,6 @@ func TestPollQuestions_MalformedNonInteractive_TerminalFallbackNavigable(t *test
 	}
 }
 
-// TestPollQuestions_MalformedParkedNonInteractiveStageIsUnparked закрывает баг,
-// найденный на ревью: терминальный fallback autoAnswerMalformed писал answer.json,
-// но (в отличие от обычной non-interactive ветки) НЕ вызывал resumeAfterAnswer.
-// Если восстановленная non-interactive стадия уже запаркована в
-// awaiting_user_input (агент задал вопрос и вышел), а вопрос неисправим, стадия
-// висла бы навсегда. Инвариант: fallback публикует EventUserAnswered в critical-
-// шину — сигнал, по которому onUserAnswered перезапускает вышедшего агента.
 func TestPollQuestions_MalformedParkedNonInteractiveStageIsUnparked(t *testing.T) {
 	o, store, _ := setupMalformedTestOrchNI(t, `not json at all {{{`)
 	// Агент задал (битый) вопрос и вышел → стадия запаркована.
@@ -575,9 +521,6 @@ func TestPollQuestions_MalformedParkedNonInteractiveStageIsUnparked(t *testing.T
 	}
 }
 
-// TestPollQuestions_InteractiveStageStillAsksUser — регрессионная гарантия:
-// interactive-стадия НЕ получает авто-ответ, поведение (EvAskUser →
-// awaiting_user_input) не меняется этой фичей.
 func TestPollQuestions_InteractiveStageStillAsksUser(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
@@ -605,12 +548,6 @@ func TestPollQuestions_InteractiveStageStillAsksUser(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce покрывает
-// базовый случай T2: когда interactive-вопрос впервые всплывает пользователю,
-// поллер публикует РОВНО ОДНО событие dialog_question — живьём в UI-шину и
-// продублированное в notices.jsonl (тот же паттерн, что и у auto_answered),
-// с одной и той же полезной нагрузкой {phase,id,title}, где title —
-// mcp.DialogSnippet текста вопроса.
 func TestPollQuestions_InteractiveQuestion_EmitsDialogQuestionOnce(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
@@ -715,13 +652,6 @@ func TestPollQuestions_InteractiveBatch_SurfacesOldestOnly(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_Regression_BatchOfEight_NoDeadlock reproduces a real
-// production hang (GogaRefinement...discover, the python-qarium incident): an
-// interactive agents:[auto] stage wrote q1..q8.question.json ALL AT ONCE and
-// its bash loop polled only q1; the user answered q8 first — q1 never got
-// answered and the stage hung in "running" forever. The fix makes the poller
-// surface only the oldest unanswered question regardless of batch size; this
-// test locks that in for a full batch of 8, not just 2.
 func TestPollQuestions_Regression_BatchOfEight_NoDeadlock(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
@@ -768,16 +698,6 @@ func TestPollQuestions_Regression_BatchOfEight_NoDeadlock(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately is
-// the regression guard for F1 (task-fixB): before this fix,
-// giveUpOnMalformedQuestion persisted a valid stub and published EventAskUser
-// ITSELF, bypassing the normal interactive branch of pollQuestions (the one
-// that calls publishDialogQuestion) entirely — no dialog_question fired on the
-// exhaustion tick itself, only on the NEXT ~1s poll once the stub flowed
-// through the normal branch. If the user answered/cancelled within that
-// window, the feed never showed the question at all. Now
-// giveUpOnMalformedQuestion emits dialog_question itself, on the very tick it
-// gives up — no second poll required.
 func TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, _ := setupMalformedTestOrch(t, broken)
@@ -788,9 +708,8 @@ func TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately(t 
 	subID, events := o.ui.Subscribe(256)
 	defer o.ui.Unsubscribe(subID)
 
-	// grace tick + maxJSONFixAttempts spawn/complete cycles + the exhaustion
-	// tick itself — exactly enough to reach give-up, no extra re-poll ticks
-	// (unlike the sibling test below, which re-polls further on purpose).
+	// grace tick + maxJSONFixAttempts spawn/complete cycles + the exhaustion tick itself — exactly enough to
+	// reach give-up, no extra re-poll ticks.
 	for i := 0; i < maxJSONFixAttempts+2; i++ {
 		o.pollQuestions(processed, malformed)
 	}
@@ -810,17 +729,6 @@ func TestPollQuestions_MalformedQuestion_GiveUpEmitsDialogQuestionImmediately(t 
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_GiveUpThenRepollEmitIdenticalDialogQuestion
-// covers what happens across MULTIPLE polls after giving up: the exhaustion
-// tick emits dialog_question itself (F1, see the sibling test above), and the
-// NEXT tick's normal branch — which sees the now-valid stub as an ordinary new
-// question — emits it AGAIN. Emitting twice is deliberately harmless: the fix
-// does not try to keep "exactly one notice" by gating here; instead
-// reconstructNotices (pkg/server/events_handler.go) dedupes dialog_question
-// notices by content (phase+id+title) on the read side, so both emissions
-// collapse to a single feed row. This test asserts the emission-side
-// invariant that makes that dedup safe: every dialog_question fired for this
-// question, however many, carries IDENTICAL content.
 func TestPollQuestions_MalformedQuestion_GiveUpThenRepollEmitIdenticalDialogQuestion(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, _ := setupMalformedTestOrch(t, broken)
@@ -916,17 +824,6 @@ func readDialogQuestionNotices(t *testing.T, runDir string) []dialogQuestionNoti
 	return out
 }
 
-// TestPollQuestions_ReusedIDAfterAnswerAsksAgain is a regression test for a
-// bug found in a real production log: the prompt tells agents "never reuse an
-// ID within a phase", but a real agent (goga-brainstorm's revision loop) did
-// reuse the same id ("q2") for a second, distinct question after the first
-// "q2" was answered and the agent resumed. pollQuestions's `processed` map is
-// keyed only by stageID|phase|id and, once marked true, was NEVER cleared —
-// so the second, genuinely-unanswered "q2" was silently invisible to the
-// poller forever: no EvAskUser, no dialog.jsonl entry, stage stuck at
-// "running" with a real unanswered question.json sitting on disk. No restart
-// of the browser fixes this (the bug is server-side, in-memory); only a full
-// restart of the afm process happens to clear the map and rediscover it.
 func TestPollQuestions_ReusedIDAfterAnswerAsksAgain(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
@@ -976,14 +873,6 @@ func TestPollQuestions_ReusedIDAfterAnswerAsksAgain(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_ReusedID_ReopensDialogHistory is the dialog-history half of
-// finding #2 (the test above only checks the FSM re-fires). When an id is
-// reused after being answered, the poller must APPEND the new question to
-// <phase>.dialog.jsonl even though an (answered) entry already exists — so
-// ReadDialog re-opens the entry as unanswered and the UI renders it with an
-// input box instead of the stale answered question. Uses the real answer path
-// (mcp.WriteAnswer → dialog.jsonl answer line), which is how an interactive
-// answer actually reaches history, unlike the FSM-only test above.
 func TestPollQuestions_ReusedID_ReopensDialogHistory(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Interactive", Agents: []flow.AgentType{flow.AgentImplementation}, Interactive: true}
@@ -1079,10 +968,8 @@ func setupMalformedTestOrch(t *testing.T, broken string) (*Orchestrator, *state.
 	return o, store, stageDir
 }
 
-// setupMalformedTestOrchNI is setupMalformedTestOrch for a NON-interactive
-// stage — the stage type where an unparseable question.json used to hang the
-// stage forever (the whole reason the fresh-agent repair is no longer
-// interactive-only).
+// setupMalformedTestOrchNI is setupMalformedTestOrch for a NON-interactive stage — the stage type where an
+// unparseable question.json used to hang the stage forever.
 func setupMalformedTestOrchNI(t *testing.T, broken string) (*Orchestrator, *state.Store, string) {
 	t.Helper()
 	runDir := t.TempDir()
@@ -1107,12 +994,8 @@ func setupMalformedTestOrchNI(t *testing.T, broken string) (*Orchestrator, *stat
 	return o, store, stageDir
 }
 
-// injectFixStub replaces the orchestrator's real fix-agent spawner with a
-// synchronous test double, so unit tests never launch a real agent process.
-// If fixed != "", the stub writes it to the question.json (a fix agent that
-// succeeds); if "", it leaves the file broken (a fix agent that fails). It
-// always returns an already-closed channel (the agent "finished"). The
-// returned pointer counts how many times a fix agent was spawned.
+// injectFixStub replaces the orchestrator's real fix-agent spawner with a synchronous test double, so unit
+// tests never launch a real agent process.
 func injectFixStub(t *testing.T, o *Orchestrator, fixed string) *int {
 	t.Helper()
 	calls := 0
@@ -1131,13 +1014,6 @@ func injectFixStub(t *testing.T, o *Orchestrator, fixed string) *int {
 	return &calls
 }
 
-// TestPollQuestions_MalformedQuestion_GraceTickHidesFromUser is a regression
-// test for a bug found in a real production log, root-caused byte-for-byte:
-// a question.json that fails to parse on its FIRST observation is very
-// often a torn read — afm's poller caught the file while the agent's Write
-// tool call was still landing on disk — not a genuine mistake. The very
-// first sighting of broken content must never reach the user: no dialog
-// entry, no synthetic answer, no EvAskUser, stage status untouched.
 func TestPollQuestions_MalformedQuestion_GraceTickHidesFromUser(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
 
@@ -1154,11 +1030,6 @@ func TestPollQuestions_MalformedQuestion_GraceTickHidesFromUser(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_ResolvesSilentlyIfWriteCompletes proves
-// the grace-tick mechanism actually fixes the real incident: once the
-// (previously torn) file becomes valid, it must flow through completely
-// normally on the next tick — no trace that anything was ever wrong, no
-// agent involvement.
 func TestPollQuestions_MalformedQuestion_ResolvesSilentlyIfWriteCompletes(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
 	processed := map[string]bool{}
@@ -1185,11 +1056,6 @@ func TestPollQuestions_MalformedQuestion_ResolvesSilentlyIfWriteCompletes(t *tes
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_StableSpawnsFixAgent covers the
-// genuinely-broken case: once the SAME broken content is observed on a second
-// tick — proof the write is done, not still in flight — afm launches a fresh,
-// clean-context fix agent to repair the file, still without bothering the user
-// and without writing any synthetic answer.json.
 func TestPollQuestions_MalformedQuestion_StableSpawnsFixAgent(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
 	calls := injectFixStub(t, o, "") // a fix agent that does not repair the file
@@ -1216,11 +1082,6 @@ func TestPollQuestions_MalformedQuestion_StableSpawnsFixAgent(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_FixAgentRepairsQuestion proves the fix
-// agent's repair is actually picked up: once it rewrites the SAME id's
-// question.json with valid content, the question flows through completely
-// normally on the next tick (surfaced to the user), the tracking entry is
-// forgotten, and there is no trace the repair ever happened.
 func TestPollQuestions_MalformedQuestion_FixAgentRepairsQuestion(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
 	calls := injectFixStub(t, o, `{"id":"q1","question":"fixed now?"}`)
@@ -1249,13 +1110,6 @@ func TestPollQuestions_MalformedQuestion_FixAgentRepairsQuestion(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery guards
-// the class of bug the old nudge mechanism had to work around: after a
-// malformed question is repaired and a human answers it normally, later ticks
-// must not touch that real answer.json. With the fresh-agent mechanism no
-// synthetic answer.json is ever written and reconcileMalformedFixes forgets the
-// key the moment the file parses, so the bug is impossible by construction —
-// this test locks that in.
 func TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrch(t, `not json at all {{{`)
 	injectFixStub(t, o, `{"id":"q1","question":"fixed?"}`)
@@ -1289,10 +1143,6 @@ func TestPollQuestions_MalformedQuestion_RealAnswerSurvivesAfterRecovery(t *test
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_FixAgentExhaustionShowsStub covers the
-// interactive terminal fallback: when every fix agent fails to repair the
-// file, afm must stop spawning agents after maxJSONFixAttempts and surface a
-// parseable stub (no options, free text) to the user instead of hanging.
 func TestPollQuestions_MalformedQuestion_FixAgentExhaustionShowsStub(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, stageDir := setupMalformedTestOrch(t, broken)
@@ -1326,12 +1176,6 @@ func TestPollQuestions_MalformedQuestion_FixAgentExhaustionShowsStub(t *testing.
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_NonInteractiveFixThenAutoAnswer is the
-// core of the incident this whole change fixes: a NON-interactive (agents:[auto])
-// stage whose question.json is unparseable. Before, the malformed branch was
-// interactive-only and such a stage's agent polled for an answer.json forever.
-// Now a fix agent repairs the file and the normal non-interactive auto-answer
-// path unblocks the stage — without ever awaiting a human.
 func TestPollQuestions_MalformedQuestion_NonInteractiveFixThenAutoAnswer(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrchNI(t, `not json at all {{{`)
 	injectFixStub(t, o, `{"id":"q1","question":"which?","options":["A","B (recommended)"],"allow_custom":true}`)
@@ -1360,10 +1204,6 @@ func TestPollQuestions_MalformedQuestion_NonInteractiveFixThenAutoAnswer(t *test
 	}
 }
 
-// TestPollQuestions_MalformedQuestion_NonInteractiveFixFailsThenAutoAnswerFallback
-// covers the non-interactive terminal fallback: even when no fix agent can
-// repair the file, the stage must be unblocked by an auto-answer rather than
-// left polling forever (the exact hang seen in the production log).
 func TestPollQuestions_MalformedQuestion_NonInteractiveFixFailsThenAutoAnswerFallback(t *testing.T) {
 	o, store, stageDir := setupMalformedTestOrchNI(t, `not json at all {{{`)
 	calls := injectFixStub(t, o, "") // never repairs
@@ -1395,19 +1235,13 @@ func TestPollQuestions_MalformedQuestion_NonInteractiveFixFailsThenAutoAnswerFal
 	}
 }
 
-// TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions covers the
-// user's explicit fallback: once retries are exhausted, afm stops asking the
-// agent for valid JSON, persists a real parseable stub (handleDialogAnswer
-// re-parses question.json strictly on every answer submission), and shows
-// the raw text to the user with NO options — free text only.
 func TestHandleMalformedQuestion_ExhaustedShowsRawTextNoOptions(t *testing.T) {
 	broken := `not json at all {{{`
 	o, store, stageDir := setupMalformedTestOrch(t, broken)
 	qPath := filepath.Join(stageDir, "implementation.q1.question.json")
 
-	// Seed state as if maxJSONFixAttempts fix agents already failed and this
-	// tick's content is stable — the exact state pollQuestions would have built
-	// up, without simulating each round here.
+	// Seed state as if maxJSONFixAttempts fix agents already failed and this tick's content is stable — the
+	// exact state pollQuestions would have built up, without simulating each round here.
 	malformed := map[string]*malformedQuestionState{
 		"s1|implementation|q1": {lastRaw: []byte(broken), attempts: maxJSONFixAttempts},
 	}

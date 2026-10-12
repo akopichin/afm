@@ -73,9 +73,7 @@ func schemaAcceptsYAML(t *testing.T, sch *jsonschema.Schema, body string) bool {
 	return sch.Validate(jsonInstance(t, []byte(body))) == nil
 }
 
-// resolveLocalRef follows the local references used by these schemas. Keeping
-// the walk structural is important: a stage.path field must be found under the
-// stage definition, not accidentally satisfied by memory.path elsewhere.
+// resolveLocalRef follows the local references used by these schemas.
 func resolveLocalRef(t *testing.T, doc schemaDocument, node map[string]any, at string) map[string]any {
 	t.Helper()
 	ref, _ := node["$ref"].(string)
@@ -139,35 +137,21 @@ func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, ty
 		typ = typ.Elem()
 	}
 
-	// Buttons has a deliberately different YAML shape from its Go slice:
-	// YAML is an ordered label:prompt mapping. Its field-level shape is covered
-	// by the behavioral tests below.
+	// Buttons has a deliberately different YAML shape from its Go slice: YAML is an ordered label:prompt
+	// mapping. Its field-level shape is covered by the behavioral tests below.
 	if typ == buttonsType {
 		schemaForType(t, doc, node, "object", at)
 		return
 	}
 
-	// EventSelector has a deliberately different YAML shape from its Go struct:
-	// the scalar "all" or a list of event names — there is no object form to
-	// walk, but its schema's oneOf must still contain the array alternative
-	// (the property's presence was already checked by the caller).
+	// EventSelector accepts scalar 'all' or an event list; ensure its schema includes the array alternative.
 	if typ == eventSelectorType {
 		schemaForType(t, doc, node, "array", at)
 		return
 	}
 
-	// VerifySpec (verify:) is a deliberate union, not a plain object: the
-	// schema is oneOf[string, run-step object, command-step object, array of
-	// step objects] (see task-V1-brief.md, "Ambiguity resolutions" #1). Forcing
-	// this field through the generic Struct case below would require the
-	// schema's `verify` node to itself be a plain `{"type":"object"}` with a
-	// "properties" map matching VerifySpec's Go fields (Steps/fromScalar) —
-	// which is exactly the shape we deliberately reject in favor of oneOf.
-	// The smallest targeted exception: just confirm an object alternative
-	// exists among the oneOf branches (same shallow check Buttons uses above),
-	// without walking VerifySpec's own fields — its real per-step contract
-	// (run xor command, optional prompt/timeout) is covered behaviorally by
-	// TestFlowSchemaMatchesParserEdgeCases instead.
+	// VerifySpec is a deliberate union, not a plain object: the schema is oneOf[string, run-step object,
+	// command-step object, array of step objects].
 	if typ == verifySpecType {
 		schemaForType(t, doc, node, "object", at)
 		return

@@ -1,10 +1,5 @@
-// Package sideagent реализует «боковой» разговор с агентом, изолированный от
-// основной FSM потока: у него собственный журнал (chat.jsonl), собственная
-// нумерация seq и собственный учёт стоимости. Один разговор на run_id, один
-// активный запрос за раз.
-//
-// Этот файл (A1) описывает схему событий журнала, типизированные нагрузки,
-// коды ошибок и конечный автомат состояний одного «хода» (turn).
+// Package sideagent реализует «боковой» разговор с агентом, изолированный от основной FSM потока: у него
+// собственный журнал, собственная нумерация seq и собственный учёт стоимости.
 package sideagent
 
 import (
@@ -15,9 +10,8 @@ import (
 	"time"
 )
 
-// SchemaVersion — текущая версия схемы события. Любое другое значение в журнале
-// считается нераспознанным и приводит к явной ошибке декодирования (не к тихому
-// zero-value).
+// SchemaVersion — текущая версия схемы события. Любое другое значение в журнале считается нераспознанным и
+// приводит к явной ошибке декодирования (не к тихому zero-value).
 const SchemaVersion = 1
 
 // EventType — тип записи журнала разговора.
@@ -114,9 +108,8 @@ func DecodeEvent(line []byte) (Event, error) {
 
 // --- Типизированные нагрузки событий ---
 
-// TurnAcceptedData несёт исходный текст сообщения пользователя и клиентский id
-// для дедупликации. Первое turn_accepted фиксирует начало разговора; его
-// conversation_id живёт в конверте.
+// TurnAcceptedData несёт исходный текст сообщения пользователя и клиентский id для дедупликации. Первое
+// turn_accepted фиксирует начало разговора; его conversation_id живёт в конверте.
 type TurnAcceptedData struct {
 	Message         string `json:"message"`
 	ClientMessageID string `json:"client_message_id"`
@@ -182,10 +175,7 @@ const (
 	TurnStateInterrupted TurnState = "interrupted"
 )
 
-// turnTransitions — разрешённые переходы. accepted→started→terminal — обычный
-// путь; accepted→failed покрывает отказ при сборке контекста (например,
-// context_limit) до старта агента; accepted→interrupted — recovery хода,
-// принятого, но не стартовавшего до краха.
+// turnTransitions — разрешённые переходы.
 var turnTransitions = map[TurnState][]TurnState{
 	TurnStateAccepted: {TurnStateStarted, TurnStateFailed, TurnStateInterrupted},
 	TurnStateStarted:  {TurnStateCompleted, TurnStateFailed, TurnStateInterrupted},
@@ -211,9 +201,8 @@ func (s TurnState) CanTransitionTo(to TurnState) bool {
 	return false
 }
 
-// TurnState возвращает состояние хода, в которое переводит FSM-событие. Для
-// content-событий (assistant_text/tool_action) возвращает ok=false — они не
-// меняют состояние хода.
+// TurnState возвращает состояние хода, в которое переводит FSM-событие. Для content-событий
+// (assistant_text/tool_action) возвращает ok=false — они не меняют состояние хода.
 func (t EventType) TurnState() (TurnState, bool) {
 	switch t {
 	case EventTurnAccepted:

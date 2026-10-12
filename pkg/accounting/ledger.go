@@ -1,19 +1,15 @@
 package accounting
 
-// usageRecordVersion is the current shape of a persisted usage.jsonl line.
-// Bump it (and teach readers to cope) if the JSON shape ever changes
-// incompatibly.
+// usageRecordVersion is the current shape of a persisted usage.jsonl line. Bump it (and teach readers to
+// cope) if the JSON shape ever changes incompatibly.
 const usageRecordVersion = 1
 
-// ScopeRunOverhead marks a UsageRecord as run-level rather than
-// stage-attributed (currently only the end-of-run memory pipeline). Every
-// other record uses the zero value "" (stage-attributed).
+// ScopeRunOverhead marks a UsageRecord as run-level rather than stage-attributed (currently only the
+// end-of-run memory pipeline). Every other record uses the zero value "" (stage-attributed).
 const ScopeRunOverhead = "run_overhead"
 
-// costToleranceUSD is the absolute reconciliation tolerance between a
-// vendor-reported cost and our own list-price estimate. A vendor figure
-// within one cent of the estimate is treated as agreement (rounding,
-// discounts, etc.); beyond that we flag it so a human can look closer.
+// costToleranceUSD is the absolute reconciliation tolerance between a vendor-reported cost and our own
+// list-price estimate.
 const costToleranceUSD = 0.01
 
 // RateSnapshot freezes the rate actually used to price a UsageRecord, so the
@@ -57,9 +53,8 @@ type UsageRecord struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// BuildRecord turns one Observation into a fully-priced UsageRecord: it
-// resolves a rate, computes the estimate, snapshots the rate used, and
-// reconciles against any vendor-reported cost. It never mutates obs.
+// BuildRecord turns one Observation into a fully-priced UsageRecord: it resolves a rate, computes the
+// estimate, snapshots the rate used, and reconciles against any vendor-reported cost.
 func BuildRecord(r *Resolver, obs Observation, stageID, phase, scope string) UsageRecord {
 	rec := UsageRecord{
 		RecordVersion:   usageRecordVersion,
@@ -88,9 +83,8 @@ func BuildRecord(r *Resolver, obs Observation, stageID, phase, scope string) Usa
 		return rec
 	}
 	if rr.missingCategory(obs.Tokens) {
-		// Resolved (config-only, no builtin to fill the gap) but a category
-		// the tokens actually use has no rate: unpriced entirely, not a
-		// misleadingly partial total that silently prices the rest at $0.
+		// Resolved but a category the tokens actually use has no rate: unpriced entirely, not a misleadingly
+		// partial total that silently prices the rest at $0.
 		return rec
 	}
 
@@ -114,10 +108,7 @@ func BuildRecord(r *Resolver, obs Observation, stageID, phase, scope string) Usa
 	return rec
 }
 
-// costDiffers reports whether a vendor-reported cost and our estimate
-// disagree beyond costToleranceUSD (an absolute USD tolerance, chosen over a
-// relative one so a tiny, near-zero estimate can't produce a warning from an
-// equally tiny absolute difference).
+// costDiffers reports whether a vendor-reported cost and our estimate disagree beyond costToleranceUSD.
 func costDiffers(reported, estimated float64) bool {
 	diff := reported - estimated
 	if diff < 0 {
@@ -131,11 +122,8 @@ func costDiffers(reported, estimated float64) bool {
 type Summary struct {
 	Tokens  Tokens
 	CostUSD float64
-	// Priced is true only when the group contains at least one metered
-	// record AND every metered record in it resolved to a price. A group
-	// with no metered records at all (e.g. only unmetered/failed
-	// invocations) is NOT priced — there is nothing to trust a cost figure
-	// for, so callers should render it as unknown ("—"), not as $0.00.
+	// Priced is true only when the group contains at least one metered record AND every metered record in it
+	// resolved to a price.
 	Priced    bool
 	Models    []string
 	Metered   int
@@ -176,9 +164,8 @@ func summarize(recs []UsageRecord) Summary {
 	return s
 }
 
-// Ledger accumulates UsageRecords for a single run and aggregates them into
-// per-stage and per-run summaries. It is not safe for concurrent use — the
-// caller (Store) is responsible for serializing writes.
+// Ledger accumulates UsageRecords for a single run and aggregates them into per-stage and per-run
+// summaries.
 type Ledger struct {
 	recs []UsageRecord
 }
@@ -188,17 +175,13 @@ func (l *Ledger) Add(rec UsageRecord) {
 	l.recs = append(l.recs, rec)
 }
 
-// Records returns every record added so far, in insertion order. Exported
-// so callers outside the package (e.g. `afm report`'s coverage/pricing
-// appendix) can inspect per-record detail — model, rate provenance,
-// warnings — that SummaryByStage/RunSummary intentionally aggregate away.
+// Records returns every record added so far, in insertion order.
 func (l *Ledger) Records() []UsageRecord {
 	return l.recs
 }
 
-// SummaryByStage groups records by stage_id, excluding run_overhead-scoped
-// records and any record with an empty stage_id (run-level records carry
-// no stage to attribute to).
+// SummaryByStage groups records by stage_id, excluding run_overhead-scoped records and any record with an
+// empty stage_id (run-level records carry no stage to attribute to).
 func (l *Ledger) SummaryByStage() map[string]Summary {
 	byStage := make(map[string][]UsageRecord)
 	for _, rec := range l.Records() {
@@ -221,12 +204,7 @@ func (l *Ledger) RunSummary() Summary {
 	return summarize(l.Records())
 }
 
-// CoverageIssues groups every unmetered/unpriced record in the ledger via
-// the same aggregation the dashboard's cost tab and `afm report`'s coverage
-// appendix use (see aggregateIssues), so every surface computes pricing-gap
-// totals identically instead of each re-deriving them from Summary's
-// Unmetered/Unpriced counters by hand. Empty when every metered record in
-// the ledger was priced.
+// CoverageIssues groups unmetered/unpriced records consistently across the dashboard and reports.
 func (l *Ledger) CoverageIssues() []CoverageIssue {
 	return aggregateIssues(l.Records())
 }

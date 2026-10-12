@@ -236,11 +236,6 @@ func TestManager_WSWrongTokenIs401_NoChrome(t *testing.T) {
 	}
 }
 
-// TestManager_CloseDuringLaunch verifies that a Manager.Close racing an
-// in-flight Chrome launch does not orphan the Chrome: once the launch completes,
-// Close must still kill it (close its pipes) instead of observing s.conn==nil and
-// skipping teardown. Before the fix Close did not wait for the launch, read a nil
-// conn, and left the finished Chrome unowned.
 func TestManager_CloseDuringLaunch(t *testing.T) {
 	m, err := New(Options{Epoch: "ep1", ChromePath: "/fake/chrome", LaunchTimeout: 2 * time.Second})
 	if err != nil {
@@ -285,10 +280,6 @@ func TestManager_CloseDuringLaunch(t *testing.T) {
 	}
 }
 
-// TestSession_DeliverAfterClientDoneIsSafe proves the send/close fix: once a
-// client is torn down (its done channel closed), deliver never sends on — let alone
-// closes — c.send, and never touches the client's socket. With a full queue the
-// select deterministically takes the done branch instead of the "slow client" fallback.
 func TestSession_DeliverAfterClientDoneIsSafe(t *testing.T) {
 	s := &session{done: make(chan struct{})}
 	c := &wsClient{send: make(chan []byte, 1), done: make(chan struct{})}

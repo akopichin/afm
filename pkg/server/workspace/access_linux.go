@@ -10,43 +10,29 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// resolveFlags is the openat2 resolve policy that makes this the security
-// boundary of the file browser:
-//
-//   - RESOLVE_BENEATH       — every path component must stay at or below the
-//     root dir fd; any ".." that would escape fails with EXDEV.
-//   - RESOLVE_NO_MAGICLINKS — no /proc-style magic-link traversal.
-//   - RESOLVE_NO_SYMLINKS   — no symlink is ever followed; a symlink component
-//     (including the final one) fails with ELOOP.
+// resolveFlags keeps paths beneath the root fd and forbids symlinks, including /proc magic links.
 const resolveFlags = unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS
 
-// Open-flag combinations for the read paths, defined per platform because
-// O_DIRECTORY / O_NONBLOCK are not portable — Windows' syscall package lacks
-// them, so referencing syscall.O_DIRECTORY from a build-tag-free file broke the
-// windows cross-build. list.go/content.go use these package constants instead.
+// Platform-specific open flags keep shared List/Read code portable.
 const (
 	openDirReadOnly      = unix.O_RDONLY | unix.O_DIRECTORY // List: open a directory fd
 	openFileReadNonblock = unix.O_RDONLY | unix.O_NONBLOCK  // Read/Reference: never block on a FIFO
 )
 
-// rootHandle pins one browsable root by an open directory fd. All access to
-// that root goes through openat, so the kernel — not string math — enforces
-// containment.
+// rootHandle pins one browsable root by an open directory fd. All access to that root goes through openat,
+// so the kernel — not string math — enforces containment.
 type rootHandle struct {
 	root Root
 	dirf int // O_DIRECTORY|O_PATH fd of the root directory
 }
 
-// openRootDir opens the root directory itself as an O_PATH handle. O_PATH means
-// we hold the directory only as an anchor for openat2, without read/traverse
-// intent of its own.
+// openRootDir opens the root directory itself as an O_PATH handle. O_PATH means we hold the directory only
+// as an anchor for openat2, without read/traverse intent of its own.
 func openRootDir(path string) (int, error) {
 	return unix.Open(path, unix.O_DIRECTORY|unix.O_PATH|unix.O_CLOEXEC, 0)
 }
 
-// openat opens relPath relative to the root dir fd under resolveFlags. It maps
-// the kernel's containment/symlink refusals onto the package's sentinel errors;
-// any other errno is returned raw for the caller to classify.
+// openat opens relPath relative to the root dir fd under resolveFlags.
 func (r *rootHandle) openat(relPath string, flags int) (int, error) {
 	how := &unix.OpenHow{
 		Flags:   uint64(flags | unix.O_CLOEXEC),
@@ -68,9 +54,8 @@ func (r *rootHandle) openat(relPath string, flags int) (int, error) {
 	return fd, nil
 }
 
-// probeOpenat2Supported checks that openat2 exists on the running kernel by
-// opening "." beneath the given root dir fd. On kernels < 5.6 openat2 is not
-// wired up and this returns ENOSYS, which New uses to degrade gracefully.
+// probeOpenat2Supported checks that openat2 exists on the running kernel by opening "." beneath the given
+// root dir fd.
 func probeOpenat2Supported(dirf int) error {
 	how := &unix.OpenHow{
 		Flags:   uint64(unix.O_PATH | unix.O_CLOEXEC),
@@ -92,13 +77,8 @@ func closeFD(fd int) error {
 // single short `gitdir: <path>` line; anything larger is not a gitfile.
 const maxGitfileBytes = 4 << 10
 
-// gitEntry classifies the `.git` entry at relGit (root-relative, slash-path)
-// opened through the secure openat2 fd, so containment/symlink policy is the
-// kernel's job, not string math. It first opens O_PATH — which never follows a
-// symlink (RESOLVE_NO_SYMLINKS → ErrSymlink) and never blocks on a fifo/device
-// — to fstat the kind. Only a confirmed regular file is reopened O_RDONLY and
-// read (bounded), so a gitfile's target can be parsed. A directory reports
-// isDir; anything that is neither dir nor regular reports both false.
+// gitEntry classifies the `.git` entry at relGit opened through the secure openat2 fd, so
+// containment/symlink policy is the kernel's job, not string math.
 func (r *rootHandle) gitEntry(relGit string) (isDir, isRegular bool, content []byte, err error) {
 	fd, err := r.openat(relGit, unix.O_PATH)
 	if err != nil {

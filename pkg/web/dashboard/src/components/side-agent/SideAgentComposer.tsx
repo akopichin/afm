@@ -14,11 +14,8 @@ export type SideAgentComposerProps = {
   running: boolean
 }
 
-// SideAgentComposer — свой композер беседы (НЕ FeedComposer: у того Revise +
-// Pause-on-focus, не нужные здесь). Растущая textarea на общих хуках, без
-// stageId/вложений. Cmd/Ctrl+Enter — отправка, обычный Enter — новая строка.
-// Поле редактируемо и во время работы агента; отправка следующего сообщения
-// возможна только когда текущий turn завершён (Send disabled при running).
+// SideAgentComposer — свой композер беседы. Поле редактируемо и во время работы агента; отправка
+// следующего сообщения возможна только когда текущий turn завершён (Send disabled при running).
 export function SideAgentComposer({ draft, onDraftChange, onSend, onStop, running }: SideAgentComposerProps): ReactElement {
   const textareaRef = useAutoGrowTextarea(draft, MAX_TEXTAREA_HEIGHT)
   const canSend = !running && draft.trim() !== ''

@@ -22,17 +22,14 @@ type pipeFramer struct {
 
 func newPipeFramer() *pipeFramer { return &pipeFramer{} }
 
-// feed appends data and returns any complete messages. It panics on an oversized
-// unterminated frame only via feedChecked; feed itself ignores that error (used in
-// tests where the input is well-formed).
+// feed appends data and returns any complete messages.
 func (f *pipeFramer) feed(data []byte) [][]byte {
 	msgs, _ := f.feedChecked(data)
 	return msgs
 }
 
-// feedChecked appends data and returns any complete (NUL-terminated) messages.
-// If the buffered-but-unterminated remainder exceeds maxFrameBytes it returns
-// ErrFrameTooLarge rather than buffering forever.
+// feedChecked appends data and returns any complete messages. If the buffered-but-unterminated remainder
+// exceeds maxFrameBytes it returns ErrFrameTooLarge rather than buffering forever.
 func (f *pipeFramer) feedChecked(data []byte) ([][]byte, error) {
 	f.buf = append(f.buf, data...)
 	var out [][]byte
@@ -87,9 +84,8 @@ type proxy struct {
 
 func newProxy() *proxy { return &proxy{pending: map[int64]pendingReq{}} }
 
-// fromClient rewrites a client CDP message's id to a globally-unique id, records
-// the mapping, and returns the message to forward to Chrome. A message without an
-// id (rare) is forwarded unchanged.
+// fromClient rewrites a client CDP message's id to a globally-unique id, records the mapping, and returns
+// the message to forward to Chrome.
 func (p *proxy) fromClient(conn *wsClient, msg []byte) []byte {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(msg, &m); err != nil {
@@ -112,13 +108,8 @@ func (p *proxy) fromClient(conn *wsClient, msg []byte) []byte {
 	return out
 }
 
-// fromChrome maps a Chrome message back to its originating client, restoring the
-// client's local id. A CDP event (no id) routes to nil → broadcast to all clients.
-// A nil return means DROP: a message that carries an id is a response to exactly
-// one request we forwarded; if its id is no longer pending (the issuing client
-// disconnected, or it is a late duplicate) it must NOT be broadcast — a reconnected
-// client that happens to have a live local request with the same numeric id would
-// otherwise accept the stale frame as its own answer.
+// fromChrome maps a Chrome message back to its originating client, restoring the client's local id. A CDP
+// event (no id) routes to nil → broadcast to all clients.
 func (p *proxy) fromChrome(msg []byte) *routed {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(msg, &m); err != nil {
@@ -149,9 +140,8 @@ func (p *proxy) fromChrome(msg []byte) *routed {
 	return &routed{conn: req.conn, payload: out}
 }
 
-// disconnect drops all pending requests issued by a client that has gone away, so
-// a late Chrome response for it is unroutable and gets dropped (see fromChrome)
-// rather than delivered to a reused connection object.
+// disconnect removes a client's pending requests so late Chrome responses cannot reach a reused
+// connection.
 func (p *proxy) disconnect(conn *wsClient) {
 	p.mu.Lock()
 	for gid, req := range p.pending {

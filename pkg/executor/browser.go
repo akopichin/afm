@@ -9,9 +9,7 @@ import (
 	"github.com/akopichin/afm/pkg/browser"
 )
 
-// BrowserMCP describes the managed Chrome DevTools MCP to inject for an author
-// runner. The Token is secret and reaches the MCP only through a per-invocation
-// 0600 descriptor file — never argv, never the agent's own env.
+// BrowserMCP describes the managed Chrome DevTools MCP to inject for an author runner.
 type BrowserMCP struct {
 	ServerName   string   // MCP server name, e.g. "afm_chrome"
 	LauncherPath string   // resolved absolute afm path (MCP command for both claude and codex)
@@ -20,9 +18,8 @@ type BrowserMCP struct {
 	AppURL       string   // tested-app URL
 	AppPort      int      // tested-app port
 	Roots        []string // filesystem roots the MCP may read/write
-	// Codex is true when the agent is the codex adapter: it reads
-	// AFM_BROWSER_DESCRIPTOR from env and builds its own -c overrides, so no
-	// claude-style .mcp.json / --mcp-config is written.
+	// Codex is true when the agent is the codex adapter: it reads AFM_BROWSER_DESCRIPTOR from env and builds
+	// its own -c overrides, so no claude-style .mcp.json / --mcp-config is written.
 	Codex bool
 }
 
@@ -30,17 +27,12 @@ type BrowserMCP struct {
 // lets callers/tests confirm whether this runner received the browser capability.
 func (e *Executor) BrowserMCPConfig() *BrowserMCP { return e.cfg.BrowserMCP }
 
-// IsBrowserTransportEnv reports whether an env entry is a managed-browser
-// transport variable (AFM_BROWSER_*). It delegates to browser.IsTransportEnv so
-// the prefix has a single source of truth shared with pkg/lifecyclehooks.
+// IsBrowserTransportEnv reports whether an env entry is a managed-browser transport variable.
 func IsBrowserTransportEnv(kv string) bool {
 	return browser.IsTransportEnv(kv)
 }
 
-// setupBrowserMCP writes the per-invocation 0600 descriptor file (and, for a
-// claude-family command, the private .mcp.json) in a fresh temp dir. It returns
-// the extra claude args (--mcp-config ...; empty for codex), the non-secret env
-// to re-add for the author runner, and a cleanup removing the temp dir.
+// setupBrowserMCP writes the per-invocation 0600 descriptor file in a fresh temp dir.
 func (e *Executor) setupBrowserMCP() (args []string, env []string, cleanup func(), err error) {
 	b := e.cfg.BrowserMCP
 	dir, err := os.MkdirTemp("", "afm-browser-inv-")

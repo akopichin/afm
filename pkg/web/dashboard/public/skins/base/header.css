@@ -1,8 +1,5 @@
-/* pkg/web/dashboard/skins/base/header.css
-   Global header: compact one-row bar (~60px) with three zones — brand + flow
-   name (left), run metrics (center), actions + connection state (right).
-   Replaces the old FlowHeader grid (#header logo/h1/flow-name-wrap). All colors
-   read from semantic tokens so the bar adapts to every skin × light/dark. */
+/* pkg/web/dashboard/skins/base/header.css Global header: compact one-row bar with three zones — brand +
+   flow name, run metrics, actions + connection state. */
 
 .global-header {
   display: grid;
@@ -189,9 +186,8 @@
   box-shadow: 0 0 0 3px rgba(var(--success-rgb), 0.16);
   animation: ghConnPulse 2.4s ease-in-out infinite;
 }
-/* Offline — красный во всех темах (семантический --danger доступен во всех
-   скинах через base/tokens.css): и текст, и точка, чтобы разрыв связи был
-   заметен, а не сливался с приглушённым нейтральным. */
+/* Offline — красный во всех темах: и текст, и точка, чтобы разрыв связи был заметен, а не сливался с
+   приглушённым нейтральным. */
 .gh-connection.disconnected {
   color: var(--danger);
 }

@@ -3,10 +3,8 @@ import { compositeAttentionBadge } from './composite-attention-badge'
 
 const PULSE_INTERVAL_MS = 700
 
-// Пульсирует favicon амберным бейджем, пока вкладка в фоне (document.hidden)
-// и active=true (хотя бы одна стадия прогона ждёт действия пользователя) —
-// тот же паттерн, что useTitleFlash использует для document.title, но для
-// <link rel="icon">.href.
+// Пульсирует favicon амберным бейджем, пока вкладка в фоне и active=true — тот же паттерн, что
+// useTitleFlash использует для document.title, но для <link rel="icon">.href.
 export function useFaviconPulse(active: boolean): void {
   useEffect(() => {
     if (!active) return
@@ -31,12 +29,8 @@ export function useFaviconPulse(active: boolean): void {
       }
       void compositeAttentionBadge(original)
         .then((badgeHref) => {
-          // timer !== undefined — защита от orphaned-таймера: если между
-          // первым и вторым вызовом onVisibility() (hidden→visible→hidden,
-          // пока промис ещё в полёте) уже успел зарезолвиться другой .then
-          // на том же кешированном промисе и запустить интервал, второй
-          // .then не должен перезаписать timer, потеряв ссылку на первый
-          // (и оставив его тикать вечно, даже когда вкладка снова видима).
+          // Не запускаем второй interval после общего async-промиса: иначе ссылка на первый таймер
+          // потеряется.
           if (cancelled || !document.hidden || timer !== undefined) return
           timer = setInterval(() => {
             toggle = !toggle

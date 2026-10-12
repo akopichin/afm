@@ -2,35 +2,20 @@ import { useCallback, useRef, useState } from 'react'
 
 const STORAGE_KEY = 'afm.pauseOnFocus'
 
-// OpState — фаза per-стадийной операции «Pause on focus»:
-//   'pausing'  — pauseStage запущен, ещё не подтверждён;
-//   'owned'    — пауза подтверждена, стадию держим мы (только такую вправе снимать);
-//   'resuming' — идёт continueStage (± доставка заметки), владение ещё не снято.
-// Отсутствие ключа = стадией мы не владеем.
+// OpState: pausing ждёт подтверждения, owned разрешает снять свою паузу, resuming ждёт Continue; нет ключа
+// — нет владения.
 type OpState = 'pausing' | 'owned' | 'resuming'
 
-// PauseOnFocusApi — «поставить стадию на паузу, пока пишу заметку». Toggle
-// «Pause on focus»: фокус поля заметки ставит running-стадию на паузу
-// (существующий pauseStage), а отправка сперва снимает паузу (continueStage), затем
-// доставляет заметку (reviseStage, обычный путь живой стадии). Только три готовых
-// вызова — без новых эндпоинтов и без изменений бэкенда.
-//
-// Каждая стадия — одна «транзакция» с монотонным поколением (gen). ЛЮБАЯ новая
-// интенция (onFocus/resume/handleSend) и ЛЮБОЕ снятие владения (clearOp) двигают
-// gen; каждая асинхронная развязка (pause/continue/revise .then/.catch) мутирует
-// состояние ТОЛЬКО если её захваченный gen всё ещё актуален. Так просроченная
-// развязка не может «воскресить» владение после снятия/смены интенции, а
-// конкурентные resume/send не топчут друг друга. Снятие владения драйвится
-// промисами (не polling); reconcile — лишь safety-net для ИДЛОВОГО 'owned'.
+// PauseOnFocusApi — «поставить стадию на паузу, пока пишу заметку». Только три готовых вызова — без новых
+// эндпоинтов и без изменений бэкенда.
 export type PauseOnFocusApi = {
   enabled: boolean
   setEnabled: (v: boolean) => void
   // isOwned — стадия, пауза которой ПОДТВЕРЖДЕНА нами (op === 'owned'). Баннер
   // паузы = status==='paused' && isOwned.
   isOwned: (stageId: string) => boolean
-  // hasActiveOp — есть ЛЮБАЯ незавершённая операция (pausing|owned|resuming).
-  // Композер держим смонтированным всё это время, чтобы не потерять черновик —
-  // в т.ч. на весь in-flight Send.
+  // hasActiveOp — есть ЛЮБАЯ незавершённая операция (pausing|owned|resuming). Композер держим
+  // смонтированным всё это время, чтобы не потерять черновик — в т.ч. на весь in-flight Send.
   hasActiveOp: (stageId: string) => boolean
   // shouldSuppressAttention — не давать нашей же паузе авто-открыть attention и
   // выкинуть пользователя из композера. Равно hasActiveOp.
@@ -38,10 +23,8 @@ export type PauseOnFocusApi = {
   onFocus: (stageId: string, status: string) => void
   onBlur: (stageId: string, hasDraft: boolean) => void
   resumeNow: (stageId: string) => void
-  // reconcile — safety-net сверка ИДЛОВОГО 'owned' с авторитетным статусом:
-  // терминал (done/failed) → снять; running ПОСЛЕ наблюдённой паузы (внешний
-  // Continue) → снять. In-flight ('pausing'/'resuming') не трогаем — их драйвят
-  // промисы.
+  // reconcile — safety-net сверка ИДЛОВОГО 'owned' с авторитетным статусом: терминал → снять; running
+  // ПОСЛЕ наблюдённой паузы → снять.
   reconcile: (stages: { id: string; status: string }[]) => void
   handleSend: (stageId: string, text: string) => Promise<void>
 }
@@ -70,11 +53,8 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
   const resumingRef = useRef<Map<string, Promise<void>>>(new Map())
   const sawPausedRef = useRef<Map<string, boolean>>(new Map())
   const genRef = useRef<Map<string, number>>(new Map())
-  // resumedRef — стадии, для которых continue в ТЕКУЩЕМ эпизоде владения уже
-  // прошёл успешно (стадия снята с паузы). Не даём второму continue уйти
-  // (toggle-off/blur после успешного Send-continue) — иначе он 400-ит «уже
-  // running», а resume.catch повесил бы ложное 'owned' навсегда. Сбрасывается в
-  // clearOp (конец эпизода) и onFocus (новый эпизод).
+  // resumedRef — стадии, для которых continue в ТЕКУЩЕМ эпизоде владения уже прошёл успешно. Сбрасывается
+  // в clearOp (конец эпизода) и onFocus (новый эпизод).
   const resumedRef = useRef<Set<string>>(new Set())
 
   const [, setVersion] = useState(0)
@@ -142,18 +122,16 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
     [continueStage],
   )
 
-  // resume — снять НАШУ паузу (отмена без отправки). Новая интенция (nextGen)
-  // лочит любой конкурентный in-flight Send этой стадии, чтобы его хвост не
-  // тронул op. Снятие/откат драйвит промис.
+  // resume — снять НАШУ паузу (отмена без отправки). Новая интенция (nextGen) лочит любой конкурентный
+  // in-flight Send этой стадии, чтобы его хвост не тронул op. Снятие/откат драйвит промис.
   const resume = useCallback(
     async (stageId: string): Promise<void> => {
       await awaitPending(stageId)
       if (!opsRef.current.has(stageId)) return
       const g = nextGen(stageId)
       setOp(stageId, 'resuming')
-      // Уже сняли с паузы в этом эпизоде (напр. Send-continue прошёл, а теперь
-      // toggle-off) — второй continue не шлём (он бы 400-ил «уже running»), просто
-      // снимаем владение.
+      // Уже сняли с паузы в этом эпизоде (напр. Send-continue прошёл, а теперь toggle-off) — второй
+      // continue не шлём (он бы 400-ил «уже running»), просто снимаем владение.
       if (resumedRef.current.has(stageId)) {
         clearOp(stageId)
         return
@@ -230,9 +208,7 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
   const reconcile = useCallback(
     (stages: { id: string; status: string }[]): void => {
       for (const { id, status } of stages) {
-        // Только ИДЛОВОЕ 'owned'. In-flight ('pausing'/'resuming') драйвят промисы —
-        // reconcile их не трогает (иначе промежуточный опрос 'running' между continue
-        // и revise снял бы владение и размонтировал композер во время Send).
+        // Только ИДЛОВОЕ 'owned'.
         if (opsRef.current.get(id) !== 'owned') continue
 
         if (status === 'done' || status === 'failed') {
@@ -266,9 +242,8 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
         return
       }
       const g = nextGen(stageId)
-      setOp(stageId, 'resuming') // держим композер на весь in-flight Send (High #1)
-      // continued: стадия снята с паузы. Если эпизод уже резюмирован (blur/resume-now
-      // успели) — второй continue не шлём.
+      setOp(stageId, 'resuming') // держим композер на весь in-flight Send (High #1) continued: стадия снята с паузы. Если эпизод уже
+      // резюмирован (blur/resume-now успели) — второй continue не шлём.
       let continued = resumedRef.current.has(stageId)
       if (!continued) {
         // Single-flight continue (может уже идти из blur/resume-now) — терпим отказ:
@@ -283,11 +258,7 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
       try {
         await reviseStage(stageId, text)
       } catch (err: unknown) {
-        // Доставка не удалась. Если интенция ещё наша:
-        //   • continue прошёл → стадия УЖЕ running: снимаем владение (баннер паузы
-        //     не должен врать), пользователь повторит обычным Send (High #2 —
-        //     иначе ложное владение зависло бы навсегда без наблюдённой паузы);
-        //   • continue не прошёл → стадия всё ещё paused: держим 'owned' для повтора.
+        // Доставка не удалась.
         if (curGen(stageId) === g) {
           if (continued) clearOp(stageId)
           else setOp(stageId, 'owned')

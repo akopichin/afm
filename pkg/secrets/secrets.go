@@ -1,7 +1,5 @@
-// Package secrets содержит нейтральные (без зависимости на pkg/config или
-// pkg/docker) хелперы резолва секретов: раскрытие "~" в путях, разбор файлов
-// вида KEY=VALUE и резолв ссылок "env:VAR" | "file:PATH". Используется как
-// docker agent-recipes (pkg/docker), так и lifecycle hooks (pkg/lifecyclehooks).
+// Package secrets содержит нейтральные хелперы резолва секретов: раскрытие "~" в путях, разбор файлов вида
+// KEY=VALUE и резолв ссылок "env:VAR" | "file:PATH".
 package secrets
 
 import (
@@ -11,9 +9,8 @@ import (
 	"strings"
 )
 
-// ExpandHome раскрывает ведущую "~" в абсолютный путь относительно home.
-// "~" → home, "~/foo" → home+"/foo"; прочее (включая "~user/foo") возвращается
-// как есть.
+// ExpandHome раскрывает ведущую "~" в абсолютный путь относительно home. "~" → home, "~/foo" →
+// home+"/foo"; прочее (включая "~user/foo") возвращается как есть.
 func ExpandHome(p, home string) string {
 	if p == "~" {
 		return home
@@ -24,10 +21,7 @@ func ExpandHome(p, home string) string {
 	return p
 }
 
-// LoadSecrets парсит один или несколько файлов вида KEY=VALUE (позже — выше
-// приоритет) в map. Отсутствующие файлы игнорируются. Пустые строки и строки
-// комментариев '#' пропускаются. Пути с ~ раскрываются относительно
-// домашнего каталога текущего процесса (os.UserHomeDir).
+// LoadSecrets парсит один или несколько файлов вида KEY=VALUE в map. Отсутствующие файлы игнорируются.
 func LoadSecrets(paths []string) (map[string]string, error) {
 	home, _ := os.UserHomeDir()
 	out := map[string]string{}
@@ -63,10 +57,8 @@ func LoadLayers(paths ...string) (map[string]string, error) {
 	return LoadSecrets(paths)
 }
 
-// ResolveRef резолвит ссылку вида "env:VAR" | "file:PATH" относительно
-// загруженного map секретов (env: сначала map, затем os.Getenv) или чтением
-// файла (file:). ~ раскрывается относительно домашнего каталога текущего
-// процесса (os.UserHomeDir).
+// ResolveRef резолвит ссылку вида "env:VAR" | "file:PATH" относительно загруженного map секретов или
+// чтением файла.
 func ResolveRef(ref string, loaded map[string]string) (string, error) {
 	switch {
 	case strings.HasPrefix(ref, "env:"):

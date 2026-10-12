@@ -32,8 +32,7 @@ func codexScriptPath(t *testing.T) string {
 	return p
 }
 
-// writeFakeCodex writes a fake codex binary (used via CODEX_BIN, bypassing
-// PATH entirely) that prints jsonlOutput verbatim to stdout and exits with
+// writeFakeCodex writes a fake codex binary that prints jsonlOutput verbatim to stdout and exits with
 // exitCode. Returns the absolute path to the fake binary.
 func writeFakeCodex(t *testing.T, jsonlOutput string, exitCode int) string {
 	t.Helper()
@@ -46,13 +45,7 @@ func writeFakeCodex(t *testing.T, jsonlOutput string, exitCode int) string {
 	return path
 }
 
-// codexControlVars are the environment variables scripts/codex-as-claude.sh
-// reads to decide its behavior. Tests invoke the script directly (bypassing the
-// executor's RunVerifyAgent, which strips these in production), so they must NOT
-// inherit ambient values: a real `afm run` executes `go test ./...` with these
-// vars set in its environment (e.g. CODEX_VERIFY=1, AFM_IN_DOCKER=1), which would
-// make the script take a different branch than the test asserts. Stripping them
-// from the base env makes each script test hermetic — it sees only what it sets.
+// codexControlVars are the environment variables scripts/codex-as-claude.sh reads to decide its behavior.
 var codexControlVars = []string{
 	"AFM_IN_DOCKER", "CODEX_BIN", "CODEX_HOME", "CODEX_MODEL",
 	"CODEX_SANDBOX", "CODEX_VERBOSE", "CODEX_VERIFY",
@@ -75,10 +68,7 @@ func codexBaseEnv() []string {
 	return out
 }
 
-// runCodexScript runs the real scripts/codex-as-claude.sh with CODEX_BIN
-// pointed at fakeCodexPath, isolating HOME (and hence ~/.codex/config.toml) to
-// an empty temp dir unless the test overrides it via extraEnv, so tests never
-// depend on the developer machine's real codex config.
+// runCodexScript uses fake Codex and an isolated HOME so tests cannot read the developer's config.
 func runCodexScript(t *testing.T, fakeCodexPath, prompt string, extraEnv ...string) (stdout string, err error) {
 	t.Helper()
 	cmd := exec.Command("bash", codexScriptPath(t))
@@ -109,13 +99,6 @@ func extractResultLine(t *testing.T, out string) string {
 	return resultLine
 }
 
-// TestCodexAsClaude_UsageEnvelopeMatchesGoldenShape feeds the exact
-// turn.completed.usage documented in docs/superpowers/plans/2026-09-14-stage-and-run-pricing.md
-// (and mirrored in pkg/accounting/testdata/codex-gpt-5.6-sol.jsonl) through the
-// REAL script and asserts the emitted synthetic result carries the same
-// field names AND that pkg/accounting's own Collector normalizes it into the
-// same tokens as the canonical fixture — the shell↔Go contract this task
-// exists to keep in sync.
 func TestCodexAsClaude_UsageEnvelopeMatchesGoldenShape(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -195,9 +178,6 @@ func TestCodexAsClaude_UsageEnvelopeMatchesGoldenShape(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_NoSecretOrPromptLeakage: the prompt text and a
-// secret-shaped env var must never appear anywhere in the emitted envelope —
-// the usage block is numbers-only by contract.
 func TestCodexAsClaude_NoSecretOrPromptLeakage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -264,9 +244,6 @@ func TestCodexAsClaude_ModelPrecedence_EnvOverridesToml(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_ModelFallsBackToTopLevelTomlOnly: with no CODEX_MODEL, the
-// script must read only the TOP-LEVEL "model" key of config.toml — a model key
-// nested under a later [table] header (e.g. a profile) must not be picked up.
 func TestCodexAsClaude_ModelFallsBackToTopLevelTomlOnly(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -286,8 +263,7 @@ func TestCodexAsClaude_ModelFallsBackToTopLevelTomlOnly(t *testing.T) {
 		t.Fatal(writeErr)
 	}
 
-	// runCodexScript sets its own isolated HOME internally; this test needs a
-	// specific HOME (holding the fixture config.toml above), so it builds the
+	// runCodexScript sets its own isolated HOME internally; this test needs a specific HOME, so it builds the
 	// command directly instead of using the shared helper.
 	cmd := exec.Command("bash", codexScriptPath(t))
 	cmd.Env = append(codexBaseEnv(), "CODEX_BIN="+fakeCodex, "HOME="+home)
@@ -305,10 +281,6 @@ func TestCodexAsClaude_ModelFallsBackToTopLevelTomlOnly(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_NoUsageCapturedOmitsContractFields: when codex never emits
-// a turn.completed (e.g. killed before finishing), the result line must stay
-// the bare pre-existing shape — no fabricated usage_contract_version/usage —
-// so Collector.Finish degrades to an honest unmetered observation.
 func TestCodexAsClaude_NoUsageCapturedOmitsContractFields(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -339,10 +311,6 @@ func TestCodexAsClaude_NoUsageCapturedOmitsContractFields(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_FailureStillEmitsGatheredUsage: codex exits non-zero AFTER
-// reporting a turn.completed usage (a graceful, non-killed failure) — the
-// script must still forward that usage (with a non-success subtype) and exit
-// with codex's own status so afm still fails the stage.
 func TestCodexAsClaude_FailureStillEmitsGatheredUsage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -381,11 +349,6 @@ func TestCodexAsClaude_FailureStillEmitsGatheredUsage(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows asserts that, without
-// CODEX_VERIFY, each codex item.completed is emitted as its OWN assistant line
-// (not aggregated into one; a command_execution may emit one or more lines), and
-// command_execution becomes a Bash tool_use row — matching how claude/openai-agent
-// appear in the afm feed. (Ordering/shape only; liveness is a separate test.)
 func TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -435,10 +398,6 @@ func TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_NonVerify_NullUsageLastTurnStillEmitsResult guards the
-// set -e foot-gun where extract_usage's loop ends on a conditionally-failing
-// [[ ]]&& list: a stream whose LAST line is a turn.completed with null usage
-// must still emit the result line and exit 0 (no silent errexit abort).
 func TestCodexAsClaude_NonVerify_NullUsageLastTurnStillEmitsResult(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -551,11 +510,6 @@ func TestCodexAsClaude_NonVerify_ReasoningBecomesText(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput: CODEX_VERBOSE=1
-// additionally emits the command's aggregated output as text. The command
-// deliberately does NOT contain the marker — only the verbose output block can
-// produce it, so the assertion discriminates a verbose regression from the
-// always-emitted Bash tool row (which carries just the command string).
 func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -577,15 +531,6 @@ func TestCodexAsClaude_NonVerify_VerboseEmitsCommandOutput(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_NonVerify_WhitespaceAndSummaryArray guards two XLATE
-// contracts from the codex-adapter review: (1) whitespace-only
-// agent_message/reasoning text (spaces/tabs/newlines) emits NOTHING — a
-// length>0 check alone would still create a blank feed bubble; (2) a reasoning
-// item carrying codex's summary ARRAY shape
-// (summary:[{"type":"summary_text","text":"..."}], per
-// RawResponseItemCompletedNotification) is normalized into joined text instead
-// of failing jq's array+string addition — an error the streaming loop's || true
-// used to swallow, silently dropping the whole reasoning event.
 func TestCodexAsClaude_NonVerify_WhitespaceAndSummaryArray(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -594,9 +539,8 @@ func TestCodexAsClaude_NonVerify_WhitespaceAndSummaryArray(t *testing.T) {
 		t.Skip("jq not available")
 	}
 
-	// Raw string literals keep \t and \n as the two-character JSON escapes —
-	// the stream itself must contain tab/newline ESCAPES, which decode to
-	// whitespace-only item text inside jq.
+	// Raw string literals keep \t and \n as the two-character JSON escapes — the stream itself must contain
+	// tab/newline ESCAPES, which decode to whitespace-only item text inside jq.
 	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"   "}}
 {"type":"item.completed","item":{"type":"reasoning","text":"\t\n"}}
 {"type":"item.completed","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"first summary line"},{"type":"summary_text","text":"second line"}]}}

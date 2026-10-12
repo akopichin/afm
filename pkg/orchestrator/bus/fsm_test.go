@@ -87,14 +87,6 @@ func TestFSM_Apply_RetryingStartPlanning(t *testing.T) {
 	}
 }
 
-// TestFSM_RetryFromAwaitingUserInput закрывает Finding #5: поллер вопросов мог
-// перевести стадию Running→AwaitingUserInput из-за брошенного вопроса, пока агент
-// ещё выполнялся; затем агент возвращал ретраибельную ошибку (529). Раньше
-// EvScheduleRetry (From={Planning,Running}) и EvResumeAfterRetry (From={Retrying})
-// молча отбрасывались из AwaitingUserInput, и всё время бэкоффа стадия показывала
-// неверный awaiting_user_input вместо retrying (и полагалась на fallthrough
-// повторного запуска агента + AwaitingUserInput-приём в EvComplete — хрупко). Оба
-// события теперь принимают AwaitingUserInput как исходный статус.
 func TestFSM_RetryFromAwaitingUserInput(t *testing.T) {
 	t.Run("EvScheduleRetry: awaiting_user_input->retrying", func(t *testing.T) {
 		fsm, store := newTestFSM(t, []string{"a"})
@@ -139,11 +131,6 @@ func TestFSM_Apply_ReviseFromRunning(t *testing.T) {
 	}
 }
 
-// TestEvRevise_FromPaused закрывает Task 5 фичи review-notes: инъекция
-// ревью-заметки в приостановленную стадию должна суметь перезапустить её
-// агента через тот же путь, что и обычный Revise (feedback.md + EvRevise),
-// поэтому paused обязан быть легальным источником EvRevise, как
-// running/awaiting_approval.
 func TestEvRevise_FromPaused(t *testing.T) {
 	fsm, store := newTestFSM(t, []string{"a"})
 	defer store.Close()
@@ -169,10 +156,6 @@ func TestFSM_Apply_AskUser(t *testing.T) {
 	}
 }
 
-// TestFSM_Apply_AskUser_FromRetryAndRevising locks in the fix for the question
-// poller scanning retrying/revising stages: EvAskUser must transition them to
-// awaiting_user_input, otherwise a question asked mid-retry/mid-revision never
-// reaches the awaiting state and the answer is lost.
 func TestFSM_Apply_AskUser_FromRetryAndRevising(t *testing.T) {
 	for _, from := range []state.StageStatus{state.StatusRetrying, state.StatusRevising} {
 		fsm, store := newTestFSM(t, []string{"a"})
@@ -347,11 +330,6 @@ func TestFSM_Apply_Continue_IllegalFromRunning(t *testing.T) {
 	}
 }
 
-// TestFSM_Apply_VerifyFail_LegalFromActiveStatuses — H1 (6-е код-ревью):
-// EvVerifyFail mirrors EvComplete's From-set (the same "active execution"
-// statuses a verify outcome can legitimately land from), and DOES transition
-// to failed from all of them — unlike EvFail's From:nil, this is a real
-// restriction, not a no-op allow-all.
 func TestFSM_Apply_VerifyFail_LegalFromActiveStatuses(t *testing.T) {
 	for _, from := range []state.StageStatus{
 		state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput,
@@ -370,11 +348,6 @@ func TestFSM_Apply_VerifyFail_LegalFromActiveStatuses(t *testing.T) {
 	}
 }
 
-// TestFSM_Apply_VerifyFail_IllegalFromPausedOrRevising — the crux of H1: a
-// stale verify-driven failure must NOT be able to override a stage a
-// concurrent Pause()/Revise() already durably moved to paused/revising.
-// Unlike EvFail (rule.From == nil, accepts any non-terminal status), this
-// must be rejected by the FSM's own CAS — no read-then-act guard needed.
 func TestFSM_Apply_VerifyFail_IllegalFromPausedOrRevising(t *testing.T) {
 	for _, from := range []state.StageStatus{state.StatusPaused, state.StatusRevising} {
 		fsm, store := newTestFSM(t, []string{"a"})

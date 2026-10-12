@@ -154,10 +154,7 @@ describe('FileBrowserModal', () => {
     const onSubmit = vi.fn()
 
     renderModal({ mode: 'picker', selection, onSubmit })
-    // Ждём, пока разрешится getRoots() (эффект на маунте) — иначе assert ниже
-    // синхронно опережает setRoots из ещё не отработавшего промиса, и React
-    // ругается "not wrapped in act(...)" на обновление состояния уже после
-    // конца теста.
+    // Ждём getRoots, чтобы обновление состояния не пришло после завершения теста вне act.
     await screen.findByRole('button', { name: 'afm' })
 
     expect(screen.getByText(/a\.go/)).toBeInTheDocument()
@@ -296,10 +293,7 @@ describe('FileBrowserModal', () => {
   })
 
   test('a stale Reload response for a file that is no longer active does not clobber the newly-opened file, and Reload is not stuck', async () => {
-    // A's Reload is deliberately held open (deferred) — resolved by hand,
-    // late, AFTER B has already loaded — to reproduce the exact race from
-    // the review finding: Reload(A) in flight -> switch to B (fast, wins) ->
-    // A's stale response arrives -> must be dropped, not applied over B.
+    // Resolve Reload(A) only after B loads; A's stale response must not replace B.
     let resolveReloadA!: (r: Response) => void
     const reloadAResponse = new Promise<Response>((resolve) => {
       resolveReloadA = resolve

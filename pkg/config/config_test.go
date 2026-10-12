@@ -334,9 +334,8 @@ func TestDockerConfig_IsDockerEnabled(t *testing.T) {
 		{"nil+env=", config.DockerConfig{}, "", "", false, false},
 		{"in_docker overrides", config.DockerConfig{Enabled: &trueVal}, "", "1", false, false},
 		{"explicit=true wins over AFM_IN_DOCKER=1 not", config.DockerConfig{Enabled: &trueVal}, "", "1", false, false},
-		// Foreign container: marker file present, no AFM_IN_DOCKER. Auto-detect
-		// wins even over an explicit docker.enabled: true / AFM_USE_DOCKER=1 —
-		// afm must not attempt a nested re-exec.
+		// Foreign container: marker file present, no AFM_IN_DOCKER. Auto-detect wins even over an explicit
+		// docker.enabled: true / AFM_USE_DOCKER=1 — afm must not attempt a nested re-exec.
 		{"marker overrides enabled=true", config.DockerConfig{Enabled: &trueVal}, "", "", true, false},
 		{"marker overrides env=1", config.DockerConfig{}, "1", "", true, false},
 		{"no marker, enabled=true → enabled", config.DockerConfig{Enabled: &trueVal}, "", "", false, true},
@@ -387,9 +386,6 @@ func TestInContainer(t *testing.T) {
 	})
 }
 
-// TestDefaultContainerMarkerPresent exercises the real os.Stat-based detector
-// against temp paths, so the filesystem logic itself is covered (not only the
-// injected seam used elsewhere).
 func TestDefaultContainerMarkerPresent(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "dockerenv")
@@ -1294,15 +1290,6 @@ func TestAgentRecipe_ClaudeType(t *testing.T) {
 	}
 }
 
-// TestAgentRecipe_RejectsReservedAuthTargets — E1 (третье код-ревью
-// AI-verify): auth.to не должен позволять рецепту перезаписать
-// control/transport-переменную окружения враппера. Конкретный сценарий —
-// auth.to: env:CODEX_VERIFY: сгенерированный враппер экспортирует секрет
-// ПОСЛЕ того, как CODEX_VERIFY=1 уже стоит в окружении процесса
-// (pkg/docker/wrapper.go), затирая контрольный флаг значением секрета — а
-// scripts/codex-as-claude.sh трактует любое значение != "1" как полный,
-// небезопасный доступ (--dangerously-bypass-approvals-and-sandbox) вместо
-// read-only verify-режима.
 func TestAgentRecipe_RejectsReservedAuthTargets(t *testing.T) {
 	cases := []struct {
 		name   string

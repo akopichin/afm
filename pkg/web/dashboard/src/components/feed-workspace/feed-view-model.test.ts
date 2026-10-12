@@ -115,9 +115,8 @@ describe('verify_started/verify_result — наблюдательные собы
     expect(items[0]).toMatchObject({ actor: 'system', tone: 'success', kind: 'success' })
     expect(items[0]?.text).toContain('codex')
     expect(items[0]?.text).toContain('всё хорошо')
-    // Ссылка на полный отчёт строится из id стадии + verification_id, а не из
-    // абсолютного report_path (сервер отдаёт report.md только по этим id, см.
-    // V5b.3) — присутствие report_path в payload лишь СИГНАЛ "отчёт есть".
+    // Ссылка на полный отчёт строится из id стадии + verification_id, а не из абсолютного report_path —
+    // присутствие report_path в payload лишь СИГНАЛ "отчёт есть".
     expect(items[0]?.reportVerificationId).toBe('v-1')
   })
 
@@ -179,9 +178,8 @@ describe('verify_started/verify_result — наблюдательные собы
     expect(items).toHaveLength(2)
     expect(new Set(items.map((i) => i.key)).size).toBe(2)
 
-    // Тот же список, прогнанный дважды (имитация повторного рендера той же
-    // истории после reload) — ключи стабильны и не плодят occurrence-суффиксы,
-    // если внутри одного toFeedItems-вызова verification_id+step не повторяется.
+    // Тот же список, прогнанный дважды — ключи стабильны и не плодят occurrence-суффиксы, если внутри
+    // одного toFeedItems-вызова verification_id+step не повторяется.
     const again = toFeedItems([started, result])
     expect(again.map((i) => i.key)).toEqual(items.map((i) => i.key))
   })

@@ -17,29 +17,12 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRecovery_AutoApproveAutoAnswerQAndASurviveRestart is the backend end-to-end
-// guard for the auto-answer feed feature: a non-interactive planning stage whose
-// agent asks a question is auto-answered by afm, planning completes, and the
-// stage passes AUTO-APPROVAL to done — all without a human. RequireApproval:true
-// is load-bearing: it proves the auto_approve branch drove the approval, not a
-// no-approval fast path. After the run finishes, the store and server are torn
-// down and a FRESH server is opened over the SAME run directory (simulating an
-// afm restart). The recovered HTTP APIs must still show the whole story:
-//
-//   - /api/status: stage done, auto_approve:true, show_dialog:true.
-//   - the stage NEVER entered awaiting_user_input (non-interactive auto-answer
-//     leaves the FSM untouched — no ask_user transition in the durable log).
-//   - /api/events?stage=<id>: the dialog_question AND the navigable auto-answer
-//     (dialog:true) both replay from notices.jsonl.
-//   - /api/stages/<id>/dialog: the full question with its auto-answered answer.
 func TestRecovery_AutoApproveAutoAnswerQAndASurviveRestart(t *testing.T) {
 	runDir := t.TempDir()
 	const stageID = "plan"
 
-	// A synthetic planning agent: writes a question, polls for afm's answer, then
-	// emits the plan as assistant text (RunPlanning saves it to plan.md). Modeled
-	// on integration_auto_answer_test.go / scenario_harness_test.go's planning
-	// completion script.
+	// A synthetic planning agent: writes a question, polls for afm's answer, then emits the plan as assistant
+	// text.
 	agentScript := filepath.Join(runDir, "planning-agent.sh")
 	script := "#!/bin/bash\n" +
 		"STAGE_DIR=\"$AFM_STAGE_DIR\"\n" +

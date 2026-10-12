@@ -21,9 +21,8 @@ function readInitialEnabled(): boolean {
   return window.localStorage.getItem(STORAGE_KEY) === '1'
 }
 
-// showNotification — единая точка создания браузерной нотификации: best-effort
-// (new Notification может кинуть синхронно, если разрешения на ОС-уровне нет —
-// не роняем UI), иконка из favicon, клик фокусирует окно + опциональный колбэк.
+// showNotification — единая точка создания браузерной нотификации: best-effort, иконка из favicon, клик
+// фокусирует окно + опциональный колбэк.
 function showNotification(title: string, body: string, tag: string, onClick?: () => void): void {
   const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href
   let n: Notification
@@ -54,14 +53,7 @@ function flowFinished(stages: Stage[]): boolean {
   return stages.length > 0 && stages.every((s) => TERMINAL_STATUSES.has(s.status))
 }
 
-// Десктоп-уведомления о стадиях, которым нужно действие (approve/question/fail),
-// пока вкладка дашборда не активна. Один reconciliation-проход (reconcile)
-// покрывает и "новый переход в attention, пока вкладка уже скрыта", и "стадия
-// уже ждала, когда пользователь ушёл со вкладки" — оба случая вызывают одну и
-// ту же функцию, разница только в том, что её триггерит (обновление stages или
-// visibilitychange). Стадии, вышедшие из attention, забываются из
-// notifiedStageIds, чтобы повторный заход (упала → retried → упала снова)
-// уведомил заново.
+// Десктоп-уведомления о стадиях, которым нужно действие, пока вкладка дашборда не активна.
 export function useDesktopNotifications(
   stages: Stage[],
   onFocusStage: (stageId: string) => void,
@@ -74,15 +66,8 @@ export function useDesktopNotifications(
 } {
   const [permission, setPermission] = useState<NotificationPermissionState>(readInitialPermission)
   const [enabled, setEnabled] = useState<boolean>(readInitialEnabled)
-  // stageId → updatedAt того attention-эпизода, о котором уже уведомили. Ключ по
-  // updatedAt, а НЕ по одному stage.id: одна и та же стадия может входить в
-  // attention несколько раз подряд (напр. интерактивный диалог — q1, ответ, q2:
-  // awaiting → running → awaiting, две FSM-транзакции с разными UpdatedAt).
-  // Опрос /api/status (раз в 3с) может НЕ застать промежуточный `running`, и
-  // фронт увидит awaiting(q1) → awaiting(q2) без наблюдаемого выхода из
-  // attention. Прежний Set<stageId> в этом случае глушил q2 как «уже
-  // уведомляли». Сравнение по updatedAt различает эпизоды даже без наблюдения
-  // промежуточного снимка: сменился updatedAt → новый эпизод → уведомляем снова.
+  // stageId → updatedAt того attention-эпизода, о котором уже уведомили. Прежний Set<stageId> в этом
+  // случае глушил q2 как «уже уведомляли».
   const notifiedStages = useRef<Map<string, string>>(new Map())
   const stagesRef = useRef<Stage[]>(stages)
   const enabledRef = useRef<boolean>(enabled)
@@ -102,9 +87,7 @@ export function useDesktopNotifications(
     const current = stagesNeedingAttention(currentStages)
     const currentIds = new Set(current.map((e) => e.stage.id))
 
-    // Забываем стадии, вышедшие из attention (наблюдаемый выход) — тогда повторный
-    // заход уведомит заново. Дополнительно к сравнению по updatedAt ниже это
-    // покрывает случай, когда снимок с не-attention статусом реально наблюдался.
+    // Забываем стадии, вышедшие из attention — тогда повторный заход уведомит заново.
     for (const id of notifiedStages.current.keys()) {
       if (!currentIds.has(id)) notifiedStages.current.delete(id)
     }
@@ -131,26 +114,10 @@ export function useDesktopNotifications(
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [reconcile])
 
-  // Нотификация о завершении флоу: когда ВСЕ стадии стали терминальными
-  // (done/failed) — т.е. ран дошёл до конца, прямо перед выходом afm. В отличие
-  // от attention-нотификаций выше, эта шлётся НЕЗАВИСИМО от видимости вкладки
-  // (одноразовое терминальное событие «ран закончился» полезно и когда смотришь,
-  // и когда ушёл). flowEndedNotified — гард «уже уведомили об этом завершении»:
-  // сбрасывается, как только флоу СНОВА не-финишный (напр. ручной retry оживил
-  // стадию), чтобы повторное завершение уведомило заново.
-  // sawActive — видели ли мы флоу В РАБОТЕ (непустой не-финишный снимок) в этой
-  // сессии. Нужен, чтобы уведомлять о ПЕРЕХОДЕ в завершение, а не при открытии
-  // дашборда уже завершённого рана. ПУСТОЙ снимок stages:[] (первый рендер до
-  // ответа /api/status) — это «данных ещё нет», НЕ «в работе»: его нельзя
-  // засчитывать как активность, иначе первый же финишный снимок уведомит.
+  // Нотификация о завершении флоу: когда ВСЕ стадии стали терминальными — т.е. ран дошёл до конца, прямо
+  // перед выходом afm.
   const sawActive = useRef(false)
-  // lastFinishSig — подпись последнего ОБРАБОТАННОГО (уведомлённого ИЛИ просто
-  // консумнутого) завершения. Подпись включает updatedAt стадий, поэтому повторное
-  // завершение после ретрая (даже если промежуточный active-снимок не застали
-  // опросом) даёт НОВУЮ подпись → уведомляем снова; стабильный тот же снимок —
-  // ту же подпись → не дублируем. Консумим подпись ДАЖЕ когда уведомления
-  // выключены — тогда включение уведомлений ПОЗЖЕ не выстрелит задним числом по
-  // уже прошедшему завершению.
+  // lastFinishSig — подпись последнего ОБРАБОТАННОГО завершения.
   const lastFinishSig = useRef('')
   const flowNameRef = useRef(flowName)
   useEffect(() => {

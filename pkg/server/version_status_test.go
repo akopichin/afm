@@ -16,10 +16,6 @@ func TestStatus_VersionSurfaced(t *testing.T) {
 	}
 }
 
-// TestStatus_VersionOmitEmpty проверяет omitempty на уровне СЫРОГО JSON: при
-// пустой версии ключ "version" вообще отсутствует, при непустой — присутствует
-// со значением. Декодирование в statusResponse не отличает отсутствие от
-// пустой строки, поэтому нужен map[string]any.
 func TestStatus_VersionOmitEmpty(t *testing.T) {
 	raw := func(t *testing.T, cfg Config) map[string]any {
 		t.Helper()

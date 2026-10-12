@@ -36,25 +36,15 @@ func newReportCmd() *cobra.Command {
 				return fmt.Errorf("load state: %w", err)
 			}
 
-			// `afm report` is a pure cost/usage command. With the accounting
-			// display switched off (accounting.enabled: false / AFM_ACCOUNTING=0)
-			// it renders nothing — a one-line hint on stderr, exit 0 (so a
-			// redirected report stays empty). The gate runs AFTER resolving the
-			// run and loading its state, so a bad run id / no runs / corrupt
-			// state still errors exactly as with the display on — only the
-			// cost rendering is skipped. usage.jsonl keeps being collected, so
-			// `AFM_ACCOUNTING=1 afm report` shows it on demand.
+			// `afm report` is a pure cost/usage command. usage.jsonl keeps being collected, so `AFM_ACCOUNTING=1
+			// afm report` shows it on demand.
 			if !accountingDisplayEnabled() {
 				fmt.Fprintln(os.Stderr, "accounting display disabled; set AFM_ACCOUNTING=1 or accounting.enabled: true to view")
 				return nil
 			}
 
-			// Read-only: a run without usage.jsonl at all (accounting
-			// disabled, or a run predating this feature) must still produce
-			// a valid report — accounting.Load returns an empty ledger with
-			// a nil error for that case. A CORRUPT or otherwise-unreadable
-			// ledger renders a self-contained degraded report (see the
-			// matrix in RenderMarkdown's RenderState) and exits 3.
+			// Read-only: a run without usage.jsonl at all must still produce a valid report — accounting.Load
+			// returns an empty ledger with a nil error for that case.
 			led, loadErr := accounting.Load(runDir)
 
 			var renderState accounting.RenderState
@@ -92,14 +82,7 @@ func newReportCmd() *cobra.Command {
 	}
 }
 
-// resolveReportRunDir resolves the `afm report [run]` positional argument to
-// a run directory. Read-only, no flock — this must work while a live `afm
-// run` holds the run's lock, same guarantee as `afm check`. Empty means the
-// latest run under base (the same pick-the-lexicographically-last-directory
-// rule `afm check` uses: run directory names are `<flow>-<timestamp>-<rand>`,
-// so sorting equals chronological order). A non-empty arg is tried first as
-// a filesystem path (relative or absolute) and, failing that, as a bare run
-// id directly under base.
+// resolveReportRunDir resolves the `afm report [run]` positional argument to a run directory.
 func resolveReportRunDir(base, arg string) (string, error) {
 	if arg == "" {
 		return latestRunDir(base)
@@ -134,12 +117,8 @@ func latestRunDir(base string) (string, error) {
 	return dirs[len(dirs)-1], nil
 }
 
-// stageDurations best-effort-derives each stage's wall-clock span (its
-// earliest to latest recorded transition time) directly from events.jsonl —
-// read-only, no flock, tolerant of a missing or corrupt file (a report with
-// no duration column is still a valid report; state.LoadRunState already
-// applies the same read-only, torn-tail-tolerant treatment for status, this
-// just needs Transition.Time per stage, which LoadRunState does not expose).
+// stageDurations best-effort-derives each stage's wall-clock span directly from events.jsonl — read-only,
+// no flock, tolerant of a missing or corrupt file.
 func stageDurations(runDir string) map[string]time.Duration {
 	data, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
 	if err != nil {
@@ -177,10 +156,8 @@ func stageDurations(runDir string) map[string]time.Duration {
 	return out
 }
 
-// formatDuration renders a stage's derived span, or "" for a non-positive
-// duration (a stage with only one transition recorded has no span to show).
-// accounting.StageInfo treats an empty Duration as "omit the parens"
-// rather than rendering a misleading "0s".
+// formatDuration renders a stage's derived span, or "" for a non-positive duration. accounting.StageInfo
+// treats an empty Duration as "omit the parens" rather than rendering a misleading "0s".
 func formatDuration(d time.Duration) string {
 	if d <= 0 {
 		return ""

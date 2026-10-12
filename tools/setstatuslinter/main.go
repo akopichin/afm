@@ -14,12 +14,7 @@ var Analyzer = &analysis.Analyzer{
 	Run:  run,
 }
 
-// fsmFile — единственный файл, которому разрешён прямой (*state.Store).Apply.
-// Переехал из pkg/orchestrator/fsm.go в pkg/orchestrator/bus/fsm.go (Task 4
-// orchestrator-split, вынос CriticalBus/UIBus/FSM в отдельный пакет) — путь
-// здесь хардкодился под старое расположение и не был упомянут в брифе задачи;
-// без этой правки линтер молча продолжил бы искать старый путь и репортил
-// бы FSM.Apply как нарушение.
+// fsmFile — единственный файл, которому разрешён прямой.Apply.
 const fsmFile = "pkg/orchestrator/bus/fsm.go"
 
 func run(pass *analysis.Pass) (any, error) {

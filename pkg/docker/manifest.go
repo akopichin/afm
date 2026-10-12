@@ -13,9 +13,8 @@ import (
 // закодированный манифест file roots внутрь контейнера.
 const FileRootsEnvVar = "AFM_DOCKER_FILE_ROOTS"
 
-// fileRootManifestVersion — версия формата FileRootManifest. Меняется при
-// несовместимых изменениях схемы; DecodeFileRootManifest отвергает всё, что
-// не совпадает с текущей версией.
+// fileRootManifestVersion — версия формата FileRootManifest. Меняется при несовместимых изменениях схемы;
+// DecodeFileRootManifest отвергает всё, что не совпадает с текущей версией.
 const fileRootManifestVersion = 1
 
 // FileRootManifestEntry — один просматриваемый в file browser корень:
@@ -35,16 +34,8 @@ type FileRootManifest struct {
 	Roots   []FileRootManifestEntry `json:"roots"`
 }
 
-// BuildFileRootManifest строит манифест: корень проекта всегда первым
-// (id:"project", read-write), плюс по одному extra-N на каждый browse:true
-// mount (read-only). Пути без browse:true (в т.ч. legacy-строковая форма)
-// не попадают в манифест — они существуют в контейнере (на случай если
-// агенту нужен доступ), но не показываются в file browser.
-//
-// Путь mount'а с ведущим "~" разворачивается относительно домашнего каталога
-// контейнера (containerHome); прочий относительный путь — относительно
-// projectContainerPath (так же, как он был бы разрешён на хосте относительно
-// рабочей директории проекта).
+// BuildFileRootManifest включает project root и browse:true extra mounts; приватные mount-пути не
+// передаются.
 func BuildFileRootManifest(projectContainerPath string, mounts config.ExtraMounts) (FileRootManifest, error) {
 	m := FileRootManifest{
 		Version: fileRootManifestVersion,
@@ -84,19 +75,14 @@ func BuildFileRootManifest(projectContainerPath string, mounts config.ExtraMount
 	return m, nil
 }
 
-// containerPathFor резолвит путь extra_mounts в абсолютный путь внутри
-// контейнера: "~/..." — относительно домашнего каталога контейнера,
-// уже абсолютный путь — как есть, прочий относительный — относительно
-// корня проекта в контейнере. Делегирует resolveMountPath (launcher.go) —
-// той же функции, которой резолвится хост-сторона `-v` в ReExec, иначе
-// манифест (container_path) и реально смонтированный путь расходятся.
+// containerPathFor резолвит extra_mounts тем же resolveMountPath, что и ReExec, чтобы пути манифеста и
+// mount совпадали.
 func containerPathFor(projectContainerPath, path string) string {
 	return resolveMountPath(projectContainerPath, path, containerHome)
 }
 
-// EncodeFileRootManifest сериализует манифест в JSON и кодирует его в
-// base64 (без padding, URL-safe alphabet) для безопасной передачи через
-// переменную окружения.
+// EncodeFileRootManifest сериализует манифест в JSON и кодирует его в base64 (без padding, URL-safe
+// alphabet) для безопасной передачи через переменную окружения.
 func EncodeFileRootManifest(m FileRootManifest) (string, error) {
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -105,9 +91,8 @@ func EncodeFileRootManifest(m FileRootManifest) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// DecodeFileRootManifest декодирует и валидирует манифест: версия должна
-// совпадать с текущей, id корней — быть уникальными, container_path — быть
-// абсолютным.
+// DecodeFileRootManifest декодирует и валидирует манифест: версия должна совпадать с текущей, id корней —
+// быть уникальными, container_path — быть абсолютным.
 func DecodeFileRootManifest(raw string) (FileRootManifest, error) {
 	var m FileRootManifest
 	b, err := base64.RawURLEncoding.DecodeString(raw)

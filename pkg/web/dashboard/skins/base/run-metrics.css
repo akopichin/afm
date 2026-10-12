@@ -1,8 +1,4 @@
-/* pkg/web/dashboard/skins/base/run-metrics.css
-   Five run metrics (Started / Elapsed / Idle / Backoff / Est. cost) in the
-   header center. icon + label + value; value uses tabular-nums so per-second
-   updates don't make the row jitter. Semantic tokens only → adapts to every
-   skin × theme. */
+/* Run metrics layout and popover, using semantic theme tokens. */
 
 .run-metrics {
   position: relative; /* anchor for the overflow popover */
@@ -51,10 +47,7 @@
   color: var(--text-primary);
 }
 
-/* Est. cost / Est. tokens — metric tiles that are real <button>s (destination =
-   the Cost tab, see App.tsx/GlobalHeader). Reset browser button chrome to match
-   the plain .metric look; .metric-cost keeps a relative anchor for the amber
-   marker dot below (Est. tokens has no marker, so no anchor needed). */
+/* Est. cost / Est. */
 .metric-cost,
 .metric-tokens {
   background: none;
@@ -74,16 +67,7 @@
   outline-offset: 2px;
 }
 
-/* Visible reason tooltip (FIX 4, codex#4): the reason (coverage gap /
-   unavailable storage) used to be reachable ONLY via the native `title`
-   attribute, which browsers reveal on mouse hover but never on keyboard
-   focus — a keyboard-only user had no way to learn WHY the amber marker is
-   lit. `data-tooltip` (set in RunMetrics.tsx, same text as the SR-only
-   aria-describedby node) drives a small CSS-only popover shown on BOTH
-   :hover and :focus-visible, so the reason is reachable identically by mouse
-   and keyboard. Hidden by default via opacity+visibility (not display:none)
-   so the transition can animate; `prefers-reduced-motion` drops it to an
-   instant toggle. */
+/* Show reason tooltips on hover and keyboard focus; reduced-motion disables the transition. */
 .metric-cost[data-tooltip] {
   position: relative;
 }
@@ -122,10 +106,7 @@
   }
 }
 
-/* Amber marker — a coverage gap or an unavailable accounting store (see
-   hasCostMarker in RunMetrics.tsx). Anchored to the button itself, NOT nested
-   inside .metric-label, so it stays visible even once the <1280px breakpoint
-   below hides label text. */
+/* Amber marker — a coverage gap or an unavailable accounting store. */
 .metric-marker {
   position: absolute;
   top: -2px;
@@ -136,9 +117,7 @@
   background: var(--attention);
 }
 
-/* Visually-hidden reason node the tile's aria-describedby points at — ONE
-   shared node for both the inline and popover copies of the tile (twin
-   render), so the DOM never carries two elements with the same id. */
+/* Share one hidden aria-describedby reason node between inline and popover tiles to avoid duplicate IDs. */
 .metric-cost-reason {
   position: absolute;
   width: 1px;
@@ -151,9 +130,7 @@
   border: 0;
 }
 
-/* Overflow control: a "⋯" button that pops the full four-metric list. Hidden on
-   desktop; revealed only once the two secondary metrics collapse (<1000px), so
-   Idle/Backoff stay reachable instead of silently vanishing. */
+/* Overflow control: a "⋯" button that pops the full four-metric list. */
 .metrics-more {
   display: none;
   align-items: center;
@@ -189,16 +166,8 @@
 /* Labels always show inside the popover — it exists precisely to name the values. */
 .metrics-popover .metric-label { display: block; }
 
-/* Responsive contract (Increment 2, task 9 — re-tuned for the 5th metric):
-   collapse order keeps Started + Elapsed inline longest (the two "anchor"
-   facts about the run), folding the rest behind the "⋯" popover in this
-   order: Idle + Backoff first (least surprising to lose — Idle/Backoff are
-   secondary timers), then Est. cost, then everything.
-   - 1080–1279px: inline Started + Elapsed + Est. cost; Idle + Backoff → popover.
-   - 900–1079px: inline Started + Elapsed only; Idle + Backoff + Est. cost → popover.
-   - <900px: all five fold into the single "⋯" popover.
-   The popover copies (grandchildren) always keep labels + stay visible,
-   regardless of tier. */
+/* Responsive contract: collapse order keeps Started + Elapsed inline longest, folding the rest behind the
+   "⋯" popover in this order: Idle + Backoff first, then Est. cost, then everything. */
 @media (max-width: 1279px) {
   .run-metrics { gap: 16px; }
   .run-metrics > .metric .metric-label { display: none; }

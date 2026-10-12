@@ -12,12 +12,8 @@ func isAutonomousStage(stageDir string) bool {
 	return err == nil
 }
 
-// clearStaleAutonomousFlag удаляет autonomous.flag, оставшийся от неудавшейся
-// автономной попытки, когда текущая попытка идёт по стандартному треку
-// (planning). Без этого isAutonomousStage (и производный от неё
-// stage_autonomous в /api/status) навсегда считал бы стадию автономной — даже
-// после того, как она реально прошла planning и получила настоящий plan.md,
-// ожидающий approve/revise в дашборде.
+// clearStaleAutonomousFlag удаляет autonomous.flag, оставшийся от неудавшейся автономной попытки, когда
+// текущая попытка идёт по стандартному треку.
 func clearStaleAutonomousFlag(stageDir string) {
 	_ = os.Remove(filepath.Join(stageDir, "autonomous.flag"))
 }

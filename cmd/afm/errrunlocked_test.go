@@ -7,10 +7,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestApproveErrRunLockedMessage verifies that `afm approve` surfaces a
-// friendly, actionable message (not a raw lock error) when the run
-// directory's flock is already held by another process (e.g. a live
-// `afm run`), per the state.ErrRunLocked branch in approve.go.
 func TestApproveErrRunLockedMessage(t *testing.T) {
 	chdirTemp(t)
 

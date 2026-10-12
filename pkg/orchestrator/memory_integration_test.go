@@ -14,11 +14,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// newMemoryIntegrationOrchestrator wires a real *state.Store + *Orchestrator
-// with memory v3 enabled end-to-end (RunDir/Memory/MemoryDir) for a single
-// reflect:{mode:rw} stage, exactly the shape production wires in
-// cmd/afm/run.go. Returns the orchestrator plus the resolved paths/dirs the
-// test needs.
+// newMemoryIntegrationOrchestrator wires one reflect-enabled stage with a real Store and memory pipeline.
 func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow.Stage, runDir, stageDir, memDir string) {
 	t.Helper()
 	stage = flow.Stage{
@@ -48,14 +44,8 @@ func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow
 		MemoryDir: memDir,
 	})
 
-	// completeStage only calls maybeRunReflection once the stage's own agent
-	// has already created its directory (see runAutonomousAgent/
-	// runImplementationAgent — MkdirAll happens before the first RunAgent
-	// call). Reproduce that precondition by hand since no real agent runs
-	// here — production dirs exist, tests must create them. A recognizable
-	// agent-session artifact (execution_summary.md) is also required: the
-	// real memorypipeline.CaptureStage primitive (Task 10) StepErrors on a
-	// stage dir with no agent session at all (SourceInventory.HasAgentSession).
+	// completeStage only calls maybeRunReflection once the stage's own agent has already created its
+	// directory.
 	stageDir = filepath.Join(runDir, stage.ID)
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -66,12 +56,6 @@ func newMemoryIntegrationOrchestrator(t *testing.T) (o *Orchestrator, stage flow
 	return o, stage, runDir, stageDir, memDir
 }
 
-// TestIntegration_MemoryV3_PipelineWritesStageFile drives a reflect:{mode:rw}
-// stage through maybeRunReflection (the real trigger point completeStage
-// calls, see reflection.go) with a stubbed runMemoryAgent, then checks the
-// full v3 write path: reflect_dataset.yaml/patterns.md/prioritized.md/high.md
-// land in the stage dir, and the stage's own memory file is rewritten with
-// the merged High patterns.
 func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
 	o, stage, runDir, stageDir, memDir := newMemoryIntegrationOrchestrator(t)
 	var order []string
@@ -93,11 +77,7 @@ func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
 		t.Error("reflect_dataset.yaml is empty")
 	}
 
-	// The distill byproducts (patterns.md/prioritized.md/high.md) now live
-	// under the run's .memory-finalize staging attempt dir, not the stage dir
-	// itself — Finalize (memorypipeline.Pipeline.Finalize, Task 10) stages
-	// every target's intermediates in a fresh, exclusive per-attempt
-	// directory so promotion can be atomic and stage dirs stay uncluttered.
+	// Finalize intermediates live under .memory-finalize attempts so promotion can remain atomic.
 	for _, f := range []string{"patterns.md", "prioritized.md", "high.md"} {
 		matches, err := filepath.Glob(filepath.Join(runDir, ".memory-finalize", "*", "stages", stage.ID, "distill", f))
 		if err != nil {
@@ -122,12 +102,6 @@ func TestIntegration_MemoryV3_PipelineWritesStageFile(t *testing.T) {
 	}
 }
 
-// TestIntegration_MemoryV3_PointerReachesLaterStagePrompt runs the full
-// pipeline for stage s1 (mode:rw — both writes AND reads its own file), then
-// verifies a later stage's prompt carries the memory pointer via the actual
-// prompts.Build path every runXxxAgent uses (agents.go: MemoryBlock:
-// o.memoryBlockForStage(s)) — the project file always, the stage's own file
-// only when its mode allows reading.
 func TestIntegration_MemoryV3_PointerReachesLaterStagePrompt(t *testing.T) {
 	o, stage, _, _, memDir := newMemoryIntegrationOrchestrator(t)
 	var order []string
@@ -136,9 +110,8 @@ func TestIntegration_MemoryV3_PointerReachesLaterStagePrompt(t *testing.T) {
 	o.maybeRunReflection(context.Background(), stage.ID)
 	o.concurrency.WaitAgents()
 
-	// Per-stage память строится в КОНЦЕ рана: до end-of-run ни файла стадии, ни
-	// memory.md ещё нет, инъекция пуста. Память (и своя стадии, и общая)
-	// переносится в СЛЕДУЮЩИЙ ран — как и общий memory.md.
+	// Per-stage память строится в КОНЦЕ рана: до end-of-run ни файла стадии, ни memory.md ещё нет, инъекция
+	// пуста.
 	if b := o.memoryBlockForStage(stage); b != "" {
 		t.Fatalf("before end-of-run nothing is built yet, block must be empty:\n%s", b)
 	}

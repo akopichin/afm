@@ -38,10 +38,6 @@ func TestBuildRetryContext_MissingLogReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestIsRetryableError: перенесён из completion_test.go при выносе
-// completion.go в pkg/orchestrator/stagefiles (Task 3 orchestrator-split) —
-// isRetryableError и константы match* остаются в этом пакете (retry.go,
-// errors.go), поэтому тест здесь, а не в stagefiles.
 func TestIsRetryableError(t *testing.T) {
 	cases := []struct {
 		msg  string
@@ -72,19 +68,6 @@ func TestIsRetryableError(t *testing.T) {
 	}
 }
 
-// TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion is a regression
-// test for a bug found analyzing a real production log: a stage's
-// completion marker (execution_summary.md) already existed — the agent had
-// genuinely finished all its real work and its process exited cleanly (err
-// == nil) — but an entirely unrelated, permanently-abandoned question.json
-// from much earlier in the stage's life (in the real incident: the
-// reused-id bug's orphaned second-round question, which the user had
-// already worked around via a manual Revise and moved past) was still
-// sitting on disk with no answer.json. runWithRetry's hasOpenQuestion check
-// doesn't distinguish "genuinely waiting on this answer" from "long-dead
-// artifact nobody will ever answer" — it held the stage in
-// awaiting_user_input forever, even though the real work was already done
-// and verifiable on disk.
 func TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")
@@ -100,12 +83,8 @@ func TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Симулирует реальный прод-сценарий: независимый поллер вопросов уже
-	// перевёл стадию в awaiting_user_input, ПОКА агент ещё выполнялся —
-	// раньше, чем он успел вернуться и записать execution_summary.md. Без
-	// этого перехода тест не отличим от случая "вопрос только что написан
-	// этим же вызовом" (см. TestIntegration_PlanningWithOpenQuestionWaits),
-	// где completion не должен побеждать открытый вопрос.
+	// Поллер уже перевёл живого агента в awaiting_user_input до записи completion; это отличает stale-вопрос
+	// от нового.
 	events := o.critical.Recv()
 	o.Trigger("s1", bus.EvAskUser, bus.GuardCtx{Phase: phaseAutonomous}, "")
 	<-events // drain this Trigger's own stage_status_changed notification
@@ -127,10 +106,7 @@ func TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion(t *testing.T) {
 		t.Fatal("expected EventAgentCompleted to be published — completion marker was already satisfied")
 	}
 
-	// runWithRetry only publishes the event — advancing the FSM from it is
-	// the live event loop's job (Run's onAgentCompleted dispatch). Simulate
-	// that one step so the assertion below reflects the real end-to-end
-	// outcome, not just "was the event published".
+	// runWithRetry only publishes the event — advancing the FSM from it is the live event loop's job.
 	if err := o.onAgentCompleted(context.Background(), completedEvent); err != nil {
 		t.Fatalf("onAgentCompleted: %v", err)
 	}
@@ -140,17 +116,10 @@ func TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion(t *testing.T) {
 	}
 }
 
-// TestRunWithRetry_ScheduleRetryTransitionCarriesReason закрывает Finding #7:
-// EventRetryScheduled публикуется живьём с Data="attempt X/Y in Zs", но сама
-// FSM-transition EvScheduleRetry создавалась с reason="" — а на reload
-// transitionToFeedEvents реконструирует retry_scheduled именно из reason
-// (Data: t.Reason). Итог: после перезагрузки строка ленты показывала "retry:"
-// без attempt/backoff. Теперь reason == сообщению.
 func TestRunWithRetry_ScheduleRetryTransitionCarriesReason(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
-	// setupHookOrch строит Orchestrator вручную (не через New), поэтому
-	// maxRetries/retryBackoff нулевые — выставляем явно, иначе retry вообще не
-	// планируется (attempt < 0 == false → сразу EvFail).
+	// setupHookOrch строит Orchestrator вручную (не через New), поэтому maxRetries/retryBackoff нулевые —
+	// выставляем явно, иначе retry вообще не планируется (attempt < 0 == false → сразу EvFail).
 	o.maxRetries = 1
 	o.retryBackoff = time.Millisecond
 	stageDir := filepath.Join(runDir, "s1")
@@ -189,22 +158,6 @@ func TestRunWithRetry_ScheduleRetryTransitionCarriesReason(t *testing.T) {
 	}
 }
 
-// TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage — E4 (третье
-// код-ревью): раньше runWithRetry реконсилировал ТОЛЬКО paused перед
-// публикацией EventAgentCompleted — если конкурентный Revise() успевал
-// перевести стадию в revising, пока completionCheck (verify) ещё выполнялся,
-// completion всё равно публиковался. Для implementation/autonomous это
-// маскировалось отдельной веткой в onAgentCompleted (спавнит раннер с
-// фидбеком сама, см. orchestrator.go), но для STANDALONE review-стадии
-// completeStage тихо отклоняет переход из revising (revising не входит в её
-// From-набор EvComplete) — стадия зависала в revising без единого работающего
-// раннера до перезапуска afm.
-//
-// Тест воспроизводит гонку детерминированно: agentFn симулирует конкурентный
-// Revise(), реально переводящий стадию running->revising ЧЕРЕЗ FSM, ПРЯМО
-// перед тем как вернуть nil (агент "успел" естественно завершиться). phase —
-// phaseReview (та самая standalone review-ветка), completionCheck — nil
-// (сразу checkErr==nil, как после успешного verify-прохода).
 func TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	s := flow.Stage{ID: "s1"}
@@ -227,9 +180,8 @@ func TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage(t *testing.T) {
 	if got := o.opts.Store.Get(s.ID); got != state.StatusRevising {
 		t.Fatalf("status = %v, want revising (untouched — the respawn callback owns the next transition)", got)
 	}
-	// Trigger(EvRevise) itself legitimately wakes the event loop with a
-	// stage_status_changed critical event — drain that and assert
-	// specifically that EventAgentCompleted was never published alongside it.
+	// Trigger itself legitimately wakes the event loop with a stage_status_changed critical event — drain
+	// that and assert specifically that EventAgentCompleted was never published alongside it.
 	for {
 		select {
 		case ev := <-o.critical.Recv():
@@ -242,14 +194,6 @@ func TestRunWithRetry_LateCompletionDoesNotCompleteRevisingStage(t *testing.T) {
 	}
 }
 
-// TestRunWithRetry_ConcurrentReviseWinsOverNeedsChangesVerifyOutcome — F1
-// (4-е код-ревью): реконсиляция конкурентного Revise() (running->revising)
-// должна покрывать ЛЮБОЙ исход completionCheck, а не только успешный (pass).
-// agentFn симулирует конкурентный Revise() ПРЯМО перед тем как вернуть nil
-// (агент "успел" завершиться естественно); completionCheck возвращает
-// *VerifyRejectedError (needs_changes-эквивалент AI-verify) — стадия должна
-// уйти по пути respawn-with-feedback (onUserInterrupted), а НЕ начать
-// коррекцию СТАРОГО поколения (incomplete-retry ветка ниже в runWithRetry).
 func TestRunWithRetry_ConcurrentReviseWinsOverNeedsChangesVerifyOutcome(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	s := flow.Stage{ID: "s1"}
@@ -280,11 +224,6 @@ func TestRunWithRetry_ConcurrentReviseWinsOverNeedsChangesVerifyOutcome(t *testi
 	}
 }
 
-// TestRunWithRetry_ConcurrentReviseWinsOverVerifyExecError — F1 (4-е
-// код-ревью), зеркало предыдущего теста для exec-ошибки verify
-// (транспорт/протокол/таймаут/inconclusive/сбой сохранения). Раньше такой
-// исход шёл прямиком в EvFail (FSM разрешает EvFail даже из revising, см.
-// bus/fsm.go), затирая уже случившийся человеческий Revise.
 func TestRunWithRetry_ConcurrentReviseWinsOverVerifyExecError(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	s := flow.Stage{ID: "s1"}

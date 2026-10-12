@@ -8,9 +8,8 @@ import (
 	"path/filepath"
 )
 
-// ownerMarkerName is the per-profile marker that records which afm process owns a
-// Chrome profile dir, so a later start can safely sweep only provably-dead-owned
-// dirs left behind by a SIGKILL (which skips Close).
+// ownerMarkerName is the per-profile marker that records which afm process owns a Chrome profile dir, so a
+// later start can safely sweep only provably-dead-owned dirs left behind by a SIGKILL.
 const ownerMarkerName = "owner.json"
 
 type ownerMarker struct {
@@ -26,10 +25,8 @@ type chromeConn struct {
 	profileDir string
 }
 
-// launchChrome starts a dedicated Chrome with --remote-debugging-pipe (never a
-// TCP port) in its own profile dir. The pipe fds are passed as the child's fd 3
-// (input) and fd 4 (output). The process is put in its own group so the whole
-// tree can be killed on teardown.
+// launchChrome starts a dedicated Chrome with --remote-debugging-pipe in its own profile dir. The pipe fds
+// are passed as the child's fd 3 (input) and fd 4 (output).
 func launchChrome(chromePath, profileDir string, headless bool) (*chromeConn, error) {
 	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		return nil, fmt.Errorf("browser: profile dir: %w", err)
@@ -103,10 +100,7 @@ func writeOwnerMarker(profileDir string, pid int, epoch string) error {
 	return os.WriteFile(filepath.Join(profileDir, ownerMarkerName), data, 0o600)
 }
 
-// sweepStaleProfiles removes profile dirs under parent whose owner process is no
-// longer alive. Dirs without a readable owner marker are left untouched
-// (conservative): this is the honest counterpart to the SIGKILL limitation — a
-// best-effort sweep on the next start, never a watchdog.
+// sweepStaleProfiles removes profile dirs under parent whose owner process is no longer alive.
 func sweepStaleProfiles(parent string, isAlive func(int) bool) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {

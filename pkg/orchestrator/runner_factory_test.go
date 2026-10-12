@@ -14,12 +14,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRunnerForAttributesStageIDForDefaultCommand воспроизводит косяк №1:
-// у стадии без собственного command (использует дефолтный клиент) события
-// agent_action уходили с пустым StageID — дашборд не рисовал бейдж стадии.
-// Причина: runnerFor отдавал разделяемый o.runner, чей OnAction был привязан
-// к пустому stageID (uiActionPublisher(ui, "")). После фикла каждая стадия
-// получает per-stage runner с корректным stageID.
 func TestRunnerForAttributesStageIDForDefaultCommand(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend"}
@@ -78,9 +72,6 @@ func waitForAgentAction(t *testing.T, ch <-chan bus.Event) bus.Event {
 	}
 }
 
-// TestRunnerForSetsStageDirForNonInteractiveStage закрывает главный пробел
-// этой фичи: без AFM_STAGE_DIR агенту non-interactive стадии физически
-// некуда писать question.json (см. docs/superpowers/specs/2026-08-07-non-interactive-auto-answer-design.md).
 func TestRunnerForSetsStageDirForNonInteractiveStage(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend"} // Interactive: false (default)
@@ -121,28 +112,6 @@ printf '{"type":"result","subtype":"success"}\n'`, marker)
 	}
 }
 
-// TestRunnerForVerify_WiresInterruptChFromStage — V5a.1: runnerForVerify
-// (в отличие от runnerFor) не подключало Config.InterruptCh к
-// o.interruptChans[s.ID] — Pause()/Revise() во время работающего
-// verify-субпроцесса сигналили канал, но некому было его слушать, и
-// верификатор продолжал бы работать до собственного естественного
-// завершения. Тест гоняет РЕАЛЬНЫЙ bash-скрипт через RunVerifyAgent (не
-// инъектированный o.runVerifyAgent) и проверяет, что сигнал на канал
-// реально доходит до процесса — RunVerifyAgent должен вернуть
-// verify.RunOutcome{Interrupted:true}.
-//
-// Не проверяет "мягкое" vs "принудительное" завершение по отдельному
-// маркеру от bash-trap'а — живое исследование этого теста на реальной
-// машине показало, что доставка SIGINT процессной группе с graceful-trap'ом
-// в дочернем bash иногда (не всегда) проигрывает гонку с завершением
-// заведомо untrapped-потомка (sleep) в той же группе — известная
-// особенность взаимодействия bash/сигналы/wait(), не имеющая отношения к
-// корректности executor.run: он ВСЕГДА в итоге возвращает
-// ErrUserInterrupted — либо через быстрый путь (<-done сразу после SIGINT),
-// либо через гарантированный SIGKILL-фолбэк после interruptGracePeriod
-// (executor.go, 15s). Поэтому единственное, что тест обязан проверить —
-// именно этот исход (Interrupted=true), с таймаутом, комфортно
-// перекрывающим худший случай (SIGKILL-фолбэк).
 func TestRunnerForVerify_WiresInterruptChFromStage(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "S1"}
@@ -200,9 +169,8 @@ func TestRunnerForVerify_WiresInterruptChFromStage(t *testing.T) {
 	}
 	interruptCh <- struct{}{}
 
-	// Таймаут комфортно перекрывает executor.go's interruptGracePeriod
-	// (15s) — именно столько может занять худший случай, когда graceful
-	// SIGINT проигрывает гонку и executor сам форсирует SIGKILL.
+	// Таймаут комфортно перекрывает executor.go's interruptGracePeriod (15s) — именно столько может занять
+	// худший случай, когда graceful SIGINT проигрывает гонку и executor сам форсирует SIGKILL.
 	select {
 	case got := <-outcomeCh:
 		if got.err != nil {

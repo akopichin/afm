@@ -10,17 +10,13 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// newGateVerifyTestOrchestrator строит минимальный Orchestrator для тестов
-// gateWithVerify напрямую — тот же приём, что newVerifyTestOrchestrator в
-// verify_test.go (RunVerification не трогает FSM/store/UI).
+// newGateVerifyTestOrchestrator строит минимальный Orchestrator для тестов gateWithVerify напрямую — тот
+// же приём, что newVerifyTestOrchestrator в verify_test.go.
 func newGateVerifyTestOrchestrator(t *testing.T, stages ...flow.Stage) *Orchestrator {
 	t.Helper()
 	return &Orchestrator{opts: Options{RunDir: t.TempDir(), Stages: stages, RunID: "run1"}, ui: bus.NewUIBus()}
 }
 
-// TestGateWithVerify_ProbeFailsSkipsVerify — файл-проба идёт ПЕРВОЙ: если она
-// не прошла, gateWithVerify возвращает её ошибку как есть, вообще не запуская
-// verify (GET/status/refresh не должны триггерить AI).
 func TestGateWithVerify_ProbeFailsSkipsVerify(t *testing.T) {
 	s := flow.Stage{ID: "s1", Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
 	o := newGateVerifyTestOrchestrator(t, s)
@@ -48,9 +44,6 @@ func TestGateWithVerify_EmptyVerifyNeverRunsVerification(t *testing.T) {
 	}
 }
 
-// TestGateWithVerify_ProbePassesRunsVerification — проба прошла, verify
-// настроен и фаза исполнительская: verify реально вызывается, а его вердикт
-// становится итоговой ошибкой completionCheck.
 func TestGateWithVerify_ProbePassesRunsVerification(t *testing.T) {
 	s := flow.Stage{ID: "s1", Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
 	o := newGateVerifyTestOrchestrator(t, s)
@@ -71,9 +64,6 @@ func TestGateWithVerify_ProbePassesRunsVerification(t *testing.T) {
 	}
 }
 
-// TestGateWithVerify_AutonomousGatesAfterSummaryProbe — CheckAutonomousCompletion
-// (базовая проба для [auto]-стадий) идёт первой; verify запускается только
-// после того, как она реально прошла (новое поведение для [auto]+verify).
 func TestGateWithVerify_AutonomousGatesAfterSummaryProbe(t *testing.T) {
 	s := flow.Stage{ID: "s1", Agents: []flow.AgentType{flow.AgentAuto},
 		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
@@ -96,11 +86,6 @@ func TestGateWithVerify_AutonomousGatesAfterSummaryProbe(t *testing.T) {
 	}
 }
 
-// TestGateWithVerify_PlanningPhaseNeverGated — belt-and-suspenders: даже если
-// кто-то по ошибке обернёт completionCheck планировочного раннера,
-// gateWithVerify не должен запускать verify для фазы planning (в проде этого
-// не происходит — раннеры планирования вообще не оборачиваются, см. agents.go;
-// V1 к тому же запрещает verify на planning-only стадии на этапе parse).
 func TestGateWithVerify_PlanningPhaseNeverGated(t *testing.T) {
 	s := flow.Stage{ID: "s1", Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyAgent, Command: "codex"}}}}
 	o := newGateVerifyTestOrchestrator(t, s)

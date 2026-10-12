@@ -7,15 +7,8 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 )
 
-// NewExecRunner returns the production AgentRunner: a fresh isolated agent
-// (без --resume, без StageDir — AFM_STAGE_DIR стрипается executor'ом),
-// CWD=cfg.RootDir, читает/пишет файлы по абсолютным путям из промпта.
-// Зеркалит runJSONFixAgent, но синхронный: конвейер уже крутится в отдельной
-// (SpawnDetached) горутине и вызывает шаги последовательно.
-//
-// Всегда использует дефолтную команду клиента (cfg.Command/cfg.ExtraArgs) —
-// каждый шаг конвейера памяти запускается одним и тем же настроенным
-// агентом, per-spec переопределения команды нет.
+// NewExecRunner returns the production AgentRunner: a fresh isolated agent, CWD=cfg.RootDir, читает/пишет
+// файлы по абсолютным путям из промпта.
 func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 	return func(ctx context.Context, spec AgentSpec) error {
 		var onUsage func(accounting.Observation)

@@ -17,9 +17,8 @@ func promptLine(scanner *bufio.Scanner, w io.Writer, label string) string {
 	return strings.TrimSpace(scanner.Text())
 }
 
-// promptChoice prints a numbered menu (1-based) and reads a selection.
-// Empty input selects defaultIdx (0-based). Out-of-range or non-numeric
-// input re-prompts until a valid choice is entered.
+// promptChoice prints a numbered menu (1-based) and reads a selection. Empty input selects defaultIdx
+// (0-based). Out-of-range or non-numeric input re-prompts until a valid choice is entered.
 func promptChoice(scanner *bufio.Scanner, w io.Writer, label string, options []string, defaultIdx int) int {
 	_, _ = fmt.Fprintln(w, label)
 	for i, opt := range options {
@@ -68,9 +67,8 @@ func promptInt(scanner *bufio.Scanner, w io.Writer, label string, def int) int {
 	return n
 }
 
-// parsePhaseSelection parses a comma-separated list of 1-based option
-// indices (e.g. "1,2"). Empty input returns defaults unchanged. Invalid
-// or out-of-range indices are silently skipped.
+// parsePhaseSelection parses a comma-separated list of 1-based option indices (e.g. "1,2"). Empty input
+// returns defaults unchanged. Invalid or out-of-range indices are silently skipped.
 func parsePhaseSelection(raw string, numOptions int, defaults []int) []int {
 	if strings.TrimSpace(raw) == "" {
 		return defaults

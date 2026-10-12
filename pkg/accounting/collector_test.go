@@ -74,9 +74,8 @@ func TestCollectorInterruptedIsUnmetered(t *testing.T) {
 	}
 }
 
-// --- Additional collector tests: the synthetic adapter envelope (Task 7 will
-// emit this shape from codex/openai/openai-agent), not exercised by the three
-// tests above.
+// --- Additional collector tests: the synthetic adapter envelope (Task 7 will emit this shape from
+// codex/openai/openai-agent), not exercised by the three tests above.
 
 func TestCollectorSyntheticAdapterEnvelope(t *testing.T) {
 	c := NewCollector(UsageHint{})

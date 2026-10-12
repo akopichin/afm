@@ -18,14 +18,11 @@ import (
 
 // Константы бокового разговора.
 const (
-	// MaxMessageBytes — верхний предел размера ОДНОГО пользовательского
-	// сообщения (отдельно от бюджета всего собранного промпта —
-	// ContextBuilder.ByteLimit). Экспортирован: C1 маппит превышение в HTTP.
+	// MaxMessageBytes — верхний предел размера ОДНОГО пользовательского сообщения. Экспортирован: C1 маппит
+	// превышение в HTTP.
 	MaxMessageBytes = 64 * 1024
 
-	// subBufferSize — буфер канала одного подписчика. Медленный подписчик,
-	// переполнивший буфер, отцепляется (канал закрывается), чтобы не блокировать
-	// агентскую горутину и не терять durable-события (они уже в журнале).
+	// subBufferSize — буфер канала одного подписчика.
 	subBufferSize = 32
 
 	sideAgentType = "side"
@@ -73,13 +70,9 @@ type Config struct {
 	IdleTimeout time.Duration
 	// Context — сборщик промпта из истории + текущего сообщения.
 	Context ContextBuilder
-	// Secrets — поставщик значений секретов для редакции пользовательского
-	// текста (собственный секрет агента + recipe-секреты). nil → без редакции.
-	// Функция (а не []string), чтобы вызывающий (D1) мог резолвить лениво.
+	// Secrets — поставщик значений секретов для редакции пользовательского текста. nil → без редакции.
 	Secrets func() []string
-	// OnUsage — приёмник учёта стоимости одного хода (проброс в
-	// executor.Config.OnUsage). nil → учёт выключен. Вызывающий (D1) обычно
-	// связывает это с accounting-стором по Store.UsagePath()/Store.Dir().
+	// OnUsage — приёмник учёта стоимости одного хода. nil → учёт выключен.
 	OnUsage func(accounting.Observation)
 	// NewExecutor — фабрика AgentRunner из executor.Config (тест-шов). nil →
 	// NewExecutorRunner (реальный executor).
@@ -100,9 +93,8 @@ type turnRecord struct {
 	turnID  string
 }
 
-// Manager владеет единственным активным ходом бокового разговора: durable-first
-// приём, запуск агента под ПРОЦЕССНЫМ ctx (не ctx запроса), доставку событий
-// подписчикам и ограниченный Drain для shutdown.
+// Manager владеет единственным активным ходом бокового разговора: durable-first приём, запуск агента под
+// ПРОЦЕССНЫМ ctx, доставку событий подписчикам и ограниченный Drain для shutdown.
 type Manager struct {
 	store       *Store
 	command     string
@@ -123,10 +115,8 @@ type Manager struct {
 	// Один активный ход за раз.
 	mu     sync.Mutex
 	active *activeTurn
-	// idem — client_message_id → принятый ход, ВО ВСЁ БЕСЕДЕ (не только последний).
-	// Восстанавливается из turn_accepted-событий журнала при создании менеджера,
-	// поэтому повтор любого id (в т.ч. после рестарта процесса) возвращает исходный
-	// ход, а не запускает агента заново (инвариант 3).
+	// idem хранит client_message_id → принятый ход для всей беседы, включая рестарты, предотвращая повторный
+	// запуск.
 	idem         map[string]turnRecord
 	shuttingDown bool
 
@@ -166,9 +156,7 @@ func New(cfg Config) *Manager {
 	}
 }
 
-// rebuildIdempotency восстанавливает карту client_message_id → ход из всех
-// turn_accepted-событий журнала (инвариант 3: идемпотентность durable и
-// действует на всю беседу, в т.ч. после рестарта процесса).
+// rebuildIdempotency восстанавливает client_message_id → ход из всей durable-истории turn_accepted.
 func rebuildIdempotency(history []Event) map[string]turnRecord {
 	idem := make(map[string]turnRecord)
 	for _, e := range history {
@@ -200,9 +188,8 @@ func (m *Manager) Unavailable() bool { return m.store.Unavailable() }
 
 // --- Send ---
 
-// Send принимает ход разговора. Durable-first: turn_accepted фиксируется в
-// журнале (fsync) ДО резервирования активного хода и возврата turnID.
-// Возвращаемая ошибка — всегда *Error со стабильным кодом.
+// Send принимает ход разговора. Durable-first: turn_accepted фиксируется в журнале (fsync) ДО
+// резервирования активного хода и возврата turnID.
 func (m *Manager) Send(clientMessageID, text string) (string, error) {
 	// Шаг 1: валидация без блокировок.
 	if clientMessageID == "" {
@@ -323,9 +310,8 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 	// Шаг 7: терминальное событие ДО освобождения слота (releaseActive — defer).
 	switch {
 	case at.storeFail.Load():
-		// Durable-запись действия провалилась: исход хода — storage_unavailable
-		// (попытка записи best-effort; если журнал мёртв, она тоже не сохранится,
-		// но ход уже остановлен, а flow FSM не затронут).
+		// Durable-запись действия провалилась: исход хода — storage_unavailable (попытка записи best-effort;
+		// если журнал мёртв, она тоже не сохранится, но ход уже остановлен, а flow FSM не затронут).
 		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeStorageUnavailable, Message: "conversation journal unavailable"}) //nolint:errcheck
 	case errors.Is(runErr, executor.ErrUserInterrupted):
 		m.record(EventTurnInterrupted, at.turnID, TurnInterruptedData{Reason: "stopped by user"}) //nolint:errcheck
@@ -366,11 +352,7 @@ func (m *Manager) Stop(turnID string) error {
 	return nil
 }
 
-// CloseAdmission закрывает приём новых ходов, НЕ прерывая активный ход (штатное
-// завершение: ход пользователя доигрывается естественно). Вызывается ДО Drain,
-// чтобы между проверкой «нет активного хода» и выключением сервера не проскочил
-// принятый 202 (один активный ход за раз: после закрытия приёма новый начаться
-// уже не может, поэтому Drain наблюдает финальное множество горутин).
+// CloseAdmission закрывает приём новых ходов, НЕ прерывая активный ход.
 func (m *Manager) CloseAdmission() {
 	m.mu.Lock()
 	m.shuttingDown = true
@@ -392,9 +374,7 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// Drain ждёт завершения активной агентской горутины ИЛИ отмены ctx и сообщает,
-// реально ли дождались (drained). В отличие от concurrency.WaitAgents, не
-// «молчит» по таймауту — вызывающий (D2) сам решает по результату.
+// Drain ждёт завершения активной агентской горутины ИЛИ отмены ctx и сообщает, реально ли дождались.
 func (m *Manager) Drain(ctx context.Context) (drained bool) {
 	done := make(chan struct{})
 	go func() {
@@ -411,9 +391,8 @@ func (m *Manager) Drain(ctx context.Context) (drained bool) {
 
 // --- Подписка (live-доставка для SSE) ---
 
-// Subscribe возвращает канал событий и функцию отписки. Каждое durable-событие
-// доставляется с его seq (дедуп — на стороне потребителя). Переполнивший буфер
-// подписчик отцепляется (канал закрывается).
+// Subscribe возвращает канал событий и функцию отписки. Каждое durable-событие доставляется с его seq
+// (дедуп — на стороне потребителя).
 func (m *Manager) Subscribe() (<-chan Event, func()) {
 	m.subMu.Lock()
 	defer m.subMu.Unlock()

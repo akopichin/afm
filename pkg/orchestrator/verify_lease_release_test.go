@@ -13,30 +13,9 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestRunVerification_NonRetryOutcomesReleaseLeasePromptly — G1 (5-е код-ревью):
-// деферренный своп lease обратно на команду автора раньше выполнялся
-// БЕЗУСЛОВНО, на любом исходе шага verify — но к моменту возврата шага
-// одноразовый interrupt уже ПОГЛОЩЁН исполнителем самого шага (executor'ом
-// для agent-шага, shell-наблюдателем для shell-шага), так что свежий
-// pauseAwareVerifyCtx здесь никогда не получит второй сигнал, а таймаут шага
-// (stepCtx) отменяет только сам шаг, не run-scoped ctx — SwapTo(ctx,
-// author), ожидающий занятый другой стадией слот автора, мог зависнуть
-// НАВСЕГДА. Держим слот автора занятым ЧУЖИМ токеном НАВСЕГДА (никогда не
-// освобождается за время теста) — если бы код всё ещё пытался
-// swap-обратно, RunVerification никогда бы не вернулась; вместо time.Sleep
-// промптность проверяется select'ом с таймаутом на channel (done), см.
-// AGENTS.md-паттерн из TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly.
 func TestRunVerification_NonRetryOutcomesReleaseLeasePromptly(t *testing.T) {
-	// steal (chan claude) — общий для всех кейсов способ смоделировать
-	// "другая стадия заняла освободившийся слот автора": сам fake
-	// runVerifyAgent кладёт токен в claudeSem В МОМЕНТ, когда его вызывает
-	// runVerifyAgentStep — т.е. СТРОГО ПОСЛЕ того, как SwapTo уже освободил
-	// слот "claude" при переходе на верификатора (release-before-acquire),
-	// и НАВСЕГДА (никогда не освобождается за время теста) — тот же приём,
-	// что и в TestRunVerification_SwapBackToAuthorAbortsOnPause_ReturnsPromptly.
-	// Заполнять claudeSem ДО вызова RunVerification нельзя: он всё ещё занят
-	// исходным Lease'ом автора (AcquireLease ниже уже держит единственный
-	// слот), второй send заблокировал бы саму настройку теста.
+	// fake verify занимает слот claude только после SwapTo release; до RunVerification он ещё занят lease
+	// автора.
 	steal := func(claudeSem concurrency.ChannelSemaphore) { claudeSem <- struct{}{} }
 
 	cases := []struct {
@@ -145,11 +124,6 @@ func TestRunVerification_NonRetryOutcomesReleaseLeasePromptly(t *testing.T) {
 	}
 }
 
-// TestRunVerification_NeedsChangesReacquiresAuthorLease — G1: в отличие от
-// прочих исходов (см. тест выше), needs_changes — единственный исход, после
-// которого runWithRetry перезапустит АВТОРА в ТОМ ЖЕ вызове, на ТОМ ЖЕ lease
-// (без нового spawnAgentLeased/acquire) — так что именно здесь дефер обязан
-// реально вернуть lease на команду автора, а не просто Release()нуть его.
 func TestRunVerification_NeedsChangesReacquiresAuthorLease(t *testing.T) {
 	claudeSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	codexSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
@@ -198,10 +172,8 @@ func TestRunVerification_NeedsChangesReacquiresAuthorLease(t *testing.T) {
 	}
 }
 
-// verifyLeaseTestStage строит однoшаговую agent-verify стадию с командой
-// автора "claude" и командой верификатора "codex" — общий fixture для тестов
-// этого файла. timeout, если ненулевой, идёт в st.Timeout (симуляция C3
-// per-step дедлайна без реального времени ожидания).
+// verifyLeaseTestStage строит однoшаговую agent-verify стадию с командой автора "claude" и командой
+// верификатора "codex" — общий fixture для тестов этого файла.
 func verifyLeaseTestStage(timeout time.Duration) flow.Stage {
 	return flow.Stage{
 		ID:      verifyTestStageID,

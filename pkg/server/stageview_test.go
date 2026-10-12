@@ -20,11 +20,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// "b" is autonomous (has autonomous.flag) and failed → plan panel must
-	// still show (Retry lives there). The dialog panel is NOT reserved here:
-	// без диалоговой истории и не в awaiting_user_input DialogChannel рендерит
-	// пусто, а зарезервированная строка давала пустую дыру (см. showDialog в
-	// stageview.go).
+	// "b" is autonomous and failed → plan panel must still show.
 	if err := os.WriteFile(filepath.Join(runDir, "b", "autonomous.flag"), nil, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +48,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 	if a.ShowPlan {
 		t.Errorf("stage a (pending): ShowPlan should be false, got %+v", a)
 	}
-	// interactive:true, но pending и без диалоговой истории → строку под диалог
-	// НЕ резервируем (иначе пустая дыра). Панель появится, когда стадия реально
-	// задаст вопрос (awaiting_user_input) или запишет dialog.jsonl (hasDialog).
+	// interactive:true, но pending и без диалоговой истории → строку под диалог НЕ резервируем.
 	if a.ShowDialog {
 		t.Errorf("stage a (interactive, pending, no dialog): ShowDialog should be false, got %+v", a)
 	}
@@ -225,13 +219,6 @@ func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
 	}
 }
 
-// TestBuildStageViews_AutonomousPausedShowsPlan is a regression test for a
-// bug found live: an autonomous stage (agents: [auto], no plan.md) that gets
-// paused had ShowPlan=false — same as any other non-failed autonomous
-// status — so PlanPanel (where the paused section + Continue button live)
-// never rendered at all. Only DialogChannel showed, with no way to resume.
-// paused must be treated like failed: both need PlanPanel's action button
-// regardless of the stage being autonomous.
 func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
 	runDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(runDir, "a"), 0755); err != nil {
@@ -274,10 +261,6 @@ func TestBuildStageViews_IncludesButtons(t *testing.T) {
 	}
 }
 
-// TestBuildStageViews_SetsCostFromBundle проверяет проброс stageCosts:
-// стадия, для которой в bundle.Stages есть запись, получает её в Cost;
-// стадия без записи (не участвовавшая в accounting) получает nil, не пустой
-// *CostView — фронт отличает "нет данных" от "данные нулевые".
 func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 	runDir := t.TempDir()
 	for _, id := range []string{"a", "b"} {
@@ -310,15 +293,6 @@ func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 	}
 }
 
-// TestStageView_JSONShape_VerifyFieldOmittedOrPresent locks the exact set of
-// JSON keys StageView serializes (V5b.4 + Task 7 of the per-stage-feed plan):
-// "verify" is now a real field (Task 7 — a durable per-stage AI-verify
-// indicator computed server-side from notices.jsonl, see latestVerifyByStage
-// in stageview.go), but it stays omitempty — a stage with no verify activity
-// (nil Verify) must still omit the key entirely, and a stage that has one
-// serializes it as {step,command,phase}. Any accidental removal/rename of an
-// existing field, or a change to this contract, fails this test — it's the
-// single guard for "the /api/status shape for a stage" including AI-verify.
 func TestStageView_JSONShape_VerifyFieldOmittedOrPresent(t *testing.T) {
 	base := StageView{
 		ID:          "a",
@@ -410,10 +384,8 @@ func equalSlices(a, b []string) bool {
 	return true
 }
 
-// appendVerifyNotice writes one verify_started/verify_result line to
-// <runDir>/notices.jsonl via the exact production call
-// (Orchestrator.emitVerifyStarted/emitVerifyResult), so the test fixture
-// matches the real on-disk shape byte-for-byte.
+// appendVerifyNotice writes one verify_started/verify_result line to <runDir>/notices.jsonl via the exact
+// production call, so the test fixture matches the real on-disk shape byte-for-byte.
 func appendVerifyNotice(t *testing.T, runDir, stageID, eventType string, data map[string]any) {
 	t.Helper()
 	stagefiles.AppendNotice(runDir, stageID, eventType, data)
@@ -449,9 +421,6 @@ func TestBuildStageViews_VerifyIndicatorFromNotices(t *testing.T) {
 	}
 }
 
-// TestBuildStageViews_VerifyAcceptedStalemate — replay: verify_result с
-// синтезированным afm вердиктом accepted_stalemate (B1 review_patience) должен
-// реконструироваться как терминальный ПРИНЯТЫЙ исход, не error.
 func TestBuildStageViews_VerifyAcceptedStalemate(t *testing.T) {
 	runDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(runDir, "build"), 0755); err != nil {
@@ -474,9 +443,6 @@ func TestBuildStageViews_VerifyAcceptedStalemate(t *testing.T) {
 	}
 }
 
-// TestBuildStageViews_VerifyReRunReturnsRunning: started → result(pass) →
-// started(step2) ⇒ phase "running" — a new verify pass after a completed one
-// re-enters "running" (current state, not the last-ever outcome).
 func TestBuildStageViews_VerifyReRunReturnsRunning(t *testing.T) {
 	runDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(runDir, "build"), 0755); err != nil {
@@ -518,19 +484,6 @@ func TestBuildStageViews_NoVerifyNotices_NilVerify(t *testing.T) {
 	}
 }
 
-// TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon is the regression
-// test for the exact bug class this whole task exists to kill:
-// latestVerifyByStage MUST stay correct even when a stage's verify_result is
-// followed by far more than maxStageReplayEvents=2000 later same-stage
-// notices — the horizon a per-stage reconstructNotices ring would evict it
-// past. If a future "helpful" refactor delegated latestVerifyByStage to
-// reconstructNotices for code reuse (that function IS capped at 2000), this
-// test would FAIL; it passes only because latestVerifyByStage does its own
-// dedicated unbounded scan. Uses the real stagefiles.AppendNotice (via the
-// writeNotices helper from events_handler_test.go, same package) for both the
-// verify notice and the 2100 filler notices, so the fixture matches the exact
-// on-disk shape production code writes. Checked for two independent stages so
-// the horizon-survival property isn't a coincidence of a single stage.
 func TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon(t *testing.T) {
 	runDir := t.TempDir()
 	for _, id := range []string{"build", "other"} {
@@ -544,9 +497,8 @@ func TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon(t *testing.T) {
 	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 1, "command": "codex", "verdict": "pass"})
 	appendVerifyNotice(t, runDir, "other", string(bus.EventVerifyResult), map[string]any{"step": 3, "command": "codex", "verdict": "needs_changes"})
 
-	// 2100 later notices for EACH stage — comfortably past
-	// maxStageReplayEvents=2000 — so a per-stage reconstructNotices ring would
-	// have evicted the verify_result above from its window by now.
+	// 2100 later notices for EACH stage — comfortably past maxStageReplayEvents=2000 — so a per-stage
+	// reconstructNotices ring would have evicted the verify_result above from its window by now.
 	writeNotices(t, runDir, "build", 2100)
 	writeNotices(t, runDir, "other", 2100)
 

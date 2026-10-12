@@ -12,9 +12,8 @@ import {
 // Покрытие поведенческого порта markdown-рендера из app.js (renderMarkdownHTML + decorate*).
 // Функции чистые — DOM/fetch не нужен.
 
-// renderPlainMarkdown — нейтральный рендерер для ленты: тот же markdown-it, но БЕЗ
-// plan-специфики (спец-секции, decorateCheckboxes). Именно его использует нарратив
-// агента в FeedWorkspace.
+// renderPlainMarkdown — нейтральный рендерер для ленты: тот же markdown-it, но БЕЗ plan-специфики
+// (спец-секции, decorateCheckboxes). Именно его использует нарратив агента в FeedWorkspace.
 describe('renderPlainMarkdown', () => {
   test('пустой ввод возвращает пустую строку', () => {
     expect(renderPlainMarkdown('')).toBe('')
@@ -138,10 +137,7 @@ describe('renderMarkdown', () => {
   })
 })
 
-// renderAnchoredSections — anchored-рендер (один парс, срезы токенов, аннотация
-// data-line на под-элементах). Главная гарантия — «не развалить markdown»:
-// структурная целостность списков/таблиц/цитат + УНИКАЛЬНАЯ стартовая строка у
-// каждого якоря (НЕ биекция со всеми строками).
+// renderAnchoredSections — anchored-рендер.
 describe('renderAnchoredSections', () => {
   // Собирает весь html всех блоков всех секций.
   const allHtml = (sections: Section[]): string =>
@@ -392,7 +388,6 @@ describe('renderAnchoredSections', () => {
     expect(sections[0]!.special?.label).toBe('Assumptions')
     expect(sections[1]!.kind).toBe('plain')
     const plainHtml = sections[1]!.blocks.map((b) => b.html).join('')
-    // ## Other рендерится нормально (не вырезан, не спец).
     expect(plainHtml).toContain('Other')
     expect(plainHtml).toContain('<h2')
   })

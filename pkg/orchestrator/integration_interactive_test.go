@@ -56,11 +56,6 @@ func (r *fileQuestionRunner) RunJSONQuery(ctx context.Context, prompt string) ([
 	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
-// TestFullDialogCycle verifies the full interactive dialog lifecycle with
-// the file-based protocol:
-// stage starts → agent writes question.json → polling goroutine detects it →
-// awaiting_user_input → user POSTs answer → answer.json written →
-// agent bash loop exits → stage done.
 func TestFullDialogCycle(t *testing.T) {
 	dir := t.TempDir()
 
@@ -149,10 +144,6 @@ func TestFullDialogCycle(t *testing.T) {
 	}
 }
 
-// TestIntegration_PlanningWithOpenQuestionWaits verifies the open-question
-// gate: when planning completes but a question.json still has no answer.json,
-// the stage must NOT advance to awaiting_approval. It must hold in
-// awaiting_user_input until the answer is recorded, then re-run planning.
 func TestIntegration_PlanningWithOpenQuestionWaits(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "gated", Name: "Gated", Description: "interactive planning",
@@ -215,9 +206,7 @@ func TestIntegration_PlanningWithOpenQuestionWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Notify via the public API the HTTP handler uses. The planning agent is
-	// not active (RunPlanning returned synchronously), so NotifyAnswer takes
-	// its restart branch → onUserAnswered re-runs planning.
+	// Notify via the public API the HTTP handler uses.
 	if err := orch.NotifyAnswer("gated", "planning", "q-stuck", "go ahead", false); err != nil {
 		t.Fatalf("NotifyAnswer: %v", err)
 	}
@@ -232,9 +221,6 @@ func TestIntegration_PlanningWithOpenQuestionWaits(t *testing.T) {
 	}
 }
 
-// TestIntegration_InteractiveFailureClearsSession: интерактивная стадия падает
-// на non-retryable ошибке — фантомный planning.session.json должен быть удалён,
-// иначе retry упадёт с "No conversation found" (afm bug #1.3).
 func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 	dir := t.TempDir()
 
@@ -281,11 +267,6 @@ func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 	}
 }
 
-// TestIntegration_MisplacedQuestionRelocated: интерактивный агент пишет
-// question.json ВНЕ stageDir (баг GLM-4.7: путь из CWD вместо $AFM_STAGE_DIR).
-// Стадия не должна зависнуть навсегда: оркестратор relocate'ит misplaced-файл в
-// правильное место, переводит стадию в awaiting_user_input, а по неверному пути
-// создаёт symlink на answer.json (чтобы агентский polling-loop нашёл ответ).
 func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 	dir := t.TempDir()
 	rootDir := filepath.Join(dir, "project")
@@ -293,9 +274,8 @@ func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// «Неправильная» директория: агент по CWD-багу пишет вопрос прямо в
-	// верхний уровень root_dir (см. дизайн: bare-relative-write паттерн),
-	// а не в $AFM_STAGE_DIR.
+	// «Неправильная» директория: агент по CWD-багу пишет вопрос прямо в верхний уровень root_dir (см. дизайн:
+	// bare-relative-write паттерн), а не в $AFM_STAGE_DIR.
 	wrongQuestion := filepath.Join(rootDir, "planning.q1.question.json")
 	wrongAnswer := filepath.Join(rootDir, "planning.q1.answer.json")
 
@@ -350,11 +330,6 @@ func TestIntegration_MisplacedQuestionRelocated(t *testing.T) {
 	}
 }
 
-// TestIntegration_BareQuestionFilenameNormalized: агент пишет вопрос вообще
-// без префикса ("q1.question.json" вместо "planning.q1.question.json") прямо
-// в root_dir. relocateMisplacedQuestions должен считать всё имя целиком id и
-// подставить активную фазу (planning — единственный <phase>.jsonl, который
-// успел появиться на диске к этому моменту).
 func TestIntegration_BareQuestionFilenameNormalized(t *testing.T) {
 	dir := t.TempDir()
 	rootDir := filepath.Join(dir, "project")
@@ -412,13 +387,6 @@ func TestIntegration_BareQuestionFilenameNormalized(t *testing.T) {
 	}
 }
 
-// TestIntegration_MisprefixedQuestionNormalized: интерактивный агент пишет
-// question.json ВНУТРЬ stageDir, но с префиксом = id стадии ("commit-changes")
-// вместо канонической фазы ("planning"). Poller такой префикс не распознаёт
-// (FindUnansweredQuestions матчит только planning/implementation/review/
-// autonomous_execution) → без нормализации вопрос невидим в UI и стадия зависает.
-// Оркестратор должен нормализовать файл к каноническому имени фазы и создать
-// symlink на answer.json по неверному (agent-poll'ящемуся) пути.
 func TestIntegration_MisprefixedQuestionNormalized(t *testing.T) {
 	dir := t.TempDir()
 
@@ -480,14 +448,6 @@ func TestIntegration_MisprefixedQuestionNormalized(t *testing.T) {
 	}
 }
 
-// TestIntegration_BrokenQuestionStillSurfaces воспроизводит реальный инцидент:
-// агент (glm-5.2, autonomous_execution) записал question.json с пропущенной
-// открывающей кавычкой у ключа "options" — `...,options":[...]` вместо
-// `...,"options":[...]`. До фикса FindUnansweredQuestions делал continue на
-// любой ошибке json.Unmarshal без единого лога — файл вопроса пропадал из
-// вида поллера, стадия висела в "running" 12+ минут без единого следа в UI.
-// Теперь jsonrepair чинит такой класс ошибок и стадия почти сразу доходит до
-// awaiting_user_input с корректно распарсенными question/options.
 func TestIntegration_BrokenQuestionStillSurfaces(t *testing.T) {
 	dir := t.TempDir()
 
@@ -545,19 +505,6 @@ func TestIntegration_BrokenQuestionStillSurfaces(t *testing.T) {
 	}
 }
 
-// TestIntegration_UnrepairableQuestionFallsBackToStub покрывает last-resort
-// fallback: агент пишет question.json настолько сломанный, что даже jsonrepair
-// не может его починить, и запускаемые afm отдельные fix-агенты тоже не могут
-// его восстановить. Стадия всё равно должна дойти до awaiting_user_input —
-// после исчерпания maxJSONFixAttempts fix-агентов afm показывает вопрос-заглушку
-// без вариантов ответа (свободный текст) вместо вечного зависания в "running".
-//
-// Один и тот же скрипт играет обе роли: как ОСНОВНОЙ агент стадии (afm
-// выставляет ему AFM_STAGE_DIR) он пишет битый question.json и спит, оставаясь
-// живым как настоящий агент в ожидании ответа; как FIX-агент (afm намеренно
-// запускает его БЕЗ AFM_STAGE_DIR — см. runJSONFixAgent) он не в состоянии
-// ничего починить и завершается сразу — быстрая, реалистичная модель
-// «отдельный агент тоже не смог».
 func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	dir := t.TempDir()
 
@@ -617,18 +564,11 @@ func TestIntegration_UnrepairableQuestionFallsBackToStub(t *testing.T) {
 	}
 }
 
-// TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit воспроизводит afm bug:
-// интерактивный planning-агент задал вопрос и ВЫШЕЛ (claude завершился), не
-// дождавшись ответа пользователя и не написав plan.md. Раньше такое завершение
-// приводило к "missing artifact or incomplete" — стадия падала, пока агент
-// легитимно ждал ответа. После фикса стадия удерживается в awaiting_user_input,
-// а когда пользователь отвечает — агент перезапускается и дописывает план.
 func TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit(t *testing.T) {
 	dir := t.TempDir()
 
-	// Агент: пока нет answer.json — пишет question.json и сразу выходит (без
-	// plan.md), имитируя преждевременный exit в ожидании ответа. Когда ответ
-	// уже есть — пишет валидный план с обязательными секциями.
+	// Агент: пока нет answer.json — пишет question.json и сразу выходит, имитируя преждевременный exit в
+	// ожидании ответа. Когда ответ уже есть — пишет валидный план с обязательными секциями.
 	agentScript := filepath.Join(dir, "mock-agent.sh")
 	script := "#!/bin/bash\n" +
 		"STAGE=\"$AFM_STAGE_DIR\"\n" +
@@ -678,9 +618,8 @@ func TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit(t *testing.T) {
 	// Агент задал вопрос и вышел → poller перевёл стадию в awaiting_user_input.
 	waitForStatus(t, stateFile, "propose", state.StatusAwaitingUserInput, 5*time.Second)
 
-	// Ключевая проверка фикса: стадия не должна падать от того, что агент
-	// завершился без артефакта. До фикса здесь уже лежал бы StatusFailed
-	// ("missing artifact or incomplete").
+	// Ключевая проверка фикса: стадия не должна падать от того, что агент завершился без артефакта. До фикса
+	// здесь уже лежал бы StatusFailed ("missing artifact or incomplete").
 	time.Sleep(500 * time.Millisecond)
 	if got := loadStateJSON(t, stateFile).Stages["propose"].Status; got == state.StatusFailed {
 		t.Fatal("interactive stage failed while agent waited for user reply; should hold awaiting_user_input")
@@ -709,26 +648,11 @@ func TestIntegration_InteractiveOpenQuestionHoldsOnAgentExit(t *testing.T) {
 	waitForStatus(t, stateFile, "propose", state.StatusDone, 10*time.Second)
 }
 
-// TestIntegration_StaleAnsweredQuestionNotReopened воспроизводит баг:
-// relocateMisplacedQuestions пере-открывал уже отвеченный вопрос ПРЕДЫДУЩЕЙ
-// фазы под именем ТЕКУЩЕЙ активной фазы. У многофазной interactive-стадии
-// (planning → implementation) planning.q1.question.json/planning.q1.answer.json
-// остаются лежать в stageDir навсегда (ничто их не удаляет). Когда
-// implementation.jsonl становится самым свежим <phase>.jsonl,
-// activeDialogPhase() переключается на "implementation" — но
-// collectQuestionFiles всё ещё находит СТАРЫЙ planning.q1.question.json как
-// кандидата. Без проверки на уже существующий answer.json под его СОБСТВЕННЫМ
-// именем normalizeMisplacedQuestion копировал его содержимое в свежесозданный
-// implementation.q1.question.json, спонтанно создавая "вопрос", на который
-// никто не отвечает — стадия зависала в awaiting_user_input.
 func TestIntegration_StaleAnsweredQuestionNotReopened(t *testing.T) {
 	dir := t.TempDir()
 
-	// Interactive-стадии игнорируют инъектированный Runner — runnerFor всегда
-	// строит executor.New(stage.Command) (см. CLAUDE.md), поэтому ОДИН bash-
-	// скрипт обслуживает обе фазы. executor.RunAgent создаёт implementation.log
-	// (progress.NewLogger) ДО спавна подпроцесса, так что его наличие в stageDir —
-	// надёжный признак того, что текущий запуск — implementation, а не planning.
+	// Interactive-стадии игнорируют инъектированный Runner — runnerFor всегда строит executor.New, поэтому
+	// ОДИН bash- скрипт обслуживает обе фазы.
 	scriptPath := filepath.Join(dir, "twophase.sh")
 	script := "#!/bin/bash\n" +
 		`STAGE="$AFM_STAGE_DIR"` + "\n" +
@@ -803,15 +727,11 @@ func TestIntegration_StaleAnsweredQuestionNotReopened(t *testing.T) {
 		t.Fatalf("NotifyAnswer: %v", err)
 	}
 
-	// Планирование дописывает валидный план → auto-approve → implementation
-	// стартует. Скрипт implementation-фазы спит 3с, давая поллеру (тик раз в
-	// секунду) несколько проходов relocateMisplacedQuestions, пока старые
-	// planning.q1.question.json/planning.q1.answer.json ещё лежат в stageDir.
+	// Планирование дописывает валидный план → auto-approve → implementation стартует.
 	waitForStatus(t, stateFile, "propose", state.StatusDone, 20*time.Second)
 
-	// Баг: relocateMisplacedQuestions копировал уже отвеченный вопрос прошлой
-	// фазы под именем текущей активной фазы. implementation.q1.question.json
-	// не должен появиться — ничто в implementation-фазе не спрашивает q1.
+	// Баг: relocateMisplacedQuestions копировал уже отвеченный вопрос прошлой фазы под именем текущей
+	// активной фазы.
 	if _, err := os.Stat(filepath.Join(stageDir, "implementation.q1.question.json")); err == nil {
 		t.Error("implementation.q1.question.json spuriously created from stale answered planning question")
 	} else if !os.IsNotExist(err) {
@@ -819,27 +739,6 @@ func TestIntegration_StaleAnsweredQuestionNotReopened(t *testing.T) {
 	}
 }
 
-// TestIntegration_RealMalformedQuestionRepairedByFreshAgent drives the EXACT
-// broken question.json captured from the production log
-// (testdata/malformed_q4.question.json — an over-escaped `\\"1\\"` that
-// prematurely terminates a JSON string; jsonrepair cannot recover it, verified
-// by mcp.CanParseQuestion) end-to-end through a REAL orchestrator with REAL
-// subprocesses, for BOTH stage types.
-//
-// One script plays two roles, distinguished by AFM_STAGE_DIR exactly as
-// production does (the main stage agent always gets it; runJSONFixAgent
-// deliberately does not):
-//   - main agent (AFM_STAGE_DIR set): copies the real broken q4 into the stage
-//     dir and blocks waiting for its answer, like a real agent polling.
-//   - fix agent (no AFM_STAGE_DIR): reads the file path from its prompt on
-//     stdin (buildJSONFixPrompt's "File (absolute path): ..." line) and
-//     deterministically repairs the over-escaping — a stand-in for what a real
-//     clean-context LLM agent does.
-//
-// Interactive → the repaired question surfaces to the user with its real
-// content intact. Non-interactive (the stage type that hung forever in prod)
-// → afm auto-answers and unblocks the stage instead of polling for an answer
-// that never comes.
 func TestIntegration_RealMalformedQuestionRepairedByFreshAgent(t *testing.T) {
 	brokenAbs, err := filepath.Abs(filepath.Join("testdata", "malformed_q4.question.json"))
 	if err != nil {
@@ -856,9 +755,8 @@ func TestIntegration_RealMalformedQuestionRepairedByFreshAgent(t *testing.T) {
 		phase       string
 	}{
 		{"interactive_surfaces_to_user", true, flow.AgentPlanning, "planning"},
-		// The real incident stage (architecture-review) was agents:[auto] —
-		// a non-interactive autonomous stage that runs the command directly
-		// (no plan.md needed), exactly as reproduced here.
+		// The real incident stage (architecture-review) was agents:[auto] — a non-interactive autonomous stage
+		// that runs the command directly (no plan.md needed), exactly as reproduced here.
 		{"non_interactive_auto_answers", false, flow.AgentAuto, "implementation"},
 	}
 
@@ -932,9 +830,8 @@ PY
 				return
 			}
 
-			// Non-interactive: afm must AUTO-ANSWER the repaired question and
-			// unblock the stage — the exact thing that never happened in prod,
-			// where an unparseable question hung the stage forever.
+			// Non-interactive: afm must AUTO-ANSWER the repaired question and unblock the stage — the exact thing
+			// that never happened in prod, where an unparseable question hung the stage forever.
 			answerPath := filepath.Join(stageDir, tc.phase+".q4.answer.json")
 			deadline := time.Now().Add(25 * time.Second)
 			var data []byte

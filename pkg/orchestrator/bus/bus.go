@@ -18,129 +18,44 @@ const (
 	EventRetryExhausted     EventType = "retry_exhausted"
 	EventAskUser            EventType = "ask_user"
 	EventUserAnswered       EventType = "user_answered"
-	// EventAutoAnswered fires when a non-interactive stage's open question was
-	// answered by afm itself (see pkg/mcp.PickAutoAnswer), not by a real user.
-	// Never triggers an FSM transition — the stage's status is unaffected.
-	//
-	// A REAL auto-answer carries the navigable payload from
-	// mcp.AutoAnsweredNotice — {phase,id,answer,from_options,question_title,
-	// dialog:true} — and is paired with an EventDialogQuestion published just
-	// before it, so a completed non-interactive (e.g. auto_approve) stage shows
-	// both the question and the auto-answer in the Feed, each opening the full
-	// dialog history. The dashboard treats an auto_answered row as navigable IFF
-	// its payload has dialog==true, and dedupes it by content (see
-	// isDialogDedupable / dialogNoticeDedupKey and use-event-feed.ts). The
-	// malformed-question repair-PROGRESS notice reuses this event type WITHOUT
-	// dialog:true on purpose, so it stays a plain non-navigable system line and
-	// is never dialog-deduped.
+	// EventAutoAnswered fires when a non-interactive stage's open question was answered by afm itself, not by
+	// a real user. Never triggers an FSM transition — the stage's status is unaffected.
 	EventAutoAnswered EventType = "auto_answered"
-	// EventDialogQuestion surfaces an interactive question to the dashboard
-	// Feed — carries the display-ready {phase,id,title} payload (see
-	// mcp.DialogFeedNotice/DialogSnippet). Contract is exactly-one-feed-ROW,
-	// not exactly-one-emission: within a process the in-memory `processed` map
-	// normally emits it once per surfacing, but it can legitimately be emitted
-	// AGAIN — the malformed-question give-up fallback and, after an afm
-	// restart, a still-unanswered question re-scanned from awaiting_user_input
-	// both re-publish it. Also published from the non-interactive auto-answer
-	// path just before a navigable EventAutoAnswered. Duplicates are collapsed
-	// by content (type+stage+phase+id+title+answer): the live path dedupes in
-	// use-event-feed.ts and the replay path via reconstructNotices'
-	// isDialogDedupable predicate, so the user sees one row. A genuinely new
-	// question reusing an answered id (with
-	// different text) has a different title → its own row. Never triggers an
-	// FSM transition itself.
+	// EventDialogQuestion surfaces an interactive question to the dashboard Feed — carries the display-ready
+	// {phase,id,title} payload. Never triggers an FSM transition itself.
 	EventDialogQuestion EventType = "dialog_question"
-	// EventDialogAnswer fires exactly once, right after a HUMAN answer to an
-	// interactive dialog question is authorized and durably recorded (i.e.
-	// after NotifyAnswer succeeds and the dialog.jsonl history entry is
-	// written) — carries the same display-ready {phase,id,title} payload
-	// shape as EventDialogQuestion (see mcp.DialogFeedNotice/DialogSnippet),
-	// with title derived from the answer text. Mirrors EventDialogQuestion on
-	// the answer side; never fires on a rejected/rolled-back answer (e.g. the
-	// review-pause 409/TOCTOU path in handleDialogAnswer). Never triggers an
-	// FSM transition itself — NotifyAnswer already did that.
+	// EventDialogAnswer publishes {phase,id,title} once after a human answer is authorized and durably
+	// recorded; no FSM transition.
 	EventDialogAnswer EventType = "dialog_answer"
-	// EventAgentNote fires once, right after a HUMAN note is delivered to a live
-	// agent via Revise (the messenger-style feed composer, or the plan-panel
-	// revise) and the durable EvRevise transition is applied. Carries
-	// map[string]any{"id": <transition seq>, "text": <mcp.DialogSnippet>} — the
-	// id makes the live event and its persisted notice reconcile without
-	// collapsing two distinct notes that happen to share text (see
-	// use-event-feed.ts). Never fires on a no-op Revise (wrong status / lost
-	// CAS) and never triggers an FSM transition itself — Revise already did.
+	// EventAgentNote fires once, right after a HUMAN note is delivered to a live agent via Revise and the
+	// durable EvRevise transition is applied.
 	EventAgentNote      EventType = "agent_note"
 	EventContextWarning EventType = "context_warning"
-	// EventScriptOutput carries one line of output (stdout or stderr) from a
-	// script/hook run. Data: map[string]string{"hook": "before"|"script"|
-	// "after", "line": "...", "stream": "stdout"|"stderr"}. "stream" is
-	// absent on pre-upgrade notices.jsonl lines — treat a missing/empty
-	// value as "stdout".
+	// EventScriptOutput carries one line of output from a script/hook run. Data: map[string]string{"hook":
+	// "before"|"script"| "after", "line": "...", "stream": "stdout"|"stderr"}.
 	EventScriptOutput EventType = "script_output"
-	// EventScriptFailed fires once a script: stage exhausts runScriptWithRetry
-	// and the stage is about to transition to failed (runScriptStage,
-	// agents.go). This is a durable DASHBOARD FEED notice — distinct from the
-	// lifecycle-only lifecyclehooks.EventStageScriptFailed ("stage_script_failed",
-	// delivered only to observer hook commands, never reaches the UI): without
-	// this event the feed showed a bare stage_status_changed→failed row with no
-	// reason. Data: map[string]string{"error": <the exhausted script's error
-	// text>, "stderr_tail": <executor.ReadStderrTail of the script's log,
-	// possibly empty if nothing was written to stderr>}. Never triggers an FSM
-	// transition itself — Trigger(EvFail) already committed that durably
-	// before this is published.
+	// EventScriptFailed fires once a script: stage exhausts runScriptWithRetry and the stage is about to
+	// transition to failed.
 	EventScriptFailed EventType = "script_failed"
-	// EventHookFailed fires when a before/after hook exhausts its 3x/1-2-3s
-	// retries. Data: map[string]string{"hook": ..., "error": "...",
-	// "stderr_tail": <executor.ReadStderrTail of the hook's before.log/
-	// after.log, possibly empty if nothing was written to stderr>}.
+	// EventHookFailed fires when a before/after hook exhausts its 3x/1-2-3s retries.
 	EventHookFailed EventType = "hook_failed"
 	// EventHookResolved fires when the user retries or skips a failed hook.
 	// Data: map[string]string{"hook": ..., "resolution": "retried"|"skipped"}.
 	EventHookResolved EventType = "hook_resolved"
-	// EventLifecycleHookFailed fires when a lifecycle (observer) hook exhausts
-	// its retries or its delivery queue overflows. Purely informational: never
-	// affects the FSM, the stage or the run outcome.
+	// EventLifecycleHookFailed fires when a lifecycle hook exhausts its retries or its delivery queue
+	// overflows. Purely informational: never affects the FSM, the stage or the run outcome.
 	EventLifecycleHookFailed EventType = "lifecycle_hook_failed"
-	// EventReflectFailed fires when a step of the memory pipeline
-	// (maybeRunReflection/distill: reflect→aggregate→prioritize→update)
-	// returns an error. Best-effort notice only — never triggers an FSM
-	// transition and never fails the stage/run. Data: map[string]string{
-	// "stage": ..., "message": ...}.
+	// EventReflectFailed fires when a step of the memory pipeline returns an error. Best-effort notice only —
+	// never triggers an FSM transition and never fails the stage/run.
 	EventReflectFailed EventType = "reflect_failed"
-	// EventVerifyStarted fires right BEFORE one AI-verify step (agent or
-	// shell) actually runs, from inside Orchestrator.RunVerification (V5a) —
-	// same non-FSM observability contract as EventAutoAnswered: live via
-	// o.ui.Publish AND durable via stagefiles.AppendNotice into
-	// notices.jsonl, so a client connecting/reloading AFTER the event still
-	// sees it (server's reconstructNotices replays notices.jsonl). Never an
-	// FSM transition, never added to events.jsonl, never a flow.Phase — verify
-	// is an orthogonal pass over a stage that already claims completion via
-	// its own file-probe. Data: map[string]any{"verification_id","step"
-	// (1-based),"kind" ("agent"|"shell"),"command" (alias/command)}.
+	// EventVerifyStarted records a verify step's start live and in notices.jsonl; verify is neither an FSM
+	// transition nor a phase.
 	EventVerifyStarted EventType = "verify_started"
-	// EventVerifyResult fires right AFTER one AI-verify step's outcome is
-	// known — pass/needs_changes/inconclusive, or the step couldn't be
-	// evaluated at all (transport/protocol/timeout/interruption/storage
-	// failure/nonzero shell exit). Same non-FSM contract as
-	// EventVerifyStarted. Data: map[string]any{"verification_id","step",
-	// "kind","command","verdict" (verify.Verdict string, omitted when the
-	// step produced no verdict at all),"exec_error" (a short kind string,
-	// omitted when "verdict" is set),"reason" (short human text),
-	// "report_path" (absolute path to report.md, omitted when none was
-	// written for this outcome — e.g. a passing shell step or any exec
-	// error)}.
+	// EventVerifyResult fires right AFTER one AI-verify step's outcome is known —
+	// pass/needs_changes/inconclusive, or the step couldn't be evaluated at all.
 	EventVerifyResult EventType = "verify_result"
-	// eventAgentDrained is an internal-only nudge published on the critical
-	// bus right after a script_after hook's goroutine finishes
-	// (maybeRunAfterHook, hooks.go), once pendingAfterHooks has already been
-	// decremented. handleEvent's switch doesn't match it (falls through as a
-	// no-op) — its only purpose is to wake Run()'s select loop so it
-	// re-checks shouldExit() with a guaranteed-fresh pendingAfterHooks value.
-	// Needed because a script_after hook resolving (RetryHook/SkipHook, or
-	// the script finally succeeding) never itself triggers an FSM
-	// transition/EventAgentCompleted, so without this Run() could sit
-	// blocked on select forever after the hook settles, never noticing every
-	// stage is actually done. Never published to ui —
-	// must not reach the dashboard.
+	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
+	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"
 )
 
@@ -148,10 +63,8 @@ type Event struct {
 	Type    EventType `json:"type"`
 	StageID string    `json:"stage_id"`
 	Data    any       `json:"data,omitempty"`
-	// Seq — реальный seq FSM-transition (0, если событие не привязано к
-	// transition, напр. EventContextWarning/EventAgentCompleted). Позволяет
-	// фронту дедуплицировать историю из /api/events с live-потоком WS по
-	// стабильному ключу вместо содержимого.
+	// Seq — реальный seq FSM-transition. Позволяет фронту дедуплицировать историю из /api/events с
+	// live-потоком WS по стабильному ключу вместо содержимого.
 	Seq uint64 `json:"seq,omitempty"`
 }
 
@@ -175,9 +88,8 @@ func (b *CriticalBus) Publish(ctx context.Context, ev Event) error {
 	}
 }
 
-// TryPublish публикует событие неблокирующим best-effort send; возвращает
-// false, если буфер шины полон — вызывающий код тогда просто теряет толчок
-// (см. WakeEventLoop).
+// TryPublish публикует событие неблокирующим best-effort send; возвращает false, если буфер шины полон —
+// вызывающий код тогда просто теряет толчок (см. WakeEventLoop).
 func (b *CriticalBus) TryPublish(ev Event) bool {
 	select {
 	case b.ch <- ev:
@@ -187,12 +99,8 @@ func (b *CriticalBus) TryPublish(ev Event) bool {
 	}
 }
 
-// WakeEventLoop будит select Run()'а неблокирующей отправкой внутреннего
-// маркер-события — используется concurrency.Manager.WakeEventLoop после
-// того, как after-hook горутина завершилась без движения FSM (script_after
-// никогда не публикует EventAgentCompleted сама). Best-effort: если буфер
-// полон, там уже стоят другие события — их обработка и так вызовет
-// перепроверку состояния, потеря толчка безвредна.
+// WakeEventLoop неблокирующе будит Run после after-hook без FSM-перехода; полный буфер уже гарантирует
+// перепроверку.
 func (b *CriticalBus) WakeEventLoop() bool {
 	return b.TryPublish(Event{Type: eventAgentDrained})
 }

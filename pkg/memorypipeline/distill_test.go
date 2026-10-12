@@ -25,10 +25,8 @@ const emptyDatasetYAML = `project_level: []
 session_level: []
 `
 
-// recordingRunner dispatches by AgentSpec.Kind to a caller-supplied behavior
-// map, appending every invoked Kind (in order) to *calls. Any Kind not
-// present in behavior fails the test immediately — this is how tests assert
-// "aggregate/prioritize/update was never called".
+// recordingRunner dispatches by AgentSpec.Kind to a caller-supplied behavior map, appending every invoked
+// Kind to *calls.
 func recordingRunner(t *testing.T, calls *[]string, behavior map[string]func(spec AgentSpec) error) AgentRunner {
 	t.Helper()
 	return func(_ context.Context, spec AgentSpec) error {

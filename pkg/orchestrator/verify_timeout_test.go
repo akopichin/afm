@@ -11,12 +11,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// TestRunVerification_ShellStepTimeoutIsExecErrorNotRejection — C3 код-ревью:
-// flow.VerifyStep.Timeout парсился и валидировался, но никогда не
-// применялся. Зависший shell-шаг (`sleep 30`) с timeout: 1s должен вернуть
-// *VerifyExecError с текстом "timed out" БЫСТРО (в пределах таймаута
-// шага, а не 30 секунд) — и НИКОГДА не как needs_changes-эквивалент
-// (*VerifyRejectedError), несмотря на ненулевой exit убитого процесса.
 func TestRunVerification_ShellStepTimeoutIsExecErrorNotRejection(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,
@@ -47,11 +41,6 @@ func TestRunVerification_ShellStepTimeoutIsExecErrorNotRejection(t *testing.T) {
 	}
 }
 
-// TestRunVerification_AgentStepTimeoutIsExecError — C3 код-ревью: agent-шаг,
-// чей фейковый раннер блокируется дольше короткого timeout, должен
-// вернуться как *VerifyExecError с "timed out" — раннер уважает переданный
-// ctx (реалистичная имитация настоящего executor.RunVerifyAgent, который
-// возвращает ProcessOK=false при отмене ctx.Done()).
 func TestRunVerification_AgentStepTimeoutIsExecError(t *testing.T) {
 	stage := flow.Stage{
 		ID: verifyTestStageID,

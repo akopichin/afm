@@ -17,14 +17,8 @@ var ErrProcessDead = errors.New("afmsdk: process is not running")
 // dashboard API does not respond on the given port.
 var ErrPortUnreachable = errors.New("afmsdk: dashboard port is not reachable")
 
-// Attach reconstructs a Run for an afm subprocess started by a previous
-// Start call — typically in a previous process, e.g. before this one
-// restarted — given the run's working directory, dashboard port, and pid
-// (the same values Run.Dir, Run.Port, and Run.PID reported for it before the
-// restart). Status, Approve, Retry, and Revise work exactly as they would on
-// the original Run; Wait and Cleanup return an error, since this Client
-// never held the underlying *exec.Cmd needed to manage the process's
-// lifecycle.
+// Attach reconnects to a previous run by directory, port, and PID. Wait/Cleanup are unavailable because
+// this client does not own the subprocess.
 func (c *Client) Attach(ctx context.Context, dir string, port int, pid int) (*Run, error) {
 	if !processAlive(pid) {
 		return nil, ErrProcessDead
@@ -54,10 +48,7 @@ func (c *Client) Attach(ctx context.Context, dir string, port int, pid int) (*Ru
 	return run, nil
 }
 
-// processAlive reports whether a process with the given pid is currently
-// running. Sending signal 0 performs no action on the target process but
-// still fails if it doesn't exist (or isn't ours), which is enough to probe
-// liveness without disturbing it.
+// processAlive reports whether a process with the given pid is currently running.
 func processAlive(pid int) bool {
 	process, err := os.FindProcess(pid)
 	if err != nil {

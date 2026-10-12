@@ -28,12 +28,8 @@ const (
 	keyStatus  = "status"
 )
 
-// writeActionError renders an error from a stage-control action (Approve/
-// Revise/Retry/Pause/Continue/Button/RetryHook/SkipHook/CancelDialog). A
-// review-pause rejection (ErrFlowPaused) becomes a machine-readable
-// 409 {"error":"flow_paused"} — the same shape the /api/flow/* handlers use —
-// so the dashboard can recognize "flow is held for review" instead of parsing a
-// plain-text 500. Any other error keeps the caller's plain-text fallback.
+// writeActionError renders an error from a stage-control action. Any other error keeps the caller's
+// plain-text fallback.
 func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fallbackStatus int) {
 	if errors.Is(err, orchestrator.ErrFlowPaused) {
 		writeFlowError(w, http.StatusConflict, "flow_paused")
@@ -42,9 +38,8 @@ func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fall
 	http.Error(w, fallbackMsg+": "+err.Error(), fallbackStatus)
 }
 
-// statusResponse is GET /api/status's wire shape: run-level fields plus one
-// ordered []StageView (see stageview.go) instead of five parallel per-stage
-// maps the frontend used to re-join by id.
+// statusResponse is GET /api/status's wire shape: run-level fields plus one ordered []StageView (see
+// stageview.go) instead of five parallel per-stage maps the frontend used to re-join by id.
 type statusResponse struct {
 	FlowName string `json:"flow_name"`
 	Version  string `json:"version,omitempty"`
@@ -64,30 +59,19 @@ type statusResponse struct {
 	BackoffAccumulatedMs int64           `json:"backoff_accumulated_ms"`
 	BackoffOpenSince     []time.Time     `json:"backoff_open_since,omitempty"`
 	Capabilities         capabilities    `json:"capabilities"`
-	// FlowPauseState/FlowPausedStages surface the flow-wide review-pause
-	// round (see pkg/orchestrator/reviewpause.go): "none"|"paused"|"resuming",
-	// plus the ids of stages this round is holding paused. Populated via
-	// Config.ReviewState (a lock-free closure over the orchestrator's
-	// reviewMarker) — nil means the server was wired without review-pause
-	// support, in which case FlowPauseState is always "none".
+	// FlowPauseState/FlowPausedStages surface the flow-wide review-pause round: "none"|"paused"|"resuming",
+	// plus the ids of stages this round is holding paused.
 	FlowPauseState   string   `json:"flow_pause_state"`
 	FlowPausedStages []string `json:"flow_paused_stages,omitempty"`
-	// RunCost/RunOverheadCost/CoverageIssues/Accounting — все четыре приходят
-	// из одного accounting.CostBundle (один CostSnapshot() за запрос, см.
-	// handleStatus) и опускаются целиком, когда Server.accounting == nil
-	// (accounting вообще не подключён к этому серверу — отличается от
-	// подключённого, но неработающего провайдера, у которого Accounting всё
-	// равно присутствует со health:"unavailable").
+	// RunCost/RunOverheadCost/CoverageIssues/Accounting — все четыре приходят из одного accounting.CostBundle
+	// и опускаются целиком, когда Server.accounting == nil.
 	RunCost         *accounting.CostView       `json:"run_cost,omitempty"`
 	RunOverheadCost *accounting.CostView       `json:"run_overhead_cost,omitempty"`
 	CoverageIssues  []accounting.CoverageIssue `json:"coverage_issues,omitempty"`
 	Accounting      *accountingHealth          `json:"accounting,omitempty"`
 }
 
-// accountingHealth surfaces CostBundle.Health/HasData as-is — the server does
-// no interpretation of coverage from health (see CostBundle doc): a healthy
-// provider can still report Coverage:"none" on a given CostView, and that is
-// not a contradiction.
+// accountingHealth forwards provider health and data presence; healthy storage can still have no coverage.
 type accountingHealth struct {
 	Health  string `json:"health"`
 	HasData bool   `json:"has_data"`
@@ -106,10 +90,8 @@ type capabilities struct {
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	rs := s.store.Snapshot()
 
-	// One CostSnapshot() call per request feeds both the per-stage views and
-	// the run-level fields below — never two independent snapshots (which
-	// could observe two different revisions of the ledger within the same
-	// response).
+	// One CostSnapshot call per request feeds both the per-stage views and the run-level fields below — never
+	// two independent snapshots.
 	var stageCosts map[string]*accounting.CostView
 	resp := statusResponse{
 		FlowName:             rs.FlowName,
@@ -212,11 +194,8 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
 		return
 	}
-	// A script stage has no live agent to revise; Revise would move it to
-	// `revising`, after which script completion is dropped (completeStage
-	// rejects `revising`) and the stage would hang. Mirror the same guard
-	// handleStageButton/handleStageNote apply. Defense-in-depth behind the
-	// client-side !isScript gate on the feed composer.
+	// A script stage has no live agent to revise; Revise would move it to `revising`, after which script
+	// completion is dropped and the stage would hang.
 	if s.stages[stageID].IsScript {
 		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
 		return
@@ -235,20 +214,14 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		writeActionError(w, err, "revise failed", http.StatusInternalServerError)
 		return
 	}
-	// A no-op Revise (the stage left the running/awaiting_approval window
-	// between our snapshot and the action, or the CAS was lost) delivered
-	// nothing — report a conflict so the caller (feed composer) keeps the
-	// typed text instead of clearing it as if the note had been sent.
+	// A no-op Revise delivered nothing — report a conflict so the caller keeps the typed text instead of
+	// clearing it as if the note had been sent.
 	if !applied {
 		http.Error(w, "stage no longer accepts a note", http.StatusConflict)
 		return
 	}
-	// Surface the delivered note as a right-side feed line, mirroring
-	// dialog_answer (T2): publish live so an already-connected dashboard sees
-	// it, and duplicate into notices.jsonl so a client that connects/reloads
-	// afterwards still sees it via /api/events' notices replay. The seq is the
-	// note's unique id — the SAME payload object goes to both sinks so live and
-	// replay reconcile in use-event-feed (see bus.EventAgentNote).
+	// Publish one identical note payload live and durably; transition seq identifies the note for replay
+	// deduplication.
 	payload := map[string]any{"id": seq, "text": mcp.DialogSnippet(req.Feedback)}
 	s.uiBus.Publish(bus.Event{Type: bus.EventAgentNote, StageID: stageID, Data: payload})
 	stagefiles.AppendNotice(s.runDir, stageID, string(bus.EventAgentNote), payload)
@@ -261,11 +234,8 @@ type stageNoteRequest struct {
 	Note string `json:"note"`
 }
 
-// handleStageNote прикрепляет (или очищает) pre-note к стадии, которая ещё не
-// стартовала. В отличие от handleRevise (заметка живому агенту → FSM-переход +
-// SIGINT) здесь нет никакого FSM: стадия остаётся pending, заметка просто
-// пишется в prenote.md и вклеится в контекст агента на старте
-// (см. (*Orchestrator).preNoteBlock). Пустой текст = удалить заметку.
+// handleStageNote прикрепляет pre-note к стадии, которая ещё не стартовала. Пустой текст = удалить
+// заметку.
 func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/note")
 	if !isValidStageID(stageID) {
@@ -296,11 +266,8 @@ func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "save note failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Стадия могла стартовать между проверкой pending выше и записью prenote.md,
-	// прочитав ещё пустую заметку (finding #9): тогда заметка на диске уже не
-	// попадёт в первый промпт агента. Честно сообщаем об этом (409), а не молча
-	// возвращаем 200 «noted» — клиент (AgentNoteModal) на ошибке не закрывает
-	// модалку молча.
+	// Стадия могла стартовать между проверкой pending выше и записью prenote.md, прочитав ещё пустую заметку:
+	// тогда заметка на диске уже не попадёт в первый промпт агента.
 	if s.store.Snapshot().Stages[stageID].Status != state.StatusPending {
 		http.Error(w, "stage started before the note was saved; it may not reach the first prompt", http.StatusConflict)
 		return
@@ -313,12 +280,8 @@ type stageButtonRequest struct {
 	Name string `json:"name"`
 }
 
-// handleStageButton fires a predefined kebab-menu button: it resolves the
-// button by its declared label (never trusting a client-supplied prompt) and
-// routes it through the orchestrator's Button → Revise path — same effect as a
-// free-text note to the live agent. Gated exactly like handleRevise
-// (running/awaiting_approval, non-script) plus a check that the name is a
-// button actually declared for this stage.
+// handleStageButton accepts a declared label and delegates to Button → Revise; prompts are resolved
+// server-side.
 func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/button")
 	if !isValidStageID(stageID) {
@@ -443,12 +406,7 @@ func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "continued", keyStageID: stageID})
 }
 
-// handleRetryHook re-runs the retry cycle of a before/after hook currently
-// blocked on a user decision (stage in hook_failed for script_before, or the
-// stage's after-hook notice for script_after — the latter never changes the
-// stage's FSM status, see runAfterHook's doc comment). Unlike handleRetry,
-// there is no status precondition to check here: RetryHook's own "no waiter"
-// error is the only source of truth for whether a hook is actually pending.
+// handleRetryHook re-runs the retry cycle of a before/after hook currently blocked on a user decision.
 func (s *Server) handleRetryHook(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/retry-hook")
 	if !isValidStageID(stageID) {
@@ -502,9 +460,8 @@ func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {
 // typeAgentText is the dialogUIEntry.Type value for agent text messages.
 const typeAgentText = "agent_text"
 
-// dialogUIEntry — элемент диалоговой ленты для UI. Type == typeAgentText
-// означает текстовое сообщение агента (заполнен Text); пустой Type —
-// вопрос/ответ из ask_user.
+// dialogUIEntry — элемент диалоговой ленты для UI. Type == typeAgentText означает текстовое сообщение
+// агента (заполнен Text); пустой Type — вопрос/ответ из ask_user.
 type dialogUIEntry struct {
 	Type         string   `json:"type,omitempty"`
 	Text         string   `json:"text,omitempty"`
@@ -520,12 +477,8 @@ type dialogUIEntry struct {
 	AutoAnswered bool     `json:"auto_answered,omitempty"`
 }
 
-// buildDialogEntries собирает диалоговую ленту стейджа: вопросы/ответы из
-// <phase>.dialog.jsonl, перемежённые текстовыми сообщениями агента из
-// stream-json логов. Порядок берётся из stream-лога — там и текст, и вызовы
-// ask_user идут в реальной последовательности. Тексты показываются только
-// для фаз, где есть диалог (интерактивные стейджи), чтобы не раздувать
-// панель на обычных стейджах.
+// buildDialogEntries собирает диалоговую ленту стейджа: вопросы/ответы из <phase>.dialog.jsonl,
+// перемежённые текстовыми сообщениями агента из stream-json логов.
 func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 	var out []dialogUIEntry
 	for _, p := range flow.Phases() {
@@ -560,10 +513,8 @@ func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 			}
 		}
 	}
-	// Гарантия видимости: текущий unanswered вопрос показываем ВСЕГДА, даже если
-	// poller ещё не дописал его в <phase>.dialog.jsonl (или staging-состояние) —
-	// читаем *.question.json напрямую. Иначе UI не покажет вопрос, который агент
-	// уже задал (особенно autonomous-фаза, диалог без предистории).
+	// Гарантия видимости: текущий unanswered вопрос показываем ВСЕГДА, даже если poller ещё не дописал его в
+	// <phase>.dialog.jsonl — читаем *.question.json напрямую.
 	if pending, perr := mcp.FindUnansweredQuestions(stageDir); perr == nil {
 		haveID := make(map[string]bool, len(out))
 		for _, e := range out {
@@ -575,13 +526,8 @@ func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 			if haveID[q.ID] {
 				continue
 			}
-			// Malformed question.json is mid-retry (pollQuestions's state
-			// machine, dialog_poller.go): afm is silently nudging the agent
-			// to rewrite it, or still waiting a tick to rule out a torn read.
-			// Showing it here would leak that in-progress state to the user
-			// before the poller itself has decided to give up — skip it;
-			// once retries are exhausted the poller persists a real,
-			// parseable stub and this same scan picks it up normally.
+			// Malformed question.json is mid-retry: afm is silently nudging the agent to rewrite it, or still
+			// waiting a tick to rule out a torn read.
 			if q.Malformed {
 				continue
 			}
@@ -621,9 +567,8 @@ func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 		})
 	}
 
-	// Keep answered history + agent text; among unanswered questions keep
-	// exactly ONE — the current valid one (first occurrence wins, dropping any
-	// transcript duplicates).
+	// Keep answered history + agent text; among unanswered questions keep exactly ONE — the current valid one
+	// (first occurrence wins, dropping any transcript duplicates).
 	filtered := out[:0]
 	keptCur := false
 	for _, e := range out {
@@ -675,19 +620,13 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid phase", http.StatusBadRequest)
 		return
 	}
-	// req.ID is embedded in the question/answer filenames, so it must be a
-	// safe filename component — this guards against path traversal via a
-	// crafted id (e.g. "../../foo").
+	// req.ID is embedded in the question/answer filenames, so it must be a safe filename component — this
+	// guards against path traversal via a crafted id (e.g. "../../foo").
 	if !isValidDialogID(req.ID) {
 		http.Error(w, "invalid question id", http.StatusBadRequest)
 		return
 	}
-	// Flow-wide review-pause guard must run BEFORE any durable mutation. If the
-	// flow is held for review, writing answer.json first (and only discovering
-	// the pause afterwards, inside NotifyAnswer) leaves the answer on disk while
-	// returning an error: the question poller then stops treating the question
-	// as unanswered, no resume event is published, and a non-owned
-	// awaiting_user_input stage hangs forever. Reject up front with a
+	// Flow-wide review-pause guard must run BEFORE any durable mutation. Reject up front with a
 	// machine-readable 409 instead.
 	if s.currentReviewState() != reviewStateNone {
 		writeFlowError(w, http.StatusConflict, "flow_paused")
@@ -696,11 +635,8 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 
 	stageDir := filepath.Join(s.runDir, stageID)
 
-	// Serialize answers for interactive stages only: an agent's polling loop
-	// blocks on the first question it wrote; answering a later one leaves the
-	// earlier answer.json missing and deadlocks the agent. A well-behaved client
-	// only shows the current question (buildDialogEntries), so this guards
-	// stale/direct clients. Non-interactive stages auto-answer and are exempt.
+	// Interactive answers must follow question order or the polling agent deadlocks; non-interactive
+	// auto-answers are exempt.
 	if s.stages[stageID].Interactive {
 		cur, hasCur, err := mcp.CurrentQuestion(stageDir)
 		if err != nil {
@@ -759,15 +695,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Atomically write ONLY answer.json first (mcp.WriteAnswerFile) so the
-	// agent's bash loop can pick it up. The dialog.jsonl history entry is
-	// deliberately deferred until AFTER NotifyAnswer authorizes the answer:
-	// if a review pause started in the window past the up-front guard,
-	// NotifyAnswer rejects with ErrFlowPaused and we roll back answer.json —
-	// and because dialog.jsonl was never touched, the question does not end up
-	// recorded as answered-in-history while unanswered-on-disk (which would
-	// strand the stage in awaiting_user_input with no visible form until an afm
-	// restart).
+	// Atomically write ONLY answer.json first so the agent's bash loop can pick it up.
 	if err := mcp.WriteAnswerFile(stageDir, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
 		if os.IsExist(err) {
 			http.Error(w, "question already answered", http.StatusConflict)
@@ -777,10 +705,8 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-check that the question file still exists to ensure we maintain the
-	// invariant that answer.json only exists when its question.json exists.
-	// Another goroutine could have deleted the question between our initial
-	// check and now.
+	// Re-check that the question file still exists to ensure we maintain the invariant that answer.json only
+	// exists when its question.json exists.
 	if _, err := os.Stat(questionPath); err != nil {
 		_ = os.Remove(answerPath)
 		http.Error(w, "question disappeared during write", http.StatusBadRequest)
@@ -789,10 +715,8 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 
 	if s.secondary != nil {
 		if err := s.secondary.NotifyAnswer(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
-			// A review pause that started in the tiny window between the guard
-			// above and this call: roll back answer.json (dialog.jsonl was not
-			// yet written) so nothing durable records this answer, and report the
-			// same machine-readable 409 the up-front guard would have.
+			// Review-pause won the race: roll back answer.json before writing dialog history and return the same
+			// 409 as the initial guard.
 			if errors.Is(err, orchestrator.ErrFlowPaused) {
 				_ = os.Remove(answerPath)
 				writeFlowError(w, http.StatusConflict, "flow_paused")
@@ -810,11 +734,8 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, req.Phase, req.ID, err) //nolint:gosec // G706: phase/id validated safe (flow.IsValidPhase/isValidDialogID) above
 	}
 
-	// The human answer took effect — mirror dialog_question (T2) on the
-	// answer side: one payload map, published live on the ui bus (so an
-	// already-connected dashboard sees it without waiting for a reconnect)
-	// and duplicated into notices.jsonl (so a client that connects/reloads
-	// afterwards still sees it via /api/events' notices replay).
+	// The human answer took effect — mirror dialog_question on the answer side: one payload map, published
+	// live on the ui bus and duplicated into notices.jsonl.
 	payload := mcp.DialogFeedNotice(req.Phase, req.ID, mcp.DialogSnippet(req.Answer))
 	s.uiBus.Publish(bus.Event{Type: bus.EventDialogAnswer, StageID: stageID, Data: payload})
 	stagefiles.AppendNotice(s.runDir, stageID, string(bus.EventDialogAnswer), payload)
@@ -866,9 +787,8 @@ func isValidStageID(id string) bool {
 // alphanumerics, dash, underscore, dot. Mirrors safeStageIDRe.
 var safeArtifactNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// isValidArtifactName gates the {name} segment of an artifact URL: non-empty,
-// safe charset, no path-traversal ".." sequence. A slash never reaches here as a
-// valid name because it is outside the charset.
+// isValidArtifactName gates the {name} segment of an artifact URL: non-empty, safe charset, no
+// path-traversal ".." sequence.
 func isValidArtifactName(name string) bool {
 	if name == "" || strings.Contains(name, "..") {
 		return false
@@ -876,9 +796,8 @@ func isValidArtifactName(name string) bool {
 	return safeArtifactNameRe.MatchString(name)
 }
 
-// isValidDialogID validates a question id that is embedded in question/answer
-// filenames (<phase>.<id>.{question,answer}.json). Same rules as a stage id:
-// safe filename component, no path traversal.
+// isValidDialogID validates a question id that is embedded in question/answer filenames. Same rules as a
+// stage id: safe filename component, no path traversal.
 func isValidDialogID(id string) bool {
 	return isValidStageID(id)
 }

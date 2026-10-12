@@ -47,9 +47,7 @@ func writeFakeCurl(t *testing.T, sseResponse string) string {
 	return dir
 }
 
-// writeTestPNG writes a small valid solid-red PNG to a temp file and returns its
-// path. Used to verify the real bytes an [Screenshot: <path>] reference embeds
-// round-trip correctly through base64 in the request body.
+// writeTestPNG writes a small valid solid-red PNG to a temp file and returns its path.
 func writeTestPNG(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -71,9 +69,8 @@ func writeTestPNG(t *testing.T) string {
 	return path
 }
 
-// readTestPNGBase64 reads path and returns its raw bytes' standard base64
-// encoding, for comparing against the base64 payload embedded in a captured
-// request body's image_url data URL.
+// readTestPNGBase64 reads path and returns its raw bytes' standard base64 encoding, for comparing against
+// the base64 payload embedded in a captured request body's image_url data URL.
 func readTestPNGBase64(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -133,10 +130,6 @@ func writeFakeCurlCapturing(t *testing.T, sseResponse string) (fakeCurlDir, capt
 	return dir, captureFile
 }
 
-// TestOpenAIAsClaude_ScreenshotMarkerEmbedsImage: a prompt containing
-// [Screenshot: <path-to-a-real-png>] must produce a multimodal request body —
-// content becomes an array with a text block (marker stripped) and an
-// image_url block whose base64 payload matches the source file's bytes exactly.
 func TestOpenAIAsClaude_ScreenshotMarkerEmbedsImage(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -243,9 +236,6 @@ func TestOpenAIAsClaude_NoMarkerContentUnchanged(t *testing.T) {
 	}
 }
 
-// TestOpenAIAsClaude_MissingScreenshotFileFallsBackToText: a [Screenshot: <path>]
-// reference to a file that doesn't exist must not crash the script — it falls
-// back to sending the original text (marker included) as a plain string.
 func TestOpenAIAsClaude_MissingScreenshotFileFallsBackToText(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -288,14 +278,6 @@ func TestOpenAIAsClaude_MissingScreenshotFileFallsBackToText(t *testing.T) {
 	}
 }
 
-// TestOpenAIAsClaude_OutputParses запускает РЕАЛЬНЫЙ scripts/openai-as-claude.sh с
-// поддельным curl (без сети) и проверяет, что:
-//  1. stdout содержит строку {"type":"assistant",...} с агрегированным текстом;
-//  2. эта строка парсится внутренним parseStreamEvent и текст совпадает;
-//  3. есть корректная финальная {"type":"result","subtype":"success"} строка.
-//
-// Этот тест связывает скрипт-транслятор и парсер executor'а, ловя регрессию, когда
-// скрипт эмитит content_block_delta (которые executor молча отбрасывает).
 func TestOpenAIAsClaude_OutputParses(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

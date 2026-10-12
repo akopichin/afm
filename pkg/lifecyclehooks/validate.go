@@ -12,8 +12,7 @@ const parentDir = ".."
 // envVarNameRe — допустимое имя целевой env-переменной хука.
 var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// ValidateLayer проверяет слой хуков (config-слой, flow-слой или хуки одной
-// стадии). stageScoped=true — хуки конкретной стадии: flow-события в них
+// ValidateLayer проверяет слой хуков. stageScoped=true — хуки конкретной стадии: flow-события в них
 // запрещены (stage hook физически не может получить событие всего флоу).
 func ValidateLayer(defs []Hook, stageScoped bool) error {
 	known := make(map[EventType]bool, 32)
@@ -25,9 +24,8 @@ func ValidateLayer(defs []Hook, stageScoped bool) error {
 		if h.ID == "" {
 			return fmt.Errorf("hooks[%d]: id is required", i)
 		}
-		// id становится именем файла лога (<LogDir>/<id>.log) — обязан быть
-		// безопасным одиночным компонентом пути, иначе `id: ../events.jsonl`
-		// допишет hook-лог в авторитетный events.jsonl (codex CRIT#1).
+		// id становится именем файла лога — обязан быть безопасным одиночным компонентом пути, иначе `id:
+		// ../events.jsonl` допишет hook-лог в авторитетный events.jsonl.
 		if h.ID == "." || h.ID == parentDir || strings.ContainsAny(h.ID, "/\\\x00") {
 			return fmt.Errorf("hooks[%d]: id %q must be a single safe path component (no /, \\, NUL, dot segments)", i, h.ID)
 		}
@@ -60,11 +58,8 @@ func ValidateLayer(defs []Hook, stageScoped bool) error {
 		if h.Timeout < 0 {
 			return fmt.Errorf("hooks[%d] (%s): timeout must not be negative", i, h.ID)
 		}
-		// env: имена целевых переменных валидны, не начинаются (регистронезависимо)
-		// с зарезервированного префикса AFM_ и не коллизируют друг с другом после
-		// ASCII upper-case (Windows env — регистронезависимое). Источник —
-		// env:NAME или file:PATH с непустым хвостом; его существование не
-		// проверяется здесь (Task 3, резолв в рантайме).
+		// env: имена целевых переменных валидны, не начинаются с зарезервированного префикса AFM_ и не
+		// коллизируют друг с другом после ASCII upper-case.
 		seenUpper := make(map[string]bool, len(h.Env))
 		for varName, ref := range h.Env {
 			if !envVarNameRe.MatchString(varName) {

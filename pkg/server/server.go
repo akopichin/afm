@@ -38,9 +38,8 @@ const skinTitleFile = "title.txt"
 // mimeSVG — MIME-тип favicon по умолчанию (favicon.svg и общий дефолт).
 const mimeSVG = "image/svg+xml"
 
-// MIME-типы растровых картинок, используемые в нескольких местах пакета
-// (faviconMIME, allowedAttachmentTypes, artifactContentTypes) — вынесены в
-// константы, чтобы литералы не дублировались (goconst).
+// MIME-типы растровых картинок, используемые в нескольких местах пакета — вынесены в константы, чтобы
+// литералы не дублировались.
 const (
 	mimePNG  = "image/png"
 	mimeJPEG = "image/jpeg"
@@ -68,9 +67,8 @@ func skinHrefFor(name string) string {
 	return "./skins/" + name + "/" + skinIndexFile
 }
 
-// findSkinFavicon ищет favicon скина через statFn (embed или диск) по
-// skinFaviconCandidates. Возвращает относительный href, MIME и true, если
-// нашёл; иначе false — вызывающий использует дефолт.
+// findSkinFavicon ищет favicon скина через statFn (embed или диск) по skinFaviconCandidates. Возвращает
+// относительный href, MIME и true, если нашёл; иначе false — вызывающий использует дефолт.
 func findSkinFavicon(base string, statFn func(name string) bool) (href, mime string, found bool) {
 	for _, name := range skinFaviconCandidates {
 		if statFn(name) {
@@ -101,21 +99,16 @@ type Server struct {
 	fileServer       http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
 	customSkinServer http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
 	httpSrv          *http.Server
-	// Keepalive-таймауты вебсокета. Immutable: задаются один раз в New и не
-	// мутируются после (хранение в полях, а не в глобальных переменных, убирает
-	// data race между тестами и readPump/writePump — см. websocket.go).
+	// Keepalive-таймауты вебсокета.
 	wsPongWait   time.Duration
 	wsPingPeriod time.Duration
 	wsWriteWait  time.Duration
-	// wsClients — число открытых сейчас /ws-соединений. Используется CLI при
-	// завершении run'а, чтобы не гасить дашборд, пока за ним кто-то следит
-	// (см. waitForDashboardDrain в cmd/afm/run.go).
+	// wsClients — число открытых сейчас /ws-соединений. Используется CLI при завершении run'а, чтобы не
+	// гасить дашборд, пока за ним кто-то следит (см. waitForDashboardDrain в cmd/afm/run.go).
 	wsClients atomic.Int64
 
-	// done закрывается в Shutdown — server-level сигнал для долгоживущих
-	// стрим-хендлеров (SSE бокового агента), чтобы они не держали
-	// http.Server.Shutdown открытым бесконечно. shutdownOnce защищает от
-	// повторного close при повторном Shutdown.
+	// done закрывается в Shutdown — server-level сигнал для долгоживущих стрим-хендлеров, чтобы они не
+	// держали http.Server.Shutdown открытым бесконечно.
 	done         chan struct{}
 	shutdownOnce sync.Once
 }
@@ -143,11 +136,6 @@ type Config struct {
 	Stages      map[string]StageConfig
 	Store       *state.Store
 	// Accounting — источник данных о стоимости/токенах run'а для /api/status.
-	// nil означает "accounting не поддерживается этим сервером" (accounting
-	// вообще не был подключён к run'у) — отличается от подключённого, но
-	// нерабочего провайдера (accounting.StaticUnavailable(), см. cmd/afm/run.go):
-	// в первом случае все accounting-поля статуса опускаются целиком, во
-	// втором — присутствуют со health:"unavailable".
 	Accounting accounting.CostProvider
 	// ShowMoney включает показ денежных ($) величин в дашборде
 	// (accounting.show_money). Токены отображаются всегда, независимо от флага.
@@ -218,10 +206,8 @@ func New(cfg Config) *Server {
 		titleText = strings.TrimSpace(string(data))
 	}
 
-	// skin_dir полностью подменяет активный скин (аналогично prompts_dir):
-	// нужен index.css внутри директории, иначе — предупреждение и fallback на
-	// встроенный скин (theme/graphite). Дашборд не критичен для работы флоу
-	// (в отличие от промптов), поэтому сервер не падает при плохом skin_dir.
+	// skin_dir полностью подменяет активный скин: нужен index.css внутри директории, иначе — предупреждение и
+	// fallback на встроенный скин.
 	if cfg.SkinDir != "" {
 		if _, err := os.Stat(filepath.Join(cfg.SkinDir, skinIndexFile)); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skin_dir %q has no %s, using skin %q\n", cfg.SkinDir, skinIndexFile, skinName)
@@ -243,11 +229,8 @@ func New(cfg Config) *Server {
 		}
 	}
 
-	// Предподготовка index.html: подменяем ссылку на CSS, класс body, favicon
-	// (href + type) и, если у скина есть title.txt, <title>. Замены строковые —
-	// сами файлы скина отдаст fileServer/customSkinServer позже. Ошибка чтения
-	// embed невозможна на практике, но обрабатываем: при nil serveIndex
-	// делегирует на fileServer.
+	// Предподготовка index.html: подменяем ссылку на CSS, класс body, favicon и, если у скина есть title.txt,
+	// <title>. Замены строковые — сами файлы скина отдаст fileServer/customSkinServer позже.
 	indexBytes, err := fs.ReadFile(web.FS, "index.html")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
@@ -272,9 +255,8 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/api/files/", s.routeFiles)
 	mux.HandleFunc("/api/flow/", s.routeFlow)
-	// Маршруты бокового агента регистрируются только при включённой фиче —
-	// иначе запрос доходит до статики и возвращает 404 (старый сервер не
-	// затронут). Нужны обе формы: точный путь и поддерево (/stream, /messages…).
+	// Маршруты бокового агента регистрируются только при включённой фиче — иначе запрос доходит до статики и
+	// возвращает 404. Нужны обе формы: точный путь и поддерево (/stream, /messages…).
 	if s.sideAgent != nil {
 		mux.HandleFunc("/api/side-agent", s.routeSideAgent)
 		mux.HandleFunc("/api/side-agent/", s.routeSideAgent)
@@ -294,12 +276,7 @@ func New(cfg Config) *Server {
 	return s
 }
 
-// dashboardListenAddr выбирает адрес прослушивания (инвариант 9). Dashboard
-// отдаёт неаутентифицированные мутирующие stage/flow API (approve/revise/note/
-// button/retry/dialog), поэтому на нативном хосте всегда bind'имся только на
-// loopback (127.0.0.1) — независимо от бокового агента. В контейнере bind обязан
-// быть 0.0.0.0 (":port"), иначе хостовый `docker -p` не достучится до слушателя;
-// host-side публикация при этом всё равно уходит на 127.0.0.1 (см. launcher).
+// dashboardListenAddr выбирает адрес прослушивания.
 func dashboardListenAddr(port int, inContainer bool) string {
 	if inContainer {
 		return fmt.Sprintf(":%d", port)
@@ -307,9 +284,8 @@ func dashboardListenAddr(port int, inContainer bool) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-// builtinSkinName нормализует Theme до имени встроенного скина: "goga",
-// "novacorps" или дефолт "graphite" (сюда же попадает устаревший алиас
-// "coffee", пустое и неизвестные значения).
+// builtinSkinName нормализует Theme до имени встроенного скина: "goga", "novacorps" или дефолт "graphite"
+// (сюда же попадает устаревший алиас "coffee", пустое и неизвестные значения).
 func (s *Server) builtinSkinName() string {
 	switch s.theme {
 	case config.ThemeGoga:
@@ -330,11 +306,7 @@ func (s *Server) embeddedFavicon(skinName string) (href, mime string, found bool
 	})
 }
 
-// serveStatic отдаёт index.html (с подставленным скином) для "/" и "/index.html",
-// остальную статику делегирует на FileServer.
-// noStore оборачивает handler, добавляя Cache-Control: no-store — для статики с
-// фиксированными именами (custom skin CSS), которую нельзя кэшировать между
-// пересборками/сменами skin_dir.
+// serveStatic отдаёт index.html для "/" и "/index.html", остальную статику делегирует на FileServer.
 func noStore(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
@@ -347,31 +319,15 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		s.serveIndex(w, r)
 		return
 	}
-	// Скины (/skins/*) отдаются с ФИКСИРОВАННЫМИ именами (skins/base/layout.css,
-	// skins/graphite/index.css …), в отличие от контент-хэшированного JS-бандла
-	// (/assets/index-<hash>.js). Файлы embed.FS имеют нулевой modtime, поэтому
-	// http.FileServer не ставит Last-Modified/ETag — и браузер эвристически
-	// кэширует старый CSS между пересборками образа (симптом: «дизайн не
-	// обновился после rebuild»). no-store заставляет браузер всегда брать
-	// свежий CSS; для локального дашборда это дёшево. Хэшированный /assets/*
-	// не трогаем — он безопасно кэшируется навсегда.
+	// Скины отдаются с ФИКСИРОВАННЫМИ именами, в отличие от контент-хэшированного JS-бандла. no-store
+	// заставляет браузер всегда брать свежий CSS; для локального дашборда это дёшево.
 	if strings.HasPrefix(r.URL.Path, "/skins/") {
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	}
 	s.fileServer.ServeHTTP(w, r)
 }
 
-// dashboardCSP — Content-Security-Policy для документа дашборда
-// (defense-in-depth). Ключевая директива для фичи «картинка в ленте» —
-// img-src 'self' data: blob:: даже при регрессе renderer-глушилки внешних
-// markdown-картинок браузер не выполнит эксфильтрацию-запрос на чужой origin
-// (data: — favicon-пульс use-favicon-pulse; blob: — превью вставленной картинки
-// use-image-paste через URL.createObjectURL). script-src закреплён по sha256 инлайн-
-// скрипта темы в index.html (значение стабильно между пересборками — vite его
-// не трогает) + 'self' для хэш-бандла; style-src 'unsafe-inline' — React-инлайн-
-// стили style={{…}}; connect-src ws:/wss: — /ws (use-event-feed). Если инлайн-
-// скрипт темы в index.html поменяется — обновить хэш (иначе тема не применится
-// на первом кадре; CSP-нарушение видно в консоли).
+// dashboardCSP — Content-Security-Policy для документа дашборда.
 const dashboardCSP = "default-src 'self'; " +
 	"img-src 'self' data: blob:; " +
 	"style-src 'self' 'unsafe-inline'; " +
@@ -383,9 +339,8 @@ const dashboardCSP = "default-src 'self'; " +
 // serveIndex отдаёт предподготовленный index.html. Если embed-чтение не удалось
 // (indexBytes пуст), fallback на FileServer — защита от регрессии embed.
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
-	// index.html тоже с фиксированным именем и подменяется на лету (скин/
-	// favicon) — не должен кэшироваться, иначе браузер отдаст старую ссылку на
-	// assets/skins после пересборки.
+	// index.html тоже с фиксированным именем и подменяется на лету (скин/ favicon) — не должен кэшироваться,
+	// иначе браузер отдаст старую ссылку на assets/skins после пересборки.
 	w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	w.Header().Set("Content-Security-Policy", dashboardCSP)
 	if len(s.indexBytes) == 0 {
@@ -451,9 +406,7 @@ func (s *Server) Start() (string, error) {
 	return ln.Addr().String(), nil
 }
 
-// Shutdown gracefully stops the server. Сначала закрываем server-level done,
-// чтобы долгоживущие SSE-хендлеры вышли из select и соединения стали idle —
-// иначе httpSrv.Shutdown ждал бы их бесконечно.
+// Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() { close(s.done) })
 	err := s.httpSrv.Shutdown(ctx)

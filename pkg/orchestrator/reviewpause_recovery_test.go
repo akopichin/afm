@@ -15,10 +15,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// newBlockingRunnerOrch builds an orchestrator over a real Store + a
-// countingBlockingRunner, wired for the crash/recovery review-pause tests that
-// must observe real agent spawns (not the testRunnerHook shortcut). Cleanup
-// cancels + waits agents BEFORE closing the store (the AGENTS.md flake).
+// newBlockingRunnerOrch builds an orchestrator over a real Store + a countingBlockingRunner, wired for the
+// crash/recovery review-pause tests that must observe real agent spawns.
 func newBlockingRunnerOrch(t *testing.T, stages []flow.Stage) (*Orchestrator, *countingBlockingRunner, context.Context) {
 	t.Helper()
 	runDir := t.TempDir()
@@ -44,13 +42,6 @@ func newBlockingRunnerOrch(t *testing.T, stages []flow.Stage) (*Orchestrator, *c
 	return o, runner, ctx
 }
 
-// TestRunResumeTransaction_InjectRedeliversFeedbackOnRecovery закрывает
-// review-finding P1 #1: рекавери resuming/inject-транзакции ДОЛЖНА заново
-// загрузить review notes, отрендерить блок и идемпотентно записать feedback.md
-// — даже если синхронная запись в InjectNotesAndResume не успела произойти до
-// краха. Симулируем именно этот сценарий: маркер resuming/inject и notes лежат
-// на диске, но feedback.md для цели ЕЩЁ НЕТ. testRunnerHook подменяет реальный
-// спавн, так что проверяем ровно доставку feedback, а не резюм агента.
 func TestRunResumeTransaction_InjectRedeliversFeedbackOnRecovery(t *testing.T) {
 	o := newTestOrchestrator(t)
 	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)
@@ -94,18 +85,12 @@ func TestRunResumeTransaction_InjectRedeliversFeedbackOnRecovery(t *testing.T) {
 	}
 }
 
-// TestResumeOwner_ReSpawnsRunningOwnerWithoutTransition закрывает review-finding
-// P1 #2: owner, который на рекавери оказался уже НЕ в paused, а в running
-// (краш после успешного FSM-перехода, но до SpawnAgent), должен быть заново
-// заспавнен САМ раннер — без второго перехода (тот бы CAS-провалился из
-// running и оставил owner'а в активном статусе навсегда без процесса).
 func TestResumeOwner_ReSpawnsRunningOwnerWithoutTransition(t *testing.T) {
 	o, runner, ctx := newBlockingRunnerOrch(t, []flow.Stage{
 		{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentAuto}},
 	})
-	// s1 durably in running (as a crash after the resume transition would leave
-	// it) — NOT paused. autonomous.flag makes runAutonomousAgent the resolved
-	// runner path.
+	// s1 durably in running (as a crash after the resume transition would leave it) — NOT paused.
+	// autonomous.flag makes runAutonomousAgent the resolved runner path.
 	seedStageStatus(t, o.opts.Store, "s1", state.StatusRunning)
 	if err := os.MkdirAll(filepath.Join(o.opts.RunDir, "s1"), 0755); err != nil {
 		t.Fatal(err)
@@ -127,13 +112,6 @@ func TestResumeOwner_ReSpawnsRunningOwnerWithoutTransition(t *testing.T) {
 	}
 }
 
-// TestRunResumeTransaction_ReleasesHeldPendingDependent закрывает review-finding
-// P1 #3: после снятия review hold транзакция обязана прогнать ПОЛНЫЙ scheduling
-// cascade, а не только startReadyStages. Каноничный кейс: script-стадия
-// завершилась во время review (скрипты не owned), её зависимая стадия осталась
-// в pending из-за hold. Cancel review с owned=[] должен активировать зависимую
-// стадию — startReadyStages в одиночку этого не делает (она промоутит только
-// уже-ready стадии, а pending→ready делает tryActivatePrePlanned).
 func TestRunResumeTransaction_ReleasesHeldPendingDependent(t *testing.T) {
 	o, runner, ctx := newBlockingRunnerOrch(t, []flow.Stage{
 		{ID: "s_script", Name: "s_script", Script: "echo hi"},
@@ -160,15 +138,6 @@ func TestRunResumeTransaction_ReleasesHeldPendingDependent(t *testing.T) {
 	waitFor(t, func() bool { return runner.count("s_dep") == 1 })
 }
 
-// TestSpawnKind_StampsKindSynchronously закрывает review-finding P2 #2: kind
-// раннера должен фиксироваться СИНХРОННО (до того как SpawnAgent'овская горутина
-// успеет markActive), а не первой строкой внутри самого раннера (которая
-// исполняется уже ПОСЛЕ markActive). Раннер здесь — блокирующая заглушка,
-// поэтому его собственный setRunnerKind не срабатывает: если бы kind ставился
-// только внутри раннера, сразу после spawnKind он был бы ещё пуст. Проверяем на
-// kindPlanning (один из «нестандартных» кейсов из re-review: stale kindPlanning
-// на переходе planning→implementation) — spawnKind обязан выставить его до
-// возврата для ЛЮБОГО kind, не только review.
 func TestSpawnKind_StampsKindSynchronously(t *testing.T) {
 	o, _, ctx := newBlockingRunnerOrch(t, []flow.Stage{
 		{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentReview}},
@@ -184,12 +153,6 @@ func TestSpawnKind_StampsKindSynchronously(t *testing.T) {
 	}
 }
 
-// TestPauseFlow_ActiveReviewOwnerResumesAsReview закрывает review-finding P2 #2
-// (end-to-end): PauseFlow, наткнувшись на активную стадию с runnerKind=review,
-// обязан записать в маркер ResumeKind=review, а НЕ implementation (у review и
-// implementation одинаковый статус running — без корректного runnerKind
-// computeResumeKind ошибочно вывел бы implementation, и resume запустил бы
-// не тот раннер).
 func TestPauseFlow_ActiveReviewOwnerResumesAsReview(t *testing.T) {
 	o := newPauseFlowTestOrch(t, []flow.Stage{
 		{ID: "s1", Agents: []flow.AgentType{flow.AgentReview}},
@@ -207,9 +170,6 @@ func TestPauseFlow_ActiveReviewOwnerResumesAsReview(t *testing.T) {
 	}
 }
 
-// TestAddNote_TooLongRejected закрывает review-finding P2 #3 (per-note limit):
-// текст длиннее maxNoteTextBytes должен вернуть ErrNoteTooLong и не попасть в
-// store — иначе один огромный note раздувает review-notes.json и prompt агента.
 func TestAddNote_TooLongRejected(t *testing.T) {
 	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
 	big := strings.Repeat("x", maxNoteTextBytes+1)
@@ -221,9 +181,6 @@ func TestAddNote_TooLongRejected(t *testing.T) {
 	}
 }
 
-// TestAddNote_TooManyRejected закрывает review-finding P2 #3 (count limit): при
-// maxNotes уже сохранённых заметках новая (новый key) отклоняется ErrTooManyNotes,
-// а замена существующей — по-прежнему проходит (store не растёт).
 func TestAddNote_TooManyRejected(t *testing.T) {
 	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "orig", true))
 	// Seed maxNotes distinct file-level notes directly on disk.
@@ -248,10 +205,6 @@ func TestAddNote_TooManyRejected(t *testing.T) {
 	}
 }
 
-// TestRenderReviewFeedback_TruncatesLargeAggregate закрывает review-finding
-// P2 #3 (rendered-feedback limit): суммарный отрендеренный блок не должен
-// превышать maxRenderedFeedbackBytes (+ маркер усечения) — даже если суммарно
-// заметок много. Обрезка идёт по границе строки.
 func TestRenderReviewFeedback_TruncatesLargeAggregate(t *testing.T) {
 	var notes []state.ReviewNote
 	// Each note ~1 KiB of text; enough of them to blow past the cap.
@@ -271,13 +224,6 @@ func TestRenderReviewFeedback_TruncatesLargeAggregate(t *testing.T) {
 	}
 }
 
-// TestResumeOwner_ReSpawnsRetryingOwnerWithoutTransition закрывает re-review
-// P1 (retrying): owner, поставленный на review pause ИЗ retrying, при resume
-// возвращается EvContinue'ом обратно В retrying; если процесс упал в окне между
-// этим переходом и SpawnAgent, после рестарта resumeOwner видит retrying — без
-// backoff-таймера и без агентской goroutine. Раньше status-матрица respawn
-// покрывала только running/planning/revising, и retrying зависал навсегда.
-// Теперь он тоже пересоздаётся (без второго перехода).
 func TestResumeOwner_ReSpawnsRetryingOwnerWithoutTransition(t *testing.T) {
 	o, runner, ctx := newBlockingRunnerOrch(t, []flow.Stage{
 		{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentAuto}},
@@ -303,13 +249,6 @@ func TestResumeOwner_ReSpawnsRetryingOwnerWithoutTransition(t *testing.T) {
 	}
 }
 
-// TestRunResumeTransaction_CleanupFailureRetriesCleanupOnly закрывает re-review
-// P1 (double-spawn после cleanup failure). С РЕАЛЬНЫМ owner'ом: первый resume
-// спавнит блокирующего агента (count=1), durable cleanup падает → in-memory
-// marker сохраняется (fail-closed). Повторный вызов той же транзакции обязан
-// повторить ТОЛЬКО cleanup — owner уже в reviewResumed, второго SpawnAgent быть
-// не должно (иначе два агента одной стадии). После успешного cleanup marker
-// снимается, а суммарный spawn-count owner'а остаётся равен 1.
 func TestRunResumeTransaction_CleanupFailureRetriesCleanupOnly(t *testing.T) {
 	o, runner, ctx := newBlockingRunnerOrch(t, []flow.Stage{
 		{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentAuto}},
@@ -353,10 +292,6 @@ func TestRunResumeTransaction_CleanupFailureRetriesCleanupOnly(t *testing.T) {
 	}
 }
 
-// TestInjectCancel_RejectedWhileResuming закрывает re-review P1 (повторный
-// Inject/Cancel): пока marker уже в state=resuming, повторный HTTP-запрос не
-// должен запускать второй resume worker — обе ручки обязаны вернуть
-// ErrResumeInProgress, не тронув marker.
 func TestInjectCancel_RejectedWhileResuming(t *testing.T) {
 	o := newTestOrchestrator(t)
 	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)

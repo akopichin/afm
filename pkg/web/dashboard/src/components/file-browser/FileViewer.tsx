@@ -4,13 +4,7 @@ import type { FileContent } from '../../api/files-client'
 import type { ReviewNote } from '../../types'
 import { highlight, splitHighlightedLines } from './highlight'
 
-// Машиночитаемые коды ошибок бэкенда (см. FlowApiError.code в run-client.ts)
-// в человекочитаемый текст — тот же набор, что ReviewNotesModal's
-// describeApiError, но продублирован локально: FileViewer — лист file-browser
-// и не должен тянуть модуль review-notes-modal ради одной функции. 409-конфликт
-// addNote'а: stale_content (файл изменился с момента постановки заметки —
-// перечитать и заново привязать) и rev_conflict (стор заметок поменяли где-то
-// ещё).
+// Преобразуем коды API в текст; stale_content требует перечитать файл, rev_conflict — обновить заметки.
 function describeAddNoteError(err: unknown): string {
   if (err instanceof FlowApiError) {
     if (err.code === 'stale_content') return 'File changed since it was opened — reload and re-anchor the note.'
@@ -20,69 +14,33 @@ function describeAddNoteError(err: unknown): string {
   return err instanceof Error ? err.message : 'Request failed'
 }
 
-// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — 'none' (флоу
-// активен), 'paused' (заметки можно писать прямо сейчас), 'resuming'
-// (флоу возобновляется, заметки только что были доставлены/отменены). Тип
-// продублирован здесь намеренно: FileViewer не должен тянуть весь модуль
-// use-status ради одного литерала.
+// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — 'none', 'paused', 'resuming'.
 type FlowPauseState = 'none' | 'paused' | 'resuming'
 
 type FileViewerProps = {
   content: FileContent | null
   loading: boolean
   error: string | null
-  // root/addNote/flowPauseState/pauseFlow/expectedRev are all optional: a
-  // plain content preview (the only thing FileBrowserModal wires up today)
-  // doesn't pass them, and FileViewer degrades to the old read-only render —
-  // no line is clickable, no comment marker shows. The modal's authoritative
-  // notes list (Task 23) threads real values in on top of this.
+  // Annotation props are optional; without them FileViewer renders a read-only preview.
   root?: string
-  // Master gate for the annotate affordance — lines open the comment editor
-  // directly only when the flow is actually paused (writing a note against
-  // content that might move under an agent's feet is unsafe otherwise).
-  // 'none' → the first line click shows a confirm ("pause the flow to write
-  // notes?") instead of the editor; 'resuming' behaves like 'none' (nothing
-  // is clickable, no confirm — the pause/resume transition is already
-  // in-flight from elsewhere).
+  // Master gate for the annotate affordance — lines open the comment editor directly only when the flow is
+  // actually paused.
   flowPauseState?: FlowPauseState
-  // Task 19's pauseFlow() — invoked when the user confirms the pause-gate
-  // dialog. Without it (or without root/addNote/content), a line click is a
-  // no-op even when flowPauseState is 'none' — there is nothing to gate.
+  // pauseFlow runs after the user confirms the pause dialog.
   pauseFlow?: () => Promise<{ paused_stages: string[] }>
   addNote?: (body: AddNoteRequest) => Promise<{ note: ReviewNote; rev: number }>
-  // Optimistic-concurrency token the backend checks addNote against. Task 23
-  // owns the authoritative notes list (and therefore the current `rev`) via
-  // listNotes() — threading it in as a prop here is the simplest option that
-  // doesn't duplicate that fetch inside a leaf view component. Defaults to 0
-  // (an empty/never-fetched store), which is also what a fresh review round
-  // starts at server-side.
+  // Optimistic-concurrency token the backend checks addNote against. Defaults to 0 (an empty/never-fetched
+  // store), which is also what a fresh review round starts at server-side.
   expectedRev?: number
-  // Notes already persisted for the current review round (the modal's
-  // authoritative list — see FileBrowserModal). FileViewer hydrates the ones
-  // that belong to THIS file (matching root+path, line notes only) back into
-  // its per-line markers and textarea prefill, so switching away from a file
-  // and reopening it restores the annotation instead of silently dropping the
-  // dot (review-finding P2 #5). Local optimistic edits still take precedence
+  // Notes already persisted for the current review round. Local optimistic edits still take precedence
   // until the modal's list catches up.
   savedNotes?: ReviewNote[]
-  // Test-only override: lets FileViewer.test.tsx supply a fixed hash without
-  // depending on jsdom's crypto.subtle. Production callers never pass this —
-  // FileViewer computes it itself (see computeContentSha below) once per
-  // loaded file.
+  // Test-only override: lets FileViewer.test.tsx supply a fixed hash without depending on jsdom's
+  // crypto.subtle.
   contentSha?: string
 }
 
-// Показывает содержимое выбранного файла, построчно (Task 20 — по образцу
-// PlanPanel: каждая строка — свой div, кликабельный, с ●-маркером и инлайновой
-// формой комментария). ЕДИНСТВЕННОЕ место во всём дереве file-browser, где
-// используется dangerouslySetInnerHTML — и оно заведомо безопасно: HTML каждой
-// строки приходит только из highlight()+splitHighlightedLines() (highlight.ts),
-// которые либо экранируют исходник целиком (язык 'plain'/незарегистрированный),
-// либо прогоняют его через hljs.highlight (сам hljs экранирует текст внутри
-// найденных токенов) с последующей пере-балансировкой тегов по границам строк.
-// Контент НИКОГДА не идёт через markdown-it — в отличие от плана/диалога
-// (PlanPanel/DialogChannel), это чужой исходный код проекта, а не markdown,
-// написанный агентом.
+// Показывает содержимое выбранного файла, построчно.
 export function FileViewer({
   content,
   loading,
@@ -99,15 +57,11 @@ export function FileViewer({
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
-  // Инлайновая ошибка последнего addNote (напр. 409 stale_content/rev_conflict):
-  // форма остаётся открытой, пользователь видит причину рядом с редактором и
-  // может перечитать/повторить — а не молча закрывшуюся форму без сигнала.
+  // Инлайновая ошибка последнего addNote: форма остаётся открытой, пользователь видит причину рядом с
+  // редактором и может перечитать/повторить — а не молча закрывшуюся форму без сигнала.
   const [saveError, setSaveError] = useState<string | null>(null)
   const [computedSha, setComputedSha] = useState<string | null>(null)
-  // Line clicked while flowPauseState === 'none', awaiting the user's
-  // yes/no on the pause-gate confirm. Cleared on "Нет", on reopening the
-  // same pending line, and once the effect below opens the editor for it
-  // after the flow actually reports 'paused'.
+  // Line clicked while flowPauseState === 'none', awaiting the user's yes/no on the pause-gate confirm.
   const [pendingPauseLine, setPendingPauseLine] = useState<number | null>(null)
 
   const canUseNotes = addNote !== undefined && root !== undefined && content !== null
@@ -115,9 +69,8 @@ export function FileViewer({
   const canRequestPause = flowPauseState === 'none' && canUseNotes && pauseFlow !== undefined
   const sha = contentSha ?? computedSha
 
-  // Persisted line notes for THIS file (root+path), keyed by line number, so a
-  // reopened file shows its saved markers/prefill again. Local optimistic edits
-  // (`comments`) override the persisted text until the modal's list refreshes.
+  // Persisted line notes for THIS file, keyed by line number, so a reopened file shows its saved
+  // markers/prefill again.
   const savedByLine = useMemo(() => {
     const m: Record<number, string> = {}
     if (root === undefined || content === null || savedNotes === undefined) return m
@@ -128,10 +81,8 @@ export function FileViewer({
   }, [savedNotes, root, content])
   const displayComments = useMemo(() => ({ ...savedByLine, ...comments }), [savedByLine, comments])
 
-  // Открыть отложенную строку, как только флоу реально встал на паузу — тот
-  // самый переход, ради которого пользователь нажал "Да" в конфирме. Статус
-  // приходит через опрос /api/status снаружи (см. проп flowPauseState), так
-  // что этот эффект — единственное место, которое реагирует на изменение.
+  // Открыть отложенную строку, как только флоу реально встал на паузу — тот самый переход, ради которого
+  // пользователь нажал "Да" в конфирме.
   useEffect(() => {
     if (flowPauseState !== 'paused' || pendingPauseLine === null) return
     setActiveCommentLine(pendingPauseLine)
@@ -142,14 +93,7 @@ export function FileViewer({
     // this effect on a comments change is a no-op guarded by that check.
   }, [flowPauseState, pendingPauseLine])
 
-  // Свежий файл — свежее состояние комментариев/формы. Ключ по (root, path), а
-  // не по самому content: тот же файл, перезагруженный после Reload (см.
-  // FileBrowserModal), не должен сбрасывать уже сохранённые в этой сессии
-  // маркеры комментариев. root ОБЯЗАТЕЛЕН в ключе — иначе при переключении между
-  // двумя workspace roots с ОДИНАКОВЫМ path (root A `/src/main.go` → root B
-  // `/src/main.go`) локальный `comments` не сбросился бы и подсунул второму
-  // файлу маркер/prefill от первого, а Save создал бы в root B заметку с чужим
-  // текстом.
+  // Свежий файл — свежее состояние комментариев/формы.
   useEffect(() => {
     setComments({})
     setActiveCommentLine(null)
@@ -157,9 +101,8 @@ export function FileViewer({
     setSaveError(null)
   }, [root, content?.path])
 
-  // content_sha считается один раз на загруженный файл — не на каждый рендер
-  // и не на каждое нажатие Save (см. бриф: "Compute content_sha once per
-  // loaded file"). contentSha-проп (тестовый) пропускает вычисление целиком.
+  // content_sha считается один раз на загруженный файл — не на каждый рендер и не на каждое нажатие Save.
+  // contentSha-проп (тестовый) пропускает вычисление целиком.
   useEffect(() => {
     if (contentSha !== undefined || content === null) return
 
@@ -216,9 +159,8 @@ export function FileViewer({
 
   function confirmPause() {
     if (pauseFlow === undefined) return
-    // pendingPauseLine stays set — the useEffect above opens the editor for
-    // it once flowPauseState actually reports 'paused'. On failure, clear it
-    // so the user can retry the click instead of being stuck silently.
+    // pendingPauseLine stays set — the useEffect above opens the editor for it once flowPauseState
+    // actually reports 'paused'.
     void pauseFlow().catch(() => setPendingPauseLine(null))
   }
 
@@ -259,10 +201,7 @@ export function FileViewer({
     const hasComment = displayComments[lineNumber] !== undefined
     const editing = activeCommentLine === lineNumber
     const confirmingPause = pendingPauseLine === lineNumber
-    // A line looks/behaves clickable both when it opens the editor directly
-    // (canAnnotate) and when it opens the pause-gate confirm instead
-    // (canRequestPause) — the affordance is "you can leave a note here" in
-    // both cases, only what happens on click differs.
+    // Lines stay clickable for both direct annotation and the pause confirmation gate.
     const clickable = canAnnotate || canRequestPause
 
     return (
@@ -343,10 +282,8 @@ export function FileViewer({
   }
 }
 
-// computeContentSha реализует ровно ту формулу, что задана брифом:
-// 'sha256:' + hex(SHA-256(content)) через WebCrypto — тот же алгоритм сервер
-// использует для проверки content_sha при POST /api/flow/notes (см.
-// addNote в run-client.ts), поэтому клиентский хэш обязан совпасть байт-в-байт.
+// computeContentSha возвращает sha256:<hex> через WebCrypto; формула должна совпадать с серверной
+// проверкой content_sha.
 async function computeContentSha(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return `sha256:${toHex(new Uint8Array(digest))}`

@@ -20,10 +20,6 @@ import (
 )
 
 // containerHome — домашний каталог non-root пользователя внутри контейнера.
-// Маунты ~/.claude и ~/.afm накладываются поверх containerHome/.claude и .afm,
-// а entrypoint (gosu, см. docker-entrypoint.sh) выставляет HOME=containerHome и
-// дропает привилегии до хостового uid — поэтому записи в тома принадлежат
-// пользователю хоста, а не root.
 const containerHome = "/home/afm"
 
 // CommandMount описывает нестандартный агент для монтирования в контейнер.
@@ -45,30 +41,17 @@ type ReExecConfig struct {
 	SecretsFile     string                        // опц. override для default-слоёв secrets.env
 	MountCodexState bool                          // codex использует ~/.codex (OAuth) → монтировать read-only в /tmp/host-codex (entrypoint копирует в $HOME/.codex, см. UsesCodex)
 
-	// FileBrowserEnabled — включён ли встроенный файловый браузер проекта
-	// (config.DockerFileBrowserConfig.IsEnabled()). Вместе с непустым
-	// FileRoots.Roots переключает публикацию dashboard-порта на loopback
-	// (127.0.0.1) — file browser даёт доступ на чтение к произвольным путям
-	// внутри смонтированных корней, поэтому порт не должен быть открыт наружу
-	// хоста — и передаёт FileRoots контейнеру через FileRootsEnvVar.
+	// FileBrowserEnabled — включён ли встроенный файловый браузер проекта.
 	FileBrowserEnabled bool
-	// FileRoots — манифест корней file browser (см. BuildFileRootManifest),
-	// закодированный и передаваемый в контейнер только когда FileBrowserEnabled
-	// и Roots непусты.
+	// FileRoots — манифест корней file browser (см. BuildFileRootManifest), закодированный и передаваемый в
+	// контейнер только когда FileBrowserEnabled и Roots непусты.
 	FileRoots FileRootManifest
 
-	// Hooks — итоговый список lifecycle-хуков (Combine global+project+flow+stage
-	// слоёв, с учётом override по id), собранный ВЫЗЫВАЮЩИМ КОДОМ (cmd/afm/run.go)
-	// ДО этой докер-ветки (codex #3). ReExec резолвит секреты хуков (Hook.Env) на
-	// ХОСТЕ и передаёт их в контейнер transient bare `-e` env (см. TransportName) —
-	// контейнер после re-exec строит ТОТ ЖЕ combined из тех же слоёв и читает
-	// значения из транспорта по (hookIdx,varIdx), а не из secrets.env/файлов.
+	// Hooks — итоговый список lifecycle-хуков, собранный ВЫЗЫВАЮЩИМ КОДОМ ДО этой докер-ветки.
 	Hooks []lifecyclehooks.RegisteredHook
 
-	// Managed browser capability transport (см. cmd/afm/run_browser.go). Менеджер
-	// поднят на ХОСТЕ до docker run; контейнерный afm достаёт endpoint/token/epoch/
-	// app-url из env и строит per-stage descriptor. Токен уходит bare `-e` (значение
-	// из env afm-процесса, не в argv — не видно в ps aux), как hook-секреты.
+	// Managed browser capability transport. Менеджер поднят на ХОСТЕ до docker run; контейнерный afm достаёт
+	// endpoint/token/epoch/ app-url из env и строит per-stage descriptor.
 	BrowserEnabled  bool
 	BrowserToken    string // → bare -e AFM_BROWSER_TRANSPORT_TOKEN (секрет)
 	BrowserEndpoint string // host.docker.internal:<managerPort> → -e AFM_BROWSER_ENDPOINT
@@ -80,11 +63,7 @@ type ReExecConfig struct {
 	BrowserAppURL           string // http://127.0.0.1:<hostPort> → -e AFM_BROWSER_APP_URL (не секрет)
 }
 
-// UsesLifecycleSecrets сообщает, объявляет ли хоть один хук из combined
-// непустой Env — гейтит host-side загрузку secrets.env-слоёв и резолв в
-// ReExec: если ни у одного хука нет Env, нечего резолвить и нечего
-// транспортировать (тот же anyEnv-гейт, что и в non-docker пути
-// cmd/afm/run.go, Task 3).
+// UsesLifecycleSecrets проверяет наличие Env у хуков, чтобы не загружать и не передавать ненужные секреты.
 func UsesLifecycleSecrets(hooks []lifecyclehooks.RegisteredHook) bool {
 	for _, rh := range hooks {
 		if len(rh.Hook.Env) > 0 {
@@ -94,10 +73,8 @@ func UsesLifecycleSecrets(hooks []lifecyclehooks.RegisteredHook) bool {
 	return false
 }
 
-// CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker
-// задан один из поддерживаемых auth env vars. macOS Keychain недоступен из
-// Linux-контейнера, поэтому OAuth-сессия из ~/.claude.json там не работает.
-// Возвращает ошибку с инструкцией, если auth не настроена.
+// CheckClaudeDockerAuth проверяет, что при использовании command: claude в Docker задан один из
+// поддерживаемых auth env vars. Возвращает ошибку с инструкцией, если auth не настроена.
 func CheckClaudeDockerAuth(clientCommand string) error {
 	if clientCommand != config.ClaudeCommand && clientCommand != "" {
 		return nil
@@ -130,20 +107,8 @@ func (e *SubprocessExitError) Error() string {
 	return fmt.Sprintf("exit: %d", e.Code)
 }
 
-// defaultExecFunc запускает docker как дочерний процесс и ждёт его завершения.
-// Ранее использовался syscall.Exec (замена текущего образа), но на macOS 26
-// execve() из подписанного Go-бинаря в docker вызывает SIGKILL — macOS блокирует
-// смену образа между разными code identities. exec.Command обходит это
-// ограничение: docker запускается дочерним процессом, а не заменяет текущий.
-// Возвращает *SubprocessExitError — caller обязан завершить процесс с этим кодом.
-//
-// SIGINT/SIGTERM хостовому процессу (Ctrl-C, kill) без явной обработки просто
-// убивали САМ ЭТОТ процесс дефолтной Go/OS-диспозицией — docker run (дочерний
-// процесс, exec.Command его не форвардит сигналы автоматически) оставался
-// сиротой и продолжал крутить контейнер бесконечно, никак не зная о смерти
-// родителя. Ловим сигнал сами и форвардим его в docker run: тот в foreground-
-// режиме (без -d, как здесь), получив SIGINT/SIGTERM, сам штатно останавливает
-// контейнер — остаётся просто дождаться его настоящего завершения.
+// defaultExecFunc запускает docker как дочерний процесс и ждёт его завершения. Возвращает
+// *SubprocessExitError — caller обязан завершить процесс с этим кодом.
 var defaultExecFunc = func(argv0 string, argv []string, envv []string) error {
 	c := exec.Command(argv0, argv[1:]...) //nolint:gosec
 	c.Stdin = os.Stdin
@@ -183,10 +148,7 @@ var defaultExecFunc = func(argv0 string, argv []string, envv []string) error {
 // execFunc — заменяемая в тестах обёртка над syscall.Exec.
 var execFunc = defaultExecFunc
 
-// SetExecFunc заменяет функцию exec (только для тестов).
-// ВНИМАНИЕ: execFunc — это изменяемое состояние уровня пакета; эти хелперы
-// предназначены только для последовательного (sequential) использования в
-// тестах и НЕ безопасны при t.Parallel().
+// SetExecFunc заменяет функцию exec.
 func SetExecFunc(f func(string, []string, []string) error) {
 	execFunc = f
 }
@@ -196,13 +158,8 @@ func ResetExecFunc() {
 	execFunc = defaultExecFunc
 }
 
-// ScanCommands возвращает список нестандартных (не claude, не generated) агентов
-// из flow, которые нужно смонтировать в Docker-контейнер. generated — команды с
-// recipe (autoShim): они генерируются в контейнере, бинарник не монтируется.
-// Бинарники, не найденные в PATH, молча пропускаются. f может быть nil
-// (например, `afm memory rebuild`, который не выполняет стадии флоу и знает
-// только глобальную команду агента памяти) — тогда сканируется только
-// globalCmd, без паники на разыменовании f.Stages.
+// ScanCommands возвращает список нестандартных агентов из flow, которые нужно смонтировать в
+// Docker-контейнер. Бинарники, не найденные в PATH, молча пропускаются.
 func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []CommandMount {
 	seen := make(map[string]bool)
 	var mounts []CommandMount
@@ -234,11 +191,7 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 	return mounts
 }
 
-// stageVerifyCommands — тонкая обёртка над flow.Stage.VerifyAgentCommands:
-// команда агентского verify-шага стадии должна попадать в discovery наравне
-// с Stage.Command, даже если нигде кроме verify не встречается (AI-verify,
-// задача V3) — иначе afm смонтирует/сгенерирует не всех агентов, которых
-// реально запустит.
+// stageVerifyCommands включает verify-агентов в discovery для монтирования и генерации wrapper'ов.
 func stageVerifyCommands(s flow.Stage) []string {
 	return s.VerifyAgentCommands()
 }
@@ -267,17 +220,10 @@ func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]confi
 	return used
 }
 
-// UsedRecipes projects the used-command set onto the recipes map, returning only
-// the recipes whose command is actually referenced by the flow (a stage command
-// or the global client command). This is the same rule UsedRecipeCommands applies
-// — no duplication of the skip-claude / used-in-stages logic.
-//
-// Why: ReExec resolves a secret for EVERY entry in ReExecConfig.Recipes and
-// fail-fasts on the first missing one. If run.go passed the entire cfg.Docker.
-// Agents map, a defined-but-unused agent with a missing secret would block the
-// whole run (and leak its secret into the container env). Filtering first keeps
-// secret resolution and secret env injection scoped to agents the flow actually
-// uses — least-privilege.
+// UsedRecipes projects the used-command set onto the recipes map, returning only the recipes whose command
+// is actually referenced by the flow. Why: ReExec resolves a secret for EVERY entry in ReExecConfig.Recipes
+// and fail-fasts on the first missing one — passing the entire cfg.Docker.Agents map would let a
+// defined-but-unused agent with a missing secret block the whole run (and leak its secret into container env).
 func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentRecipe) map[string]config.AgentRecipe {
 	used := UsedRecipeCommands(f, globalCmd, all)
 	out := make(map[string]config.AgentRecipe, len(used))
@@ -287,18 +233,11 @@ func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentReci
 	return out
 }
 
-// codexAdapterCommand — имя команды-адаптера codex CLI → claude stream-json
-// (см. scripts/codex-as-claude.sh), baked в образ рядом с openai-as-claude/
-// cursor-as-claude. Используется и напрямую (command: codex-as-claude, без
-// recipe), и как exec-цель generated-враппера recipe-типа "codex".
+// codexAdapterCommand — имя команды-адаптера codex CLI → claude stream-json, baked в образ рядом с
+// openai-as-claude/ cursor-as-claude.
 const codexAdapterCommand = "codex-as-claude"
 
-// UsesCodex reports whether the flow (a stage command or the global client
-// command) invokes codex — either directly via codexAdapterCommand, or
-// indirectly via a used recipe of type "codex" — used to gate mounting the
-// host's ~/.codex OAuth state (see ReExec). usedRecipes should already be
-// filtered to commands the flow actually references (UsedRecipes), consistent
-// with the least-privilege rule already applied to recipe secrets.
+// UsesCodex gates mounting host OAuth state; usedRecipes must contain only recipes referenced by the flow.
 func UsesCodex(f *flow.Flow, globalCmd string, usedRecipes map[string]config.AgentRecipe) bool {
 	if globalCmd == codexAdapterCommand {
 		return true
@@ -323,9 +262,8 @@ func UsesCodex(f *flow.Flow, globalCmd string, usedRecipes map[string]config.Age
 	return false
 }
 
-// ReExec заменяет текущий процесс на docker run с нужными монтированиями.
-// Возвращает ошибку только если docker не найден в PATH; в случае успеха
-// syscall.Exec никогда не возвращает управление.
+// ReExec заменяет текущий процесс на docker run с нужными монтированиями. Возвращает ошибку только если
+// docker не найден в PATH; в случае успеха syscall.Exec никогда не возвращает управление.
 func ReExec(cfg ReExecConfig) error {
 	dockerBin, err := exec.LookPath("docker")
 	if err != nil {
@@ -343,32 +281,21 @@ func ReExec(cfg ReExecConfig) error {
 		args = append(args, "-it")
 	}
 
-	// Dashboard: пробрасываем порт на хост, иначе UI недоступен извне контейнера.
-	// Dashboard отдаёт неаутентифицированные мутирующие stage/flow API (а также,
-	// опц., file browser на чтение смонтированных корней), поэтому порт публикуется
-	// ТОЛЬКО на loopback (127.0.0.1) — иначе проект был бы доступен с любого хоста в
-	// той же сети. Граница не зависит от фичефлагов.
+	// Dashboard: пробрасываем порт на хост, иначе UI недоступен извне контейнера. Граница не зависит от
+	// фичефлагов.
 	if cfg.DashboardPort > 0 {
 		bind := fmt.Sprintf("127.0.0.1:%d:%d", cfg.DashboardPort, cfg.DashboardPort)
 		args = append(args, "-p", bind)
 	}
 
 	// Монтируем проект по тому же абсолютному пути — os.Args проходят без изменений.
-	// ~/.claude и ~/.afm — в домашний каталог контейнера (containerHome), чтобы
-	// claude/агенты находили их через $HOME (его выставляет entrypoint-shim).
 	args = append(args,
 		"-v", cfg.ProjectDir+":"+cfg.ProjectDir,
 		"-v", home+"/.claude:"+containerHome+"/.claude",
 		"-v", home+"/.afm:"+containerHome+"/.afm",
 		"-w", cfg.ProjectDir,
 	)
-	// ВНИМАНИЕ: ~/.claude.json намеренно НЕ монтируем. claude при попытке обновить
-	// :ro-файл (атомарный write-through-rename) ломается и квартитит его как
-	// "corrupted: JSON Parse error", после чего агент падает. Вместо этого claude
-	// создаёт свежий container-local конфиг в containerHome/.claude.json — этого
-	// достаточно: auth claude идёт через CLAUDE_CODE_OAUTH_TOKEN (long-lived token,
-	// генерируется командой `claude setup-token`) или ANTHROPIC_API_KEY из env,
-	// а не из .claude.json. Предупреждение "config not found" — нефатальный шум.
+	// ВНИМАНИЕ: ~/.claude.json намеренно НЕ монтируем. Предупреждение "config not found" — нефатальный шум.
 
 	// Нестандартные агенты монтируем read-only.
 	for _, m := range cfg.Commands {
@@ -376,22 +303,14 @@ func ReExec(cfg ReExecConfig) error {
 	}
 
 	// Доп. хост-директории кастомных агентов (токены/конфиги вне ~/.claude).
-	// Пути с ~ монтируем в домашний каталог контейнера (containerHome/…), чтобы
-	// скрипты находили их через $HOME; абсолютные пути — по тому же пути (как
-	// проект); прочий относительный путь — от корня проекта (тот же resolveMountPath,
-	// что использует манифест file browser'а — см. containerPathFor — иначе
-	// хост-путь `-v` и container_path в манифесте расходятся).
 	for _, m := range cfg.ExtraMounts {
 		hostPath := resolveMountPath(cfg.ProjectDir, m.Path, home)
 		containerPath := resolveMountPath(cfg.ProjectDir, m.Path, containerHome)
 		args = append(args, "-v", hostPath+":"+containerPath+":ro")
 	}
 
-	// Codex OAuth-состояние (~/.codex): монтируем read-only во временный путь
-	// контейнера — entrypoint (root, до gosu) копирует его в $HOME/.codex
-	// (writable), чтобы codex мог обновлять auth.json (refresh token), не задевая
-	// хостовый ~/.codex. Гейтим MountCodexState, чтобы не тащить OAuth-состояние
-	// во флоу, которые codex не используют (см. UsesCodex).
+	// Codex OAuth-состояние: монтируем read-only во временный путь контейнера — entrypoint копирует его в
+	// $HOME/.codex, чтобы codex мог обновлять auth.json, не задевая хостовый ~/.codex.
 	if cfg.MountCodexState {
 		codexHostDir := filepath.Join(home, ".codex")
 		if info, statErr := os.Stat(codexHostDir); statErr == nil && info.IsDir() {
@@ -399,11 +318,8 @@ func ReExec(cfg ReExecConfig) error {
 		}
 	}
 
-	// Окружение внутри контейнера.
-	// AFM_HOST_UID/GID: entrypoint дропает привилегии (gosu) до хостового
-	// пользователя, чтобы записи в примонтированные тома принадлежали пользователю
-	// хоста, а не root. Под non-root claude разрешает --dangerously-skip-permissions
-	// без дополнительных флагов, поэтому IS_SANDBOX больше не нужен.
+	// Окружение внутри контейнера. Под non-root claude разрешает --dangerously-skip-permissions без
+	// дополнительных флагов, поэтому IS_SANDBOX больше не нужен.
 	args = append(args,
 		"-e", "AFM_IN_DOCKER=1",
 		"-e", "AFM_HOST_UID="+strconv.Itoa(os.Getuid()),
@@ -414,18 +330,12 @@ func ReExec(cfg ReExecConfig) error {
 	if os.Getenv("AFM_DEBUG") != "" {
 		args = append(args, "-e", "AFM_DEBUG="+os.Getenv("AFM_DEBUG"))
 	}
-	// AFM_ACCOUNTING — не секрет, передаём значением: выключатель отображения
-	// стоимости резолвится ВНУТРИ контейнера (сервер dashboard + afm check/report
-	// вызывают config.AccountingConfig.IsEnabled там), поэтому env с хоста должен
-	// доехать до контейнера. Иначе AFM_ACCOUNTING=0 при Docker-режиме не скрывал
-	// бы стоимость, а AFM_ACCOUNTING=1 не мог бы переопределить config внутри.
+	// AFM_ACCOUNTING — не секрет, передаём значением: выключатель отображения стоимости резолвится ВНУТРИ
+	// контейнера, поэтому env с хоста должен доехать до контейнера.
 	if os.Getenv("AFM_ACCOUNTING") != "" {
 		args = append(args, "-e", "AFM_ACCOUNTING="+os.Getenv("AFM_ACCOUNTING"))
 	}
-	// AFM_SIDEAGENT — не секрет, передаём значением: переключатель бокового агента
-	// резолвится ВНУТРИ контейнера (config.SideAgentConfig.IsEnabled там), поэтому
-	// host-set AFM_SIDEAGENT=0/1 должен доехать до контейнера, чтобы переопределить
-	// смонтированный config. Та же логика, что у AFM_ACCOUNTING выше.
+	// Передаём AFM_SIDEAGENT в контейнер, где env переопределяет смонтированный конфиг.
 	if os.Getenv("AFM_SIDEAGENT") != "" {
 		args = append(args, "-e", "AFM_SIDEAGENT="+os.Getenv("AFM_SIDEAGENT"))
 	}
@@ -436,10 +346,8 @@ func ReExec(cfg ReExecConfig) error {
 			args = append(args, "-e", FileRootsEnvVar+"="+enc)
 		}
 	}
-	// Передаём секреты только в bare-форме `-e KEY` (без значения): docker-клиент
-	// наследует окружение afm (см. os.Environ() в вызове execFunc ниже) и сам
-	// подставит значение. Так секрет никогда не попадает в argv `docker run` и
-	// не светится в `ps aux`, history и audit-логах хоста.
+	// Передаём секреты только в bare-форме `-e KEY`: docker-клиент наследует окружение afm и сам подставит
+	// значение.
 	dockerForwardEnvVars := append([]string{"ANTHROPIC_BASE_URL"}, config.ClaudeAuthEnvVars...)
 	for _, key := range dockerForwardEnvVars {
 		if os.Getenv(key) != "" {
@@ -447,10 +355,8 @@ func ReExec(cfg ReExecConfig) error {
 		}
 	}
 
-	// autoShim: резолвим секреты recipe на хосте и передаём в контейнер как
-	// transient bare-form env (значение в env afm, не в argv docker). Generated
-	// врапперы внутри контейнера читают $AFM_SECRET_<CMD>/$AFM_SYSPROMPT_<CMD> и
-	// unset'ят их до exec claude. Команды с recipe НЕ монтируются (ScanCommands).
+	// autoShim: резолвим секреты recipe на хосте и передаём в контейнер как transient bare-form env. Команды
+	// с recipe НЕ монтируются (ScanCommands).
 	if len(cfg.Recipes) > 0 {
 		loadedSecrets, err := LoadSecretLayers(cfg.SecretsFile, cfg.ProjectDir)
 		if err != nil {
@@ -458,13 +364,7 @@ func ReExec(cfg ReExecConfig) error {
 		}
 		for cmd, recipe := range cfg.Recipes {
 			name := envName(cmd)
-			// codex — единственный тип, для которого Validate() допускает пустой
-			// Auth (авторизация идёт через смонтированную ~/.codex, не через
-			// секрет). Пропускаем резолв ТОЛЬКО для codex, иначе secrets.ResolveRef("", ...)
-			// фейлит на пустом auth.from и валит весь запуск даже когда секрет не нужен.
-			// Для остальных типов (openai/cursor) пустой auth.from при заданном
-			// auth.to — это misconfiguration, которая должна fail-fast здесь, а не
-			// молча всплыть позже в контейнере как "OPENAI_API_KEY is not set".
+			// codex — единственный тип, для которого Validate допускает пустой Auth.
 			if recipe.Type == config.RecipeTypeCodex && recipe.Auth.From == "" {
 				continue
 			}
@@ -475,9 +375,8 @@ func ReExec(cfg ReExecConfig) error {
 			_ = os.Setenv("AFM_SECRET_"+name, val) // процесс далее exec'нет docker; утечки в argv нет
 			args = append(args, "-e", "AFM_SECRET_"+name)
 			if recipe.SystemPrompt != "" {
-				// system_prompt опционален: при ошибке резолва (файла нет и т.п.) — тихий
-				// fallback, claude запускается со своим стандартным system prompt
-				// (без --append-system-prompt-file) вместо glm-специфичного.
+				// system_prompt опционален: при ошибке резолва — тихий fallback, claude запускается со своим
+				// стандартным system prompt вместо glm-специфичного.
 				if sp, spErr := ResolveSystemPrompt(recipe.SystemPrompt); spErr == nil && sp != "" {
 					_ = os.Setenv("AFM_SYSPROMPT_"+name, sp)
 					args = append(args, "-e", "AFM_SYSPROMPT_"+name)
@@ -486,16 +385,8 @@ func ReExec(cfg ReExecConfig) error {
 		}
 	}
 
-	// Lifecycle hooks (Phase 3): секреты хука (Hook.Env) резолвим на ХОСТЕ и
-	// передаём в контейнер тем же паттерном, что autoShim-секреты выше —
-	// transient bare-form `-e` (значение в env afm-процесса, не в argv).
-	// Транспортное имя инъективно по ИНДЕКСАМ combined (hookIdx,varIdx),
-	// НЕ по sanitized hook id (codex #1) — разные id, схлопывающиеся под
-	// sanitize (пунктуация/регистр), не могут получить секрет чужого хука.
-	// cfg.Hooks — тот же итоговый []RegisteredHook, что заново соберёт
-	// контейнер после re-exec из ТЕХ ЖЕ слоёв (codex #3) — индексы совпадают
-	// по обе стороны транспорта без явной передачи данных. Секрет-файлы в
-	// контейнер НЕ монтируются.
+	// Lifecycle hooks: секреты хука резолвим на ХОСТЕ и передаём в контейнер тем же паттерном, что
+	// autoShim-секреты выше — transient bare-form `-e`. Секрет-файлы в контейнер НЕ монтируются.
 	if UsesLifecycleSecrets(cfg.Hooks) {
 		loadedSecrets, err := LoadSecretLayers(cfg.SecretsFile, cfg.ProjectDir)
 		if err != nil {
@@ -517,9 +408,8 @@ func ReExec(cfg ReExecConfig) error {
 		}
 	}
 
-	// Managed browser capability: публикуем фиксированный app-порт на loopback и
-	// передаём транспорт. Токен — bare `-e` (значение из env afm, не в argv);
-	// endpoint/epoch/app-url — не секреты, валюем. Менеджер уже слушает на хосте.
+	// Managed browser capability: публикуем фиксированный app-порт на loopback и передаём транспорт. Менеджер
+	// уже слушает на хосте.
 	if cfg.BrowserEnabled {
 		if cfg.BrowserAppHostPort > 0 && cfg.BrowserAppContainerPort > 0 {
 			args = append(args, "-p", fmt.Sprintf("127.0.0.1:%d:%d", cfg.BrowserAppHostPort, cfg.BrowserAppContainerPort))
@@ -544,13 +434,8 @@ func ReExec(cfg ReExecConfig) error {
 	return execFunc(dockerBin, args, os.Environ())
 }
 
-// isTTY сообщает, подключён ли stdin к настоящему терминалу.
-// Используется, чтобы добавлять `-it` к `docker run` только в интерактивном
-// режиме. Раньше здесь был эвристический анализ os.ModeCharDevice, но он
-// ошибочно срабатывал на /dev/null (тоже символьное устройство) — и в
-// неинтерактивных сценариях (скрипты, CI, фоновый запуск) добавлялся `-it`,
-// после чего docker падал с "the input device is not a TTY". term.IsTerminal
-// делает честную проверку через ioctl(TCGETS/TIOCGETA).
+// isTTY сообщает, подключён ли stdin к настоящему терминалу. Используется, чтобы добавлять `-it` к `docker
+// run` только в интерактивном режиме.
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
@@ -561,11 +446,8 @@ func expandHome(p, home string) string {
 	return secrets.ExpandHome(p, home)
 }
 
-// ExtraMountContainerPaths возвращает container-side путь для каждой записи
-// mounts — ту же резолюцию, что ReExec использует для `-v host:container`
-// (containerHome вместо host home). Нужен вызывающим (например,
-// `afm memory rebuild`'s Docker preflight, Task 13), которым нужно заранее,
-// ДО re-exec, знать, какие хостовые пути будут видны внутри контейнера.
+// ExtraMountContainerPaths возвращает container-side путь для каждой записи mounts — ту же резолюцию, что
+// ReExec использует для `-v host:container`.
 func ExtraMountContainerPaths(projectContainerPath string, mounts config.ExtraMounts) []string {
 	paths := make([]string, 0, len(mounts))
 	for _, m := range mounts {
@@ -574,13 +456,8 @@ func ExtraMountContainerPaths(projectContainerPath string, mounts config.ExtraMo
 	return paths
 }
 
-// resolveMountPath резолвит путь extra_mounts (или другого маунта проекта) в
-// абсолютный путь: "~..." — относительно home, уже абсолютный — как есть,
-// прочий относительный — относительно projectRoot. Единая точка правды для
-// обеих сторон `-v host:container` (см. вызов в ReExec) и для
-// containerPathFor (манифест file browser'а, pkg/docker/manifest.go) — иначе
-// относительный extra_mounts.path давал бы невалидный `-v ../x:../x` для
-// Docker и расходился бы с container_path, который видит file browser.
+// resolveMountPath резолвит путь extra_mounts в абсолютный путь: "~..." — относительно home, уже
+// абсолютный — как есть, прочий относительный — относительно projectRoot.
 func resolveMountPath(projectRoot, path, home string) string {
 	if strings.HasPrefix(path, "~") {
 		return expandHome(path, home)

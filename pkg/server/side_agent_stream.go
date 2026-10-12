@@ -11,25 +11,12 @@ import (
 	"github.com/akopichin/afm/pkg/sideagent"
 )
 
-// sideAgentHeartbeatPeriod — интервал SSE-heartbeat (comment-строка), чтобы
-// соединение и промежуточные прокси не считали поток мёртвым. Var (не const),
-// чтобы тест мог укоротить интервал.
+// sideAgentHeartbeatPeriod — интервал SSE-heartbeat (comment-строка), чтобы соединение и промежуточные
+// прокси не считали поток мёртвым. Var (не const), чтобы тест мог укоротить интервал.
 var sideAgentHeartbeatPeriod = 15 * time.Second
 
-// handleSideAgentStream стримит журнал разговора через Server-Sent Events:
-// сначала replay истории после курсора, затем live-события. id каждого
-// SSE-события = chat seq.
-//
-// Инвариант «хвост не теряется»: подписка регистрируется ДО снимка истории, так
-// что событие, закоммиченное в окне между replay и live, попадает в канал и
-// отфильтровывается по монотонному seq (дубли отбрасываются). Reconnect через
-// Last-Event-ID/after_seq добирает весь пропущенный хвост без дублей.
-//
-// Hаndler ограничен по времени жизни: select на ctx запроса И на server-level
-// done (закрывается в Shutdown) — разрыв подписки отменяет ТОЛЬКО handler, агент
-// продолжает работать под ctx менеджера. Переполнивший буфер медленный клиент
-// теряет соединение (Subscribe закрывает канал) и перечитывает историю при
-// reconnect — агент при этом не блокируется.
+// handleSideAgentStream стримит журнал разговора через Server-Sent Events: сначала replay истории после
+// курсора, затем live-события. id каждого SSE-события = chat seq.
 func (s *Server) handleSideAgentStream(w http.ResponseWriter, r *http.Request) {
 	cursor := streamCursor(r)
 

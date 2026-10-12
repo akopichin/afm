@@ -10,10 +10,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// Примечание: настоящий путь *StorageError → Trigger завершает run НЕ покрыт
-// unit-тестом здесь — *state.Store конкретный тип, и заставить его вернуть
-// I/O-ошибку без Store-интерфейсного шва нельзя. Добавление такого шва — вне
-// рамок этого фикса (см. отчёт задачи).
+// Unit-тест не покрывает StorageError из Store: для инъекции I/O-сбоя нужен отдельный seam.
 
 // concurrent-change НЕ должен валить run — это доброкачественный no-op.
 func TestTrigger_ConcurrentChangeIsBenign(t *testing.T) {
@@ -48,10 +45,8 @@ func TestStore_ApplyConcurrentChangeSentinel(t *testing.T) {
 	}
 }
 
-// setFatal/loadFatal: первая ошибка фиксируется, повторные вызовы её не
-// перезаписывают (первая storage-fatal ошибка важнее последующих), и
-// cancelRun вызывается на каждый setFatal, чтобы event loop гарантированно
-// проснулся и завершился.
+// setFatal/loadFatal: первая ошибка фиксируется, повторные вызовы её не перезаписывают, и cancelRun
+// вызывается на каждый setFatal, чтобы event loop гарантированно проснулся и завершился.
 func TestSetFatal_RecordsFirstErrorAndCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	o := &Orchestrator{cancelRun: cancel}
@@ -76,24 +71,14 @@ func TestSetFatal_RecordsFirstErrorAndCancels(t *testing.T) {
 	}
 }
 
-// publishCritical raced against ctx cancellation used to be a bare
-// `_ = o.critical.Publish(ctx, ev)` at every call site — a dropped event
-// (e.g. setFatal from an unrelated stage cancelling the shared o.runCtx at
-// the exact instant this stage's own EventAgentCompleted tries to publish)
-// left zero trace anywhere. This only verifies the non-blocking/non-panicking
-// contract on both outcomes; the log line itself isn't asserted (no existing
-// convention in this package for capturing log.Printf output).
+// publishCritical raced against ctx cancellation used to be a bare `_ = o.critical.Publish` at every call
+// site — a dropped event left zero trace anywhere.
 func TestPublishCritical_CancelledCtxDoesNotBlockOrPanic(t *testing.T) {
 	o := &Orchestrator{critical: bus.NewCriticalBus(1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// Fill the buffer first so the send case in Publish's select isn't ready —
-	// otherwise, with an empty buffer and an already-cancelled ctx, BOTH
-	// select cases are simultaneously ready and Go picks between them at
-	// random (this is exactly the real race publishCritical exists to make
-	// visible, not a test bug to paper over — but asserting a specific
-	// non-blocking outcome needs the send case genuinely blocked).
+	// Fill the buffer so only cancellation is ready; otherwise select may randomly choose send.
 	o.critical.TryPublish(bus.Event{Type: bus.EventAgentCompleted, StageID: "filler"})
 
 	done := make(chan struct{})
@@ -132,9 +117,7 @@ func TestPublishCritical_LiveCtxDeliversEvent(t *testing.T) {
 	}
 }
 
-// ErrNoRule (неизвестное FSM-событие — баг в коде, не проблема storage)
-// НЕ должен валить run: Trigger обязан отличать *StorageError (fatal) от
-// прочих ошибок fsm.Apply (лог + отказ перехода, run продолжается).
+// ErrNoRule НЕ должен валить run: Trigger обязан отличать *StorageError от прочих ошибок fsm.Apply.
 func TestTrigger_NoRuleIsNotFatal(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(dir, []string{"a"})

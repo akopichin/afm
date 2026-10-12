@@ -15,12 +15,8 @@ import (
 	"github.com/akopichin/afm/pkg/prompts"
 )
 
-// usageHintFor returns a best-effort accounting.UsageHint for the given agent
-// command, taken from the docker.agents recipe declared for it (if any) —
-// empty when there's no such recipe (including the plain "claude" default).
-// This is only a non-authoritative hint fed to accounting.NewCollector: a
-// model/channel actually discovered in the agent's own stream-json output
-// always wins over it (see accounting.Collector.Finish).
+// usageHintFor returns a best-effort accounting.UsageHint for the given agent command, taken from the
+// docker.agents recipe declared for it — empty when there's no such recipe.
 func (o *Orchestrator) usageHintFor(cmd string) accounting.UsageHint {
 	recipe, ok := o.opts.Config.Docker.Agents[cmd]
 	if !ok {
@@ -29,13 +25,8 @@ func (o *Orchestrator) usageHintFor(cmd string) accounting.UsageHint {
 	return accounting.UsageHint{Channel: recipe.Type, Model: recipe.Model}
 }
 
-// browserForStage is the single stage-aware policy for the managed browser
-// capability. It returns nil (no capability) when: no descriptor for this run,
-// the stage opted out (browser: false), or the command cannot drive the MCP
-// tool-loop. Otherwise it builds the per-stage executor.BrowserMCP. Used by
-// runnerFor (both branches), runnerForFallback, AND the prompt builder — one
-// policy, no copy-paste. runnerForVerify and the detached memory/JSON-fix runners
-// never call it.
+// browserForStage is the single stage-aware policy for the managed browser capability. Otherwise it builds
+// the per-stage executor.BrowserMCP.
 func (o *Orchestrator) browserForStage(s flow.Stage, cmd string) *executor.BrowserMCP {
 	d := o.opts.BrowserDescriptor
 	if d == nil || s.BrowserDisabled() || !o.opts.Config.BrowserSupportedFor(cmd) {
@@ -66,9 +57,8 @@ func (o *Orchestrator) stageCommand(s flow.Stage) string {
 	return o.opts.Config.Client.Command
 }
 
-// browserRuntimeFor returns the prompt-side browser runtime block for a stage,
-// gated by the SAME policy as the MCP injection (browserForStage) so the prompt
-// and the actual tool availability stay in lockstep. nil = no block.
+// browserRuntimeFor returns the prompt-side browser runtime block for a stage, gated by the SAME policy as
+// the MCP injection so the prompt and the actual tool availability stay in lockstep.
 func (o *Orchestrator) browserRuntimeFor(s flow.Stage) *prompts.BrowserRuntime {
 	b := o.browserForStage(s, o.stageCommand(s))
 	if b == nil {
@@ -78,10 +68,8 @@ func (o *Orchestrator) browserRuntimeFor(s flow.Stage) *prompts.BrowserRuntime {
 	return &prompts.BrowserRuntime{AppURL: b.AppURL, AppPort: b.AppPort, ServerName: b.ServerName, Docker: docker}
 }
 
-// browserLauncherPath resolves the absolute afm path used as the MCP command. It
-// must never be the bare literal "afm" (native afm is often invoked by an absolute
-// path and may not be on PATH as "afm"). Falls back to "afm" only if resolution
-// fails.
+// browserLauncherPath resolves the absolute afm path used as the MCP command. Falls back to "afm" only if
+// resolution fails.
 func browserLauncherPath() string {
 	if p, err := os.Executable(); err == nil && p != "" {
 		return p
@@ -105,10 +93,7 @@ func dedupRoots(root, stageDir string) []string {
 		if r == "" {
 			continue
 		}
-		// Resolve to ABSOLUTE here (relative to afm's CWD, where these paths were
-		// computed). The Chrome-DevTools MCP re-resolves each filesystemRoot
-		// relative to the AGENT's CWD, which differs when root_dir is set — so a
-		// relative root would otherwise point somewhere wrong inside the agent.
+		// Resolve to ABSOLUTE here.
 		if abs, err := filepath.Abs(r); err == nil {
 			r = abs
 		}
@@ -122,8 +107,6 @@ func dedupRoots(root, stageDir string) []string {
 }
 
 // runnerFor returns the appropriate Runner for a stage's phase.
-// For interactive stages it generates a session id and returns an executor
-// configured with --session-id / --resume and AFM_STAGE_DIR env.
 func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	if !s.Interactive {
 		// Инъектированный runner (тесты) используется только для дефолтной команды.
@@ -173,15 +156,11 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	return executor.New(cfg)
 }
 
-// nonInteractiveRunner builds the per-stage non-interactive executor with the FULL
-// stage wiring — Dir (root_dir CWD), StageDir (file-dialog protocol), and the
-// browser policy. It is the single source shared by the normal non-interactive path
-// and the interactive fallback below, so a fallback can never silently drop Dir/
-// StageDir/BrowserMCP (which a hand-rolled second config previously did).
+// nonInteractiveRunner builds the per-stage non-interactive executor with the FULL stage wiring — Dir,
+// StageDir, and the browser policy.
 func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor.Runner {
-	// Для дефолтной команды берём клиент из конфига (+ его ExtraArgs) — иначе
-	// разделяемый runner привязывал бы OnAction к пустому stageID, и события
-	// agent_action уходили бы без бейджа стадии (косяк №1).
+	// Для дефолтной команды берём клиент из конфига — иначе разделяемый runner привязывал бы OnAction к
+	// пустому stageID, и события agent_action уходили бы без бейджа стадии.
 	cmd := s.Command
 	var extraArgs []string
 	if cmd == "" {
@@ -199,9 +178,8 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 		StageID:        s.ID,
-		// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or skill
-		// that uses the file-based dialog protocol always has somewhere to write
-		// question.json — the poller auto-answers it (dialog_poller.go).
+		// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or skill that uses the file-based
+		// dialog protocol always has somewhere to write question.json — the poller auto-answers it.
 		StageDir:   filepath.Join(o.opts.RunDir, s.ID),
 		Phase:      phase,
 		UsageHint:  o.usageHintFor(cmd),
@@ -222,21 +200,8 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Ru
 	return o.nonInteractiveRunner(s, phase)
 }
 
-// runnerForVerify собирает *executor.Executor для ОДНОГО шага AI-verify.
-// В отличие от runnerFor: свежая сессия (SessionID/Resume не заданы —
-// верификатор не резюмирует диалог автора), StageDir не задан (верификатор
-// не участник file-based dialog протокола, читает только то, что дано в
-// промпте) и Phase — отдельная execution-purpose метка verifyExecutionLabel,
-// а не родительская фаза стадии (planning/implementation/review), чтобы
-// usage/логи verify не путались с фазой автора. cmd — команда КОНКРЕТНОГО
+// runnerForVerify собирает *executor.Executor для ОДНОГО шага AI-verify. cmd — команда КОНКРЕТНОГО
 // verify-шага (VerifyStep.Command), может отличаться от Stage.Command.
-//
-// InterruptCh (V5a) подключён к ТОМУ ЖЕ o.interruptChans[s.ID], что и у
-// авторского раннера (runnerFor выше): пока идёт verify, стадия всё ещё
-// StatusRunning (verify не заводит собственного FSM-статуса), и Pause()/
-// Revise() сигналят ровно этот канал. Без этого подключения SIGINT от паузы
-// никогда не доходил бы до самого verify-субпроцесса — он получал бы только
-// ctx.Done() (полная отмена рана), а не мягкую паузу одной стадии.
 func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Executor {
 	cfg := executor.Config{
 		Command:        cmd,
@@ -258,9 +223,8 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Execu
 	return executor.New(cfg)
 }
 
-// execVerifyAgent — продакшн-реализация seam'а o.runVerifyAgent (см.
-// Orchestrator.runVerifyAgent): строит свежий раннер под конкретную команду
-// verify-шага и делегирует его RunVerifyAgent.
+// execVerifyAgent — продакшн-реализация seam'а o.runVerifyAgent (см. Orchestrator.runVerifyAgent): строит
+// свежий раннер под конкретную команду verify-шага и делегирует его RunVerifyAgent.
 func (o *Orchestrator) execVerifyAgent(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
 	return o.runnerForVerify(s, cmd).RunVerifyAgent(ctx, cmd, s.Name, prompt, logFile, resultFile)
 }

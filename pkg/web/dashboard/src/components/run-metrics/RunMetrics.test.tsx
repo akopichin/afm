@@ -206,9 +206,7 @@ describe('RunMetrics', () => {
     })
 
     it('hides the Est. cost tile entirely when accounting is unsupported', () => {
-      // accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status omits the
-      // accounting object → supported:false → no tile at all (not a dash tile):
-      // the whole point of the display switch is that cost chrome disappears.
+      // Disabled accounting omits the API field and hides the entire cost tile.
       render(
         <RunMetrics
           {...baseTimeProps}

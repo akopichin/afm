@@ -8,9 +8,8 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// validateFlowFile parses and validates a flow.yaml without running any
-// agents. Returns a human-readable success message, or an error wrapping
-// flow.ParseFile's validation failure.
+// validateFlowFile parses and validates a flow.yaml without running any agents. Returns a human-readable
+// success message, or an error wrapping flow.ParseFile's validation failure.
 func validateFlowFile(path string) (string, error) {
 	f, err := flow.ParseFile(path)
 	if err != nil {

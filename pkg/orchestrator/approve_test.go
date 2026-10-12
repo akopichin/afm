@@ -12,13 +12,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// approveStage долговечно переводит impl-стадию awaiting_approval → ready
-// (запись в Store фиксируется до возврата), чтобы краш после approve не терял интент.
-//
-// Стадия "a" зависит от "b" (которая осталась pending), поэтому
-// startReadyStages внутри approveStage не подхватывает "a" и не продвигает
-// её дальше в running — это позволяет наблюдать именно persisted-статус
-// ready, не гоняясь за состоянием фонового агента.
+// approveStage долговечно переводит impl-стадию awaiting_approval → ready, чтобы краш после approve не
+// терял интент.
 func TestApproveStage_DurableTransition(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(dir, []string{"a", "b"})
@@ -55,11 +50,7 @@ func TestApproveStage_DurableTransition(t *testing.T) {
 	store.Close()
 }
 
-// noopPlanningRunner — минимальный executor.Runner для теста Revise: пишет
-// валидный plan.md (с обязательными секциями), чтобы агентская горутина,
-// запущенная Revise через spawnAgent, корректно завершилась без реального
-// вызова claude (иначе r.RunPlanning на неинициализированном o.runner
-// паникует нулевым указателем).
+// noopPlanningRunner пишет валидный plan.md, завершая Revise без реального клиента.
 type noopPlanningRunner struct{}
 
 func (noopPlanningRunner) RunPlanning(_ context.Context, _, _, outFile, _ string) error {
@@ -70,21 +61,6 @@ func (noopPlanningRunner) RunAgent(_ context.Context, _, _, _, _ string) error {
 
 func (noopPlanningRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, error) { return nil, nil }
 
-// TestRevise_DurableTransition проверяет, что Revise фиксирует переход
-// в state.StatusRevising в логе синхронно (до возврата из вызова) — краш
-// сразу после Revise не теряет интент на переплан.
-//
-// Фоновая горутина, которую Revise запускает через concurrency.Manager.SpawnAgent
-// (runPlanningWithFeedback), сама первым делом делает
-// Trigger(EvStartPlanning) — а это валидный переход ИЗ revising (см.
-// fsm.go: EvStartPlanning{From: ...,StatusRevising}), так что без
-// синхронизации она гоняется с последующим LoadRunState в тесте: получаем
-// то "revising", то уже "planning" в зависимости от планировщика
-// (флейково воспроизводится через `-race -count`). Семафор команды "" (test
-// sems map) держит SpawnAgent на sem.acquire() ДО запуска run(), пока тест
-// не прочитает состояние и не отпустит его явно — тем самым тест проверяет
-// именно гарантию Revise (запись в Store до возврата), а не выигрыш в гонке
-// с фоновым агентом.
 func TestRevise_DurableTransition(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(dir, []string{"a"})
@@ -96,10 +72,7 @@ func TestRevise_DurableTransition(t *testing.T) {
 	blockSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	blockSem <- struct{}{} // занят: следующий acquire() (в SpawnAgent) заблокируется
 	o := &Orchestrator{
-		// opts.Runner (не голое поле runner) — runnerFor только отдаёт o.runner
-		// когда opts.Runner != nil (см. runner_factory.go); без него стадия без
-		// stage.Command падает на реальный дефолтный клиент ("claude") — тест
-		// раньше незаметно делал живой сетевой вызов вместо мока.
+		// Устанавливаем opts.Runner: иначе runnerFor выберет реальный claude вместо мока.
 		opts:        Options{RunDir: dir, Stages: stages, Store: store, Runner: noopPlanningRunner{}},
 		graph:       graph.NewGraph(stages),
 		runner:      noopPlanningRunner{},

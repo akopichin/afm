@@ -9,11 +9,8 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// CollectDependencyPlans reads plan.md from each stage in DependsOn
-// and returns a formatted prompt section. Missing plans produce a warning
-// comment in the prompt AND, if warn is non-nil, a callback invocation so the
-// caller can surface a visible signal (e.g. an event-feed warning) — a
-// missing dependency plan means the stage silently loses context otherwise.
+// CollectDependencyPlans reads plan.md from each stage in DependsOn and returns a formatted prompt
+// section.
 func CollectDependencyPlans(runDir string, stage flow.Stage, allStages []flow.Stage, warn func(depID, msg string)) string {
 	if len(stage.DependsOn) == 0 {
 		return ""
@@ -58,9 +55,8 @@ func CollectDependencyPlans(runDir string, stage flow.Stage, allStages []flow.St
 	return buf.String()
 }
 
-// resolveArtifactPath resolves an artifact path to an absolute file path.
-// Paths starting with "./" are relative to the stage's run directory.
-// All other paths are relative to the project directory.
+// resolveArtifactPath resolves an artifact path to an absolute file path. Paths starting with "./" are
+// relative to the stage's run directory.
 func resolveArtifactPath(projectDir, runDir, stageID, artifactPath string) string {
 	if strings.HasPrefix(artifactPath, "./") {
 		return filepath.Join(runDir, stageID, artifactPath[2:])
@@ -68,9 +64,8 @@ func resolveArtifactPath(projectDir, runDir, stageID, artifactPath string) strin
 	return filepath.Join(projectDir, artifactPath)
 }
 
-// CollectArtifacts reads artifact files referenced by a stage's Inputs
-// and returns a formatted prompt section. Returns an error if a required
-// artifact file is missing.
+// CollectArtifacts reads artifact files referenced by a stage's Inputs and returns a formatted prompt
+// section. Returns an error if a required artifact file is missing.
 func CollectArtifacts(projectDir, runDir string, stage flow.Stage, allStages []flow.Stage) (string, error) {
 	if len(stage.Inputs) == 0 {
 		return "", nil

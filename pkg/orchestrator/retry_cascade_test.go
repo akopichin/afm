@@ -16,11 +16,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// cascadeRetryRunner: RunAgent для стадии "a" возвращает не-retryable ошибку
-// на первом вызове (имитирует реальный сбой), затем успешно пишет
-// execution_summary.md на всех последующих вызовах (успех после ручного retry).
-// Стадия "b" (depends_on: ["a"]) при первом прогоне никогда не активируется —
-// её каскадно валит failBlockedStages ДО того, как для неё создаётся stageDir.
+// cascadeRetryRunner: RunAgent для стадии "a" возвращает не-retryable ошибку на первом вызове, затем
+// успешно пишет execution_summary.md на всех последующих вызовах.
 type cascadeRetryRunner struct {
 	mu     sync.Mutex
 	aCalls int
@@ -50,13 +47,6 @@ func (r *cascadeRetryRunner) RunJSONQuery(_ context.Context, _ string) ([]byte, 
 
 var _ executor.Runner = (*cascadeRetryRunner)(nil)
 
-// TestIntegration_CascadeFailedStageRetrySucceeds воспроизводит баг из
-// прод-лога GogaFeature-20260726-133106-3c1c: стадия "a" падает, стадия "b"
-// (depends_on: ["a"]) каскадно валится через blocked_by_dep, никогда не
-// получив свой stageDir. Ручной retry "a" должен пройти успешно, а затем
-// ручной retry "b" должен СОЗДАТЬ ей stageDir и autonomous.flag и успешно
-// завершиться — а не падать вечно с "open log file: ... no such file or
-// directory" (баг: retryStage спавнил runAutonomousAgent без MkdirAll).
 func TestIntegration_CascadeFailedStageRetrySucceeds(t *testing.T) {
 	dir := t.TempDir()
 	stages := []flow.Stage{
@@ -77,9 +67,8 @@ func TestIntegration_CascadeFailedStageRetrySucceeds(t *testing.T) {
 		Stages: stages,
 		Store:  store,
 		Config: config.Default(),
-		// DashboardURL непустой — Run() не должен завершиться сразу после
-		// того, как обе стадии стали terminal (failed): нужен живой run-ctx
-		// для ручных Retry() ниже, как в реальном прогоне с открытым дашбордом.
+		// DashboardURL непустой — Run не должен завершиться сразу после того, как обе стадии стали terminal:
+		// нужен живой run-ctx для ручных Retry ниже, как в реальном прогоне с открытым дашбордом.
 		DashboardURL: "http://test.invalid",
 		Prompts:      orchestrator.DefaultPrompts(),
 		Runner:       runner,
@@ -115,10 +104,8 @@ func TestIntegration_CascadeFailedStageRetrySucceeds(t *testing.T) {
 	}
 }
 
-// blockingAutonomousRunner: "a" fails on its first RunAgent call (so it can be
-// manually retried), then on its second call blocks on release before writing
-// execution_summary.md. "b" (depends_on: ["a"]) always succeeds immediately —
-// the test asserts it is never called until "a" is actually done.
+// blockingAutonomousRunner: "a" fails on its first RunAgent call, then on its second call blocks on
+// release before writing execution_summary.md.
 type blockingAutonomousRunner struct {
 	mu      sync.Mutex
 	aCalls  int
@@ -167,13 +154,6 @@ func (r *blockingAutonomousRunner) bCallCount() int {
 
 var _ executor.Runner = (*blockingAutonomousRunner)(nil)
 
-// TestIntegration_ManualRetryAutonomousWaitsForDeps воспроизводит живой баг:
-// пользователь ретраил стадию "a" и, пока она ещё выполнялась (не done),
-// вручную ретраил зависящую от неё автономную стадию "b" — retryStage
-// безусловно переводила "b" в ready→running, не проверяя depsDone (в отличие
-// от соседней ветки для НЕ-автономных стадий чуть ниже в scheduling.go,
-// у которой проверка уже была). "b" должна остаться pending и получить
-// собственный агент только после того, как "a" реально завершится.
 func TestIntegration_ManualRetryAutonomousWaitsForDeps(t *testing.T) {
 	dir := t.TempDir()
 	stages := []flow.Stage{

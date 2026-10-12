@@ -10,13 +10,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 )
 
-// TestSpawnKind_StoresLeaseDuringRunAndDeletesAfter — V4b.1: spawnKind
-// (единственная точка запуска исполнительских и планировочных раннеров)
-// обязана вручать каждому запуску *concurrency.Lease через o.stageLeases на
-// время работы run(ctx,s) и убирать запись сразу после — иначе
-// RunVerification (AI-verify) не сможет найти lease своей стадии, чтобы
-// временно перевести командный слот на верификатора (см. Orchestrator.
-// stageLeases).
 func TestSpawnKind_StoresLeaseDuringRunAndDeletesAfter(t *testing.T) {
 	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{

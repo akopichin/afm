@@ -25,12 +25,6 @@ func TestServerRouteStages(t *testing.T) {
 	}
 }
 
-// TestServerServesReactBundle пришёл на смену TestServerServesMarkdownIt.
-// После миграции дашборда с vanilla JS на React/Vite отдельный публичный файл
-// markdown-it.min.js удалён — markdown-it упакован внутрь собранного бандла
-// assets/index-<hash>.js. Хэш меняется от сборки к сборке, поэтому проверяем
-// не точное имя, а контракт: каталог /assets/ раздаётся и содержит непустой
-// .js-бандл, который сервер отдаёт с 200.
 func TestServerServesReactBundle(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	handler := srv.Handler()
@@ -119,12 +113,8 @@ func TestServer_IndexDefaultTheme(t *testing.T) {
 	}
 }
 
-// Структурный CSS «бокового» агента доставляется ПОСТОЯННОЙ ссылкой
-// /side-agent.css (её сервер не подменяет, в отличие от skin-ссылки). Проверяем
-// на РЕЗУЛЬТАТЕ сборки (встроенный index.html, регенерированный из
-// index.dev.html) — тест упадёт ровно тогда, когда будущая сборка потеряет
-// ссылку. Плюс фактическая отдача файла: HTML-only проверка не поймала бы 404
-// из-за отсутствия файла в embed.
+// Структурный CSS «бокового» агента доставляется ПОСТОЯННОЙ ссылкой /side-agent.css. Плюс фактическая
+// отдача файла: HTML-only проверка не поймала бы 404 из-за отсутствия файла в embed.
 func TestServer_SideAgentCSSLinkInIndex(t *testing.T) {
 	srv := New(Config{})
 	handler := srv.Handler()
@@ -162,10 +152,7 @@ func TestServer_ServesSideAgentCSS(t *testing.T) {
 	}
 }
 
-// Для skin_dir (custom skin) skin-ссылка указывает на custom, НО постоянная
-// ссылка на /side-agent.css по-прежнему есть, и сам файл отдаётся из встроенного
-// web.FS (не из skin_dir) — иначе под кастомным скином модалка осталась бы без
-// структурного CSS.
+// При custom skin /side-agent.css всё равно отдаётся из web.FS, сохраняя структуру модалки.
 func TestServer_SideAgentCSSSurvivesSkinDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root{--x:1;}`), 0644); err != nil {
@@ -277,9 +264,8 @@ func TestServer_ServesBaseSkinPartial(t *testing.T) {
 	}
 }
 
-// Скины отдаются с фиксированными именами и меняются между пересборками —
-// браузер не должен кэшировать старый CSS (иначе «дизайн не обновился после
-// rebuild»). Проверяем no-store и на CSS скина, и на index.html.
+// Скины отдаются с фиксированными именами и меняются между пересборками — браузер не должен кэшировать
+// старый CSS. Проверяем no-store и на CSS скина, и на index.html.
 func TestServer_SkinsAndIndexAreNotCached(t *testing.T) {
 	srv := New(Config{})
 	handler := srv.Handler()

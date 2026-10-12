@@ -28,10 +28,7 @@ bindeps: $(GOLANGCI_BIN)
 
 DASHBOARD_DIR := $(CURDIR)/pkg/web/dashboard
 
-# web собирает React-дашборд (Vite → index.html + assets/* в корне pkg/web/dashboard/),
-# откуда go:embed вкомпилирует его в бинарь. Обязательный шаг ПЕРЕД go-сборкой —
-# иначе в бинарь попадёт устаревший/пустой дашборд. npm-зависимости ставятся
-# автоматически при отсутствии node_modules.
+# web собирает дашборд до go build, чтобы go:embed включил свежие assets.
 .PHONY: web
 web:
 	@test -d $(DASHBOARD_DIR)/node_modules || (echo ">> installing dashboard dependencies" && cd $(DASHBOARD_DIR) && npm install)
@@ -40,26 +37,18 @@ web:
 build: web
 	$(GOENV) CGO_ENABLED=0 go build -v -ldflags "-X main.version=$(VERSION)" -o $(LOCAL_BIN)/$(PROJECT_NAME) ./cmd/afm
 
-# TESTFLAGS — дополнительные флаги go test (по умолчанию пусто, локально ничего
-# не меняется). CI передаёт `-p 1`: на 2-ядерном ubuntu-latest дефолтный -p=2
-# гоняет до двух race-инструментированных бинарей пакетов одновременно, и они
-# переподписывают 2 физических ядра. Горутино-тяжёлые тесты pkg/orchestrator при
-# этом голодают по CPU, а их wall-clock ожидания (waitForStatus) ложно падают по
-# таймауту. `-p 1` отдаёт весь раннер одному пакету за раз и убирает этот класс
-# флейков, не замедляя локальную разработку.
+# TESTFLAGS передаёт флаги go test; CI использует -p 1, чтобы race-пакеты не конкурировали за два CPU и не
+# давали ложных таймаутов.
 test:
 	$(GOENV) go test ./... -v -race $(TESTFLAGS)
 
-# schema-check — compiles the hand-written JSON Schemas (schema/*.json), checks
-# exact field paths and parser edge cases, and validates repository examples.
-# Part of `make test` too; this target is a focused shortcut.
+# schema-check — compiles the hand-written JSON Schemas, checks exact field paths and parser edge cases,
+# and validates repository examples.
 .PHONY: schema-check
 schema-check:
 	$(GOENV) go test ./pkg/schemacheck/
 
-# web-test/web-typecheck — Vitest и tsc для дашборда (finding #13): vite build
-# их НЕ гоняет, поэтому UI-регрессии могли попасть в main при зелёном CI.
-# node_modules ставит `web`/`build`, но гейтим и здесь на случай прямого вызова.
+# web-test/web-typecheck запускают Vitest и tsc; vite build этих проверок не выполняет.
 .PHONY: web-test web-typecheck
 web-test:
 	@test -d $(DASHBOARD_DIR)/node_modules || (cd $(DASHBOARD_DIR) && npm install)
@@ -73,10 +62,7 @@ web-typecheck:
 generate:
 	$(GOENV) go run ./tools/genstagestatus
 
-# generate-check — фейлит билд, если сгенерированный TS-файл устарел
-# относительно pkg/state.AllStatuses() (забыли make generate после правки
-# статусов). Используется lint-ci, не lint (тот тихо чинит --fix'ом, здесь
-# нужно явное падение).
+# generate-check требует актуальный TS-файл статусов после изменений state.AllStatuses.
 .PHONY: generate-check
 generate-check: generate
 	git diff --exit-code -- pkg/web/dashboard/src/types/stage-status.generated.ts
@@ -86,12 +72,7 @@ SETSTATUSLINTER_BIN=$(LOCAL_BIN)/setstatuslinter
 $(SETSTATUSLINTER_BIN): $(LOCAL_BIN)
 	$(GOENV) go build -o $(SETSTATUSLINTER_BIN) ./tools/setstatuslinter
 
-# Two golangci-lint passes so build-tagged code is fully covered regardless of
-# the dev host's OS. The first pass runs for the host platform; the second forces
-# GOOS=linux so //go:build linux files (the pkg/server/workspace openat2/git code
-# and its tests) are linted on a macOS dev host too — otherwise errcheck/etc. in
-# linux-only code slips past `make lint` and surfaces only in CI (which runs on
-# linux). On a Linux host the second pass just re-confirms the same set.
+# Lint host and Linux code so build-tagged files are checked on macOS too.
 lint: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN)
 	$(GOENV) $(GOLANGCI_BIN) run --fix ./...
 	GOOS=linux $(GOENV) $(GOLANGCI_BIN) run --fix ./...
@@ -107,13 +88,7 @@ lint-ci: $(GOLANGCI_BIN) $(SETSTATUSLINTER_BIN) generate-check
 clean:
 	rm -rf $(LOCAL_BIN)/
 
-# install обновляет ~/go/bin и освежает копии бинарника в других
-# директориях PATH (например ~/homebrew/bin), чтобы не оставались устаревшие.
-# codesign -s - создаёт ad-hoc подпись: macOS 26+ убивает неподписанные бинарники
-# с SIGKILL (Code Signature Invalid) при запуске любого subcommand.
-# ВАЖНО: cp подписанного бинарника ставит xattr com.apple.provenance, который
-# рассинхронизируется с подписью → macOS 26 убивает копию (SIGKILL 137, spctl
-# rejected). Поэтому копию нужно пере-подписать НА МЕСТЕ после cp.
+# install обновляет бинарник и PATH-копии; после cp каждую копию подписываем заново для macOS.
 install: web
 	$(GOENV) go install -ldflags "-X main.version=$(VERSION)" ./cmd/afm
 	@src=$$(go env GOPATH)/bin/$(PROJECT_NAME); \
@@ -142,9 +117,7 @@ DOCKER_TAG   := latest
 
 .PHONY: docker-build docker-push docker-run
 
-# docker-build не зависит от web: Dockerfile.runtime сам собирает React-дашборд
-# в node-стадии (см. stage web) — это же использует release.yml в CI, так что
-# релизный образ всегда получает свежий фронт из исходников.
+# Dockerfile.runtime собирает дашборд сам; docker-build не требует host web-сборки.
 docker-build:
 	docker build --build-arg AFM_VERSION=$(VERSION) -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
@@ -173,9 +146,7 @@ release-major:
 sdk-test:
 	cd sdk && go test ./... -v -race
 
-# sdk-test-integration builds the real afm binary first (with dashboard
-# assets embedded, see the `web`/`build` targets above) so sdk's integration
-# tests — which spawn `afm run` as a real subprocess — have something to exec.
+# sdk-test-integration builds afm with dashboard assets before spawning it in integration tests.
 sdk-test-integration: build
 	cd sdk && AFM_SDK_TEST_BINARY=$(LOCAL_BIN)/$(PROJECT_NAME) go test ./... -v -race -run Integration
 

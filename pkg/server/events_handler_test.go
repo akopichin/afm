@@ -18,9 +18,8 @@ import (
 func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 
-	// events.jsonl уже содержит одну transition из setupTestServerWithWS
-	// (StatusPending → StatusAwaitingApproval, Event: "test_setup") — плюс
-	// добавим ask_user, чтобы проверить, что она реплеится как отдельный тип.
+	// events.jsonl уже содержит одну transition из setupTestServerWithWS — плюс добавим ask_user, чтобы
+	// проверить, что она реплеится как отдельный тип.
 	if err := srv.store.Apply(&state.Transition{
 		StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusAwaitingUserInput,
 		Event: "ask_user",
@@ -72,11 +71,6 @@ func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_AcceptedStalemateVerifyResultReplays — durable verify_result
-// с синтезированным afm вердиктом accepted_stalemate (B1 review_patience) должен
-// пройти через /api/events (handleEvents → reconstructNotices) с сохранением
-// вердикта, причины, шага и команды. Это реплей-гарантия: клиент, подключившийся
-// ПОСЛЕ приёма по stalemate, всё равно увидит исход в ленте.
 func TestHandleEvents_AcceptedStalemateVerifyResultReplays(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 
@@ -126,10 +120,6 @@ func TestHandleEvents_AcceptedStalemateVerifyResultReplays(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_TransitionsNeverExceedGlobalCap is a basic sanity check
-// that the global response never exceeds maxReplayEvents (raised from 1000 to
-// 10000 — see TestHandleEvents_GlobalCapRaisedTo10000 for the actual boundary
-// test, which exercises the cap via notices rather than transitions).
 func TestHandleEvents_TransitionsNeverExceedGlobalCap(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	for i := 0; i < 250; i++ {
@@ -142,9 +132,8 @@ func TestHandleEvents_TransitionsNeverExceedGlobalCap(t *testing.T) {
 			to = state.StatusDone
 		}
 		if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: from, To: to, Event: "noop"}); err != nil {
-			// CAS может не совпасть при таком синтетическом чередовании —
-			// тесту важно только итоговое количество записей в логе, не
-			// валидность каждого перехода, поэтому игнорируем ошибку CAS.
+			// CAS может не совпасть при таком синтетическом чередовании — тесту важно только итоговое количество
+			// записей в логе, не валидность каждого перехода, поэтому игнорируем ошибку CAS.
 			continue
 		}
 	}
@@ -162,15 +151,6 @@ func TestHandleEvents_TransitionsNeverExceedGlobalCap(t *testing.T) {
 	}
 }
 
-// TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent is the
-// regression guard for F2/F3 (task-fixB): `processed` in dialog_poller.go is
-// in-memory, so an afm restart with a still-unanswered interactive question
-// re-emits the SAME dialog_question notice again (recovery re-scans, the
-// in-memory map starts empty). reconstructNotices must collapse repeated
-// dialog_question/dialog_answer notices that share (type, stage_id, phase,
-// id, title) down to one — the read-side half of "idempotent by content" —
-// while leaving every OTHER notice type untouched, since script_output/
-// auto_answered/context_warning legitimately repeat.
 func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T) {
 	runDir := t.TempDir()
 	lines := []string{
@@ -216,15 +196,6 @@ func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T)
 	}
 }
 
-// TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog is the regression guard
-// for the auto-answer feed feature: an `auto_answered` notice is dialog-navigable
-// (and therefore dialog-dedupable) IFF its data carries `dialog: true` — the
-// navigable auto-answer the frontend links to the full dialog history. The
-// non-navigable repair-progress notices (data.answer == "⚙️ …", NO `dialog`
-// field) must NEVER be collapsed: they legitimately repeat, one per repair
-// attempt, and dropping them would hide the progress trail. It also proves Task 1
-// (answer is part of the dedup key): two navigable auto-answers that share
-// phase/id but carry DIFFERENT answers must both survive.
 func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
 	runDir := t.TempDir()
 	lines := []string{
@@ -237,9 +208,8 @@ func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
 		// A navigable auto-answer with a DIFFERENT answer, same phase/id — must NOT
 		// collapse into the first two (Task 1: answer is part of the dedup key).
 		`{"time":"2026-09-29T10:00:06Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q1","answer":"Option C","from_options":true,"question_title":"Which approach?","dialog":true}}`,
-		// Two navigable auto-answers reusing id q3 with the SAME answer but for
-		// DIFFERENT questions (an agent may legitimately reuse an answered id) —
-		// must NOT collapse: question_title is part of the dedup key (review HIGH #2).
+		// Two navigable auto-answers reusing id q3 with the SAME answer but for DIFFERENT questions — must NOT
+		// collapse: question_title is part of the dedup key.
 		`{"time":"2026-09-29T10:00:07Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q3","answer":"Yes","from_options":true,"question_title":"Use Postgres?","dialog":true}}`,
 		`{"time":"2026-09-29T10:00:08Z","type":"auto_answered","stage_id":"s1","data":{"phase":"planning","id":"q3","answer":"Yes","from_options":true,"question_title":"Enable cache?","dialog":true}}`,
 	}
@@ -276,14 +246,6 @@ func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_EarlyStageQAndASurviveGlobalLimit is the stage-filter-before-
-// limit guard for the auto-answer feed feature. An early stage's dialog_question
-// and its navigable auto_answered notice, written FIRST, must both survive a
-// per-stage query even when the shared notices.jsonl is buried under >10000 later
-// notices from dozens of OTHER stages. reconstructNotices rings PER SCOPE while
-// scanning, so a ?stage=early query only ever holds early's own notices — it must
-// NOT global-ring-then-filter (the original bug), which would evict the two
-// early notices (oldest of >10000) before the stage filter ever ran.
 func TestHandleEvents_EarlyStageQAndASurviveGlobalLimit(t *testing.T) {
 	runDir := t.TempDir()
 
@@ -336,14 +298,6 @@ func TestHandleEvents_EarlyStageQAndASurviveGlobalLimit(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_ScriptFailedAndStderrScriptOutputReplay is the regression
-// guard for the script-stderr-visibility feature (Tasks 3-5): script_failed
-// (data {error, stderr_tail}, agents.go's runScriptStage) and script_output
-// enriched with a stream field (data {hook, line, stream}, hooks.go's
-// execScript) must replay through GET /api/events unchanged — reconstructNotices
-// is generic over notice type and doesn't allowlist/filter either shape, so
-// this proves that with no code change needed (only dialog_question/
-// dialog_answer are content-deduped, see dialogDedupTypes above).
 func TestHandleEvents_ScriptFailedAndStderrScriptOutputReplay(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "build"
@@ -442,9 +396,8 @@ func mustDecode(t *testing.T, rr *httptest.ResponseRecorder, v any) {
 	}
 }
 
-// writeNotices appends n script_output notices for stageID into runDir's
-// notices.jsonl via stagefiles.AppendNotice — the exact call execScript makes
-// for real script-stage output (pkg/orchestrator/hooks.go's execScript).
+// writeNotices appends n script_output notices for stageID into runDir's notices.jsonl via
+// stagefiles.AppendNotice — the exact call execScript makes for real script-stage output.
 func writeNotices(t *testing.T, runDir, stageID string, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
@@ -453,10 +406,7 @@ func writeNotices(t *testing.T, runDir, stageID string, n int) {
 	}
 }
 
-// newTestServerForRunDir opens a Server around an already-prepared run dir
-// (e.g. one whose notices.jsonl was written directly by the test) for the
-// given stage IDs. Unlike setupTestServer it doesn't seed plan.md/an initial
-// transition — callers that need those write them themselves.
+// newTestServerForRunDir opens a Server around an already-prepared run dir for the given stage IDs.
 func newTestServerForRunDir(t *testing.T, runDir string, stageIDs []string) *Server {
 	t.Helper()
 	store, err := state.Open(runDir, stageIDs)
@@ -473,9 +423,8 @@ func newTestServerForRunDir(t *testing.T, runDir string, stageIDs []string) *Ser
 	})
 }
 
-// newTestServerWithStages builds a Server backed by a fresh temp run dir,
-// seeding each stage in counts with that many script_output notices (via
-// writeNotices) — the shared fixture for the stage-filter/cap tests.
+// newTestServerWithStages builds a Server backed by a fresh temp run dir, seeding each stage in counts
+// with that many script_output notices — the shared fixture for the stage-filter/cap tests.
 func newTestServerWithStages(t *testing.T, counts map[string]int) *Server {
 	t.Helper()
 	runDir := t.TempDir()
@@ -534,13 +483,6 @@ func TestHandleEvents_GlobalCapRaisedTo10000(t *testing.T) {
 	}
 }
 
-// TestReconstructEventHistory_PerStageReaches2000NotBottleneckedByMaxLines
-// proves the per-stage feed can actually reach its 2000 cap: a single stage
-// whose phase log holds MORE than 2000 parseable agent-action lines must yield
-// exactly maxStageReplayEvents=2000 reconstructed events. This can only hold if
-// maxLinesPerLog (2400) leaves headroom above the per-stage cap — with the old
-// 1200 window readLines would keep only 1200 lines, so the per-stage feed would
-// top out at 1200 and this test would fail.
 func TestReconstructEventHistory_PerStageReaches2000NotBottleneckedByMaxLines(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "solo"
@@ -548,9 +490,8 @@ func TestReconstructEventHistory_PerStageReaches2000NotBottleneckedByMaxLines(t 
 		t.Fatal(err)
 	}
 
-	// 2500 parseable assistant tool_use lines in one phase log — well above the
-	// per-stage cap (2000) AND above maxLinesPerLog (2400), so the read window
-	// is exercised too. Each line is a valid agent action (executor.ParseToolAction).
+	// 2500 parseable assistant tool_use lines in one phase log — well above the per-stage cap AND above
+	// maxLinesPerLog, so the read window is exercised too.
 	var buf []byte
 	for i := 0; i < 2500; i++ {
 		buf = append(buf, []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo `+strconv.Itoa(i)+`"}}]}}`+"\n")...)
@@ -566,11 +507,6 @@ func TestReconstructEventHistory_PerStageReaches2000NotBottleneckedByMaxLines(t 
 	}
 }
 
-// TestReconstructEventHistory_QAOnCompletedStageVisibleWithinCap proves a
-// completed stage's dialog_question/dialog_answer notices remain visible in the
-// per-stage feed when followed by many (but < 2000) later same-stage events.
-// With the old 200 cap the two dialog notices, written FIRST, would be evicted
-// from the per-stage ring by the trailing filler; the raised 2000 cap keeps them.
 func TestReconstructEventHistory_QAOnCompletedStageVisibleWithinCap(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "chat"
@@ -614,10 +550,6 @@ func TestReconstructEventHistory_QAOnCompletedStageVisibleWithinCap(t *testing.T
 	}
 }
 
-// TestHandleEvents_StageFilterSurvivesFlowWideNoticeNoise is the blocker
-// regression (codex review): an early stage's notices must survive even when
-// buried under thousands of NEWER other-stage notice lines in the shared
-// notices.jsonl. This is the real-world reproduction of the original bug.
 func TestHandleEvents_StageFilterSurvivesFlowWideNoticeNoise(t *testing.T) {
 	runDir := t.TempDir()
 	// early: 5 notices written FIRST.

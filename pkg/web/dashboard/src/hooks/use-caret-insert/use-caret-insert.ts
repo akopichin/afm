@@ -5,17 +5,7 @@ export type UseCaretInsertResult = {
   insertAtCaret: (text: string) => void
 }
 
-// Shared caret-splice mechanism, factored out of use-image-paste.ts's pattern:
-// insert `text` at the textarea's current caret position via the controlled
-// value/onChange pair, then restore the caret to just after the inserted text
-// once React re-renders with the new value (useLayoutEffect fires before
-// paint, so there's no visible caret jump). use-image-paste keeps its own
-// copy of this pattern rather than using this hook — it threads an explicit
-// caret across a sequence of async uploads (each image's insertion point
-// depends on where the previous one landed), which doesn't fit this hook's
-// "read the caret right now" shape. This hook is for the simpler case: a
-// single, synchronous insertion — used by PasteableTextarea's "Attach project
-// file" button (allowFileReferences, Task 14).
+// Insert text at the current caret and restore it before paint; intended for one synchronous insertion.
 export function useCaretInsert(value: string, onChange: (value: string) => void): UseCaretInsertResult {
   const nodeRef = useRef<HTMLTextAreaElement | null>(null)
   const valueRef = useRef(value)

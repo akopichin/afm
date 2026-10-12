@@ -11,9 +11,8 @@ function readAmberColor(): string {
   return value !== '' ? value : FALLBACK_AMBER
 }
 
-// Предполагает, что href всегда same-origin (статичный ./favicon.svg или
-// скиновая иконка того же origin): canvas.toDataURL() ниже кидает
-// SecurityError на cross-origin-«tainted» canvas.
+// Предполагает, что href всегда same-origin (статичный ./favicon.svg или скиновая иконка того же origin):
+// canvas.toDataURL() ниже кидает SecurityError на cross-origin-«tainted» canvas.
 function loadImage(href: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -23,11 +22,8 @@ function loadImage(href: string): Promise<HTMLImageElement> {
   })
 }
 
-// Рисует амберный (по факту — цвет var(--amber) активного скина) бейдж-кружок
-// поверх текущей иконки вкладки, какой бы она ни была (дефолтная/скиновая) —
-// не заменяет иконку отдельным ассетом, а компонует поверх неё через canvas.
-// Кешируется по iconHref: повторная активация пульса на той же иконке не
-// перерисовывает canvas заново.
+// Рисует амберный бейдж-кружок поверх текущей иконки вкладки, какой бы она ни была — не заменяет иконку
+// отдельным ассетом, а компонует поверх неё через canvas.
 export async function compositeAttentionBadge(iconHref: string): Promise<string> {
   const cached = badgeCache.get(iconHref)
   if (cached !== undefined) return cached

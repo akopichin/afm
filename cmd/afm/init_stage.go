@@ -31,9 +31,8 @@ var planModeOptions = []string{
 	"I already have a plan file (I'll provide the path)",
 }
 
-// phaseNameImplementation/phaseNameReview name the two selectable phases
-// in phaseOptions — pulled out as constants (rather than repeating the
-// string literals at each use site) purely to satisfy goconst.
+// phaseNameImplementation/phaseNameReview name the two selectable phases in phaseOptions — pulled out as
+// constants purely to satisfy goconst.
 const (
 	phaseNameImplementation = "implementation"
 	phaseNameReview         = "review"
@@ -41,13 +40,8 @@ const (
 
 var phaseOptions = []string{phaseNameImplementation, phaseNameReview}
 
-// stageDefaults configures the suggested defaults for one round of
-// askStageDetails. FixedID, when non-empty, is used as the stage ID
-// directly (the custom archetype's own loop already read it as the
-// "empty ID = stop" signal) — the ID question is skipped entirely. When
-// FixedID is empty, SuggestedID is offered as the Enter-to-accept
-// default for a normal ID prompt. DependsOn is used verbatim unless
-// AskDeps is true, in which case it's read interactively instead.
+// stageDefaults configures the suggested defaults for one round of askStageDetails. DependsOn is used
+// verbatim unless AskDeps is true, in which case it's read interactively instead.
 type stageDefaults struct {
 	FixedID       string
 	SuggestedID   string
@@ -58,9 +52,7 @@ type stageDefaults struct {
 	ForceVerify   bool
 }
 
-// askStageDetails runs the full per-stage question sequence and returns
-// the resulting Stage. priorStages is used to offer artifacts of
-// dependency stages as candidate `inputs` in the advanced block.
+// askStageDetails runs the full per-stage question sequence and returns the resulting Stage.
 func askStageDetails(scanner *bufio.Scanner, w io.Writer, d stageDefaults, priorStages []flow.Stage) flow.Stage {
 	id := d.FixedID
 	if id == "" {
@@ -127,13 +119,7 @@ func askStageDetails(scanner *bufio.Scanner, w io.Writer, d stageDefaults, prior
 	return stage
 }
 
-// askDependsOn offers a checklist of already-built prior stages as
-// depends_on candidates instead of free-text stage IDs — free text lets
-// a typo silently produce a dangling reference that only surfaces later,
-// at `afm validate`/`afm run` time. Selecting by index into the known
-// list of already-built stages makes that mistake impossible, and
-// naturally forbids depending on a stage that comes later in the flow
-// (it hasn't been built yet, so it isn't in priorStages).
+// askDependsOn selects dependencies from prior stages to prevent unknown IDs and forward references.
 func askDependsOn(scanner *bufio.Scanner, w io.Writer, priorStages []flow.Stage) []string {
 	if len(priorStages) == 0 {
 		return nil
@@ -158,10 +144,8 @@ func askDependsOn(scanner *bufio.Scanner, w io.Writer, priorStages []flow.Stage)
 	return deps
 }
 
-// askAdvanced collects the optional advanced fields: artifacts, inputs
-// (offered from priorStages' declared artifacts, restricted to the
-// stage's own DependsOn), a verify command (skipped if already set by
-// ForceVerify), interactive mode, and a custom agent command.
+// askAdvanced collects the optional advanced fields: artifacts, inputs, a verify command, interactive
+// mode, and a custom agent command.
 func askAdvanced(scanner *bufio.Scanner, w io.Writer, stage *flow.Stage, priorStages []flow.Stage) {
 	for {
 		name := promptLine(scanner, w, "  Artifact name (empty to stop): ")

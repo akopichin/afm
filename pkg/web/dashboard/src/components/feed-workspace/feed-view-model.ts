@@ -1,11 +1,7 @@
 import type { AfmEvent, StageStatus } from '../../types'
 
-// Семантическая презентация ленты: каждое РЕАЛЬНОЕ событие из events.jsonl
-// превращается в FeedItem с ролью (agent/user/system → сторона left/right),
-// тоном (neutral/success/warning/danger/accent) и текстом. Никаких выдуманных
-// «сообщений агента»: текст и его классы 1:1 повторяют прежний EventFeedPanel
-// (toFeedLine), меняется только группировка и раскладка (мессенджер), а порядок
-// и идентичность событий сохраняются (план §6).
+// Семантическая презентация ленты: каждое РЕАЛЬНОЕ событие из events.jsonl превращается в FeedItem с
+// ролью, тоном и текстом.
 
 export type FeedActor = 'agent' | 'user' | 'system'
 export type FeedTone = 'neutral' | 'success' | 'warning' | 'danger' | 'accent'
@@ -20,24 +16,16 @@ export type FeedItem = {
   kind: FeedItemKind
   text: string
   gap: string // статичная длительность: разница с предыдущим событием ленты
-  mono: boolean // tool/script/auto-answer — компактная mono-строка
-  // dialog_question/dialog_answer: координаты вопроса диалога для последующего
-  // перехода к нему (клик по item — задача другой таски, здесь только данные).
+  mono: boolean // tool/script/auto-answer — компактная mono-строка dialog_question/dialog_answer: координаты вопроса
+  // диалога для последующего перехода к нему.
   phase?: string
   id?: string
   navigable?: boolean
-  // markdown — рендерить text как markdown (заголовки/таблицы/жирный/код), а не как
-  // сырую строку. Выставляется ТОЛЬКО для нарратива агента (agent_action tool="text"):
-  // источник события знает его семантику. User-текст (заметки/ответы) остаётся plain,
-  // чтобы введённые `*`/`#`/URL не меняли вид сообщения.
+  // markdown — рендерить text как markdown, а не как сырую строку. Выставляется ТОЛЬКО для нарратива
+  // агента (agent_action tool="text"): источник события знает его семантику.
   markdown?: boolean
-  // reportVerificationId — id verify-прохода (verification_id), только у
-  // verify_result-строк, для которых событие несло непустой report_path
-  // (см. V5a EventVerifyResult). Присутствие report_path — лишь СИГНАЛ "у
-  // этого исхода есть report.md"; сам путь никогда не используется как URL —
-  // ссылка на полный отчёт строится из stageId (уже известен) + этот id и
-  // резолвится сервером (GET /api/stages/{id}/verify/{verificationId}/report,
-  // V5b.3) — клиентский filesystem-путь никогда не доверяется.
+  // reportVerificationId — id verify-прохода, только у verify_result-строк, для которых событие несло
+  // непустой report_path.
   reportVerificationId?: string
 }
 
@@ -86,24 +74,15 @@ function extractStatusString(data: unknown): string {
   return ''
 }
 
-// codeFence computes a fence of backticks long enough that no run of
-// backticks embedded in `content` (untrusted script/hook stderr) can
-// prematurely close the block: CommonMark requires a closing fence to be AT
-// LEAST as long as the opening one, so a stray ``` line in the middle of the
-// tail must never be allowed to equal or exceed our chosen fence length.
-// N = max(3, longestBacktickRun + 1).
+// codeFence uses max(3, longestBacktickRun + 1) so untrusted stderr cannot close its Markdown block.
 function codeFence(content: string): string {
   const runs = content.match(/`+/g)
   const longest = runs === null ? 0 : Math.max(...runs.map((r) => r.length))
   return '`'.repeat(Math.max(3, longest + 1))
 }
 
-// neutralizeMarkers breaks `[AFM image: ...]` / `[AFM file: ...]` marker
-// syntax in untrusted script/hook output (error text and stderr tail) so
-// splitImageMarkers (feed-workspace) and the file-reference picker never
-// treat attacker-controlled stderr as a real marker and fetch an image/file
-// on the user's behalf. A zero-width space right after "[AFM" keeps the text
-// readable while breaking the exact-match regexes the marker parsers use.
+// neutralizeMarkers inserts a zero-width space after '[AFM' so untrusted stderr cannot trigger image/file
+// fetches.
 function neutralizeMarkers(s: string): string {
   return s.replaceAll('[AFM image:', '[AFM​ image:').replaceAll('[AFM file:', '[AFM​ file:')
 }
@@ -119,10 +98,8 @@ type Mapped = {
   navigable?: boolean
   markdown?: boolean
   reportVerificationId?: string
-  // dedupeId — переопределяет стандартный ключ дедупликации (seq или
-  // timestamp|type|stageId) там, где событие несёт свой собственный
-  // стабильный идентификатор надёжнее timestamp (verify_started/
-  // verify_result — verification_id+step, см. mapVerifyEvent).
+  // dedupeId — переопределяет стандартный ключ дедупликации там, где событие несёт свой собственный
+  // стабильный идентификатор надёжнее timestamp.
   dedupeId?: string
 }
 
@@ -142,20 +119,16 @@ function mapEvent(event: AfmEvent): Mapped | null {
     case 'agent_action': {
       const tool = str(obj.tool)
       const detail = str(obj.detail)
-      // Нарратив агента (tool="text") — чистая проза без "text:"-префикса и без
-      // mono: это сообщение агента, а не вызов инструмента. Прочие инструменты
-      // (Bash/Read/Write…) — компактная mono-строка "<tool>: <detail>".
+      // Нарратив агента — чистая проза без "text:"-префикса и без mono: это сообщение агента, а не вызов
+      // инструмента.
       if (tool === 'text') {
         return { actor: 'agent', tone: 'neutral', kind: 'message', text: detail, mono: false, markdown: true }
       }
       return { actor: 'agent', tone: 'neutral', kind: 'tool', text: `${tool}${detail !== '' ? `: ${detail}` : ''}`, mono: true }
     }
     case 'script_output': {
-      // stream различает stdout/stderr (Task 3-5, backend): stderr — тревожная
-      // mono-строка (warning), как и обычный tool-вызов, но с явной пометкой
-      // ":stderr", чтобы отличить от stdout в общей ленте script-стадии.
-      // Отсутствующий stream (старые notices, записанные ДО этой правки) —
-      // backward-compat трактуется как stdout, текст не меняется вовсе.
+      // stream различает stdout/stderr: stderr — тревожная mono-строка, как и обычный tool-вызов, но с
+      // явной пометкой ":stderr", чтобы отличить от stdout в общей ленте script-стадии.
       const stream = str(obj.stream)
       if (stream === 'stderr') {
         return { actor: 'agent', tone: 'warning', kind: 'script', text: `[${str(obj.hook)}:stderr] ${str(obj.line)}`, mono: true }
@@ -163,17 +136,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
       return { actor: 'agent', tone: 'neutral', kind: 'script', text: `[${str(obj.hook)}] ${str(obj.line)}`, mono: true }
     }
     case 'script_failed': {
-      // Итоговый сбой script-стадии (Task 3-5, backend): error — короткая
-      // причина (напр. "exit status 1"), stderr_tail — хвост stderr для
-      // диагностики. Тело рендерим как markdown с fenced code block —
-      // сырой '\n' в plain-тексте схлопывается HTML-рендерингом, а
-      // многострочный traceback обязан сохранить разбивку по строкам.
-      //
-      // error и tail — НЕДОВЕРЕННЫЙ вывод скрипта: neutralizeMarkers режет
-      // [AFM image:]/[AFM file:] маркеры (иначе untrusted stderr мог бы
-      // триггернуть фетч картинки/файла), а codeFence — динамический фенс
-      // (N бэктиков > самого длинного забега бэктиков в tail), чтобы строка
-      // ``` внутри хвоста не закрывала блок кода раньше времени.
+      // Итоговый сбой script-стадии: error — короткая причина, stderr_tail — хвост stderr для диагностики.
       const error = neutralizeMarkers(str(obj.error))
       const tail = neutralizeMarkers(str(obj.stderr_tail))
       const fence = codeFence(tail)
@@ -187,11 +150,8 @@ function mapEvent(event: AfmEvent): Mapped | null {
       }
     }
     case 'hook_failed': {
-      // stderr_tail (опционален, Task 3-5, backend): фенс-код-блок только
-      // когда хвост реально есть (markdown:true, как у script_failed выше);
-      // без хвоста — прежняя plain-строка БЕЗ markdown-рендера (сегодняшнее
-      // поведение не меняется, markdown вообще не выставляется). error/tail
-      // неблагонадёжны так же, как у script_failed выше — см. комментарий там.
+      // stderr_tail: фенс-код-блок только когда хвост реально есть; без хвоста — прежняя plain-строка БЕЗ
+      // markdown-рендера.
       const error = neutralizeMarkers(str(obj.error))
       const tail = neutralizeMarkers(str(obj.stderr_tail))
       const base = `${str(obj.hook)}-hook failed: ${error}`
@@ -211,16 +171,12 @@ function mapEvent(event: AfmEvent): Mapped | null {
     case 'hook_resolved':
       return { actor: 'system', tone: 'success', kind: 'status', text: `${str(obj.hook)}-hook ${str(obj.resolution)}`, mono: false }
     case 'lifecycle_hook_failed':
-      // Финальный сбой lifecycle (observer) хука — чисто информационное
-      // предупреждение: FSM/стадию/ран оно не трогает (см. bus.go), поэтому
-      // tone 'warning', а не 'danger', как у блокирующего hook_failed выше.
+      // Финальный сбой lifecycle хука — чисто информационное предупреждение: FSM/стадию/ран оно не
+      // трогает, поэтому tone 'warning', а не 'danger', как у блокирующего hook_failed выше.
       return { actor: 'system', tone: 'warning', kind: 'status', text: `lifecycle hook ${str(obj.hook_id)} failed: ${str(obj.error)}`, mono: false }
     case 'verify_started':
     case 'verify_result':
-      // AI-verify наблюдательные события (V5a): никогда не FSM-переход, стадия
-      // продолжает жить своим статусом независимо от исхода verify — см.
-      // mapVerifyEvent для разбора тонов (pass/needs_changes/inconclusive/
-      // exec_error) и report_path → reportVerificationId.
+      // Verify-события наблюдательные: рендерятся строкой в ленте (mapVerifyEvent), но не меняют FSM-статус стадии.
       return mapVerifyEvent(event.type, obj)
     case 'approved':
       return { actor: 'user', tone: 'success', kind: 'message', text: 'approved', mono: false }
@@ -234,9 +190,8 @@ function mapEvent(event: AfmEvent): Mapped | null {
       return { actor: 'system', tone: 'warning', kind: 'status', text: 'manual retry', mono: false }
     case 'ask_user':
     case 'user_answered':
-      // Вытеснены dialog_question/dialog_answer (несут реальный текст вопроса/
-      // ответа) — эти события больше не рендерим, чтобы не дублировать их пустой
-      // заглушкой в ленте.
+      // Вытеснены dialog_question/dialog_answer (несут реальный текст вопроса/ ответа) — эти события
+      // больше не рендерим, чтобы не дублировать их пустой заглушкой в ленте.
       return null
     case 'dialog_question': {
       const title = str(obj.title)
@@ -265,18 +220,12 @@ function mapEvent(event: AfmEvent): Mapped | null {
       }
     }
     case 'agent_note':
-      // Заметка агенту (messenger-поле ленты / правка плана) — справа своим
-      // текстом, как ответ на вопрос, но НЕ кликабельна (navigable опущен):
-      // это доставленный юзером текст, а не переход к диалогу. id (seq перехода)
-      // в payload нужен для дедупа live/replay, в презентацию не попадает.
+      // Заметка агенту — справа своим текстом, как ответ на вопрос, но НЕ кликабельна: это доставленный
+      // юзером текст, а не переход к диалогу.
       return { actor: 'user', tone: 'neutral', kind: 'message', text: str(obj.text), mono: false }
     case 'auto_answered': {
-      // Реальный авто-ответ на вопрос диалога несёт dialog:true (см. FROZEN
-      // contract). Такую строку делаем НАВИГИРУЕМОЙ (клик → тот же диалог, что
-      // и dialog_question), но оставляем actor:'system' — это автоматический
-      // ответ afm, а не реплика человека (dialog_answer, actor:'user' справа),
-      // поэтому он рисуется слева и визуально отличим. Текст несёт сам ответ,
-      // чтобы строку можно было отличить от вопроса.
+      // Реальный авто-ответ на вопрос диалога несёт dialog:true. Текст несёт сам ответ, чтобы строку можно
+      // было отличить от вопроса.
       if (obj.dialog === true) {
         const answer = str(obj.answer)
         const title = str(obj.question_title)
@@ -303,21 +252,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
   }
 }
 
-// mapVerifyEvent — презентация AI-verify наблюдательных событий (V5a). Ни
-// verify_started, ни verify_result НИКОГДА не меняют статус стадии — это
-// ортогональный проход поверх уже "заявившей о готовности" стадии, поэтому
-// тон здесь читается только как информационный сигнал, не как индикатор
-// состояния FSM. Различаем три исхода verify_result:
-//   - verdict: pass          → success (проверка прошла)
-//   - verdict: needs_changes/inconclusive → warning (РЕЙТИНГ кода — агенту
-//     есть что поправить/проверка не смогла решить; это ожидаемая, не
-//     аварийная часть цикла, как и retry_scheduled выше)
-//   - exec_error: *          → danger (ИСПОЛНЕНИЕ проверки не удалось —
-//     таймаут/прерывание/сбой транспорта — качественно другая проблема,
-//     чем "код не прошёл проверку", поэтому свой, более тревожный тон)
-// reportVerificationId выставляется только когда payload нёс непустой
-// report_path — это ЛИШЬ сигнал "у этого исхода есть report.md", сам путь
-// никогда не используется как URL (см. FeedItem.reportVerificationId).
+// mapVerifyEvent — презентация AI-verify наблюдательных событий.
 function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<string, unknown>): Mapped {
   const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
   const command = str(obj.command)
@@ -337,10 +272,8 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<st
     return { actor: 'system', tone: 'success', kind: 'success', text: `Verify passed (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
   }
   if (verdict === 'accepted_stalemate') {
-    // Синтезированный afm вердикт (review_patience): стадия принята, потому что
-    // автор перестал менять дерево в ответ на повторные отклонения. Это
-    // ПРИНЯТЫЙ исход (success-тон), но текст прямо называет причину, чтобы было
-    // видно, что гейт был завершён по stalemate, а не чистым прохождением.
+    // Синтезированный afm вердикт: стадия принята, потому что автор перестал менять дерево в ответ на
+    // повторные отклонения.
     return { actor: 'system', tone: 'success', kind: 'success', text: `Verify accepted (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
   }
   if (verdict === 'needs_changes') {
@@ -357,9 +290,8 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<st
   return { actor: 'system', tone: 'danger', kind: 'status', text: `Verify execution error (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
 }
 
-// Статичная длительность строки: разница между этим событием и предыдущим в
-// ленте по порядку отображения (не per-стадийно). Нет предыдущего или
-// невалидный timestamp — em dash. (Перенесено 1:1 из EventFeedPanel.)
+// Статичная длительность строки: разница между этим событием и предыдущим в ленте по порядку отображения.
+// Нет предыдущего или невалидный timestamp — em dash.
 export function formatEventGap(tsMs: number, prevTsMs: number): string {
   if (Number.isNaN(tsMs) || Number.isNaN(prevTsMs)) return '—'
   const diffSec = Math.max(0, Math.floor((tsMs - prevTsMs) / 1000))
@@ -369,9 +301,7 @@ export function formatEventGap(tsMs: number, prevTsMs: number): string {
   return `${Math.floor(diffSec / 86400)}d`
 }
 
-// toFeedItems — события → FeedItem[] с уникальными стабильными ключами (тот же
-// приём, что был в EventFeedPanel: seq либо `ts|type|stage`, при повторе —
-// occurrence-суффикс `#N`, детерминированно при неизменном порядке).
+// toFeedItems — события → FeedItem[] с уникальными стабильными ключами.
 export function toFeedItems(events: AfmEvent[]): FeedItem[] {
   const counts = new Map<string, number>()
   const items: FeedItem[] = []
@@ -408,9 +338,8 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
   return items
 }
 
-// groupFeedItems сливает подряд идущие items одной стороны и стадии в один
-// FeedGroup. Разрыв (новый пузырь) — при смене стороны/стадии/актора.
-// Порядок items внутри группы сохраняется, идентичность (key) не теряется.
+// groupFeedItems сливает подряд идущие items одной стороны и стадии в один FeedGroup. Разрыв (новый
+// пузырь) — при смене стороны/стадии/актора.
 export function groupFeedItems(items: FeedItem[]): FeedGroup[] {
   const groups: FeedGroup[] = []
   for (const item of items) {

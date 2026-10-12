@@ -13,17 +13,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRecovery_ResumesScriptStageStuckRunning reproduces a real bug found via
-// a Docker-mode kill/resume test: a script stage killed hard (SIGKILL, no
-// chance for graceful shutdown) is left in StatusRunning with no .done file.
-// The StatusRunning branch of startPlanningForPending did not check
-// s.IsScript() before falling through to runImplementationAgent, which
-// unconditionally looks for plan.md — a file script stages never write —
-// and immediately failed the stage with a spurious
-// "plan.md: no such file or directory" instead of simply restarting the
-// script (the same thing retryStage already does correctly for a manually
-// retried *failed* script stage — this is the missing symmetric case for a
-// stage recovered directly from StatusRunning).
 func TestRecovery_ResumesScriptStageStuckRunning(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -35,10 +24,8 @@ func TestRecovery_ResumesScriptStageStuckRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	// Simulate a hard kill mid-script: Pending -> Running, then the process
-	// dies (SIGKILL) before the script ever writes .done or the FSM ever
-	// reaches a terminal state. No plan.md exists for this stage (script
-	// stages never write one).
+	// Simulate a hard kill mid-script: Pending -> Running, then the process dies before the script ever
+	// writes .done or the FSM ever reaches a terminal state.
 	if err := store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}

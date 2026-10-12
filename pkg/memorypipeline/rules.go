@@ -7,22 +7,11 @@ import (
 	"unicode/utf8"
 )
 
-// tierHeadings — legacy "## High/Medium/Low" section headings from the
-// staging prioritized.md. A target rules file (memory.md / a stage's own
-// reflect file) must never carry one of these through: priority there is
-// encoded ONLY by block order (see the "update" prompt), not by a heading
-// or word in the output — see the "Agent memory (directory store +
-// pattern-extraction chain) — v3" section of AGENTS.md.
+// tierHeadings — legacy "## High/Medium/Low" section headings from the staging prioritized.md.
 var tierHeadings = []string{"## High", "## Medium", "## Low"}
 
-// ValidateRules enforces the strict shape a target rules file (memory.md or
-// a stage's own reflect file) must have after the "update" agent rewrites
-// it: the FIRST non-blank line is exactly "# Project rules" (no other H1
-// anywhere in the document), at least one "## <Pattern Name>" block, no
-// leaked tier heading ("## High"/"## Medium"/"## Low", case-insensitive —
-// priority is order-only in the final file), a hard cap of maxRules pattern
-// blocks (0 = unbounded), valid UTF-8, and a total size bound shared with
-// requireFreshFile's maxRulesBytes.
+// ValidateRules requires UTF-8, '# Project rules', named H2 patterns without tier headings, and
+// rule-count/size limits.
 func ValidateRules(md string, maxRules int) error {
 	if len(md) > maxRulesBytes {
 		return fmt.Errorf("rules file too large: %d bytes (limit %d)", len(md), maxRulesBytes)

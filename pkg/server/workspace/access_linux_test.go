@@ -12,18 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TestOpenat_BlocksTraversalAndSymlink is the security-boundary test. Because
-// fs.Read is only a stub in this task, it exercises the openat2 protection
-// DIRECTLY via resolve + openat rather than through Read (controller ruling R9).
-// It confirms three properties on a real temp root:
-//
-//	(a) a safe in-root file opens and its bytes are readable;
-//	(b) a `../etc/passwd`-style path never escapes the root;
-//	(c) opening a symlink that points outside the root returns ErrSymlink.
-//
-// If the running kernel lacks openat2 (ENOSYS on < 5.6), New degrades to zero
-// roots and the test skips — the degradation path is validated separately by
-// TestNew_NilRoots. The real Linux run happens in the Docker E2E (Task 16).
 func TestOpenat_BlocksTraversalAndSymlink(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("hi"), 0o644); err != nil {

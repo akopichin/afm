@@ -24,48 +24,27 @@ type StageView struct {
 	Autonomous  bool              `json:"autonomous"`
 	AutoApprove bool              `json:"auto_approve"`
 	HasDialog   bool              `json:"has_dialog"`
-	// IsScript — статический конфиг флоу (Stage.IsScript()): нужен фронту,
-	// чтобы скрывать пункт "Pause" в кебаб-меню, пока скриптовая стадия
-	// реально выполняется (mid-script graceful stop не поддержан).
+	// IsScript — статический конфиг флоу: нужен фронту, чтобы скрывать пункт "Pause" в кебаб-меню, пока
+	// скриптовая стадия реально выполняется.
 	IsScript bool `json:"is_script"`
-	// PausedFrom заполняется только когда Status == paused (см.
-	// state.StageState.PausedFrom, которое, в отличие от этого поля,
-	// остаётся непустым и после Continue) — панель паузы в дашборде решает
-	// по нему, какой текст показать.
+	// PausedFrom заполняется только когда Status == paused — панель паузы в дашборде решает по нему, какой
+	// текст показать.
 	PausedFrom state.StageStatus `json:"paused_from,omitempty"`
 	ShowPlan   bool              `json:"show_plan"`
 	ShowDialog bool              `json:"show_dialog"`
-	// PreNote — текст заметки, прикреплённой к стадии до её старта (prenote.md).
-	// Даёт фронту и текст для префилла модалки редактирования, и сигнал для
-	// индикатора 📝 «к стадии прикреплена заметка». Пусто, если заметки нет.
+	// PreNote — текст заметки, прикреплённой к стадии до её старта. Даёт фронту и текст для префилла модалки
+	// редактирования, и сигнал для индикатора 📝 «к стадии прикреплена заметка».
 	PreNote string `json:"pre_note,omitempty"`
-	// Buttons — подписи предопределённых кнопок кебаб-меню этой стадии
-	// (статический конфиг флоу). Пусто, если кнопок нет. Фронт рисует по одному
-	// пункту меню на подпись и POST'ит подпись в /button при клике.
+	// Buttons — подписи предопределённых кнопок кебаб-меню этой стадии. Пусто, если кнопок нет.
 	Buttons []string `json:"buttons,omitempty"`
-	// Cost — снапшот стоимости/токенов этой стадии (accounting.CostBundle.
-	// Stages[id]). nil, если у стадии нет ни одной записи в usage.jsonl или
-	// accounting вообще не подключён к серверу (см. Server.accounting).
+	// Cost — снапшот стоимости/токенов этой стадии (accounting.CostBundle. Stages[id]).
 	Cost *accounting.CostView `json:"cost,omitempty"`
-	// Verify — durable-индикатор последнего AI-verify прохода этой стадии
-	// (Task 7 плана per-stage-feed-full-feed): раньше бейдж вычислялся на
-	// клиенте из (капнутой) глобальной ленты событий (computeVerifyIndicators)
-	// и на долгих ранах мог "состариться" из окна — тот же класс проблемы, что
-	// и вся эта фича лечит. Теперь это поле сервер считает через
-	// latestVerifyByStage — ОДНО необрезанное сканирование ВСЕГО notices.jsonl
-	// на весь /api/status (а не на стадию), а не reconstructNotices (тот
-	// капнут maxStageReplayEvents=2000). nil, если у стадии ни разу не было
-	// verify_started/verify_result.
+	// Verify — последний durable verify-индикатор из полного notices.jsonl; nil, если verify-событий не было.
 	Verify *VerifyView `json:"verify,omitempty"`
 }
 
-// VerifyView — снимок текущего состояния последнего AI-verify прохода стадии,
-// зеркалит семантику удалённого клиентского computeVerifyIndicators
-// (feed-view-model.ts): verify_started переводит в "running", verify_result —
-// в свой verdict (pass/needs_changes/inconclusive), иначе — "error". Новый
-// verify_started ПОСЛЕ уже завершённого прохода снова переводит в "running"
-// (текущее состояние, а не финальный исход последнего прохода — так же, как
-// вело себя клиентское вычисление).
+// VerifyView отражает последний verify_started как running, verify_result как verdict либо error; новый
+// проход снова даёт running.
 type VerifyView struct {
 	Step    int    `json:"step"`
 	Command string `json:"command"`
@@ -73,9 +52,8 @@ type VerifyView struct {
 	Phase string `json:"phase"`
 }
 
-// buildStageViews joins event-log state, static configuration and on-disk
-// artifacts. Ordering is display-only: rs.StageOrder remains unchanged.
-// stageCosts comes from the same snapshot as the run-level cost fields.
+// buildStageViews joins event-log state, static configuration and on-disk artifacts. Ordering is
+// display-only: rs.StageOrder remains unchanged.
 func buildStageViews(rs state.RunState, runDir string, stages map[string]StageConfig, stageCosts map[string]*accounting.CostView) []StageView {
 	order := topoOrder(rs.StageOrder, stages)
 	views := make([]StageView, 0, len(order))
@@ -86,27 +64,11 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 		hasDialog := stageHasDialog(runDir, id)
 		cfg := stages[id]
 		isScript := cfg.IsScript
-		// autonomous-стадии обычно вообще не имеют plan.md и никогда не доходят
-		// до статусов, для которых нужна панель плана — кроме failed (retry) и
-		// paused (Continue): обе требуют кнопки действия, которая живёт в
-		// PlanPanel, а не в DialogChannel. Pending ещё не начиналась и не имеет
-		// пользовательского артефакта для просмотра; script-стадии не имеют
-		// plan.md вообще. Для failed/paused PlanPanel всё равно нужен ради Retry/
-		// Continue, включая autonomous и script-треки.
+		// PlanPanel нужен failed/paused стадиям ради Retry/Continue, включая autonomous и script без plan.md.
 		showPlan := (st.Status != state.StatusPending && !isScript && !autonomous) ||
 			st.Status == state.StatusFailed || st.Status == state.StatusPaused
-		// ShowDialog резервирует строку под DialogChannel в лейауте. Условие ДОЛЖНО
-		// совпадать с внутренним гейтом hasContent самого DialogChannel.tsx
-		// (entries>0 || awaiting_user_input || hasDialog) — иначе для стадии, где
-		// панель зарезервирована, но рендерить нечего (interactive/autonomous БЕЗ
-		// диалоговой истории и не в awaiting_user_input), DialogChannel возвращает
-		// <></>, и строка остаётся пустой дырой во всю высоту центральной колонки
-		// (баг «ломается при клике на стадию»: клик по завершённой autonomous-стадии
-		// показывал пустой центр без even fallback «Nothing to show»). hasDialog
-		// покрывает авто-ответы/историю, awaiting_user_input — живой вопрос ещё до
-		// появления <phase>.dialog.jsonl (и гонку «status обогнал fetch entries»).
-		// interactive/autonomous сами по себе панель БОЛЬШЕ не открывают —
-		// раньше это и порождало пустую дыру.
+		// ShowDialog резервирует строку под DialogChannel в лейауте. interactive/autonomous сами по себе панель
+		// БОЛЬШЕ не открывают — раньше это и порождало пустую дыру.
 		showDialog := hasDialog || st.Status == state.StatusAwaitingUserInput
 		pausedFrom := state.StageStatus("")
 		if st.Status == state.StatusPaused {
@@ -135,20 +97,8 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 	return views
 }
 
-// topoOrder returns ids reordered so every stage renders after all of its
-// depends_on — a display-only concern the dashboard's stage list uses instead
-// of raw flow.yaml declaration order. Stages with no ordering constraint
-// between them (independent stages, or several unblocked by the same
-// dependency) keep their original relative order: this is a stable Kahn's
-// algorithm, queue seeded and re-fed in declaration order, so e.g. stage1
-// (depends_on: [stage2]) among stage2..stage5 (no deps) renders as
-// stage2, stage3, stage4, stage5, stage1 — not spliced ahead of its
-// unrelated siblings just because it was declared first.
-//
-// flow.ParseFile's detectCycles already guarantees ids/dependsOn form a
-// well-formed acyclic graph referencing only known stage ids by the time this
-// runs; the length check below is a defensive fallback (return ids as-is)
-// for that invariant, not a real code path.
+// topoOrder returns ids reordered so every stage renders after all of its depends_on — a display-only
+// concern the dashboard's stage list uses instead of raw flow.yaml declaration order.
 func topoOrder(ids []string, stages map[string]StageConfig) []string {
 	index := make(map[string]int, len(ids))
 	for i, id := range ids {
@@ -207,9 +157,8 @@ func stageHasDialog(runDir, stageID string) bool {
 	return false
 }
 
-// verifyNotice is the on-disk shape of one notices.jsonl line, decoded just
-// enough to pick out verify_started/verify_result entries (mirrors
-// stagefiles.AppendNotice's noticeEntry — "time"/"type"/"stage_id"/"data").
+// verifyNotice is the on-disk shape of one notices.jsonl line, decoded just enough to pick out
+// verify_started/verify_result entries.
 type verifyNotice struct {
 	Time    time.Time      `json:"time"`
 	Type    string         `json:"type"`
@@ -217,22 +166,8 @@ type verifyNotice struct {
 	Data    map[string]any `json:"data"`
 }
 
-// latestVerifyByStage scans the WHOLE notices.jsonl ONCE and returns, per
-// stage id, only its single latest verify_started/verify_result notice
-// (O(distinct stages) memory, unbounded lookback) — a DEDICATED single-pass
-// scan, deliberately not reconstructNotices, which is capped at
-// maxStageReplayEvents=2000 and would let the badge age out on a long run
-// after 2000+ later same-stage notices (the exact eviction class this whole
-// feature exists to kill). Prior to this, buildStageViews called a per-stage
-// scan (latestVerifyForStage) once per stage, making /api/status rescan the
-// entire file O(stages) times per poll — this collapses it to one scan
-// regardless of stage count.
-//
-// "Latest" (per stage) is selected by timestamp, with file order as the
-// tie-break: stagefiles.AppendNotice stamps time.Now() right before writing,
-// so concurrent writers can land slightly out of timestamp order in the
-// file — picking max-by-timestamp (ties won by whichever is scanned later)
-// keeps parity with reconstructEventHistory's own timestamp sort.
+// latestVerifyByStage scans all notices once, keeping one verify notice per stage by timestamp, then file
+// order on ties.
 func latestVerifyByStage(runDir string) map[string]*VerifyView {
 	f, err := os.Open(filepath.Join(runDir, "notices.jsonl"))
 	if err != nil {
@@ -264,10 +199,7 @@ func latestVerifyByStage(runDir string) map[string]*VerifyView {
 	return views
 }
 
-// verifyViewFromNotice reduces one selected verify_started/verify_result
-// notice into the VerifyView the dashboard renders: verify_started ⇒
-// "running"; verify_result ⇒ its verdict (pass/needs_changes/inconclusive),
-// or "error" for anything else.
+// verifyViewFromNotice maps verify_started to running and verify_result to its verdict or error.
 func verifyViewFromNotice(n *verifyNotice) *VerifyView {
 	view := &VerifyView{
 		Step:    noticeIntField(n.Data, "step"),
@@ -286,26 +218,21 @@ func verifyViewFromNotice(n *verifyNotice) *VerifyView {
 	return view
 }
 
-// VerifyView.Phase values — named constants (instead of raw string literals
-// repeated between the implementation and its tests within this package,
-// which golangci-lint's goconst would otherwise flag) for the same vocabulary
-// as the deleted client VerifyIndicatorPhase.
+// VerifyView.Phase values — named constants for the same vocabulary as the deleted client
+// VerifyIndicatorPhase.
 const (
 	VerifyPhaseRunning = "running"
 	VerifyPhasePass    = "pass"
-	// VerifyPhaseAcceptedStalemate — терминальный ПРИНЯТЫЙ исход, синтезированный
-	// afm при срабатывании review_patience (reviewer/author stalemate). Отличается
-	// от pass (это не чистое прохождение) и НЕ error — стадия принята. Строка
-	// совпадает с verify.VerdictAcceptedStalemate.
+	// VerifyPhaseAcceptedStalemate — терминальный ПРИНЯТЫЙ исход, синтезированный afm при срабатывании
+	// review_patience. Отличается от pass (это не чистое прохождение) и НЕ error — стадия принята.
 	VerifyPhaseAcceptedStalemate = "accepted_stalemate"
 	VerifyPhaseNeedsChanges      = "needs_changes"
 	VerifyPhaseInconclusive      = "inconclusive"
 	VerifyPhaseError             = "error"
 )
 
-// noticeIntField/noticeStringField defensively read a notice's data map —
-// json.Unmarshal decodes numbers as float64, so an int field must be
-// converted, and a missing/wrong-typed key must not panic.
+// noticeIntField/noticeStringField читают JSON-поля без panic; числовые значения после Unmarshal имеют тип
+// float64.
 func noticeIntField(data map[string]any, key string) int {
 	if n, ok := data[key].(float64); ok {
 		return int(n)

@@ -12,10 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// newTestOrchestrator строит минимальный *Orchestrator поверх реального
-// *state.Store на временном run-dir — идиома этого пакета (см.
-// setupMalformedTestOrch в dialog_poller_test.go), только без стадии/событий:
-// этому тесту нужен лишь сам факт дефолтации seam-поля в New().
+// newTestOrchestrator создаёт минимальный Orchestrator с реальным временным Store для проверки defaults.
 func newTestOrchestrator(t *testing.T) *Orchestrator {
 	t.Helper()
 	runDir := t.TempDir()
@@ -30,20 +27,14 @@ func newTestOrchestrator(t *testing.T) *Orchestrator {
 	return New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
 }
 
-// TestRunMemoryAgent_SeamDefaulted verifies the o.mem *memorypipeline.Pipeline
-// seam exists and is defaulted (non-nil) by New, and that a test can override
-// its agent runner via memorypipeline.WithRunner (the injection point tests
-// use instead of the removed o.memRunner field — see stubMemoryPipeline in
-// reflection_test.go).
 func TestRunMemoryAgent_SeamDefaulted(t *testing.T) {
 	o := newTestOrchestrator(t) // existing test helper in this package
 	if o.mem == nil {
 		t.Fatal("mem pipeline must be defaulted by New")
 	}
 
-	// Override with a stub runner and confirm it is invoked (no real process)
-	// via an actual Pipeline call — CaptureStage on a fresh dataset always
-	// calls the reflect step of the injected runner.
+	// Override with a stub runner and confirm it is invoked (no real process) via an actual Pipeline call —
+	// CaptureStage on a fresh dataset always calls the reflect step of the injected runner.
 	called := false
 	o.mem = memorypipeline.New(memorypipeline.Prompts{}, memorypipeline.AgentConfig{},
 		memorypipeline.WithRunner(func(_ context.Context, spec memorypipeline.AgentSpec) error {

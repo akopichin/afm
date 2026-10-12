@@ -507,8 +507,7 @@ describe('FeedWorkspace', () => {
     it('does not animate a reconnect re-sync that leaves the newest message unchanged', () => {
       const a = ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z')
       const b = ev('agent_action', { tool: 'text', detail: 'b' }, 's1', '2026-01-01T00:00:01Z')
-      const { rerender } = render(<FeedWorkspace events={[a, b]} stageId="s1" />) // baseline, last = b
-      // reconnect re-sync: history prepends an older row and re-keys 'a' with an
+      const { rerender } = render(<FeedWorkspace events={[a, b]} stageId="s1" />) // baseline, last = b reconnect re-sync: history prepends an older row and re-keys 'a' with an
       // interpolated timestamp, but the newest message (content 'b') is unchanged:
       rerender(<FeedWorkspace events={[
         ev('agent_action', { tool: 'text', detail: 'older' }, 's1', '2025-12-31T23:59:59Z'),
@@ -541,9 +540,7 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
     })
 
-    // scopeToken namespacing: a stage legitimately named "full" must NOT collide with
-    // the Full-feed scope. Switching between them changes the token -> re-baseline ->
-    // the (different) newest row must NOT animate.
+    // scopeToken namespacing: a stage legitimately named "full" must NOT collide with the Full-feed scope.
     it('does not animate when switching Full feed <-> a stage whose id is "full"', () => {
       const { rerender } = render(<FeedWorkspace
         events={[ev('agent_action', { tool: 'text', detail: 'full-feed-last' }, 's1', '2026-01-01T00:00:00Z')]}
@@ -554,11 +551,8 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
     })
 
-    // The decision MUST key on CONTENT, not the feed key. All three rows share
-    // ts|type|stage, so the key carries an occurrence suffix #N that SHIFTS when an
-    // earlier same-base row is prepended — but the newest row's content (detail
-    // 'same') is unchanged. A key-based signal would animate here; a content one must
-    // not. (Pins the lastSig=feedItemSignature wiring against a lastKey regression.)
+    // The decision MUST key on CONTENT, not the feed key. A key-based signal would animate here; a content
+    // one must not.
     it('decides by content not the feed key: a re-keyed but content-unchanged newest row does not animate', () => {
       const mk = (detail: string) => ev('agent_action', { tool: 'text', detail }, 's1', '2026-01-01T00:00:00Z')
       const { rerender } = render(<FeedWorkspace events={[mk('x'), mk('same')]} stageId="s1" />) // baseline; newest 'same' = key #1
@@ -567,9 +561,7 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)                       // content unchanged -> no animate
     })
 
-    // The entrance clears ONLY on the row's own animationend (e.target===e.currentTarget),
-    // never on a bubbled child animation. Pins the guard (jsdom leaves animationName
-    // null, so name-filtering is impossible — this check is the only defense).
+    // The entrance clears ONLY on the row's own animationend, never on a bubbled child animation.
     it('clears the entrance on the row’s own animationend, not a bubbled child animation', () => {
       const first = ev('agent_action', { tool: 'text', detail: 'a' }, 's1', '2026-01-01T00:00:00Z')
       const events = [first, ev('agent_action', { tool: 'text', detail: 'b' }, 's1', '2026-01-01T00:00:01Z')]
@@ -587,9 +579,8 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)             // cleared
     })
 
-    // Per-branch wiring: the entrance class + its self-clearing onAnimationEnd must
-    // be present on ALL three row branches, not just the default div. A navigable
-    // (dialog_question) newest row renders through the <button> branch.
+    // Per-branch wiring: the entrance class + its self-clearing onAnimationEnd must be present on ALL
+    // three row branches, not just the default div.
     it('animates and self-clears a navigable (dialog) newest row (button branch)', () => {
       const q1 = ev('dialog_question', { phase: 'planning', id: 'q1', title: 'first?' }, 's1', '2026-01-01T00:00:00Z')
       const q2 = ev('dialog_question', { phase: 'planning', id: 'q2', title: 'second?' }, 's1', '2026-01-01T00:00:01Z')
@@ -603,9 +594,8 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)                              // cleared
     })
 
-    // The reply-able thought branch (kind message + markdown, with a live composer)
-    // renders through its own <div className="… feed-item-thought">; it too must carry
-    // the entrance class and self-clear.
+    // The reply-able thought branch renders through its own <div className="… feed-item-thought">; it too
+    // must carry the entrance class and self-clear.
     it('animates and self-clears a reply-able thought newest row (thought branch)', () => {
       const onSendNote = vi.fn().mockResolvedValue(undefined)
       const t1 = ev('agent_action', { tool: 'text', detail: 'первая мысль' }, 's1', '2026-01-01T00:00:00Z')
@@ -619,9 +609,8 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
     })
 
-    // Signature must be collision-free: two DIFFERENT tuples that would share a
-    // '|'-join must produce DIFFERENT signatures, else a genuinely-new newest row
-    // fails to animate.
+    // Signature must be collision-free: two DIFFERENT tuples that would share a '|'-join must produce
+    // DIFFERENT signatures, else a genuinely-new newest row fails to animate.
     it('feedItemSignature does not collide for different tuples that share a |-join', () => {
       const a = feedItemSignature({ stageId: 'x', kind: 'tool', actor: 'agent', text: 'message|user|z' })
       const b = feedItemSignature({ stageId: 'x|tool|agent', kind: 'message', actor: 'user', text: 'z' })

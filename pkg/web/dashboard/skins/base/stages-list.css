@@ -1,17 +1,11 @@
-/* pkg/web/dashboard/skins/base/stages-list.css
-   Stage rail: a calm vertical timeline. The rail head carries the "Stages"
-   title + run progress; each stage row is a timeline node (status dot) linked by
-   a vertical connector, with an accent left-marker on the selected row. Status
-   is never signaled by color alone — the dot shape/fill/icon plus the status
-   text carry it too. Semantic tokens only. */
+/* pkg/web/dashboard/skins/base/stages-list.css Stage rail: a calm vertical timeline. Status is never
+   signaled by color alone — the dot shape/fill/icon plus the status text carry it too. */
 
 /* === Rail container === */
 #stages-panel {
   display: flex;
   flex-direction: column;
-  /* Заполняем всю ширину рейл-слота (.rail-slot — flex-row): без flex:1 панель
-     сжималась до ширины контента, и при растянутом рейле справа зияла пустая
-     полоса, а грип делителя «висел в воздухе» вдали от видимого края панели. */
+  /* Заполняем рейл через flex:1, чтобы панель и divider оставались у видимого края. */
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -19,9 +13,7 @@
   padding: 14px 12px;
   background: var(--surface-raised);
   border-right: 1px solid var(--separator-subtle);
-  /* The panel no longer scrolls — it's the fixed flex-column FRAME. .stages-scroll
-     is the scroll region, so the .rail-foot version line can stay pinned to the
-     bottom while the stage list scrolls above it. */
+  /* The panel no longer scrolls — it's the fixed flex-column FRAME. */
   overflow: hidden;
 }
 
@@ -31,14 +23,8 @@
   min-height: 0;            /* let the flex child actually shrink & scroll */
   overflow-y: auto;
   overflow-x: hidden;       /* also prevents the 1px active-marker sub-pixel h-scrollbar */
-  /* Negative margin pulls the scroll region out to the panel's padding edge so the
-     scrollbar sits flush at the rail edge; the matching 12px side padding re-insets
-     the rows and keeps the SAME 12px horizontal gutter the panel had before this
-     change, so the attention glow and the .stage-item.active translateX(-3px) keep
-     the room they had (no horizontal regression). The 4px top/bottom padding gives
-     the soft attention halo room at the list's scroll ends; its faint outer tail may
-     still clip there — same as the panel clipped it before, acceptable for a pulsing
-     decoration. */
+  /* Extend scrolling to the rail edge; matching padding preserves row gutters and room for attention
+     halos. */
   margin: 0 -12px;
   padding: 4px 12px;
 }
@@ -129,9 +115,8 @@
   background: var(--surface-hover);
 }
 
-/* The row content is a real <button> (keyboard-accessible); it carries the grid
-   + padding so its focus ring wraps the interactive area. The kebab lives in the
-   sibling .stage-actions, never nested inside this button. */
+/* The row content is a real <button>; it carries the grid + padding so its focus ring wraps the
+   interactive area. */
 .stage-row {
   flex: 1 1 auto;
   min-width: 0;
@@ -153,9 +138,8 @@
   border-radius: var(--radius-md);
 }
 
-/* Middle cell: stage id (bold, primary) → long name (muted, secondary).
-   Статус здесь текстом не дублируется — его несёт нода-точка (цвет/анимация/
-   галочка) плюс бейджи 💬/📋 в трейлинг-слоте. */
+/* Middle cell: stage id (bold, primary) → long name (muted, secondary). Статус здесь текстом не
+   дублируется — его несёт нода-точка (цвет/анимация/ галочка) плюс бейджи 💬/📋 в трейлинг-слоте. */
 .stage-label {
   display: flex;
   flex-direction: column;
@@ -178,11 +162,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Только для скринридеров (visually-hidden): .stage-status-sr попадает в
-   accessible name кнопки строки (статус несёт сама точка-нода визуально);
-   .stage-cost-sr — полное предложение про стоимость, на которое указывает
-   aria-describedby строки (видимая цифра рядом помечена aria-hidden). Одно
-   общее visually-hidden правило на оба класса. */
+/* Только для скринридеров: .stage-status-sr попадает в accessible name кнопки строки; .stage-cost-sr —
+   полное предложение про стоимость, на которое указывает aria-describedby строки. */
 .stage-status-sr,
 .stage-cost-sr {
   position: absolute;
@@ -231,9 +212,8 @@
 .status-dot[data-status="hook_failed"]          { color: var(--c-hook-failed);   border-color: var(--c-hook-failed); }
 .status-dot[data-status="paused"]               { color: var(--c-paused);        border-color: var(--c-paused); }
 
-/* Filled node for every active/attention/terminal status; the number is punched
-   out in the canvas colour so it reads on the bright fill. Pending/ready stay
-   as hollow rings with a muted number. */
+/* Filled node for every active/attention/terminal status; the number is punched out in the canvas colour
+   so it reads on the bright fill. Pending/ready stay as hollow rings with a muted number. */
 .status-dot:not([data-status="pending"]):not([data-status="ready"]) {
   background: currentColor;
   border-color: currentColor;
@@ -302,9 +282,8 @@
   opacity: 0.75;
 }
 
-/* AI-verify компактный индикатор (V5b.2) — один нейтральный глиф, цвет несёт
-   data-phase (полный текст — в title). 'running' пульсирует как approval-badge
-   (проверка идёт прямо сейчас), остальные фазы статичны. */
+/* AI-verify компактный индикатор — один нейтральный глиф, цвет несёт data-phase. 'running' пульсирует как
+   approval-badge (проверка идёт прямо сейчас), остальные фазы статичны. */
 .verify-badge {
   font-size: 11px;
   color: var(--text-muted);
@@ -324,9 +303,8 @@
   .verify-badge[data-phase="running"] { animation: none; }
 }
 
-/* Per-stage cost figure (cost-ui increment2, task-10): a quiet mono span,
-   never opacity — intensifies via COLOR on row hover/active so the digits
-   stay fully legible even at rest (see --cost-rail token doc in tokens.css). */
+/* Per-stage cost figure: a quiet mono span, never opacity — intensifies via COLOR on row hover/active so
+   the digits stay fully legible even at rest. */
 .stage-cost {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -340,11 +318,8 @@
   color: var(--cost-rail-strong);
 }
 
-/* Оценка стоимости ещё считается: маленький крутящийся ободок вместо цифры.
-   currentColor наследует --cost-rail(-strong) от .stage-cost, поэтому спиннер
-   тема-осознан и подсвечивается на hover/active вместе с остальной ценой.
-   inline-block + vertical-align — чтобы кружок сидел по центру строки, а не
-   уезжал к базовой линии текста рядом. */
+/* Оценка стоимости ещё считается: маленький крутящийся ободок вместо цифры. inline-block + vertical-align
+   — чтобы кружок сидел по центру строки, а не уезжал к базовой линии текста рядом. */
 .stage-cost-spinner {
   display: inline-block;
   width: 10px;
@@ -386,10 +361,8 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* === Timeline connector between dots ===
-   A real child element (.stage-connector) — not ::before/::after (those carry
-   the active marker). Positioned under the status dot, bridging to the next row.
-   left is tuned to the dot center; a small nudge is acceptable. */
+/* === Timeline connector between dots === A real child element — not ::before/::after. Positioned under
+   the status dot, bridging to the next row. */
 .stage-connector {
   position: absolute;
   left: 22.5px; /* центр 26px-ноды: 10px padding + 13px радиус */

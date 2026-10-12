@@ -2,9 +2,6 @@ package verify
 
 import "testing"
 
-// TestRunOutcome_ZeroValue проверяет, что нулевое значение RunOutcome
-// однозначно читается как "ничего не решено": все булевы флаги false,
-// ошибки/результат отсутствуют. Поведения пока нет — только форма типа.
 func TestRunOutcome_ZeroValue(t *testing.T) {
 	var o RunOutcome
 	if o.ProcessOK || o.TimedOut || o.Interrupted {

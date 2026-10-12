@@ -1,35 +1,17 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/config.schema.json
-# afm Configuration
-# Place in: .afm/config.yaml (project-level) or ~/.afm/config.yaml (global)
-# Project-level config overrides global. Missing fields keep defaults.
+# Project .afm/config.yaml overrides global ~/.afm/config.yaml; omitted fields keep defaults.
 
-# Web dashboard theme.
-# "graphite"    — default product skin: material hierarchy on a cool graphite canvas,
-#                 indigo interaction accent, mint success and amber attention (dark & light).
-# "goga"        — flat dark tech theme (teal accent #20D4BF, sans-serif, Goga wordmark).
-# "novacorps"   — hi-tech theme (mint accent, monospace font, scanline/neon decor).
-# Light/dark mode is toggled inside the dashboard itself, independent of the theme.
-# Any other or empty value → "graphite" (an unknown value logs a warning to stderr).
-# The legacy "coffee" value is accepted as an alias that normalizes to "graphite".
-# Default: "graphite"
-# theme: graphite
+# Web dashboard theme. "graphite" — default product skin: material hierarchy on a cool graphite canvas,
+# indigo interaction accent, mint success and amber attention (dark & light).
 
-# Fully custom dashboard skin: a directory containing index.css. Overrides `theme`.
-# Default: "" (use the built-in theme)
-# skin_dir: .afm/skin/
+# Fully custom dashboard skin: a directory containing index.css. Overrides `theme`. Default: "" (use the
+# built-in theme) skin_dir: .afm/skin/
 
-# Automatically reset failed stages back to pending on run start/resume (e.g. if the
-# afm process/container was killed mid-run) — no manual `afm retry <id>` per failed
-# stage. All failed stages are reset regardless of the failure cause; dependency
-# order is preserved by the normal depends_on scheduler.
-# Default: true
-# auto_recover: true
+# Automatically reset failed stages back to pending on run start/resume — no manual `afm retry <id>` per
+# failed stage. Default: true auto_recover: true
 
-# server:
-#   # Open the dashboard in a browser automatically on startup.
-#   # Default: false — the URL is printed to the log, open it manually.
-#   # open_browser: true
-#   # port: 9876
+# server: # Open the dashboard in a browser automatically on startup. # Default: false — the URL is
+# printed to the log, open it manually. # open_browser: true # port: 9876
 
 # AI client settings
 client:
@@ -38,234 +20,34 @@ client:
   command: claude
 
   # Extra arguments appended to the command.
-  # Default: ["--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
-  # (auto-added for "claude", override here for custom commands)
-  # extra_args:
-  #   - --my-custom-flag
 
-  # claude_bare: whether to add --bare to generated claude wrappers (autoShim).
-  # --bare = claude Code minimal mode: skips CLAUDE.md auto-discovery, SessionStart
-  # hooks, skills listing, auto-memory (~120 KB of auto-context) — the request body
-  # is ~4 KB instead of ~127 KB (fewer tokens, less gateway load, lower 529 risk).
-  # BUT --bare breaks the Skill tool: skills stop resolving (the agent imitates them
-  # itself). Default: false (skills matter more). Enable claude_bare: true only for
+  # claude_bare: whether to add --bare to generated claude wrappers. Enable claude_bare: true only for
   # flows WITHOUT skills.
-  # claude_bare: false
 
-# Execution parameters
-# executor:
-  # Maximum idle time with no output from the agent before killing the process.
-  # Default: 30m
-  # idle_timeout: 30m
+# Execution parameters executor: Maximum idle time with no output from the agent before killing the
+# process. Default: 30m idle_timeout: 30m
 
-  # Maximum number of stages running in parallel (0 = unlimited).
-  # Default: 0
-  # max_parallel: 4
+  # Maximum number of stages running in parallel (0 = unlimited). Default: 0 max_parallel: 4
 
-  # Max chars for agent text/Bash-command detail logged to <phase>.log and the
-  # agent_action event feed (0 = no limit — the full text/command is kept).
-  # Default: 0
-  # truncate_output: 100
+  # Max chars for agent text/Bash-command detail logged to <phase>.log and the agent_action event feed (0
+  # = no limit — the full text/command is kept). Default: 0 truncate_output: 100
 
-# Cost accounting: overrides/extends the built-in list-price rate table used to
-# estimate stage/run token cost in the dashboard. All rates are decimal USD PER
-# 1,000,000 TOKENS. This is a LIST-PRICE ESTIMATE for visibility only — NOT a
-# bank charge, invoice, or a guarantee of what the provider actually billed you
-# (no discounts/credits/rounding/currency conversion are modeled).
-#
-# Two lookup scopes, matched in this precedence order: pricing.channels.<channel>.<model>
-# (most specific) > pricing.models.<model> > built-in channel table > built-in
-# model table. "channel" is a rough per-provider bucket (e.g. "codex", taken
-# from the docker.agents recipe type when the agent was launched via
-# docker.autoShim); "model" is the model id actually observed in the agent's
-# stream (falling back to the recipe's configured model when the stream
-# itself doesn't expose one).
-#
-# Each rate card is partial: any category you omit falls back to the built-in
-# table (or renders unpriced, if neither has it) — an explicit 0 is different
-# from omitting the field: 0 DISABLES that category's cost (e.g. a provider
-# that doesn't bill cache writes at all), while omitting it just means "unknown,
-# use the default".
-# pricing:
-#   models:
-#     glm-5.3:
-#       input: 1.40           # uncached input tokens
-#       cache_read: 0.26      # cache-hit read tokens
-#       cache_write_5m: 0     # explicit 0 → this provider doesn't bill 5m cache writes
-#       cache_write_1h: 0
-#       output: 4.40          # generated output tokens
-#   channels:
-#     codex:
-#       gpt-5.6-sol:
-#         input: 4.00
-#         output: 20.00
-#         # cache_read/cache_write_* omitted → falls back to the built-in table
+# Cost accounting: overrides/extends the built-in list-price rate table used to estimate stage/run token
+# cost in the dashboard. All rates are decimal USD PER 1,000,000 TOKENS.
 
-# Directory with custom prompt templates (overrides embedded defaults).
-# Recognized files: planning.md, implementation.md, review.md, summary.md,
-# autonomous.md, reflect.md, aggregate.md, prioritize.md, update.md.
-# The directory may be partial — any file that's absent falls back to the embedded
-# default, so you can override just the prompts you care about.
-# Default: "" (use embedded prompts)
-# prompts_dir: .afm/prompts/
+# Directory with custom prompt templates. Recognized files: planning.md, implementation.md, review.md,
+# summary.md, autonomous.md, reflect.md, aggregate.md, prioritize.md, update.md.
 
-# Docker mode — run afm and the agents inside a Docker container.
-# Enabled via this config or the AFM_USE_DOCKER=1 environment variable.
-# docker:
-#   # Enable Docker mode. nil/absent → falls back to $AFM_USE_DOCKER.
-#   # Default: false
-#   # enabled: true
-#
-#   # Docker image to run.
-#   # Default: "akopichin/afm:latest" (or $AFM_DOCKER_IMAGE)
-#   # image: akopichin/afm:latest
-#
-#   # Optional path to a file with secrets for autoShim auth.from lookups.
-#   # Default: "" (secrets are read from the global ~/.afm and the recipe's own paths)
-#   # secrets_file: ~/.afm/secrets.env
-#
-#   # autoShim: when set, afm generates claude wrappers for agents.<cmd> right inside
-#   # the container — without mounting the binary and without extra_mounts for tokens.
-#   # Requires an image built with autoShim support. A recipe = model + url +
-#   # system_prompt(file:) + auth{from,to}. auth.from is a file path or env:VAR that
-#   # afm reads the secret from ON THE HOST (the token value is never stored in the
-#   # config — it enters the container as a transient env var). auth.to ∈
-#   # {env:CLAUDE_CODE_OAUTH_TOKEN, env:ANTHROPIC_API_KEY, env:ANTHROPIC_AUTH_TOKEN}.
-#   # model is set for all three tiers. url is baked into the wrapper as
-#   # ANTHROPIC_BASE_URL (z.ai, deepseek — directly).
-#   # autoShim: true
-#   # agents:
-#   #   glm52:                                  # example (paths are real; no token in the config)
-#   #     model: glm-5.2
-#   #     url: https://api.z.ai/api/anthropic
-#   #     system_prompt: "file:~/.ai-free/claude-glm/system-prompt.md"
-#   #     auth:
-#   #       from: "file:~/.ai-free/claude-glm/token"
-#   #       to: "env:ANTHROPIC_AUTH_TOKEN"
-#   #   deepseek-v4:                            # docker-only (no host binary) + cross-gateway
-#   #     model: deepseek-v4-pro
-#   #     url: https://api.deepseek.com/anthropic
-#   #     auth:
-#   #       from: "file:~/.ai-free/claude-glm/token-deepseek"
-#   #       to: "env:ANTHROPIC_AUTH_TOKEN"
-#   #   cursor:                                # type:cursor → Cursor Cloud Agents API (NOT openai chat!)
-#   #     type: cursor                          # api.cursor.com has no /chat/completions — it's an
-#   #     model: auto                           # async run-based API: cursor-as-claude creates a
-#   #     url: https://api.cursor.com/v1        # no-repo Cloud Agent, polls the run, emits claude stream-json.
-#   #     auth:                                 # auth.to — any env:VAR; CURSOR_API_KEY by convention
-#   #       from: "file:~/.ai-free/claude-glm/token-cursor"
-#   #       to: "env:CURSOR_API_KEY"
-#   #   codex:                                 # type:codex → OpenAI Codex CLI, NO secret in the config:
-#   #     type: codex                           # auth via a mounted ~/.codex (ChatGPT-plan OAuth); afm
-#   #     model: gpt-5-codex                    # mounts it :ro only if the flow actually uses codex.
-#   #                                            # model is optional ("" / "default" → codex /
-#   #                                            # ~/.codex/config.toml decides).
-#   #     # auth: omitted for codex (the only type where auth is optional)
-#   #   # For providers with a real OpenAI /v1/chat/completions (deepseek, ollama, …) — type: openai:
-#   #   # openai-agent:
-#   #   #   type: openai-agent          # real tool-loop (autonomous/interactive stages)
-#   #   #   model: deepseek-chat
-#   #   #   url: https://api.deepseek.com/v1
-#   #   #   max_turns: 40               # openai-agent only: max tool-call iterations per invocation (default 40)
-#   #   #   auth: { from: "env:DEEPSEEK_KEY", to: "env:OPENAI_API_KEY" }
-#
-#   # Extra host directories for custom agents (tokens/configs outside ~/.claude,
-#   # e.g. ~/.ai-free for the GLM wrappers glm51/glm52). ~-paths → /home/afm/…,
-#   # absolute paths → the same path; all mounted read-only. With autoShim on, recipe
-#   # agents get their tokens via transient env — this mount isn't needed for them.
-#   #
-#   # extra_mounts accepts both the legacy scalar form (a bare path = browse:false, a
-#   # private mount) and the object form with an explicit browse — controlling which
-#   # mounts are visible in the dashboard file browser (see below) and which stay
-#   # hidden (credentials/tokens).
-#   # extra_mounts:
-#   #   - path: ../shared-contracts   # a neighboring code repository
-#   #     name: contracts             # optional UI label; default = basename(path)
-#   #     browse: true                # source mount — VISIBLE in the file browser (read-only)
-#   #   - path: ~/.ai-free             # credential mount
-#   #     browse: false                # mounted to the agent, but NOT visible in the file browser (default)
-#   #   - ~/.legacy-agent              # legacy scalar syntax — also means browse:false
-#
-#   # File browser: Docker mode only (it needs the manifest from the host launcher;
-#   # a plain host run without Docker doesn't have this feature at all —
-#   # /api/files/* returns 404 and there's no button in the dashboard).
-#   # Shows: a lazy source tree of the project mount + extra_mounts with browse:true,
-#   # text files with syntax highlighting (Go/TypeScript/JavaScript/Python),
-#   # a HEAD → working tree diff, and inserting [AFM file: "<container-path>"] refs
-#   # into plan/question comments (the agent reads the file itself; nothing is copied).
-#   # Always read-only: .git and .afm are hidden from the tree; no create/edit/delete
-#   # through the dashboard. Limits: file content ≤ 2 MiB (larger — "file too large",
-#   # but still referenceable), diff ≤ 4 MiB (truncated with a banner). Symlinks are
-#   # listed but not opened. On a Linux host with an old kernel (< 5.6, no openat2)
-#   # the feature degrades off automatically.
-#   #
-#   # ON by default — turn it off explicitly (enabled: false below) or via the
-#   # AFM_FILE_BROWSER env var. Priority: env AFM_FILE_BROWSER > config > default true.
-#   # AFM_FILE_BROWSER=1/true force-enables over the config, =0/false force-disables;
-#   # empty/unset → the config decides (enabled by default). The decision is made on
-#   # the host before Docker re-exec.
-#   #
-#   # IMPORTANT: a Docker run with a dashboard ALWAYS publishes the dashboard port on
-#   # loopback only (-p 127.0.0.1:<port>:<port>) instead of 0.0.0.0, so it is not
-#   # reachable from the LAN. The dashboard exposes unauthenticated mutating stage/flow
-#   # APIs (plus, optionally, the file browser and the side agent), so this boundary is
-#   # unconditional — disabling those features does NOT restore a 0.0.0.0 publish. For
-#   # remote access use an SSH tunnel to loopback.
-#   # file_browser:
-#   #   enabled: false   # opt-out; ON by default (env AFM_FILE_BROWSER overrides)
+# Docker mode — run afm and the agents inside a Docker container. Enabled via this config or the
+# AFM_USE_DOCKER=1 environment variable.
 
-# Dashboard side agent — the free-form chat alongside the run (see docs/dashboard.md).
-# ON by default. Priority: flow.yaml side_agent > env AFM_SIDEAGENT > config > default true.
-# AFM_SIDEAGENT=1/true force-enables over the config, =0/false force-disables.
-# When off, the /api/side-agent* routes are not registered, the capability reports
-# false, and the header button is hidden. This does NOT change the loopback bind above.
-# side_agent:
-#   enabled: false
+# Dashboard side agent — the free-form chat alongside the run. ON by default.
 
-# Accounting DISPLAY switch (cost/usage).
-# Controls only whether cost is SHOWN: the dashboard cost tile/tab/rail, the
-# TOKENS/CACHE/EST. COST columns in `afm check`, and `afm report`. Collection
-# into .afm/runs/<run>/usage.jsonl keeps running regardless — the data is still
-# there, so turning display back on reveals past runs too (AFM_ACCOUNTING=1 afm report).
-# ON by default. Priority: env AFM_ACCOUNTING > config > default true.
-# AFM_ACCOUNTING=1/true force-shows, =0/false force-hides; empty/unset → config decides.
-# accounting:
-#   enabled: false   # hide cost everywhere (data still collected)
+# Accounting DISPLAY switch. Controls only whether cost is SHOWN: the dashboard cost tile/tab/rail, the
+# TOKENS/CACHE/EST.
 
-# Verify gate — how many verify rejections (needs_changes) are tolerated before a
-# stage fails. max_failures = the number of retry-corrections the author gets:
-# 1 (default) allows exactly one correction, then fails on the second rejection;
-# 0 fails on the very first rejection; 3 allows up to three corrections.
-# This global value is the fallback; a stage overrides it inside its own verify
-# block using the container form:
-#   verify:
-#     steps:
-#       - run: go test ./...
-#       - command: codex
-#     max_failures: 3
-#     review_patience: 2
-# Default: 1
-#
-# review_patience — stalemate backstop for an AI reviewer that keeps finding ever-
-# subtler refinements. When a rejection is the N-th CONSECUTIVE one that left the
-# working tree unchanged (the author stopped editing in response to review), afm
-# accepts the stage as complete instead of looping to failure. Only an AI step with
-# no shell step after it can be accepted this way (a red test is never accepted).
-# Default: 0 (disabled). For it to engage you need max_failures >= review_patience.
-# verify:
-#   max_failures: 1
-#   review_patience: 0
+# Verify gate — how many verify rejections are tolerated before a stage fails. Only an AI step with no
+# shell step after it can be accepted this way (a red test is never accepted).
 
-# Managed Chrome DevTools browser capability (afm_chrome MCP). afm drives a real
-# Chrome on the host so a stage agent can run the app for real ("живой прогон"),
-# both in Docker and when afm runs natively. Chrome launches lazily on the agent's
-# first browser tool call; its lifetime ends with the run.
-# enabled: omitted = auto (tools offered on a supported host with Chrome; degrades
-#   silently on a CLI/API-only host); true = on (preflight must succeed or the run
-#   fails); false = fully off. Env AFM_BROWSER=1/0 overrides the config.
-# A per-stage opt-out lives in the flow: `browser: false` on a stage.
-# browser:
-#   enabled: true
-#   headless: false
-#   app_port: 18080            # the tested app is served here; must differ from server.port
-#   executable_path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# Managed Chrome DevTools browser capability. afm drives a real Chrome on the host so a stage agent can
+# run the app for real ("живой прогон"), both in Docker and when afm runs natively.

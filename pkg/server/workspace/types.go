@@ -1,13 +1,11 @@
-// Package workspace defines the domain core for the Docker project file
-// browser: value types shared between the filesystem backend (FS) and the
-// HTTP handlers that serve them directly as JSON.
+// Package workspace defines the domain core for the Docker project file browser: value types shared
+// between the filesystem backend (FS) and the HTTP handlers that serve them directly as JSON.
 package workspace
 
 import "time"
 
-// Root is a browsable project root (e.g. the workspace root, an .afm run
-// directory, ...). It is internal — never serialized — and holds the
-// absolute path inside the container.
+// Root is a browsable project root (e.g. the workspace root, an .afm run directory, ...). It is internal —
+// never serialized — and holds the absolute path inside the container.
 type Root struct {
 	ID, Label, Path, Kind string
 	MountReadOnly         bool
@@ -31,20 +29,14 @@ type Entry struct {
 	Selectable bool   `json:"selectable"`
 }
 
-// Page is a (possibly partial) directory listing with cursor-based
-// pagination. Truncated is distinct from NextCursor: it's true when the
-// directory itself had more raw entries than the backend is willing to scan
-// in one call (see maxDirEntries in list.go) — a hard ceiling independent of
-// normal page-to-page cursor pagination.
+// Page is a directory listing with cursor-based pagination.
 type Page struct {
 	Entries    []Entry `json:"entries"`
 	NextCursor string  `json:"next_cursor,omitempty"`
 	Truncated  bool    `json:"truncated,omitempty"`
 }
 
-// SearchResult is a flat, ranked list of files matching a search query inside
-// one root. It deliberately has no pagination cursor (search returns a bounded
-// top-N in one shot); Truncated is true when any scan/result limit was hit.
+// SearchResult is a flat, ranked list of files matching a search query inside one root.
 type SearchResult struct {
 	Entries   []Entry `json:"entries"`
 	Truncated bool    `json:"truncated,omitempty"`
@@ -81,8 +73,6 @@ type Diff struct {
 }
 
 // ChangeStatus is the git-derived state of a file in a changed-files listing.
-// Deliberately a separate vocabulary from Diff.Status (which also has "clean"
-// and describes a different object at a different moment).
 type ChangeStatus string
 
 const (
@@ -91,9 +81,8 @@ const (
 	ChangeDeleted  ChangeStatus = "deleted"
 )
 
-// Change is one file in a changed-files listing. Selectable is true only for a
-// path that is currently a regular file (a deleted/vanished/symlink/dir/special
-// path is listed but not openable).
+// Change is one file in a changed-files listing. Selectable is true only for a path that is currently a
+// regular file (a deleted/vanished/symlink/dir/special path is listed but not openable).
 type Change struct {
 	Name       string       `json:"name"`
 	Path       string       `json:"path"` // root-relative, slash-separated

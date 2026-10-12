@@ -213,10 +213,6 @@ func TestHandleArtifact_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
-// TestHandleArtifact_RejectsSymlinkedArtifactsDir is the P1 regression: the
-// `artifacts` directory itself is a symlink pointing outside the run dir. The
-// root is pinned at runDir and the full path resolved through it, so os.Root
-// refuses to follow the escaping `artifacts` component.
 func TestHandleArtifact_RejectsSymlinkedArtifactsDir(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 

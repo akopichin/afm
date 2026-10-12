@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// initTestRepo initializes a git repo in a fresh t.TempDir() with a local
-// user.email/name configured, so commits work without touching global git
-// config. Returns the repo root.
+// initTestRepo initializes a git repo in a fresh t.TempDir() with a local user.email/name configured, so
+// commits work without touching global git config. Returns the repo root.
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

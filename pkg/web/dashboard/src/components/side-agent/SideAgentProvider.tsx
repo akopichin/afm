@@ -3,9 +3,8 @@ import { useSideAgent, type SideAgentDeps } from '../../hooks/use-side-agent'
 import { useSideAgentShortcut } from '../../hooks/use-side-agent-shortcut'
 import { SideAgentModal } from './SideAgentModal'
 
-// Контекст для шапки/оболочки: показать ли кнопку (enabled), открыть беседу
-// (open), есть ли непросмотренный результат (unseenResult) и идёт ли запрос
-// (active). Дефолт — всё выключено (capability off / провайдер не смонтирован).
+// Контекст для шапки/оболочки: показать ли кнопку, открыть беседу, есть ли непросмотренный результат и
+// идёт ли запрос. Дефолт — всё выключено (capability off / провайдер не смонтирован).
 export type SideAgentContextValue = {
   enabled: boolean
   isOpen: boolean
@@ -47,10 +46,8 @@ export type SideAgentProviderProps = {
   children: ReactNode
 }
 
-// SideAgentProvider — владелец состояния беседы на уровне приложения. Держит
-// useSideAgent (source of truth), вешает глобальный хоткей и рендерит модалку
-// (смонтирована, пока enabled; видимостью управляет сама). Выключенная
-// capability делает провайдер полностью инертным, не меняя дерево для App.
+// SideAgentProvider — владелец состояния беседы на уровне приложения. Выключенная capability делает
+// провайдер полностью инертным, не меняя дерево для App.
 export function SideAgentProvider({ runId, enabled, blocked = false, onOpenChange, attentionShortcut = null, deps, children }: SideAgentProviderProps): ReactElement {
   const api = useSideAgent(runId, enabled, deps)
   const { isOpen, open, close } = api

@@ -2,10 +2,8 @@ import { useEffect, useState } from 'react'
 
 const TICK_INTERVAL_MS = 1000
 
-// Секундомер накопленного Idle-времени: accumulatedMs (пережившее restart,
-// см. RunState.IdleAccumulatedMs на бэкенде) плюс живая дельта с since, пока
-// флоу простаивает прямо сейчас (since не null). Пока /api/status не отвечает,
-// значение заморожено: локальный тик мог бы показать уже неверное состояние.
+// Секундомер накопленного Idle-времени: accumulatedMs плюс живая дельта с since, пока флоу простаивает
+// прямо сейчас.
 export function useIdleMs(accumulatedMs: number, since: string | null, statusLive: boolean): number {
   const [displayMs, setDisplayMs] = useState(accumulatedMs)
 

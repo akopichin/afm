@@ -123,15 +123,13 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	}
 	defer env.Close()
 
-	// Managed browser capability. In the container the manager runs on the host —
-	// we only rebuild the descriptor from transport env; natively we own the
-	// manager here for the run's lifetime.
+	// Managed browser capability. In the container the manager runs on the host — we only rebuild the
+	// descriptor from transport env; natively we own the manager here for the run's lifetime.
 	var browserDesc *browser.Descriptor
 	if config.ReExecedIntoContainer() {
 		browserDesc = descriptorFromEnv(true)
-		// The transport (incl. the secret token) has now been consumed into the
-		// descriptor; strip AFM_BROWSER_* from afm's own env so no child — not even
-		// a direct, non-executor spawn like memory.Commit's `git` — inherits it.
+		// Strip consumed AFM_BROWSER_* transport from afm's env so even direct child processes cannot inherit
+		// the token.
 		browser.UnsetTransportVars()
 	} else {
 		_, desc, browserCleanup, berr := startBrowser(cfg, browser.BrowserModeNative)
@@ -193,19 +191,13 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		hooksDisp.Start()
 	}
 
-	// Процессный ctx (Ctrl+C) создаётся ДО бокового агента и дашборда: агентские
-	// горутины бокового агента живут под собственным процессным ctx менеджера (не
-	// под ctx запроса), а Ctrl+C отменяет и флоу, и ожидание дренажа бокового хода.
+	// Создаём процессный ctx до бокового агента и дашборда: Ctrl+C отменяет флоу и ожидание завершения
+	// бокового хода.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// Боковой агент дашборда поднимается, когда поднят дашборд И не выключен
-	// переключателем (flow.side_agent > AFM_SIDEAGENT > config side_agent.enabled >
-	// по умолчанию ВКЛ). Когда выключен — менеджер не создаётся, side.service()
-	// отдаёт nil-интерфейс: маршруты /api/side-agent* не регистрируются, capability
-	// гаснет, фронтенд-панель прячется. Жёсткий сбой открытия журнала не валит ран —
-	// просто отключает боковой агент. Loopback-граница от этого НЕ зависит (см.
-	// dashboardListenAddr / launcher — она безусловна из-за мутирующих stage/flow API).
+	// Боковой агент дашборда поднимается, когда поднят дашборд И не выключен переключателем. Жёсткий сбой
+	// открытия журнала не валит ран — просто отключает боковой агент.
 	var side *sideAgentRuntime
 	var sideDrained bool
 	if cfg.Server.GetPort() > 0 && sideAgentEnabled(cfg, f) {
@@ -214,8 +206,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 			fmt.Fprintf(os.Stderr, "warning: side agent disabled: %v\n", err)
 		}
 	}
-	// Журнал/учёт закрываются ПОСЛЕ остановки сервера (srv.Shutdown снимает
-	// SSE-подписки) и только если агент дренирован. Регистрируем ДО defer
+	// Журнал/учёт закрываются ПОСЛЕ остановки сервера и только если агент дренирован. Регистрируем ДО defer
 	// srv.Shutdown — LIFO выполнит closeStores уже после srv.Shutdown.
 	defer func() { side.closeStores(sideDrained) }()
 
@@ -248,8 +239,6 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		waitForDashboardDrain(ctx, srv.ConnectedClients)
 	}
 	// Штатное завершение: ждём активный боковой ход без 2-минутного колпака.
-	// Если Ctrl+C пришёл во время дренирования — shutdownAfterFlow эскалирует к
-	// аварийному завершению (interrupt), чтобы подпроцесс не пережил выход.
 	sideDrained = side.shutdownAfterFlow(ctx, sideAgentEmergencyDrain)
 	return nil
 }
@@ -310,9 +299,8 @@ func resolveRun(f *flow.Flow) (runDir string, store *state.Store, err error) {
 	return
 }
 
-// newRunID строит уникальный id run: timestamp секундной гранулярности плюс
-// короткий случайный суффикс, чтобы два запуска в одну секунду не делили
-// одну директорию и один events.jsonl.
+// newRunID строит уникальный id run: timestamp секундной гранулярности плюс короткий случайный суффикс,
+// чтобы два запуска в одну секунду не делили одну директорию и один events.jsonl.
 func newRunID(flowName string) string {
 	ts := time.Now().Format("20060102-150405")
 	b := make([]byte, 2)

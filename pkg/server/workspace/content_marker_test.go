@@ -2,9 +2,6 @@ package workspace
 
 import "testing"
 
-// TestBuildMarker runs on every platform (pure function, no filesystem) —
-// unlike content_test.go's Linux-only end-to-end test, this gives real
-// RED/GREEN evidence on a non-Linux dev host.
 func TestBuildMarker(t *testing.T) {
 	cases := map[string]string{
 		"/workspace/a.go":          `[AFM file: "/workspace/a.go"]`,

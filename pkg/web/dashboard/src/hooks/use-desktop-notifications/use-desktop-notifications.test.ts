@@ -78,13 +78,8 @@ describe('useDesktopNotifications', () => {
   })
 
   it('повторный вопрос ТОЙ ЖЕ стадии уведомляет заново, даже если промежуточный не-attention снимок не наблюдался (баг: полёшка пропустила running между q1 и q2)', () => {
-    // Реальный сценарий из репорта: агент интерактивной стадии задаёт вопрос
-    // (q1), пользователь отвечает (awaiting_user_input → running), агент тут же
-    // задаёт следующий (q2, running → awaiting_user_input). Обе транзакции
-    // меняют updatedAt, но опрос /api/status (раз в 3с) может НЕ застать
-    // промежуточный `running` — фронт видит awaiting(q1) → awaiting(q2). Раньше
-    // notifiedStageIds ключился только по stage.id и очищался лишь когда фронт
-    // НАБЛЮДАЛ выход из attention, поэтому q2 глушился как «уже уведомляли».
+    // Реальный сценарий из репорта: агент интерактивной стадии задаёт вопрос, пользователь отвечает, агент
+    // тут же задаёт следующий.
     const onFocusStage = vi.fn()
     const { rerender } = renderHook(({ stages }) => useDesktopNotifications(stages, onFocusStage), {
       initialProps: { stages: [stage('awaiting_user_input', 's', 't1')] },
@@ -222,9 +217,8 @@ describe('useDesktopNotifications', () => {
     })
 
     it('does not notify when opening an already-finished run (useStatus starts as [] then a finished snapshot)', () => {
-      // Real app path: useStatus's first render is stages:[] (no data yet), then
-      // the first /api/status snapshot is already terminal. Must NOT notify — the
-      // run finished before the tab was opened.
+      // Real app path: useStatus's first render is stages:[] (no data yet), then the first /api/status
+      // snapshot is already terminal. Must NOT notify — the run finished before the tab was opened.
       const { rerender } = render([])
       rerender({ s: [stage('done', 'a'), stage('failed', 'b')] })
       expect(MockNotification.instances.filter((n) => /flow/i.test(n.title))).toHaveLength(0)

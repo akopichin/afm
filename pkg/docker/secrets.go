@@ -17,9 +17,8 @@ func homeDir() string {
 	return h
 }
 
-// ResolveSystemPrompt читает содержимое ссылки system_prompt вида "file:PATH".
-// Пустая ссылка → ("", nil) (sysprompt не задан). ~ раскрывается относительно
-// домашнего каталога хоста.
+// ResolveSystemPrompt читает содержимое ссылки system_prompt вида "file:PATH". Пустая ссылка → ("", nil)
+// (sysprompt не задан). ~ раскрывается относительно домашнего каталога хоста.
 func ResolveSystemPrompt(ref string) (string, error) {
 	if ref == "" {
 		return "", nil
@@ -35,10 +34,8 @@ func ResolveSystemPrompt(ref string) (string, error) {
 	return string(data), nil
 }
 
-// LoadSecretLayers собирает map секретов из слоёв по умолчанию (глобальный
-// ~/.afm/secrets.env + проектный <projectDir>/.afm/secrets.env) либо из файла
-// override, если он задан. Вызывается только на хосте. Exported, чтобы внешний
-// тестовый пакет docker_test мог обращаться к функции напрямую.
+// LoadSecretLayers собирает map секретов из слоёв по умолчанию либо из файла override, если он задан.
+// Вызывается только на хосте.
 func LoadSecretLayers(override, projectDir string) (map[string]string, error) {
 	var files []string
 	if override != "" {

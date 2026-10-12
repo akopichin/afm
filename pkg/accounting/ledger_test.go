@@ -62,13 +62,6 @@ func TestBuildRecordUnknownModelUnpriced(t *testing.T) {
 	}
 }
 
-// TestBuildRecordPartialOverrideUnknownModelMissingCategoryUnpriced verifies
-// FINDING 1's completeness rule end-to-end: a user config overrides a
-// category on an UNKNOWN model (no builtin to fill the gap), but the
-// observation actually uses a category with no configured rate. BuildRecord
-// must mark the record unpriced (Priced=false, cost 0) rather than compute a
-// misleadingly partial total that silently treats the uncovered category as
-// free.
 func TestBuildRecordPartialOverrideUnknownModelMissingCategoryUnpriced(t *testing.T) {
 	four := Rate(4.0)
 	twenty := Rate(20.0)
@@ -93,17 +86,6 @@ func TestBuildRecordPartialOverrideUnknownModelMissingCategoryUnpriced(t *testin
 	}
 }
 
-// TestBuildRecordBuiltinCacheWriteOtherIsPriced is a regression test for a
-// bug introduced by the FINDING-1 fix: the builtin card() constructor never
-// set the generic CacheWrite rate, only CacheWrite5m/CacheWrite1h. When an
-// Anthropic usage line has no 5m/1h breakdown, normalize.go puts ALL
-// cache-creation tokens into CacheWriteOther, which is priced ONLY by the
-// generic CacheWrite rate (no TTL-specific fallback of its own, see
-// ResolvedRate.missingCategory/cost). With CacheWrite left nil, a fully
-// mainstream builtin model observation using only CacheWriteOther got
-// silently flipped to unpriced. card() now sets CacheWrite = the 1h rate, so
-// this must resolve priced with the CacheWriteOther bucket costed at that
-// fallback rate.
 func TestBuildRecordBuiltinCacheWriteOtherIsPriced(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	obs := Observation{

@@ -10,9 +10,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
-// TestResolvePlanSource фиксирует разрешение пути stage.Plan: относительный путь
-// (./plan.md) ищется в run-директориях стадий-зависимостей (где артефакты реально
-// лежат), с fallback на буквальный путь для pre-existing планов.
 func TestResolvePlanSource(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "init"), 0755); err != nil {
@@ -58,9 +55,6 @@ func TestResolvePlanSource(t *testing.T) {
 	}
 }
 
-// TestCollectDependencyPlans_AutonomousFallback проверяет, что для зависимости,
-// прошедшей автономный трек (есть autonomous.flag), контекст читается из
-// execution_summary.md, а не из plan.md.
 func TestCollectDependencyPlans_AutonomousFallback(t *testing.T) {
 	runDir := t.TempDir()
 

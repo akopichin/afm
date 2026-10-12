@@ -7,10 +7,7 @@ type DiffViewerProps = {
   error: Error | null
 }
 
-// Рендерит FileDiff построчно. НИКАКОГО dangerouslySetInnerHTML — в отличие
-// от FileViewer, строки диффа не подсвечиваются (unified diff — не исходный
-// код одного языка) и кладутся в DOM как обычные текстовые React-узлы, что
-// уже само по себе безопасно (React экранирует текст ребёнка).
+// Рендерит FileDiff построчно.
 export function DiffViewer({ diff, loading, error }: DiffViewerProps): ReactElement {
   if (loading) return <div className="file-viewer-hint">Loading diff…</div>
 
@@ -25,9 +22,8 @@ export function DiffViewer({ diff, loading, error }: DiffViewerProps): ReactElem
 
   if (diff.binary) return <div className="file-viewer-hint">Binary file — diff not shown</div>
 
-  // split('\n') на строке с завершающим \n (обычный случай unified diff)
-  // даёт лишний хвостовой '' элемент — убираем его, чтобы не рисовать пустую
-  // строку в конце; настоящие пустые context-строки внутри диффа не трогаем.
+  // split на строке с завершающим \n даёт лишний хвостовой '' элемент — убираем его, чтобы не рисовать
+  // пустую строку в конце; настоящие пустые context-строки внутри диффа не трогаем.
   const lines = diff.diff.length > 0 ? diff.diff.split('\n') : []
   if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   const hasChanges = diff.status !== 'clean' && lines.length > 0

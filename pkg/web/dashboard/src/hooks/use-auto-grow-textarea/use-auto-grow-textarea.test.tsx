@@ -23,12 +23,7 @@ function TestComponent({ value, maxHeight }: { value: string; maxHeight: number 
   return <textarea ref={ref} data-testid="textarea" defaultValue={value} />
 }
 
-// Mirrors PlanPanel/DialogChannel's actual pattern: the hook is called at the
-// parent's top level, but the textarea itself is rendered conditionally (only
-// when a comment form is "open") — so the DOM node does not exist yet at the
-// hook's own first render.
-// Mirrors PlanPanel/DialogChannel: a trailing action button as the
-// textarea's DOM nextElementSibling.
+// Model conditional textarea mounting with a trailing action button, as PlanPanel/DialogChannel do.
 function TestComponentWithSibling({ value, maxHeight }: { value: string; maxHeight: number }) {
   const ref = useAutoGrowTextarea(value, maxHeight)
   return (
@@ -88,9 +83,7 @@ describe('useAutoGrowTextarea', () => {
     try {
       const { rerender } = render(<TestComponent value="" maxHeight={400} />)
       const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
-      // Mount ran the layout effect once — it must NOT have scrolled the page
-      // (else a mounting textarea, e.g. the pending answer box, yanks the
-      // dialog to the bottom and overrides feed→dialog targeted navigation).
+      // Mount ran the layout effect once — it must NOT have scrolled the page.
       expect(spy).not.toHaveBeenCalled()
 
       // A subsequent value change (the user typing) DOES keep the field visible.
@@ -103,9 +96,8 @@ describe('useAutoGrowTextarea', () => {
   })
 
   it('does NOT scrollIntoView on mount even under StrictMode (layout effect replay)', () => {
-    // StrictMode double-invokes layout effects in dev; a "first effect run"
-    // counter would flip on the first pass and let the replay scroll. Tracking
-    // the value instead keeps mount silent across the replay.
+    // StrictMode double-invokes layout effects in dev; a "first effect run" counter would flip on the
+    // first pass and let the replay scroll.
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
     try {
       render(
@@ -230,10 +222,6 @@ describe('useAutoGrowTextarea', () => {
     Object.defineProperty(textarea, 'scrollHeight', { value: 500, configurable: true })
 
     // Rerender with a different value — height should stay locked at 250px.
-    // Against the old useRef([]) implementation, the ResizeObserver was never
-    // created (ref.current was null at mount), so lastObserver stays null,
-    // the trigger() above is a no-op, the lock never engages, and this would
-    // snap back to min(500, 400) = 400px instead of staying at 250px.
     rerender(<ConditionalTestComponent show={true} value="first draft, now much longer" maxHeight={400} />)
     expect(textarea.style.height).toBe('250px')
   })

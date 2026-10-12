@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestParseGitfile covers the pure gitfile parser on every platform (RED/GREEN
-// on darwin): a valid `gitdir:` line, surrounding whitespace, and the absence
-// of any gitdir line.
 func TestParseGitfile(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -33,10 +30,6 @@ func TestParseGitfile(t *testing.T) {
 	}
 }
 
-// TestGitDirFromEntry_Containment covers the containment gate with real temp
-// dirs (runs on darwin): a directory `.git`, a gitfile pointing inside the
-// root, a gitfile pointing outside the root (must be refused), a relative
-// gitfile resolved against absDir, and a non-regular/non-dir entry.
 func TestGitDirFromEntry_Containment(t *testing.T) {
 	root := t.TempDir()
 	absDir := filepath.Join(root, "sub")

@@ -509,9 +509,6 @@ func TestIntegration_PlanningPromptIncludesDependencyPlan(t *testing.T) {
 	}
 }
 
-// TestIntegration_PrePlannedStageWaitsForDeps verifies that a stage with plan:
-// and depends_on does NOT fail at startup when the plan file doesn't exist yet.
-// Instead it waits for its dependency to complete, then activates.
 func TestIntegration_PrePlannedStageWaitsForDeps(t *testing.T) {
 	// Create a plan file that the "implement" stage references.
 	// Initially it does NOT exist — "init" will "create" it.
@@ -554,10 +551,6 @@ func TestIntegration_PrePlannedStageWaitsForDeps(t *testing.T) {
 	}
 }
 
-// TestIntegration_PlanSavedToCustomFile: описание стадии просит агента сохранить
-// план в файл с произвольным именем. Агент пишет план через Write tool, а текстом
-// выводит лишь резюме. Оркестратор должен подхватить план из записанного файла,
-// а не проваливать стадию на валидации текстового вывода.
 func TestIntegration_PlanSavedToCustomFile(t *testing.T) {
 	planFile := filepath.Join(t.TempDir(), "my-custom-plan.md")
 	planContent := "## Tasks\n\n- [ ] step 1\n\n## Assumptions\n\n- none\n\n## Acceptance Criteria\n\n- [ ] works\n"

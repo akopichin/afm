@@ -1,17 +1,11 @@
 import { useEffect, useState } from 'react'
 
-// Типы input, которые являются click-control'ами, а не полем ввода: фокус на
-// них НЕ считается редактированием (клик по checkbox `Pause on focus` не должен
-// подавлять авто-открытие attention). Denylist, а не allowlist — исходное
-// поведение было «любой INPUT = editing», и доказанно ложен только чистый
-// click-control. Всё остальное (text/search/email/…/date/time/range/color/file,
-// отсутствующий/пустой/неизвестный type) остаётся редактированием: там
-// пользователь реально взаимодействует, и выдёргивать его так же неприятно.
+// Типы input, которые являются click-control'ами, а не полем ввода: фокус на них НЕ считается
+// редактированием.
 const CLICK_CONTROL_INPUT_TYPES = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'image'])
 
-// contenteditable в jsdom не реализует HTMLElement.isContentEditable (всегда
-// undefined) — поэтому обязателен fallback на атрибут, иначе ветка мертва и в
-// тестах, и в проде.
+// contenteditable в jsdom не реализует HTMLElement.isContentEditable (всегда undefined) — поэтому
+// обязателен fallback на атрибут, иначе ветка мертва и в тестах, и в проде.
 function isContentEditableElement(el: Element): boolean {
   return (
     (el as HTMLElement).isContentEditable === true ||
@@ -20,9 +14,8 @@ function isContentEditableElement(el: Element): boolean {
   )
 }
 
-// isEditableElement — чистый предикат «этот элемент — редактируемое поле?».
-// Принимает элемент аргументом (не читает document), поэтому тестируется без
-// фокус-возни. DENYLIST-семантика (см. CLICK_CONTROL_INPUT_TYPES).
+// isEditableElement — чистый предикат «этот элемент — редактируемое поле?». Принимает элемент аргументом
+// (не читает document), поэтому тестируется без фокус-возни.
 export function isEditableElement(el: Element | null): boolean {
   if (el === null) return false
   const tag = el.tagName
@@ -34,17 +27,13 @@ export function isEditableElement(el: Element | null): boolean {
   return isContentEditableElement(el)
 }
 
-// isEditableFocused — сейчас в фокусе редактируемый элемент? Используется для
-// suppression авто-открытия attention, чтобы не выдёргивать пользователя из
-// набора текста (rule 9).
+// isEditableFocused — сейчас в фокусе редактируемый элемент? Используется для suppression авто-открытия
+// attention, чтобы не выдёргивать пользователя из набора текста (rule 9).
 function isEditableFocused(): boolean {
   return isEditableElement(document.activeElement)
 }
 
 // useIsEditing — реактивный сигнал «сейчас в фокусе редактируемый элемент».
-// Пригоден как зависимость (обновляется по focusin/focusout), поэтому его можно
-// передать в workspace-редьюсер как suppressed: пока пользователь печатает,
-// прибывшее ожидание лишь светится на вкладке, но фокус из ввода не крадётся.
 export function useIsEditing(): boolean {
   // Lazy-init фактическим состоянием фокуса, а не жёстким false — иначе remount
   // при уже сфокусированном поле создал бы окно ложного auto-open.
@@ -62,10 +51,8 @@ export function useIsEditing(): boolean {
     }
   }, [])
 
-  // Reconcile после каждого commit (без массива зависимостей): если
-  // сфокусированный composer удаляется из DOM, focusout может не выстрелить, и
-  // editing застрял бы в true навсегда. Сверяемся с фактическим activeElement
-  // после мутаций DOM. setEditing с тем же значением — no-op в React (без цикла).
+  // Reconcile после каждого commit: если сфокусированный composer удаляется из DOM, focusout может не
+  // выстрелить, и editing застрял бы в true навсегда.
   useEffect(() => {
     setEditing(isEditableFocused())
   })

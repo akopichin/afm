@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Test: codex-as-claude.sh injects the afm_chrome MCP -c overrides for a normal
-# author pass (descriptor + launcher present) and NOT for a verify pass.
-# The codex binary is faked; it records its argv so we can assert the overrides.
+# Test: codex-as-claude.sh injects the afm_chrome MCP -c overrides for a normal author pass and NOT for a
+# verify pass.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

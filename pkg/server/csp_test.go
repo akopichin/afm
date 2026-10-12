@@ -13,9 +13,6 @@ import (
 	"github.com/akopichin/afm/pkg/web"
 )
 
-// TestServeIndex_SetsCSP проверяет, что документ дашборда отдаётся с CSP —
-// browser-level рубеж против эксфильтрации через внешние картинки (img-src
-// 'self' data:) даже при регрессе renderer-глушилки.
 func TestServeIndex_SetsCSP(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -39,11 +36,6 @@ func TestServeIndex_SetsCSP(t *testing.T) {
 	}
 }
 
-// TestDashboardCSP_InlineScriptHashMatches — guard: sha256 инлайн-скрипта темы
-// из встроенного index.html должен присутствовать в script-src. Если инлайн-
-// скрипт index.html поменяется (а хэш в dashboardCSP забудут обновить) — CSP
-// заблокирует его в браузере, тема не применится на первом кадре. Тест ловит
-// это в CI, а не в проде.
 func TestDashboardCSP_InlineScriptHashMatches(t *testing.T) {
 	indexBytes, err := fs.ReadFile(web.FS, "index.html")
 	if err != nil {

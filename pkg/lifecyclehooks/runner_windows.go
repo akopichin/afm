@@ -7,10 +7,8 @@ import (
 	"syscall"
 )
 
-// killProcessGroup: на Windows нет аналога отрицательного PID (нужен был бы
-// CREATE_NEW_PROCESS_GROUP при Start), поэтому сигналим только прямому
-// потомку. Реальные цели деплоя afm (Docker/macOS/Linux) идут через
-// runner_unix.go.
+// killProcessGroup: на Windows нет аналога отрицательного PID, поэтому сигналим только прямому потомку.
+// Реальные цели деплоя afm (Docker/macOS/Linux) идут через runner_unix.go.
 func killProcessGroup(cmd *exec.Cmd, sig syscall.Signal) {
 	if cmd.Process == nil {
 		return

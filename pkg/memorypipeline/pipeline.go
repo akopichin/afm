@@ -1,8 +1,7 @@
 package memorypipeline
 
-// Pipeline holds the wiring shared by all memory-pipeline operations run
-// against one memory-rebuild attempt: the seam that actually runs a step's
-// agent (AgentRunner).
+// Pipeline holds the wiring shared by all memory-pipeline operations run against one memory-rebuild
+// attempt: the seam that actually runs a step's agent (AgentRunner).
 type Pipeline struct {
 	run AgentRunner
 }
@@ -16,9 +15,8 @@ func WithRunner(r AgentRunner) Option {
 	return func(p *Pipeline) { p.run = r }
 }
 
-// New builds a Pipeline. By default it runs agents via NewExecRunner(agent,
-// prompts); overridable via Option (WithRunner) so tests never spawn a real
-// process.
+// New builds a Pipeline. By default it runs agents via NewExecRunner(agent, prompts); overridable via
+// Option (WithRunner) so tests never spawn a real process.
 func New(prompts Prompts, agent AgentConfig, opts ...Option) *Pipeline {
 	p := &Pipeline{
 		run: NewExecRunner(agent, prompts),

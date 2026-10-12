@@ -2,16 +2,13 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
 
 type FeedComposerProps = {
-  // Стадия, живому агенту которой уйдёт заметка. Также key этого компонента в
-  // FeedWorkspace — смена стадии даёт свежий пустой черновик (черновик не
-  // «переедет» в другую стадию) и инвалидирует зависшие attach-колбэки.
+  // Стадия, живому агенту которой уйдёт заметка.
   stageId: string
   // onSend ОБЯЗАН отклоняться (reject) при неудаче доставки — тогда черновик
   // сохраняется. Резолв = заметка ушла, поле очищается.
   onSend: (text: string) => Promise<void>
-  // Ответ на мысль агента: текст цитируемой мысли (null/undefined — обычная
-  // свободная заметка, чипа нет). Родитель (FeedWorkspace) деривит его из
-  // activeReply, поэтому здесь достаточно строки/null.
+  // Ответ на мысль агента: текст цитируемой мысли. Родитель (FeedWorkspace) деривит его из activeReply,
+  // поэтому здесь достаточно строки/null.
   replyQuote?: string | null
   // Ключ цитируемой мысли — возвращается родителю в onSent, чтобы тот сбросил
   // reply-таргет race-safe (только если цель всё ещё та же).
@@ -25,9 +22,8 @@ type FeedComposerProps = {
   // Состояние toggle «Pause on focus» и его переключатель.
   pauseOnFocusEnabled?: boolean
   onTogglePauseOnFocus?: (v: boolean) => void
-  // paused — эта стадия сейчас на паузе И поставлена на неё нами (родитель
-  // считает status==='paused' && isOwned). Показывает янтарный баннер + тонирует
-  // строку ввода/кнопку.
+  // paused — эта стадия сейчас на паузе И поставлена на неё нами (родитель считает status==='paused' &&
+  // isOwned). Показывает янтарный баннер + тонирует строку ввода/кнопку.
   paused?: boolean
   // Фокус/blur поля ввода: родитель ставит/снимает паузу. onBlur сообщает,
   // остался ли непустой черновик (при нём паузу НЕ снимаем — Send сам возобновит).
@@ -37,12 +33,8 @@ type FeedComposerProps = {
   onResumeNow?: () => void
 }
 
-// buildReplyBody собирает тело Revise для ответа на мысль: цитата целиком как
-// Markdown-blockquote (каждая строка с префиксом `> `, включая пустые и уже
-// заквоченные/фенсовые), затем пустая строка и комментарий пользователя. Без
-// цитаты (quote === null) — просто триммированный комментарий (сегодняшнее
-// поведение свободной заметки). CRLF нормализуется в LF ДО префиксинга, иначе
-// заквоченная строка получила бы хвостовой `\r`.
+// buildReplyBody собирает тело Revise для ответа на мысль: цитата целиком как Markdown-blockquote, затем
+// пустая строка и комментарий пользователя.
 export function buildReplyBody(quote: string | null, comment: string): string {
   const c = comment.trim()
   if (quote === null) return c
@@ -54,12 +46,8 @@ export function buildReplyBody(quote: string | null, comment: string): string {
   return `${q}\n\n${c}`
 }
 
-// FeedComposer — messenger-поле ввода заметки живому агенту, прибитое к низу
-// ленты. Растущая textarea + Attach (вставка/загрузка картинок, опционально
-// файлы проекта в Docker) — всё из общего PasteableTextarea, как в
-// AgentNoteModal. Отправка кнопкой ✈ или Cmd/Ctrl+Enter; пустой текст — no-op.
-// Доставка идёт через существующий Revise (graceful-пауза + feedback.md) — сам
-// вызов задаёт FeedWorkspace/App.
+// FeedComposer — messenger-поле ввода заметки живому агенту, прибитое к низу ленты. Доставка идёт через
+// существующий Revise (graceful-пауза + feedback.md) — сам вызов задаёт FeedWorkspace/App.
 export function FeedComposer({
   stageId,
   onSend,
@@ -80,9 +68,8 @@ export function FeedComposer({
 
   const empty = value.trim() === ''
 
-  // Выбор мысли (клик по ↩) — переводим фокус в поле ввода, чтобы Cmd/Ctrl+Enter
-  // сразу отправлял ответ, не требуя лишнего клика в textarea (иначе фокус
-  // остаётся на кнопке ↩ и хоткей не доходит до обработчика textarea).
+  // Выбор мысли — переводим фокус в поле ввода, чтобы Cmd/Ctrl+Enter сразу отправлял ответ, не требуя
+  // лишнего клика в textarea.
   useEffect(() => {
     if (replyKey === undefined) return
     rootRef.current?.querySelector<HTMLTextAreaElement>('.feed-composer-textarea')?.focus()
@@ -95,9 +82,8 @@ export function FeedComposer({
     setSending(true)
     try {
       await onSend(body)
-      // Очищаем ТОЛЬКО если пользователь не набрал новый текст поверх, пока шла
-      // отправка (поле остаётся редактируемым) — иначе затрём свежий черновик.
-      // Снимок сравниваем с сырым value (submitted), не с body.
+      // Очищаем ТОЛЬКО если пользователь не набрал новый текст поверх, пока шла отправка — иначе затрём
+      // свежий черновик. Снимок сравниваем с сырым value (submitted), не с body.
       setValue((cur) => (cur === submitted ? '' : cur))
       // Сообщаем родителю ключ отправленной мысли — он сбросит reply-таргет
       // только если цель всё ещё та же (race-safe, см. FeedWorkspace).

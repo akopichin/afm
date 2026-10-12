@@ -202,9 +202,7 @@ func TestAggregateChanges_DeletedPlusUntrackedCollapsesToModified(t *testing.T) 
 	if len(got) != 1 {
 		t.Fatalf("want 1 entry, got %+v", got)
 	}
-	// aggregateChanges collapses the pair to a single "modified"; Selectable is
-	// no longer resolved here (resolveSelectable does that on the capped
-	// survivors — verified end-to-end in TestChanges_* against a real repo).
+	// aggregateChanges collapses the pair to a single "modified"; Selectable is no longer resolved here.
 	if got[0].Status != ChangeModified {
 		t.Fatalf("want modified, got %+v", got[0])
 	}
@@ -248,9 +246,6 @@ func TestHeadState(t *testing.T) {
 	}
 }
 
-// TestHeadState_CorruptHeadIsError proves the unborn/corrupt distinction: a HEAD
-// whose commit object is missing must be a read error, NOT silently treated as
-// unborn (which would mislabel a damaged repo's whole tree as "added").
 func TestHeadState_CorruptHeadIsError(t *testing.T) {
 	dir := t.TempDir()
 	gitInit(t, dir)
@@ -280,10 +275,6 @@ func TestHeadState_CorruptHeadIsError(t *testing.T) {
 	}
 }
 
-// TestChanges_StagedDiffersBetweenModes locks in the one semantic difference
-// between the two modes: a fully-staged edit (worktree == index) is absent from
-// Unstaged (worktree-vs-index) but present in vs HEAD (worktree-vs-HEAD). The
-// existing matrix test only exercises unstaged edits, where the modes agree.
 func TestChanges_StagedDiffersBetweenModes(t *testing.T) {
 	dir := t.TempDir()
 	gitInit(t, dir)
@@ -321,9 +312,6 @@ func TestChanges_StagedDiffersBetweenModes(t *testing.T) {
 	}
 }
 
-// TestChanges_IgnoresAmbientGitEnv proves the env-sanitization hardening: an
-// ambient GIT_INDEX_FILE pointing at a different repo's index must not leak
-// phantom paths into this root's listing.
 func TestChanges_IgnoresAmbientGitEnv(t *testing.T) {
 	dir := t.TempDir()
 	gitInit(t, dir)
@@ -471,13 +459,6 @@ func TestChanges_UnbornRepoExcludesCachedDeleted(t *testing.T) {
 	}
 }
 
-// TestChanges_SymlinkAtChangedPath_NotSelectable is the security-critical case
-// for isSelectable: git output is untrusted, so a changed path must not be
-// treated as viewable just because git reports it. A tracked regular file
-// replaced on disk by a symlink is reported by git as a typechange ('T',
-// mapped to ChangeModified) — the entry must still be listed (so the user sees
-// something changed there) but Selectable must be false, because the real
-// openat2 (RESOLVE_NO_SYMLINKS) refuses to follow the symlink.
 func TestChanges_SymlinkAtChangedPath_NotSelectable(t *testing.T) {
 	dir := t.TempDir()
 	gitInit(t, dir)
@@ -513,11 +494,6 @@ func TestChanges_SymlinkAtChangedPath_NotSelectable(t *testing.T) {
 	}
 }
 
-// TestValidGitPath unit-tests the untrusted-git-output path filter directly:
-// it must drop any path escaping the root, any absolute path, any hidden
-// service subtree, any NUL byte, and any invalid-UTF-8 byte sequence — git
-// output is attacker-influenced (a malicious repo could report a crafted
-// path) and none of this may reach the secure openat layer unfiltered.
 func TestValidGitPath(t *testing.T) {
 	fs := newFS(t, Root{ID: "r", Label: "root", Path: t.TempDir()})
 	defer fs.Close()

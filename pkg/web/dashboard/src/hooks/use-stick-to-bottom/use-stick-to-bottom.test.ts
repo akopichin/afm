@@ -17,9 +17,8 @@ describe('useStickToBottom', () => {
     Object.defineProperty(el, 'scrollHeight', { value: 500, configurable: true })
     el.scrollTop = 0
 
-    // Simulates DialogChannel: the container mounts (ref callback fires) only after
-    // history/pending content is already in the DOM, unlike a container that's
-    // always mounted from the first render.
+    // Simulates DialogChannel: the container mounts (ref callback fires) only after history/pending
+    // content is already in the DOM, unlike a container that's always mounted from the first render.
     act(() => {
       result.current.ref(el)
     })

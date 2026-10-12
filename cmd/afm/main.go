@@ -19,9 +19,8 @@ var debugEnabled bool
 // (Makefile build/install, Dockerfile.runtime ARG AFM_VERSION). По умолчанию "dev".
 var version = "dev"
 
-// fmDir возвращает путь к служебному каталогу .afm относительно rootDir.
-// rootDir задаётся флагом --dir, иначе переменной AFM_DIR, иначе "."
-// (PersistentPreRunE в корневой команде).
+// fmDir возвращает путь к служебному каталогу .afm относительно rootDir. rootDir задаётся флагом --dir,
+// иначе переменной AFM_DIR, иначе "." (PersistentPreRunE в корневой команде).
 func fmDir() string {
 	return filepath.Join(rootDir, config.AfmDir)
 }
@@ -36,9 +35,8 @@ func flowsDir() string {
 	return filepath.Join(fmDir(), "flows")
 }
 
-// resolveRootDir определяет базовую директорию для .afm по приоритету:
-// явный флаг --dir важнее переменной окружения AFM_DIR, а та важнее
-// текущей директории. dirFlag пуст, если флаг не задан.
+// resolveRootDir определяет базовую директорию для .afm по приоритету: явный флаг --dir важнее переменной
+// окружения AFM_DIR, а та важнее текущей директории. dirFlag пуст, если флаг не задан.
 func resolveRootDir(dirFlag, envDir string) string {
 	switch {
 	case dirFlag != "":
@@ -67,11 +65,7 @@ func main() {
 	os.Exit(runMain(os.Args[1:]))
 }
 
-// runMain выполняет корневую команду и переводит любой ошибочный результат
-// в код завершения процесса, сам не вызывая os.Exit — так main() остаётся
-// тонкой обёрткой, а сам перевод error → exit code проверяем в тестах
-// (включая настоящий процесс, см. exit_test.go) без падения тестового
-// бинаря.
+// runMain возвращает код завершения команды без os.Exit, чтобы его можно было проверить в тестах.
 func runMain(args []string) int {
 	root := newRootCmd()
 	root.SetArgs(args)
@@ -82,10 +76,7 @@ func runMain(args []string) int {
 
 	var subprocessErr *docker.SubprocessExitError
 	if errors.As(err, &subprocessErr) {
-		// Код завершения docker-контейнера (в т.ч. 0 — успех) передаётся
-		// через error-канал Cobra чисто как транспорт для os.Exit(code) в
-		// main; это не настоящая ошибка пользователя, поэтому подавляем
-		// её через SilenceErrors/SilenceUsage на root и не печатаем здесь.
+		// Возвращаем код завершения контейнера, включая сигнальный выход.
 		return subprocessErr.Code
 	}
 
@@ -98,10 +89,7 @@ func runMain(args []string) int {
 	}
 
 	cmd.PrintErrln(cmd.ErrPrefix(), err.Error())
-	// Usage goes to STDERR, never stdout: `afm browser mcp` is a stdio JSON-RPC
-	// server whose stdout carries the MCP protocol, so a usage dump on stdout on a
-	// startup error would corrupt the client's handshake. Usage-on-error belongs on
-	// stderr for every command anyway.
+	// Send usage to stderr: stdout belongs to the browser MCP's JSON-RPC transport.
 	cmd.PrintErrln(cmd.UsageString())
 	return 1
 }

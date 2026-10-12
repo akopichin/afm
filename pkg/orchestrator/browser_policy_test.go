@@ -108,9 +108,8 @@ func TestBrowserForStage_CodexFlag(t *testing.T) {
 	}
 }
 
-// afm-root != flow.root_dir (the Docker layout): the descriptor roots must carry
-// BOTH the project root and the stage dir so the MCP can read the project and
-// write artifacts.
+// afm-root != flow.root_dir (the Docker layout): the descriptor roots must carry BOTH the project root and
+// the stage dir so the MCP can read the project and write artifacts.
 func TestBrowserForStage_RootsCoverProjectAndStageDir(t *testing.T) {
 	runDir := t.TempDir()
 	o := &Orchestrator{

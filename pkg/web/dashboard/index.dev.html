@@ -16,11 +16,7 @@
       })();
     </script>
     <link rel="stylesheet" href="/skins/graphite/index.css">
-    <!-- Структурный CSS «бокового» агента — ПОСТОЯННАЯ ссылка, сервер её не
-         подменяет (в отличие от skin-ссылки выше). Присутствует и для встроенных
-         тем, и для skin_dir: skin_dir заменяет основной stylesheet целиком,
-         поэтому доставлять этот слой через skin @import нельзя. Оформление — на
-         семантических токенах активной темы. -->
+    <!-- Постоянный CSS бокового агента подключается отдельно, поскольку skin_dir заменяет основной stylesheet. -->
     <link rel="stylesheet" href="/side-agent.css">
 </head>
 <body class="theme-graphite">

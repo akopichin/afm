@@ -2,10 +2,8 @@ package flow
 
 import "testing"
 
-// minimalFlowWithStageID строит минимальный валидный (во всём, кроме id)
-// флоу с одной нескриптовой стадией, чтобы изолированно проверить только
-// stageIDSafe-проверку id. Стадия несёт planning+implementation,
-// чтобы не упасть на более раннем "must have planning agent" чеке.
+// minimalFlowWithStageID строит минимальный валидный флоу с одной нескриптовой стадией, чтобы изолированно
+// проверить только stageIDSafe-проверку id.
 func minimalFlowWithStageID(id string) *Flow {
 	return &Flow{
 		Name: "f",
@@ -15,9 +13,8 @@ func minimalFlowWithStageID(id string) *Flow {
 	}
 }
 
-// minimalFlowWithReflect строит минимальный валидный флоу с включённой
-// памятью (Memory.Path непусто) и одной нескриптовой стадией с reflect,
-// чтобы изолированно проверить только path-safety проверку reflect.file.
+// minimalFlowWithReflect строит минимальный валидный флоу с включённой памятью и одной нескриптовой
+// стадией с reflect, чтобы изолированно проверить только path-safety проверку reflect.file.
 func minimalFlowWithReflect(reflectFile string) *Flow {
 	return &Flow{
 		Name:   "f",

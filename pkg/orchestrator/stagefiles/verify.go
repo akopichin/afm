@@ -14,20 +14,8 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
 
-// Пространство файлов AI-verify под стадией:
-//
-//	<stageDir>/verify/
-//	  latest.json                 # указатель "последняя проверка" для отображения —
-//	                               # НЕ разрешение на завершение стадии (пишет V4)
-//	  feedback.md                 # активные машинные замечания (провенанс), НЕ human-заметка
-//	  <verification-id>/
-//	    manifest.json             # метаданные + результаты шагов этого прохода
-//	    report.md                 # человекочитаемый отчёт по проходу
-//	    step-01/ command.log result.json
-//	    step-02/ agent.log agent.jsonl agent.stderr.log raw-result.json result.json
-//
-// Это только хранилище: пакет ничего не знает про то, что значит "стадия
-// завершена" — это решает V4/V5 (см. AcceptedResult и LoadActiveFeedback).
+// verify/ хранит latest.json, feedback.md и per-pass manifest/report/step-артефакты; latest не разрешает
+// завершение стадии.
 const (
 	verifyDirName     = "verify"
 	feedbackFileName  = "feedback.md"
@@ -37,15 +25,11 @@ const (
 	resultFileName    = "result.json"
 )
 
-// feedbackBudgetBytes — верхняя граница размера verify/feedback.md (не
-// report.md — тот всегда пишется целиком). Feedback инлайнится в контекст
-// следующего запуска агента, поэтому его размер ограничен; полный отчёт
-// всегда доступен по ссылке на диске.
+// feedbackBudgetBytes — верхняя граница размера verify/feedback.md.
 const feedbackBudgetBytes = 12 * 1024
 
-// feedbackTruncationMarker дописывается при обрезании feedback.md по
-// бюджету — явный сигнал человеку/агенту, что текст неполный и нужно
-// смотреть report.md по ссылке.
+// feedbackTruncationMarker дописывается при обрезании feedback.md по бюджету — явный сигнал
+// человеку/агенту, что текст неполный и нужно смотреть report.md по ссылке.
 const feedbackTruncationMarker = "\n\n… (обрезано, полный отчёт по ссылке)\n"
 
 // VerifyDir возвращает путь к каталогу verify-namespace стадии.
@@ -58,10 +42,7 @@ func verificationDir(stageDir, verID string) string {
 	return filepath.Join(VerifyDir(stageDir), verID)
 }
 
-// newVerificationID — сид генерации id прохода верификации. Пакетная
-// переменная (не константа), чтобы тесты могли подменить её на
-// детерминированную функцию и получать воспроизводимые id — то же самое
-// решение, что state.SavePreNote/newRunID применяют к времени/рандому.
+// newVerificationID — сид генерации id прохода верификации.
 var newVerificationID = func() string {
 	ts := time.Now().Format("20060102-150405")
 	b := make([]byte, 2)
@@ -69,10 +50,7 @@ var newVerificationID = func() string {
 	return fmt.Sprintf("v-%s-%s", ts, hex.EncodeToString(b))
 }
 
-// NewVerificationID возвращает уникальный id одного прохода верификации —
-// безопасный компонент пути (без "/", без пробелов). Это НЕ номер локальной
-// retry-попытки шага внутри прохода (за него отвечает stepIdx) — id меняется
-// только когда стадия запускает верификацию заново с нуля.
+// NewVerificationID возвращает уникальный id одного прохода верификации — безопасный компонент пути.
 func NewVerificationID() string {
 	return newVerificationID()
 }
@@ -102,10 +80,8 @@ type Manifest struct {
 	Steps          []ManifestStep `json:"steps"`
 }
 
-// atomicWriteFile пишет data во временный файл рядом с path и переименовывает
-// его на место — то же самое temp+rename, что state.SavePreNote (см.
-// pkg/state/state.go), без лишнего fsync: verify-файлы не входят в
-// событийный лог и не требуют его гарантий durability.
+// atomicWriteFile заменяет файл через temp+rename без fsync; verify-артефакты не имеют гарантий durability
+// событийного лога.
 func atomicWriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -121,19 +97,13 @@ func atomicWriteFile(path string, data []byte) error {
 	return nil
 }
 
-// SaveRawResult сохраняет сырой (ещё не разобранный/не принятый) ответ
-// модели в step-NN/raw-result.json. Пишется до валидации DecodeModelResult —
-// это единственный след того, что шаг вообще что-то вернул, если разбор или
-// проверка согласованности упадёт.
+// SaveRawResult сохраняет сырой ответ модели в step-NN/raw-result.json.
 func SaveRawResult(stageDir, verID string, stepIdx int, raw []byte) error {
 	path := filepath.Join(StepDir(stageDir, verID, stepIdx), rawResultFileName)
 	return atomicWriteFile(path, raw)
 }
 
-// SaveAcceptedResult атомарно сохраняет уже провалидированный результат в
-// step-NN/result.json. Наличие этого файла — единственный признак того, что
-// шаг "принят" (см. AcceptedResult) — raw-result.json без result.json значит
-// незавершённый/отклонённый разбор.
+// SaveAcceptedResult атомарно сохраняет уже провалидированный результат в step-NN/result.json.
 func SaveAcceptedResult(stageDir, verID string, stepIdx int, r verify.ModelResult) error {
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -143,10 +113,7 @@ func SaveAcceptedResult(stageDir, verID string, stepIdx int, r verify.ModelResul
 	return atomicWriteFile(path, data)
 }
 
-// AcceptedResult читает step-NN/result.json. ok=false означает "шаг не
-// принят" — либо result.json ещё не появился (шаг в процессе/упал до
-// сохранения), либо есть только raw-result.json без result.json
-// (частичный коммит: разбор начался, но не завершился успехом).
+// AcceptedResult читает step-NN/result.json.
 func AcceptedResult(stageDir, verID string, stepIdx int) (verify.ModelResult, bool, error) {
 	path := filepath.Join(StepDir(stageDir, verID, stepIdx), resultFileName)
 	data, err := os.ReadFile(path)
@@ -163,21 +130,14 @@ func AcceptedResult(stageDir, verID string, stepIdx int) (verify.ModelResult, bo
 	return r, true, nil
 }
 
-// WriteReport детерминированно рендерит человекочитаемый отчёт прохода в
-// verify/<id>/report.md. В отличие от feedback.md, отчёт никогда не
-// обрезается — это полный источник истины для человека, открывающего
-// проход вручную.
+// WriteReport детерминированно рендерит человекочитаемый отчёт прохода в verify/<id>/report.md.
 func WriteReport(stageDir, verID string, r verify.ModelResult, alias string, stepIdx int) error {
 	path := filepath.Join(verificationDir(stageDir, verID), reportFileName)
 	return atomicWriteFile(path, []byte(renderReport(r, alias, stepIdx)))
 }
 
-// ReportRelPath возвращает путь к report.md одного прохода верификации
-// ОТНОСИТЕЛЬНО каталога стадии (<verify>/<verID>/report.md) — без stageDir.
-// Нужен pkg/server (V5b.3), чтобы резолвить отчёт через os.Root, закреплённый
-// на runDir (id стадии + verID приходят от клиента и уже провалидированы
-// как безопасные компоненты пути), не дублируя строковые литералы "verify"/
-// "report.md" в другом пакете.
+// ReportRelPath возвращает путь к report.md одного прохода верификации ОТНОСИТЕЛЬНО каталога стадии — без
+// stageDir.
 func ReportRelPath(verID string) string {
 	return filepath.Join(verifyDirName, verID, reportFileName)
 }
@@ -216,10 +176,8 @@ func renderFindingInto(b *strings.Builder, f verify.Finding) {
 	renderFindingDetailsInto(b, f)
 }
 
-// renderFindingDetailsInto пишет общий для report.md и feedback.md блок
-// "Требование/Свидетельство/Минимальное исправление" одного finding —
-// вызывающая сторона сама решает, что писать до него (заголовок, статус,
-// путь), т.к. эта часть в report.md и feedback.md разная.
+// renderFindingDetailsInto пишет общий блок finding для report и feedback; заголовок и путь задаёт
+// вызывающий код.
 func renderFindingDetailsInto(b *strings.Builder, f verify.Finding) {
 	fmt.Fprintf(b, "- Требование: %s\n", f.Requirement)
 	fmt.Fprintf(b, "- Свидетельство: %s\n", f.Evidence)
@@ -236,17 +194,12 @@ func WriteManifest(stageDir, verID string, m Manifest) error {
 	return atomicWriteFile(path, data)
 }
 
-// feedbackProvenancePrefix — начало HTML-комментария в шапке feedback.md, по
-// которому LoadActiveFeedback вычленяет verification_id. Формат:
-// "<!-- afm-verify verification_id=<verID> step=<stepIdx> -->".
+// feedbackProvenancePrefix — начало HTML-комментария в шапке feedback.md, по которому LoadActiveFeedback
+// вычленяет verification_id.
 const feedbackProvenancePrefix = "<!-- afm-verify verification_id="
 
-// WriteActiveFeedback пишет verify/feedback.md — активные машинные замечания
-// текущего прохода, отдельно от human-заметки <stageDir>/feedback.md.
-// Содержит вердикт, ссылку на полный report.md, провенанс (verID+stepIdx —
-// по нему LoadActiveFeedback/вызывающий код позже проверяют свежесть) и
-// текст каждого блокирующего finding. Обрезается по feedbackBudgetBytes
-// (report.md на диске при этом остаётся полным).
+// WriteActiveFeedback пишет verify/feedback.md — активные машинные замечания текущего прохода, отдельно от
+// human-заметки <stageDir>/feedback.md.
 func WriteActiveFeedback(stageDir, verID string, r verify.ModelResult, alias string, stepIdx int) error {
 	content := renderActiveFeedback(stageDir, verID, r, alias, stepIdx)
 	content = truncateUTF8(content, feedbackBudgetBytes, feedbackTruncationMarker)
@@ -284,9 +237,8 @@ func blockingFindings(fs []verify.Finding) []verify.Finding {
 	return out
 }
 
-// truncateUTF8 обрезает s до limit байт (включая marker), никогда не разрывая
-// многобайтовую руну посередине. Если s уже укладывается в limit — возвращает
-// s без изменений (marker не добавляется).
+// truncateUTF8 обрезает s до limit байт, никогда не разрывая многобайтовую руну посередине. Если s уже
+// укладывается в limit — возвращает s без изменений (marker не добавляется).
 func truncateUTF8(s string, limit int, marker string) string {
 	if len(s) <= limit {
 		return s
@@ -304,11 +256,8 @@ func truncateUTF8(s string, limit int, marker string) string {
 	return s[:cut] + marker
 }
 
-// LoadActiveFeedback читает verify/feedback.md. ok=false если файла нет
-// (нет активной обратной связи от верификатора — обычное состояние стадии
-// без запущенной проверки). verID вычленяется из провенанс-комментария в
-// шапке файла — по нему вызывающий код может сверить свежесть (совпадает ли
-// с id последнего завершённого прохода).
+// LoadActiveFeedback читает verify/feedback.md. ok=false если файла нет (нет активной обратной связи от
+// верификатора — обычное состояние стадии без запущенной проверки).
 func LoadActiveFeedback(stageDir string) (text string, verID string, ok bool) {
 	data, err := os.ReadFile(filepath.Join(VerifyDir(stageDir), feedbackFileName))
 	if err != nil {
@@ -330,10 +279,7 @@ func parseFeedbackVerificationID(text string) string {
 	return rest[:end]
 }
 
-// ClearActiveFeedback удаляет verify/feedback.md после того как стадия
-// целиком прошла проверку (или её результат больше не актуален). Архив
-// прохода в verify/<id>/ (manifest.json, report.md, шаги) не трогается —
-// это история, а feedback.md — только текущее активное состояние.
+// ClearActiveFeedback удаляет verify/feedback.md после того как стадия целиком прошла проверку.
 func ClearActiveFeedback(stageDir string) error {
 	path := filepath.Join(VerifyDir(stageDir), feedbackFileName)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

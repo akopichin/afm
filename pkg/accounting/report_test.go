@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// reportObsA is a realistic metered claude-cli invocation of a known
-// built-in model, used to build a couple of stage-attributed records for the
-// golden report test.
+// reportObsA is a realistic metered claude-cli invocation of a known built-in model, used to build a
+// couple of stage-attributed records for the golden report test.
 func reportObsA() Observation {
 	return Observation{
 		Metered: true,
@@ -37,12 +36,6 @@ func reportObsOverhead() Observation {
 	}
 }
 
-// TestRenderMarkdown_Golden builds a ledger with two stage-attributed
-// records (implementation + review of the same stage) plus one
-// run_overhead-scoped record, and asserts the rendered markdown contains the
-// stage row, its per-phase invocation counts and token breakdown, the Run
-// overhead section, the Total section, and the Coverage and pricing
-// appendix — the shape described in the task brief.
 func TestRenderMarkdown_Golden(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	led := &Ledger{}
@@ -82,12 +75,6 @@ func TestRenderMarkdown_Golden(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_ShowMoneyFalse verifies the presentation gate: with
-// showMoney=false the report keeps every token figure (per-stage, overhead,
-// total) but drops all monetary output — the "Est. Cost" column, the
-// "Estimated cost:" lines, any "$" amount, and the reported/estimated dollar
-// figures in the coverage mismatch section (the mismatch itself is still
-// reported by its warning token).
 func TestRenderMarkdown_ShowMoneyFalse(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	led := &Ledger{}
@@ -127,16 +114,6 @@ func TestRenderMarkdown_ShowMoneyFalse(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts is a targeted
-// regression for a bug found in review: renderOverhead called
-// phaseCounts(overhead, "") on a slice ALREADY filtered to
-// Scope==ScopeRunOverhead, but phaseCounts itself ALSO unconditionally
-// skipped any record with that scope (a guard meant to keep overhead out of
-// the per-stage table) — so the Run overhead section's phase/invocation
-// breakdown always rendered "—" instead of the real counts. This test would
-// have failed against the buggy code (which printed "—" here) and must pass
-// against the fix (phaseCounts no longer re-excludes what the caller
-// already scoped).
 func TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	led := &Ledger{}
@@ -158,11 +135,6 @@ func TestRenderMarkdown_OverheadPhaseBreakdownShowsActualCounts(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_NoUsageData covers both shapes a run without recorded
-// usage can take (a nil ledger, and a non-nil ledger with zero records —
-// what accounting.Load returns for a run predating this feature) and
-// asserts both render a clean, honest "no usage" report instead of crashing
-// or showing a bogus $0.00.
 func TestRenderMarkdown_NoUsageData(t *testing.T) {
 	for name, led := range map[string]*Ledger{
 		"nil ledger":   nil,
@@ -180,12 +152,6 @@ func TestRenderMarkdown_NoUsageData(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_CoverageAndPricing exercises the coverage appendix's
-// three call-outs: an unmetered invocation (with its reason), a metered but
-// unpriced invocation (unknown model, no rate resolved), and a
-// reported-vs-estimated cost mismatch surfaced via the record's own
-// warnings — none of which are computed by the renderer itself, only read
-// off the already-built UsageRecords.
 func TestRenderMarkdown_CoverageAndPricing(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 
@@ -233,12 +199,6 @@ func TestRenderMarkdown_CoverageAndPricing(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount verifies the
-// coverage appendix now groups identical unmetered/unpriced records via
-// aggregateIssues instead of listing one line per record — two identical
-// unpriced records for the same stage/phase/channel/model must render as a
-// single grouped line carrying "×2", not two separate lines each silently
-// implying a count of 1.
 func TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	unpricedRec := BuildRecord(r, Observation{
@@ -269,12 +229,6 @@ func TestRenderMarkdown_CoverageGroupsIdenticalGapsWithCount(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_DegradedCorrupt verifies the self-contained degraded
-// shape for a corrupt ledger: no bare "No usage data", but a title, the
-// caller-supplied FSM stage rows, and a note that plainly distinguishes
-// "corrupt" from "unreadable" or "missing" — all of it on stdout (the return
-// value here), since a caller redirecting `afm report > out.md` never sees
-// stderr.
 func TestRenderMarkdown_DegradedCorrupt(t *testing.T) {
 	stages := map[string]StageInfo{"backend": {Status: "done", Duration: "12m34s"}}
 
@@ -299,9 +253,6 @@ func TestRenderMarkdown_DegradedCorrupt(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_DegradedUnreadable mirrors
-// TestRenderMarkdown_DegradedCorrupt for the "other read error" case — the
-// note must never say "corrupt" for a cause that isn't a parse failure.
 func TestRenderMarkdown_DegradedUnreadable(t *testing.T) {
 	stages := map[string]StageInfo{"backend": {Status: "running"}}
 
@@ -325,11 +276,6 @@ func TestRenderMarkdown_DegradedUnreadable(t *testing.T) {
 	}
 }
 
-// TestLedger_CoverageIssues_SumsCountAcrossIdenticalRecords is the
-// pkg/accounting-level companion to the CLI's coverageNote test: two
-// identical unpriced records must aggregate into ONE CoverageIssue with
-// Count==2, never two separate issues (which would make a naive len(issues)
-// undercount).
 func TestLedger_CoverageIssues_SumsCountAcrossIdenticalRecords(t *testing.T) {
 	r := NewResolver(PricingConfig{})
 	rec := BuildRecord(r, Observation{

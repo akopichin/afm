@@ -17,11 +17,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// planningTrackingRunner wraps a Runner and counts RunPlanning invocations —
-// used to prove a resumed StatusRetrying stage routed straight to a fresh
-// implementation+verify pass, NOT through the CheckPlanCompletion/
-// NeedsPlanning "probably a stuck planning-retry" heuristic (which would
-// re-invoke planning).
+// planningTrackingRunner counts planning calls to prove retry recovery resumes execution directly.
 type planningTrackingRunner struct {
 	delegate       executor.Runner
 	planningCalled int32
@@ -42,14 +38,6 @@ func (r *planningTrackingRunner) RunJSONQuery(ctx context.Context, prompt string
 
 var _ executor.Runner = (*planningTrackingRunner)(nil)
 
-// TestIntegration_ResumeRunningWithDoneFile_RunsFreshVerifyGate is V5a.2's
-// core freshness regression [T17/T32/T33]: a stage recovered from a crash
-// with StatusRunning AND a pre-existing .done on disk must NOT be declared
-// done on the strength of that file alone when Verify is configured — .done
-// is the AUTHOR's own claim, not the verifier's verdict (see
-// stagefiles.CheckCompletion's doc comment). Before this fix,
-// resumeStageAtStatus's "recovered .done" fast path completed the stage
-// without ever invoking verify at all.
 func TestIntegration_ResumeRunningWithDoneFile_RunsFreshVerifyGate(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "impl1", Name: "Impl1",
@@ -63,10 +51,8 @@ func TestIntegration_ResumeRunningWithDoneFile_RunsFreshVerifyGate(t *testing.T)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// plan.md must already be on disk — the resumed implementation agent
-	// reads it unconditionally, same as a real post-approval crash would
-	// leave it (planning happened long before this point in the stage's
-	// life).
+	// plan.md must already be on disk — the resumed implementation agent reads it unconditionally, same as a
+	// real post-approval crash would leave it.
 	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("## Tasks\n- [ ] x\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -100,10 +86,6 @@ func TestIntegration_ResumeRunningWithDoneFile_RunsFreshVerifyGate(t *testing.T)
 	}
 }
 
-// TestIntegration_ResumeRetryingAutonomousWithSummary_RunsFreshVerifyGate is
-// the StatusRetrying/autonomous counterpart: execution_summary.md already on
-// disk from before a crash must still go through a fresh gate — including the
-// one-free-retry correction cycle if that fresh gate rejects.
 func TestIntegration_ResumeRetryingAutonomousWithSummary_RunsFreshVerifyGate(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "auto1", Name: "Auto1",
@@ -159,13 +141,6 @@ func TestIntegration_ResumeRetryingAutonomousWithSummary_RunsFreshVerifyGate(t *
 	}
 }
 
-// TestIntegration_ResumeRunningAutonomousWithSummary_RunsFreshVerifyGate is
-// the StatusRunning/autonomous counterpart of the Retrying test above —
-// resumeStageAtStatus's OWN StatusRunning/autonomous branch (reached directly
-// from startPlanningForPending's second switch, unlike Retrying which the
-// bootstrap loop's first switch can intercept via a different, .done-based
-// heuristic) must also refuse to trust a recovered execution_summary.md
-// without a fresh verify pass.
 func TestIntegration_ResumeRunningAutonomousWithSummary_RunsFreshVerifyGate(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "auto1", Name: "Auto1",
@@ -211,12 +186,6 @@ func TestIntegration_ResumeRunningAutonomousWithSummary_RunsFreshVerifyGate(t *t
 	}
 }
 
-// TestIntegration_ResumeAfterCrashDuringVerifyCorrection_InjectsActiveFeedback
-// is V5a.2's [T31]: a crash between a verify rejection (which durably writes
-// verify/feedback.md via persistVerifyRejection) and the correction attempt
-// must not lose that feedback — the resumed (fresh) author run must see it in
-// its very first prompt via the existing verifyFeedbackBlock plumbing
-// (V4b.5), exactly as it would for a live, uninterrupted correction.
 func TestIntegration_ResumeAfterCrashDuringVerifyCorrection_InjectsActiveFeedback(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "impl1", Name: "Impl1",
@@ -240,10 +209,7 @@ func TestIntegration_ResumeAfterCrashDuringVerifyCorrection_InjectsActiveFeedbac
 	if err := os.WriteFile(filepath.Join(stageDir, ".done"), []byte("completed work summary"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Active machine feedback from the pass that rejected right before the
-	// crash — persistVerifyRejection already wrote this durably BEFORE
-	// returning the typed rejection, so it survives independently of the FSM
-	// status frozen by the crash.
+	// Machine feedback persisted before rejection survives a crash independently of FSM status.
 	if err := stagefiles.WriteActiveFeedback(stageDir, "ver-stale", verify.ModelResult{
 		SchemaVersion: 1,
 		Verdict:       verify.VerdictNeedsChanges,
@@ -282,9 +248,6 @@ func TestIntegration_ResumeAfterCrashDuringVerifyCorrection_InjectsActiveFeedbac
 	}
 }
 
-// TestIntegration_ResumeDoneStage_NeverReVerifies is V5a.2's [T33]: a stage
-// already durably done is left completely untouched by recovery — no agent
-// respawn, no verify re-invocation, no repeated cost.
 func TestIntegration_ResumeDoneStage_NeverReVerifies(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "impl1", Name: "Impl1",
@@ -324,25 +287,6 @@ func TestIntegration_ResumeDoneStage_NeverReVerifies(t *testing.T) {
 	}
 }
 
-// TestIntegration_ResumeRetryingPlainWithDoneFile_RunsFreshVerifyGateNotPlanningHeuristic
-// closes a coverage gap flagged in code review: resumeStageAtStatus's
-// StatusRetrying branch for a PLAIN (non-autonomous, has-a-planning-agent)
-// stage has its own bespoke control flow — on ".done present AND Verify
-// non-empty" it must spawnKind(kindImplementation) and return IMMEDIATELY,
-// skipping the CheckPlanCompletion/NeedsPlanning "probably a stuck
-// planning-retry" heuristic right below it (that heuristic exists only for
-// the ambiguous case where .done does NOT yet exist). This branch is
-// reachable in practice: a has-planning-agent stage reaching StatusRetrying
-// during bootstrap recovery bypasses startPlanningForPending's FIRST switch
-// entirely (that switch only applies to !s.NeedsPlanning() stages) and falls
-// through to the SECOND switch, which calls resumeStageAtStatus directly —
-// exactly what this test drives. (Also reachable via Continue() after a
-// manual pause during Retrying backoff.)
-//
-// Asserts BOTH halves of the contract: (1) RunVerification actually runs
-// again (a fresh gate — the injected verify runner is invoked), and (2) the
-// planning agent is NEVER invoked (proving the early return skipped the
-// planning heuristic, not just that verify happened to run anyway).
 func TestIntegration_ResumeRetryingPlainWithDoneFile_RunsFreshVerifyGateNotPlanningHeuristic(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "impl1", Name: "Impl1",
@@ -356,11 +300,7 @@ func TestIntegration_ResumeRetryingPlainWithDoneFile_RunsFreshVerifyGateNotPlann
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// plan.md already on disk (as a real post-approval crash would leave it)
-	// AND .done already on disk (the author already ran once) — status
-	// StatusRetrying (frozen mid-backoff by the crash). This is exactly the
-	// shape that used to fall into the CheckPlanCompletion heuristic below
-	// the (now-fixed) short-circuit.
+	// plan.md already on disk AND .done already on disk — status StatusRetrying.
 	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("## Tasks\n- [ ] x\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

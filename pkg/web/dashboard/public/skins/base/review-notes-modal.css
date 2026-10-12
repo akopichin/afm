@@ -1,9 +1,5 @@
-/* pkg/web/dashboard/public/skins/base/review-notes-modal.css
-   Модалка ревью-раунда (Task 23) — открывается из ReviewBanner's "Send notes".
-   Переиспользует .modal-overlay/.modal-content/.modal-actions/.btn-* из
-   agent-note-modal.css (общая база модалок дашборда) — здесь только то, что
-   специфично именно этой модалке: список заметок по файлам и выбор целевой
-   стадии. Только токены переменных из skins/<name>/index.css. */
+/* pkg/web/dashboard/public/skins/base/review-notes-modal.css Модалка ревью-раунда — открывается из
+   ReviewBanner's "Send notes". Только токены переменных из skins/<name>/index.css. */
 
 .review-notes-modal {
   max-width: 640px;

@@ -12,9 +12,8 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 )
 
-// envName sanitizes a command name into an uppercase env-var suffix: only
-// [A-Z0-9_] allowed, everything else → '_'. Used for AFM_SECRET_<NAME> and
-// AFM_SYSPROMPT_<NAME> transient env vars.
+// envName sanitizes a command name into an uppercase env-var suffix: only [A-Z0-9_] allowed, everything
+// else → '_'. Used for AFM_SECRET_<NAME> and AFM_SYSPROMPT_<NAME> transient env vars.
 func envName(cmd string) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(cmd) {
@@ -27,13 +26,8 @@ func envName(cmd string) string {
 	return b.String()
 }
 
-// WrapperSpec describes one wrapper script to generate in the wrapper-dir.
-// Type "" or "claude" selects the claude template (auth + ANTHROPIC_* vars + exec claude).
-// Type "openai" selects the OpenAI-compatible template (OPENAI_* vars + exec openai-as-claude).
-// Type "openai-agent" selects the openai-compatible tool-loop template (OPENAI_* vars + exec openai-agent-as-claude).
-// Type "cursor" selects the Cursor Cloud Agents template (CURSOR_* vars + exec cursor-as-claude).
-// Type "codex" selects the codex template (CODEX_BIN + optional CODEX_MODEL + exec codex-as-claude).
-// Model == "" with Type "" selects the claude proxy-shim (BASE_URL only, no model vars).
+// WrapperSpec describes one wrapper script to generate in the wrapper-dir. Model == "" with Type ""
+// selects the claude proxy-shim (BASE_URL only, no model vars).
 type WrapperSpec struct {
 	Type         string // "" | "claude" = claude template; "openai" = openai-compatible; "openai-agent" = openai-compatible tool-loop; "cursor" = Cursor Cloud Agents
 	Command      string
@@ -45,17 +39,8 @@ type WrapperSpec struct {
 	MaxTurns     int    // openai-agent only: OPENAI_AGENT_MAX_TURNS; 0 → omit (script default)
 }
 
-// CreateWrappers creates a temp dir with one executable script per spec, named
-// after spec.Command, and returns its path. realClaude is resolved once via
-// exec.LookPath("claude") (absolute path → bypasses the wrapper-dir on PATH,
-// avoiding recursion) — but only when at least one spec is a claude-family type
-// (not openai/cursor/codex, which exec their own adapters, never claude).
-// realCodexBin is resolved once via exec.LookPath("codex") — only when at least
-// one spec is type "codex" — for the same PATH-recursion reason: the generated
-// "codex" wrapper shadows the real codex binary on PATH, so the wrapper bakes
-// in the absolute path via CODEX_BIN instead of letting the adapter script
-// resolve "codex" through the (now-shadowed) PATH itself.
-// Caller must defer os.RemoveAll(dir). Empty specs → ("", nil).
+// CreateWrappers creates a temp dir with one executable script per spec, named after spec.Command, and
+// returns its path. Caller must defer os.RemoveAll(dir).
 func CreateWrappers(specs []WrapperSpec) (string, error) {
 	if len(specs) == 0 {
 		return "", nil
@@ -169,10 +154,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	}
 
 	if s.Type == config.RecipeTypeCodex {
-		// codex: без API/URL/auth-token — авторизация идёт через смонтированный
-		// ~/.codex (OAuth state), не через этот враппер. Здесь только резолвим
-		// CODEX_BIN (реальный бинарник, до PATH-рекурсии), опционально CODEX_MODEL,
-		// и exec'аем codex-as-claude. realClaude не нужен — codex-as-claude не вызывает claude.
+		// codex: без API/URL/auth-token — авторизация идёт через смонтированный ~/.codex, не через этот враппер.
+		// realClaude не нужен — codex-as-claude не вызывает claude.
 		if s.AuthTo != "" {
 			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
@@ -180,10 +163,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		// hasModel — ""/"default" означает "решает сам codex/~/.codex/config.toml",
 		// поэтому CODEX_MODEL для них не выставляется.
 		hasModel := s.Model != "" && s.Model != codexDefaultModel
-		// CODEX_BIN — abs-путь к реальному codex CLI, резолвлен ДО того как
-		// wrapper-dir (где лежит ЭТОТ же файл с именем "codex") попал в PATH —
-		// иначе codex-as-claude (внутри себя вызывающий голый `codex`) поймал бы
-		// сам этот враппер и ушёл в бесконечную рекурсию.
+		// CODEX_BIN — abs-путь к реальному codex CLI, резолвлен ДО того как wrapper-dir попал в PATH — иначе
+		// codex-as-claude поймал бы сам этот враппер и ушёл в бесконечную рекурсию.
 		fmt.Fprintf(&b, "export CODEX_BIN=%q\n", realCodexBin)
 		if hasModel {
 			fmt.Fprintf(&b, "export CODEX_MODEL=%q\n", s.Model)
@@ -217,23 +198,13 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		b.WriteString("  set -- \"$@\" --append-system-prompt-file \"$_sp\"\n")
 		b.WriteString("fi\n")
 	}
-	// --bare: minimal mode claude Code — пропускает CLAUDE.md auto-discovery,
-	// SessionStart-хуки, skills-listing, auto-memory (~120 KB автоконтекста, который
-	// агентам внутри flow не нужен). Меньший payload → меньше токенов и нагрузки на
-	// шлюз (z.ai), ниже шанс 529. Управляется config client.claude_bare (default on).
+	// --bare: minimal mode claude Code — пропускает CLAUDE.md auto-discovery, SessionStart-хуки,
+	// skills-listing, auto-memory. Управляется config client.claude_bare (default on).
 	if s.Bare {
 		b.WriteString("set -- \"$@\" --bare\n")
 	}
-	// Стриминг обязателен для всех claude-обёрток (прокси удалён — ZAI transform больше
-	// не форсирует streaming). Без --output-format stream-json claude уходит в
-	// non-streaming → z.ai 529 на overload + executor не парсит вывод; это покрывает и
-	// non-interactive stages, которым executor не передаёт ExtraArgs. --output-format
-	// добавляем только при отсутствии (interactive уже получает его через executor
-	// ExtraArgs), чтобы не дублировать флаг.
-	// --include-partial-messages добавляем ТОЛЬКО при output-format=stream-json: флаг
-	// требует stream-json, и его безусловное добавление ломало вызовы RunJSONQuery
-	// (--output-format json → claude: "requires --output-format=stream-json").
-	// Для json-режима (однократный LLM-запрос без stream-json) partial не нужен и вреден.
+	// Стриминг обязателен для всех claude-обёрток. --output-format добавляем только при отсутствии
+	// (interactive уже получает его через executor ExtraArgs), чтобы не дублировать флаг.
 	b.WriteString("case \" $* \" in *\"--output-format\"*) : ;; *) set -- \"$@\" --output-format stream-json ;; esac\n")
 	b.WriteString("case \" $* \" in *\"--output-format stream-json\"*|*\"--output-format=stream-json\"*) set -- \"$@\" --include-partial-messages ;; esac\n")
 	fmt.Fprintf(&b, "exec %s \"$@\"\n", realClaude)

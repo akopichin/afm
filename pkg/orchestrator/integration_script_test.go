@@ -65,14 +65,6 @@ func TestIntegration_ScriptStage_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_RetryFailedScriptStage воспроизводит баг: retryStage не
-// имела ветки IsScript(), поэтому попадала в "!NeedsPlanning() → искать
-// plan.md" — у script-стадии нет ни plan.md, ни stage.Plan-источника, так что
-// retry немедленно повторно фейлил стадию с "no plan.md and no plan source
-// configured" вместо реального повторного запуска скрипта. Стадия сначала
-// исчерпывает встроенные ретраи (script всегда падает, пока не появится
-// gateFile), уходит в failed, затем ручной orch.Retry с уже существующим
-// gateFile должен успешно перезапустить сам скрипт и довести стадию до done.
 func TestIntegration_RetryFailedScriptStage(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()
@@ -99,9 +91,8 @@ func TestIntegration_RetryFailedScriptStage(t *testing.T) {
 		Store:   store,
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
-		// DashboardURL непустой — Run() не должен завершиться сразу после
-		// того, как стадия стала terminal (failed): нужен живой run-ctx для
-		// ручного Retry() ниже, как в реальном прогоне с открытым дашбордом.
+		// DashboardURL непустой — Run не должен завершиться сразу после того, как стадия стала terminal: нужен
+		// живой run-ctx для ручного Retry ниже, как в реальном прогоне с открытым дашбордом.
 		DashboardURL: "http://test.invalid",
 	})
 
@@ -131,12 +122,6 @@ func TestIntegration_RetryFailedScriptStage(t *testing.T) {
 	cancel()
 }
 
-// TestRunScriptStage_Failure_PublishesScriptFailedNotice (Task 4): a
-// script: stage whose script always exits non-zero and writes to stderr
-// exhausts runScriptWithRetry, transitions to failed (unchanged FSM path),
-// AND publishes a durable script_failed notice carrying the exit error plus
-// a stderr tail — so the dashboard feed shows a reason instead of a bare
-// "→ failed" row. Before this task no such notice existed.
 func TestRunScriptStage_Failure_PublishesScriptFailedNotice(t *testing.T) {
 	rootDir := t.TempDir()
 	runDir := t.TempDir()

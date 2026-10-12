@@ -1,10 +1,6 @@
 #!/bin/sh
-# Бампит SemVer от последнего git-тега и пушит новый тег vX.Y.Z.
-# Сама сборка (docker-образ, бинарники, Homebrew formula) происходит в
-# GitHub Actions (.github/workflows/release.yml), которая реагирует на пуш
-# этого тага — единая точка входа в релиз что для авто-патча из CI (push в
-# main), что для ручного minor/major отсюда.
-# --dry-run: только напечатать следующую версию (без git tag/push).
+# Бампит SemVer от последнего git-тега и пушит новый тег vX.Y.Z. --dry-run: только напечатать следующую
+# версию (без git tag/push).
 set -e
 
 if [ "$1" = "--dry-run" ]; then dry=1; shift; else dry=0; fi

@@ -8,9 +8,8 @@ import (
 	"net/http"
 )
 
-// StageStatus mirrors afm's internal stage FSM status
-// (github.com/akopichin/afm/pkg/state.StageStatus), duplicated here as a
-// plain string type so this module has no dependency on afm's Go packages.
+// StageStatus mirrors afm's internal stage FSM status, duplicated here as a plain string type so this
+// module has no dependency on afm's Go packages.
 type StageStatus string
 
 const (

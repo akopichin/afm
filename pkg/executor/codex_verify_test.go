@@ -9,11 +9,8 @@ import (
 	"testing"
 )
 
-// writeFakeCodexWithHelp — как writeFakeCodex в codex_translator_test.go, но
-// дополнительно отвечает на пробу поддержки `exec --help` (helpOutput) и, при
-// вызове с `--output-last-message <file>`, пишет lastMessage в этот файл —
-// имитируя реальный codex CLI, поддерживающий эту опцию. argvFile получает
-// полный argv РЕАЛЬНОГО (не --help) вызова для проверки собранных флагов.
+// writeFakeCodexWithHelp имитирует --help и --output-last-message; argvFile сохраняет только рабочий
+// вызов.
 func writeFakeCodexWithHelp(t *testing.T, argvFile, helpOutput, lastMessage, jsonlOutput string, exitCode int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -39,11 +36,6 @@ func writeFakeCodexWithHelp(t *testing.T, argvFile, helpOutput, lastMessage, jso
 	return path
 }
 
-// TestCodexAsClaude_VerifyMode_ReadOnlyNoBypass проверяет требование V2b.3:
-// с CODEX_VERIFY=1 собранный argv содержит "-s read-only" и НЕ содержит
-// --dangerously-bypass-approvals-and-sandbox. Фейковый codex не объявляет
-// поддержку --output-last-message (пустой help), поэтому этот флаг не
-// участвует — тест сфокусирован только на sandbox-флагах.
 func TestCodexAsClaude_VerifyMode_ReadOnlyNoBypass(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -83,13 +75,6 @@ func TestCodexAsClaude_VerifyMode_ReadOnlyNoBypass(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_VerifyMode_DockerFullAccess проверяет docker-исключение:
-// внутри собственного контейнера afm (AFM_IN_DOCKER=1) codex read-only sandbox
-// (bwrap) не может создать namespace, поэтому verify запускается «на максимум»
-// как обычный агент — `--dangerously-bypass-approvals-and-sandbox -s
-// danger-full-access`, БЕЗ `-s read-only`. Контейнер и есть граница изоляции
-// (тот же trust, что у не-verify пути). Флаг bypass — version-agnostic; `-a`
-// на `codex exec` не принимается codex'ом из закреплённого образа (0.155.x).
 func TestCodexAsClaude_VerifyMode_DockerFullAccess(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -133,10 +118,6 @@ func TestCodexAsClaude_VerifyMode_DockerFullAccess(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_VerifyMode_UsesOutputLastMessageWhenSupported проверяет,
-// что при поддержке --output-last-message скрипт использует его содержимое
-// как финальный текст, а не агрегированный agent_message (который тут
-// намеренно другой — "stale intermediate reasoning" — чтобы отличить их).
 func TestCodexAsClaude_VerifyMode_UsesOutputLastMessageWhenSupported(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -191,10 +172,6 @@ func TestCodexAsClaude_VerifyMode_UsesOutputLastMessageWhenSupported(t *testing.
 	}
 }
 
-// TestCodexAsClaude_VerifyMode_FallsBackToAggregatedWhenUnsupported проверяет
-// поведение, когда установленный codex НЕ поддерживает --output-last-message
-// (help-текст его не содержит): скрипт не передаёт этот флаг и использует
-// агрегированный agent_message, как в обычном режиме.
 func TestCodexAsClaude_VerifyMode_FallsBackToAggregatedWhenUnsupported(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -234,9 +211,6 @@ func TestCodexAsClaude_VerifyMode_FallsBackToAggregatedWhenUnsupported(t *testin
 	}
 }
 
-// TestCodexAsClaude_NonVerifyMode_UnchangedByDefault проверяет, что без
-// CODEX_VERIFY поведение полностью прежнее: bypass-флаг и $CODEX_SANDBOX
-// присутствуют, read-only и --output-last-message — нет.
 func TestCodexAsClaude_NonVerifyMode_UnchangedByDefault(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -283,10 +257,6 @@ func TestCodexAsClaude_NonVerifyMode_UnchangedByDefault(t *testing.T) {
 	}
 }
 
-// TestCodexAsClaude_VerifyMode_AggregatesNoToolRows — verify mode must NOT
-// stream per-item and must NOT emit tool_use rows: the whole answer is ONE
-// aggregated assistant text (DecodeModelResult needs a clean JSON buffer).
-// Guards against a future refactor accidentally streaming verify.
 func TestCodexAsClaude_VerifyMode_AggregatesNoToolRows(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -294,10 +264,8 @@ func TestCodexAsClaude_VerifyMode_AggregatesNoToolRows(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not available")
 	}
-	// Help output WITHOUT --output-last-message forces the aggregation fallback,
-	// keeping this test independent of that flag's presence. Two agent_messages:
-	// if verify ever streamed per-item, assistantCount would catch it (>=2) even
-	// independently of the tool_use check.
+	// Help output WITHOUT --output-last-message forces the aggregation fallback, keeping this test
+	// independent of that flag's presence.
 	fakeCodex := writeFakeCodexWithHelp(t, filepath.Join(t.TempDir(), "argv.txt"),
 		"  -s, --sandbox <SANDBOX_MODE>", "",
 		`{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}

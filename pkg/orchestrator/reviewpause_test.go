@@ -19,10 +19,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRunnerKind_SetGetClear проверяет базовый контракт реестра runnerKind
-// (Task 6 фичи "review notes"): пусто по умолчанию, set/get, clear возвращает
-// в пустое состояние. o := &Orchestrator{} без New() — runnerKind это голое
-// sync.Map с нулевым значением, отдельной инициализации не требует.
 func TestRunnerKind_SetGetClear(t *testing.T) {
 	o := &Orchestrator{}
 	if o.runnerKindOf("s1") != "" {
@@ -38,31 +34,14 @@ func TestRunnerKind_SetGetClear(t *testing.T) {
 	}
 }
 
-// TestRunWithRetry_Attempt0ResumeContext закрывает Task 7 фичи "review notes"
-// (decision A′): резюмируемый non-interactive стадии агент должен получить
-// replay-контекст "previously completed actions" уже на ПЕРВОЙ попытке, а не
-// только начиная со второй (attempt > 0) — иначе Continue после паузы
-// перезапускает агента с чистого листа, будто предыдущей работы не было.
-// armResumeContext — однократный флаг (stageID -> взведён), consumed внутри
-// runWithRetry через LoadAndDelete: используется агентом отладки этого
-// вызова, ко второму вызову той же стадии без повторного arm флаг уже снят.
-//
-// Переиспользует существующий тест-конструктор setupHookOrch (hooks_test.go)
-// вместо изобретения параллельного newTestOrchestrator — тот уже собирает
-// Orchestrator с реальными RunDir/Store/critical bus, которых достаточно,
-// чтобы runWithRetry дошёл до success-ветки (agentFn возвращает nil,
-// completionCheck nil → сразу EventAgentCompleted, без обращения к FSM).
 func TestRunWithRetry_Attempt0ResumeContext(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	stageDir := filepath.Join(runDir, "s1")
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// Минимальная строка в форме реального stream-json лога агента (см.
-	// buildRetryContext/executor.RenderActions и аналогичный
-	// TestBuildRetryContext_FullActionNotTruncated в retry_test.go) — иначе
-	// buildRetryContext вернёт "" для любого attempt и тест не отличит
-	// "context пуст потому что не собирается" от "собирается, но пуст".
+	// Валидная stream-json строка позволяет отличить отсутствие retry-контекста от отсутствия данных для
+	// него.
 	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo prior work"}}]}}`
 	if err := os.WriteFile(filepath.Join(stageDir, "implementation.jsonl"), []byte(line+"\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -99,15 +78,6 @@ func TestRunWithRetry_Attempt0ResumeContext(t *testing.T) {
 	}
 }
 
-// TestRunWithRetry_SelfAbortsWhenAlreadyPaused закрывает Task 8 фичи "review
-// notes": окно между проверкой shouldRun в concurrency.Manager.SpawnAgent и
-// регистрацией interruptCh в начале runWithRetry — если Pause() успевает
-// закоммитить транзишн в этом окне, интерраптор ещё не зарегистрирован и
-// сигнал некому доставить. Симулируем это, заранее переведя стадию в
-// state.StatusPaused (как будто Pause() уже случился ДО входа в
-// runWithRetry) и проверяя, что agentFn вообще не вызывается — attempt-loop
-// должен сам себя прервать на самом первом обращении к currentStatus, до
-// запуска подпроцесса.
 func TestRunWithRetry_SelfAbortsWhenAlreadyPaused(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusPaused, Event: "test_setup"}); err != nil {
@@ -129,14 +99,6 @@ func TestRunWithRetry_SelfAbortsWhenAlreadyPaused(t *testing.T) {
 	}
 }
 
-// TestActivationHold_BlocksNewActivation закрывает Task 9 фичи "review notes":
-// пока activationHeld взведён (ревью-режим), startReadyStages не должен
-// переводить уже готовую (Ready) стадию в Running — она обязана остаться на
-// месте (already-running стадии здесь ни при чём, только НОВЫЕ активации).
-// Собран напрямую (по образцу TestCancelDialog_FailsStage в
-// control_api_test.go), а не через setupHookOrch: нужен реальный
-// concurrency.Manager, иначе незагаженный путь (до реализации guard'а)
-// упадёт в nil-панике на o.concurrency.SpawnAgent вместо честного assert-fail.
 func TestActivationHold_BlocksNewActivation(t *testing.T) {
 	dir := t.TempDir()
 	stages := []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}}
@@ -168,14 +130,8 @@ func TestActivationHold_BlocksNewActivation(t *testing.T) {
 	}
 }
 
-// newPauseFlowTestOrch строит *Orchestrator поверх реального *state.Store с
-// НЕСКОЛЬКИМИ стадиями через New() — в отличие от newTestOrchestrator
-// (memory_agent_test.go), которая жёстко собирает Store с единственной
-// стадией "s1" и не годится тестам PauseFlow, которым нужно независимо
-// сидировать статусы s1/s2/s3. stages сами решают, какая из них script
-// (flow.Stage.Script непусто) — граф собирается один раз внутри New() и
-// после этого неизменен, так что "is this a script stage" нельзя пришить
-// постфактум, только объявить при конструировании.
+// newPauseFlowTestOrch создаёт реальные Store/Orchestrator с несколькими стадиями; script-тип задаётся до
+// построения графа.
 func newPauseFlowTestOrch(t *testing.T, stages []flow.Stage) *Orchestrator {
 	t.Helper()
 	runDir := t.TempDir()
@@ -191,12 +147,7 @@ func newPauseFlowTestOrch(t *testing.T, stages []flow.Stage) *Orchestrator {
 	return New(Options{RunDir: runDir, Stages: stages, Store: store, Config: config.Default()})
 }
 
-// seedStageStatus переводит стадию id из state.StatusPending (начальное
-// состояние любой свежесозданной Store) прямо в status одной транзакцией.
-// Store.Apply проверяет только совпадение From с текущим статусом (FSM-guard
-// тут ни при чём — это сырая подмена состояния для теста), поэтому это
-// работает для любого целевого статуса ровно так же, как уже делают
-// setupHookOrch/TestActivationHold_BlocksNewActivation в этом пакете.
+// seedStageStatus переводит стадию id из state.StatusPending прямо в status одной транзакцией.
 func seedStageStatus(t *testing.T, store *state.Store, id string, status state.StageStatus) {
 	t.Helper()
 	if err := store.Apply(&state.Transition{StageID: id, From: state.StatusPending, To: status, Event: "test_setup"}); err != nil {
@@ -204,11 +155,7 @@ func seedStageStatus(t *testing.T, store *state.Store, id string, status state.S
 	}
 }
 
-// seedScriptStage — то же самое, что seedStageStatus, но для стадии,
-// объявленной в графе как script (Script непусто в её flow.Stage) —
-// именование отдельным хелпером в тесте документирует намерение "эта стадия
-// должна быть проигнорирована PauseFlow как скриптовая", а не просто
-// переиспользует seedStageStatus напрямую.
+// seedScriptStage seeds a declared script stage that PauseFlow must skip.
 func seedScriptStage(t *testing.T, o *Orchestrator, id string, status state.StageStatus) {
 	t.Helper()
 	stage := o.graph.Stage(id)
@@ -218,23 +165,11 @@ func seedScriptStage(t *testing.T, o *Orchestrator, id string, status state.Stag
 	seedStageStatus(t, o.opts.Store, id, status)
 }
 
-// testActiveRelease хранит per-stageID idempotent release-функцию,
-// установленную markActiveForTest — markDoneForTest использует её, чтобы
-// освободить стадию ПРЯМО ВНУТРИ теста (не только на t.Cleanup), когда нужно
-// проверить логику, реагирующую на переход IsActive true->false (см.
-// resumeOwner's drain-wait в TestResumeOwner_WaitsForDrain).
+// testActiveRelease хранит idempotent release по stageID для проверки drain прямо во время теста.
 var testActiveRelease sync.Map // stageID -> func() (закрывает release-канал не более раза)
 
-// markActiveForTest делает concurrency.Manager.IsActive(stageID) истинным по-
-// настоящему, через реальный SpawnAgent (markActive/markDone — приватные
-// методы concurrency.Manager, недоступные этому пакету напрямую — тест
-// использует единственную существующую производственную точку входа, а не
-// заводит теневой способ выставить активность). run блокируется на release;
-// releaseFn (sync.Once-обёрнутая) регистрируется и в testActiveRelease (для
-// markDoneForTest), и в t.Cleanup (страховка, если тест сам не вызвал
-// markDoneForTest) — идемпотентность гарантирует, что оба пути закрытия не
-// паникуют на двойном close. close(ready) гарантирует, что markActive внутри
-// SpawnAgent уже отработал к моменту, когда <-ready возвращается здесь.
+// markActiveForTest делает concurrency.Manager.IsActive истинным по- настоящему, через реальный
+// SpawnAgent.
 func markActiveForTest(t *testing.T, o *Orchestrator, stageID string) {
 	t.Helper()
 	ready := make(chan struct{})
@@ -253,12 +188,7 @@ func markActiveForTest(t *testing.T, o *Orchestrator, stageID string) {
 	<-ready
 }
 
-// markDoneForTest releases a stage marked active by markActiveForTest so
-// concurrency.Manager.IsActive(stageID) flips to false DURING the test
-// (rather than only at t.Cleanup) — needed to test drain-wait logic such as
-// resumeOwner's polling loop. Blocks until the effect is actually observable
-// (the SpawnAgent goroutine's deferred markDone has run), so the caller never
-// races its own subsequent IsActive check against that goroutine.
+// markDoneForTest releases an active stage and waits until IsActive becomes false.
 func markDoneForTest(t *testing.T, o *Orchestrator, stageID string) {
 	t.Helper()
 	v, ok := testActiveRelease.Load(stageID)
@@ -271,13 +201,8 @@ func markDoneForTest(t *testing.T, o *Orchestrator, stageID string) {
 	}
 }
 
-// setPausedFrom seeds a stage straight into StatusPaused with PausedFrom set
-// to a specific prior status, via two real Store.Apply transitions
-// (Pending -> from -> Paused) — the same derivation production code uses
-// (RunState.SetStageStatusAt stamps PausedFrom from the status immediately
-// preceding a transition INTO Paused), rather than hand-poking the field.
-// Requires the stage to still be Pending (true for any freshly-opened Store,
-// e.g. newTestOrchestrator's), and from != state.StatusPaused.
+// setPausedFrom derives PausedFrom through real pending → from → paused transitions; requires pending and
+// from != paused.
 func setPausedFrom(t *testing.T, store *state.Store, id string, from state.StageStatus) {
 	t.Helper()
 	if from != state.StatusPending {
@@ -290,10 +215,7 @@ func setPausedFrom(t *testing.T, store *state.Store, id string, from state.Stage
 	}
 }
 
-// boolStr renders a bool the same way the test-only observer closure in
-// TestResumeOwner_TargetImplementationUsesWithFeedback does, so assertions
-// read as a single comparable string ("implementation/true") instead of two
-// separate fields.
+// boolStr formats observer results for assertions such as implementation/true.
 func boolStr(b bool) string {
 	if b {
 		return "true"
@@ -301,11 +223,6 @@ func boolStr(b bool) string {
 	return "false"
 }
 
-// TestPauseFlow_OwnsOnlyActiveWinners закрывает Task 10 фичи "review notes":
-// PauseFlow не должен пытаться поставить на паузу всё подряд, что похоже на
-// "бегущую" стадию — только те, что действительно живы прямо сейчас
-// (concurrency.IsActive), и никогда скриптовые стадии (у них нет точки
-// прерывания, см. Pause в control_api.go).
 func TestPauseFlow_OwnsOnlyActiveWinners(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}},
@@ -361,10 +278,6 @@ func TestPauseFlow_RejectedDuringFinalization(t *testing.T) {
 	}
 }
 
-// TestRenderReviewFeedback_AlwaysCarriesOriginal закрывает Task 11 фичи
-// "review notes": рендер ревью-фидбэка ВСЕГДА выводит JSON-quoted исходный
-// текст строки, а при расхождении контентной ХЭШ'и добавляет диагностику
-// "content differed at injection".
 func TestRenderReviewFeedback_AlwaysCarriesOriginal(t *testing.T) {
 	l42 := 42
 	orig := "\tif err != nil {"
@@ -388,9 +301,6 @@ func TestRenderReviewFeedback_AlwaysCarriesOriginal(t *testing.T) {
 	}
 }
 
-// TestRenderReviewFeedback_UnavailableFile закрывает Task 11: файл
-// недоступен при injection-времени (current() возвращает ok=false) ->
-// добавляется диагностика на заголовке файла.
 func TestRenderReviewFeedback_UnavailableFile(t *testing.T) {
 	l5 := 5
 	orig := "package gone"
@@ -402,12 +312,6 @@ func TestRenderReviewFeedback_UnavailableFile(t *testing.T) {
 	}
 }
 
-// TestRenderReviewFeedback_TwoFileLevelNotesStableOrder закрывает Fix round 1:
-// регрессионная проверка strict-weak-ordering контракта SortStableFunc.
-// renderReviewFeedback должна корректно обрабатывать несколько file-level
-// notes (Line==nil) на том же файле, что и line notes, и выдать
-// детерминированный порядок (line notes первыми, потом file-level notes) без
-// паники и переупорядочивания.
 func TestRenderReviewFeedback_TwoFileLevelNotesStableOrder(t *testing.T) {
 	l10 := 10
 	lineOrig := "var x int"
@@ -455,12 +359,6 @@ func TestRenderReviewFeedback_TwoFileLevelNotesStableOrder(t *testing.T) {
 	}
 }
 
-// TestResumeOwner_TargetImplementationUsesWithFeedback закрывает Task 12
-// фичи "review notes": стадия-цель (isTarget=true, review notes ЕЙ
-// адресованы) резюмируется через withFeedbackRunner независимо от
-// FromRevising — она должна увидеть feedback.md с ревью-заметками.
-// o.testRunnerHook — тест-сейм: подменяет реальный Trigger+SpawnAgent
-// наблюдением "какой kind, с фидбеком или без", без запуска процесса.
 func TestResumeOwner_TargetImplementationUsesWithFeedback(t *testing.T) {
 	o := newTestOrchestrator(t)
 	setPausedFrom(t, o.opts.Store, "s1", state.StatusRunning)
@@ -475,34 +373,6 @@ func TestResumeOwner_TargetImplementationUsesWithFeedback(t *testing.T) {
 	}
 }
 
-// TestResumeOwner_WaitsForDrain закрывает Task 12: resumeOwner не должен
-// транзишнить/спавнить раннер, пока concurrency.IsActive(ow.ID) истинно —
-// это сигнал, что старый (прерванный PauseFlow'ом) callback стадии ещё не
-// вернулся. Резюмировать раньше значит рисковать гонкой: старый callback,
-// вернувшись позже с ErrUserInterrupted, увидит статус уже не paused (мы его
-// сменили) и не распознает свой возврат как обычный Pause — см. комментарий
-// у resumeOwner.
-//
-// markActiveForTest seeds the stage to Running (not Paused) BEFORE spawning:
-// the real concurrency.Manager built by New() carries the production
-// shouldRun gate (opts.Store.Get(id) != Paused, see orchestrator.New) checked
-// right after the semaphore is acquired — seeding Paused first would make
-// that gate reject the spawned run() before it ever reaches `close(ready)`,
-// hanging markActiveForTest itself instead of exercising the drain wait. The
-// stage is moved Running->Paused only AFTER the goroutine is confirmed live,
-// reproducing the real sequence: PauseFlow's EvPause fires while an agent
-// goroutine started earlier (when the stage was still Running) is still in
-// flight — IsActive stays true for a stage that is already Paused.
-//
-// testRunnerHook is stubbed (no-op) here too, even though this test isn't
-// about which runner gets picked: without it, resumeOwner's real path spawns
-// a genuine runImplementationAgent, which fails fast (no plan.md on disk) and
-// calls Trigger(EvFail) on a goroutine this test never waits for — a leftover
-// write racing t.Cleanup's store.Close() right after the test returns
-// (exactly the "storage failure: write events.jsonl: invalid argument" flake
-// documented in AGENTS.md: nil *os.File after Close returns fs.ErrInvalid,
-// not a real OS error). The stub keeps resumeOwner's observable side effect
-// bounded to the drain wait this test actually exercises.
 func TestResumeOwner_WaitsForDrain(t *testing.T) {
 	o := newTestOrchestrator(t)
 	o.testRunnerHook = func(string, bool) {}
@@ -533,12 +403,7 @@ func TestResumeOwner_WaitsForDrain(t *testing.T) {
 	}
 }
 
-// waitFor polls cond every 10ms until it returns true or a 2s deadline
-// passes (t.Fatal on timeout) — a small generic helper for asserting on the
-// effect of an async worker (SpawnDetached) that this package's other
-// wait-helpers (waitForStatus, waitForAgentAction) don't cover: they poll a
-// specific status/event, this one polls an arbitrary caller-supplied
-// condition.
+// waitFor polls a condition every 10ms, failing after 2s.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -553,13 +418,6 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-// TestInject_WritesFeedbackOnceAndResumes закрывает Task 13 фичи "review
-// notes": InjectNotesAndResume должен (1) синхронно, до возврата, зафиксировать
-// маркер State=resuming/Mode=inject и записать feedback.md РОВНО ОДИН раз
-// (SaveFeedbackOnce's op-id sentinel), (2) снять activationHeld, (3)
-// асинхронно (под runContext, через SpawnDetached — testRunnerHook подменяет
-// реальный Trigger+SpawnAgent внутри resumeOwner) резюмировать owner'а и
-// только ПОСЛЕ этого удалить notes+marker (reviewTxnActive() -> false).
 func TestInject_WritesFeedbackOnceAndResumes(t *testing.T) {
 	o := newTestOrchestrator(t)
 	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)
@@ -623,10 +481,6 @@ func TestInject_WritesFeedbackOnceAndResumes(t *testing.T) {
 	}
 }
 
-// TestInject_RejectsUnpausedTargetAndEmptyNotes закрывает Task 13: три пути
-// отказа InjectNotesAndResume — нет активного ревью-раунда вовсе, целевая
-// стадия не paused, заметок нет — не должны трогать диск (никакого
-// feedback.md, маркер/статус остаются как были).
 func TestInject_RejectsUnpausedTargetAndEmptyNotes(t *testing.T) {
 	o := newTestOrchestrator(t)
 
@@ -663,11 +517,8 @@ func TestInject_RejectsUnpausedTargetAndEmptyNotes(t *testing.T) {
 	}
 }
 
-// makeAllTerminal moves every stage of o's flow directly to StatusDone
-// (bypassing the FSM, same technique as seedStageStatus) so that allTerminal()
-// — and therefore shouldExit(), absent any other gate — would report true.
-// Used to isolate the reviewTxnActive() gate from shouldExit's other
-// conditions in TestShouldExit_HeldByReviewMarker.
+// makeAllTerminal moves every stage of o's flow directly to StatusDone so that allTerminal — and therefore
+// shouldExit, absent any other gate — would report true.
 func makeAllTerminal(t *testing.T, o *Orchestrator) {
 	t.Helper()
 	for _, s := range o.opts.Stages {
@@ -675,12 +526,6 @@ func makeAllTerminal(t *testing.T, o *Orchestrator) {
 	}
 }
 
-// TestControlPolicy_RejectsWhileReviewPaused закрывает Task 14: пока активен
-// маркер ревью-паузы (reviewTxnActive()), любое внешнее forward-driving
-// control-действие обязано вернуть ErrFlowPaused ПЕРВЫМ делом — до чтения
-// или изменения состояния стадии. Continue и Retry выбраны как
-// представители двух разных путей (Continue гейтится по текущему статусу,
-// Retry — нет), оба должны отклоняться одинаково.
 func TestControlPolicy_RejectsWhileReviewPaused(t *testing.T) {
 	o := newTestOrchestrator(t)
 	m := state.PauseMarker{Version: 1, State: state.PauseStatePaused}
@@ -693,10 +538,6 @@ func TestControlPolicy_RejectsWhileReviewPaused(t *testing.T) {
 	}
 }
 
-// TestShouldExit_HeldByReviewMarker закрывает Task 14: shouldExit() должен
-// вернуть false, пока существует маркер ревью-паузы, даже если все прочие
-// условия для выхода (allTerminal, DashboardURL=="") уже выполнены — иначе
-// Run() финализировал бы ран прямо под ревьюером.
 func TestShouldExit_HeldByReviewMarker(t *testing.T) {
 	o := newTestOrchestrator(t)
 	makeAllTerminal(t, o) // so shouldExit would otherwise be true
@@ -707,11 +548,6 @@ func TestShouldExit_HeldByReviewMarker(t *testing.T) {
 	}
 }
 
-// TestRecoverReviewPause_PausedReestablishesHold закрывает Task 15 фичи
-// "review notes": на старте afm (перед обычным bootstrap'ом) durable-маркер
-// state=paused должен ре-установить и activationHeld, и in-memory кэш
-// маркера (reviewTxnActive()) — ровно то, что PauseFlow сам установил бы,
-// не будь afm перезапущен между PauseFlow и решением оператора.
 func TestRecoverReviewPause_PausedReestablishesHold(t *testing.T) {
 	o := newTestOrchestrator(t)
 	m := state.PauseMarker{Version: 1, State: state.PauseStatePaused,
@@ -727,13 +563,6 @@ func TestRecoverReviewPause_PausedReestablishesHold(t *testing.T) {
 	}
 }
 
-// TestRecoverReviewPause_ResumingFinishes закрывает Task 15: durable-маркер
-// state=resuming (интерраптед resume-транзакция) должен быть ДОВЕДЁН до
-// конца прямо на старте (runResumeTransaction идемпотентна) — маркер и
-// review notes должны исчезнуть с диска, а не просто быть закэшированы.
-// o.testRunnerHook — тот же тест-сейм, что и в TestInject_WritesFeedback…/
-// TestResumeOwner_…, подменяет реальный Trigger+SpawnAgent внутри
-// resumeOwner, чтобы не спавнить настоящий процесс агента.
 func TestRecoverReviewPause_ResumingFinishes(t *testing.T) {
 	o := newTestOrchestrator(t)
 	seedStageStatus(t, o.opts.Store, "s1", state.StatusPaused)
@@ -751,12 +580,8 @@ func TestRecoverReviewPause_ResumingFinishes(t *testing.T) {
 	}
 }
 
-// countingBlockingRunner реализует executor.Runner и для RunAgent считает,
-// сколько раз агент КАЖДОЙ стадии реально был заспавнен, после чего блокируется
-// до отмены ctx — стадия остаётся "running", так что ошибочный ВТОРОЙ спавн
-// можно наблюдать по счётчику, а не гоняться с завершением стадии. Не блокирующий
-// раннер (пишущий .done и завершающий стадию) сделал бы тест флейки: bootstrap
-// мог бы увидеть стадию уже done и не задвоить спавн даже при отсутствии guard'а.
+// countingBlockingRunner считает запуски по стадиям и блокируется до cancel, чтобы повторный spawn был
+// наблюдаем.
 type countingBlockingRunner struct {
 	mu    sync.Mutex
 	calls map[string]int
@@ -789,18 +614,6 @@ func (r *countingBlockingRunner) count(stageName string) int {
 
 var _ executor.Runner = (*countingBlockingRunner)(nil)
 
-// TestRecoverReviewPause_ResumingDoesNotDoubleSpawn закрывает F1: маркер
-// state=resuming на рестарте recoverReviewPause синхронно доводит до конца
-// (runResumeTransaction выводит owner'а из paused и спавнит его раннер), а
-// СРАЗУ ПОСЛЕ Run() безусловно зовёт startPlanningForPending — тот увидел бы
-// того же owner'а уже в Running и через resumeStageAtStatus заспавнил бы
-// ВТОРОГО агента в ту же стадию. Guard reviewResumed это предотвращает.
-//
-// В отличие от TestRecoverReviewPause_ResumingFinishes (стабит testRunnerHook,
-// НЕ гоняет bootstrap — потому и не ловил этот баг) тест прогоняет реальный
-// resume-путь (testRunnerHook не задан) с настоящим считающим Runner'ом и
-// после recovery действительно вызывает startPlanningForPending, утверждая
-// РОВНО ОДИН спавн на owner'а.
 func TestRecoverReviewPause_ResumingDoesNotDoubleSpawn(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentAuto}}
@@ -829,10 +642,7 @@ func TestRecoverReviewPause_ResumingDoesNotDoubleSpawn(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Порядок cleanup (LIFO): cancel+WaitAgents ДО store.Close, чтобы
-	// заблокированные агентские горутины (по отмене ctx делают Trigger EvFail)
-	// успели слиться до закрытия стораджа — иначе флейк "write events.jsonl:
-	// invalid argument" из AGENTS.md (nil *os.File после Close).
+	// LIFO cleanup отменяет и ждёт агентов до store.Close, исключая запись в закрытый eventsLog.
 	t.Cleanup(func() {
 		cancel()
 		o.concurrency.WaitAgents()
@@ -845,9 +655,8 @@ func TestRecoverReviewPause_ResumingDoesNotDoubleSpawn(t *testing.T) {
 	}
 	waitFor(t, func() bool { return runner.count("s1") == 1 })
 
-	// Bootstrap — ровно как Run() зовёт его сразу после recovery. Без guard'а
-	// reviewResumed он увидел бы s1 в Running и resumeStageAtStatus заспавнил бы
-	// ВТОРОГО автономного агента в той же стадии.
+	// Bootstrap — ровно как Run() зовёт его сразу после recovery. Без guard'а reviewResumed он увидел бы s1 в
+	// Running и resumeStageAtStatus заспавнил бы ВТОРОГО автономного агента в той же стадии.
 	o.startPlanningForPending(ctx)
 
 	// Даём возможному ошибочному второму спавну время дойти до RunAgent и
@@ -864,9 +673,6 @@ func TestRecoverReviewPause_ResumingDoesNotDoubleSpawn(t *testing.T) {
 	}
 }
 
-// TestRecoverReviewPause_Absent закрывает Task 15: без маркера на диске
-// recoverReviewPause не должен ничего трогать — ни activationHeld, ни
-// reviewMarker — и должен вернуть nil.
 func TestRecoverReviewPause_Absent(t *testing.T) {
 	o := newTestOrchestrator(t)
 	if err := o.recoverReviewPause(context.Background()); err != nil {
@@ -877,12 +683,6 @@ func TestRecoverReviewPause_Absent(t *testing.T) {
 	}
 }
 
-// TestRecoverReviewPause_CorruptResumingFailsClosed закрывает Task 15: если
-// на диске лежит НЕПАРСИМЫЙ маркер, но его сырые байты содержат "resuming"
-// (best-effort State detection в state.ReadNotesPauseMarker), recoverReviewPause
-// обязан вернуть ошибку и оставить activationHeld взведённым — мы не можем
-// понять по повреждённому файлу, какие owner'ы уже резюмированы, поэтому
-// fail-closed: держим hold, не пропускаем обычный bootstrap на резюм.
 func TestRecoverReviewPause_CorruptResumingFailsClosed(t *testing.T) {
 	o := newTestOrchestrator(t)
 	path := filepath.Join(o.opts.RunDir, "notes-pause.json")
@@ -915,11 +715,6 @@ func TestRecoverReviewPause_CorruptResumingFailsClosed(t *testing.T) {
 	}
 }
 
-// TestRecoverReviewPause_PoisonSurvivesRestart закрывает re-review P2: durable
-// poison breadcrumb должен ре-устанавливать fail-closed на ЛЮБОМ последующем
-// рестарте — даже когда повреждённый canonical marker уже отправлен в quarantine
-// и его больше нет на диске. Симулируем «второй рестарт»: только breadcrumb, без
-// notes-pause.json.
 func TestRecoverReviewPause_PoisonSurvivesRestart(t *testing.T) {
 	o := newTestOrchestrator(t)
 	if err := state.WritePoisonMarker(o.opts.RunDir, "prior corrupt resuming round"); err != nil {
@@ -952,11 +747,6 @@ func TestRecoverReviewPause_PoisonSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestRecoverReviewPause_CorruptPausedFailsOpen закрывает Task 15: маркер
-// корраптед, но лучший угадываемый State не "resuming" (по умолчанию
-// paused) — recoverReviewPause должен fail-open (вернуть nil, ничего не
-// взводить): owned-стадии уже durable-paused в event-логе независимо от
-// маркера, ждут ручного Continue.
 func TestRecoverReviewPause_CorruptPausedFailsOpen(t *testing.T) {
 	o := newTestOrchestrator(t)
 	path := filepath.Join(o.opts.RunDir, "notes-pause.json")
@@ -971,11 +761,7 @@ func TestRecoverReviewPause_CorruptPausedFailsOpen(t *testing.T) {
 	}
 }
 
-// stubResolveFile returns an Options.ResolveFile stub that always resolves
-// successfully with a fixed content_sha/line text/in-range verdict — the
-// AddNote tests below (Task 18) drive staleness purely by varying the
-// clientSHA/line the CALLER passes in, not by changing what the "workspace"
-// reports.
+// stubResolveFile returns fixed file metadata; caller SHA/line controls stale-note cases.
 func stubResolveFile(sha, lineText string, inRange bool) func(root, path string, line *int) (ResolvedFile, bool) {
 	return func(root, path string, line *int) (ResolvedFile, bool) {
 		return ResolvedFile{
@@ -988,9 +774,8 @@ func stubResolveFile(sha, lineText string, inRange bool) func(root, path string,
 	}
 }
 
-// pausedNotesTestOrch builds a single-stage orchestrator with a live
-// PauseStatePaused review marker (the precondition AddNote/UpdateNote/
-// DeleteNote all require) and the given ResolveFile stub wired in.
+// pausedNotesTestOrch builds a single-stage orchestrator with a live PauseStatePaused review marker and
+// the given ResolveFile stub wired in.
 func pausedNotesTestOrch(t *testing.T, resolve func(root, path string, line *int) (ResolvedFile, bool)) *Orchestrator {
 	t.Helper()
 	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
@@ -999,9 +784,6 @@ func pausedNotesTestOrch(t *testing.T, resolve func(root, path string, line *int
 	return o
 }
 
-// TestAddNote_RejectedWhenNotPaused закрывает Task 18: без активного
-// review-pause маркера (или маркер есть, но State != paused) AddNote должен
-// вернуть ErrNoReviewPause и не трогать review-notes.json.
 func TestAddNote_RejectedWhenNotPaused(t *testing.T) {
 	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
 	o.opts.ResolveFile = stubResolveFile("sha256:x", "orig", true)
@@ -1037,9 +819,6 @@ func TestAddNote_StaleContent(t *testing.T) {
 	}
 }
 
-// TestAddNote_UnresolvableFileIsStaleContent закрывает Task 18: если
-// ResolveFile не смог резолвить файл вообще (ok=false — например, файл
-// удалили), AddNote должен вернуть ErrStaleContent, а не панику/500.
 func TestAddNote_UnresolvableFileIsStaleContent(t *testing.T) {
 	o := pausedNotesTestOrch(t, func(root, path string, line *int) (ResolvedFile, bool) { return ResolvedFile{}, false })
 	if _, _, err := o.AddNote("project", "a.go", nil, "fix", "sha256:x", 0); !errors.Is(err, ErrStaleContent) {
@@ -1057,9 +836,6 @@ func TestAddNote_StaleLine(t *testing.T) {
 	}
 }
 
-// TestAddNote_HappyPath закрывает Task 18: первая нота получает id "n1",
-// Rev поднимается до 1, и записанное на диск review-notes.json совпадает с
-// возвращённым значением.
 func TestAddNote_HappyPath(t *testing.T) {
 	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "original line", true))
 	line := 42
@@ -1089,10 +865,6 @@ func TestAddNote_HappyPath(t *testing.T) {
 	}
 }
 
-// TestAddNote_DedupReplacesSameKey закрывает Task 18: две ноты на один и тот
-// же (root,path,line) — вторая ЗАМЕНЯЕТ первую, сохраняя id/created_at, а не
-// плодит дубликат; Rev поднимается на каждый вызов, NextID — только на
-// НОВУЮ ноту.
 func TestAddNote_DedupReplacesSameKey(t *testing.T) {
 	o := pausedNotesTestOrch(t, stubResolveFile("sha256:x", "original line", true))
 	line := 42
@@ -1202,9 +974,6 @@ func TestDeleteNote_Success(t *testing.T) {
 	}
 }
 
-// TestListNotes_NoPauseGate закрывает Task 18: ListNotes читает
-// review-notes.json без проверки паузы — доступен даже когда review-pause
-// вообще не активен.
 func TestListNotes_NoPauseGate(t *testing.T) {
 	o := newPauseFlowTestOrch(t, []flow.Stage{{ID: "s1", Agents: []flow.AgentType{flow.AgentImplementation}}})
 	notes, err := o.ListNotes()

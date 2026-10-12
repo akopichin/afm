@@ -23,15 +23,8 @@ export function useMaximize(): MaximizeState {
   return useContext(MaximizeContext)
 }
 
-// Максимизация БЕЗ портала: один и тот же <div> всегда монтирован на своей
-// исходной позиции в дереве — meняется только className (просто CSS
-// position:fixed на maximize-overlay даёт полноэкранный вид, см. layout.css).
-// Раньше здесь был createPortal (сначала Fragment↔Portal, потом
-// anchor↔document.body) — в обоих случаях React видел смену идентичности
-// узла на этой позиции и размонтировал детей при каждом toggle, сбрасывая их
-// состояние (баг: стик-скролл ленты событий и видимость кнопки «↓ latest»
-// терялись при maximize/restore). Без портала контейнер вообще не меняется —
-// React только обновляет className, дети остаются смонтированными.
+// Максимизация БЕЗ портала: один и тот же <div> всегда монтирован на своей исходной позиции в дереве —
+// meняется только className.
 export function Maximizable({ id, children }: { id: string; children: ReactNode }) {
   const { maximizedKey } = useMaximize()
   const maximized = maximizedKey === id

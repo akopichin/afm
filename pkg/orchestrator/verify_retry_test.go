@@ -12,12 +12,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestRunWithRetry_VerifyRejected_OneFreeRetryThenFailsWithDiagnosis — V4b.3:
-// VerifyRejectedError embeds *stagefiles.IncompleteWorkError (V4a), so it
-// routes through the EXISTING incomplete-retry policy without any new code
-// path — attempt 0 gets one free retry (no backoff), the second rejection
-// fails the stage. The failure reason must preserve the verify diagnosis
-// (report id / step), not the old generic "missing artifact or incomplete".
 func TestRunWithRetry_VerifyRejected_OneFreeRetryThenFailsWithDiagnosis(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -65,12 +59,6 @@ func TestRunWithRetry_VerifyRejected_OneFreeRetryThenFailsWithDiagnosis(t *testi
 	}
 }
 
-// TestRunWithRetry_VerifyExecError_NoRetryFailsImmediatelyWithDiagnosis —
-// V4b.3: VerifyExecError (transport/protocol/timeout/inconclusive/storage
-// failure of the VERIFIER itself) is NOT an IncompleteWorkError — re-running
-// the author cannot fix a verification that never produced a verdict, so it
-// must fail on attempt 0 without ever calling agentFn a second time, and the
-// failure reason must still carry the verify diagnosis.
 func TestRunWithRetry_VerifyExecError_NoRetryFailsImmediatelyWithDiagnosis(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15

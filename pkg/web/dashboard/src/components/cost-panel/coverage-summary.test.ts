@@ -2,11 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { summarizeCoverageGroups } from './coverage-summary'
 import type { CoverageIssue } from '../../types/cost'
 
-// FIX 2 (codex#2/opus#2, cost-ui increment 2 final review): the coverage line
-// used to drop issue.attribution and issue.reason entirely — a reader could
-// see "unpriced implementation/claude claude-x (×3)" but never learn WHOSE
-// invocations these were (a specific stage? run overhead? unresolvable) or WHY
-// they weren't priced. These tests pin the new format down.
+// Coverage text must identify attribution and explain why invocations are unpriced.
 function makeIssue(overrides: Partial<CoverageIssue> = {}): CoverageIssue {
   return {
     kind: 'unpriced',

@@ -41,9 +41,8 @@ describe('useStageEvents', () => {
   })
 
   it('ignores a stale response after the stage changed', async () => {
-    // Первая стадия ('a') резолвится ПОСЛЕ переключения на вторую ('b') —
-    // ответ для 'a' должен быть отброшен (generation-ref), история должна
-    // остаться той, что уже пришла для 'b'.
+    // Первая стадия ('a') резолвится ПОСЛЕ переключения на вторую ('b') — ответ для 'a' должен быть
+    // отброшен (generation-ref), история должна остаться той, что уже пришла для 'b'.
     const a = deferred<Response>()
     const b = deferred<Response>()
     vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
@@ -130,18 +129,8 @@ describe('useStageEvents', () => {
     expect(result.current).toEqual([])
   })
 
-  // Review round 1, Important finding: useEffect коммитится ПОСЛЕ рендера,
-  // так что рендер СРАЗУ ПОСЛЕ смены stageId ещё видит старое состояние
-  // history (принадлежащее ПРЕДЫДУЩЕЙ стадии) — без явной метки-стадии
-  // useMemo смёржил бы чужую историю с live-хвостом новой стадии на один
-  // кадр. result.current (renderHook) отражает только ФИНАЛЬНОЕ состояние
-  // после того, как act() досасывает все синхронные последствия эффекта —
-  // поэтому здесь мы трекаем ЛЮБОЙ рендер через обёртку-хук useTracked,
-  // которая пушит в captured каждый вызов (включая тот самый промежуточный,
-  // ДО того как эффект успел среагировать), а не только последний.
-  // P2 defensive fix: even if the server ignores ?stage=<id> and returns the
-  // global/mixed feed, the hook must not tag other stages' events as this
-  // stage's own — it filters the fetched history client-side before storing it.
+  // Записываем каждый render, включая кадр до effect: история прежней стадии и чужие события не должны
+  // попасть в новую.
   it('filters out events for a different stage from a mixed fetch response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
@@ -197,9 +186,8 @@ describe('useStageEvents', () => {
 
     rerender({ stageId: 'b', globalEvents: [ev('b', 5)] })
 
-    // Ни один зафиксированный рендер (включая самый первый — ДО того, как
-    // эффект для 'b' успел хоть что-то сделать: его фетч зависает навечно)
-    // не должен содержать событие стадии 'a'.
+    // Ни один зафиксированный рендер (включая самый первый — ДО того, как эффект для 'b' успел хоть что-то
+    // сделать: его фетч зависает навечно) не должен содержать событие стадии 'a'.
     expect(captured.length).toBeGreaterThan(0)
     for (const snapshot of captured) {
       expect(snapshot.some((e) => e.stageId === 'a')).toBe(false)

@@ -11,12 +11,8 @@ export type SideAgentHistoryProps = {
   emptyHint?: string
 }
 
-// SideAgentHistory — прокручиваемая история беседы. Переиспользует FeedGroupView
-// (тот же пузырь/markdown/tool-строки, что и лента стадий) через mapper
-// sideAgentFeedGroups — БЕЗ подделки событий стадии. systemAuthorLabel="Side
-// agent" (turn_failed/interrupted подписываются не «Flow»), imagePolicy="none"
-// (у беседы нет артефактов стадии — [AFM image: …] остаётся текстом).
-// stick-to-bottom + Jump to latest — как в FeedWorkspace.
+// SideAgentHistory — прокручиваемая история беседы. stick-to-bottom + Jump to latest — как в
+// FeedWorkspace.
 export function SideAgentHistory({ events, emptyHint }: SideAgentHistoryProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   const groups = useMemo(() => sideAgentFeedGroups(events), [events])

@@ -1,8 +1,4 @@
-// Заметка ревьюера, привязанная к строке/файлу проекта во время flow-wide
-// review-pause (см. pkg/state.ReviewNote). Поля 1:1 соответствуют JSON-виду
-// бэкенда — камелкейс не нужен, объект идёт напрямую в fetch-тело и обратно
-// без промежуточного маппинга (в отличие от Stage/FlowStatus, где normalizeStatus
-// приводит snake_case к camelCase для остального дашборда).
+// Заметка ревьюера, привязанная к строке/файлу проекта во время flow-wide review-pause.
 export type ReviewNote = {
   id: string
   root: string

@@ -111,9 +111,6 @@ func TestHandleVerifyReport_RejectsInvalidStageID(t *testing.T) {
 	}
 }
 
-// TestHandleVerifyReport_RejectsSymlinkEscape — тот же P0, что у артефактов
-// (TestHandleArtifact_RejectsSymlinkEscape): report.md внутри verify/<verID>/
-// не может быть симлинком наружу из runDir.
 func TestHandleVerifyReport_RejectsSymlinkEscape(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 
@@ -136,9 +133,6 @@ func TestHandleVerifyReport_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
-// TestHandleVerifyReport_ViaRouteFiles — конец-в-конец через настоящий mux
-// routeStages, а не прямой вызов метода, чтобы зафиксировать реальный
-// маршрут /api/stages/{id}/verify/{verID}/report.
 func TestHandleVerifyReport_ViaRouteStages(t *testing.T) {
 	srv, runDir := setupTestServer(t)
 	writeVerifyReport(t, runDir, testStageID, "v-1", "ok")

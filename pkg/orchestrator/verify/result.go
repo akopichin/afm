@@ -1,7 +1,5 @@
-// Package verify описывает контракт машинного результата AI-verify —
-// строгий декодер финального JSON-ответа верификатора — и тип, отделяющий
-// успех/неуспех запуска процесса от вердикта модели. Пакет чистый: без
-// подпроцессов и без оркестрации, полностью юнит-тестируемый.
+// Package verify описывает контракт машинного результата AI-verify — строгий декодер финального
+// JSON-ответа верификатора — и тип, отделяющий успех/неуспех запуска процесса от вердикта модели.
 package verify
 
 import (
@@ -20,22 +18,13 @@ const (
 	VerdictPass         Verdict = "pass"
 	VerdictNeedsChanges Verdict = "needs_changes"
 	VerdictInconclusive Verdict = "inconclusive"
-	// VerdictAcceptedStalemate синтезируется САМИМ afm (не декодируется из
-	// ответа модели) при срабатывании review_patience: стадия принята как
-	// завершённая, потому что автор перестал менять дерево в ответ на
-	// повторные verify-отклонения (reviewer/author stalemate). Намеренно НЕ
-	// входит в allow-list DecodeModelResult ниже — модель не вправе его
-	// вернуть; значение живёт только на пути отображения (verify-result
-	// нотис → latestVerifyByStage/feed-view-model).
+	// VerdictAcceptedStalemate создаёт только afm при review_patience; модель не вправе возвращать этот
+	// вердикт.
 	VerdictAcceptedStalemate Verdict = "accepted_stalemate"
 )
 
-// Finding — одно замечание верификатора. Path/LineStart/LineEnd — указатели,
-// потому что замечание может не быть привязано к конкретному файлу/строкам
-// (null в JSON). Id и метаданные запуска (run/stage/verification-id/время)
-// присваивает AFM, а не модель — их в контракте намеренно нет: если модель
-// всё же пришлёт такое поле, DisallowUnknownFields отклонит его как
-// неизвестное.
+// Finding — одно замечание верификатора. Path/LineStart/LineEnd — указатели, потому что замечание может не
+// быть привязано к конкретному файлу/строкам (null в JSON).
 type Finding struct {
 	Blocking    bool    `json:"blocking"`
 	Title       string  `json:"title"`
@@ -55,32 +44,22 @@ type ModelResult struct {
 	Findings      []Finding `json:"findings"`
 }
 
-// MaxResultBytes — верхняя граница размера сырого JSON-ответа. Проверяется
-// ДО разбора: усечённый по лимиту префикс мог бы случайно оказаться валидным
-// JSON и пройти как "тихо обрезанный", поэтому решение принимается по полной
-// длине входа, не по префиксу.
+// MaxResultBytes — верхняя граница размера сырого JSON-ответа.
 const MaxResultBytes = 256 * 1024
 
-// SupportedSchemaVersion — единственная поддерживаемая версия схемы
-// результата. Любое другое значение отклоняется явной ошибкой, а не молча
-// игнорируется — совместимость обеспечивает будущая миграция схемы, не
-// декодер.
+// SupportedSchemaVersion — единственная поддерживаемая версия схемы результата.
 const SupportedSchemaVersion = 1
 
-// DecodeModelResult строго разбирает сырой JSON-ответ верификатора и
-// проверяет его внутреннюю согласованность (версия схемы, допустимость
-// вердикта, соответствие findings вердикту). Возвращает ошибку, называющую
-// конкретную причину отказа (текст ошибки — на английском, по конвенции
-// пакета, см. pkg/orchestrator/stagefiles/completion.go).
+// DecodeModelResult строго разбирает сырой JSON-ответ верификатора и проверяет его внутреннюю
+// согласованность.
 func DecodeModelResult(raw []byte) (ModelResult, error) {
 	if len(raw) > MaxResultBytes {
 		return ModelResult{}, fmt.Errorf("verification result exceeds %d byte limit (got %d)", MaxResultBytes, len(raw))
 	}
 
 	trimmed := bytes.TrimSpace(raw)
-	// Markdown-fence отклоняем до любого ремонта: это намеренная строгость (модель
-	// обязана отдавать голый JSON), а jsonrepair умеет снимать fence и тем самым
-	// обошёл бы это правило.
+	// Markdown-fence отклоняем до любого ремонта: это намеренная строгость (модель обязана отдавать голый
+	// JSON), а jsonrepair умеет снимать fence и тем самым обошёл бы это правило.
 	if bytes.HasPrefix(trimmed, []byte("```")) {
 		return ModelResult{}, errors.New("verification result is wrapped in a markdown code fence; expected bare JSON")
 	}
@@ -90,16 +69,8 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 		return r, nil
 	}
 
-	// Ремонтируем ТОЛЬКО одну узкую поломку: сырые управляющие символы
-	// (перенос строки/возврат каретки/таб) ВНУТРИ строкового литерала JSON —
-	// именно это выдают ревьюеры, вписывая многострочную цитату кода в поле
-	// evidence. escapeRawControlCharsInStrings НЕ снимает fence/JSONP/
-	// комментарии и не отбрасывает лишний контент (в отличие от jsonrepair),
-	// поэтому все намеренные строгие отказы сохраняются: после ремонта мы
-	// повторно прогоняем ВЕСЬ строгий конвейер, и дубли ключей, неизвестные
-	// поля, trailing-контент, неверные schema_version/verdict по-прежнему
-	// отвергаются. Применяем ремонт, только если вход вообще содержал сырой
-	// управляющий символ (иначе чинить нечего — возвращаем исходную ошибку).
+	// Ремонтируем ТОЛЬКО одну узкую поломку: сырые управляющие символы ВНУТРИ строкового литерала JSON —
+	// именно это выдают ревьюеры, вписывая многострочную цитату кода в поле evidence.
 	if repaired, changed := escapeRawControlCharsInStrings(trimmed); changed {
 		if r2, err2 := decodeStrict(repaired); err2 == nil {
 			return r2, nil
@@ -108,13 +79,8 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 	return ModelResult{}, err
 }
 
-// escapeRawControlCharsInStrings проходит JSON побайтово, отслеживая, находимся
-// ли мы внутри строкового литерала, и заменяет сырые управляющие символы внутри
-// строк на их валидные escape-последовательности (\n, \r, \t; прочие < 0x20 —
-// на \u00XX). Вне строк байты не трогаются, поэтому структура документа
-// (границы, лишний контент, fence) остаётся как есть — это намеренно узкий
-// ремонт, не нормализатор. Возвращает (возможно изменённые) байты и флаг, были
-// ли замены.
+// escapeRawControlCharsInStrings экранирует сырые control-байты только внутри JSON-строк; возвращает байты
+// и признак замены.
 func escapeRawControlCharsInStrings(data []byte) ([]byte, bool) {
 	const hexdigits = "0123456789abcdef"
 	out := make([]byte, 0, len(data)+8)
@@ -164,12 +130,6 @@ func escapeRawControlCharsInStrings(data []byte) ([]byte, bool) {
 }
 
 // decodeStrict — строгий конвейер разбора ОДНОГО JSON-документа без репейра.
-// Порядок важен: структурный разбор (json.Decode) идёт ПЕРВЫМ, поэтому
-// лексическая ошибка выходит как "failed to parse …" с развёрнутым
-// *json.SyntaxError (а не маскируется под "duplicate key"), и вызывающий может
-// отличить её по типу, чтобы решить, стоит ли пробовать jsonrepair. Проверка
-// дубликатов ключей идёт ПОСЛЕ успешного разбора (json сам дубли молча
-// схлопывает, поэтому их всё равно надо ловить отдельным проходом).
 func decodeStrict(trimmed []byte) (ModelResult, error) {
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
@@ -202,10 +162,8 @@ func decodeStrict(trimmed []byte) (ModelResult, error) {
 	return r, nil
 }
 
-// validateVerdictConsistency проверяет, что вердикт согласован с findings и
-// summary: pass не может нести блокирующие находки, needs_changes обязан
-// нести хотя бы одну, а summary всегда обязателен (для inconclusive он же
-// объясняет причину невозможности проверки).
+// validateVerdictConsistency требует summary; pass запрещает blocking findings, needs_changes требует хотя
+// бы один.
 func validateVerdictConsistency(r ModelResult) error {
 	blocking := 0
 	for _, f := range r.Findings {
@@ -238,11 +196,8 @@ func validateVerdictConsistency(r ModelResult) error {
 	return nil
 }
 
-// detectDuplicateKeys проходит JSON токен за токеном и ищет повторяющиеся
-// ключи внутри одного объекта на любой глубине вложенности. json.Decoder
-// сам по себе такие дубликаты не ловит (при декодировании в struct/map
-// последнее значение молча побеждает) — это единственный способ отклонить
-// их явной ошибкой, а не проглотить.
+// detectDuplicateKeys проходит JSON токен за токеном и ищет повторяющиеся ключи внутри одного объекта на
+// любой глубине вложенности.
 func detectDuplicateKeys(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	return checkDuplicateValue(dec)

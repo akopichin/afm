@@ -176,10 +176,8 @@ describe('FileBrowserProvider', () => {
     expect(screen.getByRole('button', { name: /insert references/i })).toBeDisabled()
   })
 
-  // Finding 5: capabilities.file_browser=false must gate the provider itself,
-  // not just the header button — a defensive no-op in case something still
-  // calls openBrowser/pickFiles while disabled (both should be unreachable in
-  // practice once callers gate on `enabled`, see AttachFileButton/OpenFileBrowserButton).
+  // Finding 5: capabilities.file_browser=false must gate the provider itself, not just the header button —
+  // a defensive no-op in case something still calls openBrowser/pickFiles while disabled.
   test('enabled=false: openBrowser and pickFiles are no-ops — the modal never opens and the files API is never called', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const onInsert = vi.fn()
@@ -198,9 +196,7 @@ describe('FileBrowserProvider', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  // Finding 7: a pending getReference must not resurrect a stale selection
-  // once the run it belongs to is gone — the generation guard is keyed off
-  // exactly the flowName/startedAt change that already clears `selection`.
+  // A late getReference must not restore selection after the run changes.
   test('stale getReference: resolving after a run change does not resurrect the selection', async () => {
     let resolveReference: ((response: Response) => void) | undefined
     let referenceCalls = 0

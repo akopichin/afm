@@ -77,12 +77,7 @@ func (c *Client) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// Start launches "<afm> run --dir <workDir> --port <picked> <flowPath>" as a
-// subprocess whose --dir (afm's own state directory) and cwd (where the
-// flow's agents actually operate) are both workDir, creating workDir first if
-// it doesn't exist, and waits for its dashboard API to become reachable
-// before returning. On failure, workDir is left as-is (Start didn't create
-// it for its own exclusive use, so it isn't Start's to delete).
+// Start launches afm with workDir as cwd and --dir, then waits for the API. Failures leave workDir intact.
 func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, error) {
 	release, err := c.acquire(ctx)
 	if err != nil {

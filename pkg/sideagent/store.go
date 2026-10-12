@@ -29,17 +29,7 @@ var (
 	ErrInvalidTransition = errors.New("sideagent: invalid turn transition")
 )
 
-// Store — единственный живой писатель журнала одного разговора. Раскладка (от
-// переданной базы, путь .afm НЕ хардкодится):
-//
-//	<base>/side-agent/<run_id>/
-//	  chat.jsonl                 # авторитетный журнал
-//	  usage.jsonl                # учёт side-запросов
-//	  turns/<turn_id>/...        # логи агента по ходу
-//
-// Журнал отдельный от pkg/state — те же принципы durability (fsync до возврата,
-// безопасный разбор, усечение оборванного хвоста, карантин битой середины), но
-// независимая реализация. seq принадлежит стору.
+// Store — единственный живой писатель журнала одного разговора. seq принадлежит стору.
 type Store struct {
 	mu             sync.Mutex
 	dir            string
@@ -56,10 +46,7 @@ type Store struct {
 	lastErr     error
 }
 
-// Open открывает (создавая при необходимости) разговор для run_id под base.
-// Возвращает стор даже при повреждённом журнале (вместе с ErrStorageUnavailable)
-// — side-agent не должен ронять flow. Второй открыватель того же разговора
-// получает ErrLocked.
+// Open открывает разговор для run_id под base. Второй открыватель того же разговора получает ErrLocked.
 func Open(base, runID string) (*Store, error) {
 	dir := filepath.Join(base, "side-agent", runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -152,9 +139,8 @@ func acquireLock(dir string) (*progress.Lock, error) {
 	return l, nil
 }
 
-// parseChatLog — единственный разборщик chat.jsonl. Оборванный хвост (последняя
-// строка без '\n') усекается и НЕ считается порчей. Битая ПОЛНАЯ строка в
-// середине → corrupt=true (goodOffset указывает на конец последней целой записи).
+// parseChatLog — единственный разборщик chat.jsonl. Оборванный хвост (последняя строка без '\n') усекается
+// и НЕ считается порчей.
 func parseChatLog(data []byte) (events []Event, lastSeq uint64, goodOffset int64, corrupt bool) {
 	lines := splitLines(data)
 	endsWithNewline := len(data) > 0 && data[len(data)-1] == '\n'
@@ -221,9 +207,8 @@ func (s *Store) applyTurnState(e Event) {
 	s.turnStates[e.TurnID] = st
 }
 
-// Append добавляет событие в журнал: валидация перехода → durable-запись с fsync
-// → и только потом мутация in-memory состояния (durable-first). Один активный
-// ход за раз обеспечивается валидацией переходов.
+// Append добавляет событие в журнал: валидация перехода → durable-запись с fsync → и только потом мутация
+// in-memory состояния. Один активный ход за раз обеспечивается валидацией переходов.
 func (s *Store) Append(typ EventType, turnID string, data any) (Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

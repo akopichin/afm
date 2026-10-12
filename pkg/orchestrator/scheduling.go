@@ -21,11 +21,8 @@ func (o *Orchestrator) depsDone(s flow.Stage) bool {
 	return true
 }
 
-// activateAutoStage переводит auto-стадию (agents: [auto]) в Ready для автономного
-// трека: создаёт stageDir, пишет autonomous.flag (жёсткий автономный трек — без
-// supervisor и без plan.md), фиксирует durable EvReady. Возвращает true, если стадия
-// действительно auto (и обработана). Единая точка активации auto-стадии для обоих
-// путей: tryActivatePrePlanned (scheduling) и startPlanningForPending (recovery).
+// activateAutoStage переводит auto-стадию в Ready для автономного трека: создаёт stageDir, пишет
+// autonomous.flag, фиксирует durable EvReady.
 func (o *Orchestrator) activateAutoStage(s flow.Stage) bool {
 	if !s.IsAuto() {
 		return false
@@ -40,19 +37,14 @@ func (o *Orchestrator) activateAutoStage(s flow.Stage) bool {
 	return true
 }
 
-// shouldGateAutoRun reports whether s's first activation should pause
-// instead of proceeding: auto_run is explicitly false AND this stage has
-// never been through a pause cycle before (PausedFrom is the permanent
-// marker — see state.StageState.PausedFrom). Without the second condition a
-// stage retried after failing (which re-enters Pending via EvManualRetry)
-// would re-pause on every retry instead of only the very first activation.
+// shouldGateAutoRun reports whether s's first activation should pause instead of proceeding: auto_run is
+// explicitly false AND this stage has never been through a pause cycle before.
 func (o *Orchestrator) shouldGateAutoRun(s flow.Stage) bool {
 	return s.AutoRunDisabled() && o.opts.Store.PausedFrom(s.ID) == ""
 }
 
-// activateScriptStage activates a script-only stage (Stage.IsScript()) the
-// same way activateAutoStage activates an auto stage: no plan.md, straight
-// to Ready. Returns false (no-op) if s is not a script stage.
+// activateScriptStage activates a script-only stage the same way activateAutoStage activates an auto
+// stage: no plan.md, straight to Ready. Returns false (no-op) if s is not a script stage.
 func (o *Orchestrator) activateScriptStage(s flow.Stage) bool {
 	if !s.IsScript() {
 		return false
@@ -115,9 +107,8 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 	o.startReadyStages(ctx)
 }
 
-// startPlanningForUnblocked starts planning for pending stages whose
-// dependencies are all done. Stages with eager_planning start at flow
-// start and are never gated here.
+// startPlanningForUnblocked starts planning for pending stages whose dependencies are all done. Stages
+// with eager_planning start at flow start and are never gated here.
 func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
 	for _, s := range o.opts.Stages {
 		if !s.NeedsPlanning() {
@@ -161,9 +152,8 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 	}
 }
 
-// startReadyStage is shared by normal scheduling and manual retry. Only the
-// winner of the durable ready -> running transition may spawn the stage.
-// Recheck the gates here because the caller's ready-stage snapshot may be stale.
+// startReadyStage is shared by normal scheduling and manual retry. Only the winner of the durable ready ->
+// running transition may spawn the stage.
 func (o *Orchestrator) startReadyStage(ctx context.Context, s flow.Stage) bool {
 	if o.activationBlocked() || !o.depsDone(s) {
 		return false
@@ -197,11 +187,8 @@ func (o *Orchestrator) executionKind(s flow.Stage) string {
 	return kindImplementation
 }
 
-// clearInteractiveSessions удаляет claude-сессии и обнуляет stream-json логи всех
-// диалоговых фаз стадии — вызывается при manual retry интерактивной стадии, чтобы
-// не тянуть phantom-сессию и не перезапускать старый *.question.json. Использует
-// dialogPhases (учитывает autonomous.flag) и jsonlFileForPhase (autonomous-фаза
-// логируется в autonomous.jsonl, а не autonomous_execution.jsonl).
+// clearInteractiveSessions очищает сессии и stream-json всех диалоговых фаз перед manual retry, включая
+// autonomous-фазу.
 func clearInteractiveSessions(stageDir string) {
 	for _, ph := range dialogPhases(stageDir) {
 		_ = os.Remove(stagefiles.SessionFile(stageDir, ph))
@@ -209,10 +196,7 @@ func clearInteractiveSessions(stageDir string) {
 	}
 }
 
-// retryStage долговечно переводит проваленную стадию из failed и перезапускает
-// её (планирование или implementation, в зависимости от наличия plan.md).
-// Вызывается СИНХРОННО из Retry (HTTP-обработчик) — переход в Store фиксируется
-// до возврата, краш после Retry не теряет интент (recovery резюмит по логу).
+// retryStage долговечно переводит проваленную стадию из failed и перезапускает её.
 func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 	current := o.currentStatus(stageID)
 
@@ -225,35 +209,21 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		return
 	}
 
-	// Тест-сейм (nil в проде): точка, где тест может смоделировать проигрыш
-	// CAS, переведя стадию из failed на другой горутине между проверкой статуса
-	// выше и CAS ниже.
+	// Тест-сейм (nil в проде): точка, где тест может смоделировать проигрыш CAS, переведя стадию из failed на
+	// другой горутине между проверкой статуса выше и CAS ниже.
 	if o.retryCASBarrier != nil {
 		o.retryCASBarrier(stageID)
 	}
 
-	// CAS ПЕРВЫМ: право на retry захватывает ровно один вызывающий. Два
-	// конкурентных Retry-запроса оба проходят устаревшую проверку failed выше,
-	// но EvManualRetry (failed -> pending) применится только у одного —
-	// проигравший выходит здесь, НЕ тронув файлы стадии. Раньше очистка
-	// session/jsonl шла ДО этого CAS: проигравший успевал снести уже свежие
-	// данные победителя, стартовавшего новый запуск.
+	// CAS ПЕРВЫМ: право на retry захватывает ровно один вызывающий.
 	if _, ok := o.Trigger(stageID, bus.EvManualRetry, bus.GuardCtx{}, ""); !ok {
 		return
 	}
 
-	// Только победитель CAS чистит. Manual retry of an interactive stage must
-	// start a fresh Claude session: a leftover <phase>.session.json may
-	// reference a conversation that was never created (phantom), which makes
-	// claude fail with "No conversation found". Clear all phase sessions for
-	// this stage.
-	//
-	// Also truncate <phase>.jsonl: detectDialogViolation re-scans the raw
-	// stream-json log every poll tick, and a *.question.json Write from a
-	// previous (violating) run would otherwise re-fire instantly and make the
-	// stage un-retryable. Truncating here stays race-free w.r.t. the poller:
-	// after EvManualRetry the stage is pending (non-active) and the poller
-	// skips it just the same.
+	// Только победитель CAS чистит. Для interactive-стадии чистим phase-сессии (leftover <phase>.session.json
+	// сослался бы на несуществующий разговор → claude «No conversation found») и усекаем <phase>.jsonl
+	// (иначе *.question.json из прошлого violating-рана мгновенно пере-сработал бы у поллера). Race-free
+	// w.r.t. поллера: после EvManualRetry стадия pending (non-active), и поллер её пропускает.
 	if stage.Interactive {
 		clearInteractiveSessions(filepath.Join(o.opts.RunDir, stageID))
 	}
@@ -298,8 +268,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		}
 	}
 
-	// Keep blocked retries pending so normal scheduling can activate them
-	// (or cascade a dependency failure). A cached plan only skips planning;
+	// Keep blocked retries pending so normal scheduling can activate them. A cached plan only skips planning;
 	// even eager_planning never permits implementation before dependencies.
 	if !o.depsDone(*stage) {
 		return
@@ -310,9 +279,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 	}
 }
 
-// failBlockedStages marks pending stages as failed if any of their
-// dependencies are in StatusFailed. This prevents the flow from hanging
-// when a dependency fails and dependent stages can never start.
+// failBlockedStages marks pending stages as failed if any of their dependencies are in StatusFailed.
 func (o *Orchestrator) failBlockedStages() {
 	changed := true
 	for changed {
@@ -348,33 +315,8 @@ func (o *Orchestrator) allTerminal() bool {
 	return true
 }
 
-// shouldExit reports whether the orchestrator loop should stop.
-// Without a dashboard, any terminal state (done or failed) is final.
-// With a dashboard, exit only when all stages are done — failed stages stay
-// visible so the user can retry them without restarting the process.
-//
-// pendingAfterHooks guards a gap allTerminal() alone can't see: a stage's
-// own status can already be "done" while its script_after hook (spawned
-// from onAgentCompleted/approveStage, right as that same status flips) is
-// still running or blocked waiting on a RetryHook/SkipHook decision —
-// runAfterHook deliberately never touches the FSM (see its doc comment), so
-// the stage stays "done" throughout. Without this check, Run() could cancel
-// its ctx (shutdown) in the very same instant the hook goroutine was
-// spawned, killing it before it ever gets to run. Scoped narrowly to
-// after-hooks only (not a general "any agent in flight" counter, see
-// SpawnAgent's doc comment) — every other agent type already moves its
-// stage's FSM status, which allTerminal() below already accounts for.
-// pendingReflections mirrors the same guard for the reflect→consolidator
-// memory pipeline (maybeRunReflection, reflection.go): it, too,
-// never touches the FSM, so a stage stays "done" while its pipeline is
-// still running in the background.
-//
-// reviewTxnActive() is checked first and unconditionally: every owned stage
-// a PauseFlow round holds sits in status paused, which allTerminal() below
-// treats as non-terminal anyway — but the check is kept explicit and first so
-// the intent ("never finalize a run mid review-pause") doesn't depend on that
-// coincidence, and so it also covers the brief window where the marker exists
-// but ownership/counting hasn't settled yet.
+// shouldExit reports whether the orchestrator loop should stop. Without a dashboard, any terminal state
+// (done or failed) is final.
 func (o *Orchestrator) shouldExit() bool {
 	if o.reviewTxnActive() {
 		return false // a review-pause round is in progress; stay alive for the reviewer

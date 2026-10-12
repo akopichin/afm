@@ -29,10 +29,8 @@ function makeDeps(convo: () => ConversationResponse = emptyConversation) {
     handlers = h
     return { close }
   })
-  // serverState моделирует авторитетное состояние беседы на бэкенде: пока ни
-  // одного принятого сообщения — берётся из convo(); успешный sendMessage (202)
-  // переводит его в 'running', поэтому последующий getConversation (его зовёт
-  // connection-эффект после send) не откатывает requestState назад в idle.
+  // serverState после принятого Send становится running, чтобы последующий getConversation не откатил UI в
+  // idle.
   let serverState: 'idle' | 'running' | null = null
   const getConversation = vi.fn(async () => {
     const c = convo()
@@ -207,9 +205,8 @@ describe('useSideAgent', () => {
   })
 
   it('an idle idempotent response (completed turn, window closed) applies idle state and catches up history', async () => {
-    // Повтор уже завершённого хода: POST отвечает state:'idle', нового SSE
-    // терминала не будет. Окно закрыто (keepAlive=false) → connection-эффект не
-    // бежит; догон должен сделать сам send.
+    // Повтор уже завершённого хода: POST отвечает state:'idle', нового SSE терминала не будет. Окно
+    // закрыто (keepAlive=false) → connection-эффект не бежит; догон должен сделать сам send.
     const completed = [
       parsed(1, 'turn_accepted', { message: 'q', client_message_id: 'c1' }, 'tdone'),
       parsed(2, 'assistant_text', { text: 'the answer' }, 'tdone'),
@@ -232,9 +229,8 @@ describe('useSideAgent', () => {
   })
 
   it('a stale idle catch-up does not overwrite a newer running turn', async () => {
-    // send A → idle (идемпотентный повтор завершённого) с ОТЛОЖЕННЫМ догоном GET;
-    // пока он висит, send B принимается как running. Протухший idle-GET A при
-    // резолве НЕ должен вернуть состояние в idle или подменить turn_id.
+    // send A → idle с ОТЛОЖЕННЫМ догоном GET; пока он висит, send B принимается как running. Протухший
+    // idle-GET A при резолве НЕ должен вернуть состояние в idle или подменить turn_id.
     let resolveStaleGet!: (v: ConversationResponse) => void
     const getConversation = vi
       .fn<(afterSeq?: number, limit?: number) => Promise<ConversationResponse>>()
@@ -267,10 +263,7 @@ describe('useSideAgent', () => {
   })
 
   it('a stale idle history snapshot does not override a newer turn observed via SSE', async () => {
-    // Окно открыто (SSE активен). send A → idle с ОТЛОЖЕННЫМ догоном GET. Пока он
-    // висит, по стриму приходит НОВЫЙ ход B (turn_accepted/turn_started) — его POST
-    // ещё не вернулся, поэтому op НЕ поднят. Протухший idle-GET A при резолве не
-    // должен откатить running→idle: его отсекает lastSeq < cursor.
+    // Окно открыто. send A → idle с ОТЛОЖЕННЫМ догоном GET.
     let handlers: StreamHandlers | null = null
     let resolveStaleGet!: (v: ConversationResponse) => void
     const getConversation = vi

@@ -12,15 +12,12 @@ import { PasteableTextarea } from '../pasteable-textarea'
 import { renderAnchoredSections, type Block, type Section } from './markdown'
 import { useLineComments } from './use-line-comments'
 
-// Горизонтальное правило (---, ***, ___, с любыми пробелами между символами и
-// по краям) — как и пустая строка, не показывается как quote-превью: цитировать
-// разделитель бессмысленно.
+// Горизонтальное правило (---, ***, ___, с любыми пробелами между символами и по краям) — как и пустая
+// строка, не показывается как quote-превью: цитировать разделитель бессмысленно.
 const HR_LINE_RE = /^\s*([-*_])(\s*\1){2,}\s*$/
 
-// quotedSourceLine — чистая функция вычисления quote-превью для формы
-// комментария. line — 1-based (как activeCommentLine/data-line); raw берётся
-// из sourceLines[line-1] (с защитным '' на выход за границы). Пустая/hr-строка
-// → '' (нет quote).
+// quotedSourceLine — чистая функция вычисления quote-превью для формы комментария. Пустая/hr-строка → ''
+// (нет quote).
 export function quotedSourceLine(sourceLines: string[], line: number): string {
   const raw = sourceLines[line - 1] ?? ''
   const trimmed = raw.trim()
@@ -28,10 +25,7 @@ export function quotedSourceLine(sourceLines: string[], line: number): string {
   return trimmed
 }
 
-// API, который владелец отдаёт потребителю через render-prop. Панель действий
-// (Approve/Send revision / Send feedback) и commentCount читают state ОТСЮДА
-// напрямую — зеркала state в родителе нет, поэтому смена documentIdentity (key на
-// родителе) размонтирует владельца и обнулит всё состояние АТОМАРНО.
+// API, который владелец отдаёт потребителю через render-prop.
 export type LineCommentDocumentApi = {
   // body — готовый к рендеру markdown-контейнер (со всеми блоками, формами и
   // индикаторами внутри). Потребитель кладёт его в свой лейаут где нужно.
@@ -40,10 +34,7 @@ export type LineCommentDocumentApi = {
   commentCount: number
   activeCommentLine: number | null
   draft: string
-  // hasOpenDraft — открыта форма с НЕПУСТЫМ черновиком. Submit-кнопки
-  // (Approve/Send revision/Send feedback/answer SEND) гейтятся по activeCommentLine
-  // (форма открыта, даже пустая), а не по hasOpenDraft — иначе пустая открытая
-  // форма пропускала бы сабмит по ошибке.
+  // hasOpenDraft — открыта форма с НЕПУСТЫМ черновиком.
   hasOpenDraft: boolean
   clearComments: () => void
 }
@@ -52,9 +43,8 @@ type LineCommentedDocumentProps = {
   text: string
   specialSections: boolean
   stageId: string
-  // beforeOpen — синхронный колбэк ПЕРЕД открытием формы (Dialog передаёт
-  // feed.release, чтобы стик-к-низу не утащил канал после автоскролла к форме;
-  // Plan — noop/не передаёт).
+  // beforeOpen — синхронный колбэк ПЕРЕД открытием формы (Dialog передаёт feed.release, чтобы стик-к-низу
+  // не утащил канал после автоскролла к форме; Plan — noop/не передаёт).
   beforeOpen?: () => void
   allowFileReferences?: boolean
   bodyId?: string
@@ -62,9 +52,7 @@ type LineCommentedDocumentProps = {
   children: (doc: LineCommentDocumentApi) => ReactNode
 }
 
-// LineCommentedDocument — keyed-владелец ОДНОЙ версии документа. Родитель монтирует
-// его как `<LineCommentedDocument key={documentIdentity} …>`; смена identity →
-// remount → атомарный сброс всего state (comments/draft/active/collapsed/roving).
+// LineCommentedDocument — keyed-владелец ОДНОЙ версии документа.
 export function LineCommentedDocument({
   text,
   specialSections,
@@ -107,9 +95,8 @@ export function LineCommentedDocument({
     [beforeOpen],
   )
 
-  // onActivate — реакция на клик/Enter по якорю: непустой черновик игнорирует любые
-  // клики; повторный клик по активной строке (с пустым черновиком) закрывает форму;
-  // иначе открываем/переключаемся.
+  // onActivate — реакция на клик/Enter по якорю: непустой черновик игнорирует любые клики; повторный клик
+  // по активной строке (с пустым черновиком) закрывает форму; иначе открываем/переключаемся.
   const onActivate = useCallback(
     (line: number) => {
       if (activeRef.current !== null && draftRef.current.trim() !== '') return
@@ -320,9 +307,8 @@ function SpecialSectionWrapper({
   )
 }
 
-// QuoteBlock — dimmed-превью строки-источника (большая акцентная кавычка). Одна и
-// та же разметка у открытой формы и у сохранённого комментария; пустой quotedLine
-// (пустая/hr-строка) не рендерит ничего.
+// QuoteBlock — dimmed-превью строки-источника. Одна и та же разметка у открытой формы и у сохранённого
+// комментария; пустой quotedLine (пустая/hr-строка) не рендерит ничего.
 function QuoteBlock({ quotedLine }: { quotedLine: string }): ReactElement | null {
   if (quotedLine === '') return null
   return (

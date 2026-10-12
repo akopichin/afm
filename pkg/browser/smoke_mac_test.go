@@ -1,14 +1,6 @@
 //go:build browser_smoke
 
-// Opt-in real-Chrome smoke test. Run manually on a developer Mac/Linux host with
-// Chrome installed:
-//
-//	go test -tags browser_smoke ./pkg/browser/ -run Smoke -v
-//
-// It is excluded from the default `go test ./...` and from CI so the normal suite
-// stays headless. This exercises a REAL Chrome launched via --remote-debugging-pipe
-// through the Manager's real launch path (no fake), proving the pipe proxy carries
-// genuine CDP traffic end-to-end.
+// Opt-in real-Chrome smoke test.
 package browser
 
 import (

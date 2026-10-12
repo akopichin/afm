@@ -13,10 +13,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// stubCostProvider — минимальная тестовая реализация accounting.CostProvider:
-// CostSnapshot просто возвращает заранее заданный bundle, без реального
-// Store/Ledger (см. бриф: "Use a tiny in-test stub ... do NOT spin a real
-// Store unless trivial").
+// stubCostProvider возвращает заданный CostBundle без реального Store.
 type stubCostProvider struct {
 	bundle accounting.CostBundle
 }
@@ -58,11 +55,6 @@ func decodeStatusMap(t *testing.T, w *httptest.ResponseRecorder) map[string]json
 	return m
 }
 
-// TestHandleStatus_AccountingFieldsOmittedWhenProviderNil — сервер без
-// подключённого accounting (Config.Accounting оставлен нулевым, как в
-// setupTestServer) не должен вообще упоминать accounting-поля в JSON —
-// это "не поддерживается", отличное от подключённого, но нерабочего
-// провайдера (StaticUnavailable).
 func TestHandleStatus_AccountingFieldsOmittedWhenProviderNil(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/status", nil)
@@ -113,9 +105,6 @@ func TestHandleStatus_AccountingFieldsPresentWhenProviderSet(t *testing.T) {
 	}
 }
 
-// TestHandleStatus_ShowMoney — флаг Server.showMoney протаскивается в
-// accounting.show_money ответа /api/status. По умолчанию (не задан) — false,
-// поэтому дашборд прячет деньги; явный true — показывает.
 func TestHandleStatus_ShowMoney(t *testing.T) {
 	bundle := accounting.CostBundle{Health: accounting.HealthOK, HasData: true}
 
@@ -161,10 +150,6 @@ func TestHandleStatus_ShowMoney(t *testing.T) {
 	})
 }
 
-// TestHandleStatus_StaticUnavailableProvider — accounting.StaticUnavailable()
-// (открытие Store'а провалилось на хосте) отдаёт health:"unavailable",
-// has_data:false — но, в отличие от nil-провайдера, поле accounting
-// ПРИСУТСТВУЕТ в JSON (nil vs static-unavailable — разные вещи, см. бриф).
 func TestHandleStatus_StaticUnavailableProvider(t *testing.T) {
 	srv := newTestServerWithAccounting(t, accounting.StaticUnavailable())
 
@@ -189,12 +174,6 @@ func TestHandleStatus_StaticUnavailableProvider(t *testing.T) {
 	}
 }
 
-// TestHandleStatus_HealthOrthogonalToCoverage — регрессия на смешивание двух
-// независимых осей: Health описывает сам Store (можно ли ему верить), а
-// Coverage — насколько ПОЛНО оценена конкретная группа записей. Здоровый
-// провайдер с одной неоценённой (unpriced) записью — совершенно
-// легитимное одновременное состояние: health:"ok" И coverage:"none". Сервер
-// не должен ничего домысливать — просто пробрасывать bundle как есть.
 func TestHandleStatus_HealthOrthogonalToCoverage(t *testing.T) {
 	bundle := accounting.CostBundle{
 		Health:  accounting.HealthOK,
@@ -219,9 +198,6 @@ func TestHandleStatus_HealthOrthogonalToCoverage(t *testing.T) {
 	}
 }
 
-// TestHandleStatus_CoverageIssuesAttributionJSON фиксирует JSON-литерал
-// Attribution для всех трёх Kind — контракт с фронтом, который на них
-// переключается (stage_id присутствует только для attribution:stage).
 func TestHandleStatus_CoverageIssuesAttributionJSON(t *testing.T) {
 	bundle := accounting.CostBundle{
 		Health:  accounting.HealthOK,

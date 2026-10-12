@@ -2,14 +2,8 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 const STICK_THRESHOLD_PX = 40
 
-// Держит скролл-контейнер прижатым к низу, пока пользователь сам не уехал вверх.
-// stick=true → MutationObserver докручивает вниз при росте контента.
-// stick=false → не трогаем скролл; jumpToBottom() возвращается к хвосту.
-//
-// ref — callback (не RefObject): некоторые контейнеры (DialogChannel/#dialog-scroll)
-// монтируются не сразу, а только когда появляется контент (hasContent). Callback
-// ref гарантирует, что эффект ниже переустановит наблюдатели именно в момент
-// реального появления DOM-узла, а не только один раз при первом рендере хука.
+// Держит скролл-контейнер прижатым к низу, пока пользователь сам не уехал вверх. stick=true →
+// MutationObserver докручивает вниз при росте контента.
 export function useStickToBottom<T extends HTMLElement>(): {
   ref: (node: T | null) => void
   stick: boolean
@@ -27,28 +21,19 @@ export function useStickToBottom<T extends HTMLElement>(): {
     setStick(true)
   }, [node])
 
-  // release — императивно отпускает «прилипание» к низу. Нужен, когда что-то
-  // вне хука намеренно уводит скролл (прицельный переход к конкретному Q&A из
-  // ленты, DialogChannel): иначе MutationObserver ниже на ближайшей же мутации
-  // контента (React-коммит, авто-рост textarea, flash-класс) пока stick=true
-  // тут же вернул бы scrollTop к низу и «съел» бы целевой скролл. Пишем и
-  // stickRef.current сразу (не только setStick), чтобы наблюдатель перестал
-  // докручивать в ТОМ ЖЕ кадре, до асинхронного ре-рендера.
+  // release — императивно отпускает «прилипание» к низу. Пишем и stickRef.current сразу (не только
+  // setStick), чтобы наблюдатель перестал докручивать в ТОМ ЖЕ кадре, до асинхронного ре-рендера.
   const release = useCallback(() => {
     stickRef.current = false
     setStick(false)
   }, [])
 
-  // useLayoutEffect (не useEffect): начальную позицию скролла выставляем ДО
-  // отрисовки кадра. Иначе список/диалог сначала рисуется прижатым к верху
-  // (scrollTop=0) и только следующим кадром прыгает вниз — заметное мигание;
-  // особенно с attention-баннером первым ребёнком #dialog-scroll (баннер
-  // мелькал сверху и тут же уезжал). Наблюдатели ниже — тоже здесь, разницы нет.
+  // useLayoutEffect: начальную позицию скролла выставляем ДО отрисовки кадра. Наблюдатели ниже — тоже
+  // здесь, разницы нет.
   useLayoutEffect(() => {
     if (node === null) return
 
-    // Узел мог примонтироваться уже с готовым контентом (та самая задержка
-    // DialogChannel выше) — без явного скролла здесь MutationObserver ниже
+    // Узел мог примонтироваться уже с готовым контентом — без явного скролла здесь MutationObserver ниже
     // реагирует только на БУДУЩИЙ рост контента, и список остаётся наверху.
     if (stickRef.current) node.scrollTop = node.scrollHeight
 

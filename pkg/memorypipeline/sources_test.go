@@ -110,9 +110,6 @@ func TestSourceInventory_ExcludesMemoryArtifactsAndDir(t *testing.T) {
 	}
 }
 
-// TestSourceInventory_ScriptOnlyStageHasNoAgentSession покрывает review #9:
-// стадия только с before.log/after.log/script.log (скрипт-стадия без
-// реального агента) не должна считаться имеющей агентскую сессию.
 func TestSourceInventory_ScriptOnlyStageHasNoAgentSession(t *testing.T) {
 	dir := t.TempDir()
 	for _, f := range []string{"before.log", "after.log", "script.log"} {
@@ -186,11 +183,6 @@ func TestSourceInventory_SkipsSymlinks(t *testing.T) {
 	}
 }
 
-// TestSourceInventory_LstatErrorIsNotSwallowed покрывает review #9: путь
-// строгий (без сети) — Lstat-ошибка на конкретной записи должна вернуться
-// вызывающему коду, а не быть тихо пропущена. Директория с правами r--
-// (без x) позволяет os.ReadDir перечислить имена, но блокирует Lstat по
-// пути dir/name — воспроизводимо без гонок и без root.
 func TestSourceInventory_LstatErrorIsNotSwallowed(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix permission bits don't apply on windows")

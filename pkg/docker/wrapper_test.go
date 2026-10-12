@@ -85,9 +85,8 @@ func TestCreateWrappers_AgentTemplate(t *testing.T) {
 			t.Errorf("agent wrapper missing %q\n--- script ---\n%s", w, s)
 		}
 	}
-	// Регресс: supervisor-ный вызов (--output-format json) НЕ должен получать
-	// --include-partial-messages — claude требует под него stream-json.
-	// Скрипт не содержит безусловного добавления partial.
+	// Регресс: supervisor-ный вызов (--output-format json) НЕ должен получать --include-partial-messages —
+	// claude требует под него stream-json. Скрипт не содержит безусловного добавления partial.
 	if strings.Contains(s, "\nset -- \"$@\" --include-partial-messages\n") {
 		t.Errorf("wrapper must not unconditionally add --include-partial-messages (breaks json calls)\n--- script ---\n%s", s)
 	}

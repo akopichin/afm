@@ -18,22 +18,12 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// maxJSONFixAttempts — сколько раз afm запускает свежий изолированный агент
-// для починки question.json, который не парсится даже после jsonrepair,
-// прежде чем сдаться (interactive-стадия → показать сырой текст человеку;
-// non-interactive → авто-ответить fallback'ом, чтобы стадия не зависла).
-//
-// Каждая попытка — это полный запуск отдельного агентского процесса с чистым
-// контекстом и единственной задачей «почини этот один файл» (см.
-// runJSONFixAgent). Такой агент существенно надёжнее прежнего in-context
-// нуджа тому же агенту (он не отвлечён своей основной задачей и видит только
-// битый файл), поэтому и попыток нужно меньше — но потолок оставляем на
-// случай принципиально нечинибельного содержимого.
+// maxJSONFixAttempts — сколько раз afm запускает свежий изолированный агент для починки question.json,
+// который не парсится даже после jsonrepair, прежде чем сдаться.
 const maxJSONFixAttempts = 3
 
-// malformedQuestionState отслеживает прогресс починки одного
-// (stageID,phase,id), чей question.json не парсится. Живёт всё время работы
-// поллинг-горутины, параллельно с `processed` (см. startQuestionPoller).
+// malformedQuestionState отслеживает прогресс починки одного, чей question.json не парсится. Живёт всё
+// время работы поллинг-горутины, параллельно с `processed` (см. startQuestionPoller).
 type malformedQuestionState struct {
 	lastRaw  []byte          // сырые байты, увиденные на предыдущем тике (torn-read grace + детект перезаписи)
 	attempts int             // сколько свежих fix-агентов уже запущено (0..maxJSONFixAttempts)
@@ -47,16 +37,8 @@ type violationCacheEntry struct {
 	mtime time.Time
 }
 
-// startQuestionPoller launches a goroutine that scans active stage directories
-// every second for new *.question.json files (file-based dialog protocol).
-//
-// o.pollerDone is created here and closed on exit (defer) — finalizeLifecycle
-// (orchestrator.go) bounded-waits on it before emitting the terminal
-// flow_* lifecycle event, so a poller tick still in flight at shutdown can
-// never publish a stage event after the terminal one (finding #1, final
-// review). This goroutine isn't tracked by concurrency.WaitAgents (it's an
-// observer, not an agent), so without this explicit channel nothing would
-// wait for it at all.
+// startQuestionPoller launches a goroutine that scans active stage directories every second for new
+// *.question.json files.
 func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 	o.pollerDone = make(chan struct{})
 	go func() {
@@ -77,14 +59,10 @@ func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 }
 
 // pollQuestions scans each active stage directory for unanswered question files.
-// For each new file: writes it to dialog.jsonl (for UI history) and publishes
-// EventAskUser to transition the stage to awaiting_user_input.
 func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[string]*malformedQuestionState) {
 	snap := o.opts.Store.Snapshot()
 
-	// activeInteractiveCount считает interactive-стадии, активные прямо сейчас
-	// (см. relocateMisplacedQuestions: файл в root_dir не несёт stageID, поэтому
-	// скан root_dir безопасен, только когда однозначно ясно, кому он принадлежит).
+	// activeInteractiveCount считает interactive-стадии, активные прямо сейчас.
 	activeInteractiveCount := 0
 	for id, st := range snap.Stages {
 		switch st.Status {
@@ -107,20 +85,15 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 		}
 		stageDir := filepath.Join(o.opts.RunDir, stageID)
 		stage := o.graph.Stage(stageID)
-		// Once a fix-agent (or the original agent) has made a tracked
-		// question.json valid again, stop tracking it — from here it flows
-		// through the normal question path. Applies to every stage type: the
-		// fresh-agent repair mechanism is no longer interactive-only.
+		// Once a fix-agent has made a tracked question.json valid again, stop tracking it — from here it flows
+		// through the normal question path.
 		o.reconcileMalformedFixes(malformed, stageID, stageDir)
 		questions, err := mcp.FindUnansweredQuestions(stageDir)
 		if err != nil {
 			continue
 		}
-		// Serialize interactive dialogs: an agent's polling loop blocks on the
-		// FIRST question it wrote, so afm must process only the oldest unanswered
-		// question (by its immutable q<N> id) and hold the rest. Chosen from the
-		// SAME slice we just scanned — never a second FS read. Non-interactive
-		// stages are exempt (they auto-answer every question below).
+		// Serialize interactive dialogs: an agent's polling loop blocks on the FIRST question it wrote, so afm
+		// must process only the oldest unanswered question and hold the rest.
 		var interactiveCurrent *mcp.QuestionFile
 		if stage != nil && stage.Interactive {
 			if cur, ok := mcp.SelectCurrentQuestion(questions); ok {
@@ -128,18 +101,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				interactiveCurrent = &c
 			}
 		}
-		// Forget any previously-processed key for this stage that is no longer
-		// in the current unanswered set — it must have been answered (dropped
-		// out of FindUnansweredQuestions once its answer.json appeared).
-		// Without this, `processed` never releases a key: the prompt tells
-		// agents to never reuse a question id within a phase, but a real
-		// agent (goga-brainstorm's revision loop) did reuse the same id for a
-		// second, distinct question after the first was answered — and the
-		// stale `processed[key] == true` silently swallowed it forever, with
-		// no EvAskUser, no dialog entry, and no visible symptom beyond the
-		// stage going idle. Restarting the browser can't fix this (the map is
-		// server-side, in-process); only a full afm restart happened to clear
-		// it. See TestPollQuestions_ReusedIDAfterAnswerAsksAgain.
+		// Forget answered keys so the agent can reuse a question ID.
 		unanswered := make(map[string]bool, len(questions))
 		for _, q := range questions {
 			unanswered[stageID+"|"+q.Phase+"|"+q.ID] = true
@@ -151,9 +113,8 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			}
 		}
 		for _, q := range questions {
-			// Hold back every interactive question that is not the current one. Not
-			// marked processed, so it is re-evaluated each tick and surfaced once it
-			// becomes current.
+			// Hold back every interactive question that is not the current one. Not marked processed, so it is
+			// re-evaluated each tick and surfaced once it becomes current.
 			if interactiveCurrent != nil &&
 				(q.Phase != interactiveCurrent.Phase || q.ID != interactiveCurrent.ID) {
 				continue
@@ -161,16 +122,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 
 			key := stageID + "|" + q.Phase + "|" + q.ID
 
-			// Malformed question.json (unparseable even after jsonrepair):
-			// never surface it directly. A single failed parse is frequently
-			// a torn read racing the agent's still-in-flight Write call, not
-			// a genuine mistake — see handleMalformedQuestion for the full
-			// repair state machine (torn-read grace → fresh fix-agent →
-			// terminal fallback). Applies to EVERY stage type: a malformed
-			// file cannot be parsed, so a non-interactive stage's auto-answer
-			// path (which needs parsed options) can't run on it either — the
-			// old "interactive-only" gate here left non-interactive stages
-			// hanging forever on an unparseable question.
+			// Malformed question.json: never surface it directly.
 			if q.Malformed {
 				if stage != nil {
 					o.handleMalformedQuestion(malformed, stageID, stageDir, q, key)
@@ -181,15 +133,8 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			if processed[key] {
 				continue
 			}
-			// Write to dialog.jsonl for history. Append when the id isn't
-			// recorded yet OR the recorded entry is already answered — the
-			// latter means the agent reused the id for a NEW question (removed
-			// answer.json, rewrote question.json). The new incarnation must
-			// reach dialog.jsonl so ReadDialog re-opens the entry as unanswered
-			// (see mcp.ReadDialog's reused-id handling); otherwise the reused
-			// question is never shown with an input box and the interactive
-			// stage hangs. FindEntry reflects that re-opening, so the next tick
-			// sees an unanswered entry and does not append a duplicate.
+			// Write to dialog.jsonl for history. FindEntry reflects that re-opening, so the next tick sees an
+			// unanswered entry and does not append a duplicate.
 			dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
 			if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil || e.Answer != nil {
 				_ = mcp.AppendQuestion(dialogPath, mcp.Question{
@@ -200,37 +145,26 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				})
 			}
 
-			// Non-interactive stage (default, or agents:[auto]): afm answers the
-			// question itself instead of surfacing it to a human — the stage's
-			// FSM status is left untouched (no EvAskUser transition) in the normal
-			// case where the agent is still polling.
+			// Non-interactive stage: afm answers the question itself instead of surfacing it to a human — the
+			// stage's FSM status is left untouched in the normal case where the agent is still polling.
 			if stage != nil && !stage.Interactive {
 				if o.reviewTxnActive() {
-					// Review-pause is active: afm must not auto-answer on the
-					// stage's behalf while the flow is held for a human
-					// reviewer — leave the question unanswered and retry on
-					// the next tick, same as a failed WriteAnswer above.
+					// Leave questions unanswered during review-pause; retry after the reviewer releases the flow.
 					continue
 				}
-				// Гейт снимаем ДО WriteAnswer: паркинг-стадию покрывает
-				// FSM-путь (EvAskUser/EvUserAnswered через triggerWithSeq,
-				// см. Task 8 fsmLifecycleEvents) — не-FSM пара ниже эмитится
-				// ТОЛЬКО когда стадия НЕ была запаркована, иначе
-				// stage_question_asked/answered задваивались бы.
+				// Гейт снимаем ДО WriteAnswer: паркинг-стадию покрывает FSM-путь — не-FSM пара ниже эмитится ТОЛЬКО
+				// когда стадия НЕ была запаркована, иначе stage_question_asked/answered задваивались бы.
 				parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
 				answer, fromOptions := mcp.PickAutoAnswer(q)
 				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
 					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
-					// НЕ помечаем processed: неудачная запись (диск / O_EXCL-гонка)
-					// должна ретраиться на следующем тике, иначе стадия зависнет в
-					// ожидании answer.json до idle-таймаута исполнителя (~30 мин).
+					// НЕ помечаем processed: неудачная запись (диск / O_EXCL-гонка) должна ретраиться на следующем тике,
+					// иначе стадия зависнет в ожидании answer.json до idle-таймаута исполнителя (~30 мин).
 					continue
 				}
 				processed[key] = true
-				// Публикуем dialog_question ПЕРЕД auto_answered — лента должна
-				// показать и вопрос, и авто-ответ, оба навигируемыми в полный
-				// диалог, в правильном порядке. Обе строки durable (notices.jsonl),
-				// поэтому переживают reload/рестарт.
+				// Публикуем dialog_question ПЕРЕД auto_answered — лента должна показать и вопрос, и авто-ответ, оба
+				// навигируемыми в полный диалог, в правильном порядке.
 				o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
 				o.publishNotice(bus.Event{
 					Type:    bus.EventAutoAnswered,
@@ -255,41 +189,20 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 						Key:       q.Phase + "/" + q.ID,
 					})
 				}
-				// Если агент уже вышел, оставив стадию запаркованной в
-				// awaiting_user_input, написать answer.json недостаточно —
-				// стадию надо вывести из этого статуса и перезапустить агента
-				// (тем же путём, что human-ответ). В нормальном случае (агент
-				// ещё жив и опрашивает answer.json) это no-op. См.
-				// resumeAfterAnswer / TestPollQuestions_ParkedNonInteractiveStageIsUnparked.
+				// Если агент уже вышел, оставив стадию запаркованной в awaiting_user_input, написать answer.json
+				// недостаточно — стадию надо вывести из этого статуса и перезапустить агента.
 				_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
 				continue
 			}
 			processed[key] = true
-			// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт,
-			// что уже гарантирует единственность EventAskUser (processed[key]).
-			// giveUpOnMalformedQuestion (терминальный fallback для malformed)
-			// публикует СВОЙ собственный EventAskUser в обход этой ветки и НЕ
-			// трогает processed — поэтому на следующем тике его валидный стаб
-			// проходит через эту же ветку как обычный новый вопрос и попадает
-			// сюда ЕЩЁ РАЗ. giveUpOnMalformedQuestion теперь тоже публикует
-			// dialog_question (task-fixB, F1 — иначе быстрый ответ/отмена
-			// пользователя в окне до следующего тика теряет уведомление
-			// совсем), так что здесь возможен повторный, но байт-в-байт
-			// идентичный dialog_question. Не гасим его гейтом намеренно —
-			// reconstructNotices (pkg/server/events_handler.go) схлопывает
-			// одинаковые по содержимому dialog_question/dialog_answer в одну
-			// строку на чтении. См.
-			// TestPollQuestions_MalformedQuestion_GiveUpThenRepollEmitIdenticalDialogQuestion.
+			// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт, что уже гарантирует единственность
+			// EventAskUser.
 			o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
 
 			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
-			// Фаза из имени файла (q.Phase) может быть неправильной (агент написал
-			// "review" вместо "planning") — при EvUserAnswered используем сохранённую
-			// фазу, а не ту что в файле вопроса.
 			o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
-			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию
-			// реальный seq этой transition — фронт дедуплицирует по нему live-
-			// событие с историческим двойником из /api/events.
+			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию реальный seq этой transition — фронт
+			// дедуплицирует по нему live- событие с историческим двойником из /api/events.
 			_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
 			o.ui.Publish(bus.Event{
 				Type:    bus.EventAskUser,
@@ -301,10 +214,8 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				Seq: seq,
 			})
 		}
-		// No open question in stageDir: if this is an interactive stage, check
-		// whether the agent wrote one elsewhere (GLM-4.7 hallucination bug: agent
-		// constructs path from CWD instead of reading $AFM_STAGE_DIR).
-		// Auto-relocate the misplaced file so the dialog becomes visible in the UI.
+		// No open question in stageDir: if this is an interactive stage, check whether the agent wrote one
+		// elsewhere. Auto-relocate the misplaced file so the dialog becomes visible in the UI.
 		if len(questions) == 0 {
 			if stage != nil && stage.Interactive {
 				o.relocateMisplacedQuestions(stageID, stageDir, activeInteractiveCount <= 1)
@@ -313,31 +224,15 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 	}
 }
 
-// publishDialogQuestion emits a "dialog_question" feed message the first time
-// an interactive question is surfaced to a human — live to the UI bus AND
-// persisted to notices.jsonl, the same one-map-two-sinks shape as
-// EventAutoAnswered (see the auto-answer branch above): a client that
-// connects/reloads AFTER the question was asked still sees it in the feed
-// history via /api/events' reconstructNotices, which replays only from
-// notices.jsonl, not from the live bus. The payload map is built ONCE so the
-// live and persisted JSON are byte-identical (feed dedup depends on it).
+// publishDialogQuestion publishes one identical payload live and to notices.jsonl for history/live
+// deduplication.
 func (o *Orchestrator) publishDialogQuestion(stageID, phase, id, questionText string) {
 	payload := mcp.DialogFeedNotice(phase, id, mcp.DialogSnippet(questionText))
 	o.publishNotice(bus.Event{Type: bus.EventDialogQuestion, StageID: stageID, Data: payload})
 }
 
-// reconcileMalformedFixes drops every tracked malformed key for stageID whose
-// question.json now parses (a fix-agent — or the original agent — repaired it)
-// or no longer exists. Once dropped, the id flows through the normal question
-// path (auto-answer for non-interactive, EvAskUser for interactive) on this
-// same tick. Runs for every stage type, before FindUnansweredQuestions.
-//
-// Because the fresh-agent repair mechanism rewrites question.json in place and
-// never writes a synthetic answer.json, there is nothing stale to clean up on
-// disk here — a valid file simply stops being tracked. This is what makes the
-// whole class of "stale tracking deletes a later real answer" bug (which the
-// old nudge-based unblockRewrittenMalformedQuestions had to guard against)
-// impossible by construction.
+// reconcileMalformedFixes drops every tracked malformed key for stageID whose question.json now parses or
+// no longer exists. Runs for every stage type, before FindUnansweredQuestions.
 func (o *Orchestrator) reconcileMalformedFixes(malformed map[string]*malformedQuestionState, stageID, stageDir string) {
 	prefix := stageID + "|"
 	for key := range malformed {
@@ -355,28 +250,8 @@ func (o *Orchestrator) reconcileMalformedFixes(malformed map[string]*malformedQu
 	}
 }
 
-// handleMalformedQuestion advances the repair state machine for a
-// question.json that failed to parse even after jsonrepair (the "fix via the
-// library" step already happened inside FindUnansweredQuestions — reaching
-// here means it failed). The unified mechanism, identical for interactive and
-// non-interactive stages, is:
-//
-//   - Torn-read grace: a single failed parse is frequently the poller catching
-//     the file mid-write, not a genuine mistake (root-caused byte-for-byte in a
-//     real production log — the SAME bytes parsed perfectly one tick later once
-//     the write finished). First sighting of broken content: remember it, do
-//     nothing. If it was a torn read, the next tick re-reads valid bytes and we
-//     never even get called (FindUnansweredQuestions no longer flags Malformed).
-//   - Fresh fix-agent: same broken bytes on a second tick means the write is
-//     genuinely done. Launch a fresh, clean-context agent whose only task is to
-//     rewrite this one file as valid JSON (runJSONFixAgent), up to
-//     maxJSONFixAttempts times. We wait (via the state's done channel) while an
-//     agent is in flight; each finished-but-still-broken attempt spends one of
-//     the attempts budget.
-//   - Terminal fallback once attempts are exhausted: interactive stage → persist
-//     a parseable stub and surface the raw text to a human (giveUpOnMalformedQuestion);
-//     non-interactive stage → auto-answer a fallback so the stage never hangs
-//     (autoAnswerMalformed).
+// handleMalformedQuestion advances the repair state machine for a question.json that failed to parse even
+// after jsonrepair. First sighting of broken content: remember it, do nothing.
 func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQuestionState, stageID, stageDir string, q mcp.QuestionFile, key string) {
 	stage := o.graph.Stage(stageID)
 	if stage == nil {
@@ -395,10 +270,7 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 	}
 
 	if st.done != nil {
-		// A fix-agent is in flight. If it had already made the file valid,
-		// FindUnansweredQuestions would no longer flag Malformed and we would
-		// not be here — so being here means it is either still working or
-		// finished without fixing it. Distinguish via the done channel.
+		// A fix-agent is in flight. Distinguish via the done channel.
 		select {
 		case <-st.done:
 			st.done = nil // agent finished (still broken): fall through to next attempt / exhaustion
@@ -407,9 +279,8 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 			return // agent still working — keep waiting
 		}
 	} else if string(raw) != string(st.lastRaw) {
-		// Not mid-repair and the content is still changing between ticks — a
-		// slow write settling. Refresh the baseline and grant one more grace
-		// tick before treating it as stably broken.
+		// Not mid-repair and the content is still changing between ticks — a slow write settling. Refresh the
+		// baseline and grant one more grace tick before treating it as stably broken.
 		st.lastRaw = raw
 		return
 	}
@@ -438,21 +309,14 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 	})
 }
 
-// autoAnswerMalformed is the non-interactive terminal fallback: after the fix
-// agents have all failed, the question is still unparseable, so its options
-// can't be recovered. PickAutoAnswer with an empty question yields the standard
-// "decide autonomously" fallback text; writing it as the answer unblocks the
-// stage's agent (its bash loop is waiting on <phase>.<id>.answer.json) instead
-// of leaving it polling forever. Mirrors the normal non-interactive auto-answer
-// path (EventAutoAnswered + notices.jsonl), leaving the stage FSM untouched.
+// autoAnswerMalformed is the non-interactive terminal fallback: after the fix agents have all failed, the
+// question is still unparseable, so its options can't be recovered.
 func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.QuestionFile) {
 	// Тот же гейт против дублей, что и в обычной non-interactive ветке
 	// pollQuestions: снимаем ДО WriteAnswer, паркинг-стадию покрывает FSM-путь.
 	parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
 	answer, fromOptions := mcp.PickAutoAnswer(mcp.QuestionFile{ID: q.ID, Phase: q.Phase})
-	// Оригинальный question.json так и не распарсился — реального текста вопроса
-	// нет. Кладём в диалог синтетический (bounded) заголовок, чтобы у ленты была
-	// навигируемая пара «вопрос + авто-ответ» так же, как в обычной ветке.
+	// Оригинальный question.json так и не распарсился — реального текста вопроса нет.
 	syntheticQuestion := mcp.DialogSnippet(fmt.Sprintf("question %s (unreadable — invalid JSON)", q.ID))
 	dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
 	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
@@ -486,24 +350,13 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 			Key:       q.Phase + "/" + q.ID,
 		})
 	}
-	// Как и в обычной non-interactive ветке (см. resumeAfterAnswer выше): если
-	// агент уже вышел, оставив стадию запаркованной в awaiting_user_input,
-	// написать answer.json недостаточно — стадию надо вывести из этого статуса и
-	// перезапустить агента. Без этого восстановленная стадия с неисправимым
-	// malformed-вопросом висла бы в awaiting_user_input навсегда. В нормальном
-	// случае (агент ещё жив) — no-op.
+	// Если агент уже вышел в awaiting_user_input, после записи ответа выводим стадию из ожидания и
+	// перезапускаем агента.
 	_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
 }
 
-// giveUpOnMalformedQuestion runs once fix attempts are exhausted on an
-// interactive stage: persists a real, parseable stub to disk —
-// handleDialogAnswer (pkg/server/handlers.go) re-parses question.json strictly
-// on every answer submission, so leaving broken JSON in place would 500 forever
-// — and surfaces it to the user with no options, free text only; whatever they
-// type becomes the literal answer. It also emits the dialog_question feed
-// notice itself (task-fixB, F1) instead of leaving that to the NEXT poller
-// tick — a user who answers or the stage gets cancelled within that ~1s
-// window must not lose the feed row entirely.
+// giveUpOnMalformedQuestion persists a parseable free-text stub and emits its feed notice immediately
+// after repair attempts fail.
 func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp.QuestionFile, qPath string, raw []byte) {
 	explanation := fmt.Sprintf(
 		"⚠️ Отдельный агент %d раз(а) подряд не смог записать корректный JSON для этого вопроса. Показан необработанный текст файла — ответьте свободным текстом.\n\nСодержимое файла:\n%s",
@@ -528,16 +381,8 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
 		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: explanation, AllowCustom: true})
 	}
-	// Emit dialog_question HERE, on the give-up tick itself (task-fixB, F1) —
-	// do not wait for the stub to flow through pollQuestions' normal branch on
-	// the NEXT tick. If the user answers/cancels within that ~1s window, the
-	// old code never emitted the notice at all, and the feed silently never
-	// showed the question. The stub still re-enters the normal branch next
-	// tick and fires dialog_question again with IDENTICAL content (same
-	// phase/id, and title = DialogSnippet(explanation) both times) — that
-	// double-emission is deliberately left in place rather than gated: F2/F3's
-	// read-side dedup in reconstructNotices (pkg/server/events_handler.go)
-	// collapses same-content dialog_question notices to a single feed row.
+	// Emit dialog_question HERE, on the give-up tick itself — do not wait for the stub to flow through
+	// pollQuestions' normal branch on the NEXT tick.
 	o.publishDialogQuestion(stageID, q.Phase, q.ID, explanation)
 	o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
 	_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
@@ -552,32 +397,8 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 	})
 }
 
-// runJSONFixAgent launches a fresh, clean-context agent whose ONLY task is to
-// rewrite one malformed question.json as valid JSON, and returns a channel
-// closed when that agent finishes. This is the production value of
-// Orchestrator.spawnJSONFix (tests inject a synchronous stub).
-//
-// Key isolation choices:
-//   - Fresh session (SessionID/Resume unset) — the whole point is a clean
-//     context untainted by the stage agent's history; unlike runnerFor, we
-//     never resume.
-//   - No StageDir/AFM_STAGE_DIR — the fix agent is NOT a dialog participant; it
-//     only edits the single absolute-path file named in its prompt, so it can
-//     never itself write a new question.json the poller would pick up.
-//   - concurrency.SpawnDetached, not SpawnAgent — the stage's main agent is
-//     blocked polling for the answer to this very question while holding the
-//     stage's command semaphore slot; routing the fix agent through the same
-//     semaphore would deadlock, and SpawnAgent's markActive would clobber the
-//     main agent's active marker.
-//   - Separate <phase>.<id>.jsonfix.log — keeps the fix agent's tool actions
-//     out of the stage's own <phase>.jsonl (event feed / WrittenFiles).
-//
-// It builds its own executor.Config outside runnerFor (a fresh, isolated
-// agent, not one of the stage's normal phase runners) — its usage is still
-// attributed to the source stage via recordUsage under a distinct accounting
-// phase (phaseJSONFix), so a stage that needed several json-fix attempts
-// shows that cost without being confused with its real planning/implementation/
-// review/autonomous usage.
+// runJSONFixAgent launches a fresh, clean-context agent whose ONLY task is to rewrite one malformed
+// question.json as valid JSON, and returns a channel closed when that agent finishes.
 const phaseJSONFix = "json_fix"
 
 func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan struct{} {
@@ -596,10 +417,7 @@ func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan st
 		cmd = o.opts.Config.Client.Command
 		extra = o.opts.Config.Client.ExtraArgs
 	}
-	// Every afm agent command is claude-stream-json compatible (claude itself,
-	// autoShim wrappers, openai(-agent)-as-claude, …); the default flags are
-	// required to run non-interactively (--print) and are safe everywhere, the
-	// same assumption runnerFor makes for interactive stages.
+	// All agent commands accept Claude stream-json flags; --print is required for non-interactive execution.
 	cfg := executor.Config{
 		Command:     cmd,
 		ExtraArgs:   executor.ResolveArgs(extra),
@@ -651,15 +469,8 @@ Before finishing, verify it parses:
 This command must exit 0.`, qPath, id, qPath)
 }
 
-// detectDialogViolation scans the agent's stream-json logs (<phase>.jsonl) for a
-// Write of a *.question.json file OUTSIDE the stage directory. Such a write
-// violates the file-based dialog contract: the poller and dashboard only look
-// inside stageDir, so a misplaced question hangs the stage forever. Returns a
-// human-readable reason when a violation is found.
-//
-// Результат каждого файла кешируется по (size, mtime): если файл не изменился
-// с прошлого тика, он не перечитывается. Метод вызывается только из поллера —
-// синхронизация не нужна.
+// detectDialogViolation scans the agent's stream-json logs for a Write of a *.question.json file OUTSIDE
+// the stage directory. Метод вызывается только из поллера — синхронизация не нужна.
 func (o *Orchestrator) detectDialogViolation(stageDir string) (string, bool) {
 	phases := dialogPhases(stageDir)
 	for _, phase := range phases {
@@ -690,10 +501,8 @@ func jsonlFileForPhase(phase string) string {
 	return flow.PhaseJSONL(flow.Phase(phase))
 }
 
-// dialogPhases возвращает фазы, чьи диалоговые артефакты (session/jsonl/вопросы)
-// относятся к стадии: базовые planning/implementation/review плюс autonomous,
-// если стадия исполняется в автономном треке (в stageDir есть autonomous.flag).
-// Единый источник для сканов, ранее собиравшихся вручную в нескольких местах.
+// dialogPhases возвращает фазы, чьи диалоговые артефакты относятся к стадии: базовые
+// planning/implementation/review плюс autonomous, если стадия исполняется в автономном треке.
 func dialogPhases(stageDir string) []string {
 	var phases []string
 	for _, p := range flow.Phases() {
@@ -705,15 +514,12 @@ func dialogPhases(stageDir string) []string {
 	return phases
 }
 
-// relocateScanInterval — throttle для скана root_dir внутри
-// relocateMisplacedQuestions: это запасная сеть, а не основной путь, лишняя
-// частота (раз в секунду, как основной poll-тик) не нужна.
+// relocateScanInterval — throttle для скана root_dir внутри relocateMisplacedQuestions: это запасная сеть,
+// а не основной путь, лишняя частота (раз в секунду, как основной poll-тик) не нужна.
 const relocateScanInterval = 5 * time.Second
 
-// activeDialogPhase возвращает фазу, чей <phase>.jsonl изменялся последним
-// среди dialogPhases(stageDir) — это и есть фаза, в которой сейчас реально
-// работает агент (одновременно активна только одна). Пустая строка, если
-// агент ещё не начал писать ни в одну фазу (ни один <phase>.jsonl не создан).
+// activeDialogPhase возвращает фазу, чей <phase>.jsonl изменялся последним среди dialogPhases — это и есть
+// фаза, в которой сейчас реально работает агент.
 func activeDialogPhase(stageDir string) string {
 	var latest string
 	var latestMod time.Time
@@ -745,28 +551,8 @@ func collectQuestionFiles(dir string, into map[string]bool) {
 	}
 }
 
-// relocateMisplacedQuestions чинит два способа, которыми агент может «спрятать»
-// файл вопроса от поллера, и оба ведут к вечному зависанию стадии:
-//
-//  1. Неверная ДИРЕКТОРИЯ: question.json записан вне stageDir (агент строит
-//     путь из CWD вместо $AFM_STAGE_DIR).
-//  2. Неверный ПРЕФИКС: файл лежит внутри stageDir, но назван не по
-//     канонической фазе (напр. "commit-changes.q1.question.json" или вообще
-//     без префикса "q1.question.json").
-//
-// В отличие от прежней реализации, НЕ парсит stream-json лог агента в поисках
-// вызова инструмента Write — сканирует файловую систему напрямую, поэтому не
-// зависит от того, каким инструментом (Write, Bash echo/heredoc, кастомный
-// скилл-скрипт) агент создал файл.
-//
-// Скан stageDir (случай 2) выполняется всегда — дёшево, там всего несколько
-// файлов. Скан root_dir (случай 1, allowRootScan) — throttled раз в
-// relocateScanInterval на стадию и ТОЛЬКО когда allowRootScan=true: если
-// параллельно активно ≥2 interactive-стадий без открытого вопроса, у файла в
-// root_dir нет однозначного адресата (в имени только phase+id, без stageID) —
-// безопаснее оставить стадию висеть ещё один тик поллера, чем угадать неверно
-// (см. дизайн-документ, "Безопасность при нескольких параллельных
-// interactive-стадиях").
+// relocateMisplacedQuestions исправляет неверный phase-префикс и размещение вопроса вне stageDir, сохраняя
+// answer-путь агента.
 func (o *Orchestrator) relocateMisplacedQuestions(stageID, stageDir string, allowRootScan bool) {
 	phase := activeDialogPhase(stageDir)
 	if phase == "" {
@@ -789,13 +575,8 @@ func (o *Orchestrator) relocateMisplacedQuestions(stageID, stageDir string, allo
 	}
 }
 
-// normalizeMisplacedQuestion нормализует один найденный файл в канонический
-// путь "<phase>.<id>.question.json" внутри stageDir и создаёт dangling-симлинк
-// на будущий answer.json по (неверному) пути, который опрашивает агент.
-//
-// Разбор имени: "<prefix>.<id>.question.json" → id (префикс отбрасывается,
-// неважно, стадии он или фазы). Если в имени нет точки-разделителя вообще
-// (агент написал голый "q1.question.json") — id это всё имя целиком.
+// normalizeMisplacedQuestion переносит вопрос в <phase>.<id>.question.json и создаёт answer-симлинк по
+// пути, опрашиваемому агентом.
 func (o *Orchestrator) normalizeMisplacedQuestion(f, stageDir, phase string) {
 	base := filepath.Base(f)
 	trimmed := strings.TrimSuffix(base, ".question.json")
@@ -806,12 +587,7 @@ func (o *Orchestrator) normalizeMisplacedQuestion(f, stageDir, phase string) {
 	if id == "" {
 		return
 	}
-	// Файл уже разрешён под СВОИМ (возможно другим) именем — не трогаем.
-	// Отсекает случай, когда предыдущая фаза интерактивной стадии уже
-	// задала вопрос и получила ответ: activeDialogPhase() к этому моменту
-	// может указывать на следующую фазу, но старый
-	// <старая-фаза>.<id>.question.json остаётся лежать в stageDir и не
-	// должен копироваться под именем новой фазы, будто это новый вопрос.
+	// Файл уже разрешён под СВОИМ именем — не трогаем.
 	ownAnswer := strings.TrimSuffix(f, ".question.json") + ".answer.json"
 	if _, err := os.Stat(ownAnswer); err == nil {
 		return
@@ -840,11 +616,7 @@ func (o *Orchestrator) normalizeMisplacedQuestion(f, stageDir, phase string) {
 	log.Printf("INFO: normalized misplaced question %s → %s (symlink answer)", f, dst)
 }
 
-// pathInside reports whether file is located inside dir. Both are resolved to
-// absolute paths the same way (filepath.Abs, no symlink resolution), so they
-// stay in a consistent form — the agent's Write paths and stageDir both originate
-// from the same source (AFM_STAGE_DIR), so a consistent resolution is
-// sufficient and avoids EvalSymlinks' failure on not-yet-existing files.
+// pathInside reports whether file is located inside dir.
 func pathInside(file, dir string) bool {
 	absFile, err := filepath.Abs(file)
 	if err != nil {
@@ -878,11 +650,8 @@ func (o *Orchestrator) hasOpenQuestion(stageID, phase string) bool {
 	return false
 }
 
-// correctPhaseForState возвращает корректную фазу для возврата из awaiting_user_input,
-// основываясь на текущем состоянии FSM, а не на фазе из имени файла вопроса.
-// Агент может написать неправильное имя фазы (напр. "review" вместо "planning"),
-// поэтому мы дублируем правило phaseDispatch на основе реального состояния:
-// planning/revising → phasePlanning, всё остальное → фаза из файла (обычно корректна).
+// correctPhaseForState возвращает корректную фазу для возврата из awaiting_user_input, основываясь на
+// текущем состоянии FSM, а не на фазе из имени файла вопроса.
 func (o *Orchestrator) correctPhaseForState(current state.StageStatus, filePhase string) string {
 	if current == state.StatusPlanning || current == state.StatusRevising {
 		return phasePlanning
@@ -890,9 +659,8 @@ func (o *Orchestrator) correctPhaseForState(current state.StageStatus, filePhase
 	return filePhase
 }
 
-// popPreAskPhase читает и удаляет сохранённую фазу для стейджа.
-// Если запись отсутствует (напр. перезапуск afm без перехода через EvAskUser),
-// возвращает fallback — фазу из имени файла вопроса.
+// popPreAskPhase читает и удаляет сохранённую фазу для стейджа. Если запись отсутствует (напр. перезапуск
+// afm без перехода через EvAskUser), возвращает fallback — фазу из имени файла вопроса.
 func (o *Orchestrator) popPreAskPhase(stageID, fallback string) string {
 	if v, ok := o.preAskPhase.LoadAndDelete(stageID); ok {
 		return v.(string)

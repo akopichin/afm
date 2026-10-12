@@ -57,10 +57,6 @@ func newFS(t *testing.T, root Root) FS {
 	return fs
 }
 
-// TestDiff_TrackedModifiedAndUntracked exercises the full HEAD→working-tree
-// diff path against a real git repo: a tracked file with a local modification
-// (status "modified", unified diff body containing the new line) and an
-// untracked file (status "added").
 func TestDiff_TrackedModifiedAndUntracked(t *testing.T) {
 	dir := t.TempDir()
 	run := func(args ...string) {
@@ -101,9 +97,6 @@ func TestDiff_TrackedModifiedAndUntracked(t *testing.T) {
 	}
 }
 
-// TestDiff_NoRepoUnavailable verifies that a root with no .git anywhere above
-// it (up to the root itself) returns ErrDiffUnavailable, not a panic or a
-// misleading empty diff.
 func TestDiff_NoRepoUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
@@ -119,9 +112,8 @@ func TestDiff_NoRepoUnavailable(t *testing.T) {
 	}
 }
 
-// makeExternalRepo builds a git repo OUTSIDE any allowed root, committing
-// relPath with the given secret content, and returns the repo dir. It is the
-// escape target the security tests must never leak.
+// makeExternalRepo builds a git repo OUTSIDE any allowed root, committing relPath with the given secret
+// content, and returns the repo dir.
 func makeExternalRepo(t *testing.T, relPath, secret string) string {
 	t.Helper()
 	ext := t.TempDir()
@@ -133,9 +125,6 @@ func makeExternalRepo(t *testing.T, relPath, secret string) string {
 	return ext
 }
 
-// TestDiff_GitSymlinkRefused: a `.git` SYMLINK pointing at an external repo's
-// object store must be refused structurally by openat2 (RESOLVE_NO_SYMLINKS) —
-// Diff returns ErrDiffUnavailable and never leaks the external baseline.
 func TestDiff_GitSymlinkRefused(t *testing.T) {
 	const secret = "package a\nSECRET_FROM_OUTSIDE\n"
 	ext := makeExternalRepo(t, "f.go", secret)
@@ -160,9 +149,6 @@ func TestDiff_GitSymlinkRefused(t *testing.T) {
 	}
 }
 
-// TestDiff_GitfileOutsideRootRefused: a gitfile `.git` (regular file with
-// `gitdir: <outside>`) pointing outside the root fails the containment check →
-// ErrDiffUnavailable, no external baseline.
 func TestDiff_GitfileOutsideRootRefused(t *testing.T) {
 	const secret = "package a\nSECRET_FROM_OUTSIDE\n"
 	ext := makeExternalRepo(t, "f.go", secret)

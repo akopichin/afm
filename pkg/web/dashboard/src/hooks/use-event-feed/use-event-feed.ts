@@ -1,34 +1,16 @@
 import { useEffect, useState } from 'react'
 import type { AfmEvent } from '../../types'
 
-// Подписка на WebSocket /ws с автопереконнектом и keepalive.
-// Реконнект: экспоненциальный backoff (1с → 10с) по onclose (как в app.js).
-// Watchdog: нет сообщений (событий ИЛИ heartbeat) > 75с → принудительный close
-// → срабатывает onclose → реконнект. Так клиент ловит «мёртвый сервер» быстрее
-// TCP-таймаута. Heartbeat от сервера в ленту событий НЕ попадает (liveness only).
+// Подписка на WebSocket /ws с автопереконнектом и keepalive. Heartbeat от сервера в ленту событий НЕ
+// попадает (liveness only).
 const INITIAL_RECONNECT_DELAY_MS = 1000
 const MAX_RECONNECT_DELAY_MS = 10000
-// Лента событий ограничена (как $feedContent в app.js обрезалась до 200
-// записей). Поднято до 10000 — full feed depth: меньший кап слишком быстро
-// отрезал начало долгого рана из глобальной ленты; per-stage лента (Task 3,
-// useStageEvents) переиспользует mergeCapped со своим, отдельным капом.
+// Лента событий ограничена.
 const MAX_EVENTS = 10000
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
-// Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ (см. onmessage
-// выше). Эти события публикуются live И персистятся в notices.jsonl без seq,
-// так что реплей истории после live-сообщения (или наоборот) может дать
-// дубль контента. agent_action/script_output намеренно исключены —
-// легитимные одинаковые повторы не должны схлопываться.
-// agent_note добавлен по той же причине: он публикуется live И персистится в
-// notices.jsonl без seq, так что live+replay могут дать дубль. Его payload
-// несёт уникальный id (seq перехода), поэтому контент-ключ различает две
-// РАЗНЫЕ заметки с одинаковым текстом и схлопывает только один и тот же note.
-// script_failed добавлен по той же причине (Fix 3): это ОДНОКРАТНОЕ терминальное
-// событие script-стадии (в отличие от script_output, чьи одинаковые строки
-// легитимно повторяются), публикуется live И персистится в notices.jsonl без
-// seq — без ингест-дедупа реконнект/гонка history-vs-live даёт вторую строку
-// в ленте с тем же error/stderr_tail.
+// Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ. agent_action/script_output намеренно
+// исключены — легитимные одинаковые повторы не должны схлопываться.
 const CONTENT_DEDUPE_ON_INGEST = new Set(['agent_note', 'script_failed'])
 
 export function useEventFeed(url: string): { events: AfmEvent[]; connected: boolean } {
@@ -39,11 +21,6 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
     let cancelledFetch = false
 
     // Тянет /api/events и мёржит с уже накопленными live-событиями.
-    // Вызывается один раз на монтировании (первичная история) и повторно на
-    // каждом реконнекте после первого успешного open (см. hasConnectedBefore
-    // ниже) — иначе транзишены, случившиеся, пока сокет был разорван, тихо
-    // теряются: /ws не реплеит пропущенные сообщения, без ресинка панель
-    // event-feed могла бы пропустить переходы за время отключения.
     function syncHistory() {
       fetch('/api/events')
         .then((r) => (r.ok ? r.json() : []))
@@ -104,27 +81,13 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
         // Единственная точка приведения типа для данных входящего сообщения.
         const event = toEvent(raw)
         setEvents((prev) => {
-          // Схлопываем подряд идущие одинаковые смены статуса одной стадии
-          // (напр. поток «TASK-REVIEW → ready»): бэкенд фиксирует переход один
-          // раз, но повторы (реконнект/дребезг) не должны засорять ленту.
+          // Схлопываем подряд идущие одинаковые смены статуса одной стадии: бэкенд фиксирует переход один
+          // раз, но повторы не должны засорять ленту.
           const last = prev[prev.length - 1]
           if (last !== undefined && isSameStatusEvent(last, event)) return prev
 
-          // dialog_question/dialog_answer/agent_note/script_failed публикуются
-          // И live, И в notices.jsonl (реплеятся через /api/events) — без seq
-          // (не FSM-transition), поэтому mergeHistory их обычную дедуп-гонку
-          // не ловит, когда история приходит РАНЬШЕ этого live-сообщения (а
-          // не наоборот): тогда запись уже в prev, а onmessage раньше слепо
-          // аппендил ещё одну. Дедупим по контенту ТОЛЬКО типы из
-          // CONTENT_DEDUPE_ON_INGEST (см. константу выше) — бланковый
-          // контент-дедуп всех seq-less событий схлопнул бы легитимные
-          // повторы agent_action/script_output.
-          // Семейство диалога (dialog_question/dialog_answer и навигируемый
-          // auto_answered с dialog:true) дедупится по контент-ключу из
-          // именованных полей (см. feedDedupeKey), остальные из
-          // CONTENT_DEDUPE_ON_INGEST (agent_note/script_failed) — по прежнему
-          // dedupeKey. Legacy/repair auto_answered (без dialog) сюда НЕ попадает
-          // — два разных прогресс-сообщения ремонта обязаны оба остаться.
+          // Дедупим контент только CONTENT_DEDUPE_ON_INGEST; dialog использует именованные поля, а повторы
+          // agent_action/script_output сохраняем.
           if (isDialogContentEvent(event) || CONTENT_DEDUPE_ON_INGEST.has(event.type)) {
             const key = feedDedupeKey(event)
             if (prev.some((e) => feedDedupeKey(e) === key)) return prev
@@ -173,29 +136,14 @@ function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
   )
 }
 
-// dedupeKey — стабильный ключ дедупликации между историей из /api/events и
-// live-событиями WebSocket. Приоритет — реальный seq FSM-transition: бэкенд
-// теперь прикладывает его и к live-событиям (triggerWithSeq в orchestrator.go),
-// а не только к реплею истории, так что seq — надёжный ключ для событий,
-// производных от transition (stage_status_changed/ask_user/user_answered/
-// retry_scheduled/retry_exhausted). Ключ включает ещё и type: одна
-// FSM-transition может опубликовать ДВА события с общим seq (напр.
-// stage_status_changed + retry_scheduled) — дедуп по одному только seq
-// схлопнул бы их в одно, потеряв самостоятельную запись. Для типов без
-// transition (agent_action, agent_completed, context_warning, dialog_question,
-// dialog_answer) seq не приходит ни оттуда, ни отсюда — падаем на ключ по
-// содержимому (type+stageId+payload).
+// dedupeKey — стабильный ключ дедупликации между историей из /api/events и live-событиями WebSocket.
 function dedupeKey(e: AfmEvent): string {
   if (e.seq !== undefined) return `seq:${e.seq}|${e.type}`
   return `${e.type}|${e.stageId}|${JSON.stringify(e.payload)}`
 }
 
-// isDialogContentEvent — событие принадлежит «семейству диалога»: dialog_question,
-// dialog_answer, а также auto_answered ТОЛЬКО когда это настоящий авто-ответ на
-// вопрос (payload.dialog === true, тот же контракт, что делает его навигируемым
-// в feed-view-model). Legacy/repair auto_answered (без dialog) сюда не входит —
-// его дедуп идёт прежним путём, чтобы два разных прогресс-сообщения ремонта не
-// схлопнулись.
+// isDialogContentEvent — событие принадлежит «семейству диалога»: dialog_question, dialog_answer, а также
+// auto_answered ТОЛЬКО когда это настоящий авто-ответ на вопрос.
 function isDialogContentEvent(e: AfmEvent): boolean {
   if (e.type === 'dialog_question' || e.type === 'dialog_answer') return true
   if (e.type !== 'auto_answered') return false
@@ -203,15 +151,8 @@ function isDialogContentEvent(e: AfmEvent): boolean {
   return typeof p === 'object' && p !== null && (p as { dialog?: unknown }).dialog === true
 }
 
-// dialogContentKey — контент-ключ семейства диалога из ИМЕНОВАННЫХ полей
-// (type|stageId|phase|id|title|question_title|answer), а не из
-// JSON.stringify(payload): порядок ключей в payload между live (WS) и history
-// (/api/events) не гарантирован, поэтому одна и та же запись, доставленная двумя
-// путями, обязана давать один и тот же ключ. phase/id адресуют вопрос, но агент
-// может законно переиспользовать отвеченный id для ДРУГОГО вопроса, поэтому текст
-// вопроса — часть ключа: title различает вопросы (dialog_question/dialog_answer),
-// question_title — авто-ответы на разные вопросы, answer — два авто-ответа на один
-// вопрос. Ключ ЗЕРКАЛИТ серверный dialogNoticeDedupKey (events_handler.go).
+// dialogContentKey зеркалит серверный ключ из именованных полей; текст различает повторно использованные
+// phase/id, порядок JSON-ключей не важен.
 function dialogContentKey(e: AfmEvent): string {
   const p = e.payload
   const obj = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {}
@@ -219,27 +160,14 @@ function dialogContentKey(e: AfmEvent): string {
   return `${e.type}|${e.stageId}|${field(obj.phase)}|${field(obj.id)}|${field(obj.title)}|${field(obj.question_title)}|${field(obj.answer)}`
 }
 
-// feedDedupeKey — единый дедуп-ключ для ленты, используемый И ингест-путём
-// (onmessage), И mergeCapped: семейство диалога → контент-ключ из именованных
-// полей, всё остальное → прежний dedupeKey (seq либо type|stageId|JSON(payload)).
+// feedDedupeKey — единый дедуп-ключ для ленты, используемый И ингест-путём, И mergeCapped: семейство
+// диалога → контент-ключ из именованных полей, всё остальное → прежний dedupeKey.
 function feedDedupeKey(e: AfmEvent): string {
   return isDialogContentEvent(e) ? dialogContentKey(e) : dedupeKey(e)
 }
 
-// mergeCapped сливает историю из /api/events (history) с уже накопленными
-// live-событиями (live). history — авторитетна и уже отсортирована сервером по
-// времени (reconstructEventHistory, slices.SortFunc по Timestamp), поэтому она
-// и есть база; из live дописываются в КОНЕЦ только те события, которых ещё нет в
-// истории (самые свежие, ещё не долетевшие до durable-логов на момент фетча).
-//
-// Раньше было наоборот — [...deduped, ...live], где deduped = history без
-// live-ключей. На реконнекте (или в гонке «WS обогнал /api/events») события,
-// случившиеся, пока их не было в live, попадали в deduped и уезжали в НАЧАЛО
-// ленты, ломая хронологию; а при полном буфере отсекались slice(-cap) первыми
-// и пропадали вовсе. См. тест «Finding #4».
-//
-// cap вынесен параметром (был жёстко MAX_EVENTS) — переиспользуется per-stage
-// лентой (Task 3, useStageEvents) со своим, отдельным капом.
+// mergeCapped сливает историю из /api/events с уже накопленными live-событиями. Раньше было наоборот —
+// [...deduped, ...live], где deduped = history без live-ключей.
 export function mergeCapped(history: AfmEvent[], live: AfmEvent[], cap: number): AfmEvent[] {
   const historyKeys = new Set(history.map(feedDedupeKey))
   const liveOnly = live.filter((e) => !historyKeys.has(feedDedupeKey(e)))
@@ -256,9 +184,7 @@ function statusOf(event: AfmEvent): string {
 function toEvent(raw: unknown): AfmEvent {
   const obj = isRecord(raw) ? raw : {}
 
-  // timestamp — из payload, если сервер его прислал (реплей истории из
-  // /api/events, Task 4); live WS-сообщения его не несут — падаем на время
-  // приёма, как и раньше.
+  // Берём timestamp из payload истории; для live WS используем время приёма.
   const timestamp = typeof obj.timestamp === 'string' ? obj.timestamp : new Date().toISOString()
   const seq = typeof obj.seq === 'number' ? obj.seq : undefined
 
@@ -275,7 +201,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
 
-// dedupeKey/toEvent переиспользуются per-stage лентой (Task 3, useStageEvents)
-// при разборе своего собственного фетча — единая точка приведения типа и
-// дедуп-ключа для истории и live-потока, не дублируется.
+// dedupeKey/toEvent переиспользуются per-stage лентой при разборе своего собственного фетча — единая точка
+// приведения типа и дедуп-ключа для истории и live-потока, не дублируется.
 export { dedupeKey, toEvent }

@@ -115,11 +115,6 @@ func TestBuild_InteractivePrintsAbsolutePathAndNowhereElse(t *testing.T) {
 	}
 }
 
-// TestBuild_InteractiveRobustnessInstructions locks in the polling-loop
-// robustness wording added to fix the "agent gives up waiting" dialog-stall
-// bug: a bash-timeout must not be treated as a stop signal, ScheduleWakeup/
-// background waits must not be used, and the output artifact must be
-// deferred until all answers are collected.
 func TestBuild_InteractiveRobustnessInstructions(t *testing.T) {
 	in := Inputs{
 		Template:    "RULES",
@@ -142,12 +137,6 @@ func TestBuild_InteractiveRobustnessInstructions(t *testing.T) {
 	}
 }
 
-// TestBuild_InteractivePrefixIsPhaseNotStageID locks in the constraint added to
-// fix the dialog-stall bug where the agent used the stage id as the filename
-// prefix (e.g. "commit-changes.q1.question.json") instead of the phase
-// ("planning.q1.question.json"). The poller only recognises canonical phase
-// prefixes, so a stage-id-prefixed question is invisible → the stage hangs.
-// The prompt must name the trap explicitly with the real stage id inline.
 func TestBuild_InteractivePrefixIsPhaseNotStageID(t *testing.T) {
 	in := Inputs{
 		Template:    "RULES",
@@ -309,9 +298,6 @@ func TestBuild_NoGlobalPromptBlock_WhenEmpty(t *testing.T) {
 	}
 }
 
-// TestBuild_AutonomousOverridesTemplate locks in the autonomous-track behaviour:
-// when Autonomous is non-empty it replaces Template inside <system_rules>, and
-// when empty Build falls back to Template exactly (the common non-autonomous case).
 func TestBuild_AutonomousOverridesTemplate(t *testing.T) {
 	stage := flow.Stage{ID: "x", Name: "X", Description: "context"}
 
@@ -361,10 +347,7 @@ func TestBuild_GlobalPromptEscapesOwnClosingTag(t *testing.T) {
 	}
 }
 
-// MemoryBlock — по-стадийный срез памяти (Task 9), заменяющий статический
-// GlobalPrompt-указатель из v1. Непустой блок оборачивается в
-// <project_memory>…</project_memory> и идёт после </global_prompt>; пустой —
-// блок вовсе не появляется в выводе.
+// MemoryBlock — по-стадийный срез памяти, заменяющий статический GlobalPrompt-указатель из v1.
 func TestBuild_MemoryBlockWrappedInProjectMemoryTag(t *testing.T) {
 	in := Inputs{
 		Template:     "RULES",
@@ -400,9 +383,8 @@ func TestBuild_EmptyMemoryBlockOmitsProjectMemoryTag(t *testing.T) {
 	}
 }
 
-// A closing </project_memory> inside memory content must be neutralized so
-// it cannot prematurely end the block or inject sibling blocks — same
-// injection defense as global_prompt/stage/etc.
+// A closing </project_memory> inside memory content must be neutralized so it cannot prematurely end the
+// block or inject sibling blocks — same injection defense as global_prompt/stage/etc.
 func TestBuild_MemoryBlockEscapesOwnClosingTag(t *testing.T) {
 	in := Inputs{
 		Template:    "RULES",

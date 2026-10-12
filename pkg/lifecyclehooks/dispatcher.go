@@ -16,9 +16,8 @@ const FlushTimeout = 10 * time.Second
 // потоком событий, начинает терять доставки (best-effort контракт Phase 1).
 const hookQueueSize = 256
 
-// DispatcherOptions собирают dispatcher. RunFunc/OnError — seams: тесты
-// подменяют RunFunc фейком; OnError получает финальные сбои доставки и
-// переполнения очереди (для dashboard-warning).
+// DispatcherOptions собирают dispatcher. RunFunc/OnError — seams: тесты подменяют RunFunc фейком; OnError
+// получает финальные сбои доставки и переполнения очереди (для dashboard-warning).
 type DispatcherOptions struct {
 	Config  DispatcherConfig
 	Hooks   []RegisteredHook
@@ -32,10 +31,7 @@ type delivery struct {
 	payload Payload
 }
 
-// Dispatcher маршрутизирует события хукам: по одному воркеру на хук (строго
-// последовательные доставки для одного потребителя), параллельно между
-// разными хуками. Собственный контекст, независимый от run-ctx: хуки —
-// наблюдатели, событие flow_interrupted должно уйти даже после отмены рана.
+// Dispatcher маршрутизирует события хукам: по одному воркеру на хук, параллельно между разными хуками.
 type Dispatcher struct {
 	cfg     DispatcherConfig
 	hooks   []RegisteredHook
@@ -50,10 +46,8 @@ type Dispatcher struct {
 	sent   atomic.Int64
 	done   atomic.Int64
 
-	// mu/stopped закрывают гонку Emit-vs-Stop (codex CRIT#2): Emit шлёт под
-	// RLock, Stop закрывает каналы под Lock — пересечение невозможно; Emit
-	// после Stop — тихий no-op. Поздние эмиттеры (question poller, agent
-	// goroutine, пережившие возврат Run) не паникуют на closed channel.
+	// mu/stopped закрывают гонку Emit-vs-Stop: Emit шлёт под RLock, Stop закрывает каналы под Lock —
+	// пересечение невозможно; Emit после Stop — тихий no-op.
 	mu      sync.RWMutex
 	stopped bool
 }
@@ -84,9 +78,8 @@ func (d *Dispatcher) Start() {
 	}
 }
 
-// Emit рассылает событие подходящим хукам. Неблокирующий: полная очередь
-// одного хука не задерживает эмиттера (оркестратор) — доставка дропается
-// с отчётом в OnError.
+// Emit рассылает событие подходящим хукам. Неблокирующий: полная очередь одного хука не задерживает
+// эмиттера (оркестратор) — доставка дропается с отчётом в OnError.
 func (d *Dispatcher) Emit(ev Event) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -112,14 +105,8 @@ func (d *Dispatcher) Emit(ev Event) {
 	}
 }
 
-// eventID — стабильный идентификатор по спеке: FSM-переходы несут durable
-// seq, flow-события уникальны в пределах рана, прочие stage-события —
-// best-effort (повтор при retry стадии допустим). Для не-FSM stage-событий с
-// непустым ev.Key (например, два разных auto-answered вопроса q1/q2 в одной
-// стадии/фазе) в id подмешивается Key — иначе разные вопросы схлопнулись бы
-// в один и тот же event_id и получатель с идемпотентностью по нему потерял
-// бы второе событие. Script-события Key не задают — их повторяемый между
-// retry id остаётся как раньше.
+// eventID — стабильный идентификатор по спеке: FSM-переходы несут durable seq, flow-события уникальны в
+// пределах рана, прочие stage-события — best-effort.
 func (d *Dispatcher) eventID(ev Event) string {
 	switch {
 	case ev.Seq > 0:

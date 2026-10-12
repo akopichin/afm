@@ -1,21 +1,10 @@
-// STAGE_STATUSES/StageStatus сгенерированы из pkg/state.AllStatuses() —
-// см. tools/genstagestatus и 'make generate'. Раньше это был отдельный
-// вручную поддерживаемый список, который приходилось синхронизировать с Go
-// FSM руками при каждом новом статусе.
-//
-// `export { type StageStatus } from ...` реэкспортирует имя для потребителей
-// этого файла, но НЕ вносит его в область видимости самого stage.ts — ниже
-// StageStatus используется в собственных аннотациях типов (Stage.status,
-// STAGE_STATUS_LABELS, ACTIVE_STAGE_STATUSES), поэтому нужен ещё и обычный
-// `import type` рядом.
+// STAGE_STATUSES/StageStatus сгенерированы из pkg/state.AllStatuses — см. tools/genstagestatus и 'make
+// generate'.
 export { STAGE_STATUSES, type StageStatus } from './stage-status.generated'
 import type { StageStatus } from './stage-status.generated'
 import type { CostSummary } from './cost'
 
-// Данные одной стадии afm-флоу. Источник — элемент упорядоченного массива
-// stages ответа GET /api/status (см. pkg/server/stageview.go's StageView) —
-// каждое поле уже лежит прямо на объекте стадии, отдельных parallel-map'ов
-// (stage_names/stage_interactive/...) в ответе больше нет.
+// Данные одной стадии afm-флоу.
 export type Stage = {
   id: string
   name: string
@@ -27,37 +16,26 @@ export type Stage = {
   hasDialog: boolean
   showPlan: boolean
   showDialog: boolean
-  // isScript: true, если стадия скриптовая (Stage.IsScript() в Go) — кебаб-
-  // меню скрывает пункт "Pause", пока такая стадия реально выполняется (нет
-  // graceful mid-script stop).
+  // isScript: true, если стадия скриптовая (Stage.IsScript() в Go) — кебаб- меню скрывает пункт "Pause",
+  // пока такая стадия реально выполняется (нет graceful mid-script stop).
   isScript: boolean
-  // pausedFrom заполнен только когда status === 'paused' (см. Go
-  // StageView.PausedFrom) — пустая строка иначе. Панель паузы использует его
-  // для текста причины.
+  // pausedFrom заполнен только когда status === 'paused' (см. Go StageView.PausedFrom) — пустая строка
+  // иначе. Панель паузы использует его для текста причины.
   pausedFrom: StageStatus | ''
-  // preNote — текст заметки, прикреплённой к стадии до старта (prenote.md, см.
-  // Go StageView.PreNote). Пустая строка — заметки нет. Используется для
-  // префилла модалки редактирования и индикатора 📝 в списке стадий.
+  // preNote — текст заметки, прикреплённой к стадии до старта. Пустая строка — заметки нет.
   preNote: string
-  // buttons — метки предопределённых в flow.yaml кнопок стадии (см. Go
-  // StageView.Buttons), в порядке объявления. Пустой массив — кнопок нет.
-  // Кебаб-меню рендерит по одному пункту на метку; клик POST'ит метку на
-  // /button, сервер сам достаёт промпт и доставляет его агенту через Revise.
+  // buttons — метки предопределённых в flow.yaml кнопок стадии, в порядке объявления. Пустой массив —
+  // кнопок нет.
   buttons: string[]
   // cost — сводка по затратам стадии (omitempty, если нет записи использования).
   cost?: CostSummary
-  // verify — durable-индикатор последнего AI-verify прохода стадии (см. Go
-  // StageView.Verify, pkg/server/stageview.go). Сервер вычисляет его через
-  // необрезанное сканирование notices.jsonl — раньше это вычислялось на
-  // клиенте из капнутой глобальной ленты событий и на долгих ранах могло
-  // "состариться" из окна. undefined — у стадии ни разу не было
+  // verify — durable-индикатор последнего AI-verify прохода стадии. undefined — у стадии ни разу не было
   // verify_started/verify_result.
   verify?: StageVerify
 }
 
-// StageVerify — компактное текущее состояние AI-verify одной стадии:
-// verify_started → 'running', verify_result → его verdict
-// (pass/needs_changes/inconclusive), иначе — 'error'.
+// StageVerify — компактное текущее состояние AI-verify одной стадии: verify_started → 'running',
+// verify_result → его verdict (pass/needs_changes/inconclusive), иначе — 'error'.
 export type StageVerify = {
   step: number
   command: string
@@ -80,13 +58,8 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   hook_failed: 'Hook failed',
 }
 
-// Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует
-// прогресс флоу и ждёт решения человека (нужно auto-select, иначе на свежей
-// загрузке дашборда стадия в awaiting_approval/hook_failed не выбирается
-// сама, и панель Plan/Communication channel с кнопкой действия просто не
-// рендерится — пользователь видит пустой экран, хотя баннер "Action needed"
-// уже горит). awaiting_user_input уже был в этом множестве по той же причине,
-// хоть агент там тоже не «работает», а ждёт ответа.
+// Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует прогресс флоу и ждёт решения
+// человека.
 export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'running',
   'planning',

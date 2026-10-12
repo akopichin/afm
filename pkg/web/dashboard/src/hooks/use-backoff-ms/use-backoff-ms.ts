@@ -2,11 +2,8 @@ import { useEffect, useState } from 'react'
 
 const TICK_INTERVAL_MS = 1000
 
-// Секундомер накопленного Backoff-времени: accumulatedMs (пережившее restart)
-// плюс сумма живых дельт для каждого сейчас открытого эпизода в openSince —
-// параллельные ретраи суммируются, а не мёржатся (см. use-status-duration.ts,
-// которую этот хук заменяет). Как и useIdleMs, замораживает отображаемое
-// значение, пока /api/status недоступен.
+// Секундомер накопленного Backoff-времени: accumulatedMs плюс сумма живых дельт для каждого сейчас
+// открытого эпизода в openSince — параллельные ретраи суммируются, а не мёржатся.
 export function useBackoffMs(accumulatedMs: number, openSince: string[], statusLive: boolean): number {
   const [displayMs, setDisplayMs] = useState(accumulatedMs)
 

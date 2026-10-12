@@ -15,9 +15,8 @@ type GlobalHeaderProps = {
   elapsedMs: number
   idleMs: number
   backoffMs: number
-  // Est. cost (Increment 2) — прокидываются в RunMetrics как есть; дефолты
-  // здесь только на случай, если вызывающий код ещё не дошёл до полного
-  // проброса из App.tsx (см. types/cost.ts).
+  // Est. cost (Increment 2) — прокидываются в RunMetrics как есть; дефолты здесь только на случай, если
+  // вызывающий код ещё не дошёл до полного проброса из App.tsx (см. types/cost.ts).
   runCost?: CostSummary
   coverageIssues?: CoverageIssue[]
   accounting?: AccountingState
@@ -29,12 +28,8 @@ type GlobalHeaderProps = {
   capabilities?: { fileBrowser: boolean }
 }
 
-// GlobalHeader — компактная шапка дашборда (пришла на смену FlowHeader+Footer).
-// Слева бренд + имя/описание флоу; в центре метрики прогона (RunMetrics); справа
-// действия: Files, dark/light, уведомления, состояние соединения. Данные и хуки
-// те же, что были у FlowHeader/Footer — меняется только композиция. id header/
-// flow-name/flow-description/ws-status сохранены для совместимости со скинами и
-// проверками.
+// GlobalHeader — компактная шапка дашборда. Данные и хуки те же, что были у FlowHeader/Footer — меняется
+// только композиция.
 export function GlobalHeader({
   flowName,
   description,
@@ -158,10 +153,8 @@ function bellIcon(enabled: boolean): ReactElement {
   )
 }
 
-// Кнопка открытия «бокового» агента. Контекст имеет безопасный дефолт
-// (enabled=false вне провайдера), поэтому GlobalHeader остаётся тестируемым без
-// SideAgentProvider — кнопка просто не рендерится, пока capability выключена.
-// Индикатор-точка: активный запрос (пульс) или непросмотренный результат.
+// Кнопка открытия «бокового» агента. Индикатор-точка: активный запрос (пульс) или непросмотренный
+// результат.
 function SideAgentHeaderButton(): ReactElement | null {
   const { enabled, open, unseenResult, active } = useSideAgentContext()
   if (!enabled) return null
@@ -185,10 +178,8 @@ function SideAgentHeaderButton(): ReactElement | null {
   )
 }
 
-// Отдельный подкомпонент — useFileBrowser() бросает вне FileBrowserProvider, а
-// монтируется он только при capabilities.fileBrowser=true, поэтому сам
-// GlobalHeader остаётся тестируемым без провайдера (та же причина, что была у
-// FlowHeader.OpenFileBrowserButton).
+// Монтируем useFileBrowser только при доступной capability, чтобы GlobalHeader работал без
+// FileBrowserProvider.
 function OpenFileBrowserButton(): ReactElement {
   const { openBrowser } = useFileBrowser()
   return (

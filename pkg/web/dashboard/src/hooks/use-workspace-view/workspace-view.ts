@@ -1,27 +1,12 @@
 import type { Stage, StageStatus } from '../../types'
 
-// WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла
-// стадий (плана §4). 'feed' — постоянный дефолт; 'cost' — постоянный вид учёта
-// токенов/стоимости (increment 2); 'full-feed' — постоянный вид ленты всего
-// флоу целиком (не привязан к выбранной стадии); 'attention' — контекстный
-// воркспейс текущего элемента, требующего действия
-// (approval/question/failed/hook_failed/paused); 'plan-history'/'dialog-history'
-// — read-only просмотр завершённого плана/диалога (rule 13: они НЕ считаются
-// attention и не светятся).
+// WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла стадий.
 export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history'
 
-// AttentionKind — вид элемента, требующего действия пользователя. В отличие от
-// use-attention (которое схлопывает failed/hook_failed в один 'failed' для
-// заголовочной точки), здесь пять раздельных видов — под пять контекстных
-// вкладок с собственными подписями (Approval/Question/Paused/Failed/Hook failed).
+// AttentionKind — вид элемента, требующего действия пользователя.
 export type AttentionKind = 'approval' | 'question' | 'failed' | 'hook_failed' | 'paused'
 
-// episode — идентификатор attention-эпизода (stage.updatedAt). Одна стадия за
-// свою жизнь может входить в один и тот же вид attention несколько раз подряд
-// (интерактивный диалог: q1 → ответ → q2, обе awaiting_user_input, но с разными
-// updatedAt). Без episode в подписи reducer считал бы q2 тем же элементом, что и
-// q1, и не авто-открывал бы его после возврата в Feed (Finding #1, раунд 3) —
-// симметрично тому, как desktop-уведомления различают эпизоды по updatedAt.
+// episode — идентификатор attention-эпизода.
 export type AttentionItem = { stageId: string; kind: AttentionKind; episode: string }
 
 // attentionKindForStatus — статус стадии → вид attention, либо null, если статус
@@ -44,10 +29,6 @@ export function attentionKindForStatus(status: StageStatus): AttentionKind | nul
 }
 
 // deriveAttentionItems строит упорядоченную очередь attention из массива стадий.
-// Порядок сохраняется как есть — сервер уже отдаёт stages в топологическом
-// порядке (см. pkg/server/stageview.go's buildStageViews), поэтому rule 6
-// ("order by the server-provided topological stage order") выполняется без
-// повторной сортировки на клиенте.
 export function deriveAttentionItems(stages: Stage[]): AttentionItem[] {
   const items: AttentionItem[] = []
   for (const s of stages) {
@@ -57,11 +38,7 @@ export function deriveAttentionItems(stages: Stage[]): AttentionItem[] {
   return items
 }
 
-// sig — стабильная подпись элемента attention (stageId+kind+episode). Одна стадия
-// за свою жизнь может пройти несколько разных видов (paused → running → failed) —
-// поэтому в подпись входит вид; и может ВОЙТИ В ТОТ ЖЕ вид повторно (диалог из
-// нескольких вопросов) — поэтому в подпись входит episode (updatedAt): смена вида
-// ИЛИ нового эпизода той же стадии = новый элемент (новое «прибытие»).
+// sig — стабильная подпись элемента attention.
 export function sig(item: AttentionItem): string {
   return `${item.stageId}:${item.kind}:${item.episode}`
 }
@@ -72,22 +49,10 @@ export interface WorkspaceState {
   // activeStageId — на каком элементе очереди сфокусирован воркспейс, когда
   // view === 'attention'. null — очередь пуста / attention не открыт.
   activeStageId: string | null
-  // handledSignatures — подписи элементов, которые уже получили своё единственное
-  // «показ» (авто-открыты, вручную открыты, либо показаны как активный attention).
-  // handled = «этот элемент больше сам фокус не крадёт» (rule 9). Пока элемент
-  // прибыл под suppression и ещё НЕ handled — он «отложен»: только светится
-  // beacon'ом и авто-откроется, когда suppression снимут. Подпись, чей элемент
-  // покинул очередь, забывается (см. reduceSync) — чтобы повторное появление той
-  // же стадии+вида снова считалось новым прибытием (симметрично забыванию
-  // отвеченных вопросов в pollQuestions на бэкенде).
+  // handledSignatures — подписи элементов, которые уже получили своё единственное «показ». handled = «этот
+  // элемент больше сам фокус не крадёт» (rule 9).
   handledSignatures: string[]
   // returnView — куда вернуться, когда закроется/разрешится attention.
-  // Ограничен ГЛОБАЛЬНЫМИ видами ('feed'/'cost'/'full-feed') — history-виды
-  // (plan-history/dialog-history) не подлежат восстановлению: они привязаны к
-  // конкретной выбранной стадии, а не к постоянному воркспейсу. Записывается
-  // ровно на переходе non-attention → attention (см. reduceSync) и обновляется
-  // явной ручной навигацией (openFeed/openCost/openFullFeed), в том числе во
-  // время attention.
   returnView: 'feed' | 'cost' | 'full-feed'
 }
 
@@ -100,14 +65,8 @@ export const initialWorkspaceState: WorkspaceState = {
 }
 
 export type WorkspaceAction =
-  // sync — новый снимок очереди из polling. suppressed=true, когда пользователь
-  // печатает / смотрит файл в оверлее / идёт owned-pause операция — тогда
-  // прибывший элемент только светится, а auto-open ОТКЛАДЫВАЕТСЯ до снятия
-  // suppression (элемент остаётся не-handled), а не сгорает навсегда (rule 9).
-  // ownedHandledSigs — подписи self-owned paused эпизодов (пользователь сам
-  // поставил паузу через фокус композера). Их auto-open НЕ откладывается, а
-  // подавляется навсегда (помечаются handled сразу), иначе после снятия владения
-  // до refresh /api/status устаревший paused всплыл бы ложной панелью.
+  // sync — новый снимок очереди из polling. ownedHandledSigs — подписи self-owned paused эпизодов
+  // (пользователь сам поставил паузу через фокус композера).
   | { type: 'sync'; items: AttentionItem[]; suppressed: boolean; ownedHandledSigs?: string[] }
   // openAttention — пользователь кликнул контекстную вкладку (опц. конкретный id).
   | { type: 'openAttention'; stageId?: string }
@@ -134,16 +93,12 @@ export function countByKind(items: AttentionItem[], kind: AttentionKind): number
 }
 
 // globalReturnView — маппинг текущего вида на returnView при входе в attention.
-// ГЛОБАЛЬНЫЕ виды ('cost'/'full-feed') сохраняются как есть — именно туда и
-// нужно вернуться; любой НЕ глобальный вид (history) падает на 'feed', потому
-// что history привязана к конкретной стадии, а не к постоянному воркспейсу.
 function globalReturnView(view: WorkspaceView): 'feed' | 'cost' | 'full-feed' {
   return view === 'cost' || view === 'full-feed' ? view : 'feed'
 }
 
-// retainSigs оставляет из набора подписей только те, чей элемент ещё в очереди.
-// Разрешённые/исчезнувшие подписи забываются, чтобы повторное появление стало
-// новым прибытием. Единственная точка фильтрации sig-множества по items.
+// retainSigs оставляет из набора подписей только те, чей элемент ещё в очереди. Разрешённые/исчезнувшие
+// подписи забываются, чтобы повторное появление стало новым прибытием.
 function retainSigs(sigs: string[], items: AttentionItem[]): string[] {
   const present = new Set(items.map(sig))
   return sigs.filter((s) => present.has(s))
@@ -162,11 +117,8 @@ function reduceSync(
   let activeStageId = state.activeStageId
   let returnView = state.returnView
 
-  // 2. Резолюция/advance: активный элемент исчез из очереди (rule 10) → переходим
-  // к следующему оставшемуся; если очередь пуста — возвращаемся на returnView.
-  // Ветка НЕ зависит от suppressed: intra-attention advance не замораживается
-  // (иначе attention-панель показала бы пустоту). Пометку handled активного
-  // элемента делает единое правило шага 5, а не сам advance.
+  // 2. Резолюция/advance: активный элемент исчез из очереди (rule 10) → переходим к следующему
+  // оставшемуся; если очередь пуста — возвращаемся на returnView.
   if (view === 'attention') {
     const stillActive = items.some((it) => it.stageId === activeStageId)
     if (!stillActive) {
@@ -184,12 +136,7 @@ function reduceSync(
   // отложенные ранее под suppression И новоприбывшие, единым множеством.
   const candidates = items.filter((it) => !handled.includes(sig(it)))
 
-  // 3a. Self-owned paused эпизоды — не «действие, требующее внимания» (пользователь
-  // сам поставил паузу). Помечаем handled СРАЗУ и никогда не авто-открываем,
-  // независимо от suppressed. Так после clearOp (handleSend снимает владение до
-  // refresh /api/status) устаревший A/paused уже handled и не всплывёт ложной
-  // панелью — восстанавливает гарантию прежнего consume-on-suppress. Beacon при
-  // этом остаётся: элемент по-прежнему в items.
+  // 3a. Self-owned paused эпизоды — не «действие, требующее внимания» (пользователь сам поставил паузу).
   const ownedSet = new Set(ownedHandledSigs)
   for (const c of candidates) {
     if (ownedSet.has(sig(c))) handled.push(sig(c))
@@ -197,10 +144,8 @@ function reduceSync(
   const openable = candidates.filter((it) => !ownedSet.has(sig(it)))
   const first = openable[0]
 
-  // 4. При suppressed НИЧЕГО не делаем: кандидаты остаются не-handled и просто
-  // светятся beacon'ом — auto-open откладывается. При suppressed=false помечаем
-  // все открываемые кандидаты handled и (если ещё не в attention) открываем
-  // первый, записывая returnView В МОМЕНТ ОТКРЫТИЯ (не в момент arrival).
+  // 4. При suppressed НИЧЕГО не делаем: кандидаты остаются не-handled и просто светятся beacon'ом —
+  // auto-open откладывается.
   if (first && !suppressed) {
     for (const c of openable) handled.push(sig(c))
     if (view !== 'attention') {
@@ -212,13 +157,7 @@ function reduceSync(
     }
   }
 
-  // 5. Единое правило «активный attention = показан = handled». Активный элемент,
-  // найденный по ФИНАЛЬНЫМ локалам (не по устаревшему state), всегда handled —
-  // независимо от suppressed: он по определению показан в панели. Покрывает
-  // первичное открытие, advance-к-следующему и in-place смену эпизода той же
-  // стадии (activeStageId резолвится по stageId, поэтому A/t1 → A/t2 даёт новую
-  // подпись t2, которая иначе осталась бы unseen и после openFeed+release
-  // ошибочно переоткрылась бы). Заменяет частный consume-при-advance.
+  // 5. Единое правило «активный attention = показан = handled».
   if (view === 'attention' && activeStageId !== null) {
     const active = items.find((it) => it.stageId === activeStageId)
     if (active && !handled.includes(sig(active))) handled.push(sig(active))
@@ -240,17 +179,15 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
           : state.activeStageId && state.items.some((it) => it.stageId === state.activeStageId)
             ? state.activeStageId
             : first.stageId
-      // Ручное открытие считает ФАКТИЧЕСКИ выбранный (после fallback) элемент
-      // handled — по полной подписи (у стадии может быть несколько эпизодов),
-      // чтобы после возврата в Feed он не украл фокус повторно.
+      // Ручное открытие считает ФАКТИЧЕСКИ выбранный элемент handled — по полной подписи, чтобы после
+      // возврата в Feed он не украл фокус повторно.
       const selected = state.items.find((it) => it.stageId === target)
       const handledSignatures =
         selected && !state.handledSignatures.includes(sig(selected))
           ? [...state.handledSignatures, sig(selected)]
           : state.handledSignatures
-      // Вход из non-attention фиксирует returnView так же, как auto-entry в
-      // reduceSync (иначе beacon из history вернул бы в устаревший cost). Уже
-      // будучи в attention — не трогаем.
+      // Вход из non-attention фиксирует returnView так же, как auto-entry в reduceSync (иначе beacon из
+      // history вернул бы в устаревший cost). Уже будучи в attention — не трогаем.
       const returnView = state.view === 'attention' ? state.returnView : globalReturnView(state.view)
       return { ...state, view: 'attention', activeStageId: target, handledSignatures, returnView }
     }

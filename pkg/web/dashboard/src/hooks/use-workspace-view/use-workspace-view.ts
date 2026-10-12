@@ -10,13 +10,7 @@ import {
   type WorkspaceView,
 } from './workspace-view'
 
-// useWorkspaceView — тонкая обёртка над чистым workspaceReducer (вся логика
-// переходов и тесты — в workspace-view.ts). Синхронизирует очередь attention из
-// текущего снимка стадий на каждый ререндер и отдаёт наверх и состояние, и
-// действия навигации. `suppressed` — внешний сигнал (пользователь печатает /
-// смотрит файл в оверлее), при котором прибывший элемент только светится, а
-// фокус не крадётся (rule 9); вычисление этого сигнала — забота вызывающего
-// (App.tsx), не воркспейса.
+// useWorkspaceView — тонкая обёртка над чистым workspaceReducer.
 export interface UseWorkspaceView {
   state: WorkspaceState
   activeItem: ReturnType<typeof activeItem>
@@ -35,12 +29,8 @@ export function useWorkspaceView(
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState)
 
   const items = deriveAttentionItems(stages)
-  // Синхронизируем на каждое изменение состава/порядка очереди, сигнала
-  // suppression или набора owned-paused подписей. Сериализованные ключи держат
-  // эффект идемпотентным: тот же снимок не диспатчит sync повторно каждый рендер.
-  // useLayoutEffect (а не useEffect): reducer применяет свежие items ДО paint и
-  // пользовательского клика — иначе между commit нового snapshot и passive-эффектом
-  // openAttention мог бы не найти только что прибывший элемент и потерять клик.
+  // Синхронизируем на каждое изменение состава/порядка очереди, сигнала suppression или набора
+  // owned-paused подписей.
   const itemsKey = items.map(sig).join('|')
   const ownedKey = ownedHandledSigs.join('|')
   useLayoutEffect(() => {

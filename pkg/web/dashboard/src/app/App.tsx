@@ -40,7 +40,7 @@ const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
   paused: 'Paused',
 }
 
-// Подпись шортката к ждущему действию в шапке файлового оверлея (Finding #4).
+// Подпись ждущего действия в шапке файлового оверлея.
 const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
   approval: 'Approval waiting',
   question: 'Question waiting',
@@ -50,8 +50,6 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 }
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
-// Владеет состоянием выбора текущей стадии; WebSocket работает как канал обновления
-// состояния — по значимым событиям ре-запрашивает /api/status.
 export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
@@ -60,15 +58,10 @@ export function App(): ReactElement {
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
   } = useStatus()
 
-  // Модалка ревью-раунда (Task 23) — открывается по клику ReviewBanner's "Send
-  // notes". Держит только флаг открытия: сам список заметок/выбор стадии
-  // модалка загружает и владеет собой (listNotes() на маунте).
+  // Модалка ревью-раунда — открывается по клику ReviewBanner's "Send notes".
   const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
-  // Стадия, для которой открыта модалка pre-note (заметка ДО старта, только
-  // pending-стадии); null — модалка скрыта. Заметку ЖИВОМУ агенту теперь шлют
-  // не через модалку из кебаба, а из messenger-поля внизу ленты (FeedComposer),
-  // поэтому отдельного noteModalStageId больше нет.
+  // Стадия, для которой открыта модалка pre-note; null — модалка скрыта.
   const [preNoteModalStageId, setPreNoteModalStageId] = useState<string | null>(null)
 
   async function handleSubmitPreNote(note: string): Promise<void> {
@@ -77,42 +70,25 @@ export function App(): ReactElement {
       await setStageNote(preNoteModalStageId, note)
       setPreNoteModalStageId(null)
     } catch (err) {
-      // Как handleSubmitNote: не закрываем молча — оставляем модалку открытой
-      // с введённым текстом, чтобы пользователь мог повторить (стадия могла
-      // уже стартовать, либо сеть отвалилась).
+      // Как handleSubmitNote: не закрываем молча — оставляем модалку открытой с введённым текстом, чтобы
+      // пользователь мог повторить (стадия могла уже стартовать, либо сеть отвалилась).
       console.error('Failed to save pre-note:', err)
     }
   }
 
-  // «Pause on focus» — при включённом toggle фокус поля заметки ставит running-
-  // стадию на паузу (pauseStage), а отправка сперва снимает паузу (continueStage),
-  // затем доставляет заметку (reviseStage). При выключенном toggle handleSend
-  // просто зовёт reviseStage — сегодняшнее поведение. Только переиспользование
-  // готовых вызовов, без новых эндпоинтов. Весь стейт (toggle + владение) — внутри
-  // хука. Отправка заметки живому агенту из messenger-поля ленты (FeedComposer)
-  // идёт через pauseOnFocus.handleSend: промис проброшен КАК ЕСТЬ — при неудаче
-  // (стадия ушла из running → 409, либо сеть) он отклоняется, и FeedComposer
-  // сохраняет текст (ошибку ловит сам композер).
+  // «Pause on focus» — при включённом toggle фокус поля заметки ставит running- стадию на паузу, а
+  // отправка сперва снимает паузу, затем доставляет заметку.
   const pauseOnFocus = usePauseOnFocus({ pauseStage, continueStage, reviseStage })
 
   function handlePause(stageId: string): void {
-    // StagesList закрывает кебаб синхронно ДО вызова onPause, так что здесь
-    // нет модалки/состояния, которое надо откатывать при ошибке (в отличие
-    // от handleSubmitNote выше) — но onPause всё равно не-async проп,
-    // вызывается без await из onClick, поэтому свой catch обязателен, иначе
-    // отказ pauseStage (сеть, либо стадия успела уйти из pausable-статуса
-    // между открытием меню и кликом) уйдёт в unhandled rejection молча.
+    // onPause вызывается без await из onClick; catch нужен для ошибок сети и сменившегося статуса стадии.
     pauseStage(stageId).catch((err: unknown) => {
       console.error('Failed to pause stage:', err)
     })
   }
 
   function handleButton(stageId: string, name: string): void {
-    // Fire-immediately, без модалки: StagesList закрывает кебаб синхронно ДО
-    // вызова onButton. Как и handlePause, onButton — не-async проп, поэтому
-    // свой catch обязателен, иначе отказ triggerStageButton (сеть, либо стадия
-    // успела уйти из running/awaiting_approval между открытием меню и кликом)
-    // уйдёт в unhandled rejection молча.
+    // Fire-immediately, без модалки: StagesList закрывает кебаб синхронно ДО вызова onButton.
     triggerStageButton(stageId, name).catch((err: unknown) => {
       console.error('Failed to trigger stage button:', err)
     })
@@ -120,20 +96,14 @@ export function App(): ReactElement {
 
   const reviewNoteCount = useReviewNoteCount(flowPauseState === 'paused')
 
-  // onCancel баннера отменяет раунд ревью без доставки заметок (Task 19's
-  // cancelNotes) — не требует выбора целевой стадии, поэтому можно вызвать
-  // напрямую отсюда, тем же fire-and-forget-с-catch приёмом, что и handlePause
-  // выше (onCancel — не-async проп кнопки).
+  // Отмена ревью не требует целевой стадии; fire-and-forget вызов обязательно обрабатывает reject.
   function handleReviewCancel(): void {
     cancelNotes().catch((err: unknown) => {
       console.error('Failed to cancel review notes:', err)
     })
   }
 
-  // onSend, в отличие от onCancel, не может просто вызвать injectNotes здесь:
-  // тому нужен id целевой стадии, которую пока выбирает пользователь — этим
-  // занимается ReviewNotesModal (список заметок + выбор стадии + сам
-  // injectNotes), эта функция лишь её открывает.
+  // Открываем ReviewNotesModal для выбора целевой стадии перед injectNotes.
   function handleReviewSend(): void {
     setReviewModalOpen(true)
   }
@@ -141,45 +111,26 @@ export function App(): ReactElement {
   const wsUrl = buildWebSocketUrl()
   const { events, connected } = useEventFeed(wsUrl)
 
-  // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано
-  // справа от рейла: Feed, контекстный attention (approval/question/failed/
-  // hook_failed/paused) или read-only просмотр истории плана/диалога. Он же
-  // держит очередь attention (топологический порядок сервера), авто-открывает
-  // новое ожидание ровно один раз (rule 9, с suppression при наборе текста),
-  // продвигается к следующему при разрешении и возвращается в Feed, когда
-  // очередь пуста (rule 10). Раньше это подменялось локальными
-  // selectedStageId+activeTab, из-за чего ожидание на НЕ выбранной стадии не
-  // всплывало — action могло «потеряться».
-  // suppression авто-открытия: пользователь печатает ИЛИ открыт ЛЮБОЙ оверлей
-  // поверх воркспейса — файловый браузер (Finding #4 р2), заметка агенту/pre-note
-  // или модалка ревью (Finding #5 р3). Новое ожидание не должно авто-открываться
-  // за непрозрачной модалкой; оно только светится (маяк-вкладка/шорткат в шапке
-  // модалки). Сами модальные состояния объявлены выше по файлу.
+  // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано справа от рейла: Feed,
+  // контекстный attention или read-only просмотр истории плана/диалога.
   const [filesOpen, setFilesOpen] = useState(false)
-  // sideAgentOpen — видимость «бокового» агента (владеет SideAgentProvider,
-  // сообщает сюда через onOpenChange). Входит в anyModalOpen, чтобы attention
-  // других стадий не авто-открывался за открытой беседой (только сигналил).
-  // otherModalsOpen НЕ включает сам Side agent — это его гейт «не красть хоткей».
+  // sideAgentOpen — видимость «бокового» агента. Входит в anyModalOpen, чтобы attention других стадий не
+  // авто-открывался за открытой беседой (только сигналил).
   const [sideAgentOpen, setSideAgentOpen] = useState(false)
   const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
   const anyModalOpen = otherModalsOpen || sideAgentOpen
-  // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция
-  // (мы её ставим/держим/снимаем). Пока так — не даём НАШЕЙ же паузе авто-открыть
-  // attention и выкинуть пользователя из композера (shouldSuppressAttention).
+  // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
   const editing = useIsEditing() || anyModalOpen || selfOwnedActive
-  // ownedHandledSigs — подписи НАШИХ же paused-эпизодов (Pause on focus): их
-  // auto-open подавляется навсегда, а не откладывается. Иначе после Send владение
-  // снимается (clearOp) до refresh /api/status, и устаревший paused всплыл бы
-  // ложной панелью вместо отложенного вопроса другой стадии.
+  // ownedHandledSigs — подписи НАШИХ же paused-эпизодов: их auto-open подавляется навсегда, а не
+  // откладывается.
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
   const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing, ownedHandledSigs)
 
-  // reconcile «Pause on focus»-владения с авторитетным статусом: если владеемая
-  // стадия внешне ушла в running (внешний Continue) или завершилась — забыть
-  // владение, иначе устаревшее ownership привело бы к Send→continue→400.
+  // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
+  // лишний Continue.
   useEffect(() => {
     pauseOnFocus.reconcile(stages.map((s) => ({ id: s.id, status: s.status })))
   }, [stages, pauseOnFocus.reconcile])
@@ -188,13 +139,7 @@ export function App(): ReactElement {
     wsState.view === 'attention' ? attnItem?.stageId ?? null : null,
   )
 
-  // FIX 3 (round-5 #6 спеки): активация Cost из поповера «⋯» шапки должна
-  // довести фокус до САМОЙ вкладки Cost воркспейса, а не оставлять его на
-  // «⋯» — RunMetrics сам возвращает фокус туда лишь как промежуточный
-  // стабильный узел (кнопка, в отличие от активированного тайла, никуда не
-  // денется из DOM), дальнейший перенос — забота App.tsx, единственного, кто
-  // знает о существовании WorkspaceTabs. Инлайновая активация тайла (fromPopover
-  // =false) поведение не меняет — там фокус и так остаётся на месте клика.
+  // После активации Cost из поповера переносим фокус на вкладку Cost; inline-клик сохраняет свой фокус.
   const [costFocusPending, setCostFocusPending] = useState(false)
   function handleOpenCost(fromPopover: boolean): void {
     openCost()
@@ -205,37 +150,26 @@ export function App(): ReactElement {
     document.querySelector<HTMLElement>('.workspace-tabs [data-tab-id="cost"]')?.focus()
     setCostFocusPending(false)
   }, [costFocusPending, wsState.view])
-  // Защита: если accounting выключён на бэкенде (supported:false), а вид застрял
-  // на 'cost' — уводим в Feed. В норме недостижимо (без вкладки/тайла открыть
-  // Cost нечем), но рестарт afm с AFM_ACCOUNTING=0 при уже открытом Cost иначе
-  // оставил бы пустую CostPanel без вкладки для выхода.
+  // Защита: если accounting выключён на бэкенде, а вид застрял на 'cost' — уводим в Feed.
   useEffect(() => {
     if (!accounting.supported && wsState.view === 'cost') openFeed()
   }, [accounting.supported, wsState.view])
 
-  // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный
-  // элемент очереди (он может отличаться от того, что вручную выбрано в рейле —
-  // именно «отделить active attention stage от обычной выбранной стадии»);
-  // иначе — выбранная в рейле стадия.
+  // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный элемент очереди; иначе —
+  // выбранная в рейле стадия.
   const workspaceStageId = wsState.view === 'attention' && attnItem !== null ? attnItem.stageId : selectedStageId
   const workspaceStage = stages.find((stage) => stage.id === workspaceStageId) ?? null
 
-  // stageEvents — лента вкладки Feed: только события ТЕКУЩЕЙ стадии воркспейса
-  // (история + live-хвост, см. useStageEvents), а не весь событийный поток
+  // stageEvents — лента вкладки Feed: только события ТЕКУЩЕЙ стадии воркспейса, а не весь событийный поток
   // флоу. Full feed (глобальный вид) продолжает читать сырые `events` напрямую.
   const stageEvents = useStageEvents(workspaceStage?.id ?? null, events)
 
-  // Клик по стадии в рейле (или по desktop-уведомлению): выбираем её и открываем
-  // подходящий вид — attention, если стадия ждёт действия; иначе Feed для
-  // завершённых/ещё не начавшихся стадий; историю живой стадии — если есть.
-  // openAttention/openHistory/
-  // openFeed — действия того же редьюсера, поэтому ручной выбор и авто-очередь
-  // не расходятся (единая state machine, без параллельной вкладочной).
+  // Клик по стадии в рейле: выбираем её и открываем подходящий вид — attention, если стадия ждёт действия;
+  // иначе Feed для завершённых/ещё не начавшихся стадий; историю живой стадии — если есть.
   function handleSelectStage(stageId: string): void {
     setSelectedStageId(stageId)
-    // Ручной выбор другой стадии инвалидирует прицельный скролл к Q&A, заданный
-    // кликом по элементу ленты (handleOpenDialogFromFeed) — иначе, если у новой
-    // стадии случайно совпадёт phase/id, DialogChannel проскроллит не туда.
+    // Ручной выбор другой стадии инвалидирует прицельный скролл к Q&A, заданный кликом по элементу ленты —
+    // иначе, если у новой стадии случайно совпадёт phase/id, DialogChannel проскроллит не туда.
     setScrollToDialogTarget(null)
     const stage = stages.find((s) => s.id === stageId) ?? null
     const kind = stage === null ? null : attentionKindForStatus(stage.status)
@@ -243,12 +177,7 @@ export function App(): ReactElement {
       openAttention(stageId)
       return
     }
-    // Нет ожидающего действия. Если пользователь в ГЛОБАЛЬНОМ виде (Feed/Cost/
-    // Full feed) — сохраняем его: клик по стадии в рейле не должен выдёргивать в
-    // историю (её план/диалог доступны кликом по detail-вкладке). Раньше live-
-    // стадия с историей (например уже отвеченный вопрос: showDialog остаётся true)
-    // насильно открывала dialog/plan-history, из-за чего возврат к такой стадии из
-    // Feed «прыгал» на вопросы вместо ленты.
+    // Нет ожидающего действия.
     if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed') return
     if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
     else if (stage?.showDialog === true) openHistory('dialog-history')
@@ -256,15 +185,8 @@ export function App(): ReactElement {
     else openFeed()
   }
 
-  // Прицельный переход из ленты (FeedWorkspace.onOpenDialog) по клику на
-  // dialog_question/dialog_answer элемент: выбираем стадию, открываем диалог
-  // (attention, если стадия live-ждёт ответа; иначе history) и запоминаем,
-  // к какому именно Q&A прокрутить. Новый объект-литерал на каждый клик (а не
-  // переиспользование ссылки) — повторный клик по тому же элементу тоже должен
-  // повторно триггернуть попытку скролла в DialogChannel. stageId — чья это
-  // цель (F6): без него цель, не сброшенная после применения, могла бы дожить
-  // до другой стадии (attention auto-advance, повторное открытие того же
-  // диалога) и проскроллить там что-то не то по случайному совпадению phase/id.
+  // Прицельный переход из ленты по клику на dialog_question/dialog_answer элемент: выбираем стадию,
+  // открываем диалог и запоминаем, к какому именно Q&A прокрутить.
   const [scrollToDialogTarget, setScrollToDialogTarget] = useState<{ stageId: string; phase: string; id: string } | null>(null)
   function handleOpenDialogFromFeed(stageId: string, phase: string, id: string): void {
     setSelectedStageId(stageId)
@@ -274,10 +196,8 @@ export function App(): ReactElement {
     setScrollToDialogTarget({ stageId, phase, id })
   }
 
-  // Вызывается DialogChannel'ом сразу после того, как scrollToDialogTarget
-  // был успешно применён (скролл состоялся) — родитель обязан сбросить цель,
-  // иначе она переживёт своё назначение (F6: повторное открытие того же
-  // диалога иначе проигрывало бы старый скролл заново).
+  // Вызывается DialogChannel'ом сразу после того, как scrollToDialogTarget был успешно применён — родитель
+  // обязан сбросить цель, иначе она переживёт своё назначение.
   const handleDialogTargetConsumed = useCallback((): void => {
     setScrollToDialogTarget(null)
   }, [])
@@ -285,11 +205,8 @@ export function App(): ReactElement {
   // anyAttention (любая стадия прогона ждёт) — пульс favicon (шапочная точка
   // была убрана в этой ветке — пульс остался единственным глобальным сигналом).
   const anyAttention = anyAwaiting(stages)
-  // Title flash завязан на ГЛОБАЛЬНОЕ непросмотренное ожидание, а не только на
-  // текущую workspace-стадию (Finding #1 второго раунда): мигаем, когда в
-  // очереди есть ожидание, но воркспейс сейчас НЕ в attention-виде (пользователь
-  // в Feed/истории/печатает — ожидание не должно потеряться). Когда он реально
-  // смотрит attention — не мигаем (он уже занят действием).
+  // Title flash завязан на ГЛОБАЛЬНОЕ непросмотренное ожидание, а не только на текущую workspace-стадию:
+  // мигаем, когда в очереди есть ожидание, но воркспейс сейчас НЕ в attention-виде.
   useTitleFlash(wsState.items.length > 0 && wsState.view !== 'attention')
   useFaviconPulse(anyAttention)
   const {
@@ -299,29 +216,20 @@ export function App(): ReactElement {
     disable: onDisableNotifications,
   } = useDesktopNotifications(stages, handleSelectStage, flowName)
 
-  // Заголовок вкладки берём из description флоу (из flow.yaml), иначе имя флоу,
-  // иначе дефолт. useTitleFlash мигает вокруг текущего title и восстанавливает
-  // его, поэтому базовый заголовок можно менять здесь без конфликта.
+  // Заголовок вкладки берём из description флоу, иначе имя флоу, иначе дефолт.
   useEffect(() => {
     document.title = (description ?? '').trim() || flowName || 'afm Dashboard'
   }, [description, flowName])
 
-  // showPlan/showDialog capabilities are computed server-side per stage (see
-  // pkg/server/stageview.go's StageView.ShowPlan/ShowDialog) — the client only
-  // adds the "nothing selected → show both, neutral state" rule on top.
+  // showPlan/showDialog capabilities are computed server-side per stage — the client only adds the
+  // "nothing selected → show both, neutral state" rule on top.
   const showPlan = workspaceStage === null || workspaceStage.showPlan
   const showDialog = workspaceStage === null || workspaceStage.showDialog
 
-  // noteTarget — стадия, живому агенту которой можно послать заметку из
-  // messenger-поля ленты: только running (агент реально работает и примет
-  // Revise) И не скрипт (у скрипта нет живого агента; Revise увёл бы его в
-  // revising и подвесил). Прочие статусы/скрипты → null (поле не показываем).
-  // Композер остаётся смонтированным на всём цикле «Pause on focus»
-  // (pause→набор→send→resume), пока у стадии есть незавершённая операция
-  // (hasActiveOp) — иначе поле (и черновик) исчезли бы в момент, когда стадия
-  // мигнула в paused/resuming, и Send/Resume стали бы недоступны.
-  // flowPauseState==='none' сохраняет прежний гейт (в ревью-раунде поле не
-  // показываем).
+  // noteTarget — стадия, живому агенту которой можно послать заметку из messenger-поля ленты: running И
+  // не скрипт, ЛИБО есть незавершённая Pause-on-focus операция (hasActiveOp) — композер остаётся
+  // смонтированным на всём цикле pause→набор→send→resume, иначе поле и черновик исчезли бы, когда стадия
+  // мигнула в paused/resuming. Прочие статусы/скрипты и flowPauseState!=='none' → null (поле не показываем).
   const noteTarget =
     workspaceStage !== null &&
     flowPauseState === 'none' &&
@@ -341,15 +249,7 @@ export function App(): ReactElement {
   useEffect(() => {
     if (events.length === 0) return
 
-    // Идентичность по ССЫЛКЕ на последнее событие, а не по events.length: лента
-    // капается в MAX_EVENTS=10000 (use-event-feed), после чего length навсегда
-    // остаётся 10000, и старое сравнение `refreshedForEvent === events.length`
-    // (10000 === 10000) возвращалось раньше НАВСЕГДА — WS-канал обновления статуса
-    // тихо умирал на длинных ранах, оставляя только тротлящийся в фоне 3s-poll.
-    // use-event-feed добавляет новый объект события в конец на каждое
-    // поступление, поэтому ссылка на последний элемент меняется ровно тогда,
-    // когда пришло новое событие. См. App.test.tsx "WS refresh survives past
-    // the 10000-event feed cap".
+    // Сравниваем ссылку на последнее событие: длина ленты перестаёт меняться после MAX_EVENTS.
     const latest = events[events.length - 1]
     if (latest === undefined || latest === lastRefreshedEvent.current) return
 
@@ -359,9 +259,8 @@ export function App(): ReactElement {
     }
   }, [events, refresh])
 
-  // Очередь attention (топологический порядок сервера) и позиция активного
-  // элемента — для навигации prev/next между несколькими стадиями, ждущими
-  // действия (rule 6). Очередь ведёт сам редьюсер (wsState.items).
+  // Очередь attention и позиция активного элемента — для навигации prev/next между несколькими стадиями,
+  // ждущими действия. Очередь ведёт сам редьюсер (wsState.items).
   const attnItems = wsState.items
   const attnIndex = attnItem === null ? -1 : attnItems.findIndex((it) => it.stageId === attnItem.stageId)
   function goAttention(delta: number): void {
@@ -381,8 +280,7 @@ export function App(): ReactElement {
   // активный элемент; иначе — голова очереди.
   const attentionTabItem = attnItem ?? attnItems[0] ?? null
 
-  // Шорткат к ждущему действию для шапки файлового оверлея (Finding #4): первый
-  // нерешённый элемент очереди; клик закрывает Files и открывает его attention.
+  // Клик по первому нерешённому ожиданию закрывает Files и открывает attention.
   const attentionShortcut = attentionTabItem !== null
     ? {
         label: ATTENTION_SHORTCUT_LABEL[attentionTabItem.kind],
@@ -393,37 +291,17 @@ export function App(): ReactElement {
       }
     : null
 
-  // Вкладки: Feed + контекстная detail-вкладка (тело воркспейса) + отдельный
-  // маяк ожидания. Finding #7 (раунд 3): раньше единственная detail-вкладка
-  // ПЕРЕИМЕНОВЫВАЛАСЬ в Approval/Question и становилась active, хотя тело всё ещё
-  // показывало историю выбранной стадии — history «маскировалась» под attention,
-  // а клик по «active» вкладке внезапно переключал тело на другую стадию. Теперь:
-  //   • detail-вкладка отражает РЕАЛЬНОЕ тело (attention самой стадии ИЛИ история/
-  //     имя выбранной стадии) и совпадает с содержимым;
-  //   • ожидание, которое НЕ показано в теле, выносится в ОТДЕЛЬНУЮ glow-вкладку
-  //     «beacon» — она никогда не active, клик по ней явно открывает attention.
-  // Cost (increment 2) — ГЛОБАЛЬНЫЙ вид, как и Feed: отчёт по затратам не
-  // привязан к выбранной стадии, поэтому detail-таб выбранной стадии в нём так
-  // же неуместен, как и в Feed без содержимого. isGlobalView объединяет оба —
-  // и duplicatesBeacon, и ветка ниже гейтятся ИМ, а не одним только 'feed'
-  // (баг: Cost раньше вместе с маяком показывал ещё и detail-таб той же
-  // стадии — два таба на одно и то же ожидание).
+  // Вкладки: Feed + контекстная detail-вкладка + отдельный маяк ожидания.
   const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed'
-  // В глобальном виде (Feed/Cost) detail-таб выбранной стадии дублирует
-  // glow-маяк, если оба ведут в ОДНО и то же ожидание — т.е. у стадии есть своё
-  // ожидание (contextKind) и маяк указывает на неё же. Тогда detail-таб
-  // скрываем (см. else-ветку ниже), маяк остаётся. Если ждут несколько стадий и
-  // маяк показывает ДРУГУЮ — не дубликат, detail-таб оставляем как прямой
-  // доступ к ожиданию выбранной стадии.
+  // В глобальном виде detail-таб выбранной стадии дублирует glow-маяк, если оба ведут в ОДНО и то же
+  // ожидание — т.е. у стадии есть своё ожидание и маяк указывает на неё же.
   const duplicatesBeacon =
     isGlobalView &&
     contextKind !== null &&
     workspaceStage !== null &&
     attentionTabItem?.stageId === workspaceStage.id
-  // Cost — постоянная вкладка (increment 2): глобальный отчёт по затратам, не
-  // привязанный к выбранной стадии. Никогда не auto-open'ится (в отличие от
-  // контекстных attention-вкладок ниже). Должна оставаться ПОСЛЕДНЕЙ в списке —
-  // добавляется в конце, после detail/beacon вкладок (см. push ниже).
+  // Cost — постоянная вкладка: глобальный отчёт по затратам, не привязанный к выбранной стадии. Никогда не
+  // auto-open'ится (в отличие от контекстных attention-вкладок ниже).
   const tabs: WorkspaceTabDescriptor[] = [{ id: 'feed', label: 'Feed' }]
   if (workspaceStage !== null) {
     if (inAttention && contextKind !== null) {
@@ -436,21 +314,8 @@ export function App(): ReactElement {
         glow: true,
       })
     } else if (!isGlobalView || (wsState.view === 'feed' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
-      // Тело показывает историю/детали выбранной стадии — вкладка это и отражает.
-      // Завершённая (done) стадия с планом или диалогом тоже получает detail-таб:
-      // это единственная точка входа в её историю Plan/Dialog из Feed (rail-click
-      // остаётся на Feed и не открывает историю автоматически).
-      // Не рисуем detail-таб в глобальном виде, если:
-      //   • wsState.view — cost или full-feed — глобальный отчёт/лента, не
-      //     привязанные к стадии, тело не показывает историю выбранной стадии
-      //     вовсе (только view === 'feed' пускает detail-таб, FIX 1);
-      //   • стадия ещё не стартовала (pending) — плана и диалога у неё нет;
-      //   • duplicatesBeacon — он вёл бы в то же ожидание, что и glow-маяк
-      //     (в Feed у стадии с собственным ожиданием), т.е. дубль маяка;
-      //   • в Feed у стадии нет ни плана, ни диалога (напр. завершённая
-      //     автономная стадия) — таб вёл бы в ту же ленту (Feed), пустышка, клик
-      //     по которой ничего не менял. В history-виде (!isGlobalView) таб
-      //     нужен всегда — он и есть активная вкладка истории.
+      // Тело показывает историю/детали выбранной стадии — вкладка это и отражает. В history-виде
+      // (!isGlobalView) таб нужен всегда — он и есть активная вкладка истории.
       tabs.push({
         id: 'detail',
         label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,
@@ -469,18 +334,12 @@ export function App(): ReactElement {
       glow: true,
     })
   }
-  // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу
-  // после Feed (иначе контекстные вкладки оказывались «за» ней). Вкладку
-  // показываем только когда accounting поддержан бэкендом: при
-  // accounting.enabled: false / AFM_ACCOUNTING=0 /api/status приходит без
-  // объекта accounting (supported:false) — ни вкладки, ни тайла Est. cost.
+  // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.
   if (accounting.supported) {
     tabs.push({ id: 'cost', label: 'Cost' })
   }
-  // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка (increment: per-stage feed cap),
-  // читает весь событийный поток флоу (все стадии вперемешку, с бейджами
-  // стадии). Всегда ПОСЛЕДНЯЯ в списке — правее Cost, а не второй сразу после
-  // Feed (тот же порядок, что и у Cost выше).
+  // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка, читает весь событийный поток флоу. Всегда ПОСЛЕДНЯЯ в
+  // списке — правее Cost, а не второй сразу после Feed (тот же порядок, что и у Cost выше).
   tabs.push({ id: 'full-feed', label: 'Full feed' })
   const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : 'detail'
   function onSelectTab(id: string): void {
@@ -503,15 +362,7 @@ export function App(): ReactElement {
     else openFeed()
   }
 
-  // Единственная панель детали — по одной за раз (Question ИЛИ Approval ИЛИ
-  // история), на всю доступную высоту. Раньше и PlanPanel, и DialogChannel
-  // добавлялись вместе (оба flex:1) → вопрос получал полэкрана, а над/под ним
-  // висела историческая панель плана. Теперь показываем ровно то, что относится
-  // к текущему виду: attention-вопрос → диалог; attention-approval/failed/paused
-  // → план (в нём же кнопки retry/Continue); история → соответствующая панель.
-  // attention-шапка передаётся ВНУТРЬ панели (скролл-область), а не рендерится
-  // над ней — так она уезжает вместе с контентом и не съедает высоту у больших
-  // планов/вопросов (фиксированные кнопки/ответ остаются на месте).
+  // Единственная панель детали — по одной за раз, на всю доступную высоту.
   const attentionBanner = inAttention && contextKind !== null ? <AttentionBanner kind={contextKind} /> : undefined
   let detailPanel: ReactElement | null = null
   if (workspaceStage !== null) {
@@ -616,9 +467,8 @@ export function App(): ReactElement {
                   <FeedWorkspace
                     events={stageEvents}
                     stageId={workspaceStage?.id ?? null}
-                    // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно
-                    // `scope:stage:<id>` / `scope:none`. Явный токен нужен только
-                    // Full-feed-сайту (scope:full), который переопределяет дефолт.
+                    // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно `scope:stage:<id>` / `scope:none`.
+                    // Явный токен нужен только Full-feed-сайту (scope:full), который переопределяет дефолт.
                     emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                     onOpenDialog={handleOpenDialogFromFeed}
                     noteTarget={noteTarget}

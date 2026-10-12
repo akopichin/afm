@@ -35,9 +35,6 @@ func TestIntegration_FailedStage(t *testing.T) {
 	}
 }
 
-// TestIntegration_FailedDependencyCascade verifies that when a stage fails,
-// all pending stages that depend on it are also marked as failed,
-// so the flow terminates instead of hanging forever.
 func TestIntegration_FailedDependencyCascade(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "a", Name: "A", Description: "will fail", Agents: []flow.AgentType{flow.AgentPlanning}},
@@ -133,9 +130,6 @@ func TestIntegration_NoPlanningForDoomedStage(t *testing.T) {
 	}
 }
 
-// TestIntegration_DashboardStaysAliveOnAllFailed verifies that when DashboardURL
-// is set, the orchestrator does NOT exit when all stages are failed — it keeps
-// running so the user can retry via the dashboard.
 func TestIntegration_DashboardStaysAliveOnAllFailed(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "fail", Name: "Fail", Description: "fails permanently",
@@ -174,9 +168,6 @@ func TestIntegration_DashboardStaysAliveOnAllFailed(t *testing.T) {
 	}
 }
 
-// TestIntegration_DashboardRetryAfterAllFailed verifies that when DashboardURL
-// is set, a failed stage can be retried via the orchestrator and the process
-// exits normally once all stages are done.
 func TestIntegration_DashboardRetryAfterAllFailed(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "fail-then-ok", Name: "Fail Then OK", Description: "fails once, succeeds on retry",

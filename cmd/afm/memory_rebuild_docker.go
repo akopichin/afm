@@ -10,29 +10,11 @@ import (
 	"github.com/akopichin/afm/pkg/docker"
 )
 
-// rebuildDockerReExec — Docker self-re-exec для `afm memory rebuild`,
-// зеркалит блок cmd/afm/run.go:74-146 МИНУС всё специфичное для dashboard
-// (порт/browser opener/file-browser манифест) — rebuild не поднимает HTTP-
-// сервер и не открывает браузер. Вызывается ПОСЛЕ того, как хост уже
-// резолвил absFlowPath/agentRoot/memDir/runDir (нужны для preflight
-// reachability ниже), но ДО захвата run-лока и memory-лока (review #14:
-// re-exec BEFORE locks) — если Docker перезапускает процесс, лок должен
-// быть взят уже ВНУТРИ контейнера тем же процессом, что его реально
-// держит.
-//
-// Возвращает nil сразу, если Docker выключен или мы уже внутри любого
-// контейнера (IsDockerEnabled → config.InContainer: собственный re-exec с
-// AFM_IN_DOCKER=1 ИЛИ чужой контейнер по marker-файлу) — самый частый путь.
-// Иначе либо возвращает ошибку
-// (auth/preflight не прошли), либо делегирует docker.ReExec, которая либо
-// не возвращает управление вовсе (успешный re-exec), либо возвращает
-// *docker.SubprocessExitError (код завершения контейнера) — пробрасываем
-// её вызывающей стороне как есть, main.go уже умеет транслировать такую
-// ошибку в правильный os.Exit (см. main.go).
+// rebuildDockerReExec перезапускает rebuild в Docker до захвата run/memory-локов; возвращает код выхода
+// контейнера.
 func rebuildDockerReExec(cfg config.Config, o rebuildOptions, absFlowPath, agentRoot, memDir, runDir string) error {
-	// IsDockerEnabled() уже возвращает false внутри любого контейнера
-	// (config.InContainer, включая AFM_IN_DOCKER=1) — отдельная проверка env
-	// здесь была бы избыточной.
+	// IsDockerEnabled() уже возвращает false внутри любого контейнера (config.InContainer, включая
+	// AFM_IN_DOCKER=1) — отдельная проверка env здесь была бы избыточной.
 	if !cfg.Docker.IsDockerEnabled() {
 		return nil
 	}
@@ -50,12 +32,8 @@ func rebuildDockerReExec(cfg config.Config, o rebuildOptions, absFlowPath, agent
 		}
 	}
 
-	// rebuild не выполняет стадий флоу — единственный агент, который нужно
-	// смонтировать/сгенерировать, это глобальный cfg.Client.Command. Те же
-	// UsedRecipes/ScanCommands/UsesCodex, что и `afm run`, теперь принимают
-	// nil-флоу (pkg/docker/launcher.go, Task 13) — командный список сводится
-	// к [cfg.Client.Command] без отдельной "командный список из одного
-	// элемента" обёртки.
+	// rebuild не выполняет стадий флоу — единственный агент, который нужно смонтировать/сгенерировать, это
+	// глобальный cfg.Client.Command.
 	var recipes map[string]config.AgentRecipe
 	var generatedForMount map[string]bool
 	if cfg.Docker.IsAutoShim() {
@@ -97,16 +75,8 @@ func rebuildDockerReExec(cfg config.Config, o rebuildOptions, absFlowPath, agent
 	})
 }
 
-// rebuildDockerArgs строит ExtraArgs для docker.ReExec из УЖЕ распарсенных
-// rebuildOptions, а не форвардит os.Args[1:] как это делает run.go (review
-// #14): позиционный аргумент флоу мог быть задан относительным путём,
-// резолвящимся от ХОСТОВОГО cwd — под container-ным `-w absRoot` тот же
-// относительный путь резолвился бы иначе (или не резолвился бы вовсе).
-// Пересборка из типизированных полей исключает этот класс ошибки и заодно
-// не требует хрупкого позиционного парсинга os.Args. absFlowPath передаётся
-// ВСЕГДА явно (даже если пользователь не указал флоу и он был найден
-// автосканированием flowsDir() на хосте) — детерминированно, без риска, что
-// контейнер с другим --dir найдёт другой файл при повторном автосканировании.
+// rebuildDockerArgs собирает аргументы из rebuildOptions с абсолютным путём флоу, независимым от CWD
+// контейнера.
 func rebuildDockerArgs(o rebuildOptions, absFlowPath, absRoot string) []string {
 	args := []string{"memory", "rebuild"}
 	if o.RunID != "" {
@@ -132,14 +102,8 @@ func rebuildDockerArgs(o rebuildOptions, absFlowPath, absRoot string) []string {
 	return args
 }
 
-// rebuildDockerPreflight проверяет, что каждый именованный путь физически
-// виден внутри контейнера, который поднимет docker.ReExec: под корнем
-// проекта (смонтирован по тому же абсолютному пути) или под одним из
-// docker.extra_mounts (смонтированы read-only, но для ЧТЕНИЯ этого
-// достаточно). Пустые пути пропускаются (например, cfg.PromptsDir == "" —
-// используются вкомпиленные дефолты, файла на диске вовсе нет). Ошибка
-// здесь — явная и ДО дорогой работы конвейера, а не невнятный agent-side
-// "no such file or directory" где-то внутри контейнера.
+// rebuildDockerPreflight проверяет, что каждый именованный путь физически виден внутри контейнера, который
+// поднимет docker.ReExec: под корнем проекта или под одним из docker.extra_mounts.
 func rebuildDockerPreflight(projectDir string, mounts config.ExtraMounts, named map[string]string) error {
 	reachable := append([]string{projectDir}, docker.ExtraMountContainerPaths(projectDir, mounts)...)
 	labels := make([]string, 0, len(named))
@@ -152,14 +116,7 @@ func rebuildDockerPreflight(projectDir string, mounts config.ExtraMounts, named 
 		if p == "" {
 			continue
 		}
-		// named-пути (в частности runDir = runsDir() = "<rootDir>/.afm/runs")
-		// могут быть ОТНОСИТЕЛЬНЫМИ на обычном вызове (rootDir по умолчанию
-		// "."), тогда как reachable (projectDir/extra_mounts) — всегда
-		// абсолютные (absRoot). Сравнение относительного с абсолютным всегда
-		// проваливалось бы — нормализуем через filepath.Abs (относительно
-		// того же os.Getwd(), от которого resolve'ился absRoot) перед
-		// containment-проверкой; в сообщении об ошибке остаётся исходная
-		// строка p, чтобы не путать пользователя абсолютизированным путём.
+		// named-пути могут быть ОТНОСИТЕЛЬНЫМИ на обычном вызове, тогда как reachable — всегда абсолютные.
 		absP, err := filepath.Abs(p)
 		if err != nil {
 			return fmt.Errorf("docker: resolve %s %q: %w", label, p, err)
@@ -171,19 +128,11 @@ func rebuildDockerPreflight(projectDir string, mounts config.ExtraMounts, named 
 	return nil
 }
 
-// rebuildDockerMemoryWritable — review #14: единственный РЕАЛЬНО writable
-// маунт в Docker-режиме — сам корень проекта (projectDir); все
-// docker.extra_mounts монтируются read-only (pkg/docker/launcher.go, ReExec,
-// "-v ...:ro"). Внешний (вне projectDir) абсолютный memory.path, даже если
-// он "виден" через extra_mounts, физически не может быть перезаписан
-// агентом update внутри контейнера — падаем здесь с понятной ошибкой,
-// вместо непонятного сбоя где-то в середине Finalize после дорогого
-// capture.
+// rebuildDockerMemoryWritable разрешает запись только под корнем проекта; extra_mounts монтируются
+// read-only.
 func rebuildDockerMemoryWritable(projectDir, memDir string) error {
-	// Defensive: normalize memDir to absolute too (same relative-vs-absolute
-	// hazard as rebuildDockerPreflight above) — in production memDir is
-	// already absolute (resolved in cmd/afm/run.go before this is called),
-	// but a relative memDir must not silently misclassify as "outside".
+	// Defensive: normalize memDir to absolute too — in production memDir is already absolute, but a relative
+	// memDir must not silently misclassify as "outside".
 	absMemDir, err := filepath.Abs(memDir)
 	if err != nil {
 		return fmt.Errorf("docker: resolve memory dir %q: %w", memDir, err)

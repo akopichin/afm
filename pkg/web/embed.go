@@ -5,12 +5,7 @@ import (
 	"io/fs"
 )
 
-// Внедряем только то, что реально раздаётся дашбордом: точку входа index.html,
-// собранный React-бандл (assets/) и статические стили/иконки/логотип.
-//
-// node_modules/, src/, public/, scripts/, конфиги и прочее намеренно исключены:
-// вариант «dashboard/*» утягивал бы в бинарь ~96 МБ зависимостей и исходников
-// фронтенда. Набор путей = набор публичных веб-путей дашборда.
+// Явный список assets исключает исходники и node_modules из бинарника.
 //
 //go:embed dashboard/index.html dashboard/favicon.svg dashboard/quarium-logo.png dashboard/skins dashboard/assets dashboard/side-agent.css
 var embedded embed.FS

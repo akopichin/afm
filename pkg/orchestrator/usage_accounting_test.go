@@ -16,18 +16,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// usageAgentScript is a real (bash) agent used via Config.Client.Command —
-// unlike the mockRunner/scriptedRunner helpers elsewhere in this package
-// (which inject an executor.Runner directly and therefore bypass
-// executor.Config entirely: runnerFor short-circuits an injected Runner
-// straight to o.runner for a stage with no Command), this script goes
-// through a REAL *executor.Executor built by runnerFor per phase, which is
-// the only thing that ever calls Config.OnUsage. Phase is distinguished by
-// which artifacts already exist in $AFM_STAGE_DIR: plan.md means planning
-// already ran (so this call is implementation); a first-attempt marker
-// distinguishes an incomplete first implementation attempt (no .done — the
-// stage retries, mirrors TestIntegration_IncompleteRetry) from the
-// successful second attempt.
+// usageAgentScript uses a real executor so OnUsage fires; artifacts distinguish planning and retried
+// implementation calls.
 const usageAgentScript = `
 if [ -f "$AFM_STAGE_DIR/plan.md" ]; then
   if [ ! -f "$AFM_STAGE_DIR/.impl_attempt" ]; then
@@ -59,11 +49,8 @@ func usageStages() []flow.Stage {
 	}
 }
 
-// setupUsageOrchestrator opens both the FSM store and an accounting.Store
-// against the SAME fresh runDir, then builds a real (non-injected-Runner)
-// orchestrator backed by usageAgentScript via Config.Client.Command. Returns
-// the orchestrator, runDir and the accounting store so callers can close it
-// and inspect Unavailable()/Snapshot() after Run.
+// setupUsageOrchestrator opens both the FSM store and an accounting.Store against the SAME fresh runDir,
+// then builds a real orchestrator backed by usageAgentScript via Config.Client.Command.
 func setupUsageOrchestrator(t *testing.T) (orch *orchestrator.Orchestrator, runDir, stateFile string, acct *accounting.Store) {
 	t.Helper()
 	stages := usageStages()
@@ -97,8 +84,7 @@ func setupUsageOrchestrator(t *testing.T) (orch *orchestrator.Orchestrator, runD
 	return orch, runDir, filepath.Join(runDir, "state.json"), acct
 }
 
-// readUsageRecords parses <runDir>/usage.jsonl directly (the durable ledger
-// Store.Append writes to) — the black-box equivalent of loadStateJSON for
+// readUsageRecords parses <runDir>/usage.jsonl directly — the black-box equivalent of loadStateJSON for
 // accounting, since accounting.Ledger's own record accessor is unexported.
 func readUsageRecords(t *testing.T, runDir string) []accounting.UsageRecord {
 	t.Helper()
@@ -136,13 +122,6 @@ func countPhase(recs []accounting.UsageRecord, phase string) int {
 	return n
 }
 
-// TestIntegration_UsageRecordedAcrossPlanningImplementationRetry drives one
-// stage through planning -> (auto-approve) -> implementation, where the
-// first implementation attempt is incomplete (no .done) and triggers a
-// retry (mirrors TestIntegration_IncompleteRetry) before the second attempt
-// succeeds. It asserts the accounting store received exactly the three
-// usage lines this produces, each attributed to the right stage/phase, and
-// that the run-level summary sums them.
 func TestIntegration_UsageRecordedAcrossPlanningImplementationRetry(t *testing.T) {
 	orch, runDir, stateFile, acct := setupUsageOrchestrator(t)
 	defer acct.Close()
@@ -196,21 +175,10 @@ func TestIntegration_UsageRecordedAcrossPlanningImplementationRetry(t *testing.T
 	}
 }
 
-// TestIntegration_UsageStorageFailureDoesNotAffectRun proves that a broken
-// accounting store never affects the run itself: pre-closing the store's
-// underlying file (the black-box way to force every subsequent Append to
-// fail, since Store's internals are unexported) simulates a storage-fatal
-// condition on the accounting side only. The stage must still reach `done`
-// exactly as if accounting had never been wired in, and the store must
-// report Unavailable() — recordUsage logs and swallows the error, never
-// calls setFatal, never touches the FSM.
 func TestIntegration_UsageStorageFailureDoesNotAffectRun(t *testing.T) {
 	orch, _, stateFile, acct := setupUsageOrchestrator(t)
 
-	// Force every subsequent Append to fail: Append's first Write goes to an
-	// already-closed *os.File, which errors and permanently marks the store
-	// unavailable (see Store.Append/markUnavailable) — all through the public
-	// API, no accounting-internal access needed.
+	// Close the usage file to force Append failure and permanently mark accounting unavailable.
 	if err := acct.Close(); err != nil {
 		t.Fatalf("acct.Close: %v", err)
 	}

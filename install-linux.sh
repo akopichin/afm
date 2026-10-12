@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-#
-# Installs the prebuilt afm binary on Linux without Homebrew.
-# Downloads the archive from GitHub Releases, verifies the checksum, and puts
-# the binary into /usr/local/bin (or ~/.local/bin if /usr/local is not writable).
-#
-# Usage:
-#   ./install-linux.sh                       # latest version
-#   AFM_VERSION=vX.Y.Z ./install-linux.sh    # specific version (see GitHub Releases)
-#
+# Install the Linux release binary; AFM_VERSION=vX.Y.Z selects a version, otherwise latest.
 set -euo pipefail
 
 REPO="akopichin/afm"

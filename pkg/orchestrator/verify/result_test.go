@@ -196,12 +196,6 @@ func TestDecodeModelResult_Rejections(t *testing.T) {
 	}
 }
 
-// TestDecodeModelResult_RepairsBareNewline покрывает реальный инцидент: codex-
-// ревьюер вписал в строковое значение (evidence) многострочную цитату кода, и
-// сырой перенос строки попал прямо внутрь строкового литерала JSON. Строгий
-// json недопускает сырой \n внутри строки — но это чисто лексическая поломка
-// вывода модели, а не проблема вердикта. Декодер чинит её через jsonrepair и
-// принимает результат, вместо того чтобы валить verify красным из-за транспорта.
 func TestDecodeModelResult_RepairsBareNewline(t *testing.T) {
 	// Реальный перенос строки (не экранированный) внутри evidence.
 	raw := "{\"schema_version\":1,\"verdict\":\"needs_changes\",\"summary\":\"есть проблема\"," +
@@ -223,11 +217,6 @@ func TestDecodeModelResult_RepairsBareNewline(t *testing.T) {
 	}
 }
 
-// TestDecodeModelResult_RepairDoesNotMaskRejections гарантирует, что ремонт
-// применяется ТОЛЬКО к лексической поломке (сырой \n), но не вскрывает дыру в
-// намеренных отказах: если после ремонта остаётся дубль ключа — результат всё
-// равно отклоняется. (jsonrepair не дедуплицирует ключи, а строгая проверка
-// дубликатов прогоняется повторно по отремонтированным байтам.)
 func TestDecodeModelResult_RepairDoesNotMaskRejections(t *testing.T) {
 	// Сырой \n в evidence (чинится) + дубль ключа "blocking" (должен отклониться).
 	raw := "{\"schema_version\":1,\"verdict\":\"needs_changes\",\"summary\":\"ok\"," +
@@ -239,17 +228,10 @@ func TestDecodeModelResult_RepairDoesNotMaskRejections(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected rejection: a duplicate key must not survive repair")
 	}
-	// The input is malformed in two ways; afm returns the first failure (the
-	// syntax error) — what matters is that the repaired-but-still-duplicate
-	// document is NOT accepted. A pure duplicate (no syntax error) still surfaces
-	// the "duplicate" message, proven by TestDecodeModelResult_Rejections.
+	// The input is malformed in two ways; afm returns the first failure — what matters is that the
+	// repaired-but-still-duplicate document is NOT accepted.
 }
 
-// TestDecodeModelResult_SyntaxErrorMessageIsNotMisleading фиксирует, что
-// лексическая ошибка больше не маскируется под "duplicate key" (детектор
-// дубликатов теперь идёт ПОСЛЕ структурного разбора). Берём вход с сырым \n и
-// неизвестным полем, который ремонт не доведёт до валидной схемы, и проверяем,
-// что ошибка — не про дубликат ключа.
 func TestDecodeModelResult_SyntaxErrorMessageIsNotMisleading(t *testing.T) {
 	raw := "{\"schema_version\":1,\"verdict\":\"pass\",\"summary\":\"x\ny\"," +
 		"\"findings\":[],\"bogus\":true}"
@@ -263,10 +245,6 @@ func TestDecodeModelResult_SyntaxErrorMessageIsNotMisleading(t *testing.T) {
 	}
 }
 
-// TestDecodeModelResult_RepairStaysNarrow гарантирует, что узкий ремонт сырых
-// управляющих символов НЕ превращается в вседозволенный нормализатор: обёртки и
-// лишний контент, которые jsonrepair снял бы, тут обязаны по-прежнему
-// отклоняться (даже если рядом есть сырой \n, запускающий путь ремонта).
 func TestDecodeModelResult_RepairStaysNarrow(t *testing.T) {
 	valid := `{"schema_version":1,"verdict":"pass","summary":"ok","findings":[]}`
 	cases := map[string]string{
@@ -286,9 +264,6 @@ func TestDecodeModelResult_RepairStaysNarrow(t *testing.T) {
 	}
 }
 
-// TestEscapeRawControlCharsInStrings_OnlyInsideStrings проверяет, что ремонт
-// трогает управляющие символы ТОЛЬКО внутри строковых литералов, а структурные
-// переносы строк между токенами (валидный pretty-printed JSON) не меняет.
 func TestEscapeRawControlCharsInStrings_OnlyInsideStrings(t *testing.T) {
 	// Переносы строк МЕЖДУ токенами (не в строке) — валидны, ремонт не нужен.
 	pretty := "{\n  \"schema_version\": 1\n}"

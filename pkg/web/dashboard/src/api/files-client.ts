@@ -1,9 +1,4 @@
-// Типизированный клиент к GET /api/files/* — дереву проекта в браузере файлов
-// дашборда (Task 13 строит на нём UI, эта клетка — только клиент). Пара к
-// run-client.ts (мутирующие POST-команды): тот же fetch-паттерн, но для
-// чтения, поэтому разбор ответа ближе к normalizeStatus (use-status.ts) —
-// snake_case JSON с бэкенда приводится к camelCase на границе клиента,
-// с защитными дефолтами на месте отсутствующих/неверных полей.
+// Типизированный клиент к GET /api/files/* — дереву проекта в браузере файлов дашборда.
 
 export class FilesApiError extends Error {
   constructor(
@@ -66,10 +61,7 @@ export type FileDiff = {
   diff: string
 }
 
-// fetchOk делает GET и бросает типизированную FilesApiError на не-ok ответ
-// (кроме 304 — это валидный "не изменилось", обрабатывается вызывающим).
-// Код ошибки разбирается из JSON-тела {"error":"<code>"}; если тело не JSON —
-// падаем на 'read_failed' по контракту бэкенда.
+// fetchOk делает GET и бросает типизированную FilesApiError на не-ok ответ.
 async function fetchOk(url: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(url, init)
   if (response.ok || response.status === 304) return response
@@ -149,9 +141,8 @@ export async function getReference(root: string, path: string): Promise<FileRefe
   }
 }
 
-// getContent возвращает undefined на 304 ("не изменилось" — вызывающий
-// сохраняет предыдущий контент как есть) вместо того, чтобы бросать ошибку:
-// это ожидаемый, а не исключительный исход условного запроса.
+// getContent возвращает undefined на 304 вместо того, чтобы бросать ошибку: это ожидаемый, а не
+// исключительный исход условного запроса.
 export async function getContent(root: string, path: string, etag?: string): Promise<FileContent | undefined> {
   const response = await fetchOk(`/api/files/content${query({ root, path })}`, etag ? { headers: { 'If-None-Match': etag } } : undefined)
   if (response.status === 304) return undefined
@@ -206,10 +197,7 @@ function isChangeStatus(value: unknown): value is ChangeStatus {
   return value === 'modified' || value === 'added' || value === 'deleted'
 }
 
-// toChangeEntry требует строковые name/path и известный status; иначе строка
-// отбрасывается (не выдумываем 'modified'). kind синтезируется как 'file' —
-// changed-entry структурно совместим с TreeEntry, чтобы openFile/onToggleSelect
-// принимали его без адаптеров.
+// toChangeEntry требует строковые name/path и известный status; иначе строка отбрасывается.
 function toChangeEntry(raw: unknown): ChangeEntry | null {
   if (!isRecord(raw) || typeof raw.name !== 'string' || typeof raw.path !== 'string' || !isChangeStatus(raw.status)) {
     return null
@@ -223,9 +211,8 @@ function toChangeEntry(raw: unknown): ChangeEntry | null {
   }
 }
 
-// getChanged запрашивает GET /api/files/changed (git-статус относительно
-// индекса или HEAD — переключатель mode). signal — тот же паттерн отмены
-// устаревшего запроса, что и у getSearch.
+// getChanged запрашивает GET /api/files/changed (git-статус относительно индекса или HEAD — переключатель
+// mode). signal — тот же паттерн отмены устаревшего запроса, что и у getSearch.
 export async function getChanged(root: string, mode: 'index' | 'head', signal?: AbortSignal): Promise<ChangeList> {
   const response = await fetchOk(`/api/files/changed${query({ root, mode })}`, signal ? { signal } : undefined)
   const data = (await response.json()) as { entries?: unknown; truncated?: unknown }

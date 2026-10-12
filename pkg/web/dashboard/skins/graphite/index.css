@@ -1,17 +1,4 @@
-/* pkg/web/dashboard/skins/graphite/index.css — Graphite skin.
-
-   The default product skin: a calm, material dark/light theme. Identity comes
-   from surface hierarchy (canvas → raised → overlay), NOT from decorative glow
-   or a background image. Indigo (#5f78ff) is the single interaction/selection
-   accent; mint = success, amber = attention, coral = danger.
-
-   Structure mirrors the other skins: import base/tokens.css first (semantic
-   fallbacks), then all base/*.css partials, then the theme token blocks, then a
-   small override section that re-tints the hardcoded neon fills baked into the
-   base partials (novacorps sources: teal rgba(111,212,204,X), yellow
-   rgba(229,212,66,X), violet rgba(183,135,255,X)) into graphite indigo/mint/
-   amber. Those overrides use the --*-rgb triplet tokens, so they follow the
-   active theme automatically. Rules after @import win over base at equal
+/* pkg/web/dashboard/skins/graphite/index.css — Graphite skin. Rules after @import win over base at equal
    specificity by cascade order (same convention as coffee/goga). */
 
 @import url("../base/tokens.css");
@@ -57,21 +44,10 @@
   --danger:             #f06b78;
   --danger-rgb:         240, 107, 120;
 
-  /* cost-ui increment2 (task-12): true violet for the token-mix bar's
-     cache-write segment, distinct in hue from --accent-primary (indigo) and
-     --success (mint) — a reader must be able to tell the two blue-ish/green
-     segments apart from this one at a glance, not just by tooltip text. */
+  /* Violet cache-write segments stay distinct from indigo interaction and mint success colors. */
   --cost-cachewrite: #c084fc;
 
-  /* FIX 5 (codex#5, AA contrast): dedicated cost tokens, natively defined
-     rather than aliased to --text-muted/--attention (see tokens.css doc).
-     Values reused verbatim from the existing (already-passing) text-muted/
-     attention — graphite never had a contrast problem here, this only makes
-     the dependency explicit and immune to future retuning of those two
-     general-purpose tokens.
-       --cost-rail        #828da1 on --surface-raised #111a27 → 5.22:1
-       --cost-rail-strong #aab4c4 on --surface-raised #111a27 → 8.36:1
-       --cost-warning     #f2b84b on --surface-canvas #0b111b → 10.57:1 */
+  /* Dedicated cost tokens provide contrast on cost surfaces. */
   --cost-rail:        #828da1;
   --cost-rail-strong: #aab4c4;
   --cost-warning:     #f2b84b;
@@ -163,10 +139,7 @@
      raised surface, still a clear violet next to accent-primary/success. */
   --cost-cachewrite: #9333ea;
 
-  /* FIX 5 (codex#5, AA contrast) — see the dark block above for rationale.
-       --cost-rail        #616c7e on --surface-raised #ffffff → 5.31:1
-       --cost-rail-strong #596579 on --surface-raised #ffffff → 5.90:1
-       --cost-warning     #9c5a06 on --surface-canvas #f3f5f9 → 4.96:1 */
+  /* Cost tokens for the light theme. */
   --cost-rail:        #616c7e;
   --cost-rail-strong: #596579;
   --cost-warning:     #9c5a06;
@@ -224,13 +197,7 @@
   --text-dim: var(--ink-dim);
 }
 
-/* === graphite overrides over base ===
-   Re-tint every hardcoded neon fill baked into base/*.css into graphite tones,
-   using the --*-rgb triplet tokens so each fill follows the active theme
-   automatically (indigo → interaction/selection, mint → success/criteria,
-   amber → attention/annotation). Graphite stays CALM: moderate alpha, no glow
-   maximalism, no background image. Rules after @import win over base by cascade
-   order. This set mirrors coffee's override set selector-for-selector. */
+/* Override base fills with graphite RGB tokens; place rules after imports so the theme wins the cascade. */
 
 ::selection { background: rgba(var(--accent-primary-rgb), 0.28); }
 
@@ -288,9 +255,7 @@
   40%  { box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.55), 0 0 24px rgba(var(--accent-primary-rgb), 0.4), inset 0 0 16px rgba(var(--accent-primary-rgb), 0.12); }
   100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent, inset 0 0 0 transparent; }
 }
-/* base/dialog-channel.css — additional hardcoded fills not in the brief's grep
-   list (matched by coffee's audit): .dialog-pending bg + option hover/selected
-   were pure rgba(183,135,255,X), no var(). */
+/* Retint dialog pending and option fills with theme RGB tokens. */
 .dialog-pending { background: linear-gradient(180deg, rgba(var(--accent-primary-rgb), 0.10), rgba(var(--accent-primary-rgb), 0.02)); }
 .dialog-pending .dialog-options button:hover { box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.40); }
 .dialog-pending .dialog-options button.selected {

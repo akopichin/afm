@@ -1,21 +1,5 @@
-/* pkg/web/dashboard/skins/base/tokens.css — shared semantic-token fallback layer.
-
-   The redesign introduces a semantic token vocabulary (--surface-*, --text-*,
-   --accent-primary, --success, --danger, --attention, --radius-*, --font-*, …).
-   The graphite skin authors these NATIVELY per theme. The older skins
-   (coffee / goga / novacorps) only define the LEGACY vars (--bg, --ink-hi,
-   --amber, --mint, --coral, …). This file bridges them: every semantic token
-   is derived from the legacy var it corresponds to, so a component written
-   against the new vocabulary renders correctly under the old skins too.
-
-   Defined at plain :root (NOT theme-scoped) on purpose — each token resolves
-   from whichever legacy var the active [data-theme] block set, so it inherits
-   dark/light automatically. graphite's own :root[data-theme="…"] blocks have
-   higher specificity and override every one of these natively.
-
-   The *-rgb triplets can't be derived from a hex var in CSS, so they carry a
-   neutral fallback that only needs to be approximately right for non-graphite
-   skins in this milestone; graphite supplies exact triplets itself. */
+/* pkg/web/dashboard/skins/base/tokens.css — shared semantic-token fallback layer. graphite's own
+   :root[data-theme="…"] blocks have higher specificity and override every one of these natively. */
 
 :root {
   /* surfaces */
@@ -32,12 +16,8 @@
   --text-primary:   var(--ink-hi);
   --text-secondary: var(--ink);
   --text-muted:     var(--ink-dim);
-  /* Текст строк-команд в ленте (feed, .feed-item.mono) — приглушённее «голоса»
-     агента, но обязан оставаться читаемым (WCAG AA ≥4.5:1 для 12.5px). По
-     умолчанию = --text-muted (AA-safe в graphite/goga на surface-tool). Скины,
-     где --ink-dim проседает ниже 4.5:1 (novacorps dark/light, coffee light),
-     переопределяют этот токен нативно AA-safe значением — тот же приём, что и
-     у --cost-rail (см. ниже). */
+  /* Текст строк-команд в ленте — приглушённее «голоса» агента, но обязан оставаться читаемым. По умолчанию
+     = --text-muted (AA-safe в graphite/goga на surface-tool). */
   --feed-command:   var(--text-muted);
 
   /* accents (semantic) */
@@ -64,32 +44,14 @@
   --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
-  /* Per-stage cost figure in the rail (cost-ui increment2, task-10): quiet at
-     rest, intensifies to a stronger-but-still-muted tone on row hover/active.
-     Color only — NEVER opacity (a dim digit must stay fully legible, not
-     partially vanish).
-
-     FIX 5 (codex#5, AA contrast audit): these used to be plain aliases of
-     --text-muted/--attention — fine for graphite/goga (already ≥4.5:1 on
-     their cost surfaces) but NOT for novacorps, whose --ink-dim/--amber sit at
-     3.66–4.36:1 there (measured on the rail's --surface-raised background and
-     the coverage line's --surface-canvas background respectively) — below
-     WCAG AA for normal text. Every skin now defines these three tokens
-     NATIVELY (graphite/goga/novacorps index.css, dark+light) with a value
-     reasoned to ≥4.5:1 against its actual cost surface, instead of silently
-     inheriting whatever --text-muted/--attention happen to be tuned to for
-     unrelated UI. The generic aliases below are ONLY a fallback for a skin
-     that forgets to define them (none of the three shipped skins rely on it
-     for --cost-rail/--cost-rail-strong/--cost-warning today). */
+  /* Per-stage cost figure in the rail: quiet at rest, intensifies to a stronger-but-still-muted tone on
+     row hover/active. */
   --cost-rail:        var(--text-muted);
   --cost-rail-strong: var(--text-secondary);
   --cost-warning:     var(--attention);
 
-  /* === motion ===
-     Shared, theme-agnostic entrance motion. Durations/easings are tokens;
-     keyframes (below, outside :root) animate only opacity/transform/box-shadow
-     and take color from the active --accent-primary via color-mix.
-     --motion-fast is pinned to 120ms (already used as var(--motion-fast, 120ms)). */
+  /* === motion === Shared, theme-agnostic entrance motion. --motion-fast is pinned to 120ms (already used
+     as var(--motion-fast, 120ms)). */
   --motion-fast:  120ms;
   --motion-base:  240ms;
   --motion-slow:  420ms;
@@ -97,9 +59,8 @@
   --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* Quote chip entrance (reply-to-thought & line-comment): a bright accent glow
-   that flashes on appear and eases down to rest, while the chip rises a hair.
-   box-shadow ends at none (no lingering glow). Color from the ACTIVE accent. */
+/* Quote chip entrance: a bright accent glow that flashes on appear and eases down to rest, while the chip
+   rises a hair. box-shadow ends at none (no lingering glow). */
 @keyframes quoteChipIn {
   0% {
     opacity: 0;
@@ -111,11 +72,7 @@
   100% { opacity: 1; transform: translateY(0); box-shadow: 0 0 0 0 transparent; }
 }
 
-/* Quote-mark entrance — NOT a plain fade: spring in from a small rotated scale
-   with a brief overshoot, then settle. TRANSFORM ONLY: the fade-in comes from the
-   parent quoteChipIn (the chip/quote block animates opacity 0->1 and the mark is
-   its child), so each mark keeps its OWN resting opacity (1 for the chip label,
-   0.30 for the line-comment ::before) with no end-of-animation opacity jump. */
+/* Spring the quote mark from a rotated scale, briefly overshoot, then settle. */
 @keyframes quoteMarkPop {
   0%   { transform: scale(0.4) rotate(-14deg); }
   60%  { transform: scale(1.12) rotate(3deg); }
@@ -128,14 +85,8 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* reset.css already zeroes durations under reduced motion (0.01ms), which STILL
-   fires animationend. Name the pure mount-animation surfaces off explicitly
-   (house convention) so they collapse to rest.
-   DO NOT include .feed-item--enter here: that class is cleared by its own
-   animationend handler (useEnteringLast.onEntered), and animation:none would
-   suppress the event, leaving a stale entrance flag that could animate later if
-   the user turns reduced motion off. The 0.01ms gate already makes it effectively
-   instant while preserving the cleanup event — exactly what we want. */
+/* reset.css already zeroes durations under reduced motion, which STILL fires animationend. Name the pure
+   mount-animation surfaces off explicitly (house convention) so they collapse to rest. */
 @media (prefers-reduced-motion: reduce) {
   .feed-reply-chip,
   .feed-reply-chip-label,

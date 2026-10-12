@@ -137,10 +137,6 @@ func TestScanCommands_SkipsMissingBinary(t *testing.T) {
 	}
 }
 
-// TestScanCommands_NilFlow — Task 13 (rebuild не выполняет стадии флоу и
-// знает только глобальную команду агента памяти, флоу для этой операции
-// может быть nil): nil f не должен паниковать, глобальная команда
-// монтируется как обычно, а generated пропускается так же.
 func TestScanCommands_NilFlow(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "glm51")
@@ -163,9 +159,6 @@ func TestScanCommands_NilFlow(t *testing.T) {
 	}
 }
 
-// TestScanCommands_VerifyOnlyCommandIsMounted — codex НЕ используется ни в
-// одном stages[].command, а только в verify-шаге агента: он всё равно должен
-// монтироваться, иначе verify-адаптер внутри контейнера не найдётся.
 func TestScanCommands_VerifyOnlyCommandIsMounted(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "codex")
@@ -230,9 +223,6 @@ func TestScanCommands_VerifyStepsDedupeWithinStage(t *testing.T) {
 	}
 }
 
-// TestUsedRecipeCommands_VerifyOnlyCommand — recipe-ключ "codex" встречается
-// только в verify-шаге агента, ни в одном stages[].command — discovery всё
-// равно должен его найти (иначе afm не сгенерирует враппер codex в контейнере).
 func TestUsedRecipeCommands_VerifyOnlyCommand(t *testing.T) {
 	recipes := map[string]config.AgentRecipe{
 		"codex": {Type: config.RecipeTypeCodex},
@@ -267,9 +257,6 @@ func TestUsesCodex_VerifyOnlyDirectCommand(t *testing.T) {
 	}
 }
 
-// TestUsesCodex_VerifyOnlyRecipeType — verify-шаг использует alias "codex" с
-// recipe type:codex, спроецированный через UsedRecipes (та же цепочка, что
-// используется для stages[].command).
 func TestUsesCodex_VerifyOnlyRecipeType(t *testing.T) {
 	all := map[string]config.AgentRecipe{
 		"codex": {Type: config.RecipeTypeCodex},
@@ -426,10 +413,6 @@ func TestReExec_PassthroughEnv(t *testing.T) {
 	}
 }
 
-// TestReExec_ForwardsAccounting verifies AFM_ACCOUNTING reaches the container
-// by value (not a secret): the display switch is resolved INSIDE the container,
-// so `AFM_ACCOUNTING=0/1 afm run` with Docker enabled must carry the same env
-// through. Both 0 and 1 forward; unset forwards nothing.
 func TestReExec_ForwardsAccounting(t *testing.T) {
 	run := func(t *testing.T, envVal string, setEnv bool) string {
 		var capturedArgs []string
@@ -474,9 +457,6 @@ func TestReExec_ForwardsAccounting(t *testing.T) {
 	})
 }
 
-// TestReExec_ForwardsSideAgentEnv verifies AFM_SIDEAGENT reaches the container by
-// value (not a secret): the toggle is resolved INSIDE the container, so a
-// host-set AFM_SIDEAGENT=0/1 must carry through to override the mounted config.
 func TestReExec_ForwardsSideAgentEnv(t *testing.T) {
 	run := func(t *testing.T, envVal string, setEnv bool) string {
 		var capturedArgs []string
@@ -596,10 +576,6 @@ func TestReExec_RecipeMissingSecretFailFast(t *testing.T) {
 	}
 }
 
-// TestUsedRecipes_FiltersUnusedAgents доказывает контракт: неиспользуемый агент
-// с отсутствующим секретом не может заблокировать запуск — UsedRecipes исключает
-// его из maps, которую ReExec резолвит. glm52 определён в конфиге, но флоу его не
-// использует → его recipe (с секретом на несуществующий файл) отфильтровывается.
 func TestUsedRecipes_FiltersUnusedAgents(t *testing.T) {
 	// Секрет для glm51 — валидный файл; для glm52 — несуществующий файл.
 	tokFile := filepath.Join(t.TempDir(), "token")
@@ -790,12 +766,6 @@ func TestReExec_CodexStateMount_SkippedWhenDirMissing(t *testing.T) {
 	}
 }
 
-// TestReExec_CodexRecipeNoAuth_DoesNotFail проверяет фикс бага, найденного в
-// ревью Task 2: recipe типа codex может законно иметь пустой Auth (Validate()
-// это разрешает — авторизация идёт через смонтированную ~/.codex, а не через
-// секрет). Раньше ResolveAuthValue("", secrets) фейлил на пустом auth.from и
-// валил ВЕСЬ ReExec — это ломало главный (безсекретный) сценарий codex.
-// hasEnvKey ищет `-e KEY` (bare-форма) или `-e KEY=...` среди аргументов.
 func hasEnvKey(args []string, key string) bool {
 	for i, a := range args {
 		if a != "-e" || i+1 >= len(args) {
@@ -809,9 +779,6 @@ func hasEnvKey(args []string, key string) bool {
 	return false
 }
 
-// TestReExec_FileBrowserWiring: при включённом file browser и непустом
-// манифесте порт публикуется только на loopback (127.0.0.1), а закодированный
-// манифест передаётся контейнеру через AFM_DOCKER_FILE_ROOTS.
 func TestReExec_FileBrowserWiring(t *testing.T) {
 	var capturedArgs []string
 	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
@@ -846,11 +813,6 @@ func TestReExec_FileBrowserWiring(t *testing.T) {
 	}
 }
 
-// TestReExec_DashboardAlwaysLoopback: даже без file browser и без прочих фич
-// dashboard-порт публикуется только на loopback (127.0.0.1) — dashboard отдаёт
-// неаутентифицированные мутирующие stage/flow API, поэтому не должен быть открыт
-// наружу хоста. Это регрессионный guard: раньше публикация уходила на все
-// интерфейсы, когда боковой агент был выключен.
 func TestReExec_DashboardAlwaysLoopback(t *testing.T) {
 	var capturedArgs []string
 	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
@@ -882,13 +844,6 @@ func TestReExec_DashboardAlwaysLoopback(t *testing.T) {
 	}
 }
 
-// TestReExec_ExtraMountPathResolution — регрессия R7: относительный
-// extra_mounts.path (не начинающийся ни с "/", ни с "~") раньше давал
-// невалидный `-v ../shared:../shared` (относительный путь Docker не
-// принимает) и расходился с манифестом (containerPathFor резолвил его в
-// абсолютный /work/shared). Единый хелпер resolveMountPath используется и в
-// -v петле, и в containerPathFor — расхождения быть не должно. Абсолютный и
-// "~"-путь должны резолвиться так же, как раньше.
 func TestReExec_ExtraMountPathResolution(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
@@ -936,9 +891,8 @@ func TestReExec_ExtraMountPathResolution(t *testing.T) {
 		t.Errorf("relative path must not leak raw into docker args: %s", argsStr)
 	}
 
-	// Манифест (используемый file browser'ом) должен резолвить тот же
-	// относительный путь в тот же абсолютный /work/shared — без расхождения
-	// с тем, что реально смонтировано через -v.
+	// Манифест (используемый file browser'ом) должен резолвить тот же относительный путь в тот же абсолютный
+	// /work/shared — без расхождения с тем, что реально смонтировано через -v.
 	manifest, err := docker.BuildFileRootManifest("/work/afm", mounts)
 	if err != nil {
 		t.Fatal(err)
@@ -992,11 +946,6 @@ func TestReExec_CodexRecipeNoAuth_DoesNotFail(t *testing.T) {
 	}
 }
 
-// TestReExec_HookSecretTransport доказывает Task 5: два хука с env, чьи id
-// различаются только пунктуацией/регистром (envName/sanitize схлопнул бы их в
-// один суффикс), получают РАЗНЫЕ транспортные имена (инъективность по
-// индексам combined, codex #1), значение секрета уходит только в env
-// afm-процесса (bare `-e`, не argv), а секрет-файл не монтируется.
 func TestReExec_HookSecretTransport(t *testing.T) {
 	tokFile := filepath.Join(t.TempDir(), "hook-token")
 	if err := os.WriteFile(tokFile, []byte("hook-secret-value\n"), 0600); err != nil {
@@ -1103,9 +1052,6 @@ func TestReExec_HookNoEnv_NoTransport(t *testing.T) {
 	}
 }
 
-// TestReExec_HookSecretMissingFailFast — как TestReExec_RecipeMissingSecretFailFast,
-// но для lifecycle-хуков: отсутствующий секрет должен fail-fast'ить ДО docker run,
-// а не молча уйти в контейнер с недорезолвленным env.
 func TestReExec_HookSecretMissingFailFast(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {

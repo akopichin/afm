@@ -2,10 +2,6 @@ package workspace
 
 import "testing"
 
-// TestTruncateOnLine runs on every platform (no git/openat needed) — it's the
-// pure-function slice of Task 9 that gives real RED/GREEN on a darwin host,
-// where the rest of diff.go's behavior can only be exercised via Docker E2E
-// (linux-tagged tests in diff_test.go).
 func TestTruncateOnLine(t *testing.T) {
 	cases := []struct {
 		name string

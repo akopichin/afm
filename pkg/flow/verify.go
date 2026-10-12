@@ -30,36 +30,23 @@ type VerifyStep struct {
 	Timeout time.Duration
 }
 
-// VerifySpec — нормализованный verify стадии: один или несколько шагов
-// (shell и/или агент), выполняемых по порядку после того как стадия заявила
-// о завершении. Заменяет прежний Stage.Verify string, сохраняя старое
-// поведение при скалярной форме YAML.
+// VerifySpec — нормализованный verify стадии: один или несколько шагов, выполняемых по порядку после того
+// как стадия заявила о завершении.
 type VerifySpec struct {
 	Steps []VerifyStep
-	// MaxFailures — сколько отклонений (needs_changes) verify допускает, прежде
-	// чем стадия проваливается: N = число retry-коррекций автора. Указатель, чтобы
-	// отличить «не задано» (nil → берётся config verify.max_failures, дефолт 1) от
-	// явного значения, включая 0 (строгий режим: первое же отклонение проваливает).
-	// Задаётся ТОЛЬКО в container-форме YAML: verify: {steps: [...], max_failures: N}.
+	// MaxFailures — сколько отклонений verify допускает, прежде чем стадия проваливается: N = число
+	// retry-коррекций автора.
 	MaxFailures *int
-	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших
-	// рабочее дерево, допустить до принятия стадии (reviewer/author stalemate).
-	// Указатель, чтобы отличить «не задано» (nil → config verify.review_patience,
-	// дефолт 0 = выключено) от явного значения. Как и MaxFailures, задаётся ТОЛЬКО
-	// в container-форме YAML: verify: {steps: [...], review_patience: N}.
+	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших рабочее дерево, допустить до
+	// принятия стадии.
 	ReviewPatience *int
-	// fromScalar отмечает, что спека получена из legacy-скаляра
-	// (verify: "команда") — используется ТОЛЬКО для симметричной сериализации
-	// обратно в тот же вид (см. MarshalYAML). На валидацию и исполнение не
-	// влияет.
+	// fromScalar отмечает, что спека получена из legacy-скаляра — используется ТОЛЬКО для симметричной
+	// сериализации обратно в тот же вид. На валидацию и исполнение не влияет.
 	fromScalar bool
 }
 
-// NewShellVerify собирает VerifySpec из одной shell-команды программно —
-// то же самое, что получилось бы при разборе YAML-скаляра verify: "команда".
-// Нужен там, где Stage.Verify собирается в памяти, а не через YAML (afm
-// init, cmd/afm/init_stage.go) — fromScalar не экспортирован, так что
-// прямое присвоение поля недоступно за пределами пакета flow.
+// NewShellVerify собирает VerifySpec из одной shell-команды программно — то же самое, что получилось бы
+// при разборе YAML-скаляра verify: "команда".
 func NewShellVerify(cmd string) VerifySpec {
 	if cmd == "" {
 		return VerifySpec{}
@@ -74,19 +61,8 @@ func (s VerifySpec) IsEmpty() bool { return len(s.Steps) == 0 }
 // сериализации целиком, а не пишется как пустой список/объект.
 func (s VerifySpec) IsZero() bool { return s.IsEmpty() }
 
-// UnmarshalYAML разбирает три формы verify (см. docs/superpowers/sdd —
-// задача V1 фичи ai-verify):
-//   - скаляр — один shell-шаг, verify: "cmd" (в т.ч. verify: "codex" —
-//     это ВСЕГДА shell, а не агент; агентский шаг возможен только через
-//     объектную форму {command: ...});
-//   - объект — один шаг, {run: ...} (shell) либо {command: ..., prompt: ...} (агент);
-//   - список объектов — несколько шагов по порядку.
-//
-// Здесь отклоняются только структурные проблемы (неизвестные поля, вложенный
-// список, некорректный формат timeout, пустой список). Бизнес-правила —
-// взаимоисключение run/command, обязательность run/command, отрицательный
-// timeout — проверяет VerifySpec.validate(stageID): там есть id стадии и
-// 1-based индекс шага для точного текста ошибки, недоступные здесь.
+// UnmarshalYAML принимает shell-скаляр, объект run/command или список шагов; скаляр всегда shell.
+// Бизнес-правила проверяет validate.
 func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
 	case yaml.ScalarNode:
@@ -193,17 +169,8 @@ func mappingHasKey(node *yaml.Node, key string) bool {
 	return false
 }
 
-// unmarshalContainer разбирает container-форму verify:
-//
-//	verify:
-//	  steps:
-//	    - run: ...
-//	    - command: ...
-//	  max_failures: N   # необязателен
-//
-// В отличие от одиночной формы, здесь допустимы только ключи steps и
-// max_failures. Поля отдельного шага (run/command/prompt/timeout) на верхнем
-// уровне container'а — ошибка (их место внутри steps).
+// unmarshalContainer разбирает container-форму verify: verify: steps: - run: ... max_failures: N #
+// необязателен В отличие от одиночной формы, здесь допустимы только ключи steps и max_failures.
 func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 	var stepsNode *yaml.Node
 	var maxFailures *int
@@ -253,11 +220,7 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 	return nil
 }
 
-// MarshalYAML сериализует VerifySpec обратно в ту же форму, которую понимает
-// UnmarshalYAML: одна shell-команда, полученная из legacy-скаляра, снова
-// становится скаляром (fromScalar), один шаг — объектом, несколько шагов —
-// списком объектов. Нужно для afm init, который собирает flow.Stage в памяти
-// и затем сериализует его в flow.yaml.
+// MarshalYAML сохраняет форму VerifySpec: legacy-скаляр, объект для одного шага или список для нескольких.
 func (s VerifySpec) MarshalYAML() (any, error) {
 	if s.IsEmpty() {
 		return nil, nil
@@ -307,13 +270,8 @@ func verifyStepToMap(step VerifyStep) map[string]any {
 	return m
 }
 
-// VerifyAgentCommands возвращает команды всех агентских шагов verify стадии
-// (Kind == VerifyAgent), без дублей внутри стадии, в порядке появления.
-// Shell-шаги пропускаются — у них нет отдельного агента-исполнителя.
-// Нужен там, где команду агента нужно обнаружить ДАЖЕ если она встречается
-// только в verify, а не в Stage.Command: монтирование Docker-бинарников,
-// discovery recipe-ключей, командные семафоры Manager (см. пакет
-// pkg/orchestrator/concurrency, задача V3 фичи ai-verify).
+// VerifyAgentCommands возвращает команды всех агентских шагов verify стадии, без дублей внутри стадии, в
+// порядке появления. Shell-шаги пропускаются — у них нет отдельного агента-исполнителя.
 func (s Stage) VerifyAgentCommands() []string {
 	if s.Verify.IsEmpty() {
 		return nil
@@ -330,9 +288,8 @@ func (s Stage) VerifyAgentCommands() []string {
 	return cmds
 }
 
-// validate проверяет бизнес-правила шагов verify: ровно один из run/command
-// на шаг, непустое значение выбранного поля, неотрицательный timeout.
-// Индексы в сообщениях — 1-based (как в остальных ошибках flow.go).
+// validate проверяет бизнес-правила шагов verify: ровно один из run/command на шаг, непустое значение
+// выбранного поля, неотрицательный timeout.
 func (s VerifySpec) validate(stageID string) error {
 	if s.MaxFailures != nil {
 		if len(s.Steps) == 0 {

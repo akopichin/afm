@@ -90,9 +90,6 @@ func drainAgentCompleted(events <-chan bus.Event) bool {
 	}
 }
 
-// TestStalemate_NoEditsAcceptsStage — автор ничего не правит, агентский шаг
-// отклоняет каждый раунд → стадия принимается по stalemate на (patience+1)-м
-// отклонении, публикуется EventAgentCompleted и accepted_stalemate verify_result.
 func TestStalemate_NoEditsAcceptsStage(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -112,9 +109,8 @@ func TestStalemate_NoEditsAcceptsStage(t *testing.T) {
 	if attempts != 3 {
 		t.Fatalf("patience=2: expected 3 attempts then accept, got %d", attempts)
 	}
-	// Capture the completion event and drive it through the NORMAL handler
-	// (onAgentCompleted) to prove the stage reaches done via the real success
-	// path — not merely "not failed" (a still-running stage would pass that).
+	// Capture the completion event and drive it through the NORMAL handler to prove the stage reaches done
+	// via the real success path — not merely "not failed".
 	var completed bus.Event
 	select {
 	case completed = <-events:
@@ -135,9 +131,6 @@ func TestStalemate_NoEditsAcceptsStage(t *testing.T) {
 	}
 }
 
-// TestStalemate_ShellFirstThenAgentAccepts — безопасный порядок [shell, agent]:
-// agent (step 2) отклоняет, shell (step 1) уже прошёл fail-fast → stalemate
-// принимает.
 func TestStalemate_ShellFirstThenAgentAccepts(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -165,9 +158,6 @@ func TestStalemate_ShellFirstThenAgentAccepts(t *testing.T) {
 	}
 }
 
-// TestStalemate_AgentFirstUnrunShellNeverAccepts — опасный порядок [agent, shell]:
-// agent (step 1) отклоняет, а shell (step 2) в этом проходе НЕ запускался
-// (fail-fast) → stalemate НЕ вправе принять; стадия падает на max_failures.
 func TestStalemate_AgentFirstUnrunShellNeverAccepts(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -198,9 +188,6 @@ func TestStalemate_AgentFirstUnrunShellNeverAccepts(t *testing.T) {
 	}
 }
 
-// TestStalemate_ShellOnlyNeverAccepts — shell-only verify: красный shell-шаг
-// отклоняет каждый раунд → НИКОГДА не принимается, падает на max_failures,
-// независимо от review_patience.
 func TestStalemate_ShellOnlyNeverAccepts(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -227,9 +214,6 @@ func TestStalemate_ShellOnlyNeverAccepts(t *testing.T) {
 	}
 }
 
-// TestStalemate_ChangingTreeNeverAccepts — автор правит дерево каждый раунд
-// (отпечаток всё время разный) → stalemate никогда не срабатывает, падает на
-// max_failures.
 func TestStalemate_ChangingTreeNeverAccepts(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -260,9 +244,6 @@ func TestStalemate_ChangingTreeNeverAccepts(t *testing.T) {
 	}
 }
 
-// TestStalemate_NotOkFingerprintNeverCounts — отпечаток !ok (не git / слишком
-// большой файл) никогда не засчитывается как «без изменений» → stalemate не
-// срабатывает, падает на max_failures.
 func TestStalemate_NotOkFingerprintNeverCounts(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -289,10 +270,6 @@ func TestStalemate_NotOkFingerprintNeverCounts(t *testing.T) {
 	}
 }
 
-// TestStalemate_ChangeThenFreezeAccepts — A/B композиция: автор правит дерево
-// первые раунды (отпечаток меняется, счётчик сбрасывается), затем замирает →
-// B принимает, отсчитывая от ПОСЛЕДНЕГО изменения, а не от первого отклонения.
-// Доказывает, что базовый снимок переустанавливается на каждом изменении.
 func TestStalemate_ChangeThenFreezeAccepts(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -319,10 +296,8 @@ func TestStalemate_ChangeThenFreezeAccepts(t *testing.T) {
 		func() { t.Error("onUserInterrupted should not be called") },
 	)
 
-	// reject#1 fp-1 baseline; reject#2 fp-2 (change, reset); reject#3 frozen
-	// (change vs fp-2, new baseline); reject#4 frozen count=1; reject#5 frozen
-	// count=2 → accept. Итого 5 вызовов агента — счёт идёт от последнего
-	// изменения (reject#3), не от reject#1.
+	// reject#1 fp-1 baseline; reject#2 fp-2; reject#3 frozen; reject#4 frozen count=1; reject#5 frozen
+	// count=2 → accept.
 	if attempts != 5 {
 		t.Fatalf("expected 5 attempts (2 changing + 3 frozen), got %d", attempts)
 	}
@@ -337,10 +312,6 @@ func TestStalemate_ChangeThenFreezeAccepts(t *testing.T) {
 	}
 }
 
-// TestStalemate_ReviseDuringFingerprintNotClobbered — Revise, закоммиченный в
-// окне отпечатка (ровно перед ownership re-check), не затирается accept'ом:
-// EventAgentCompleted НЕ публикуется, onUserInterrupted вызывается (ветка
-// revising у verifyOutcomeStillOwned), стадия остаётся revising.
 func TestStalemate_ReviseDuringFingerprintNotClobbered(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -350,9 +321,8 @@ func TestStalemate_ReviseDuringFingerprintNotClobbered(t *testing.T) {
 	o.fingerprintFn = func(string) (string, bool) {
 		fpN++
 		if fpN == 2 {
-			// Второй вызов — на нём счётчик достигнет patience=1 и код пойдёт
-			// на accept. Симулируем Revise, долговечно закоммиченный в окне
-			// отпечатка, ДО ownership re-check.
+			// Второй вызов — на нём счётчик достигнет patience=1 и код пойдёт на accept. Симулируем Revise,
+			// долговечно закоммиченный в окне отпечатка, ДО ownership re-check.
 			if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusRevising, Event: "test_revise"}); err != nil {
 				t.Error(err)
 			}
@@ -380,9 +350,6 @@ func TestStalemate_ReviseDuringFingerprintNotClobbered(t *testing.T) {
 	}
 }
 
-// TestStalemate_PauseDuringFingerprintNotClobbered — Pause, закоммиченный в окне
-// вычисления отпечатка (ровно перед ownership re-check), не затирается
-// accept-публикацией: EventAgentCompleted НЕ публикуется, стадия остаётся paused.
 func TestStalemate_PauseDuringFingerprintNotClobbered(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	o.maxRetries = 15
@@ -392,9 +359,8 @@ func TestStalemate_PauseDuringFingerprintNotClobbered(t *testing.T) {
 	o.fingerprintFn = func(string) (string, bool) {
 		fpN++
 		if fpN == 2 {
-			// Второй вызов — тот, на котором счётчик достигнет patience и
-			// код пойдёт на accept. Симулируем Pause, долговечно
-			// закоммиченный в окне отпечатка, ДО ownership re-check.
+			// Второй вызов — тот, на котором счётчик достигнет patience и код пойдёт на accept. Симулируем Pause,
+			// долговечно закоммиченный в окне отпечатка, ДО ownership re-check.
 			if err := o.opts.Store.Apply(&state.Transition{StageID: "s1", From: state.StatusRunning, To: state.StatusPaused, Event: "test_pause"}); err != nil {
 				t.Error(err)
 			}

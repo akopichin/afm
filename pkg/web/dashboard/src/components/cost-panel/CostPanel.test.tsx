@@ -175,9 +175,8 @@ describe('CostPanel — table + Total + expand', () => {
       expect(btn).toHaveAttribute('aria-expanded', 'false')
     }
 
-    // Раскрываем все три — каждая должна получить СВОЙ уникальный, резолвящийся
-    // ровно в один элемент aria-controls (никакой коллизии между стадией с id
-    // '__overhead__' и настоящей строкой run-overhead).
+    // Раскрываем все три — каждая должна получить СВОЙ уникальный, резолвящийся ровно в один элемент
+    // aria-controls.
     const seenRegionIds = new Set<string>()
     for (const btn of buttons) {
       fireEvent.click(btn)
@@ -203,11 +202,8 @@ describe('CostPanel — table + Total + expand', () => {
   })
 
   test('a stage id containing a space produces a whitespace-free aria-controls id that resolves to exactly one region', () => {
-    // Stage ids legally contain spaces (flow validation only forbids `/`, `\`,
-    // `.`/`..`, NUL). aria-controls/aria-labelledby are space-delimited
-    // IDREF-LIST attributes — an id with an embedded space would be parsed by
-    // assistive tech as TWO broken references. DOM ids must be derived from
-    // the row's position, not from the raw stage id.
+    // Stage ids legally contain spaces. DOM ids must be derived from the row's position, not from the raw
+    // stage id.
     const stages = [makeStage('a stage', makeCost(), 'A stage')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
 

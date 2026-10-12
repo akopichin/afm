@@ -7,16 +7,8 @@ import (
 	"syscall"
 )
 
-// killProcessGroup сигналит всей группе процессов (отрицательный PID), а не
-// только прямому потомку — тот же урок, что pkg/executor.killProcessGroup и
-// pkg/lifecyclehooks.killProcessGroup: shell-verify команда (st.Run) может
-// быть скриптом, чей внук не exec'нулся в родителя (например, хвостовой
-// `sleep N &`) — внук наследует stdout/stderr-пайпы, и обычный
-// cmd.Process.Kill()/SIGKILL прямому потомку убивает только "sh", а внук
-// держит пайп открытым, и cmd.Wait()/CombinedOutput() висит до его конца.
-// setProcessGroup (вызывается перед Start) делает команду лидером своей
-// группы, чтобы -pid дошёл до всех потомков. При ошибке килла группы
-// (например, процесс уже пожат) — фолбэк на сигнал самому процессу.
+// killProcessGroup сигналит всей группе, чтобы потомки не держали stdout/stderr открытыми; при ошибке
+// сигналит самому процессу.
 func killProcessGroup(cmd *exec.Cmd, sig syscall.Signal) {
 	if cmd.Process == nil {
 		return

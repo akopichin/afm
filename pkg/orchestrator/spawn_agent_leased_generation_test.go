@@ -9,22 +9,6 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 )
 
-// TestSpawnAgentLeased_OverlappingGenerationsPreservesNewerLease — E3 (третье
-// код-ревью): на Revise-прерывании замена-раннер (generation B) спавнится
-// ДО того, как ЕЩЁ ЖИВОЙ старый callback (generation A) успевает размотать
-// свой defer (см. retry.go/control_api.go). spawnAgentLeased раньше делал
-// безусловный o.stageLeases.Delete(s.ID) — если A's defer срабатывает ПОСЛЕ
-// того, как B уже сохранил свой lease под тем же stageID, он стирает lease B,
-// а не свой собственный, и RunVerification генерации B молча деградирует
-// (o.stageLeases.Load возвращает ok=false — верификатор перестаёт учитываться
-// в командном семафоре).
-//
-// Generation A и B спавнятся на РАЗНЫХ *concurrency.Manager (общий
-// o.stageLeases живёт на Orchestrator, не на Manager) — это позволяет
-// детерминированно дождаться ПОЛНОГО разматывания defer'ов ИМЕННО generation
-// A через mgrA.WaitAgents(), не трогая ещё не завершившуюся generation B
-// (зарегистрированную в agentWG другого, mgrB, экземпляра) — без единого
-// sleep/poll.
 func TestSpawnAgentLeased_OverlappingGenerationsPreservesNewerLease(t *testing.T) {
 	semA := concurrency.ChannelSemaphore(make(chan struct{}, 1))
 	mgrA := concurrency.NewWithSemaphores(bus.NewCriticalBus(1), map[string]concurrency.Semaphore{"claude": semA}, "claude")
@@ -34,9 +18,8 @@ func TestSpawnAgentLeased_OverlappingGenerationsPreservesNewerLease(t *testing.T
 	o := &Orchestrator{concurrency: mgrA}
 	s := flow.Stage{ID: "s1", Command: "claude"}
 
-	// Generation A: старый раннер, ещё не размотавший свой defer — имитирует
-	// verify/RunVerification, всё ещё выполняющиеся в момент, когда Revise()
-	// уже решил перезапустить стадию.
+	// Generation A: старый раннер, ещё не размотавший свой defer — имитирует verify/RunVerification, всё ещё
+	// выполняющиеся в момент, когда Revise() уже решил перезапустить стадию.
 	aStarted := make(chan struct{})
 	releaseA := make(chan struct{})
 	o.spawnAgentLeased(context.Background(), s, func(context.Context, flow.Stage) {
@@ -67,8 +50,6 @@ func TestSpawnAgentLeased_OverlappingGenerationsPreservesNewerLease(t *testing.T
 	}
 
 	// Дать generation A вернуться и полностью размотать свой defer.
-	// mgrA.WaitAgents() ждёт ровно её agentWG (B зарегистрирован в agentWG
-	// mgrB и не блокирует этот вызов) — детерминированно, без sleep.
 	close(releaseA)
 	mgrA.WaitAgents()
 

@@ -12,9 +12,8 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 )
 
-// newBrowserCmd registers the internal `afm browser` subcommands used by the
-// managed Chrome DevTools capability. They are invoked by afm itself (the MCP
-// stdio launcher, the host protocol probe) rather than typed by users.
+// newBrowserCmd registers the internal `afm browser` subcommands used by the managed Chrome DevTools
+// capability.
 func newBrowserCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "browser",

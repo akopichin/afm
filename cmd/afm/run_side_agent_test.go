@@ -13,9 +13,8 @@ import (
 	"github.com/akopichin/afm/pkg/sideagent"
 )
 
-// blockingRunner — управляемый фейк агента для Phase D (shutdown/drain) тестов:
-// эмитит один видимый ответ, затем блокируется до close(release) ЛИБО (если
-// honorInterrupt) до сигнала InterruptCh, возвращая ErrUserInterrupted.
+// blockingRunner — управляемый фейк агента для Phase D тестов: эмитит один видимый ответ, затем
+// блокируется до close ЛИБО до сигнала InterruptCh, возвращая ErrUserInterrupted.
 type blockingRunner struct {
 	cfg            executor.Config
 	started        chan struct{}
@@ -81,9 +80,8 @@ func historyHas(rt *sideAgentRuntime, typ sideagent.EventType) bool {
 	return false
 }
 
-// Штатное завершение: приём закрывается ДО Drain (новый Send отвергается
-// shutting_down), активный ход НЕ прерывается — доигрывает и завершается
-// turn_completed, а не turn_interrupted.
+// Штатное завершение: приём закрывается ДО Drain (новый Send отвергается shutting_down), активный ход НЕ
+// прерывается — доигрывает и завершается turn_completed, а не turn_interrupted.
 func TestShutdownNormal_ClosesAdmissionAndDoesNotInterrupt(t *testing.T) {
 	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{}), honorInterrupt: true}
 	rt := newRuntimeWithRunner(t, r)
@@ -143,9 +141,7 @@ func TestShutdownEmergency_InterruptsActiveTurn(t *testing.T) {
 	rt.closeStores(true)
 }
 
-// Ctrl+C во время штатного дренирования: ctx уже отменён → shutdownNormal
-// возвращает drained=false без прерывания, поэтому shutdownAfterFlow эскалирует к
-// аварийному завершению (interrupt), и подпроцесс останавливается.
+// Ctrl+C отменяет штатный drain; shutdownAfterFlow прерывает подпроцесс.
 func TestShutdownAfterFlow_EscalatesOnCanceledCtx(t *testing.T) {
 	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{}), honorInterrupt: true}
 	rt := newRuntimeWithRunner(t, r)
@@ -163,9 +159,8 @@ func TestShutdownAfterFlow_EscalatesOnCanceledCtx(t *testing.T) {
 	rt.closeStores(true)
 }
 
-// Инвариант «без записи в закрытый файл»: Drain не уложился в bound (ход
-// игнорирует interrupt) → drained=false → closeStores НЕ закрывает журнал, и
-// доигравший позже ход успешно пишет терминал в ВСЁ ЕЩЁ открытый store.
+// Инвариант «без записи в закрытый файл»: Drain не уложился в bound → drained=false → closeStores НЕ
+// закрывает журнал, и доигравший позже ход успешно пишет терминал в ВСЁ ЕЩЁ открытый store.
 func TestCloseStores_SkippedWhenNotDrained(t *testing.T) {
 	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{}), honorInterrupt: false}
 	rt := newRuntimeWithRunner(t, r)

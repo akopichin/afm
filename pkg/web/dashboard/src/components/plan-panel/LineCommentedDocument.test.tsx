@@ -4,9 +4,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { FileBrowserProvider } from '../file-browser'
 import { LineCommentedDocument, quotedSourceLine, type LineCommentDocumentApi } from './LineCommentedDocument'
 
-// Тесты слоя ВЗАИМОДЕЙСТВИЯ (useLineComments) через реальный DOM владельца
-// LineCommentedDocument: клик/hover/keyboard/выделение, императивные классы
-// has-comment/is-active/roving tabindex, collapse спец-секций, атомарный reset.
+// Проверяем useLineComments через реальный DOM: ввод, навигацию, классы, collapse и reset.
 
 type HarnessProps = {
   text: string
@@ -115,10 +113,8 @@ describe('LineCommentedDocument / useLineComments', () => {
     expect(container.querySelector('.line-comment-form')).toBeNull()
   })
 
-  // Примечание: jsdom не реализует PointerEvent (нет clientX), поэтому
-  // координатный drag-порог здесь драйвить нельзя. Реальный drag по тексту
-  // создаёт выделение — этот сценарий покрыт тестом selection выше. Здесь
-  // проверяем, что pointer-трекинг НЕ пере-подавляет обычный клик.
+  // Примечание: jsdom не реализует PointerEvent, поэтому координатный drag-порог здесь драйвить нельзя.
+  // Реальный drag по тексту создаёт выделение — этот сценарий покрыт тестом selection выше.
   test('a plain pointerdown/pointerup (no drag) does not suppress the click', () => {
     const { container } = render(<Harness text={'# Line one'} />)
     const a1 = anchor(container, 1)
@@ -352,29 +348,12 @@ describe('LineCommentedDocument render-prop api', () => {
   })
 })
 
-// Quote preview above the comment textarea (messenger-style, big faint accent
-// quotation mark). Anchor semantics (see task brief): data-line — 1-based,
-// каждый li/tr/paragraph/heading/hr/fence якорится на СВОЕЙ стартовой строке —
-// поэтому quotedLine всегда равен именно этой строке, а не «содержательной»
-// внутренней строке блока (см. кейс fence ниже).
+// Quote preview above the comment textarea.
 describe('LineCommentedDocument quote preview', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  // Один текст с явно узнаваемыми, различимыми строками для каждого типа блока:
-  //  1: paragraph
-  //  2: (blank — separator)
-  //  3: list item one
-  //  4: list item two   ← (a)
-  //  5: (blank)
-  //  6: table header row
-  //  7: table delimiter (no anchor)
-  //  8: table data row  ← (b)
-  //  9: (blank)
-  // 10: fence opening ``` ← (d)
-  // 11: fence interior line (must NOT be the quote)
-  // 12: fence closing ```
-  // 13: (blank)
-  // 14: hr             ← (e)
+  // Distinct source lines identify paragraph, list, table, fence, and hr anchors; fence contents must not
+  // become the quote.
   const quoteText = [
     'Paragraph one here',
     '',
@@ -440,10 +419,8 @@ describe('LineCommentedDocument quote preview', () => {
   })
 })
 
-// Тот же quote-блок, что и у открытой формы, но у УЖЕ СОХРАНЁННОГО комментария
-// (LineCommentDisplay) — чтобы читатель видел, к какой строке привязан коммент,
-// не открывая форму. Плюс: при редактировании существующего коммента карточка
-// его строки не рендерится (только форма) — иначе цитата задвоилась бы.
+// Тот же quote-блок, что и у открытой формы, но у УЖЕ СОХРАНЁННОГО комментария — чтобы читатель видел, к
+// какой строке привязан коммент, не открывая форму.
 describe('LineCommentedDocument saved-comment quote', () => {
   afterEach(() => vi.restoreAllMocks())
 

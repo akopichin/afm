@@ -15,13 +15,8 @@ import (
 
 const cmdInit = "init"
 
-// generateAndValidateFlow marshals f to YAML, writes it to outPath, and
-// validates the result via flow.ParseFile. Returns the rendered YAML and
-// a validation error (if any) — the file is written regardless of
-// validity, so the user (or the wizard's own repair loop) can inspect
-// or edit it.
-// flowSchemaLine points editors (VS Code / JetBrains via the YAML language
-// server) at the flow.yaml JSON Schema for autocomplete and validation.
+// generateAndValidateFlow marshals f to YAML, writes it to outPath, and validates the result via
+// flow.ParseFile.
 const flowSchemaLine = "# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json\n"
 
 func generateAndValidateFlow(f *flow.Flow, outPath string) (string, error) {
@@ -98,9 +93,8 @@ func splitComma(s string) []string {
 	return result
 }
 
-// ensureGitignoreEntry дописывает entry в .gitignore в repoDir, если его там ещё
-// нет. Создаёт .gitignore при отсутствии. Используется afm-init, чтобы
-// секреты recipe (.afm/secrets.env) не попали в VCS.
+// ensureGitignoreEntry дописывает entry в .gitignore в repoDir, если его там ещё нет. Создаёт .gitignore
+// при отсутствии.
 func ensureGitignoreEntry(repoDir, entry string) error {
 	giPath := filepath.Join(repoDir, ".gitignore")
 	data, _ := os.ReadFile(giPath)
@@ -122,9 +116,8 @@ func ensureGitignoreEntry(repoDir, entry string) error {
 	return err
 }
 
-// runInitWizard runs the full interactive flow: archetype selection,
-// flow-level name/description, and per-stage questions. Returns the
-// fully built Flow — nothing is written to disk yet.
+// runInitWizard runs the full interactive flow: archetype selection, flow-level name/description, and
+// per-stage questions. Returns the fully built Flow — nothing is written to disk yet.
 func runInitWizard(scanner *bufio.Scanner, w io.Writer) *flow.Flow {
 	name := promptLine(scanner, w, "Flow name (e.g. my-feature): ")
 	description := promptLine(scanner, w, "Flow description: ")

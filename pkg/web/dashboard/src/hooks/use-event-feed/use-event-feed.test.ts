@@ -319,11 +319,7 @@ describe('useEventFeed', () => {
 
     const { result } = renderHook(() => useEventFeed('/ws'))
 
-    // Живое сообщение с тем же seq=2 (та же transition, что и последняя
-    // запись истории) приходит по WS ДО того, как REST-фетч резолвится
-    // (гонка между открытием WS и /api/events). Бэкенд теперь прикладывает
-    // реальный seq и к live-событиям (triggerWithSeq в orchestrator.go), не
-    // только к реплею истории — после merge не должно быть дубля.
+    // Живое сообщение с тем же seq=2 приходит по WS ДО того, как REST-фетч резолвится.
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -370,12 +366,7 @@ describe('useEventFeed', () => {
     })
   })
 
-  // Finding #4: mergeHistory при непустом live (реконнект ИЛИ гонка «WS обогнал
-  // /api/events») раньше делала [...deduped, ...live] — события, присутствующие
-  // только в свежей истории (случившиеся, пока их ещё не было в live), уезжали в
-  // НАЧАЛО ленты (визуально «самые старые»), ломая хронологию, а при полном
-  // буфере отсекались slice(-200) первыми. Теперь history (уже отсортирована
-  // сервером по времени) — база, а live-only дописывается в конец.
+  // History остаётся хронологической базой; только live-only события дописываются в конец.
   test('merge keeps chronological order when a live event races ahead of /api/events (Finding #4)', async () => {
     // Полная упорядоченная история; seq=3 — «случилось, пока шёл фетч».
     const history = [
@@ -413,10 +404,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3])
   })
 
-  // T4b: dialog_question/dialog_answer публикуются И live, И в notices.jsonl
-  // (реплеятся через /api/events) — без seq (не FSM-transition), поэтому
-  // дедуп идёт по контенту. Гонка «live обогнал историю» уже работала через
-  // mergeHistory; проверяем явно как регресс.
+  // T4b: dialog_question/dialog_answer публикуются И live, И в notices.jsonl — без seq, поэтому дедуп идёт
+  // по контенту.
   test('dialog_question arriving live first, then the same question in history — one row', async () => {
     const questionPayload = { id: 'q1', question: 'Proceed?', options: ['yes', 'no'] }
     let resolveFetch: (value: unknown) => void = () => {}
@@ -482,9 +471,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(1)
   })
 
-  // Trap #1 из брифа: одна FSM-transition может породить ДВА события с общим
-  // seq (stage_status_changed + retry_scheduled). Дедуп по одному только seq
-  // схлопнул бы их в одно — ключ должен учитывать ещё и type.
+  // Trap #1 из брифа: одна FSM-transition может породить ДВА события с общим seq. Дедуп по одному только
+  // seq схлопнул бы их в одно — ключ должен учитывать ещё и type.
   test('stage_status_changed and retry_scheduled sharing the same seq both survive merge with history', async () => {
     let resolveFetch: (value: unknown) => void = () => {}
     const fetchPromise = new Promise((res) => {
@@ -542,9 +530,8 @@ describe('useEventFeed', () => {
     expect(result.current.events).toHaveLength(2)
   })
 
-  // agent_note публикуется И live, И в notices.jsonl (реплеится через
-  // /api/events) без seq — как dialog_answer. Уникальный id в payload делает
-  // контент-ключ надёжным: тот же note (live+replay) схлопывается в одну строку.
+  // agent_note публикуется И live, И в notices.jsonl без seq — как dialog_answer. Уникальный id в payload
+  // делает контент-ключ надёжным: тот же note (live+replay) схлопывается в одну строку.
   test('the same agent_note arriving live and via history collapses to one row', () => {
     const notePayload = { id: 7, text: 'fix it' }
     const { result } = renderHook(() => useEventFeed('/ws'))
@@ -575,14 +562,7 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'agent_note')).toHaveLength(2)
   })
 
-  // Task 7: script_failed (нет собственного bus.Event.Seq, не FSM-transition
-  // само по себе, но публикуется live И персистится в notices.jsonl) НЕ
-  // входит в CONTENT_DEDUPE_ON_INGEST по seq — dedup на history/live слиянии
-  // всё равно даёт одну строку, потому что mergeCapped дедупит ПО
-  // СОДЕРЖИМОМУ (dedupeKey падает на type+stageId+payload), а payload теперь
-  // несёт data.seq (applied EvFail transition seq) как дискриминатор ОДНОГО
-  // И ТОГО ЖЕ occurrence — обе копии (history+live) одного occurrence несут
-  // одинаковый seq, поэтому по-прежнему схлопываются в одну строку.
+  // Один script_failed occurrence имеет одинаковый data.seq в live/history и схлопывается при merge.
   test('a script_failed present in both history and live resolves to one row via mergeCapped', () => {
     const scriptFailed = (): AfmEvent => ({
       type: 'script_failed',
@@ -599,13 +579,7 @@ describe('useEventFeed', () => {
     expect(merged.filter((e) => e.type === 'script_failed')).toHaveLength(1)
   })
 
-  // Fix 3: script_failed теперь входит в CONTENT_DEDUPE_ON_INGEST — проверяем
-  // именно ингест-путь onmessage (не только mergeCapped выше), тем же
-  // сценарием, что и dialog_question ("already in history, then live"): без
-  // ингест-дедупа onmessage слепо аппендил бы вторую строку поверх уже
-  // засинканной истории. Обе копии несут ОДИН И ТОТ ЖЕ data.seq (тот же
-  // occurrence, доставленный дважды — history да live), поэтому дедуп по
-  // содержимому должен схлопнуть их в одну строку.
+  // Проверяем ingest-дедуп script_failed: история уже загружена, затем приходит live с тем же data.seq.
   test('script_failed already in history, then the same script_failed arrives live — dedup keeps one row', async () => {
     const scriptFailedPayload = { error: 'exit status 1', stderr_tail: 'boom', seq: '1' }
     vi.stubGlobal(
@@ -637,13 +611,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(1)
   })
 
-  // Regression for the dedup-collapses-distinct-failures bug: two genuinely
-  // DIFFERENT script_failed occurrences for the same stage (e.g. a manual
-  // Retry that fails identically — same error/stderr_tail text) must NOT
-  // collapse into one row. Each occurrence carries the applied EvFail
-  // transition's own seq in data.seq, so even though error/stderr_tail are
-  // byte-identical, the payloads differ and dedupeKey's content-based key
-  // (type|stageId|JSON(payload)) tells them apart.
+  // Regression for the dedup-collapses-distinct-failures bug: two genuinely DIFFERENT script_failed
+  // occurrences for the same stage must NOT collapse into one row.
   test('two script_failed for the same stage with different seq are both kept (distinct occurrences)', () => {
     const { result } = renderHook(() => useEventFeed('/ws'))
 
@@ -666,10 +635,7 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(2)
   })
 
-  // Навигируемый авто-ответ (auto_answered с dialog:true) публикуется И live,
-  // И в notices.jsonl (реплеится через /api/events) без seq — как dialog_answer.
-  // Дедуп идёт по контент-ключу type|stageId|phase|id|answer, так что один и тот
-  // же авто-ответ (WS + history) схлопывается в одну строку.
+  // Навигируемый авто-ответ публикуется И live, И в notices.jsonl без seq — как dialog_answer.
   test('the same navigable auto_answered arriving via WS then history collapses to one row', async () => {
     const answerPayload = { phase: 'implementation', id: 'q7', answer: 'Option B', from_options: true, question_title: 'Which?', dialog: true }
     let resolveFetch: (value: unknown) => void = () => {}
@@ -702,10 +668,8 @@ describe('useEventFeed', () => {
     })
   })
 
-  // Обратный порядок — ингест-путь onmessage: навигируемый авто-ответ уже
-  // вошёл из истории, теперь та же запись долетает по WS. Без ингест-дедупа
-  // (auto_answered с dialog:true должен в него входить) onmessage слепо
-  // аппендил бы вторую строку поверх уже засинканной истории.
+  // Обратный порядок — ингест-путь onmessage: навигируемый авто-ответ уже вошёл из истории, теперь та же
+  // запись долетает по WS.
   test('navigable auto_answered already in history, then the same one arrives live — dedup keeps one row', async () => {
     const answerPayload = { phase: 'implementation', id: 'q7', answer: 'Option B', from_options: true, question_title: 'Which?', dialog: true }
     vi.stubGlobal(
@@ -735,10 +699,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
   })
 
-  // Дедуп навигируемого авто-ответа НЕ должен зависеть от порядка ключей в
-  // payload (JSON.stringify его не гарантирует между live и history) — ключ
-  // строится из именованных полей type|stageId|phase|id|answer. Здесь WS и
-  // history несут один и тот же логический ответ с РАЗНЫМ порядком ключей.
+  // Дедуп навигируемого авто-ответа НЕ должен зависеть от порядка ключей в payload — ключ строится из
+  // именованных полей type|stageId|phase|id|answer.
   test('navigable auto_answered dedupes regardless of payload key order (WS vs history)', async () => {
     const wsPayload = { dialog: true, id: 'q7', phase: 'implementation', answer: 'Option B', from_options: true }
     const historyPayload = { phase: 'implementation', id: 'q7', answer: 'Option B', dialog: true, from_options: true }
@@ -769,9 +731,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
   })
 
-  // Два РАЗНЫХ авто-ответа на один и тот же вопрос (тот же id/phase, разный
-  // answer) — это две самостоятельные записи и обе должны выжить: ключ включает
-  // answer.
+  // Два РАЗНЫХ авто-ответа на один и тот же вопрос (тот же id/phase, разный answer) — это две
+  // самостоятельные записи и обе должны выжить: ключ включает answer.
   test('two navigable auto_answered with same id/phase but different answer are both kept', () => {
     const { result } = renderHook(() => useEventFeed('/ws'))
     act(() => {
@@ -816,9 +777,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(3)
   })
 
-  // Review HIGH #3: агент может переиспользовать отвеченный id для ДРУГОГО
-  // вопроса — dialog_question с тем же id/phase, но разным title, это две записи.
-  // Ключ обязан включать title (регресс: раньше выпадал и вторую строку теряли).
+  // Review HIGH #3: агент может переиспользовать отвеченный id для ДРУГОГО вопроса — dialog_question с тем
+  // же id/phase, но разным title, это две записи.
   test('two dialog_question with same id/phase but different title are both kept', () => {
     const { result } = renderHook(() => useEventFeed('/ws'))
     act(() => {
@@ -832,9 +792,8 @@ describe('useEventFeed', () => {
     expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(2)
   })
 
-  // Review HIGH #2/#3: два навигируемых авто-ответа на переиспользованный id с
-  // ОДИНАКОВЫМ answer, но для РАЗНЫХ вопросов (разный question_title) — обе записи.
-  // Ключ обязан включать question_title (зеркалит серверный dialogNoticeDedupKey).
+  // Review HIGH #2/#3: два навигируемых авто-ответа на переиспользованный id с ОДИНАКОВЫМ answer, но для
+  // РАЗНЫХ вопросов — обе записи.
   test('two navigable auto_answered with same id/answer but different question_title are both kept', () => {
     const { result } = renderHook(() => useEventFeed('/ws'))
     act(() => {

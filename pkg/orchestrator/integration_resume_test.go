@@ -117,9 +117,6 @@ func TestIntegration_ResumeFromRetrying(t *testing.T) {
 	}
 }
 
-// TestIntegration_ResumeFromPlanningWithExistingPlan verifies that if planning
-// was completed (plan.md exists) but the orchestrator crashed before transitioning
-// to awaiting_approval, the stage resumes correctly without re-planning.
 func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "planned", Name: "Planned", Description: "already planned", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
@@ -178,11 +175,7 @@ func TestIntegration_ResumeFromPlanningWithExistingPlan(t *testing.T) {
 	}
 }
 
-// capturingPlanningRunner wraps a Runner and records every prompt passed to
-// RunPlanning — used to verify that runPlanningWithFeedback (recovery.go,
-// StatusRevising branch) actually reads feedback.md and forwards its content
-// into the prompt, as opposed to a "fresh" planning restart which would not
-// carry any feedback text.
+// capturingPlanningRunner records planning prompts to verify recovery forwards saved feedback.
 type capturingPlanningRunner struct {
 	delegate executor.Runner
 	mu       sync.Mutex
@@ -204,13 +197,6 @@ func (r *capturingPlanningRunner) RunJSONQuery(ctx context.Context, prompt strin
 	return r.delegate.RunJSONQuery(ctx, prompt)
 }
 
-// TestIntegration_ResumeFromRevising verifies that a stage stuck in "revising"
-// status (process killed while the agent was re-planning after review
-// feedback) resumes via runPlanningWithFeedback (recovery.go, StatusRevising
-// branch) rather than restarting planning from scratch: the pre-existing
-// feedback.md must be read and its content forwarded into the new planning
-// prompt, and the stage must progress past awaiting_approval (auto-approved)
-// all the way to done.
 func TestIntegration_ResumeFromRevising(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "revise-stuck", Name: "Revise Stuck", Description: "was revising", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
@@ -277,17 +263,6 @@ func TestIntegration_ResumeFromRevising(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReviseFeedsBackOriginalPlanContent — полный живой путь
-// Revise (не восстановление после краша): реальный plan.md, реальный вызов
-// orch.Revise, реальная версионация через VersionPlan, реальное чтение через
-// LatestPlanVersion. Закрывает пробел, который не закрывают ни
-// TestRevise_DurableTransition (approve_test.go — блокирует спавн
-// семафором, runPlanningWithFeedback не успевает выполниться), ни
-// TestIntegration_ResumeFromRevising (plan.v1.md разложен тестом вручную,
-// VersionPlan вообще не вызывается) — здесь же проверяется, что байты
-// ОРИГИНАЛЬНОГО plan.md, написанного первым проходом planning, доходят до
-// промпта ревизии в неизменном виде через полную цепочку VersionPlan →
-// LatestPlanVersion.
 func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
 	stages := []flow.Stage{{
 		ID: "a", Name: "A", Description: "revise round-trip",
@@ -299,10 +274,8 @@ func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
 
 	orch, runDir, stateFile := setupOrchestratorWithRunner(t, stages, runner)
 
-	// Непустой DashboardURL → headless auto-approve не срабатывает, стадия
-	// стабильно стоит на awaiting_approval вместо мгновенного авто-апрува
-	// (иначе planning->approve->implementation->done проходит быстрее, чем
-	// поллинг state.json успевает застать промежуточный статус).
+	// Непустой DashboardURL → headless auto-approve не срабатывает, стадия стабильно стоит на
+	// awaiting_approval вместо мгновенного авто-апрува.
 	orch.SetDashboardURL("http://127.0.0.1:0")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -316,9 +289,8 @@ func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
 		t.Fatalf("Revise: %v", err)
 	}
 
-	// После Revise planning перезапускается с фидбеком и снова доходит до
-	// awaiting_approval — к этому моменту runPlanningWithFeedback уже
-	// отработал и capture успел записать второй промпт.
+	// После Revise planning перезапускается с фидбеком и снова доходит до awaiting_approval — к этому моменту
+	// runPlanningWithFeedback уже отработал и capture успел записать второй промпт.
 	waitForStatus(t, stateFile, "a", state.StatusAwaitingApproval, 10*time.Second)
 
 	stageDir := filepath.Join(runDir, "a")
@@ -342,22 +314,14 @@ func TestIntegration_ReviseFeedsBackOriginalPlanContent(t *testing.T) {
 	}
 }
 
-// TestResume_RevisingAutonomousStageUsesAutonomousFeedback подтверждает, что
-// краш в revising для АВТОНОМНОЙ стадии резюмится через
-// runAutonomousWithFeedback, а не жёстко через runPlanningWithFeedback (баг
-// до этой правки: detectInterruptedPhase не проверял
-// autonomous_execution.session.json, поэтому не находил активную фазу и
-// recovery.go шёл в default-ветку planning, которая упала бы — у автономной
-// стадии нет plan.md).
 func TestResume_RevisingAutonomousStageUsesAutonomousFeedback(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "auto")
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// Имитируем прерванную автономную стадию: autonomous.flag +
-	// autonomous_execution.session.json (свежий) + feedback.md — как если бы
-	// Revise уже сработал, но процесс упал до перезапуска.
+	// Имитируем прерванную автономную стадию: autonomous.flag + autonomous_execution.session.json (свежий) +
+	// feedback.md — как если бы Revise уже сработал, но процесс упал до перезапуска.
 	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -399,30 +363,15 @@ func TestResume_RevisingAutonomousStageUsesAutonomousFeedback(t *testing.T) {
 		_ = orch.Run(ctx)
 	}()
 
-	// blockingThenFeedbackRunner.calls==1 при первом вызове блокируется на
-	// ctx.Done() — здесь нам нужно, чтобы recovery СРАЗУ вызвала
-	// runAutonomousWithFeedback (calls становится 1, читает feedback.md,
-	// но т.к. это ПЕРВЫЙ вызов раннера в этом тесте — он блокируется). Чтобы
-	// проверить именно ДИСПЕТЧИНГ (не полный цикл), достаточно убедиться,
-	// что стадия дошла до "running" (recovery успешно нашла autonomous-фазу
-	// и не упала на попытке прочитать несуществующий plan.md) в разумное
-	// время — а не осталась в revising/failed.
+	// Проверяем dispatch по достижению running: первый feedback-вызов раннера блокируется, поэтому done здесь
+	// не ждём.
 	waitForStatus(t, stateFile, "auto", state.StatusRunning, 10*time.Second)
 
-	// Явно останавливаем фоновую горутину orch.Run и дожидаемся её
-	// завершения ДО возврата из теста: иначе разблокированный ctx.Done()
-	// в blockingThenFeedbackRunner.RunAgent пытается зафейлить стадию через
-	// store уже ПОСЛЕ того, как t.Cleanup закрыл его (store.Close) — гонка,
-	// проявляющаяся как шумная "FATAL: storage failure applying auto/fail:
-	// ..." в логе теста (см. task-6-report.md, раздел "Fix round").
+	// Отменяем и дожидаемся orch.Run до store.Close, чтобы агент не писал в закрытый Store.
 	cancel()
 	runWG.Wait()
 }
 
-// TestResumeAfterCrash verifies that when afm crashes while a stage is
-// in awaiting_user_input, and both question.json and answer.json already exist
-// on disk, the orchestrator on restart resumes the interactive agent, which
-// reads the pre-existing answer.json via its bash loop, and the stage reaches done.
 func TestResumeAfterCrash(t *testing.T) {
 	dir := t.TempDir()
 	stageDir := filepath.Join(dir, "discovery")

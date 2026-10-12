@@ -5,9 +5,7 @@ export type PasteAttachment = {
   id: string
   previewUrl: string
   uploading: boolean
-  // failed=true — загрузка не удалась; чип НЕ исчезает, а остаётся с Retry/Remove
-  // (Finding #6c второго раунда). errorMsg — причина (слишком большой / неверный
-  // тип / сеть), показывается на чипе.
+  // failed сохраняет чип с Retry/Remove; errorMsg показывает причину сбоя загрузки.
   failed: boolean
   errorMsg: string | null
 }
@@ -16,10 +14,7 @@ export type UseImagePasteResult = {
   nodeRef: MutableRefObject<HTMLTextAreaElement | null>
   attachments: PasteAttachment[]
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
-  // uploadFiles — тот же путь загрузки, что и вставка из буфера, но для файлов,
-  // выбранных явно (native <input type=file> — пункт «Upload image…»). Стартует
-  // с текущей позиции каретки (или конца значения), загружает последовательно и
-  // вставляет «[Screenshot: <path>]» — реюз, а не второй механизм.
+  // uploadFiles — тот же путь загрузки, что и вставка из буфера, но для файлов, выбранных явно.
   uploadFiles: (files: File[]) => Promise<void>
   // retryAttachment — повторная загрузка ранее упавшего вложения (тот же File).
   retryAttachment: (id: string) => void
@@ -33,13 +28,8 @@ function errorMessageFor(err: unknown): string {
   return status === 413 ? 'Image too large (max 10 MB)' : status === 415 ? 'Unsupported image type' : 'Upload failed'
 }
 
-// Backs PasteableTextarea's paste handling: uploads a pasted clipboard image
-// via uploadAttachment and splices "[Screenshot: <path>]\n" into the
-// controlled value at the caret. Multiple images in one paste are uploaded
-// sequentially (not in parallel), with caret advanced between each insertion.
-// At each upload resolution, reads the live textarea value (valueRef.current),
-// handling concurrent edits safely (e.g., user typing or deleting while upload
-// is pending).
+// Backs PasteableTextarea's paste handling: uploads a pasted clipboard image via uploadAttachment and
+// splices "[Screenshot: <path>]\n" into the controlled value at the caret.
 export function useImagePaste(
   stageId: string,
   value: string,
@@ -56,13 +46,8 @@ export function useImagePaste(
 
   const [attachments, setAttachments] = useState<AttachmentRecord[]>([])
 
-  // Поколение композера, привязанное к stageId (Finding #2, раунд 3). Панель
-  // DialogChannel рендерится с постоянным key="dialog", поэтому при переходе
-  // A → B ЭТОТ хук остаётся тем же. Медленный upload, начатый для стадии A,
-  // резолвится уже когда onChangeRef указывает на композер B — и вставил бы
-  // «[Screenshot: …A…]» в ответ стадии B (не тому агенту!). Смена stageId
-  // инкрементит genRef; каждый upload запоминает своё поколение и на резолве
-  // сверяет — устаревший ответ игнорируется (preview URL освобождается).
+  // Поколение композера, привязанное к stageId. Панель DialogChannel рендерится с постоянным key="dialog",
+  // поэтому при переходе A → B ЭТОТ хук остаётся тем же.
   const genRef = useRef(0)
   const stageIdRef = useRef(stageId)
   useLayoutEffect(() => {
@@ -88,18 +73,14 @@ export function useImagePaste(
     pendingCaret.current = null
   }, [value])
 
-  // performUpload — сама загрузка для УЖЕ созданной записи (id). Используется и
-  // первичной загрузкой (uploadOne), и повтором (retryAttachment). На успехе
-  // вставляет «[Screenshot: <path>]» и снимает uploading; на ошибке НЕ удаляет
-  // запись, а помечает failed + errorMsg (чип с Retry/Remove), если её не убрали
-  // из очереди пока летел запрос.
+  // performUpload — сама загрузка для УЖЕ созданной записи. Используется и первичной загрузкой
+  // (uploadOne), и повтором (retryAttachment).
   async function performUpload(id: string, file: File, previewUrl: string, caret: number): Promise<{ caret: number } | null> {
     const gen = genRef.current
     setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, uploading: true, failed: false, errorMsg: null } : a)))
     try {
       const { path } = await uploadAttachment(stageId, file)
-      // Стадия сменилась, пока летел запрос → это чужой (устаревший) upload:
-      // не вставляем ссылку в композер новой стадии (Finding #2).
+      // После смены стадии игнорируем upload старой стадии, чтобы не вставить ссылку в новый composer.
       if (gen !== genRef.current) {
         URL.revokeObjectURL(previewUrl)
         return null
@@ -173,10 +154,8 @@ export function useImagePaste(
     return runUploads(files, startCaret)
   }
 
-  // uploadFiles — путь для явно выбранных изображений (пункт «Upload image…»).
-  // Отфильтровываем не-изображения (input accept — подсказка, не гарантия) и
-  // стартуем с текущей каретки/конца значения. Возвращаем промис, чтобы вызывающий
-  // мог сбросить value input'а после завершения.
+  // uploadFiles — путь для явно выбранных изображений. Возвращаем промис, чтобы вызывающий мог сбросить
+  // value input'а после завершения.
   async function uploadFiles(files: File[]): Promise<void> {
     const images = files.filter((f) => f.type.startsWith('image/'))
     if (images.length === 0) return
@@ -184,9 +163,8 @@ export function useImagePaste(
     await runUploads(images, caret)
   }
 
-  // retryAttachment — повтор упавшей загрузки тем же файлом (Finding #6c).
-  // Стартует с текущей каретки/конца значения; сам performUpload переведёт чип
-  // обратно в uploading и на успехе вставит ссылку.
+  // retryAttachment — повтор упавшей загрузки тем же файлом. Стартует с текущей каретки/конца значения;
+  // сам performUpload переведёт чип обратно в uploading и на успехе вставит ссылку.
   function retryAttachment(id: string): void {
     const target = attachments.find((a) => a.id === id)
     if (target === undefined || !target.failed) return

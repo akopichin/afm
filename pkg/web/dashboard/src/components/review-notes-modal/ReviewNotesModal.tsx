@@ -3,23 +3,16 @@ import { cancelNotes, deleteNote, injectNotes, listNotes, updateNote, FlowApiErr
 import type { ReviewNote } from '../../types'
 
 type ReviewNotesModalProps = {
-  // Стадии, реально приостановленные прямо сейчас (см. use-status.ts's
-  // flowPausedStages) — только они могут быть целью инжекта заметок: агенту
-  // некуда доставить контекст, пока сам он не стоит на паузе. Пустой массив —
-  // Inject недоступен, доставлять некуда (см. дизейбл ниже).
+  // Стадии, реально приостановленные прямо сейчас — только они могут быть целью инжекта заметок: агенту
+  // некуда доставить контекст, пока сам он не стоит на паузе.
   pausedStages: string[]
   onClose: () => void
-  // Шорткат к ждущему действию (Finding #5, раунд 3) — начальный экран модалки
-  // ревью может не иметь input'а, поэтому новое ожидание могло бы авто-открыться
-  // за непрозрачной модалкой; кнопка в шапке закрывает её и открывает attention.
+  // Кнопка ожидания закрывает модалку и открывает attention, которое иначе осталось бы за ней.
   attentionShortcut?: { label: string; onActivate: () => void } | null
 }
 
-// Тексты машиночитаемых кодов ошибок бэкенда (см. FlowApiError.code в
-// run-client.ts) — stale_content (addNote'а содержимое файла изменилось с
-// момента постановки заметки) и rev_conflict (кто-то ещё поменял стор заметок
-// между чтением rev и этим update/delete) — оба требуют перечитать список
-// заново, а не тихо повторить тот же запрос с той же устаревшей ревизией.
+// Тексты машиночитаемых кодов ошибок бэкенда — stale_content и rev_conflict — оба требуют перечитать
+// список заново, а не тихо повторить тот же запрос с той же устаревшей ревизией.
 function describeApiError(err: unknown): string {
   if (err instanceof FlowApiError) {
     if (err.code === 'stale_content') return 'The file changed since this note was created (stale content) — reload and retry.'
@@ -29,9 +22,8 @@ function describeApiError(err: unknown): string {
   return err instanceof Error ? err.message : 'Request failed'
 }
 
-// Заметки одного файла идут одной группой, в порядке первого появления файла
-// в списке (а не пересортировкой по алфавиту) — тот же порядок, в котором их
-// отдал listNotes().
+// Заметки одного файла идут одной группой, в порядке первого появления файла в списке (а не
+// пересортировкой по алфавиту) — тот же порядок, в котором их отдал listNotes().
 function groupByFile(notes: ReviewNote[]): Array<[string, ReviewNote[]]> {
   const order: string[] = []
   const groups = new Map<string, ReviewNote[]>()
@@ -47,11 +39,7 @@ function groupByFile(notes: ReviewNote[]): Array<[string, ReviewNote[]]> {
   return order.map((path) => [path, groups.get(path) ?? []])
 }
 
-// Модалка ревью-раунда (Task 23): открывается по клику «Send notes» в
-// ReviewBanner (Task 22). Показывает собранные заметки, сгруппированные по
-// файлу, с редактированием/удалением на месте, плюс выбор целевой стадии и
-// финальное решение — Inject (доставить в стадию и возобновить флоу) или
-// Cancel (отменить раунд, заметки остаются в сторе на следующий раз).
+// Модалка ревью-раунда: открывается по клику «Send notes» в ReviewBanner.
 export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = null }: ReviewNotesModalProps): ReactElement {
   const [notes, setNotes] = useState<ReviewNote[]>([])
   const [rev, setRev] = useState(0)
@@ -112,9 +100,7 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
   async function handleDelete(id: string): Promise<void> {
     try {
       await deleteNote(id, rev)
-      // Ре-читаем целиком, а не просто выкидываем note из локального массива:
-      // deleteNote возвращает только void, а нам нужна свежая rev для
-      // последующих update/delete — как и написано в брифе Task 23.
+      // После удаления перечитываем notes: следующий update/delete требует свежей rev.
       const res = await listNotes()
       setNotes(res.notes)
       setRev(res.rev)

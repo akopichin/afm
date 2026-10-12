@@ -142,10 +142,8 @@ describe('useFaviconPulse', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     expect(mockComposite).toHaveBeenCalledTimes(2)
 
-    // Оба промиса резолвятся, пока вкладка всё ещё скрыта — оба .then
-    // проходят проверку `!document.hidden`, но без guard'а по timer
-    // второй .then перезаписал бы ссылку на первый интервал, оставив его
-    // тикать вечно (orphaned timer).
+    // Оба промиса завершаются в скрытой вкладке; guard по timer должен предотвратить второй orphaned
+    // interval.
     resolvers.forEach((resolve) => resolve(BADGE_HREF))
     await vi.advanceTimersByTimeAsync(0)
 

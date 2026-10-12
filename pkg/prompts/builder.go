@@ -8,9 +8,8 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// Agent — фаза выполнения (алиас доменного flow.Phase). Значения приходят из
-// единого источника pkg/flow; локальные имена сохранены для читаемости
-// вызовов prompts.AgentPlanning и т.п.
+// Agent — фаза выполнения (алиас доменного flow.Phase). Значения приходят из единого источника pkg/flow;
+// локальные имена сохранены для читаемости вызовов prompts.AgentPlanning и т.п.
 type Agent = flow.Phase
 
 const (
@@ -38,17 +37,11 @@ type Inputs struct {
 	// Autonomous — шаблон для автономного трека (без plan.md, с execution_summary.md).
 	// Если непустой, используется вместо Template.
 	Autonomous string
-	// MemoryBlock — по-стадийный срез agent-памяти (Task 9), посчитанный
-	// вызывающей стороной (см. Orchestrator.memoryBlockForStage) под конкретную
-	// стадию — либо inlined findings, либо pointer на файлы памяти. Заменяет
-	// v1's статический GlobalPrompt-указатель на память: тот был одним и тем
-	// же текстом для всех стадий флоу, этот пересчитывается на каждый Build.
+	// MemoryBlock — по-стадийный срез agent-памяти, посчитанный вызывающей стороной под конкретную стадию —
+	// либо inlined findings, либо pointer на файлы памяти.
 	MemoryBlock string
-	// BrowserRuntime, если non-nil, добавляет блок <browser_tools> — короткая
-	// подсказка агенту, что у него есть managed-браузер (afm_chrome MCP) и как им
-	// пользоваться. Ставится вызывающей стороной под ТОЙ ЖЕ policy, что и инъекция
-	// MCP (Orchestrator.browserForStage), чтобы промпт и реальная доступность
-	// инструментов шли в ногу (не «рассказали про инструмент, которого нет»).
+	// BrowserRuntime, если non-nil, добавляет блок <browser_tools> — короткая подсказка агенту, что у него
+	// есть managed-браузер и как им пользоваться.
 	BrowserRuntime *BrowserRuntime
 }
 
@@ -57,9 +50,7 @@ type BrowserRuntime struct {
 	AppURL     string
 	AppPort    int
 	ServerName string
-	// Docker shapes the bind guidance: in Docker the app must bind 0.0.0.0 so the
-	// published port is reachable from the host browser; natively it binds 127.0.0.1
-	// to avoid exposing the dev app on the LAN.
+	// Docker apps bind 0.0.0.0 for host browser access; native apps bind loopback.
 	Docker bool
 }
 
@@ -78,9 +69,8 @@ func Build(in Inputs) string {
 		sb.WriteString(in.OutputContractMD)
 	}
 	if in.Interactive {
-		// Печатаем буквальный абсолютный путь stage-директории, чтобы у агента
-		// не было причин придумывать путь (afm bug-2: агент писал question.json
-		// в .afm/stages/... и ломал диалог).
+		// Печатаем буквальный абсолютный путь stage-директории, чтобы у агента не было причин придумывать путь
+		// (afm bug-2: агент писал question.json в .afm/stages/... и ломал диалог).
 		stageDir := in.StageDir
 		if abs, err := filepath.Abs(in.StageDir); err == nil && abs != "" {
 			stageDir = abs
@@ -88,10 +78,7 @@ func Build(in Inputs) string {
 		sb.WriteString("\n\n<interactive_rules>\n")
 		sb.WriteString("Use the file-based dialog protocol to ask the user questions.\n")
 		fmt.Fprintf(&sb, "Your stage directory is AFM_STAGE_DIR=%q\n\n", stageDir)
-		// Полностью развёрнутые имена файлов + адресный constraint против
-		// подстановки id стадии вместо фазы (afm bug: агент писал
-		// "<stage-id>.q1.question.json" вместо "<phase>.q1.question.json",
-		// поллер такой префикс не распознаёт → вопрос не виден в UI → зависание).
+		// Полностью развёрнутые имена файлов + адресный constraint против подстановки id стадии вместо фазы.
 		sb.WriteString("The dialog files use a FIXED filename prefix that is ALWAYS the literal phase word below.\n")
 		fmt.Fprintf(&sb, "  Question file: %s.q<N>.question.json\n", in.PhaseAgent)
 		fmt.Fprintf(&sb, "  Answer file:   %s.q<N>.answer.json\n", in.PhaseAgent)
@@ -125,14 +112,8 @@ func Build(in Inputs) string {
 		sb.WriteString("</interactive_rules>\n")
 	}
 
-	// Контракт публикации картинки в ленту: агент может показать пользователю
-	// файл-изображение (график, отрендеренную диаграмму, скриншот, скачанный
-	// файл), атомарно опубликовав его как immutable-артефакт стадии и напечатав
-	// маркер отдельной строкой. Каталог артефактов — $AFM_STAGE_DIR/artifacts/
-	// (env-переменная задана всем агентским стадиям). Атомарность (temp→rename
-	// ПЕРЕД маркером) закрывает torn read: сервер отдаёт только целиком
-	// записанный файл, а маркер появляется в тексте лишь после того, как файл
-	// на месте под финальным именем.
+	// Контракт публикации картинки в ленту: агент может показать пользователю файл-изображение, атомарно
+	// опубликовав его как immutable-артефакт стадии и напечатав маркер отдельной строкой.
 	sb.WriteString("\n\n<image_output>\n")
 	sb.WriteString("To show the user an image you produced (a chart, rendered diagram, screenshot, or downloaded picture), publish it as a stage artifact and reference it in your narrative text:\n")
 	sb.WriteString("1. Ensure the directory exists: $AFM_STAGE_DIR/artifacts/\n")

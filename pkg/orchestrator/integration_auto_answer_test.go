@@ -16,12 +16,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestIntegration_NonInteractiveStageAutoAnswersQuestion — полный e2e
-// сценарий: non-interactive стадия (interactive не указан — дефолт false)
-// запускает агента, который использует файловый диалоговый протокол (пишет
-// question.json и ждёт answer.json в цикле — так же, как настоящий
-// интерактивный агент). Стадия не должна ни разу побывать в
-// awaiting_user_input, а должна дойти до done, получив ответ от afm.
 func TestIntegration_NonInteractiveStageAutoAnswersQuestion(t *testing.T) {
 	dir := t.TempDir()
 

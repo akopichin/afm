@@ -120,15 +120,8 @@ func ReadDialog(path string) ([]Entry, error) {
 			}
 			if e, ok := byID[q.ID]; ok {
 				if e.Answer != nil && e.Question != "" {
-					// A COMPLETE prior exchange (both question AND answer) exists
-					// for this id and a fresh question line arrived — the agent
-					// reused the id for a NEW question (removed answer.json,
-					// rewrote question.json). Re-open the entry as the latest
-					// incarnation: adopt the new question and drop the stale
-					// answer so it reads as unanswered again. Without this the UI
-					// keeps showing the old answered question with no input box
-					// and the interactive stage hangs forever in
-					// awaiting_user_input.
+					// A COMPLETE prior exchange exists for this id and a fresh question line arrived — the agent reused
+					// the id for a NEW question.
 					e.TS = q.TS
 					e.Question = q.Question
 					e.Options = q.Options
@@ -138,10 +131,8 @@ func ReadDialog(path string) ([]Entry, error) {
 					e.FromOptions = false
 					e.AutoAnswered = false
 				} else {
-					// Same incarnation: either the answer line arrived before the
-					// question line (out-of-order writers — e.Question == "") or a
-					// still-unanswered question was rewritten. Fill in / refresh
-					// the question fields, leaving any answer untouched.
+					// Same incarnation: either the answer line arrived before the question line or a still-unanswered
+					// question was rewritten. Fill in / refresh the question fields, leaving any answer untouched.
 					e.TS = q.TS
 					e.Question = q.Question
 					e.Options = q.Options
@@ -181,11 +172,7 @@ func FindEntry(path, id string) (*Entry, error) {
 	return nil, nil
 }
 
-// appendMu serializes concurrent writers of dialog.jsonl. Two goroutines now
-// append to the same files — the question poller (AppendQuestion) and the HTTP
-// answer handler (AppendAnswer) — and O_APPEND does not guarantee byte-atomic
-// writes for records larger than PIPE_BUF, so without a lock their bytes could
-// interleave and corrupt the JSONL (silently dropped on read).
+// appendMu serializes concurrent writers of dialog.jsonl.
 var appendMu sync.Mutex
 
 // appendLine opens the file with O_APPEND and writes one JSON record + \n.
@@ -218,16 +205,7 @@ type QuestionFile struct {
 	Question    string
 	Options     []string
 	AllowCustom bool
-	// Malformed is true when the file's JSON could not be parsed even after
-	// jsonrepair. Callers that surface questions directly to a human (the
-	// question poller, the dialog HTTP handler) must NOT show these to the
-	// user immediately — see pkg/orchestrator/dialog_poller.go's retry state
-	// machine, which decides whether this is a transient torn read (the
-	// agent's Write tool hadn't finished landing on disk when this file was
-	// scanned) or a genuine, persistent mistake worth nudging the agent
-	// about. Callers that only care about "is something unanswered" (e.g.
-	// hasOpenQuestion) can ignore this field — a malformed file still counts
-	// as open.
+	// Malformed is true when the file's JSON could not be parsed even after jsonrepair.
 	Malformed bool
 }
 
@@ -275,24 +253,13 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 		}
 		malformed := false
 		if err := json.Unmarshal(raw, &qf); err != nil {
-			// Агент пишет question.json руками (файловый протокол диалога) и
-			// иногда ломает JSON: незаэкранированная кавычка внутри строки,
-			// пропущенная кавычка у ключа, пропущенная запятая и т.п.
-			// jsonrepair покрывает эти классы ошибок гораздо шире одной
-			// самописной эвристики.
+			// jsonrepair исправляет типичные ошибки JSON, написанного агентом вручную.
 			repaired, repairErr := jsonrepair.Repair(string(raw))
 			if repairErr == nil {
 				repairErr = json.Unmarshal([]byte(repaired), &qf)
 			}
 			if repairErr != nil {
-				// Даже jsonrepair не справился. НЕ пишем ничего на диск здесь:
-				// файл может быть просто недописан агентом (torn read —
-				// поллер читает файл, пока Write ещё не долетел до диска), и
-				// перезапись содержимого afm'ом гонится со всё ещё
-				// выполняющейся записью агента. Решение "это временная гонка
-				// или агент реально сломал JSON" принимает вызывающий
-				// (pollQuestions'ный retry-автомат в dialog_poller.go) —
-				// здесь только сигнализируем Malformed и отдаём то, что есть.
+				// Даже jsonrepair не справился.
 				log.Printf("WARN: %s: invalid JSON even after repair: %v", qPath, err)
 				malformed = true
 				qf.Question = string(raw)
@@ -302,14 +269,8 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 				log.Printf("INFO: %s: repaired invalid JSON: %v", qPath, err)
 			}
 		}
-		// The FILENAME id is authoritative — it's what the agent's polling loop
-		// derives its answer path from (<phase>.<id>.answer.json) and what the
-		// answerPath existence check above already keys off. If the JSON body
-		// carries a DIFFERENT id (agent bug: filename says <id>, body says
-		// <other>), trusting the body would make afm/UI write the answer to
-		// <other>.answer.json while the agent forever polls <id>.answer.json —
-		// an eternal hang that neither auto-answer nor the UI can break. So we
-		// ignore a divergent body id and key strictly off the filename.
+		// The FILENAME id is authoritative — it's what the agent's polling loop derives its answer path from and
+		// what the answerPath existence check above already keys off.
 		if id == "" {
 			continue
 		}
@@ -325,15 +286,8 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 	return out, nil
 }
 
-// CanParseQuestion reports whether raw is a *.question.json payload that
-// FindUnansweredQuestions would treat as parseable — a direct json.Unmarshal,
-// or (failing that) after jsonrepair.Repair. Does not persist anything to
-// disk; a caller that needs the repaired bytes should call
-// FindUnansweredQuestions itself, which does both the check and the persist.
-// Exposed for the orchestrator's malformed-question retry state machine
-// (pkg/orchestrator/dialog_poller.go), which needs to know whether an
-// agent's rewrite actually fixed a file without re-scanning the whole stage
-// directory.
+// CanParseQuestion reports whether raw is a *.question.json payload that FindUnansweredQuestions would
+// treat as parseable — a direct json.Unmarshal, or after jsonrepair.Repair.
 func CanParseQuestion(raw []byte) bool {
 	var probe map[string]any
 	if json.Unmarshal(raw, &probe) == nil {
@@ -350,15 +304,12 @@ func CanParseQuestion(raw []byte) bool {
 // (no options, only allow_custom) in a non-interactive stage.
 const autoAnswerFallbackText = "Прими самое релевантное решение автономно или предложи варианты ответов"
 
-// autoAnswerMarkers are the case-insensitive substrings that mark an option
-// as the recommended default, checked in option order (not marker priority
-// order) — the first option carrying ANY of these markers wins.
+// autoAnswerMarkers are the case-insensitive substrings that mark an option as the recommended default,
+// checked in option order — the first option carrying ANY of these markers wins.
 var autoAnswerMarkers = []string{"(recommended)", "(default)", "(рекомендую)", "(рекомендуется)", "(по умолчанию)"}
 
-// PickAutoAnswer chooses the answer afm synthesizes for a question asked by a
-// non-interactive stage's agent: the option explicitly marked recommended
-// (see autoAnswerMarkers), the first option if none are marked, or a fixed
-// fallback text when the question has no options at all.
+// PickAutoAnswer chooses a recommended option, otherwise the first option or fixed fallback text when
+// options are absent.
 func PickAutoAnswer(q QuestionFile) (answer string, fromOptions bool) {
 	if len(q.Options) == 0 {
 		return autoAnswerFallbackText, false
@@ -371,9 +322,8 @@ func PickAutoAnswer(q QuestionFile) (answer string, fromOptions bool) {
 	return q.Options[0], true
 }
 
-// stripRecommendedMarker reports whether opt carries any autoAnswerMarkers
-// substring and, if so, returns opt with the marker (and a trailing
-// space/dash left over from " - (recommended)"-style authoring) removed.
+// stripRecommendedMarker reports whether opt carries any autoAnswerMarkers substring and, if so, returns
+// opt with the marker removed.
 func stripRecommendedMarker(opt string) (string, bool) {
 	lower := strings.ToLower(opt)
 	for _, m := range autoAnswerMarkers {
@@ -389,15 +339,7 @@ func stripRecommendedMarker(opt string) (string, bool) {
 	return "", false
 }
 
-// WriteAnswerFile atomically creates <stageDir>/<phase>.<id>.answer.json
-// (O_EXCL — a question may only be answered once; returns an error
-// satisfying os.IsExist if it already was). No dialog.jsonl side effect —
-// callers decide separately whether this answer belongs in human-facing
-// history (see WriteAnswer, which pairs it with AppendAnswer). The HTTP dialog
-// handler calls this directly and appends to dialog.jsonl only AFTER its
-// flow-pause guard authorizes the answer, so a rejected answer never leaves a
-// durable history entry behind (which would strand the question as
-// answered-in-history but unanswered-on-disk).
+// WriteAnswerFile atomically creates <stageDir>/<phase>.<id>.answer.json.
 func WriteAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error {
 	answerPath := filepath.Join(stageDir, phase+"."+id+".answer.json")
 	payload, err := json.Marshal(map[string]any{
@@ -407,9 +349,8 @@ func WriteAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error
 		return fmt.Errorf("marshal answer: %w", err)
 	}
 
-	// O_EXCL atomically creates-and-checks-existence in one step, preventing a
-	// TOCTOU race where two concurrent writers both see the file missing and
-	// both try to create it.
+	// O_EXCL atomically creates-and-checks-existence in one step, preventing a TOCTOU race where two
+	// concurrent writers both see the file missing and both try to create it.
 	f, err := os.OpenFile(answerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		return err
@@ -431,15 +372,8 @@ func WriteAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error
 	return nil
 }
 
-// WriteAnswer atomically creates <stageDir>/<phase>.<id>.answer.json and
-// best-effort appends the answer to <phase>.dialog.jsonl for UI history.
-// autoAnswered marks answers afm synthesized itself (non-interactive
-// auto-answer), as opposed to a real user reply — see Answer.AutoAnswered /
-// Entry.AutoAnswered.
-//
-// A dialog.jsonl append failure is logged and swallowed: answer.json is
-// already safely on disk (the critical path for the agent's polling loop),
-// so failing the caller here would incorrectly signal the answer was lost.
+// WriteAnswer atomically creates <stageDir>/<phase>.<id>.answer.json and best-effort appends the answer to
+// <phase>.dialog.jsonl for UI history.
 func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered bool) error {
 	if err := WriteAnswerFile(stageDir, phase, id, answer, fromOptions); err != nil {
 		return err
@@ -453,9 +387,8 @@ func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered b
 	return nil
 }
 
-// askOrder parses the strict q<N> form (q1, q2, … q10): the id must be 'q'
-// followed by one or more digits and nothing else. foo2/bar10/qX are NOT
-// numeric — they fall back to lexical order in AskOrderLess.
+// askOrder parses the strict q<N> form: the id must be 'q' followed by one or more digits and nothing
+// else. foo2/bar10/qX are NOT numeric — they fall back to lexical order in AskOrderLess.
 func askOrder(id string) (int, bool) {
 	if len(id) < 2 || id[0] != 'q' {
 		return 0, false
@@ -472,10 +405,8 @@ func askOrder(id string) (int, bool) {
 	return n, true
 }
 
-// AskOrderLess orders question ids by the q<N> convention the interactive
-// prompt mandates: numeric suffix order (q2 before q10), a numeric id before a
-// non-numeric one, else lexical. The id is authoritative (filename-derived) and
-// immutable across repair/relocation, so this is a stable ask-order key.
+// AskOrderLess orders question ids by the q<N> convention the interactive prompt mandates: numeric suffix
+// order, a numeric id before a non-numeric one, else lexical.
 func AskOrderLess(a, b string) bool {
 	na, oka := askOrder(a)
 	nb, okb := askOrder(b)
@@ -494,10 +425,8 @@ func AskOrderLess(a, b string) bool {
 	}
 }
 
-// phaseRank orders phases by their lifecycle position (planning < implementation
-// < review < autonomous_execution) using flow.Phases(). A higher rank is a
-// later, more-recently-active phase. Unknown phases rank -1 (least current);
-// in practice FindUnansweredQuestions already filters to valid phases.
+// phaseRank orders phases by their lifecycle position using flow.Phases. A higher rank is a later,
+// more-recently-active phase.
 func phaseRank(phase string) int {
 	for i, p := range flow.Phases() {
 		if string(p) == phase {
@@ -509,22 +438,15 @@ func phaseRank(phase string) int {
 
 func questionBefore(a, b QuestionFile) bool {
 	if a.Phase != b.Phase {
-		// Prefer the LATER lifecycle phase: phases advance forward and cannot
-		// advance past an unanswered question, so when two phases have open
-		// questions at once the later one belongs to the agent running now and
-		// the earlier is a stale leftover. Surfacing the stale earlier one would
-		// hide the actively-polled question and reintroduce the hang (codex MAJOR#1).
+		// Prefer the later phase's question: earlier open questions are stale and can hide the active agent's
+		// question.
 		return phaseRank(a.Phase) > phaseRank(b.Phase)
 	}
 	return AskOrderLess(a.ID, b.ID)
 }
 
-// SelectCurrentQuestion returns the oldest unanswered question in qs — the one
-// the agent's sequential polling loop is blocked on and the ONLY one afm should
-// surface / accept an answer for. Pure (no FS): callers that already scanned the
-// directory pass their slice, avoiding a second, inconsistent scan. Malformed
-// entries participate (a malformed oldest question still blocks younger ones;
-// the poller repairs it first). ok is false for empty input.
+// SelectCurrentQuestion returns the oldest unanswered question in qs — the one the agent's sequential
+// polling loop is blocked on and the ONLY one afm should surface / accept an answer for.
 func SelectCurrentQuestion(qs []QuestionFile) (QuestionFile, bool) {
 	var cur QuestionFile
 	found := false
@@ -537,9 +459,8 @@ func SelectCurrentQuestion(qs []QuestionFile) (QuestionFile, bool) {
 	return cur, found
 }
 
-// CurrentQuestion is the FS-backed convenience wrapper for server read/answer
-// paths. It propagates the FindUnansweredQuestions error so callers can fail
-// closed.
+// CurrentQuestion is the FS-backed convenience wrapper for server read/answer paths. It propagates the
+// FindUnansweredQuestions error so callers can fail closed.
 func CurrentQuestion(stageDir string) (QuestionFile, bool, error) {
 	qs, err := FindUnansweredQuestions(stageDir)
 	if err != nil {

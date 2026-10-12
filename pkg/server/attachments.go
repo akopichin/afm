@@ -10,14 +10,11 @@ import (
 	"path/filepath"
 )
 
-// maxAttachmentBytes caps a single pasted-image upload. 10 MiB comfortably
-// covers a full-screen macOS/browser screenshot with room to spare, while
-// still bounding worst-case disk usage per paste.
+// maxAttachmentBytes caps a single pasted-image upload.
 const maxAttachmentBytes = 10 << 20
 
-// allowedAttachmentTypes maps an accepted Content-Type to the file extension
-// used when persisting the upload. afm only needs to accept clipboard
-// screenshots through this endpoint, not arbitrary file types.
+// allowedAttachmentTypes maps an accepted Content-Type to the file extension used when persisting the
+// upload.
 var allowedAttachmentTypes = map[string]string{
 	mimePNG:  ".png",
 	mimeJPEG: ".jpg",
@@ -25,12 +22,8 @@ var allowedAttachmentTypes = map[string]string{
 	mimeGIF:  ".gif",
 }
 
-// handleUploadAttachment saves a pasted clipboard image to
-// <runDir>/<stageID>/attachments/paste-<id>.<ext> and returns its absolute
-// path as {"path": "..."}. The path is later embedded as plain text
-// ("[Screenshot: <path>]") in a revise/dialog-answer/note payload by the
-// frontend — this handler has no awareness of where the path ends up, it
-// only persists bytes and hands back a location for the agent to Read.
+// handleUploadAttachment saves a pasted clipboard image to <runDir>/<stageID>/attachments/paste-<id>.<ext>
+// and returns its absolute path as {"path": "..."}.
 func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
 	stageID := extractStageID(r.URL.Path, "/api/stages/", "/attachments")
 	if !isValidStageID(stageID) {
@@ -77,9 +70,8 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]string{"path": absPath})
 }
 
-// randomAttachmentID mirrors newRunID's random-suffix shape (cmd/afm/run.go):
-// 8 random bytes as hex, generated fresh per upload so concurrent pastes in
-// the same stage never collide on a filename.
+// randomAttachmentID mirrors newRunID's random-suffix shape: 8 random bytes as hex, generated fresh per
+// upload so concurrent pastes in the same stage never collide on a filename.
 func randomAttachmentID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)

@@ -27,25 +27,18 @@ const (
 // by both the GET/POST cases in routeFlowNotes below.
 const pathFlowNotes = "/api/flow/notes"
 
-// maxNoteBodyBytes bounds a single notes add/update request body. A note's text
-// is capped at 8 KiB server-side (orchestrator.maxNoteTextBytes); 128 KiB leaves
-// generous room for the path/reference/content_sha envelope while refusing a
-// pathological multi-megabyte body before it's ever buffered/decoded.
+// maxNoteBodyBytes bounds a single notes add/update request body.
 const maxNoteBodyBytes = 128 << 10
 
-// writeFlowError writes the scoped JSON error shape used only by the
-// /api/flow/* handlers — {"error": "<code>"}, mirroring writeFilesError's
-// convention so both API surfaces stay consistent for the dashboard client.
+// writeFlowError writes {"error":"<code>"} for /api/flow/*, matching file API errors.
 func writeFlowError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
 
-// flowErrCode maps an orchestrator review-pause sentinel error to an HTTP
-// status and a stable machine-readable error code. Any unrecognized error
-// (including nil-unsafe callers, which never reach here since callers only
-// invoke this on a non-nil err) falls into the default 500 "internal" case.
+// flowErrCode maps an orchestrator review-pause sentinel error to an HTTP status and a stable
+// machine-readable error code.
 func flowErrCode(err error) (int, string) {
 	switch {
 	case errors.Is(err, orchestrator.ErrRunFinalizing):
@@ -79,9 +72,8 @@ func flowErrCode(err error) (int, string) {
 	}
 }
 
-// currentReviewState nil-safely reads the flow-wide review-pause state — the
-// same "none" default handleStatus falls back to when no ReviewState func is
-// wired (see server.go's Config.ReviewState).
+// currentReviewState nil-safely reads the flow-wide review-pause state — the same "none" default
+// handleStatus falls back to when no ReviewState func is wired.
 func (s *Server) currentReviewState() string {
 	if s.reviewState == nil {
 		return reviewStateNone
@@ -90,13 +82,8 @@ func (s *Server) currentReviewState() string {
 	return st
 }
 
-// routeFlow dispatches POST /api/flow/pause, /api/flow/notes/inject,
-// /api/flow/notes/cancel, and (Task 18) the notes CRUD routes under
-// /api/flow/notes to their handlers. The whole capability is 404 when no
-// FlowActions is configured (host runs without review-pause wiring never
-// expose these routes at all, matching the /api/files/ precedent). The
-// notes-prefix case must come after the two exact /api/flow/notes/inject and
-// /api/flow/notes/cancel cases above it — otherwise it would shadow them.
+// routeFlow dispatches POST /api/flow/pause, /api/flow/notes/inject, /api/flow/notes/cancel, and the notes
+// CRUD routes under /api/flow/notes to their handlers.
 func (s *Server) routeFlow(w http.ResponseWriter, r *http.Request) {
 	if s.flowActions == nil {
 		http.NotFound(w, r)
@@ -116,9 +103,8 @@ func (s *Server) routeFlow(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// routeFlowNotes dispatches the notes CRUD routes: GET/POST on
-// /api/flow/notes (list/add), PUT/DELETE on /api/flow/notes/{id}
-// (update/delete a single note).
+// routeFlowNotes dispatches the notes CRUD routes: GET/POST on /api/flow/notes (list/add), PUT/DELETE on
+// /api/flow/notes/{id} (update/delete a single note).
 func (s *Server) routeFlowNotes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == pathFlowNotes && r.Method == http.MethodGet:
@@ -134,8 +120,7 @@ func (s *Server) routeFlowNotes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleNotesList returns every currently collected review note plus the
-// notes-list revision (for optimistic-concurrency writes). Safe to call
+// handleNotesList returns every currently collected review note plus the notes-list revision. Safe to call
 // regardless of pause state — ListNotes has no pause gate.
 func (s *Server) handleNotesList(w http.ResponseWriter, r *http.Request) {
 	notes, err := s.flowActions.ListNotes()
@@ -148,11 +133,7 @@ func (s *Server) handleNotesList(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"rev": notes.Rev, "notes": notes.Notes})
 }
 
-// handleNotesAdd adds (or replaces, for the same root/path/line) a review
-// note. The flow must be paused for review — checked here against
-// currentReviewState() BEFORE calling into the orchestrator, so the 409
-// happens even against a fake/mock FlowActions in tests that hasn't been
-// told to also reject the call.
+// handleNotesAdd adds a review note.
 func (s *Server) handleNotesAdd(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Root        string `json:"root"`

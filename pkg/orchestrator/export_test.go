@@ -8,15 +8,11 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// Тест-сеймы для регрессий по гонкам completeStage/withBeforeHook/retryStage.
-// Живут в package orchestrator (не _test), поэтому имеют доступ к приватным
-// completeStage/retryStage/pendingAfterHooks, но вызываются из внешнего
-// package orchestrator_test через эти экспортированные обёртки. Аналог уже
-// существующего InterruptChanForTest.
+// Тест-сеймы для регрессий по гонкам completeStage/withBeforeHook/retryStage. Аналог уже существующего
+// InterruptChanForTest.
 
-// CompleteStageForTest вызывает приватный completeStage с переданным «снимком»
-// статуса current — позволяет тесту смоделировать проигрыш CAS EvComplete
-// (реальный статус стадии уже paused, а current устарел = running).
+// CompleteStageForTest вызывает приватный completeStage с переданным «снимком» статуса current — позволяет
+// тесту смоделировать проигрыш CAS EvComplete.
 func CompleteStageForTest(o *Orchestrator, stageID string, current state.StageStatus) {
 	o.completeStage(context.Background(), stageID, current, "")
 }
@@ -27,9 +23,8 @@ func PendingAfterHooksForTest(o *Orchestrator) int32 {
 	return o.pendingAfterHooks.Load()
 }
 
-// WaitAgentsForTest дожидается завершения всех агентских горутин (тот же
-// WaitAgents, что Run вызывает на shutdown) — чтобы тест читал счётчики после
-// того, как спавн отработал.
+// WaitAgentsForTest дожидается завершения всех агентских горутин (тот же WaitAgents, что Run вызывает на
+// shutdown) — чтобы тест читал счётчики после того, как спавн отработал.
 func WaitAgentsForTest(o *Orchestrator) {
 	o.concurrency.WaitAgents()
 }
@@ -46,21 +41,13 @@ func SetRetryCASBarrierForTest(o *Orchestrator, fn func(stageID string)) {
 	o.retryCASBarrier = fn
 }
 
-// SetVerifyOutcomeGuardHookForTest инъектирует хук, вызываемый в
-// retry.go's commitVerifyFailure НЕПОСРЕДСТВЕННО перед атомарным
-// Trigger(EvVerifyFail) (см. поле verifyOutcomeGuardHook) — тест может
-// внутри него смоделировать конкурентный Pause()/Revise(), приземлившийся в
-// TOCTOU-зазоре между fast-path чтением и этим CAS.
+// SetVerifyOutcomeGuardHookForTest вставляет Pause/Revise непосредственно перед CAS EvVerifyFail.
 func SetVerifyOutcomeGuardHookForTest(o *Orchestrator, fn func(stageID string)) {
 	o.verifyOutcomeGuardHook = fn
 }
 
-// SetVerifyAgentRunnerForTest инъектирует фейковый раннер agent-шагов
-// AI-verify (см. поле runVerifyAgent, verify.go) для тестов из внешнего
+// SetVerifyAgentRunnerForTest инъектирует фейковый раннер agent-шагов AI-verify для тестов из внешнего
 // package orchestrator_test — тот же приём, что и остальные *ForTest выше.
-// Позволяет собрать полноценный *Orchestrator через New() (реальные FSM/
-// Store/раннеры основного агента) и при этом не запускать настоящий
-// verify-subprocess.
 func SetVerifyAgentRunnerForTest(o *Orchestrator, fn func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error)) {
 	o.runVerifyAgent = fn
 }

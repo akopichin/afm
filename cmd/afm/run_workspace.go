@@ -49,13 +49,6 @@ func openRunWorkspace(dashboardEnabled bool) workspace.FS {
 }
 
 // workspaceResolveFile adapts a workspace.FS into orchestrator.Options.
-// ResolveFile: it reads the file's full content through ws.Read (which also
-// gives us DisplayPath/Reference for free, since Read embeds the same
-// "[AFM file: ...]" marker Reference alone would), hashes it for AddNote's
-// stale-content check, and — for a line-scoped note — slices out the
-// requested 1-indexed line. Any workspace error (not found, too large,
-// binary, symlink, ...) is reported as "can't resolve" rather than surfaced
-// to the caller: AddNote already turns that into ErrStaleContent.
 func workspaceResolveFile(ws workspace.FS) func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
 	return func(root, path string, line *int) (orchestrator.ResolvedFile, bool) {
 		f, err := ws.Read(context.Background(), root, path)
@@ -68,16 +61,7 @@ func workspaceResolveFile(ws workspace.FS) func(root, path string, line *int) (o
 			ContentSHA:  state.FileContentSHA([]byte(f.Content)),
 		}
 		if line != nil {
-			// f.Content almost always ends in "\n" for a real source file —
-			// a bare strings.Split would then produce a phantom trailing
-			// empty element (Split("a\nb\n", "\n") == ["a","b",""]), so
-			// len(lines) overcounts by one and a request for the line right
-			// after the real last line wrongly reports InRange=true with an
-			// empty LineText instead of InRange=false. Trim exactly one
-			// trailing newline first so lines counts only real lines. An
-			// empty file has 0 real lines (not the 1 a bare Split("", "\n")
-			// would report), so a line-1 request against it correctly comes
-			// back out of range.
+			// Trim one trailing newline to count real lines; empty files have zero lines.
 			content := strings.TrimSuffix(f.Content, "\n")
 			var lines []string
 			if content != "" {
@@ -93,9 +77,6 @@ func workspaceResolveFile(ws workspace.FS) func(root, path string, line *int) (o
 }
 
 // workspaceCurrentFileSHA adapts a workspace.FS into orchestrator.Options.
-// CurrentFileSHA: the same content-read path as workspaceResolveFile above,
-// minus the line-splitting, used by renderReviewFeedback to detect drift
-// between when a review note was taken and when it's injected.
 func workspaceCurrentFileSHA(ws workspace.FS) func(root, path string) (string, bool) {
 	return func(root, path string) (string, bool) {
 		f, err := ws.Read(context.Background(), root, path)

@@ -2,9 +2,6 @@ package workspace
 
 import "testing"
 
-// TestNew_NilRoots verifies the cross-platform baseline: no roots in → no roots
-// out, no error, and Close succeeds. On non-Linux hosts (or on a kernel without
-// openat2) this is also the shape of the graceful-degradation result.
 func TestNew_NilRoots(t *testing.T) {
 	fs, err := New(nil)
 	if err != nil {

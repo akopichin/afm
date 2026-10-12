@@ -8,10 +8,6 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 )
 
-// TestServerAccountingProvider covers the display gate on top of the existing
-// acct/acctErr matrix: display=false must return nil (the dashboard omits every
-// cost field) regardless of the ledger, while display=true keeps the previous
-// behavior — the live *Store, StaticUnavailable on a hard open error, or nil.
 func TestServerAccountingProvider(t *testing.T) {
 	acct, err := accounting.Open(t.TempDir(), accounting.NewResolver(config.Config{}.Pricing))
 	if err != nil {

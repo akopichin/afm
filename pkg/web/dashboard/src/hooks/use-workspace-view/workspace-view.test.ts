@@ -92,9 +92,7 @@ describe('workspaceReducer — auto-open (rule 9)', () => {
   })
 
   it('does NOT steal focus when suppressed (typing / reviewing a file) — only glows', () => {
-    // Только половина контракта: под suppression фокус не крадётся, остаёмся в
-    // feed. Полный цикл defer → release покрыт в блоке «deferred attention» ниже
-    // (не дублируем сюда, чтобы контракт жил в одном месте).
+    // Только половина контракта: под suppression фокус не крадётся, остаёмся в feed.
     const s = sync(initialWorkspaceState, [item('b', 'approval')], true)
     expect(s.view).toBe('feed')
   })
@@ -287,9 +285,8 @@ describe('workspaceReducer — deferred attention (suppression defers, release o
     const held = sync(initialWorkspaceState, [paused], true, [sig(paused)])
     expect(held.view).toBe('feed')
     expect(held.items.some((it) => it.stageId === 'a')).toBe(true)
-    // Владение снято (clearOp после Send) ДО refresh /api/status: A ещё paused в
-    // снимке, ownedHandledSigs уже пуст, suppression отпущен. A НЕ должен всплыть
-    // ложной панелью — он уже handled.
+    // Владение снято (clearOp после Send) ДО refresh /api/status: A ещё paused в снимке, ownedHandledSigs
+    // уже пуст, suppression отпущен. A НЕ должен всплыть ложной панелью — он уже handled.
     const afterDrop = sync(held, [paused], false, [])
     expect(afterDrop.view).toBe('feed')
     expect(afterDrop.activeStageId).toBeNull()

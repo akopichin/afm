@@ -33,11 +33,6 @@ func TestResolveUnknownIsUnpriced(t *testing.T) {
 	}
 }
 
-// TestResolvePartialOverrideMergesOntoBuiltin verifies FINDING 1: overriding
-// only the input rate of a known builtin model must NOT zero out the
-// categories the user didn't mention — cache_read/output must still use the
-// builtin's own rates, and the resulting cost must reflect that merge (not
-// treat the omitted categories as free).
 func TestResolvePartialOverrideMergesOntoBuiltin(t *testing.T) {
 	six := Rate(6.0)
 	cfg := PricingConfig{Models: map[string]RateCard{
@@ -51,9 +46,8 @@ func TestResolvePartialOverrideMergesOntoBuiltin(t *testing.T) {
 	if rr.card.Input == nil || *rr.card.Input != six {
 		t.Fatalf("expected overridden input rate 6.0, got %v", rr.card.Input)
 	}
-	// Same token shape as TestResolvePrecedenceAndCost, but now input is 6.0
-	// (config) while cache_read/cache_write_1h/output stay at the builtin's
-	// 0.50/10.00/25.00.
+	// Same token shape as TestResolvePrecedenceAndCost, but now input is 6.0 (config) while
+	// cache_read/cache_write_1h/output stay at the builtin's 0.50/10.00/25.00.
 	tok := Tokens{UncachedInput: 2, CacheRead: 15940, CacheWrite1h: 18551, Output: 345}
 	got := rr.cost(tok)
 	want := costUSD(tok.UncachedInput, 6.0) +
@@ -65,12 +59,6 @@ func TestResolvePartialOverrideMergesOntoBuiltin(t *testing.T) {
 	}
 }
 
-// TestResolveUnknownModelPartialOverrideMissingCategory verifies FINDING 1's
-// completeness rule: a config-only card (no builtin to fall back to) that
-// omits a category the tokens actually use resolves ok=true (the key
-// matched), but ResolvedRate.missingCategory must flag it so BuildRecord can
-// mark the record unpriced rather than silently costing the omitted category
-// at $0.
 func TestResolveUnknownModelPartialOverrideMissingCategory(t *testing.T) {
 	four := Rate(4.0)
 	cfg := PricingConfig{Models: map[string]RateCard{

@@ -7,12 +7,7 @@ import (
 	"testing"
 )
 
-// mkRun создаёт run-директорию name под base и для каждой стадии из statuses
-// проводит настоящий переход pending -> statuses[id] через Store.Apply — так
-// events.jsonl получается ровно таким же, какой пишет живой прогон. Стадии,
-// отсутствующие в statuses, в лог вообще не попадают (как если бы стадия
-// никогда не запускалась) — это поведение проверяет
-// TestFindLatestCompletedRunDir_DonePlusNeverStartedPendingNotCompleted.
+// mkRun пишет реальные переходы через Store.Apply; стадии вне statuses не появляются в логе.
 func mkRun(t *testing.T, base, name string, statuses map[string]StageStatus) string {
 	t.Helper()
 	runDir := filepath.Join(base, name)
@@ -53,12 +48,8 @@ func mkEmptyRun(t *testing.T, base, name string) string {
 	return runDir
 }
 
-// mkCorruptRun создаёт run-директорию с битой ПОЛНОЙ строкой в середине
-// events.jsonl (валидная строка после неё есть) — тот же паттерн порчи, что и
-// TestOpen_MidCorruptionQuarantines в store_replay_test.go, но записанный
-// напрямую в файл: тест проверяет read-only путь (LoadRunState через
-// FindLatestCompletedRunDir), который порченный файл НЕ трогает и НЕ
-// карантинирует.
+// mkCorruptRun пишет полную битую строку между валидными; read-only lookup не меняет и не карантинирует
+// файл.
 func mkCorruptRun(t *testing.T, base, name string) string {
 	t.Helper()
 	runDir := filepath.Join(base, name)

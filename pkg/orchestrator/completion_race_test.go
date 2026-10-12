@@ -13,22 +13,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestIntegration_PollerRaceDoesNotStrandCompletedStage is a regression test
-// for a gap found live while verifying the fix for
-// TestRunWithRetry_CompletionMarkerOverridesStaleOpenQuestion: even after
-// runWithRetry learned to check completion before an open question, a stage
-// could still get stuck if afm's OWN independent question poller won the
-// race and moved the FSM to awaiting_user_input WHILE the agent was still
-// running — before the agent (unaware of this) finished its real work and
-// returned. completeStage's Running/Retrying-only precondition then
-// silently dropped the resulting EventAgentCompleted, leaving the stage
-// stuck forever with no agent process left alive to ever retry.
-//
-// Uses a real bash script as the stage Command, not an injected Runner:
-// interactive stages (stage.Interactive=true) always ignore the injected
-// Runner — runnerFor builds a real executor.New(...) driven by
-// stage.Command regardless (see CLAUDE.md's File-Based Dialog Protocol
-// section, and poller_test.go's block.sh for the established pattern).
 func TestIntegration_PollerRaceDoesNotStrandCompletedStage(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "s1")
@@ -36,12 +20,7 @@ func TestIntegration_PollerRaceDoesNotStrandCompletedStage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The agent writes a stray question.json (it never waits for an answer
-	// to it — a mistake, or a leftover from earlier work), keeps "running"
-	// long enough for the real 1-second question poller to notice the file
-	// and independently move the FSM to awaiting_user_input, and only THEN
-	// finishes its real work and writes the completion marker before
-	// exiting — racing the poller goroutine within a single invocation.
+	// Leave a stray question for the real poller to detect before the agent writes completion and exits.
 	scriptPath := filepath.Join(runDir, "racyagent.sh")
 	script := "#!/bin/bash\n" +
 		`printf '{"id":"q_stale","question":"never answered"}' > "$AFM_STAGE_DIR/autonomous_execution.q_stale.question.json"` + "\n" +
@@ -76,14 +55,6 @@ func TestIntegration_PollerRaceDoesNotStrandCompletedStage(t *testing.T) {
 	waitForStatus(t, stateFile, "s1", state.StatusDone, 5*time.Second)
 }
 
-// TestIntegration_PollerRaceDoesNotStrandPlanningStage is the planning-phase
-// counterpart of TestIntegration_PollerRaceDoesNotStrandCompletedStage:
-// onAgentCompleted's phasePlanning branch has the exact same
-// Planning/Retrying-only precondition (and EvPlanReady the same From list in
-// the FSM), so the identical poller-vs-agent-exit race strands a stage that
-// finished planning successfully, for the same reason. Found by auditing
-// for the same shape after fixing the implementation/autonomous case, not
-// by a separate live incident.
 func TestIntegration_PollerRaceDoesNotStrandPlanningStage(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, "s1")
@@ -123,16 +94,11 @@ func TestIntegration_PollerRaceDoesNotStrandPlanningStage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
-	// First confirm the poller actually won the race and parked the stage in
-	// awaiting_user_input (proving this test exercises the intended
-	// scenario, not a no-op).
+	// First confirm the poller actually won the race and parked the stage in awaiting_user_input (proving
+	// this test exercises the intended scenario, not a no-op).
 	waitForStatus(t, stateFile, "s1", state.StatusAwaitingUserInput, 3*time.Second)
 
-	// Headless auto-approve (no DashboardURL) synchronously cascades planning
-	// straight past AwaitingApproval in the same event-loop tick, so that
-	// status may never be observable at 50ms poll granularity — assert on
-	// "did NOT get stuck at awaiting_user_input" instead of one exact
-	// downstream status.
+	// Headless approval may skip observable intermediate states; assert the stage leaves awaiting_user_input.
 	deadline := time.Now().Add(5 * time.Second)
 	var last state.StageStatus
 	for time.Now().Before(deadline) {

@@ -153,18 +153,13 @@ describe('FileViewer', () => {
 
     expect(screen.getByTestId('file-line-1').className).toContain('has-comment')
 
-    // Reopening the same line prefills the previously saved text and offers
-    // "Update" instead of "Save" — the backend addNote call replaces the note
-    // for the same root/path/line rather than creating a duplicate.
+    // Reopening a saved line prefills its text and updates the existing note.
     fireEvent.click(screen.getByTestId('file-line-1'))
     expect(screen.getByRole('textbox')).toHaveValue('note text')
     expect(screen.getByText('Update')).toBeInTheDocument()
   })
 
-  // Review-finding P2 #5: a note already persisted for this file (passed via
-  // savedNotes) must rehydrate its marker + textarea prefill on open — without
-  // any local save this session — so switching files and back never loses the
-  // annotation. Only line notes matching this file's root+path hydrate.
+  // Hydrate saved line notes only for this root/path, preserving markers and drafts across file switches.
   test('hydrates saved line notes into markers and textarea prefill', () => {
     const savedNotes = [
       {
@@ -202,10 +197,7 @@ describe('FileViewer', () => {
     expect(screen.getByText('Update')).toBeInTheDocument()
   })
 
-  // Re-review P2: a locally-saved note must not leak across workspace roots that
-  // share a path. After saving on root A `a.go`, switching to root B `a.go`
-  // (same path, same content) must reset the local marker/prefill — otherwise
-  // Save on root B would create a note carrying root A's text.
+  // Re-review P2: a locally-saved note must not leak across workspace roots that share a path.
   test('does not leak local annotations between roots with the same path', async () => {
     const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
     const content = makeContent({ content: 'line one\nline two' })

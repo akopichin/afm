@@ -1,9 +1,4 @@
-// Тестовый (не production) хелпер: маршрутизирует моки globalThis.fetch по
-// /api/files/* так же, как это делает files-client.ts (Task 12) — снаружи
-// проверяем через реальный files-client, а не через vi.mock его модуля,
-// следуя конвенции репозитория (см. DialogChannel.test.tsx: моки на уровне
-// fetch, не на уровне api-клиента). Не *.test.ts — vitest не подхватит его
-// как тестовый файл; используется из FileTree.test.tsx и FileBrowserModal.test.tsx.
+// Моки fetch для реального files-client; имя без .test.ts исключает обнаружение хелпера как теста Vitest.
 import { vi, type MockInstance } from 'vitest'
 
 type RootInput = { id: string; label: string; kind?: string; mountReadOnly?: boolean }
@@ -32,9 +27,8 @@ export function errorResponse(code: string, status: number): Response {
   return jsonResponse({ error: code }, { status })
 }
 
-// FilesApiMock — построитель фикстур для GET /api/files/*. Запросы,
-// для которых ничего не настроено, отвечают 404 not_found (тот же код,
-// что и реальный бэкенд для несуществующего root/path).
+// FilesApiMock — построитель фикстур для GET /api/files/*. Запросы, для которых ничего не настроено,
+// отвечают 404 not_found (тот же код, что и реальный бэкенд для несуществующего root/path).
 export class FilesApiMock {
   private roots: RootInput[] = []
   private trees = new Map<string, { entries: TreeEntryInput[]; nextCursor?: string }>()
@@ -44,9 +38,8 @@ export class FilesApiMock {
   private diffs = new Map<string, DiffInput | { errorCode: string; status: number }>()
   private searches = new Map<string, { entries: TreeEntryInput[]; truncated?: boolean }>()
   private changes = new Map<string, { entries: (TreeEntryInput & { status: string })[]; truncated?: boolean } | { errorCode: string; status: number }>()
-  // Ссылка на сам мок fetch — тестам Reload/If-None-Match нужно проверять,
-  // с какими заголовками ушёл конкретный запрос (vi.spyOn возвращает мок с
-  // .mock.calls, install() сохраняет её сюда, чтобы не заводить второй spy).
+  // Ссылка на сам мок fetch — тестам Reload/If-None-Match нужно проверять, с какими заголовками ушёл
+  // конкретный запрос.
   fetchMock?: MockInstance<typeof fetch>
 
   setRoots(roots: RootInput[]): void {
@@ -89,10 +82,8 @@ export class FilesApiMock {
     this.changes.set(`${root}|${mode}`, { errorCode: code, status })
   }
 
-  // setContentError форсирует ошибку /api/files/content для (root, path) —
-  // для теста "Reload error показывается инлайн, текущий content не стирается":
-  // сначала успешный начальный getContent, потом эта ошибка подставляется
-  // ПЕРЕД кликом Reload.
+  // setContentError подменяет /api/files/content после первой загрузки для проверки ошибки Reload без
+  // потери preview.
   setContentError(root: string, path: string, code: string, status: number): void {
     this.contentErrors.set(`${root}|${path}`, { errorCode: code, status })
   }

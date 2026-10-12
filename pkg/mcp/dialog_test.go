@@ -199,9 +199,7 @@ func TestFindUnansweredQuestions(t *testing.T) {
 		t.Fatalf("want 1 unanswered (implementation), got %v", got)
 	}
 
-	// Malformed, unrepairable JSON → surfaced with Malformed=true, not
-	// dropped silently (a dropped question hangs the stage forever with no
-	// diagnostic — see TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed).
+	// Malformed, unrepairable JSON → surfaced with Malformed=true, not dropped silently.
 	bad := filepath.Join(dir, "review.q1.question.json")
 	if err := os.WriteFile(bad, []byte(`not json`), 0644); err != nil {
 		t.Fatal(err)
@@ -220,12 +218,6 @@ func TestFindUnansweredQuestions(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_RepairsUnescapedQuote locks in the repair for
-// a common agent authoring mistake: a literal, unescaped '"' inside a JSON
-// string value (agent hand-writes the question file and quotes a word
-// instead of escaping it). Before this fix, such a file failed
-// json.Unmarshal and was skipped silently — the question never surfaced to
-// the poller or the UI, and the stage hung forever with no diagnostic.
 func TestFindUnansweredQuestions_RepairsUnescapedQuote(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planning.q1.question.json")
@@ -266,12 +258,6 @@ func TestFindUnansweredQuestions_RepairsUnescapedQuote(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_MissingKeyQuote_Repaired locks in the repair
-// for the actual incident that motivated this fix: the agent dropped the
-// opening quote before the "options" key
-// (`...,options":[...]` instead of `...,"options":[...]`). This is a
-// different failure shape from the unescaped-quote case above — it must be
-// repaired without corrupting the surrounding Cyrillic text.
 func TestFindUnansweredQuestions_MissingKeyQuote_Repaired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planning.q10.question.json")
@@ -310,17 +296,6 @@ func TestFindUnansweredQuestions_MissingKeyQuote_Repaired(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed locks in the
-// last-resort fallback: a question file so broken that even jsonrepair
-// cannot recover it must still surface to the caller (Malformed=true, id
-// from the filename) instead of vanishing — but WITHOUT afm touching the
-// file on disk. Found via a real production log: overwriting the file the
-// instant a parse fails races against the agent's own Write tool call, which
-// may still be landing on disk (a torn read produces exactly this kind of
-// unparseable content that becomes valid again moments later, unmodified).
-// Deciding whether this is a transient race or a genuine, persistent mistake
-// belongs to the caller (pollQuestions's retry state machine in
-// pkg/orchestrator/dialog_poller.go), not to this scan.
 func TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planning.q5.question.json")
@@ -343,9 +318,8 @@ func TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed(t *testing.T) 
 		t.Fatalf("must keep the id from the filename, got %q", got[0].ID)
 	}
 
-	// The file on disk must be left completely untouched — no stub, no
-	// overwrite of any kind, since afm cannot tell a torn read from a
-	// genuine mistake at this layer.
+	// The file on disk must be left completely untouched — no stub, no overwrite of any kind, since afm
+	// cannot tell a torn read from a genuine mistake at this layer.
 	unchanged, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -355,9 +329,6 @@ func TestFindUnansweredQuestions_UnrepairableJSON_MarkedMalformed(t *testing.T) 
 	}
 }
 
-// TestFindUnansweredQuestions_UnknownPhaseSkipped locks in the phase
-// whitelist: only planning/implementation/review question files are
-// recognized, any other phase prefix is silently skipped.
 func TestFindUnansweredQuestions_UnknownPhaseSkipped(t *testing.T) {
 	dir := t.TempDir()
 
@@ -395,10 +366,6 @@ func TestFindUnansweredQuestions_GlobMetacharDir(t *testing.T) {
 	}
 }
 
-// TestReadDialog_AnswerBeforeQuestion exercises the merge branch where the
-// answer line is appended before the question line (the question poller and
-// the HTTP answer handler write to dialog.jsonl from separate goroutines).
-// ReadDialog must fold them into a single entry carrying both sets of fields.
 func TestReadDialog_AnswerBeforeQuestion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d.jsonl")
@@ -428,10 +395,6 @@ func TestReadDialog_AnswerBeforeQuestion(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_SamePhaseAndFallback covers cases the basic
-// test does not: multiple unanswered questions within a single phase, an
-// explicit allow_custom:false, and an empty JSON "id" that falls back to the
-// id parsed from the filename.
 func TestFindUnansweredQuestions_SamePhaseAndFallback(t *testing.T) {
 	// Two unanswered questions in the SAME phase are both returned.
 	dir := t.TempDir()
@@ -570,10 +533,6 @@ func TestWriteAnswer_DialogAppendFailureStillWritesAnswerFile(t *testing.T) {
 	}
 }
 
-// TestCanParseQuestion covers the three cases the malformed-question retry
-// state machine (pkg/orchestrator/dialog_poller.go) depends on to decide
-// whether an agent's rewrite actually fixed a file, without persisting
-// anything or re-scanning the stage directory.
 func TestCanParseQuestion(t *testing.T) {
 	cases := []struct {
 		name string
@@ -593,11 +552,6 @@ func TestCanParseQuestion(t *testing.T) {
 	}
 }
 
-// TestReadDialog_ReusedIDReopens is a regression test for finding #2: an agent
-// that reuses a question id after it was answered (removes answer.json, rewrites
-// question.json) must not leave the dialog stuck showing the old answered
-// question. ReadDialog re-opens the entry — adopting the new question text and
-// dropping the stale answer — so the UI renders it as pending again.
 func TestReadDialog_ReusedIDReopens(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planning.dialog.jsonl")
@@ -646,11 +600,6 @@ func TestReadDialog_ReusedIDReopens(t *testing.T) {
 	}
 }
 
-// TestFindUnansweredQuestions_FilenameIDAuthoritative is a regression test for
-// finding #4: when a question file's name and its JSON body carry different
-// ids, the FILENAME id wins — that's the one the agent's polling loop derives
-// its answer path from. Trusting the body id would make afm write the answer to
-// a path the agent never polls, hanging the stage forever.
 func TestFindUnansweredQuestions_FilenameIDAuthoritative(t *testing.T) {
 	dir := t.TempDir()
 	// Filename id is "foo", JSON body id is "bar".
@@ -729,10 +678,7 @@ func TestSelectCurrentQuestion(t *testing.T) {
 }
 
 func TestSelectCurrentQuestion_PrefersLaterLifecyclePhase(t *testing.T) {
-	// A stale planning.q1 lingering plus the active implementation.q1: the
-	// implementation question (later phase, the running agent's) must win, NOT
-	// the lexically-smaller "implementation" vs "planning" — regression guard
-	// for codex MAJOR#1 (cross-phase deadlock).
+	// Prefer active implementation.q1 over stale planning.q1; phase order must win over lexical order.
 	qs := []mcp.QuestionFile{
 		{Phase: "planning", ID: "q1"},
 		{Phase: "implementation", ID: "q1"},
@@ -751,9 +697,8 @@ func TestSelectCurrentQuestion_PrefersLaterLifecyclePhase(t *testing.T) {
 		t.Fatalf("expected review/q1 (later phase) current, got ok=%v phase=%q", ok, cur.Phase)
 	}
 
-	// Conflicting case: the active later phase wins even when its id is
-	// numerically larger than the stale earlier phase's — this FAILS under the
-	// old ID-primary comparator (which would pick planning/q1).
+	// Conflicting case: the active later phase wins even when its id is numerically larger than the stale
+	// earlier phase's — this FAILS under the old ID-primary comparator.
 	for _, order := range [][]mcp.QuestionFile{
 		{{Phase: "planning", ID: "q1"}, {Phase: "implementation", ID: "q8"}},
 		{{Phase: "implementation", ID: "q8"}, {Phase: "planning", ID: "q1"}},

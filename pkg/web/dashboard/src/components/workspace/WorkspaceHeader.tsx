@@ -17,12 +17,8 @@ type WorkspaceHeaderProps = {
   attentionNav?: AttentionNav
 }
 
-// WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя +
-// статус-бейдж + «thinking»-индикатор во время running. Пришёл на смену
-// detail-header из DashboardLayout; вращающийся ornament (novacorps-декор)
-// намеренно убран (план §5.2/§17 — спокойная state-специфичная анимация вместо
-// постоянного декоративного вращения). id detail-title/detail-status и класс
-// status-badge сохранены для совместимости со скинами и проверками.
+// WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + статус-бейдж +
+// «thinking»-индикатор во время running.
 export function WorkspaceHeader({ stage, connected, attentionNav }: WorkspaceHeaderProps): ReactElement {
   return (
     <div className="workspace-header">

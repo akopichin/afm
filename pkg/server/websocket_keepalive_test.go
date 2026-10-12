@@ -48,9 +48,8 @@ func TestWebSocket_ClosesSilentClient(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Намеренно не читаем > pongWait → сервер не получает pong → рвёт соединение.
-	// (gorilla отвечает на ping только из read-цикла приложения, поэтому пока
-	// мы спим, pong на сервер не уходит.)
+	// Намеренно не читаем > pongWait → сервер не получает pong → рвёт соединение. (gorilla отвечает на ping
+	// только из read-цикла приложения, поэтому пока мы спим, pong на сервер не уходит.)
 	time.Sleep(500 * time.Millisecond)
 
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {

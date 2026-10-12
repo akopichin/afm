@@ -11,10 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	// Blank imports register the decoders whose formats we accept. The
-	// allowlist below is enforced against the format string image.DecodeConfig
-	// returns, so an unregistered format (e.g. SVG, which stdlib has no decoder
-	// for at all) can never be served.
+	// Blank imports register the decoders whose formats we accept.
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -24,24 +21,19 @@ import (
 // larger than 10 MiB is refused rather than streamed.
 const maxArtifactBytes = 10 << 20
 
-// maxArtifactDim caps the pixel width/height read from the image header, a cheap
-// guard against decompression-bomb artifacts (image.DecodeConfig reads only the
-// header, so this is checked before any pixel allocation would happen client-side).
+// maxArtifactDim caps the pixel width/height read from the image header, a cheap guard against
+// decompression-bomb artifacts.
 const maxArtifactDim = 8192
 
-// artifactContentTypes maps a confirmed decoder format to the Content-Type we
-// serve. The value comes from image.DecodeConfig, never from the file
-// extension, so a mislabeled ".png" that is really something else is rejected.
+// artifactContentTypes maps a confirmed decoder format to the Content-Type we serve.
 var artifactContentTypes = map[string]string{
 	"png":  mimePNG,
 	"jpeg": mimeJPEG,
 	"gif":  mimeGIF,
 }
 
-// handleArtifact serves an immutable image artifact a stage published under
-// <runDir>/<stageID>/artifacts/<name>. Addressing is opaque (stageID + name);
-// no client-supplied path is ever joined. Every "not found / not allowed"
-// outcome collapses to a single 404 so no filesystem detail or raw error leaks.
+// handleArtifact serves an immutable image artifact a stage published under <runDir>/<stageID>/artifacts/<name>.
+// Addressing is opaque (stageID + name); no client-supplied path is ever joined.
 func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -62,14 +54,8 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pin the root at runDir (afm-owned, created before any agent runs), NOT at
-	// the artifacts directory: os.OpenRoot FOLLOWS symlinks in the directory NAME
-	// it opens, so pinning at `<runDir>/<id>/artifacts` would follow an agent-
-	// planted `artifacts` symlink out of the run dir. Opening the whole relative
-	// path `<id>/artifacts/<name>` THROUGH a root pinned at runDir makes os.Root
-	// resolve every component (incl. `<id>` and `artifacts`) and reject any that
-	// escapes runDir — a symlink `artifacts -> /etc` (or `../../…`) is refused.
-	// id and name are already validated (no `..`, safe charset).
+	// Pin os.Root at runDir so every stage/artifacts path component is contained; opening artifacts as the
+	// root would follow its symlink.
 	root, err := os.OpenRoot(s.runDir)
 	if err != nil {
 		http.NotFound(w, r)
@@ -77,9 +63,7 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer root.Close()
 
-	// root.Open resolves the path relative to the pinned runDir fd. Any symlink
-	// component escaping the root is rejected by os.Root itself — there is no
-	// EvalSymlinks-then-check-prefix window (TOCTOU-free).
+	// root.Open resolves the path relative to the pinned runDir fd.
 	f, err := root.Open(filepath.Join(id, "artifacts", name))
 	if err != nil {
 		http.NotFound(w, r)
@@ -124,11 +108,8 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	// NOT immutable: the same stage dir is reused across retry/revision and the
-	// prompt permits renaming over the same final name (e.g. chart.png), so the
-	// bytes behind a URL CAN change within a run. `no-cache` lets the browser
-	// store the response but forces revalidation against the ETag on every use —
-	// a 304 (cheap) when unchanged, fresh bytes when the file was overwritten.
+	// NOT immutable: the same stage dir is reused across retry/revision and the prompt permits renaming over
+	// the same final name, so the bytes behind a URL CAN change within a run.
 	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("ETag", artifactETag(name, fi.Size(), fi.ModTime().UnixNano()))
 

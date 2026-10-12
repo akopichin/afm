@@ -12,13 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TestReadReference_FIFO_DoesNotHang is the regression test for finding 4: a
-// FIFO opened without O_NONBLOCK blocks until a writer shows up — potentially
-// forever, wedging the handler goroutine. Nobody ever opens the write end
-// here, so if Read/Reference regressed back to a blocking open this test
-// would hang past its own deadline and get killed by `go test`'s timeout
-// instead of failing cleanly; the explicit per-call timeout below turns that
-// into a fast, readable failure.
 func TestReadReference_FIFO_DoesNotHang(t *testing.T) {
 	dir := t.TempDir()
 	fifoPath := filepath.Join(dir, "pipe")
@@ -68,10 +61,6 @@ func TestReadReference_FIFO_DoesNotHang(t *testing.T) {
 	})
 }
 
-// TestList_FIFO_NotSelectable exercises finding 4's list-side half: a FIFO in
-// a directory listing must never be reported as selectable — the frontend
-// must not be able to ask the browser to open something that can hang the
-// handler.
 func TestList_FIFO_NotSelectable(t *testing.T) {
 	dir := t.TempDir()
 	fifoPath := filepath.Join(dir, "pipe")

@@ -25,10 +25,8 @@ const (
 // build understands (see docs/superpowers/plans/2026-09-14-stage-and-run-pricing.md).
 const usageContractVersion = 1
 
-// Observation is what a finished agent process reports to the accounting
-// pipeline: normalized tokens plus enough provenance to price and audit them
-// later. When Metered is false, Tokens is zero and Reason explains why no
-// usable usage was found.
+// Observation is what a finished agent process reports to the accounting pipeline: normalized tokens plus
+// enough provenance to price and audit them later.
 type Observation struct {
 	Metered         bool
 	Schema          Schema
@@ -45,9 +43,8 @@ type Observation struct {
 type Collector struct {
 	hint UsageHint
 
-	// discoveredModel comes from `assistant` lines' message.model — the ONLY
-	// thing those lines are used for. Their usage is never summed: the same
-	// message.id repeats as a turn streams.
+	// discoveredModel comes from `assistant` lines' message.model — the ONLY thing those lines are used for.
+	// Their usage is never summed: the same message.id repeats as a turn streams.
 	discoveredModel string
 
 	// terminal is true once a valid terminal result envelope was parsed;
@@ -60,10 +57,7 @@ type Collector struct {
 	reportedCost *float64
 	warnings     []string
 
-	// failReason is set when a terminal `result` line was seen but rejected
-	// (bad envelope / unsupported contract version or schema). It takes
-	// precedence over Finish's generic interrupted/missing reasons — a known
-	// diagnosis beats a guess from the exit code.
+	// failReason is set when a terminal `result` line was seen but rejected.
 	failReason string
 }
 
@@ -73,9 +67,8 @@ func NewCollector(hint UsageHint) *Collector {
 	return &Collector{hint: hint}
 }
 
-// envelopeMessage carries just enough of an `assistant` line's message to
-// discover the model in use; usage on this line is deliberately not modeled
-// here, since it must never be summed.
+// envelopeMessage carries just enough of an `assistant` line's message to discover the model in use; usage
+// on this line is deliberately not modeled here, since it must never be summed.
 type envelopeMessage struct {
 	Model string `json:"model"`
 }
@@ -92,7 +85,7 @@ type envelope struct {
 	Usage        json.RawMessage `json:"usage"`
 	TotalCostUSD *float64        `json:"total_cost_usd"`
 
-	// result, adapter synthetic envelope (this contract; Task 7 emits it).
+	// Synthetic terminal result from an adapter.
 	UsageContractVersion *int              `json:"usage_contract_version"`
 	UsageSchema          string            `json:"usage_schema"`
 	Channel              string            `json:"channel"`
@@ -107,9 +100,8 @@ type anthropicCacheCreation struct {
 	Ephemeral1hInputTokens *uint64 `json:"ephemeral_1h_input_tokens"`
 }
 
-// anthropicUsageWire mirrors the actual wire shape of a claude stream-json
-// usage object: the 5m/1h cache-write breakdown is nested under
-// cache_creation, unlike the flat fields rawUsage exposes to normalize().
+// anthropicUsageWire matches Claude's nested cache_creation breakdown; normalize uses flat rawUsage
+// fields.
 type anthropicUsageWire struct {
 	InputTokens              uint64                  `json:"input_tokens"`
 	CacheReadInputTokens     uint64                  `json:"cache_read_input_tokens"`
@@ -132,9 +124,8 @@ func (w anthropicUsageWire) toRawUsage() rawUsage {
 	return r
 }
 
-// Observe feeds one stream-json line. Lines that aren't JSON objects, aren't
-// a recognized type, or arrive after a terminal result was already parsed
-// are ignored.
+// Observe feeds one stream-json line. Lines that aren't JSON objects, aren't a recognized type, or arrive
+// after a terminal result was already parsed are ignored.
 func (c *Collector) Observe(line []byte) {
 	if c.terminal {
 		return
@@ -163,9 +154,8 @@ func (c *Collector) observeResult(env envelope) {
 	c.observeNativeResult(env)
 }
 
-// observeNativeResult handles a real claude stream-json terminal result: the
-// authoritative usage for the whole turn, plus the vendor's own cost figure
-// (captured only as a diagnostic, never used as our cost).
+// observeNativeResult handles a real claude stream-json terminal result: the authoritative usage for the
+// whole turn, plus the vendor's own cost figure.
 func (c *Collector) observeNativeResult(env envelope) {
 	if len(env.Usage) == 0 {
 		c.failReason = ReasonParse
@@ -180,10 +170,8 @@ func (c *Collector) observeNativeResult(env envelope) {
 	c.commit(SchemaAnthropic, tokens, warn, env.TotalCostUSD)
 }
 
-// observeSyntheticResult handles the adapter contract this task defines:
-// a terminal result naming its own schema/channel/model explicitly, with
-// either a single `usage` blob or an `upstream_usages` array. Each raw usage
-// is normalized independently and summed HERE — never by the shell adapter.
+// observeSyntheticResult normalizes and sums adapter usage blobs; shell adapters must preserve raw
+// upstream usage.
 func (c *Collector) observeSyntheticResult(env envelope) {
 	if *env.UsageContractVersion != usageContractVersion {
 		c.failReason = ReasonUnsupported
@@ -233,9 +221,7 @@ func (c *Collector) commit(schema Schema, tokens Tokens, warn []string, reported
 	c.warnings = append(c.warnings, warn...)
 }
 
-// Finish closes the collector out. exitErr is the agent process's own exit
-// error (nil on a clean exit) — it's consulted only when no terminal result
-// was ever parsed, to distinguish "never showed up" from "got interrupted".
+// Finish closes the collector out.
 func (c *Collector) Finish(exitErr error) Observation {
 	model := c.model
 	if model == "" {

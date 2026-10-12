@@ -9,13 +9,8 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// fakeWorkspace is a minimal workspace.FS stub for testing
-// workspaceResolveFile/workspaceCurrentFileSHA in isolation, without a real
-// Linux openat2-backed fsImpl (workspace.New degrades to zero roots on
-// non-Linux — see pkg/server/workspace/access_other.go — so it can't
-// exercise Read() at all on a macOS dev host). Only Read is exercised by the
-// two closures under test; the rest of the interface is implemented just to
-// satisfy workspace.FS.
+// fakeWorkspace is a minimal workspace.FS stub for testing workspaceResolveFile/workspaceCurrentFileSHA in
+// isolation, without a real Linux openat2-backed fsImpl.
 type fakeWorkspace struct {
 	files map[string]workspace.File // key: rootID+"/"+relPath
 	err   error
@@ -56,9 +51,6 @@ func (f *fakeWorkspace) Search(context.Context, string, string) (workspace.Searc
 
 func (f *fakeWorkspace) Close() error { return nil }
 
-// TestWorkspaceResolveFile_FileNote проверяет happy-path для ноты без
-// привязки к строке: DisplayPath/Reference берутся из File как есть,
-// ContentSHA считается через state.FileContentSHA от реального содержимого.
 func TestWorkspaceResolveFile_FileNote(t *testing.T) {
 	ws := &fakeWorkspace{files: map[string]workspace.File{
 		"project/main.go": {
@@ -137,16 +129,6 @@ func TestWorkspaceResolveFile_LineNote_OutOfRange(t *testing.T) {
 	}
 }
 
-// TestWorkspaceResolveFile_TrailingNewlineLineCount — регрессия на off-by-one
-// из-за завершающего "\n": почти любой реальный файл на диске оканчивается
-// переводом строки, и наивный strings.Split(content, "\n") на "a\nb\nc\nd\n"
-// даёт 5 элементов (["a","b","c","d",""]), а не 4 реальные строки — фантомный
-// последний элемент. Из-за этого запрос строки N+1 (на единицу за пределом
-// файла — ровно тот случай, когда пользователь удалил ОТМЕЧЕННУЮ строку и
-// файл стал короче на одну строку) ошибочно репортился как InRange=true с
-// пустым LineText, вместо InRange=false — что глушило ErrStaleLine в
-// AddNote и детект дрифта переставал работать для этого частного случая.
-// Здесь 4 реальные строки: N=4 должен резолвиться, N+1=5 — нет.
 func TestWorkspaceResolveFile_TrailingNewlineLineCount(t *testing.T) {
 	ws := &fakeWorkspace{files: map[string]workspace.File{
 		"project/main.go": {
@@ -178,11 +160,6 @@ func TestWorkspaceResolveFile_TrailingNewlineLineCount(t *testing.T) {
 	}
 }
 
-// TestWorkspaceResolveFile_WorkspaceError покрывает ErrStaleContent-путь
-// AddNote: любая ошибка workspace (файл удалён, слишком большой, бинарный,
-// симлинк, ...) должна репортиться единообразно как ok=false, а не паниковать
-// или различаться по типу ошибки — вызывающий код (AddNote) уже сворачивает
-// это в единый ErrStaleContent.
 func TestWorkspaceResolveFile_WorkspaceError(t *testing.T) {
 	ws := &fakeWorkspace{err: workspace.ErrTooLarge}
 	resolve := workspaceResolveFile(ws)

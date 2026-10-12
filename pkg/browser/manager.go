@@ -158,9 +158,8 @@ func (m *Manager) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(m.token)) == 1
 }
 
-// firstConnect ensures the session for (epoch,stageID) exists and its Chrome is
-// launched exactly once (singleflight), bounded by launchTimeout and the caller's
-// context. On timeout/cancel the half-started session is torn down.
+// firstConnect ensures the session for exists and its Chrome is launched exactly once, bounded by
+// launchTimeout and the caller's context.
 func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*session, error) {
 	key := epoch + "/" + stageID
 
@@ -196,9 +195,7 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 				close(s.launched)
 				return
 			}
-			// Hand off ownership under s.mu. If close() already ran (run ending, or
-			// a client-cancel teardown) while this launch was in flight, WE own the
-			// cleanup: kill the Chrome we just started instead of orphaning it.
+			// Hand off ownership under s.mu.
 			s.mu.Lock()
 			if s.closed {
 				s.mu.Unlock()
@@ -221,23 +218,15 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 	select {
 	case <-done:
 		if s.err != nil {
-			// A launch failure must NOT be cached for the whole run: evict so a
-			// later connect (after a transient fork/EAGAIN or a cleared profile
-			// lock) relaunches a fresh session instead of replaying sync.Once's
-			// stale error forever.
+			// A launch failure must NOT be cached for the whole run: evict so a later connect relaunches a fresh
+			// session instead of replaying sync.Once's stale error forever.
 			m.evictSession(key, s)
 			return nil, s.err
 		}
 		return s, nil
 	case <-launchCtx.Done():
-		// This caller gave up (client disconnected or its deadline fired). Under
-		// singleflight the session may still be wanted by OTHER callers sharing this
-		// same launch (each has its own deadline), so this caller must NOT tear it
-		// down. If the launch already finished at the same instant, hand back the live
-		// session (or evict on failure); otherwise leave the shared session in the map
-		// — a succeeding launch is then reused by a reconnect and reaped at run end by
-		// Manager.Close (never orphaned, since it stays reachable in the map), and a
-		// failing launch is evicted by the next connect's <-done path.
+		// This caller gave up. Under singleflight the session may still be wanted by OTHER callers sharing this
+		// same launch (each has its own deadline), so this caller must NOT tear it down.
 		select {
 		case <-done:
 			if s.err != nil {
@@ -251,9 +240,8 @@ func (m *Manager) firstConnect(ctx context.Context, epoch, stageID string) (*ses
 	}
 }
 
-// evictSession removes a session from the map ONLY if it is still the mapped one
-// (identity check), so a concurrently-created replacement for the same key is not
-// clobbered. Safe to call multiple times.
+// evictSession removes a session from the map ONLY if it is still the mapped one, so a
+// concurrently-created replacement for the same key is not clobbered. Safe to call multiple times.
 func (m *Manager) evictSession(key string, s *session) {
 	m.mu.Lock()
 	if m.sessions[key] == s {
@@ -283,12 +271,8 @@ func (m *Manager) Close() error {
 	_ = m.srv.Shutdown(ctx)
 	_ = m.ln.Close()
 	for _, s := range sessions {
-		// Wait for any in-flight launch to finish before tearing the session down.
-		// s.launched is closed only AFTER the launch goroutine assigns s.conn, so
-		// this receive both (a) establishes the happens-before that lets s.close()
-		// read s.conn without a data race, and (b) ensures a Chrome that finished
-		// launching is actually killed instead of being orphaned (s.conn still nil
-		// at close time → conn.close() skipped). Bounded by the same 10s budget.
+		// Wait for any in-flight launch to finish before tearing the session down. Bounded by the same 10s
+		// budget.
 		select {
 		case <-s.launched:
 		case <-ctx.Done():
@@ -308,10 +292,7 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// NewEpoch returns a host-generated random session epoch ("b-"+8 hex). It is a
-// per-process value, NOT a run id: sessions/Chrome never outlive the process that
-// created the manager, so a random epoch is both sufficient and the only value
-// available at reexec time (the run is resolved later, inside the container).
+// NewEpoch returns a host-generated random session epoch.
 func NewEpoch() (string, error) {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {

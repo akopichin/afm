@@ -9,12 +9,6 @@ import (
 	"time"
 )
 
-// TestLoadReviewNotes_EmptyStoreSerializesAsArray закрывает review-finding P1
-// #6 (backend-половина): свежий store БЕЗ файла review-notes.json обязан отдать
-// НЕ nil-срез Notes, иначе encoding/json кодирует его как `null`, и дашбордный
-// ReviewNotesModal падает с TypeError на `for (const note of notes)`. Проверяем
-// не только пустой файл, но и store, который был сохранён с нулём заметок и
-// round-trip'нулся через JSON как `"notes": null`.
 func TestLoadReviewNotes_EmptyStoreSerializesAsArray(t *testing.T) {
 	dir := t.TempDir()
 

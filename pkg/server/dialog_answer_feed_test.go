@@ -70,11 +70,6 @@ func drainDialogAnswerEvents(events <-chan bus.Event) []bus.Event {
 	}
 }
 
-// TestHandleDialogAnswer_EmitsDialogAnswerOnSuccess закрывает T3: успешный
-// человеческий ответ должен опубликовать РОВНО ОДНО событие dialog_answer
-// живьём в UI-шину И продублировать ту же полезную нагрузку в notices.jsonl
-// (тот же паттерн "одна карта, два получателя", что и у dialog_question из
-// T2) — с {phase,id,title}, где title == mcp.DialogSnippet(answer).
 func TestHandleDialogAnswer_EmitsDialogAnswerOnSuccess(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -143,12 +138,6 @@ func TestHandleDialogAnswer_EmitsDialogAnswerOnSuccess(t *testing.T) {
 	}
 }
 
-// TestHandleDialogAnswer_RejectedAnswerDoesNotEmitDialogAnswer покрывает
-// негативный путь T3: если ответ отклоняется (здесь — flow держится на
-// review-паузе, тот же 409-путь, что уже покрыт
-// TestHandleDialogAnswer_RejectedWhileFlowPaused), dialog_answer НЕ должен
-// публиковаться ни живьём, ни в notices.jsonl — иначе в ленте появится
-// запись об ответе, которого на самом деле не произошло.
 func TestHandleDialogAnswer_RejectedAnswerDoesNotEmitDialogAnswer(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)
@@ -177,9 +166,8 @@ func TestHandleDialogAnswer_RejectedAnswerDoesNotEmitDialogAnswer(t *testing.T) 
 			notifyCalled = true
 			return nil
 		}},
-		// Flow is held for review — the up-front guard rejects before any
-		// durable mutation, exactly as TestHandleDialogAnswer_RejectedWhileFlowPaused
-		// verifies.
+		// Flow is held for review — the up-front guard rejects before any durable mutation, exactly as
+		// TestHandleDialogAnswer_RejectedWhileFlowPaused verifies.
 		ReviewState: func() (string, []string) { return "paused", []string{"other"} },
 	})
 
@@ -205,10 +193,6 @@ func TestHandleDialogAnswer_RejectedAnswerDoesNotEmitDialogAnswer(t *testing.T) 
 	}
 }
 
-// TestHandleDialogAnswer_TOCTOURollbackDoesNotEmitDialogAnswer — тот же
-// негативный инвариант, но на TOCTOU-пути (NotifyAnswer возвращает
-// ErrFlowPaused и answer.json откатывается): dialog_answer тоже не должен
-// публиковаться.
 func TestHandleDialogAnswer_TOCTOURollbackDoesNotEmitDialogAnswer(t *testing.T) {
 	runDir := t.TempDir()
 	stageDir := filepath.Join(runDir, testStageID)

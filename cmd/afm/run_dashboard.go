@@ -90,11 +90,8 @@ func openBrowser(url string) {
 	_ = exec.Command(cmd, url).Start()
 }
 
-// launchHostBrowserOpener запускает на хосте фоновый помощник, который ждёт,
-// пока dashboard поднимется на port, и открывает URL в браузере хоста.
-// Нужен только для Docker-режима: afm внутри Linux-контейнера сам открыть
-// браузер на macOS-хосте не может. Помощник — отдельный процесс (Start без
-// Wait), поэтому он переживает syscall.Exec родителя, заменяющего afm на docker.
+// launchHostBrowserOpener запускает на хосте фоновый помощник, который ждёт, пока dashboard поднимется на
+// port, и открывает URL в браузере хоста.
 func launchHostBrowserOpener(port int) {
 	openCmd := browserCmd()
 	if openCmd == "" {
@@ -114,37 +111,26 @@ func launchHostBrowserOpener(port int) {
 const extYAML = ".yaml"
 const extYML = ".yml"
 
-// dashboardExitGraceMinimum — безусловная пауза перед завершением процесса после
-// успеха флоу, если поднят дашборд. Фронтенд опрашивает /api/status каждые 3с
-// (POLL_INTERVAL_MS в use-status.ts) и обновляется по WS; 5с хватает, чтобы UI
-// гарантированно увидел терминальный статус (done/failed), пока вкладка
-// браузера активна.
+// dashboardExitGraceMinimum — безусловная пауза перед завершением процесса после успеха флоу, если поднят
+// дашборд.
 const dashboardExitGraceMinimum = 5 * time.Second
 
-// dashboardExitGraceMaximum — верхняя граница суммарного ожидания, пока к
-// дашборду подключён хотя бы один WS-клиент. Свёрнутая/неактивная вкладка
-// браузера троттлится браузером сильнее для setInterval-поллинга /api/status,
-// чем для уже открытого WS-соединения — dashboardExitGraceMinimum один в этом
-// случае недостаточен, UI «залипает» на последнем статусе (см. use-status.ts).
-// Ограничена сверху, чтобы процесс (и, в Docker-режиме, контейнер) не завис
-// навсегда из-за незакрытой вкладки.
+// dashboardExitGraceMaximum — верхняя граница суммарного ожидания, пока к дашборду подключён хотя бы один
+// WS-клиент.
 const dashboardExitGraceMaximum = 2 * time.Minute
 
 // dashboardDrainPoll — как часто проверять число подключённых WS-клиентов
 // в течение dashboardExitGraceMaximum.
 const dashboardDrainPoll = 2 * time.Second
 
-// waitForDashboardDrain держит дашборд открытым после успешного завершения
-// флоу: сначала dashboardExitGraceMinimum безусловно, затем — пока
-// connectedClients() > 0, но не дольше dashboardExitGraceMaximum суммарно.
-// Ctrl-C (ctx.Done()) прерывает ожидание немедленно.
+// waitForDashboardDrain ждёт минимум graceMinimum, затем подключённых клиентов до graceMaximum; Ctrl+C
+// прерывает ожидание.
 func waitForDashboardDrain(ctx context.Context, connectedClients func() int) {
 	waitForDashboardDrainWithTiming(ctx, connectedClients, dashboardExitGraceMinimum, dashboardExitGraceMaximum, dashboardDrainPoll)
 }
 
-// waitForDashboardDrainWithTiming — тело waitForDashboardDrain с
-// параметризованными длительностями (тесты подставляют миллисекунды вместо
-// реальных minGrace/maxGrace/pollInterval).
+// waitForDashboardDrainWithTiming — тело waitForDashboardDrain с параметризованными длительностями (тесты
+// подставляют миллисекунды вместо реальных minGrace/maxGrace/pollInterval).
 func waitForDashboardDrainWithTiming(ctx context.Context, connectedClients func() int, minGrace, maxGrace, pollInterval time.Duration) {
 	select {
 	case <-time.After(minGrace):
@@ -162,19 +148,8 @@ func waitForDashboardDrainWithTiming(ctx context.Context, connectedClients func(
 	}
 }
 
-// serverAccountingProvider decides what the dashboard server sees as its
-// accounting.CostProvider: the live *Store when accounting.Open succeeded
-// (acct != nil), accounting.StaticUnavailable() when it hard-failed to open
-// (acct == nil, acctErr != nil — e.g. permission denied), or nil (accounting
-// unsupported for this server) in the (currently unreachable in practice,
-// see accounting.Open's doc) case of neither. nil vs StaticUnavailable are
-// deliberately distinct in the API: nil omits every accounting field from
-// /api/status, StaticUnavailable reports health:"unavailable" explicitly.
-//
-// display=false (accounting.enabled: false / AFM_ACCOUNTING=0) returns nil
-// regardless of the ledger: the dashboard omits every cost field and renders
-// no tile/tab/rail, while collection into usage.jsonl (via Options.Accounting)
-// keeps running untouched — the switch hides the display, not the data.
+// serverAccountingProvider возвращает live Store или StaticUnavailable при ошибке; nil скрывает cost API,
+// сохраняя сбор usage.
 func serverAccountingProvider(display bool, acct *accounting.Store, acctErr error) accounting.CostProvider {
 	if !display {
 		return nil

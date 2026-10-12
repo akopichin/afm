@@ -26,11 +26,8 @@ const DefaultHookTimeout = 30 * time.Second
 // hookRetryBackoff — пауза между попытками одного delivery.
 const hookRetryBackoff = time.Second
 
-// buildEnv формирует окружение hook-процесса (spec-дефолт — минимальное
-// окружение, НЕ полное наследование): InheritEnv==false (дефолт) →
-// minimalBaseEnv(); InheritEnv==true → stripTransportVars(os.Environ()).
-// Затем всегда + afmVars(cfg,p) + h.ResolvedEnv последними (перекрывают
-// базовые/AFM_*).
+// buildEnv формирует окружение hook-процесса: InheritEnv==false → minimalBaseEnv; InheritEnv==true →
+// stripTransportVars.
 func buildEnv(h Hook, cfg DispatcherConfig, p Payload) []string {
 	var env []string
 	if h.InheritEnv {
@@ -71,9 +68,8 @@ func afmVars(cfg DispatcherConfig, p Payload) []string {
 	return env
 }
 
-// minimalBaseEnv — spec-дефолт окружения hook-процесса: whitelist PATH/HOME/
-// locale/TMPDIR/proxy/certs из os.Environ(). Transport-переменные (AFM_*
-// секреты/sysprompt autoShim) в whitelist не входят по построению.
+// minimalBaseEnv — spec-дефолт окружения hook-процесса: whitelist PATH/HOME/ locale/TMPDIR/proxy/certs из
+// os.Environ.
 func minimalBaseEnv() []string {
 	keys := []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
@@ -100,10 +96,8 @@ func stripTransportVars(env []string) []string {
 	return out
 }
 
-// runCommand выполняет команду хука: sh -c, stdin = JSON-payload, CWD =
-// cfg.RootDir, stdout/stderr дописываются в logPath. Попытки: h.Retries+1,
-// каждая ограничена timeout. Возвращает nil после первой успешной попытки,
-// иначе — последнюю ошибку.
+// runCommand выполняет команду хука: sh -c, stdin = JSON-payload, CWD = cfg.RootDir, stdout/stderr
+// дописываются в logPath. Попытки: h.Retries+1, каждая ограничена timeout.
 func runCommand(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPath string) error {
 	attempts := h.Retries + 1
 	var lastErr error
@@ -140,23 +134,16 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	cmd.Dir = cfg.RootDir
 	cmd.Stdin = bytes.NewReader(payloadJSON)
 	cmd.Env = buildEnv(h, cfg, p)
-	// Своя process group: таймаут-килл бьёт по группе (-pid), иначе внук
-	// скрипта (sleep &) держал бы stdout-канал и Run висел до его конца —
-	// тот же урок, что pkg/executor.killProcessGroup. Платформозависимые
-	// части — в runner_unix.go/runner_windows.go.
+	// Своя process group: таймаут-килл бьёт по группе, иначе внук скрипта держал бы stdout-канал и Run висел
+	// до его конца — тот же урок, что pkg/executor.killProcessGroup.
 	setProcessGroup(cmd)
 	cmd.Cancel = func() error {
 		killProcessGroup(cmd, syscall.SIGKILL)
 		return nil
 	}
 
-	// Потоковая запись stdout/stderr прямо в лог-файл (codex MAJ#12): буфер
-	// в памяти не ограничен, шумный хук за 30s-таймаута мог бы исчерпать
-	// память и уронить afm — observer не должен иметь такой рычаг. Ошибки
-	// открытия лога не влияют на доставку (best-effort): вывод уходит в никуда.
-	// Если у хука есть резолвнутые секреты — лог оборачивается редактором
-	// (codex #5): секрет не должен попасть в лог хука ни через stdout/stderr
-	// самой команды, ни через finish-строку.
+	// Потоковая запись stdout/stderr прямо в лог-файл: буфер в памяти не ограничен, шумный хук за
+	// 30s-таймаута мог бы исчерпать память и уронить afm — observer не должен иметь такой рычаг.
 	logFile, logErr := openAttemptLog(logPath)
 	var sink io.Writer = logFile
 	var redactor *redact.Writer
@@ -165,10 +152,8 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 			redactor = redact.NewWriter(logFile, vals)
 			sink = redactor
 		}
-		// Заголовок пишем через sink (редактор при наличии секретов), а не
-		// напрямую в logFile: сами поля заголовка (event/id/stage) — не
-		// секреты, но defense-in-depth — не должно быть ни одной строки
-		// лога хука, обходящей редактор, если он активен (codex).
+		// Заголовок пишем через sink, а не напрямую в logFile: сами поля заголовка — не секреты, но
+		// defense-in-depth — не должно быть ни одной строки лога хука, обходящей редактор, если он активен.
 		_, _ = fmt.Fprintf(sink, "=== %s event=%s id=%s stage=%s attempt=%d ===\n",
 			time.Now().Format(time.RFC3339), p.Event, p.EventID, stageIDOrDash(p), attempt)
 		cmd.Stdout = sink
@@ -178,9 +163,8 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	}
 	err = cmd.Run()
 	if logErr == nil {
-		// Best-effort финальная строка: диск мог отвалиться посреди попытки.
-		// Идёт через sink (редактор при наличии секретов) — err может нести
-		// секрет из stderr агента.
+		// Best-effort финальная строка: диск мог отвалиться посреди попытки. Идёт через sink (редактор при
+		// наличии секретов) — err может нести секрет из stderr агента.
 		_, _ = fmt.Fprintf(sink, "=== attempt %d finished: %v ===\n", attempt, err)
 		if redactor != nil {
 			redactor.Close() // флаш буферизованного хвоста в logFile
@@ -194,11 +178,7 @@ func execOne(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPa
 	return err
 }
 
-// openAttemptLog создаёт/дописывает лог хука. Заголовок попытки пишет
-// вызывающий код (execOne) — через sink, ПОСЛЕ того как решено, нужен ли
-// редактор секретов, чтобы заголовок тоже проходил через него при наличии
-// секретов (codex, defense-in-depth). Один воркер на хук → записи
-// сериализованы, мьютекс не нужен.
+// openAttemptLog создаёт/дописывает лог хука. Один воркер на хук → записи сериализованы, мьютекс не нужен.
 func openAttemptLog(logPath string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, err

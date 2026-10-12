@@ -20,10 +20,7 @@ func newCaptureDispatcher() *captureDispatcher {
 	return &captureDispatcher{events: make(chan lifecyclehooks.Payload, 64)}
 }
 
-// captureDispatcherAsReal строит настоящий *lifecyclehooks.Dispatcher —
-// переиспользует его реальный матчинг хуков и построение event_id/seq
-// (BuildPayload/eventID), не запуская никаких процессов: RunFunc просто
-// записывает доставленный Payload в capture.events.
+// captureDispatcherAsReal сохраняет Payload реального dispatcher без запуска процессов.
 func captureDispatcherAsReal(t *testing.T, capture *captureDispatcher) *lifecyclehooks.Dispatcher {
 	t.Helper()
 	d := lifecyclehooks.New(lifecyclehooks.DispatcherOptions{
@@ -42,9 +39,6 @@ func captureDispatcherAsReal(t *testing.T, capture *captureDispatcher) *lifecycl
 	return d
 }
 
-// TestEmitLifecycleTransition_MapsFSMEvent проверяет мапинг bus.EvFail →
-// lifecyclehooks.EventStageFailed и то, что from/to/seq/reason реально
-// доходят до payload'а хука — сквозь настоящий Dispatcher, а не мок.
 func TestEmitLifecycleTransition_MapsFSMEvent(t *testing.T) {
 	o := newTestOrchestrator(t) // существующий хелпер пакета (memory_agent_test.go): stage "s1", Name="Stage"
 	capture := newCaptureDispatcher()
@@ -82,9 +76,6 @@ func TestEmitLifecycleTransition_MapsFSMEvent(t *testing.T) {
 	}
 }
 
-// TestEmitLifecycleTransition_UnmappedFSMEventIgnored — EvReady это внутренняя
-// планировка без публичного lifecycle-аналога (fsmLifecycleEvents не содержит
-// её), emitLifecycleTransition должен молча ничего не эмитить.
 func TestEmitLifecycleTransition_UnmappedFSMEventIgnored(t *testing.T) {
 	o := newTestOrchestrator(t)
 	capture := newCaptureDispatcher()
@@ -100,9 +91,6 @@ func TestEmitLifecycleTransition_UnmappedFSMEventIgnored(t *testing.T) {
 	}
 }
 
-// TestEmitLifecycle_NilSafe — без настроенных хуков (o.hooks == nil, обычный
-// путь всех прочих тестов orchestrator и ранов без hooks) все три
-// точки отправки — no-op, не паника.
 func TestEmitLifecycle_NilSafe(t *testing.T) {
 	o := newTestOrchestrator(t)
 	o.hooks = nil

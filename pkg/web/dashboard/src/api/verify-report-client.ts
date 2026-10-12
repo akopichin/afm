@@ -1,9 +1,5 @@
-// Типизированный клиент к GET /api/stages/{id}/verify/{verificationId}/report
-// (V5b.3) — единственный способ получить полный текст отчёта одной
-// AI-verify-проверки. Адресация ОПАЧНАЯ: stageId + verificationId, оба уже
-// известны фронту из события verify_result (см. feed-view-model.ts) — сюда
-// НИКОГДА не передаётся клиентский filesystem-путь (report_path из payload
-// события используется только как булев сигнал "отчёт есть", не как URL).
+// Типизированный клиент к GET /api/stages/{id}/verify/{verificationId}/report — единственный способ
+// получить полный текст отчёта одной AI-verify-проверки.
 
 export class VerifyReportError extends Error {
   constructor(public status: number) {

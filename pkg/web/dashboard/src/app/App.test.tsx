@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 
 // Минимальный stub WebSocket — App открывает соединение при монтировании.
-// instances хранит все созданные сокеты, чтобы тесты могли достать актуальный
-// и вручную вызвать onmessage, эмулируя событие сервера.
 class StubWebSocket {
   static instances: StubWebSocket[] = []
 
@@ -29,17 +27,12 @@ type StageViewOverrides = {
   isScript?: boolean
   showPlan?: boolean
   showDialog?: boolean
-  // updatedAt параметризует episode-подпись attention (stageId+kind+updatedAt).
-  // По умолчанию '' — так же, как раньше, чтобы существующие тесты не менялись;
-  // тесты про повторные эпизоды одной стадии задают разные t1/t2.
+  // updatedAt параметризует episode-подпись attention. По умолчанию '' — так же, как раньше, чтобы
+  // существующие тесты не менялись; тесты про повторные эпизоды одной стадии задают разные t1/t2.
   updatedAt?: string
 }
 
-// Строит один элемент нового wire-формата stages: []StageView (см. Task 2's
-// pkg/server/stageview.go). show_plan/show_dialog по умолчанию вычисляются
-// так же, как их раньше считал клиент (App.tsx до удаления NO_STAGE) — это
-// сохраняет поведение существующих тестов один в один, ведь теперь эти два
-// поля приходят готовыми с бэкенда, а не считаются на фронте.
+// Строит один элемент нового wire-формата stages: []StageView.
 function stageView(id: string, name: string, status: string, overrides: StageViewOverrides = {}) {
   const interactive = overrides.interactive ?? false
   const autonomous = overrides.autonomous ?? false
@@ -69,14 +62,8 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
 
     if (url.includes('/api/status')) {
       onStatusCall?.()
-      // The real accounting-enabled backend (the default) always sends an
-      // `accounting` object; the Cost tab / Est. cost tile are gated on its
-      // presence. Default it in when a payload omits it, so tests model the
-      // enabled backend; a test exercising the disabled switch sets
-      // `accounting` explicitly (e.g. null → supported:false, no Cost chrome).
-      // show_money:true keeps the money-visible default these tests were written
-      // against; the money-hidden default is covered in RunMetrics/CostPanel/
-      // StagesList unit tests.
+      // The real accounting-enabled backend always sends an `accounting` object; the Cost tab / Est. cost
+      // tile are gated on its presence.
       const payload = statusPayload()
       if (payload !== null && typeof payload === 'object' && !('accounting' in payload)) {
         ;(payload as Record<string, unknown>).accounting = { health: 'ok', has_data: false, show_money: true }
@@ -91,9 +78,8 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
   })
 }
 
-// Переключает воркспейс на вкладку деталей выбранной стадии (Feed — дефолтная
-// вкладка; план/диалог живут на второй, контекстной вкладке). Нужна там, где
-// тест проверяет наличие/отсутствие самой панели плана/диалога.
+// Переключает воркспейс на вкладку деталей выбранной стадии. Нужна там, где тест проверяет
+// наличие/отсутствие самой панели плана/диалога.
 function openDetail(): void {
   const tabs = screen.getAllByRole('tab')
   const detail = tabs.find((t) => t.textContent !== 'Feed' && t.textContent !== 'Cost')
@@ -191,9 +177,7 @@ describe('App', () => {
     await waitFor(() => expect(statusCalls).toBe(1))
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
-    // Три значимых события, отправленные синхронно в одном батче (одном act) — React 18
-    // объединяет соответствующие setState в один коммит, и refresh() эффект видит только
-    // одно изменение events (по последнему событию батча), т.е. срабатывает один раз.
+    // React батчит три синхронных события в один commit; refresh срабатывает один раз.
     act(() => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'running' }, stage_id: 's1' }) })
       ws?.onmessage?.({ data: JSON.stringify({ type: 'approved', data: {}, stage_id: 's1' }) })
@@ -224,9 +208,8 @@ describe('App', () => {
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
 
-    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=10000, use-event-feed) незначимыми
-    // agent_action — сами по себе refresh они не вызывают, но насыщают длину
-    // массива до кэпа.
+    // Забиваем ленту ВЫШЕ кэпа (MAX_EVENTS=10000, use-event-feed) незначимыми agent_action — сами по себе
+    // refresh они не вызывают, но насыщают длину массива до кэпа.
     act(() => {
       for (let i = 0; i < 10005; i += 1) {
         ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { n: i }, stage_id: 's1' }) })
@@ -235,8 +218,6 @@ describe('App', () => {
     expect(statusCalls).toBe(1)
 
     // Значимое событие ПОСЛЕ насыщения кэпа обязано снова триггерить refresh.
-    // При старой length-based проверке (N === N) этот вызов молча
-    // проглатывался — WS-канал обновления был мёртв до конца сессии.
     act(() => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
     })
@@ -294,10 +275,7 @@ describe('App', () => {
   })
 
   test('R2 #1 / R3 #7: a pending attention stays as a separate glowing beacon tab after returning to Feed', async () => {
-    // B ждёт аппрув. Воркспейс авто-открывает его (вкладка Approval). Пользователь
-    // уходит в Feed — ожидание не должно «потеряться»: оно остаётся ОТДЕЛЬНОЙ
-    // glow-вкладкой-маяком Approval (не подменяя history, R3 #7). Клик по маяку
-    // возвращает к плану ожидающей стадии.
+    // B ждёт аппрув. Воркспейс авто-открывает его (вкладка Approval).
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'awaiting_approval')],
@@ -318,9 +296,8 @@ describe('App', () => {
   })
 
   test('own attention in Feed: the plain detail tab is hidden, only the glow beacon remains (no duplicate)', async () => {
-    // Одна стадия ждёт (её же ожидание = маяк). В feed-виде средний блёклый
-    // detail-таб (имя стадии) вёл бы в ТО ЖЕ ожидание, что и маяк — дубликат.
-    // Скрываем detail-таб, красивый glow-маяк остаётся.
+    // Одна стадия ждёт. В feed-виде средний блёклый detail-таб (имя стадии) вёл бы в ТО ЖЕ ожидание, что и
+    // маяк — дубликат.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Gamma', 'awaiting_approval')],
@@ -336,9 +313,8 @@ describe('App', () => {
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(labels.some((l) => /Approval/.test(l))).toBe(true) // маяк остался
-      expect(labels.some((l) => l === 'Gamma')).toBe(false) // блёклый дубль скрыт
-      // Feed + постоянная Cost-вкладка (Task 11) + маяк + постоянная Full feed
-      // (Task 6) — никакого блёклого дубля-detail сверх этих четырёх.
+      expect(labels.some((l) => l === 'Gamma')).toBe(false) // блёклый дубль скрыт Feed + постоянная Cost-вкладка (Task 11) + маяк + постоянная Full feed (Task
+      // 6) — никакого блёклого дубля-detail сверх этих четырёх.
       expect(labels.length).toBe(4)
     })
   })
@@ -378,9 +354,8 @@ describe('App', () => {
 
     render(<App />)
 
-    // The waiting stage is initially auto-opened as Attention. Return to Feed
-    // first so the rail click is tested in the global workspace, like the live
-    // dashboard scenario.
+    // The waiting stage is initially auto-opened as Attention. Return to Feed first so the rail click is
+    // tested in the global workspace, like the live dashboard scenario.
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Waiting for answer'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
@@ -395,10 +370,7 @@ describe('App', () => {
   })
 
   test('another stage awaits in Feed: a completed stage exposes a detail tab but stays on Feed', async () => {
-    // Ждёт s2, а выбрана в рейле завершённая s1. Маяк указывает на чужое
-    // ожидание (s2). Клик по завершённой стадии оставляет Feed активным, но у
-    // s1 (есть план) теперь появляется кликабельная detail-вкладка «Alpha» —
-    // явная точка входа в историю, не открываемая автоматически.
+    // Ждёт s2, а выбрана в рейле завершённая s1. Маяк указывает на чужое ожидание (s2).
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [
@@ -538,9 +510,8 @@ describe('App', () => {
   })
 
   test('auto_approve done stage: detail tab exposes the plan history', async () => {
-    // auto_approve влияет только на awaiting_approval; завершённая auto_approve
-    // стадия семантически идентична обычной done с планом — detail-вкладка ведёт
-    // в план.
+    // auto_approve влияет только на awaiting_approval; завершённая auto_approve стадия семантически
+    // идентична обычной done с планом — detail-вкладка ведёт в план.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Auto', 'done', { autoApprove: true, showPlan: true, showDialog: false })],
@@ -581,11 +552,8 @@ describe('App', () => {
   })
 
   test('selecting a RUNNING stage with dialog history while on Feed stays on Feed', async () => {
-    // Репорт: пользователь ответил на вопрос (стадия снова running, но showDialog
-    // остаётся true — это «есть история диалога»), кликнул другую стадию, потом
-    // вернулся к ней — воркспейс прыгал в dialog-history вместо того чтобы
-    // остаться в Feed. Клик по стадии в рейле, пока ты в глобальном виде (Feed),
-    // не должен выдёргивать в историю: план/диалог доступны кликом по detail-вкладке.
+    // Репорт: пользователь ответил на вопрос, кликнул другую стадию, потом вернулся к ней — воркспейс
+    // прыгал в dialog-history вместо того чтобы остаться в Feed.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [
@@ -653,10 +621,8 @@ describe('App', () => {
   })
 
   test('CRITICAL: a pending action on a NON-selected stage surfaces itself (Finding #1)', async () => {
-    // Стадия B входит в awaiting_approval, пока выбрана и работает стадия A.
-    // Воркспейс обязан сам открыть ожидание B (его нельзя «потерять»), а не
-    // остаться на A. До подключения workspace-редьюсера auto-open считался
-    // только из выбранной стадии, поэтому ожидание на невыбранной B не всплывало.
+    // Стадия B входит в awaiting_approval, пока выбрана и работает стадия A. Воркспейс обязан сам открыть
+    // ожидание B (его нельзя «потерять»), а не остаться на A.
     let awaiting = false
     mockFetchForStatus(() =>
       awaiting
@@ -685,10 +651,8 @@ describe('App', () => {
   })
 
   test('CRITICAL: an interactive question fills the workspace alone — no plan panel beside it (Finding #2)', async () => {
-    // interactive-стадия в awaiting_user_input: сервер отдаёт и show_plan, и
-    // show_dialog=true. Раньше рендерились ОБЕ панели (обе flex:1), и вопрос
-    // получал ~полэкрана, а над ним висел исторический план. Теперь показываем
-    // ровно одну панель — диалог — на всю высоту, без плана рядом.
+    // interactive-стадия в awaiting_user_input: сервер отдаёт и show_plan, и show_dialog=true. Теперь
+    // показываем ровно одну панель — диалог — на всю высоту, без плана рядом.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Ask', 'awaiting_user_input', { interactive: true, hasDialog: true, showPlan: true, showDialog: true })],
@@ -727,13 +691,8 @@ describe('App', () => {
   })
 
   test('CRITICAL: keeps retrying auto-advance across polls instead of sticking forever (fast back-to-back script stages)', async () => {
-    // Root cause of the reported bug: the old check fired only in the exact
-    // tick the selected stage transitioned to done, searching forward for an
-    // already-active stage right then. Script stages (Stage.IsScript()) can
-    // run so briefly that a whole extra stage finishes between two polls —
-    // if NO stage was active yet in the snapshot where s1 was first seen
-    // done, the old code gave up permanently instead of trying again on the
-    // next poll once s3 actually became active.
+    // Root cause of the reported bug: the old check fired only in the exact tick the selected stage
+    // transitioned to done, searching forward for an already-active stage right then.
     let phase: 'running' | 'gap' | 'caught-up' = 'running'
     mockFetchForStatus(() => {
       if (phase === 'running') {
@@ -940,10 +899,7 @@ describe('App', () => {
   })
 
   test('regression: idle_accumulated_ms with idle_since=null does not tick — the backend, not the client, decides what counts as idle', async () => {
-    // Реальный баг, который чинил старый useIdleTime на фронте, теперь чинится
-    // на бэкенде (см. Task 1's TestIsIdle_FailedWhileAnotherRunningIsNotIdle) —
-    // здесь достаточно проверить, что фронт просто показывает то, что
-    // прислал бэкенд, и не тикает, если idle_since=null (флоу не простаивает).
+    // Показываем backend Idle без тика при idle_since=null.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Upstream', 'running'), stageView('s2', 'Downstream', 'failed')],
@@ -953,10 +909,8 @@ describe('App', () => {
     }))
 
     render(<App />)
-    // Воркспейс авто-открывает стадию, ждущую действия: 'Downstream' (failed)
-    // — это attention-элемент и всплывает сам (Finding #1), а не 'Upstream'
-    // (running). Здесь это лишь гейт «приложение отрендерилось»; суть теста —
-    // что idle не тикает при idle_since=null.
+    // Воркспейс авто-открывает стадию, ждущую действия: 'Downstream' — это attention-элемент и всплывает
+    // сам, а не 'Upstream'.
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Downstream'))
     await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
   })
@@ -1028,9 +982,8 @@ describe('App', () => {
   })
 
   test('Feed tab shows only the selected stage; Full feed shows all', async () => {
-    // Feed (per-stage) больше не фильтрует общий поток через тумблер — она
-    // читает уже отфильтрованную стадией ленту (useStageEvents). Full feed —
-    // отдельная постоянная вкладка, читающая весь поток событий флоу.
+    // Feed больше не фильтрует общий поток через тумблер — она читает уже отфильтрованную стадией ленту.
+    // Full feed — отдельная постоянная вкладка, читающая весь поток событий флоу.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'pending')],
@@ -1075,10 +1028,7 @@ describe('App', () => {
   })
 
   test('a stale selection outside current stages falls back to the global Feed empty hint', async () => {
-    // После смены набора стадий выбранная s1 исчезает, а активных/failed стадий
-    // нет → selectedStageId устаревает, workspaceStage=null → FeedWorkspace
-    // получает stageId=null и показывает нейтральный empty hint (нет тумблера,
-    // который раньше скрывался в этом случае — он просто больше не существует).
+    // Если выбранная стадия исчезла и активных нет, workspace показывает нейтральный empty hint.
     let swapped = false
     mockFetchForStatus(() =>
       swapped
@@ -1102,9 +1052,6 @@ describe('App', () => {
 
   test('Cost tab: opening it hides the stage-scoped WorkspaceHeader and shows the cost report', async () => {
     // Task 11: Cost — глобальный отчёт, не привязанный к выбранной стадии.
-    // Клик по постоянной вкладке Cost должен убрать имя/статус ранее выбранной
-    // стадии (WorkspaceHeader, id detail-title) — иначе создаётся ложное
-    // впечатление, что отчёт отфильтрован по этой стадии.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'running')],
@@ -1121,11 +1068,7 @@ describe('App', () => {
   })
 
   test('Cost tab is absent when accounting is unsupported (display switch off)', async () => {
-    // accounting.enabled: false / AFM_ACCOUNTING=0 → /api/status omits the
-    // accounting object → supported:false. The permanent Cost tab must NOT
-    // render (and neither the Est. cost tile — see RunMetrics test), otherwise
-    // the display switch wouldn't actually hide the cost UI. `accounting: null`
-    // opts this payload out of the mock's enabled-by-default injection.
+    // Disabled accounting hides all cost UI, including the permanent Cost tab.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'running')],
@@ -1141,13 +1084,8 @@ describe('App', () => {
   })
 
   test('Cost tab is always right before the trailing Full feed tab, after the contextual detail/beacon tabs', async () => {
-    // Живой ревью-баг: Cost был второй вкладкой сразу после Feed, поэтому
-    // detail-таб выбранной стадии и attention-маяк оказывались ПОСЛЕ Cost —
-    // Cost «застревала» посередине списка. Cost должна всегда идти предпоследней
-    // (Full feed, Task 6, теперь всегда самая последняя).
-    // s1 done с планом — клик по ней оставляет Feed, но добавляет detail-вкладку
-    // «Greet»; s2 ждёт аппрув — отдельный маяк Approval. Порядок:
-    // Feed, Greet (detail), Approval (маяк), Cost, Full feed.
+    // Живой ревью-баг: Cost был второй вкладкой сразу после Feed, поэтому detail-таб выбранной стадии и
+    // attention-маяк оказывались ПОСЛЕ Cost — Cost «застревала» посередине списка.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [
@@ -1178,12 +1116,7 @@ describe('App', () => {
   })
 
   test('FIX 1: Cost view never shows a redundant stage-detail tab alongside the attention beacon', async () => {
-    // User-reported bug: Cost is a GLOBAL report, not stage-scoped, but the
-    // tab list still emitted a detail-tab named after the selected stage
-    // AND the attention beacon for that same stage — two tabs pointing at
-    // the same thing. s1 is awaiting approval (its own attention); it's also
-    // the selected/workspace stage while we're on Cost. Expected order:
-    // Feed | Approval·1 | Cost | Full feed — no third "Propose" detail tab.
+    // Global Cost must not duplicate stage detail tabs; expected order is Feed, Approval, Cost, Full feed.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'awaiting_approval')],
@@ -1201,9 +1134,8 @@ describe('App', () => {
   })
 
   test('FIX 3: activating Cost from the RunMetrics "…" popover moves focus onto the Cost tab', async () => {
-    // Round-5 #6 спеки: after the popover closes and Cost opens, focus must
-    // land on the destination (the Cost tab button), not linger on the now
-    // out-of-context "…" disclosure button.
+    // Round-5 #6 спеки: after the popover closes and Cost opens, focus must land on the destination (the
+    // Cost tab button), not linger on the now out-of-context "…" disclosure button.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'running')],
@@ -1282,10 +1214,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
     const table = await screen.findByRole('table')
 
-    // Раскрываем несколько строк ВНУТРИ таблицы, а не любую кнопку с именем
-    // "Stage N" — в рейле слева тоже есть кнопки-строки с такими же именами
-    // (клик по ним переключил бы workspace обратно на attention/history и
-    // увёл бы нас с вкладки Cost, см. handleSelectStage).
+    // Раскрываем несколько строк ВНУТРИ таблицы, а не любую кнопку с именем "Stage N" — в рейле слева тоже
+    // есть кнопки-строки с такими же именами.
     const expandButtons = within(table).getAllByRole('button', { name: /Stage \d+/ })
     fireEvent.click(expandButtons[0] as HTMLElement)
     fireEvent.click(expandButtons[5] as HTMLElement)
@@ -1297,9 +1227,8 @@ describe('App', () => {
     expect(document.querySelector('.cost-panel-scroll')).not.toBeNull()
   })
 
-  // Task 6: клик по dialog_question/dialog_answer элементу ленты (FeedWorkspace's
-  // onOpenDialog) должен выбрать стадию вопроса и открыть её диалог — live-вопрос
-  // (attention), если стадия сейчас awaiting_user_input, иначе read-only историю.
+  // Task 6: клик по dialog_question/dialog_answer элементу ленты должен выбрать стадию вопроса и открыть
+  // её диалог — live-вопрос, если стадия сейчас awaiting_user_input, иначе read-only историю.
   test('клик по dialog_question в ленте для awaiting_user_input стадии выбирает её и показывает live-вопрос', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
@@ -1315,15 +1244,12 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
 
-    // Возвращаемся в Feed вручную — сигнатура авто-открытия для s2 уже
-    // потрачена (rule 9: ровно один раз на прибытие), так что редьюсер не
-    // перебросит нас назад сам.
+    // Возвращаемся в Feed вручную — сигнатура авто-открытия для s2 уже потрачена (rule 9: ровно один раз
+    // на прибытие), так что редьюсер не перебросит нас назад сам.
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
     await waitFor(() => expect(document.getElementById('dialog-section')).toBeNull())
 
-    // Клик по Feed вернул выбор в attention-эпизод s2 (см. useEffect,
-    // синхронизирующий selectedStageId с активным attention-элементом) —
-    // Feed выбранной стадии (useStageEvents) уже показывает события s2.
+    // Клик по Feed вернул выбор в attention-эпизод s2 — Feed выбранной стадии уже показывает события s2.
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {
       ws?.onmessage?.({
@@ -1381,10 +1307,7 @@ describe('App', () => {
     expect(screen.queryByText('Agent needs your input')).not.toBeInTheDocument()
   })
 
-  // Non-interactive стадия с auto_approve авто-ответила на вопрос агента. Лента
-  // завершённой стадии должна показывать И вопрос, И авто-ответ, оба
-  // навигируемые в один и тот же диалог, и оба должны переживать перезагрузку
-  // страницы (восстановление ТОЛЬКО из HTTP-истории /api/events, без live-WS).
+  // Non-interactive стадия с auto_approve авто-ответила на вопрос агента.
   test('авто-ответ и вопрос завершённой auto_approve стадии навигируемы и переживают reload', async () => {
     const feedEvents = [
       {
@@ -1408,9 +1331,8 @@ describe('App', () => {
       },
     ]
 
-    // fetch маршрутизируется по URL: /api/status → payload; любой /api/events
-    // (глобальный И per-stage ?stage=) → feedEvents из истории; /dialog → полная
-    // запись вопроса и авто-ответа. Порядок веток важен (dialog до events).
+    // fetch маршрутизируется по URL: /api/status → payload; любой /api/events → feedEvents из истории;
+    // /dialog → полная запись вопроса и авто-ответа. Порядок веток важен (dialog до events).
     function mockFetchForFeed() {
       return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
         const url = typeof input === 'string' ? input : (input as Request).url
@@ -1540,11 +1462,7 @@ describe('App', () => {
   })
 
   test('pause on focus: a self-owned paused stage keeps the feed composer (draft) and does not auto-open the paused attention view', async () => {
-    // Review High #2 + Medium #4: когда НАША пауза применяется (стадия мигает в
-    // paused) при непустом черновике, композер обязан остаться смонтированным
-    // (noteTarget через hasActiveOp), а воркспейс НЕ должен авто-переключиться в
-    // attention-вид paused (shouldSuppressAttention → editing), иначе черновик
-    // и поле исчезли бы у пользователя из-под рук.
+    // Наша pause при непустом draft сохраняет composer и подавляет auto-attention, чтобы не потерять ввод.
     localStorage.setItem('afm.pauseOnFocus', 'true')
 
     let paused = false
@@ -1605,15 +1523,8 @@ describe('App', () => {
     expect(posts).not.toContain('continue')
   })
 
-  // --- Deferred attention: не терять авто-переход из Feed (Task 4) ---
-  //
-  // ВАЖНО (jsdom): фокус драйвится ТОЛЬКО реальными element.focus()/.blur() —
-  // именно они выставляют document.activeElement и эмитят focusin/focusout,
-  // которые слушает useIsEditing. fireEvent.focus/blur этого НЕ делают, поэтому
-  // suppression от ввода под ними не наступает (см. план «Как тесты обязаны
-  // драйвить фокус»). Где suppression даёт owned-pause/overlay, а не текстовый
-  // фокус — источник другой (selfOwnedActive/anyModalOpen), и остаточный фокус
-  // textarea снимается blur'ом, чтобы не подмешивать useIsEditing.
+  // Используем настоящие focus()/blur(): fireEvent не меняет document.activeElement и не проверяет
+  // suppression.
 
   // Хелпер: значимое WS-событие → App ре-запрашивает /api/status (мутируемый
   // payload уже обновлён вызывающим ДО этого вызова).
@@ -1714,9 +1625,8 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    // Открываем модалку pre-note на pending s3 — anyModalOpen=true (overlay
-    // suppression). Проводка App→hook, которую reducer-тест с абстрактным
-    // suppressed не доказывает. Кебаб именно s3 (у running s1 тоже есть свой).
+    // Открываем модалку pre-note на pending s3 — anyModalOpen=true. Проводка App→hook, которую
+    // reducer-тест с абстрактным suppressed не доказывает.
     const s3Kebab = within(document.querySelector('[data-stage-id="s3"]') as HTMLElement).getByRole('button', { name: /more actions/i })
     fireEvent.click(s3Kebab)
     fireEvent.click(screen.getByText('Add note (before start)'))
@@ -1788,9 +1698,8 @@ describe('App', () => {
     // Пока держим owned-паузу — B задаёт вопрос: он ОТКЛАДЫВАЕТСЯ.
     s2Status = 'awaiting_user_input'
     emitStageStatus('s2', 'awaiting_user_input')
-    // Ждём именно ПРИМЕНЕНИЯ snapshot с вопросом B (data-status строки s2), а не
-    // маяка Paused самой A — иначе тест ложно-зелёный: условие уже выполнено
-    // паузой A ещё до того, как вопрос B вообще пришёл.
+    // Ждём именно ПРИМЕНЕНИЯ snapshot с вопросом B, а не маяка Paused самой A — иначе тест ложно-зелёный:
+    // условие уже выполнено паузой A ещё до того, как вопрос B вообще пришёл.
     await waitFor(() =>
       expect(document.querySelector('[data-stage-id="s2"][data-status="awaiting_user_input"]')).not.toBeNull(),
     )
@@ -1801,20 +1710,16 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
     await waitFor(() => expect(posts).toContain('revise'))
 
-    // Авторитетный статус: A снова running (владения нет), B всё ещё ждёт —
-    // отдельное событие (дедуп ленты схлопнул бы повтор того же status s2) →
-    // B авто-открывается.
+    // Авторитетный статус: A снова running (владения нет), B всё ещё ждёт — отдельное событие (дедуп ленты
+    // схлопнул бы повтор того же status s2) → B авто-открывается.
     emitStageStatus('s1', 'running')
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
   test('self-owned paused does not flash a false Paused panel after Send before /api/status catches up', async () => {
-    // Регрессия (codex code-review р2): handleSend снимает владение (clearOp) СРАЗУ
-    // после revise — до того как /api/status заменит локальный paused на running.
-    // В этот зазор suppression отпущен, а стадия ещё paused: её paused-эпизод НЕ
-    // должен всплыть ложной attention-панелью. Здесь /continue НЕ меняет статус
-    // (симулируем лаг WS/poll), поэтому A остаётся paused после Send.
+    // Регрессия: handleSend снимает владение СРАЗУ после revise — до того как /api/status заменит
+    // локальный paused на running.
     localStorage.setItem('afm.pauseOnFocus', 'true')
     let s1Status = 'running'
     const posts: string[] = []
@@ -1848,9 +1753,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
     await waitFor(() => expect(posts).toContain('revise'))
 
-    // Зазор: владение снято, suppression отпущен, A всё ещё paused. Триггерим
-    // refresh (тот же paused-статус). A НЕ должен авто-открыть Paused-панель —
-    // остаёмся в Feed (эпизод уже handled, пока держали владение).
+    // Зазор: владение снято, suppression отпущен, A всё ещё paused. Триггерим refresh (тот же
+    // paused-статус).
     emitStageStatus('s1', 'paused')
     await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
@@ -1921,14 +1825,10 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
     await waitFor(() => expect(document.getElementById('dialog-section')).toBeNull())
 
-    // Свежий суппрешн-free sync (s3 завершилась — отдельное событие, чтобы дедуп
-    // ленты не схлопнул его; s2-вопрос всё ещё в очереди): эпизод s2 уже handled,
-    // поэтому фокус не крадётся — остаёмся на Feed.
+    // Свежий суппрешн-free sync: эпизод s2 уже handled, поэтому фокус не крадётся — остаёмся на Feed.
     s3done = true
     emitStageStatus('s3', 'done')
-    // Дожидаемся, что suppression-free refresh РЕАЛЬНО применился (s3 стал done в
-    // DOM) — иначе фиксированная задержка прошла бы, даже если событие вообще не
-    // вызвало refetch, и тест не доказал бы «эпизод handled, повторно не крадётся».
+    // Ждём s3=done в DOM, доказывая применение refresh без suppression.
     await waitFor(() =>
       expect(document.querySelector('[data-stage-id="s3"][data-status="done"]')).not.toBeNull(),
     )
@@ -1937,10 +1837,8 @@ describe('App', () => {
   })
 
   test('Same-stage question after typing surfaces without a manual blur (reconcile-after-unmount)', async () => {
-    // Реальный репорт: одна стадия B; фокус в её composer'е (editing=true), затем
-    // B сама уходит в awaiting_user_input → её composer размонтируется
-    // (noteTarget=null). .blur() вручную НЕ зовём: editing обязан схлопнуться в
-    // false через reconcile-эффект после commit, иначе вопрос B завис бы в Feed.
+    // Реальный репорт: одна стадия B; фокус в её composer'е, затем B сама уходит в awaiting_user_input →
+    // её composer размонтируется.
     let asking = false
     mockFetchForStatus(() => ({
       flow_name: 'demo',
@@ -1967,9 +1865,8 @@ describe('App', () => {
   })
 
   test('New episode through the real pipeline: t2 under suppression defers, then auto-opens on blur', async () => {
-    // Suppression держится на ОТДЕЛЬНОЙ running-стадии A (composer самой B
-    // размонтируется при уходе из running). Проверяет через реальный App→hook
-    // пайплайн, что updated_at-параметризация и episode-identity живут в проде.
+    // Suppression держится на ОТДЕЛЬНОЙ running-стадии A. Проверяет через реальный App→hook пайплайн, что
+    // updated_at-параметризация и episode-identity живут в проде.
     const t1 = '2026-09-30T10:00:00.000Z'
     const t2 = '2026-09-30T10:05:00.000Z'
     let bStatus = 'awaiting_user_input'

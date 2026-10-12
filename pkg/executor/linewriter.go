@@ -8,28 +8,14 @@ import (
 	"unicode/utf8"
 )
 
-// maxLineBytes caps how much of a single line lineWriter will buffer in
-// memory. A script that writes an unbounded line with no trailing newline
-// (e.g. a runaway progress bar) must not grow the buffer forever: once the
-// buffer would exceed maxLineBytes, the line is emitted early with a
-// truncation marker, and the rest of the line (up to the next newline) is
-// discarded.
+// maxLineBytes caps how much of a single line lineWriter will buffer in memory.
 const maxLineBytes = 64 * 1024
 
 // truncationMarker is appended to a line that was cut off because it grew
 // past maxLineBytes.
 const truncationMarker = " …[truncated]"
 
-// lineWriter is an io.Writer that splits incoming bytes on '\n' and calls
-// emit once per complete line (the trailing '\n' is stripped). A trailing
-// partial line (no terminating '\n' yet) is held in an internal buffer until
-// either more bytes complete it or Flush is called.
-//
-// The buffer is bounded at maxLineBytes: once a still-unterminated line would
-// exceed that size, lineWriter emits what it has so far with a
-// truncationMarker suffix and discards any further bytes for that same line
-// until the next '\n' is seen (so a single huge line never grows the buffer
-// past maxLineBytes, and only ever produces one emitted line).
+// lineWriter is an io.Writer that splits incoming bytes on '\n' and calls emit once per complete line.
 type lineWriter struct {
 	emit    func(string)
 	buf     []byte
@@ -91,9 +77,8 @@ func (lw *lineWriter) flushLine() {
 	lw.overLen = false
 }
 
-// Flush emits any buffered trailing partial line (a line with no terminating
-// '\n' yet). It is idempotent: calling it again after the buffer has already
-// been emitted (or when nothing was ever buffered) does nothing.
+// Flush emits any buffered trailing partial line. It is idempotent: calling it again after the buffer has
+// already been emitted (or when nothing was ever buffered) does nothing.
 func (lw *lineWriter) Flush() {
 	if len(lw.buf) == 0 && !lw.overLen {
 		return
@@ -101,17 +86,8 @@ func (lw *lineWriter) Flush() {
 	lw.flushLine()
 }
 
-// ReadStderrTail returns the last up-to-maxLines lines (capped at
-// up-to-maxBytes bytes, UTF-8-safe) of the stderr log file associated with
-// logFile — i.e. logFile with its ".log" suffix replaced by ".stderr.log".
-// It returns "" if the file is missing, empty, or maxLines/maxBytes is not
-// positive.
-//
-// The read is memory-bounded: rather than loading the whole file, it seeks
-// to a suffix window sized generously enough to contain maxLines lines
-// (maxBytes*4, on the assumption that lines are usually shorter than the
-// byte cap, plus 64KiB of slack for line-boundary alignment) and only reads
-// that window.
+// ReadStderrTail returns the last up-to-maxLines lines of the stderr log file associated with logFile —
+// i.e. logFile with its ".log" suffix replaced by ".stderr.log".
 func ReadStderrTail(logFile string, maxLines, maxBytes int) string {
 	if maxLines <= 0 || maxBytes <= 0 {
 		return ""
@@ -140,12 +116,8 @@ func ReadStderrTail(logFile string, maxLines, maxBytes int) string {
 		if err != nil {
 			return ""
 		}
-		// The seek almost certainly landed inside a line; drop that partial
-		// leading line so we don't report a truncated first line as if it
-		// were complete. But only when the window actually CONTAINS a '\n' —
-		// a single huge line with no newline at all (e.g. a >80KiB stderr
-		// line) would otherwise have its entire window dropped, producing an
-		// empty tail instead of a capped excerpt of that same line.
+		// The seek almost certainly landed inside a line; drop that partial leading line so we don't report a
+		// truncated first line as if it were complete.
 		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
 			data = data[idx+1:]
 		}

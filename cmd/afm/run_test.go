@@ -6,10 +6,6 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 )
 
-// TestBuildWrapperSpec проверяет, что buildWrapperSpec корректно пробрасывает
-// поля recipe в WrapperSpec: Type, AuthTo, Model, HasSysPrompt и BaseURL
-// (прямой recipe.URL — прокси удалён, host-match не нужен). Тест упражняет
-// именно реальный хелпер buildWrapperSpec, а не собственный литерал.
 func TestBuildWrapperSpec(t *testing.T) {
 	openaiRecipe := config.AgentRecipe{
 		Type:         "openai",

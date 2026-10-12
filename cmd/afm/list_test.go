@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestListShowsFlows seeds a couple of flow files under .afm/flows/ and
-// verifies `afm list` enumerates them (both .yaml and .yml extensions),
-// while ignoring non-flow files.
 func TestListShowsFlows(t *testing.T) {
 	chdirTemp(t)
 

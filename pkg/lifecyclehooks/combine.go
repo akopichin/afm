@@ -1,18 +1,12 @@
 package lifecyclehooks
 
-// Layer — слой хуков с опциональным скоупом стадии. Слои передаются в
-// Combine в порядке возрастания специфичности: global config, project config
-// (эти два уже смёржены в config.LoadFrom), flow, затем по одному слою на
-// стадию.
+// Layer — слой хуков с опциональным скоупом стадии.
 type Layer struct {
 	StageID string
 	Hooks   []Hook
 }
 
-// Combine складывает слои в итоговый список. id — плоский namespace: хук с
-// тем же id из более позднего (специфичного) слоя ЗАМЕНЯЕТ ранний целиком,
-// включая скоуп стадии, на исходной позиции (порядок стабильный). Новые id
-// дописываются в порядке появления.
+// Combine складывает слои в итоговый список. Новые id дописываются в порядке появления.
 func Combine(layers ...Layer) []RegisteredHook {
 	var out []RegisteredHook
 	idx := map[string]int{}

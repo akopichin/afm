@@ -16,10 +16,8 @@ type TranscriptItem struct {
 	AskUserID string
 }
 
-// DialogTranscript читает stream-json лог и возвращает текстовые сообщения
-// ассистента и вызовы ask_user в порядке появления. Повторные вызовы
-// ask_user с тем же id (polling-ретраи) схлопываются в первое вхождение.
-// Отсутствующий или нечитаемый файл даёт пустой список.
+// DialogTranscript читает stream-json лог и возвращает текстовые сообщения ассистента и вызовы ask_user в
+// порядке появления. Отсутствующий или нечитаемый файл даёт пустой список.
 func DialogTranscript(jsonlPath string) []TranscriptItem {
 	f, err := os.Open(jsonlPath)
 	if err != nil {

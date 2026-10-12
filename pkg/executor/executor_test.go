@@ -94,9 +94,7 @@ func TestParseToolAction(t *testing.T) {
 			wantOK:     true,
 		},
 		{
-			// Нарратив агента НЕ обрезается даже при заданном limit — limit бьёт
-			// только по tool/Bash-детали (см. кейс ниже). Полные «мысли» агента
-			// нужны в ленте целиком.
+			// limit сокращает только tool/Bash-детали; текст агента сохраняется целиком.
 			name:       "text NOT truncated even when limit is set",
 			line:       fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}`, strings.Repeat("x", 120)),
 			limit:      100,
@@ -293,9 +291,6 @@ func TestRunAgentKeepsReadingAfterLargeStreamEvent(t *testing.T) {
 	}
 }
 
-// TestRunPlanningAgentWritesTool воспроизводит баг: если плановый агент пишет план
-// через Write tool вместо вывода текста, RunPlanning перезаписывает plan.md пустой
-// строкой (textBuf пуст, нет type=="text" блоков).
 func TestRunPlanningAgentWritesTool(t *testing.T) {
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "plan.md")
@@ -303,10 +298,8 @@ func TestRunPlanningAgentWritesTool(t *testing.T) {
 
 	planContent := "# Plan\n\n- step 1\n- step 2\n"
 
-	// Симулируем subprocess, который:
-	// 1. Выводит tool_use Write событие (без text блоков — textBuf остаётся пустым)
-	// 2. Реально записывает outFile (как это делает claude при выполнении Write tool)
-	// После этого RunPlanning вызывает os.WriteFile(outFile, "", 0644) и затирает план.
+	// Subprocess пишет plan.md через Write tool-use без текстового ответа; executor не должен перезаписывать
+	// файл.
 	script := fmt.Sprintf(
 		`printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"%s","content":"..."}}]}}\n'`+
 			"\nprintf '%%s' %q > %q"+
@@ -335,9 +328,6 @@ func TestRunPlanningAgentWritesTool(t *testing.T) {
 	}
 }
 
-// TestRunPlanningKeepsAgentWrittenOutFile воспроизводит баг: агент записал план
-// в outFile через Write tool, а текстом вывел резюме («План сохранён…»).
-// RunPlanning не должен затирать файл плана текстом чата.
 func TestRunPlanningKeepsAgentWrittenOutFile(t *testing.T) {
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "plan.md")
@@ -501,12 +491,6 @@ func TestRunSetsStageDir(t *testing.T) {
 	}
 }
 
-// TestRunStripsInheritedStageDir проверяет, что свежий (не-диалоговый) агент
-// с StageDir=="" НЕ видит AFM_STAGE_DIR, унаследованный из родительского
-// процесса (например, afm сам был запущен внутри стадии с уже выставленным
-// AFM_STAGE_DIR — так бывает для memory-конвейера, запускаемого из
-// SpawnDetached-горутины того же процесса afm). Без явного strip дочерний
-// процесс наследует переменную из os.Environ() молча.
 func TestRunStripsInheritedStageDir(t *testing.T) {
 	t.Setenv("AFM_STAGE_DIR", "/leaked")
 
@@ -521,9 +505,8 @@ func TestRunStripsInheritedStageDir(t *testing.T) {
 		Command:     testCmdShell,
 		ExtraArgs:   []string{testFlagC, script},
 		IdleTimeout: 5 * time.Second,
-		// StageDir intentionally empty: a fresh-context agent (e.g. memory
-		// pipeline) has nowhere to write question.json and must not see a
-		// stale/leaked AFM_STAGE_DIR from the parent afm process.
+		// StageDir intentionally empty: a fresh-context agent (e.g. memory pipeline) has nowhere to write
+		// question.json and must not see a stale/leaked AFM_STAGE_DIR from the parent afm process.
 	})
 
 	if err := ex.RunAgent(context.Background(), "implementation", "s1", "do work", logFile); err != nil {
@@ -539,10 +522,6 @@ func TestRunStripsInheritedStageDir(t *testing.T) {
 	}
 }
 
-// TestRunAgentRunsInConfiguredDir проверяет фикс косяка №2: агент должен
-// выполняться в рабочей директории Config.Dir (project root из flow.root_dir),
-// а не наследовать CWD процесса afm. Иначе относительные пути проекта (docs/arch)
-// резолвятся в чужом корне (в Docker-сетапе goga: /workspace вместо afm-root).
 func TestRunAgentRunsInConfiguredDir(t *testing.T) {
 	// Изолируем CWD во временный каталог: без фикса маркер упал бы сюда, а не в Dir.
 	t.Chdir(t.TempDir())
@@ -796,9 +775,7 @@ func TestRunSetsWrapperDirInPATH(t *testing.T) {
 }
 
 func TestExecutor_RunJSONQuery(t *testing.T) {
-	// Мок-скрипт эмитит JSON независимо от аргументов. RunJSONQuery вызывает
-	// `<cmd> -p <prompt> --output-format json` и НЕ наследует ExtraArgs (это
-	// streaming-флаги stage-агентов — с ними stream-json конфликтовал бы с json).
+	// Мок-скрипт эмитит JSON независимо от аргументов.
 	script := filepath.Join(t.TempDir(), "mock-llm")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho '{\"ok\":true}'\n"), 0755); err != nil {
 		t.Fatal(err)
@@ -904,9 +881,6 @@ func TestRunScript_HardTimeout(t *testing.T) {
 	}
 }
 
-// TestRunAgentUsage_OnUsageFiresOnceWithMeteredTokens verifies that a
-// claude-style terminal `result` line carrying usage produces exactly one
-// OnUsage call with Metered==true and the correct normalized tokens.
 func TestRunAgentUsage_OnUsageFiresOnceWithMeteredTokens(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")
@@ -940,9 +914,6 @@ echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0
 	}
 }
 
-// TestRunAgentUsage_SequentialCallsAreIndependent verifies that two
-// sequential agent invocations each produce their own Observation — the
-// second one is not polluted by tokens collected during the first.
 func TestRunAgentUsage_SequentialCallsAreIndependent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -982,9 +953,6 @@ func TestRunAgentUsage_SequentialCallsAreIndependent(t *testing.T) {
 	}
 }
 
-// TestRunAgentUsage_ErrorWithNoTerminalResultIsUnmetered verifies that a run
-// that ends in an error without ever emitting a terminal result line still
-// fires OnUsage exactly once, with Metered==false.
 func TestRunAgentUsage_ErrorWithNoTerminalResultIsUnmetered(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")
@@ -1016,18 +984,11 @@ func TestRunAgentUsage_ErrorWithNoTerminalResultIsUnmetered(t *testing.T) {
 	}
 }
 
-// TestRunAgentUsage_NotCorruptedByTruncateOutput verifies that
-// Config.TruncateOutput (which limits logged text/Bash-command detail) does
-// NOT affect the raw line fed to the accounting collector: the collector
-// must see the full, untruncated stream-json line, or a large usage line
-// would parse as broken JSON and silently come back unmetered.
 func TestRunAgentUsage_NotCorruptedByTruncateOutput(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "impl.log")
 
-	// Pad the result line well past any plausible truncation limit so that if
-	// the raw line were ever clipped before reaching the collector, the JSON
-	// would break and the observation would come back unmetered.
+	// Pad past display limits so accidental raw-line truncation breaks JSON and exposes lost metering.
 	padding := strings.Repeat("x", 5000)
 	resultLine := fmt.Sprintf(
 		`{"type":"result","subtype":"success","padding":"%s","usage":{"input_tokens":12345,"cache_read_input_tokens":678,"output_tokens":910}}`,
@@ -1134,11 +1095,6 @@ func TestRunScript_StreamsStderrToOnAction(t *testing.T) {
 	}
 }
 
-// TestRunScript_TimeoutStillFlushesPartialStderrLine verifies that a trailing
-// partial stderr line (no terminating '\n') still reaches OnAction after a
-// hard ScriptTimeout kills the subprocess — lineWriter.Flush() runs after
-// e.run returns regardless of why it returned (success, timeout, or
-// interruption).
 func TestRunScript_TimeoutStillFlushesPartialStderrLine(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "script.log")

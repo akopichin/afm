@@ -12,13 +12,6 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 )
 
-// TestRunVerifyShellCommand_KillsProcessGroupOnCancel — C4(b) код-ревью:
-// shell-verify команда, чей потомок не exec'нулся в родителя (хвостовой
-// `sleep 30 &` в фоне), наследует stdout/stderr-пайпы — если runVerifyShellCommand
-// киллит только прямой процесс "sh", осиротевший потомок держит пайп
-// открытым, и CombinedOutput() виснет до его естественного конца (30s). С
-// process-group killом (setProcessGroup + cmd.Cancel) отмена ctx должна
-// вернуть управление быстро, а не через 30 секунд.
 func TestRunVerifyShellCommand_KillsProcessGroupOnCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -35,12 +28,6 @@ func TestRunVerifyShellCommand_KillsProcessGroupOnCancel(t *testing.T) {
 	}
 }
 
-// TestRunVerification_ShellStepInterruptedByPause — C4(a) код-ревью: zависший
-// shell-verify шаг (`sleep 30`) должен реагировать на Pause/Revise через тот
-// же interruptChans-канал, что и agent-шаг верификации, а не только на
-// отмену родительского ctx. Барьер по файлу (не фиксированный sleep):
-// сигнал паузы посылается только после того, как шелл-скрипт реально
-// стартовал и создал ready-файл.
 func TestRunVerification_ShellStepInterruptedByPause(t *testing.T) {
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "ready")

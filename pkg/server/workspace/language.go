@@ -13,13 +13,10 @@ const (
 	langPlain = "plain"
 )
 
-// detectLanguage maps a file name's extension to the syntax-highlighting
-// language id the frontend expects. Unknown extensions fall back to langPlain.
-// This is the single definition of the mapping — Task 8's Read reuses it.
+// detectLanguage maps a file name's extension to the syntax-highlighting language id the frontend expects.
+// Unknown extensions fall back to langPlain.
 func detectLanguage(name string) string {
-	// goga CODEMANIFEST files have no extension but hold YAML-structured
-	// content. Match the exact base name (case-insensitive) so a near-miss
-	// like CODEMANIFEST.bak still falls through to the extension switch below.
+	// goga CODEMANIFEST files have no extension but hold YAML-structured content.
 	if strings.EqualFold(filepath.Base(name), "CODEMANIFEST") {
 		return langYAML
 	}

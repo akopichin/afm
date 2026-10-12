@@ -12,9 +12,8 @@ import (
 	"github.com/akopichin/afm/pkg/memory"
 )
 
-// newRulesMD is a candidate distinct from validRulesMD (distill_test.go's
-// seed) so a target seeded from validRulesMD is "changed" when update writes
-// this instead.
+// newRulesMD is a candidate distinct from validRulesMD (distill_test.go's seed) so a target seeded from
+// validRulesMD is "changed" when update writes this instead.
 const newRulesMD = "# Project rules\n\n## New Pattern\n\nNew description.\n"
 
 // --- shared helpers --------------------------------------------------------
@@ -134,9 +133,8 @@ func TestCaptureStage_WritesToStagingPathLeavesCanonicalUntouched(t *testing.T) 
 	staging := filepath.Join(work, "stages", "s1", "reflect_dataset.yaml")
 
 	p := New(Prompts{}, AgentConfig{}, WithRunner(reflectRunner(t)))
-	// force=true so reuse is skipped even though canonical is valid — proves
-	// the primitive writes to the caller's chosen staging path, canonical left
-	// untouched.
+	// force=true so reuse is skipped even though canonical is valid — proves the primitive writes to the
+	// caller's chosen staging path, canonical left untouched.
 	res, err := p.CaptureStage(context.Background(), rwStage("s1", "s1.md"), stageDir, staging, filepath.Dir(staging), true)
 	if err != nil {
 		t.Fatalf("CaptureStage: %v", err)
@@ -336,9 +334,8 @@ func TestCaptureAll_RequiresManifestPath(t *testing.T) {
 
 // --- Finalize helpers ------------------------------------------------------
 
-// distillRunner produces High for every stage except those named in noHigh,
-// where prioritize emits no High section (NoHigh => candidate stays == seed).
-// update writes newRulesMD to the candidate.
+// distillRunner produces High for every stage except those named in noHigh, where prioritize emits no High
+// section. update writes newRulesMD to the candidate.
 func distillRunner(noHigh map[string]bool) AgentRunner {
 	return func(_ context.Context, spec AgentSpec) error {
 		switch spec.Kind {
@@ -459,12 +456,6 @@ func TestFinalize_DryRunLeavesTargetsUntouched(t *testing.T) {
 	}
 }
 
-// TestFinalize_DryRunDoesNotCreateMemoryDir is the regression guard for the
-// final-review Fix 1: a dry run against a FRESH (non-existent) memory.path
-// must leave no trace on disk at all — not even an empty directory. Before
-// the fix, Finalize unconditionally MkdirAll'd req.MemoryDir near the top,
-// so a dry run on a brand-new project silently created memory.path even
-// though the documented contract is "dry run writes nothing".
 func TestFinalize_DryRunDoesNotCreateMemoryDir(t *testing.T) {
 	base := t.TempDir()
 	mem := filepath.Join(base, "memory") // deliberately never created
@@ -949,13 +940,6 @@ func TestCanonicalizeExistingAncestor_RejoinsMissingComponents(t *testing.T) {
 
 // --- buildStageGroups --------------------------------------------------
 
-// TestBuildStageGroups_EquivalentSpellingsCollapseIntoOneGroup reproduces
-// the clobbering bug: two stages whose reflect.File spellings differ
-// ("a.md" vs "./a.md") but resolve to the SAME final path must land in ONE
-// group (chained), not two groups that both target the same finalPath and
-// silently clobber each other on promotion. Keying buildStageGroups' idx by
-// the raw reflect.File string (instead of the resolved finalPath) produced
-// two groups here.
 func TestBuildStageGroups_EquivalentSpellingsCollapseIntoOneGroup(t *testing.T) {
 	mem := t.TempDir()
 	stages := []flow.Stage{rwStage("s1", "a.md"), rwStage("s2", "./a.md")}

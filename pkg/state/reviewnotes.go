@@ -63,10 +63,8 @@ func LoadReviewNotes(runDir string) (ReviewNotes, error) {
 	if n.NextID == 0 {
 		n.NextID = 1
 	}
-	// A store that was persisted with zero notes round-trips through JSON as
-	// `"notes": null`; force a non-nil slice so the API always serializes `[]`
-	// and never `null` (a `null` breaks the dashboard's ReviewNotesModal, which
-	// iterates the array without a runtime nil-guard).
+	// A store that was persisted with zero notes round-trips through JSON as `"notes": null`; force a non-nil
+	// slice so the API always serializes `[]` and never `null`.
 	if n.Notes == nil {
 		n.Notes = []ReviewNote{}
 	}
@@ -83,9 +81,8 @@ func DeleteReviewNotes(runDir string) error {
 	if err := os.Remove(reviewNotesPath(runDir)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete review notes: %w", err)
 	}
-	// fsync the parent so the unlink is durable — otherwise a crash right after
-	// a resume "completed" could resurrect the deleted notes and leak stale
-	// review comments into the next round (see runResumeTransaction cleanup).
+	// fsync the parent so the unlink is durable — otherwise a crash right after a resume "completed" could
+	// resurrect the deleted notes and leak stale review comments into the next round.
 	return fsyncDir(runDir)
 }
 
@@ -166,14 +163,8 @@ func notesPausePoisonPath(runDir string) string {
 	return filepath.Join(runDir, notesPausePoisonFile)
 }
 
-// WritePoisonMarker durably records that a review-pause resume transaction was
-// found un-recoverable (a corrupt `resuming` marker). Unlike the canonical
-// marker — which ReadNotesPauseMarker quarantines/renames on corruption, so it
-// would vanish on the next restart — this breadcrumb persists until an operator
-// removes it, so the run stays fail-closed across ANY number of restarts rather
-// than silently returning to normal scheduling after one. `detail` is a
-// human-readable note for whoever inspects it. Best-effort content; its mere
-// existence is the signal.
+// WritePoisonMarker durably records that a review-pause resume transaction was found un-recoverable.
+// `detail` is a human-readable note for whoever inspects it.
 func WritePoisonMarker(runDir, detail string) error {
 	return atomicWriteFile(notesPausePoisonPath(runDir), []byte(detail+"\n"), 0644)
 }
@@ -193,9 +184,8 @@ func ClearPoisonMarker(runDir string) error {
 	return fsyncDir(runDir)
 }
 
-// fsyncDir flushes a directory entry change (an unlink here) to disk, the same
-// durability step atomicWriteFile already does after a rename. A non-existent
-// dir is not an error (the run dir is always present in practice).
+// fsyncDir flushes a directory entry change to disk, the same durability step atomicWriteFile already does
+// after a rename.
 func fsyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {

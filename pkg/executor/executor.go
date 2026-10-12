@@ -21,39 +21,23 @@ import (
 	"github.com/akopichin/afm/pkg/progress"
 )
 
-// afmSecretEnvPrefix/afmSyspromptEnvPrefix — те же транспортные префиксы, что
-// pkg/docker расставляет в окружении afm-процесса для autoShim-агентов
-// (AFM_SECRET_<CMD>/AFM_SYSPROMPT_<CMD>, см. docker/launcher.go). Третий
-// префикс, lifecyclehooks.HookSecretTransportPrefix, уже экспортирован из
-// pkg/lifecyclehooks — переиспользуем его вместо третьей копии той же строки.
+// afmSecretEnvPrefix/afmSyspromptEnvPrefix — те же транспортные префиксы, что pkg/docker расставляет в
+// окружении afm-процесса для autoShim-агентов.
 const (
 	afmSecretEnvPrefix    = "AFM_SECRET_"    //nolint:gosec // это имя переменной окружения, а не сам секрет
 	afmSyspromptEnvPrefix = "AFM_SYSPROMPT_" //nolint:gosec // аналогично
 )
 
-// IsCrossAgentTransportSecret сообщает, что kv (строка "ИМЯ=значение" из
-// os.Environ()) — один из транспортных секретов, которыми afm передаёт
-// чужие авторизационные данные СВОИМ ЖЕ дочерним процессам (autoShim-агенты,
-// lifecycle-хуки): AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_*. Нужна
-// только для C2 (см. вызывающий код в run): непроверенный verify-верификатор
-// не должен унаследовать секреты ЧУЖИХ агентов/хуков, которые сам afm-процесс
-// держит в своём окружении только транзитом (см. AGENTS.md, "Docker Mode" /
-// "Phase 3: секреты и env lifecycle-хуков"). Экспортирована (D2a второй раунд
-// код-ревью): pkg/orchestrator/verify.go переиспользует ЭТУ ЖЕ функцию для
-// санитизации окружения shell-verify шагов — единая точка вместо второй копии
-// списка префиксов.
+// IsCrossAgentTransportSecret определяет секреты AFM_SECRET_*, AFM_HOOK_SECRET_* и AFM_SYSPROMPT_* для
+// фильтрации verify-окружения.
 func IsCrossAgentTransportSecret(kv string) bool {
 	return strings.HasPrefix(kv, afmSecretEnvPrefix) ||
 		strings.HasPrefix(kv, afmSyspromptEnvPrefix) ||
 		strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix)
 }
 
-// afmSecretEnvName воспроизводит ТОТ ЖЕ transform, что pkg/docker/wrapper.go's
-// envName делает над именем враппер-команды при построении переменной
-// AFM_SECRET_<NAME> (uppercase; всё, кроме [A-Z0-9], → '_'). Дублируется
-// здесь (а не импортируется из pkg/docker), чтобы не тянуть в pkg/executor
-// докер-специфичный пакет ради одной маленькой чистой функции — держите оба
-// места в синхроне, если правило санитизации когда-нибудь изменится.
+// afmSecretEnvName воспроизводит ТОТ ЖЕ transform, что pkg/docker/wrapper.go's envName делает над именем
+// враппер-команды при построении переменной AFM_SECRET_<NAME>.
 func afmSecretEnvName(cmd string) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(cmd) {
@@ -66,14 +50,8 @@ func afmSecretEnvName(cmd string) string {
 	return b.String()
 }
 
-// isVerifierOwnSecret сообщает, что kv — ИМЕННО собственный транспортный
-// секрет верификатора (AFM_SECRET_<envName(verifyCommand)>), который его же
-// сгенерированный autoShim-враппер (pkg/docker/wrapper.go) читает для
-// авторизации (D2b код-ревью): голый VerifyMode-strip удалял ВСЕ AFM_SECRET_*
-// без разбора, включая секрет самого верификатора — аутентифицированный
-// codex-recipe верификатор стартовал бы без своего же токена. Сравнение по
-// точному имени переменной (префикс + "="), а не просто по префиксу —
-// иначе AFM_SECRET_MYCODEX2 ложно совпал бы с verifyCommand="mycodex".
+// isVerifierOwnSecret сохраняет секрет verify-агента по точному имени переменной, исключая совпадение
+// префиксов команд.
 func isVerifierOwnSecret(kv, verifyCommand string) bool {
 	if verifyCommand == "" {
 		return false
@@ -81,18 +59,8 @@ func isVerifierOwnSecret(kv, verifyCommand string) bool {
 	return strings.HasPrefix(kv, afmSecretEnvPrefix+afmSecretEnvName(verifyCommand)+"=")
 }
 
-// isClaudeAuthorCredential сообщает, что kv — одна из переменных окружения,
-// которыми Docker forwards Claude-авторизацию АВТОРА внутрь контейнера
-// (F4 код-ревью): config.ClaudeAuthEnvVars (CLAUDE_CODE_OAUTH_TOKEN/
-// ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN) плюс ANTHROPIC_BASE_URL — тот же
-// список, что pkg/docker/launcher.go's dockerForwardEnvVars форвардит в
-// контейнер. Read-only codex-верификатор в них не нуждается: своя
-// авторизация — либо смонтированный ~/.codex (type: codex), либо собственный
-// AFM_SECRET_<CMD> recipe-секрет (см. isVerifierOwnSecret выше, D2b) — и не
-// должен иметь возможность отразить ЧУЖИЕ (авторские) credentials в своём
-// персистируемом JSON-ответе. Сравнение по точному имени переменной
-// (name+"="), а не по префиксу — те же четыре имени целиком, без
-// вариативности вроде AFM_SECRET_*.
+// isClaudeAuthorCredential определяет Claude credentials и BASE_URL автора, которые verify-агент не должен
+// наследовать.
 func isClaudeAuthorCredential(kv string) bool {
 	if strings.HasPrefix(kv, "ANTHROPIC_BASE_URL=") {
 		return true
@@ -123,38 +91,25 @@ type Config struct {
 	Phase          string                       // phase label for the accounting Observation this invocation produces
 	UsageHint      accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
 	OnUsage        func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
-	// InterruptCh, if set, is watched during RunAgent: a signal on this channel
-	// sends SIGINT to the subprocess (not SIGKILL, not ctx cancellation) —
-	// graceful, user-requested interrupt (agent_suggest), distinct from idle
-	// timeout / full-run shutdown. nil channel is safe (select never fires).
+	// InterruptCh, if set, is watched during RunAgent: a signal on this channel sends SIGINT to the
+	// subprocess — graceful, user-requested interrupt, distinct from idle timeout / full-run shutdown.
 	InterruptCh <-chan struct{}
-	// VerifyMode, if true, signals to the underlying adapter (e.g.
-	// scripts/codex-as-claude.sh via a narrow CODEX_VERIFY env var, see
-	// RunVerifyAgent) that this invocation is a read-only AI-verify pass, not
-	// a normal author/builder run — no bypass/full-access sandbox flags, no
-	// editing tools. Set only by RunVerifyAgent; never by RunPlanning/RunAgent.
+	// VerifyMode enables the adapter's verification mode through CODEX_VERIFY; set only by RunVerifyAgent.
 	VerifyMode bool
-	// BrowserMCP, if set, injects the managed Chrome DevTools MCP (afm_chrome)
-	// for this author runner: a per-invocation descriptor file + (claude)
-	// --mcp-config, plus the non-secret AFM_BROWSER_* env. nil = capability off.
-	// Never set on verify/JSON-fix/memory runners (they get the central strip only).
+	// BrowserMCP, if set, injects the managed Chrome DevTools MCP for this author runner: a per-invocation
+	// descriptor file + --mcp-config, plus the non-secret AFM_BROWSER_* env.
 	BrowserMCP *BrowserMCP
 }
 
-// ErrUserInterrupted signals that the agent process was stopped because the
-// user requested an interrupt (via Config.InterruptCh) — not a real failure.
-// Callers (runWithRetry) must distinguish this from retry/failure handling.
+// ErrUserInterrupted signals that the agent process was stopped because the user requested an interrupt —
+// not a real failure.
 var ErrUserInterrupted = errors.New("user interrupted")
 
-// ErrIdleTimeout — сигнальная ошибка простоя (за IdleTimeout не пришло ни
-// одной строки stdout). run() оборачивает ею свою текстовую ошибку через
-// %w, чтобы вызывающий код (RunVerifyAgent) мог отличить таймаут от прочих
-// ошибок процесса через errors.Is, не разбирая текст сообщения.
+// ErrIdleTimeout — сигнальная ошибка простоя.
 var ErrIdleTimeout = errors.New("idle timeout")
 
-// interruptGracePeriod bounds how long we wait for the subprocess to exit
-// gracefully after SIGINT before force-killing it as a safety net against a
-// hung/misbehaving process.
+// interruptGracePeriod bounds how long we wait for the subprocess to exit gracefully after SIGINT before
+// force-killing it as a safety net against a hung/misbehaving process.
 const interruptGracePeriod = 15 * time.Second
 
 const (
@@ -164,19 +119,13 @@ const (
 	toolNameWrite      = "Write"
 )
 
-// DefaultClaudeArgs returns the standard claude stream-json invocation flags.
-//
-// --verbose is required by Claude Code 2.1.x when --print is combined with
-// --output-format=stream-json, and is harmless on versions where it is
-// optional. It also makes the stream contain tool_use events, which the
-// executor's parser relies on.
+// DefaultClaudeArgs returns the standard claude stream-json invocation flags. It also makes the stream
+// contain tool_use events, which the executor's parser relies on.
 func DefaultClaudeArgs() []string {
 	return []string{"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"}
 }
 
 // ResolveArgs prepends DefaultClaudeArgs to extra and drops exact duplicates.
-// Used for interactive stages, which always need the claude flags regardless of
-// user config; dedup avoids passing --verbose twice when the user also sets it.
 func ResolveArgs(extra []string) []string {
 	merged := append(append([]string{}, DefaultClaudeArgs()...), extra...)
 	seen := make(map[string]bool, len(merged))
@@ -194,9 +143,8 @@ func ResolveArgs(extra []string) []string {
 // Executor spawns AI client subprocesses.
 type Executor struct {
 	cfg Config
-	// stderrSinkOverride — test-only seam (see scriptStderrSink). nil in
-	// production: New never sets it, so RunScript always opens the real
-	// .stderr.log file.
+	// stderrSinkOverride — test-only seam (see scriptStderrSink). nil in production: New never sets it, so
+	// RunScript always opens the real .stderr.log file.
 	stderrSinkOverride func(logFile string) (io.Writer, func())
 }
 
@@ -295,10 +243,7 @@ func contentToAction(c streamContent, limit int) (toolName, detail string, ok bo
 		if c.Text == "" {
 			return "", "", false
 		}
-		// Нарратив агента (его «мысли»/лог) НЕ обрезаем: limit бьёт только по
-		// механическому выводу инструментов (Bash-команда, raw input) ниже.
-		// Пользователю нужен полный текст рассуждений — иначе в ленте длинный
-		// summary обрывался на «…», а таблицы/выводы за точкой обрезки терялись.
+		// Нарратив агента НЕ обрезаем: limit бьёт только по механическому выводу инструментов ниже.
 		return contentTypeText, c.Text, true
 	case contentTypeToolUse:
 		var inp toolInput
@@ -340,9 +285,8 @@ func contentToAction(c streamContent, limit int) (toolName, detail string, ok bo
 	}
 }
 
-// openStderrLog opens <logBase>.stderr.log for appending so the agent's stderr
-// (e.g. claude "requires --verbose") is captured instead of lost. Returns nil
-// on error — stderr is diagnostic only, callers fall back to io.Discard.
+// openStderrLog opens <logBase>.stderr.log for appending so the agent's stderr is captured instead of
+// lost. Returns nil on error — stderr is diagnostic only, callers fall back to io.Discard.
 func openStderrLog(logFile string) *os.File {
 	f, err := os.OpenFile(strings.TrimSuffix(logFile, ".log")+".stderr.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
@@ -351,16 +295,7 @@ func openStderrLog(logFile string) *os.File {
 	return f
 }
 
-// dualWriter always writes to BOTH stream (the live line-streamer feeding
-// Config.OnAction, which never errors) and file (the durable .stderr.log
-// diagnostic sink, best-effort) — and always reports success to its caller
-// (os/exec's stderr-copier). This is deliberately NOT io.MultiWriter: that
-// helper stops at the FIRST writer that returns an error, so a full-disk (or
-// otherwise failing) .stderr.log write would silently stop the live stream
-// too — killing stderr visibility exactly when the disk is full and the
-// build is failing. A file-sink error here is swallowed (diagnostic only,
-// same trade-off openStderrLog itself already makes by degrading to nil on
-// open failure).
+// dualWriter always writes to BOTH stream and file — and always reports success to its caller.
 type dualWriter struct {
 	stream io.Writer
 	file   io.Writer
@@ -372,11 +307,7 @@ func (d *dualWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// scriptStderrSink opens the durable stderr sink for RunScript and returns it
-// together with a closer. Overridable per-Executor via stderrSinkOverride
-// (test-only, unexported) so tests in this package can simulate a file-write
-// failure (e.g. ENOSPC) without depending on an OS-specific always-full
-// device like /dev/full (absent on macOS).
+// scriptStderrSink opens the durable stderr sink for RunScript and returns it together with a closer.
 func (e *Executor) scriptStderrSink(logFile string) (io.Writer, func()) {
 	if e.stderrSinkOverride != nil {
 		return e.stderrSinkOverride(logFile)
@@ -473,9 +404,8 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	return os.WriteFile(outFile, []byte(textBuf.String()), 0644)
 }
 
-// WrittenFiles возвращает пути файлов, записанных агентом через Write tool,
-// в порядке появления событий в stream-json логе. Отсутствующий или
-// нечитаемый лог даёт пустой список.
+// WrittenFiles возвращает пути файлов, записанных агентом через Write tool, в порядке появления событий в
+// stream-json логе. Отсутствующий или нечитаемый лог даёт пустой список.
 func WrittenFiles(jsonlPath string) []string {
 	f, err := os.Open(jsonlPath)
 	if err != nil {
@@ -565,22 +495,8 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	return runErr
 }
 
-// RunVerifyAgent запускает один проход AI-verify: свежую read-only сессию
-// (без --resume/session-id, без AFM_STAGE_DIR — верификатор не участник
-// файлового диалогового протокола, §7.3 плана AI-verify) и захватывает
-// ФИНАЛЬНЫЙ ассистентский текстовый блок как машинный ответ модели, а не
-// весь лог. Переиспользует общий run() — не копирует тело RunPlanning/RunAgent.
-//
-// В отличие от них, успех/провал самого процесса
-// (ProcessOK/TimedOut/Interrupted) и вердикт модели (Result) — два
-// независимых поля возвращаемого verify.RunOutcome: ненулевой exit code
-// после "pass" НИКОГДА не считается пройденным, а пустой/битый ответ при
-// штатном exit 0 — это ProtocolErr, а не молчаливое решение afm о коде
-// (§5.4 плана). Текст модели никогда не решает cost/exit сам по себе.
-//
-// Возвращаемая error — только инфраструктурный сбой самого вызова (не
-// открылся лог, не записался resultFile); исход самой проверки — целиком в
-// RunOutcome, даже если error == nil.
+// RunVerifyAgent запускает один проход AI-verify: свежую read-only сессию и захватывает ФИНАЛЬНЫЙ
+// ассистентский текстовый блок как машинный ответ модели, а не весь лог.
 func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
@@ -603,10 +519,8 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 
 	lg.LogStart(agentType, stageName)
 
-	// Верификатор — всегда свежая сессия без диалогового протокола:
-	// принудительно обнуляем поля, которые могли бы просочиться из общего
-	// Config (--resume/session-id и AFM_STAGE_DIR автора), независимо от
-	// того, что несёт исходный e.cfg.
+	// Верификатор — всегда свежая сессия без диалогового протокола: принудительно обнуляем поля, которые
+	// могли бы просочиться из общего Config, независимо от того, что несёт исходный e.cfg.
 	verifyCfg := e.cfg
 	verifyCfg.SessionID = ""
 	verifyCfg.Resume = false
@@ -634,10 +548,8 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		}
 		for _, c := range ev.Message.Content {
 			if c.Type == contentTypeText {
-				// Финальный ответ — последний ассистентский текстовый
-				// блок: каждый следующий ЗАМЕНЯЕТ предыдущий, а не
-				// дописывается к нему — промежуточные рассуждения не
-				// должны перемешаться с итоговым JSON.
+				// Финальный ответ — последний ассистентский текстовый блок: каждый следующий ЗАМЕНЯЕТ предыдущий, а не
+				// дописывается к нему — промежуточные рассуждения не должны перемешаться с итоговым JSON.
 				finalText.Reset()
 				finalText.WriteString(c.Text)
 				haveFinalText = true
@@ -672,9 +584,8 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		// просто не отработал штатно; все три флага остаются false.
 	}
 
-	// Сохраняем сырой финальный текст, если он вообще появился, — даже если
-	// процесс потом упал ненулевым exit code (аудиторский след того, что
-	// модель успела написать, не более).
+	// Сохраняем сырой финальный текст, если он вообще появился, — даже если процесс потом упал ненулевым exit
+	// code (аудиторский след того, что модель успела написать, не более).
 	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
 		if werr := os.WriteFile(resultFile, []byte(finalText.String()), 0644); werr != nil {
 			return outcome, fmt.Errorf("write result file: %w", werr)
@@ -682,9 +593,8 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	}
 
 	if !outcome.ProcessOK {
-		// Процесс не завершился штатно (таймаут/прерывание/иная ошибка) —
-		// что бы модель ни написала в текст, это не решение о коде: даже
-		// "pass" в финальном тексте не засчитывается (§5.4 плана).
+		// Процесс не завершился штатно (таймаут/прерывание/иная ошибка) — что бы модель ни написала в текст, это
+		// не решение о коде: даже "pass" в финальном тексте не засчитывается (§5.4 плана).
 		return outcome, nil
 	}
 
@@ -702,12 +612,8 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	return outcome, nil
 }
 
-// RunScript runs a plain shell script (no stream-json parsing, no session/
-// resume args) with a hard, non-resetting timeout — unlike RunAgent's
-// idle-timeout (reset per output line), timeout here bounds the whole run
-// regardless of how much output streams. Each output line is logged via
-// LogAction("stdout", line) and forwarded to Config.OnAction if set, so
-// callers get the same per-line visibility RunAgent gives for tool actions.
+// RunScript runs a plain shell script with a hard, non-resetting timeout — unlike RunAgent's idle-timeout,
+// timeout here bounds the whole run regardless of how much output streams.
 func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile string) error {
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
@@ -715,12 +621,7 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 	}
 	defer lg.Close()
 
-	// Durable stderr sink (the .stderr.log file) and, independently, the live
-	// feed sink (lineWriter → OnAction("stderr", ...)). Built so that
-	// streaming to OnAction survives even if the log file failed to open OR
-	// a write to it fails mid-run (e.g. ENOSPC) — dualWriter (not
-	// io.MultiWriter, which would stop at the first erroring writer) always
-	// forwards to the live stream regardless of the file sink's outcome.
+	// Durable stderr sink and, independently, the live feed sink.
 	fileSink, closeFileSink := e.scriptStderrSink(logFile)
 	defer closeFileSink()
 	var lw *lineWriter
@@ -740,19 +641,16 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 	}
 
 	runErr := e.run(runCtx, "", "script", stderrWriter, func(line string) {
-		// "text" (не "stdout") — тип строки, который use-stage-log.ts's
-		// TEXT_LINE_PATTERN на дашборде распознаёт как отображаемый в Log
-		// panel; тот же тип, что и обычный текстовый вывод агента.
+		// "text" (не "stdout") — тип строки, который use-stage-log.ts's TEXT_LINE_PATTERN на дашборде распознаёт
+		// как отображаемый в Log panel; тот же тип, что и обычный текстовый вывод агента.
 		lg.LogAction("text", line)
 		if e.cfg.OnAction != nil {
 			e.cfg.OnAction("stdout", line)
 		}
 	})
 	if lw != nil {
-		// Emit any trailing partial stderr line (no terminating '\n' yet) —
-		// covers both the normal-exit case and timeout/interruption, where
-		// e.run already returned (killProcessGroup + cmd.Wait joined the
-		// internal stderr-copy goroutine) but the last line never saw a '\n'.
+		// Emit any trailing partial stderr line — covers both the normal-exit case and timeout/interruption,
+		// where e.run already returned but the last line never saw a '\n'.
 		lw.Flush()
 	}
 	if errors.Is(runErr, context.DeadlineExceeded) {
@@ -763,13 +661,8 @@ func (e *Executor) RunScript(ctx context.Context, timeout time.Duration, logFile
 	return runErr
 }
 
-// RunJSONQuery запускает команду с одним промптом в JSON-режиме.
-// Не использует stream-json — просто захватывает stdout через cmd.Output().
-// Предназначен для однократных LLM-вызовов (без логирования действий).
-// Возвращает сырые байты stdout; парсинг конверта/полей остаётся за вызывающей стороной.
-// jsonQueryEnv builds the RunJSONQuery child env: the ambient env minus every
-// AFM_BROWSER_* (default-deny — this is not an author runner), with WrapperDir
-// prepended to PATH when set.
+// RunJSONQuery запускает команду с одним промптом в JSON-режиме. Не использует stream-json — просто
+// захватывает stdout через cmd.Output().
 func (e *Executor) jsonQueryEnv(ambient []string) []string {
 	filtered := make([]string, 0, len(ambient)+1)
 	pathSet := false
@@ -792,11 +685,7 @@ func (e *Executor) jsonQueryEnv(ambient []string) []string {
 
 func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
 	e.logAgentInput("supervisor", prompt)
-	// Чистая one-shot JSON-инвокация. Намеренно НЕ наследуем e.cfg.ExtraArgs:
-	// executor.New дефолтит их в DefaultClaudeArgs (--print --output-format stream-json
-	// --verbose --dangerously-skip-permissions). Этот stream-json конфликтовал бы с
-	// нашим --output-format json и триггерил --include-partial-messages во враппере
-	// (→ claude exit 1: "requires --output-format=stream-json").
+	// Чистая one-shot JSON-инвокация.
 	args := []string{"-p", prompt, "--output-format", "json"}
 
 	// Команда может лежать в WrapperDir; exec.LookPath в текущем процессе его не
@@ -809,10 +698,7 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 	}
 
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
-	// RunJSONQuery (supervisor/JSON-fix) is NOT an author runner — it must never
-	// inherit the browser transport. jsonQueryEnv strips AFM_BROWSER_* even when
-	// WrapperDir is empty (otherwise cmd.Env=nil would inherit the full parent env,
-	// including the ambient AFM_BROWSER_TRANSPORT_TOKEN).
+	// RunJSONQuery is NOT an author runner — it must never inherit the browser transport.
 	cmd.Env = e.jsonQueryEnv(os.Environ())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -823,17 +709,10 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 	return out, nil
 }
 
-// killProcessGroup and setProcessGroup are OS-specific — see executor_unix.go
-// (real process-group kill via negative PID) and executor_windows.go
-// (fallback: signal the direct child only, no process-group equivalent
-// wired up for Windows).
+// killProcessGroup and setProcessGroup are OS-specific — see executor_unix.go and executor_windows.go.
 
-// filterInheritedEnv applies the default-deny strip to an ambient environment:
-// CLAUDECODE / AFM_STAGE_DIR / CODEX_VERIFY (re-added by the caller when set) and
-// AFM_BROWSER_* (re-added only for author runners, non-secret subset), plus — in
-// VerifyMode only — cross-agent transport secrets and the author's Claude creds
-// (keeping the verifier's own secret). Re-adds (StageDir/CODEX_VERIFY/browser/PATH)
-// are the caller's job.
+// filterInheritedEnv strips control/browser vars and, for verify, foreign credentials. Callers re-add
+// allowed invocation vars.
 func (e *Executor) filterInheritedEnv(ambient []string) []string {
 	filtered := make([]string, 0, len(ambient)+3)
 	for _, kv := range ambient {
@@ -845,9 +724,7 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added by caller only if cfg.VerifyMode
 		case IsBrowserTransportEnv(kv):
-			// Central default-deny: strip every AFM_BROWSER_* from EVERY child
-			// (incl. the ambient transport token). Author runners re-add only the
-			// non-secret subset; verify/JSON-fix/memory never re-add anything.
+			// Strip AFM_BROWSER_* from all children; only author runners re-add non-secret browser vars.
 		case e.cfg.VerifyMode && isVerifierOwnSecret(kv, e.cfg.Command):
 			// D2b: the verifier's OWN secret (AFM_SECRET_<verifyCommand>) survives.
 			filtered = append(filtered, kv)
@@ -887,13 +764,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		args = append(args, bargs...)
 		browserEnv = benv
 	}
-	// Resolve the command via WrapperDir before exec. exec.Command does LookPath
-	// against THIS process's PATH; the wrapper-dir is only added to the CHILD's
-	// env below, so a generated wrapper command (e.g. glm47 inside the
-	// wrapper-dir) would not be found without resolving it to an absolute path
-	// here. For a command not present in the wrapper-dir (e.g. a mounted binary at
-	// /usr/local/bin), LookPath fails and we fall back to the bare name — which
-	// exec.Command then resolves via the parent $PATH as before.
+	// Resolve the command via WrapperDir before exec.
 	cmdPath := e.cfg.Command
 	if e.cfg.WrapperDir != "" {
 		if resolved, err := exec.LookPath(filepath.Join(e.cfg.WrapperDir, e.cfg.Command)); err == nil {
@@ -916,11 +787,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
 	}
 	if e.cfg.VerifyMode {
-		// Сигнал адаптеру (напр. scripts/codex-as-claude.sh), что это
-		// read-only AI-verify проход, а не обычный запуск автора — без
-		// него VerifyMode оставался бы мёртвым полем: RunVerifyAgent
-		// выставляет его в Config, но подпроцесс никогда бы не узнал об
-		// этом и исполнялся бы в обычном (небезопасном для verify) режиме.
+		// CODEX_VERIFY сообщает адаптеру о verify-режиме; одного поля Config.VerifyMode недостаточно.
 		filtered = append(filtered, "CODEX_VERIFY=1")
 	}
 	// Re-add only the non-secret browser env for author runners (the token lives
@@ -947,15 +814,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 	cmd.Stderr = stderr
 
-	// D4 код-ревью: последняя неблокирующая проверка ПЕРЕД стартом процесса —
-	// если ctx уже отменён (полная отмена рана) или сигнал на InterruptCh уже
-	// пришёл (напр. Pause() успел durable зафиксировать переход и
-	// просигналить ДО того, как мы дошли сюда), НИКОГДА не запускаем
-	// subprocess. Полная TOCTOU-атомарность невозможна (сигнал может прийти
-	// на долю секунды позже этой проверки), но закрыть уже-случившийся случай
-	// дёшево и правильно — особенно для read-only verify-верификатора,
-	// которому вообще не должно быть позволено начать работу над уже
-	// приостановленной/отменённой стадией.
+	// Перед запуском процесса повторно проверяем ctx и interrupt, чтобы не спавнить уже отменённый вызов.
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -998,9 +857,8 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		_ = cmd.Wait()
 		return ctx.Err()
 	case <-e.cfg.InterruptCh:
-		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно
-		// завершает текущую атомарную операцию (запись файла — один syscall,
-		// его практически не рвёт сигналом на середине) и выходит.
+		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно завершает текущую атомарную операцию
+		// (запись файла — один syscall, его практически не рвёт сигналом на середине) и выходит.
 		killProcessGroup(cmd, syscall.SIGINT)
 		select {
 		case <-done:
@@ -1016,14 +874,8 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 }
 
-// logAgentInput пишет точный промпт, уходящий в агента (stdin), в debug-логи —
-// единый <RunDir>/debug.log (хронологически по всем стадиям) и по-стейджно
-// <RunDir>/<StageID>/<phase>.prompt.log. Активно только при Config.Debug.
-// StageID намеренно отделён от StageDir/AFM_STAGE_DIR: StageDir задаётся только
-// для interactive/autonomous стадий (файловый диалоговый протокол), а StageID —
-// для КАЖДОЙ стадии, иначе обычные (не-interactive) стадии теряли бы per-stage
-// prompt.log и тег stage= в debug.log. Best-effort: ошибки записи не прерывают
-// run (debug — вспомогательный тракт).
+// logAgentInput пишет точный промпт, уходящий в агента, в debug-логи — единый <RunDir>/debug.log и
+// по-стейджно <RunDir>/<StageID>/<phase>.prompt.log. Активно только при Config.Debug.
 func (e *Executor) logAgentInput(phase, prompt string) {
 	if !e.cfg.Debug {
 		return

@@ -7,11 +7,7 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// phasePlanning — локальная копия orchestrator.phasePlanning (= string(flow.PhasePlanning)).
-// Нужна только phaseDispatch ниже; не экспортируется и не алиасится — это
-// derived string-константа, а не тип с identity, так что дублирование
-// значения в двух пакетах безопасно (в отличие от StorageError ниже, где
-// identity типа важна для errors.As).
+// phasePlanning — локальная копия orchestrator.phasePlanning.
 const phasePlanning = string(flow.PhasePlanning)
 
 type FSMEvent string
@@ -32,31 +28,17 @@ const (
 	EvBlockedByDep     FSMEvent = "blocked_by_dep"
 	EvReady            FSMEvent = "ready"
 	// EvHookFailed: script_before exhausted its retries — blocks the stage.
-	// Only fired for the blocking "before" hook; "after" hook failures do not
-	// go through the FSM (the stage is already done and must stay done).
 	EvHookFailed FSMEvent = "hook_failed"
 	// EvHookResolved: user retried (succeeded) or skipped a failed before-hook.
 	EvHookResolved FSMEvent = "hook_resolved"
-	// EvPause — стадия приостанавливается: либо auto_run:false не дал ей
-	// начать первую активацию из Pending (Task 5's shouldGateAutoRun), либо
-	// пользователь вручную поставил на паузу уже бегущую/ожидающую-повтора
-	// стадию (Running/Planning/Revising/Retrying).
+	// EvPause — стадия приостанавливается: либо auto_run:false не дал ей начать первую активацию из Pending,
+	// либо пользователь вручную поставил на паузу уже бегущую/ожидающую-повтора стадию.
 	EvPause FSMEvent = "pause"
-	// EvContinue возвращает стадию из paused туда, откуда она была
-	// приостановлена (ctx.PausedFrom) — реальный перезапуск агента делает
-	// вызывающий код (Orchestrator.Continue), а не сама FSM-таблица.
+	// EvContinue возвращает стадию из paused туда, откуда она была приостановлена — реальный перезапуск
+	// агента делает вызывающий код, а не сама FSM-таблица.
 	EvContinue FSMEvent = "continue"
-	// EvVerifyFail — H1 (6-е код-ревью): АТОМАРНЫЙ аналог EvFail для
-	// verify-driven исходов (needs_changes-исчерпание/exec-ошибка
-	// верификатора, retry.go's runWithRetry). В отличие от EvFail (From: nil,
-	// разрешает любой нетерминальный статус — так и должно оставаться для
-	// остальных call site'ов: "cancelled during retry", "retries exhausted"),
-	// у EvVerifyFail ограниченный From (см. NewFSM ниже) — CAS store.Apply
-	// атомарно отбрасывает переход, если конкурентный Pause()/Revise() успел
-	// закоммититься МЕЖДУ verify-driven кодом, читающим статус, и этим
-	// событием (TOCTOU-зазор, который read-then-act не мог закрыть в
-	// принципе). Не трогает существующий From:nil у EvFail — другие call
-	// site'ы EvFail сознательно должны срабатывать из любого статуса.
+	// EvVerifyFail — H1: АТОМАРНЫЙ аналог EvFail для verify-driven исходов. Не трогает существующий From:nil
+	// у EvFail — другие call site'ы EvFail сознательно должны срабатывать из любого статуса.
 	EvVerifyFail FSMEvent = "verify_fail"
 )
 
@@ -80,17 +62,8 @@ type FSM struct {
 
 var ErrNoRule = errors.New("no rule for event")
 
-// StorageError signals that FSM.Apply failed because the underlying log
-// write failed (authoritative event log append error) — as opposed to a
-// benign state.ErrConcurrentChange (CAS mismatch, silently dropped) or
-// ErrNoRule (unknown event, logged and dropped without failing the run).
-// Callers (orchestrator.Trigger) use errors.As(err, &se *StorageError) to
-// decide whether to setFatal() and stop the run. Lives here (not in
-// orchestrator/errors.go) because it's constructed only by FSM.Apply below;
-// orchestrator/errors.go keeps a `type StorageError = bus.StorageError`
-// alias so existing errors.As call sites there and in orchestrator.go don't
-// need a bus. prefix — same pattern as the stagefiles.IncompleteWorkError/
-// MissingArtifactError aliases from Task 3.
+// StorageError signals that FSM.Apply failed because the underlying log write failed — as opposed to a
+// benign state.ErrConcurrentChange or ErrNoRule.
 type StorageError struct{ Inner error }
 
 func (e *StorageError) Error() string { return "storage failure: " + e.Inner.Error() }
@@ -104,56 +77,26 @@ func NewFSM(store *state.Store) *FSM {
 		store: store,
 		rules: map[FSMEvent]Rule{
 			EvStartPlanning: {From: []state.StageStatus{state.StatusPending, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusPlanning)},
-			// AwaitingUserInput разрешён по той же причине, что и в EvComplete
-			// ниже: поллер вопросов может независимо перевести стадию туда
-			// из-за постороннего, брошенного вопроса, пока планирующий агент
-			// ещё жив и вот-вот вернёт валидный plan.md.
+			// Поллер может перевести ещё живого planning-агента в AwaitingUserInput; валидный план всё равно должен
+			// завершить planning.
 			EvPlanReady: {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingApproval)},
 			EvApprove:   {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
 			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused}, To: to(state.StatusRevising)},
-			// Revising тоже разрешён здесь: run<Phase>WithFeedback (кроме
-			// planning-варианта, у которого свой EvStartPlanning) переводит
-			// стадию обратно в Running этим же событием ПЕРЕД повторным
-			// runWithRetry — без этого стадия застревала бы в Revising
-			// навсегда (onAgentCompleted и EvComplete ждут Running/Retrying).
+			// Revising тоже разрешён здесь: run<Phase>WithFeedback переводит стадию обратно в Running этим же
+			// событием ПЕРЕД повторным runWithRetry — без этого стадия застревала бы в Revising навсегда.
 			EvStartRun: {From: []state.StageStatus{state.StatusReady, state.StatusRevising}, To: to(state.StatusRunning)},
-			// AwaitingUserInput тоже разрешён: найдено разбором реального
-			// прод-лога + живым браузерным тестом — afm's собственный
-			// поллер вопросов может независимо перевести стадию в
-			// AwaitingUserInput из-за постороннего, брошенного вопроса
-			// (никто никогда на него не ответит), ПОКА агент ещё жив и
-			// вот-вот вернёт nil, уже дописав execution_summary.md/.done.
-			// runWithRetry (retry.go) проверяет completion ДО открытого
-			// вопроса именно ради этого — но раз EvComplete сам не признаёт
-			// AwaitingUserInput валидным источником, completeStage молча
-			// отбрасывал переход, и стадия зависала навсегда: агентского
-			// процесса больше нет, чтобы вернуться и попробовать снова.
+			// Разрешаем completion из AwaitingUserInput: поллер мог обнаружить брошенный вопрос до завершения
+			// живого агента.
 			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusDone)},
 			EvFail:     {From: nil, To: to(state.StatusFailed)},
-			// EvVerifyFail — намеренно ЗЕРКАЛИТ From-набор EvComplete (те же
-			// "активные" статусы, из которых verify-driven исход вообще может
-			// легитимно случиться), но НЕ включает Paused/Revising: если
-			// стадия уже там, её владеет конкурентный Pause()/Revise(), а не
-			// устаревший verify-исход. CAS отбрасывает переход (ok=false) —
-			// вызывающий код (retry.go's commitVerifyFailure) обязан ничего
-			// больше не коммитить.
+			// EvVerifyFail — намеренно ЗЕРКАЛИТ From-набор EvComplete, но НЕ включает Paused/Revising: если стадия
+			// уже там, её владеет конкурентный Pause/Revise, а не устаревший verify-исход.
 			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusFailed)},
-			// EvAskUser must be reachable from any state the question poller scans
-			// (planning, running, plus the retry/revision cycles where an agent can
-			// ask mid-flight). Without retrying/revising here the transition is
-			// silently rejected and the stage never reaches awaiting_user_input,
-			// which breaks the cancel path and the onUserAnswered restart path.
+			// EvAskUser must be reachable from any state the question poller scans.
 			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
 			EvUserAnswered: {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
-			// AwaitingUserInput разрешён по той же причине, что и в EvComplete/
-			// EvPlanReady: поллер вопросов мог перевести стадию Running→
-			// AwaitingUserInput из-за постороннего брошенного вопроса, пока агент
-			// ещё выполнялся, и лишь ПОТОМ агент вернул ретраибельную ошибку (529).
-			// Без AwaitingUserInput здесь оба перехода молча отбрасывались, и всё
-			// время бэкоффа стадия показывала awaiting_user_input вместо retrying;
-			// работало только за счёт fallthrough (повторный запуск агента) —
-			// хрупко: любое будущее `return` на этой ветке превратило бы это в
-			// вечный висяк. См. TestFSM_RetryFromAwaitingUserInput.
+			// Разрешаем retry из AwaitingUserInput: поллер мог сменить статус до возврата ретраибельной ошибки
+			// агента.
 			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput}, To: to(state.StatusRetrying)},
 			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying, state.StatusAwaitingUserInput}, To: phaseDispatch},
 			EvManualRetry:      {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending)},
@@ -174,17 +117,8 @@ func phaseDispatch(ctx GuardCtx) state.StageStatus {
 	return state.StatusRunning
 }
 
-// Apply возвращает вместе со статусом и seq применённой transition (0, если
-// переход не применился) — единственный надёжный источник seq для Trigger,
-// который прикладывает его к live-событию (дедуп истории /api/events с
-// live-потоком на фронте по стабильному ключу, а не по содержимому). from —
-// статус, реально прочитанный ЗДЕСЬ для CAS-проверки ruleAllowsFrom (не
-// отдельное чтение o.currentStatus() до Apply — codex MAJ#5: та отдельная
-// гонка читала статус до, а не в момент CAS, так что lifecycle-payload мог
-// увидеть from, отличный от того, что реально проверялся). Возвращается во
-// всех ветках, включая err/not-applied (from=to=current, seq=0), — вызывающий
-// код (triggerWithSeq) публикует lifecycle-событие только при ok=true, но
-// сигнатура остаётся однородной.
+// Apply возвращает вместе со статусом и seq применённой transition — единственный надёжный источник seq
+// для Trigger, который прикладывает его к live-событию.
 func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (from, to state.StageStatus, seq uint64, ok bool, err error) {
 	current := f.store.Get(stageID)
 	rule, ruleOK := f.rules[ev]

@@ -10,12 +10,6 @@ import (
 	"testing"
 )
 
-// TestRead_And_Reference exercises the real Read/Reference implementations
-// end to end on a live temp root: a small text file is read with the right
-// language/displayPath/marker, an oversized file is rejected with
-// ErrTooLarge, a file with a NUL byte is rejected with ErrBinary, and
-// Reference (unlike Read) still succeeds for the oversized file — it never
-// reads the content, only builds the marker.
 func TestRead_And_Reference(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "a.go"), "package a\n")

@@ -1,16 +1,10 @@
-// Презентация «бокового» разговора (Side agent) в тех же FeedItem/FeedGroup, что
-// и лента стадий — чтобы переиспользовать FeedGroupView/Markdown БЕЗ подделки
-// событий стадии (у беседы собственный журнал, см. pkg/sideagent). Mapper 1:1
-// переводит SideAgentEvent → FeedItem; группировка и рендер — те же примитивы
-// (groupFeedItems/FeedGroupView), что у FeedWorkspace.
+// Презентация «бокового» разговора в тех же FeedItem/FeedGroup, что и лента стадий — чтобы
+// переиспользовать FeedGroupView/Markdown БЕЗ подделки событий стадии.
 
 import { errorCodeToMessage, type SideAgentEvent } from '../../types/side-agent'
 import { formatEventGap, groupFeedItems, type FeedGroup, type FeedItem } from '../feed-workspace/feed-view-model'
 
-// mapSideAgentEvent — единственная точка соответствия «тип события беседы →
-// презентация». null — событие сознательно не рендерится строкой (turn_started/
-// turn_completed не несут видимого пользователю контента: статус запроса и имя
-// команды показываются модалкой отдельно).
+// mapSideAgentEvent — единственная точка соответствия «тип события беседы → презентация».
 type Mapped = Pick<FeedItem, 'actor' | 'side' | 'tone' | 'kind' | 'text' | 'mono'> & { markdown?: boolean }
 
 function mapSideAgentEvent(event: SideAgentEvent): Mapped | null {
@@ -28,10 +22,7 @@ function mapSideAgentEvent(event: SideAgentEvent): Mapped | null {
       return { actor: 'agent', side: 'left', tone: 'neutral', kind: 'tool', text: `${tool}${detail !== '' ? `: ${detail}` : ''}`, mono: true }
     }
     case 'turn_failed': {
-      // Код → короткий человекочитаемый текст (тот же errorCodeToMessage, что у
-      // клиентских ошибок). message (уже редактированный на бэкенде, инвариант 8)
-      // дописывается, только если непустой — чтобы не потерять диагностику, не
-      // дублируя её при пустом поле.
+      // Код → короткий человекочитаемый текст.
       const label = errorCodeToMessage(event.data.code)
       const { message } = event.data
       return { actor: 'system', side: 'left', tone: 'danger', kind: 'status', text: message !== '' ? `${label}: ${message}` : label, mono: false }
@@ -46,12 +37,8 @@ function mapSideAgentEvent(event: SideAgentEvent): Mapped | null {
   }
 }
 
-// toSideAgentFeedItems — события беседы → FeedItem[]. Ключ строки — стабильный
-// `seq:<seq>` (seq монотонен и уникален в журнале беседы): replay/переоткрытие
-// окна НЕ меняют ключи, поэтому entrance-анимации старых сообщений не
-// перезапускаются. gap считается ровно как в ленте стадий (formatEventGap).
-// stageId пуст — у беседы нет стадии (FeedGroupView со stageId==='' не рисует
-// бейдж, группировка идёт по стороне/актору).
+// toSideAgentFeedItems — события беседы → FeedItem[]. gap считается ровно как в ленте стадий
+// (formatEventGap).
 export function toSideAgentFeedItems(events: SideAgentEvent[]): FeedItem[] {
   const items: FeedItem[] = []
   events.forEach((event, index) => {

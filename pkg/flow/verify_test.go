@@ -14,9 +14,8 @@ type verifyHolder struct {
 	Verify VerifySpec `yaml:"verify,omitempty"`
 }
 
-// parseVerify декодирует YAML-фрагмент "verify: ..." и, если декодирование
-// прошло успешно, сразу прогоняет validate(stageID) — так тестируется вся
-// цепочка целиком (ровно то, что делает Flow.validate() в V1.2).
+// parseVerify декодирует YAML-фрагмент "verify: ..." и, если декодирование прошло успешно, сразу прогоняет
+// validate — так тестируется вся цепочка целиком.
 func parseVerify(t *testing.T, yamlSrc, stageID string) (VerifySpec, error) {
 	t.Helper()
 	var h verifyHolder
@@ -218,9 +217,8 @@ func TestVerifySpec_IsEmpty(t *testing.T) {
 }
 
 func TestVerifySpec_MarshalRoundTrip(t *testing.T) {
-	// Скаляр маршалится обратно скаляром (fromScalar=true), а не объектом —
-	// это нужно afm init (генерирует flow.Stage в памяти и сериализует в
-	// flow.yaml, см. cmd/afm/init_archetype_test.go).
+	// Скаляр маршалится обратно скаляром (fromScalar=true), а не объектом — это нужно afm init (генерирует
+	// flow.Stage в памяти и сериализует в flow.yaml, см. cmd/afm/init_archetype_test.go).
 	spec, err := parseVerify(t, `verify: "go test ./..."`, "s1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

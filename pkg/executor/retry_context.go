@@ -5,11 +5,8 @@ import (
 	"os"
 )
 
-// RenderActions parses a stage's raw stream-json log (<phase>.jsonl) and
-// returns one line per tool/text action, WITHOUT the Config.TruncateOutput
-// limit applied to <phase>.log — the log's detail is intentionally abbreviated
-// for the dashboard/event feed, but a retry continuation prompt needs to see
-// what the stage actually did in full. Missing or unreadable file returns nil.
+// RenderActions reads full tool/text actions from stream-json for retry context, without display
+// truncation; unreadable logs return nil.
 func RenderActions(jsonlPath string) []string {
 	f, err := os.Open(jsonlPath)
 	if err != nil {

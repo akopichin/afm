@@ -1,8 +1,7 @@
 package accounting
 
-// RateCard is a (possibly partial) set of category rates. Pointer fields
-// distinguish an unset category from an explicit zero (which disables that
-// category's cost). CacheWrite is the fallback for a TTL with no specific rate.
+// RateCard is a set of category rates. Pointer fields distinguish an unset category from an explicit zero
+// (which disables that category's cost).
 type RateCard struct {
 	Input        *Rate `yaml:"input"`
 	CacheRead    *Rate `yaml:"cache_read"`
@@ -33,14 +32,7 @@ var builtins = map[string]RateCard{
 }
 var builtinAsOf = map[string]string{"claude-opus-4-8": "2026-09-14", "glm-5.3": "2026-09-14", "codex/gpt-5.6-sol": "2026-09-14"}
 
-// card builds a builtin RateCard. The generic CacheWrite is set to the same
-// value as the 1h write rate: it's the fallback used both for a TTL bucket
-// with no rate of its own (see cacheWriteRate) AND for CacheWriteOther — the
-// bucket normalize.go fills with ALL cache-creation tokens when an Anthropic
-// usage line doesn't break them down by TTL at all. Without this, a
-// fully-priced builtin model with only CacheWriteOther tokens (no explicit
-// 5m/1h split) would fail ResolvedRate.missingCategory and get flipped to
-// unpriced — the opposite of what a "complete builtin card" should do.
+// card builds a builtin RateCard.
 func card(input, cacheRead, write5m, write1h, output Rate) RateCard {
 	cacheWrite := write1h
 	return RateCard{Input: &input, CacheRead: &cacheRead, CacheWrite: &cacheWrite, CacheWrite5m: &write5m, CacheWrite1h: &write1h, Output: &output}
@@ -50,14 +42,7 @@ type Resolver struct{ cfg PricingConfig }
 
 func NewResolver(cfg PricingConfig) *Resolver { return &Resolver{cfg: cfg} }
 
-// Resolve applies precedence: config channel/model → config model → builtin
-// channel/model → builtin model. A config card is MERGED onto the builtin
-// card for the same key (per-category: config wins, builtin fills any gap)
-// when a builtin exists for that key — a partial override no longer silently
-// zeroes the categories the user didn't mention. Returns ok=false (unpriced)
-// only when nothing matches at all; a resolved-but-incomplete card (no
-// builtin to fall back to, and still missing a category the caller needs) is
-// caught later by ResolvedRate.missingCategory, not here.
+// Resolve applies precedence: config channel/model → config model → builtin channel/model → builtin model.
 func (r *Resolver) Resolve(channel, model string) (ResolvedRate, bool) {
 	chKey := channel + "/" + model
 	if channel != "" {
@@ -79,14 +64,8 @@ func (r *Resolver) Resolve(channel, model string) (ResolvedRate, bool) {
 	return ResolvedRate{}, false
 }
 
-// mergeWithBuiltin merges a config-supplied card onto the builtin card for
-// the same key: per category, the config's *Rate wins if set, else the
-// builtin's is used. If there is no builtin for this key (a user-defined /
-// unknown model), the config card is returned verbatim — there's nothing to
-// merge onto. Source stays "config" either way (a merged card is still
-// config-sourced, just filled out); asOf is taken from the builtin when one
-// was used to fill gaps, since that's the provenance of any builtin value
-// the resulting cost figure might rely on.
+// mergeWithBuiltin merges a config-supplied card onto the builtin card for the same key: per category, the
+// config's *Rate wins if set, else the builtin's is used.
 func mergeWithBuiltin(key string, cfgCard RateCard) ResolvedRate {
 	b, ok := builtins[key]
 	if !ok {
@@ -127,13 +106,8 @@ func (rr ResolvedRate) cacheWriteRate(specific *Rate) Rate {
 	return rate(rr.card.CacheWrite)
 }
 
-// missingCategory reports whether any token category actually present in t
-// (count > 0) has no rate to price it with, respecting the same fallbacks
-// cost() uses: CacheWrite5m/1h fall back to the generic CacheWrite rate, and
-// CacheWriteOther is priced ONLY by the generic CacheWrite rate (it has no
-// TTL-specific fallback of its own). A card missing a category the
-// observation never actually used is fine — only ENCOUNTERED categories must
-// be covered for the record to be considered fully priced.
+// missingCategory checks rates for used categories, with generic cache-write fallbacks; CacheWriteOther
+// needs a generic rate.
 func (rr ResolvedRate) missingCategory(t Tokens) bool {
 	if t.UncachedInput > 0 && rr.card.Input == nil {
 		return true

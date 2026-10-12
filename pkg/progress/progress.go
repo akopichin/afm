@@ -80,10 +80,8 @@ func (l *Logger) Close() error {
 	return l.f.Close()
 }
 
-// ErrLockBusy означает, что лок уже удерживается другим процессом
-// (EWOULDBLOCK/EAGAIN на unix, ERROR_LOCK_VIOLATION на Windows) — то есть
-// реальную contention, а не сбой ввода-вывода (EACCES, отсутствующий
-// родительский каталог, исчерпание файловых дескрипторов и т.п.).
+// ErrLockBusy означает, что лок уже удерживается другим процессом — то есть реальную contention, а не сбой
+// ввода-вывода.
 var ErrLockBusy = errors.New("lock held by another process")
 
 // Lock is a file-based exclusive lock.

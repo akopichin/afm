@@ -7,11 +7,7 @@ import { DialogChannel } from './DialogChannel'
 import { FileBrowserProvider } from '../file-browser'
 import { answerDialog, FlowApiError } from '../../api/run-client'
 
-// answerDialog заменяется на vi.fn(), обёрнутый вокруг реальной реализации
-// (пропускает вызовы дальше, к fetch) — так существующие тесты, проверяющие
-// POST-тело через spy на globalThis.fetch, продолжают работать без изменений,
-// а тесты answer_out_of_order/generic-error переопределяют его по одному
-// разу через mockRejectedValueOnce.
+// vi.fn оборачивает реальный answerDialog; отдельные тесты подменяют rejection без потери проверок fetch.
 vi.mock('../../api/run-client', async () => {
   const actual = await vi.importActual<typeof import('../../api/run-client')>('../../api/run-client')
   return {
@@ -20,9 +16,8 @@ vi.mock('../../api/run-client', async () => {
   }
 })
 
-// jumpToBottom заспайен на уровне модуля (не через spyOn существующего хука, у которого
-// в jsdom scrollHeight всегда 0 и реальный скролл незаметен) — так тест #7 может
-// проверить сам факт вызова при переходе панели в maximized, не завися от layout jsdom.
+// jumpToBottom заспайен на уровне модуля — так тест #7 может проверить сам факт вызова при переходе панели
+// в maximized, не завися от layout jsdom.
 const mockJumpToBottom = vi.fn()
 const mockRelease = vi.fn()
 
@@ -46,11 +41,8 @@ function jsonResponse(data: unknown): Response {
   return { ok: true, json: async () => data } as Response
 }
 
-// use-auto-grow-textarea also calls the SAME HTMLElement.prototype.scrollIntoView
-// spied on below (with block:'nearest', for a growing pending-question textarea) —
-// noise unrelated to the scrollTarget effect under test, which always calls it
-// with block:'start' (align the target's TOP to the container top). Filters that
-// noise out and returns the target elements.
+// Filter scrollIntoView calls to block:start so textarea auto-grow does not affect target-scroll
+// assertions.
 function centeredScrollCalls(spy: ReturnType<typeof vi.spyOn>): HTMLElement[] {
   return spy.mock.calls
     .map((call, index) => ({ arg: call[0] as ScrollIntoViewOptions | undefined, context: spy.mock.contexts[index] }))
@@ -78,11 +70,8 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
   }
 }
 
-// DialogChannel's per-line question-comment textarea now renders with
-// allowFileReferences (Task 14) — its "Attach project file" button calls
-// useFileBrowser(), which throws outside a FileBrowserProvider. Every render
-// in this file goes through this wrapper, same as App.tsx wraps the whole
-// dashboard in prod.
+// DialogChannel's per-line question-comment textarea now renders with allowFileReferences — its "Attach
+// project file" button calls useFileBrowser, which throws outside a FileBrowserProvider.
 function renderDialogChannel(ui: ReactElement, enabled = true) {
   return render(
     <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={enabled}>
@@ -423,9 +412,8 @@ describe('DialogChannel', () => {
     expect(screen.getAllByRole('button', { name: 'Attach' })).toHaveLength(2)
   })
 
-  // Finding 5 + R2 #6a: capabilities.file_browser=false must hide the PROJECT
-  // picker (no /api/files call), но НЕ саму скрепку — «Upload image…» работает и
-  // в host mode. Раньше отсутствие capability прятало весь Attach.
+  // Finding 5 + R2 #6a: capabilities.file_browser=false must hide the PROJECT picker, но НЕ саму скрепку —
+  // «Upload image…» работает и в host mode.
   test('capabilities.file_browser=false: the comment textarea offers Upload image but no project picker and never calls the files API', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -775,12 +763,8 @@ describe('DialogChannel', () => {
     expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
   })
 
-  // Task 2: opening a comment form (add or edit) — regardless of whether the
-  // draft text is empty — must gate answer SEND/Send feedback via
-  // doc.activeCommentLine, not just doc.hasOpenDraft (which only covers a
-  // NON-empty draft). Otherwise clicking a question line to start a comment,
-  // then immediately hitting SEND/Send feedback before typing anything,
-  // discards the in-progress comment form.
+  // Task 2: opening a comment form — regardless of whether the draft text is empty — must gate answer
+  // SEND/Send feedback via doc.activeCommentLine, not just doc.hasOpenDraft.
   test('▸ SEND is disabled while an empty comment form is open, and re-enables once closed', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -840,9 +824,8 @@ describe('DialogChannel', () => {
     expect(feedbackBtn).not.toBeDisabled()
   })
 
-  // codex MEDIUM: the answer textarea's Ctrl/Cmd+Enter is a keyboard-submit
-  // path that a disabled SEND button does not intercept — it must be gated
-  // separately.
+  // codex MEDIUM: the answer textarea's Ctrl/Cmd+Enter is a keyboard-submit path that a disabled SEND
+  // button does not intercept — it must be gated separately.
   test('Ctrl+Enter in the answer textarea does not send while a comment form is open', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
@@ -923,9 +906,7 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'CANCEL STAGE' })
     fireEvent.click(screen.getByRole('button', { name: 'CANCEL STAGE' }))
 
-    // Give any (incorrect) fetch call a chance to happen before asserting its absence.
-    // Wrapped in act: a pending requestAnimationFrame (auto-scroll-to-pending-question)
-    // may still flush a state update while we wait.
+    // Give any fetch call a chance to happen before asserting its absence.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
@@ -1051,9 +1032,8 @@ describe('DialogChannel', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  // Finding #7: overlapping /dialog polls can resolve out of order. An older
-  // (pre-answer) response resolving AFTER a newer (answered) one must not revert
-  // the answered question back to pending.
+  // Finding #7: overlapping /dialog polls can resolve out of order. An older (pre-answer) response
+  // resolving AFTER a newer (answered) one must not revert the answered question back to pending.
   test('stale dialog response does not revert an answered question to pending', async () => {
     vi.useFakeTimers()
 
@@ -1125,10 +1105,7 @@ describe('DialogChannel', () => {
     expect(container.querySelector('#dialog-pending')).not.toBeNull()
   })
 
-  // codex MAJOR#4: reload() (called after a successful answer) used to run its
-  // own setEntries/reset WITHOUT bumping the shared generation counter — an
-  // in-flight poll issued before the answer, still pending, could resolve
-  // AFTER reload() applied the new question and stomp it back to the old one.
+  // A stale poll must not overwrite the question applied by reload after answering.
   test('a stale in-flight poll resolving after reload() does not revert to the previous question', async () => {
     vi.useFakeTimers()
 
@@ -1180,9 +1157,8 @@ describe('DialogChannel', () => {
     })
     expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
 
-    // The stale poll (call #2, requestId assigned before reload's own bump)
-    // resolves LATE with the OLD q1 data — the shared generation guard must
-    // drop it instead of reverting the just-applied q2.
+    // The stale poll (call #2, requestId assigned before reload's own bump) resolves LATE with the OLD q1
+    // data — the shared generation guard must drop it instead of reverting the just-applied q2.
     await act(async () => {
       resolveStalePoll(jsonResponse([q1]))
       await Promise.resolve()
@@ -1192,10 +1168,7 @@ describe('DialogChannel', () => {
     expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
   })
 
-  // codex MAJOR#4: reload() used to reset the draft/selection WITHOUT updating
-  // the poll effect's own "last pending key" — the very next 2s poll then saw
-  // the (already-applied) new question as "changed" and wiped the draft a
-  // second time, discarding anything the user had just started typing on it.
+  // The next poll must preserve a draft started after reload applies a new question.
   test('a poll right after reload() does not re-clear a draft started on the new pending question', async () => {
     vi.useFakeTimers()
 
@@ -1244,15 +1217,8 @@ describe('DialogChannel', () => {
     expect((container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement).value).toBe('draft for q2')
   })
 
-  // codex MAJOR: reload() (called from sendAnswer/sendFeedback after a
-  // successful POST) used to be bound only to the `stage` closed over at the
-  // moment it was invoked, not to whichever stage is CURRENTLY mounted in the
-  // panel. If the answer POST for stage A is still in flight when the user
-  // switches the panel to stage B, A's reload() ran anyway once the POST
-  // resolved — bumping the SHARED requestGenRef (invalidating B's own
-  // legitimate poll) and applying A's dialog data on top of B's panel. The
-  // currentStageIdRef guard must make A's stale reload() a no-op once the
-  // panel has moved on to B.
+  // codex MAJOR: reload used to be bound only to the `stage` closed over at the moment it was invoked, not
+  // to whichever stage is CURRENTLY mounted in the panel.
   test("an answer POST for stage A resolving after switching to stage B does not overwrite B's panel", async () => {
     const stageA = makeStage({ id: 'A' })
     const stageB = makeStage({ id: 'B' })
@@ -1288,9 +1254,8 @@ describe('DialogChannel', () => {
     )
     await screen.findByRole('button', { name: 'BetaB' })
 
-    // Now A's stale answer POST resolves — its reload() (closed over stage A)
-    // must see that the panel has moved on to stage B and no-op instead of
-    // applying A's data (or A's absence of data) onto B's panel.
+    // Now A's stale answer POST resolves — its reload must see that the panel has moved on to stage B and
+    // no-op instead of applying A's data onto B's panel.
     await act(async () => {
       resolveAnswerA({ ok: true } as Response)
       await Promise.resolve()
@@ -1361,9 +1326,8 @@ describe('DialogChannel', () => {
     expect((container.querySelector('.btn-send') as HTMLButtonElement).disabled).toBe(false)
   })
 
-  // Task 7: answerDialog теперь бросает типизированный FlowApiError — панель
-  // резинхронизируется (discard draft) ТОЛЬКО для code==='answer_out_of_order',
-  // любая другая ошибка сохраняет черновик пользователя.
+  // Task 7: answerDialog теперь бросает типизированный FlowApiError — панель резинхронизируется ТОЛЬКО для
+  // code==='answer_out_of_order', любая другая ошибка сохраняет черновик пользователя.
   test('answer_out_of_order rejection triggers reload() and discards the stale selection', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -1373,12 +1337,8 @@ describe('DialogChannel', () => {
       options: ['Alpha'],
       allow_custom: true,
     }
-    // reload()'s /dialog re-fetch (after the 409) reflects the real cause of an
-    // answer_out_of_order rejection: the server-side question actually moved on
-    // (here: a phase change) while the client still held a stale view — so the
-    // (phase,id) key genuinely changes and applyDialog's reset fires. Same id
-    // and options as before, so the "Alpha" button still renders — only its
-    // "selected" state must be gone.
+    // Reload after 409 changes phase while retaining options, proving stale selection resets on the new
+    // question key.
     const pendingAfterReload: RawDialogEntry = { ...pending, phase: 'p2' }
     let getCallCount = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
@@ -1460,10 +1420,7 @@ describe('DialogChannel', () => {
     expect(newTextarea.value).toBe('')
   })
 
-  // Task 6: переход из ленты (FeedWorkspace.onOpenDialog) передаёт scrollTarget —
-  // канал должен доскроллить до конкретного Q&A. /dialog грузится асинхронно,
-  // поэтому якорь (#qa-<phase>-<id>) на маунте ещё не существует — цель нужно
-  // удержать и повторить попытку после того, как история дорисуется.
+  // Task 6: переход из ленты передаёт scrollTarget — канал должен доскроллить до конкретного Q&A.
   describe('scrollTarget', () => {
     test('delayed-fetch: scroll fires only after the matching qa-<phase>-<id> anchor renders', async () => {
       const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
@@ -1477,9 +1434,7 @@ describe('DialogChannel', () => {
         <DialogChannel stage={makeStage({ status: 'done' })} scrollTarget={{ stageId: 's1', phase: 'planning', id: 'q1' }} />,
       )
 
-      // /dialog ещё не ответил — ни истории, ни якоря в DOM. hasContent=false
-      // (status не awaiting_user_input, hasDialog=false, entries=[]) → панель
-      // ещё вообще ничего не рендерит, и попытка скролла не может найти анкор.
+      // /dialog ещё не ответил — ни истории, ни якоря в DOM.
       expect(container.querySelector(`#qa-planning-q1`)).toBeNull()
       expect(scrollSpy).not.toHaveBeenCalled()
 
@@ -1549,10 +1504,8 @@ describe('DialogChannel', () => {
       )
 
       await waitFor(() => expect(container.querySelector('#qa-planning-q1')).not.toBeNull())
-      // Отфильтровываем шум от use-auto-grow-textarea (тот же
-      // HTMLElement.prototype.scrollIntoView, но вызывается с block:'nearest'
-      // для растущего textarea pending-вопроса) — нас интересует только вызов
-      // ИЗ прицельного эффекта (block:'center').
+      // Отфильтровываем шум от use-auto-grow-textarea — нас интересует только вызов ИЗ прицельного
+      // эффекта.
       await waitFor(() => expect(centeredScrollCalls(scrollSpy)).toHaveLength(1))
 
       // Скроллили именно к отвеченному planning/q1, а не к #dialog-pending
@@ -1560,9 +1513,8 @@ describe('DialogChannel', () => {
       expect(centeredScrollCalls(scrollSpy)[0]?.id).toBe('qa-planning-q1')
     })
 
-    // F5: клик по старому отвеченному Q&A, пока ждёт ответа НОВЫЙ вопрос —
-    // автопрыжок в конец (эффект на pending?.id) не должен перебивать
-    // прицельный скролл к старому ответу.
+    // F5: клик по старому отвеченному Q&A, пока ждёт ответа НОВЫЙ вопрос — автопрыжок в конец (эффект на
+    // pending?.id) не должен перебивать прицельный скролл к старому ответу.
     test('F5: targeting an older answered Q&A while a newer question is pending does not get overridden by the pending auto-jump', async () => {
       const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
       const entries = [
@@ -1608,9 +1560,8 @@ describe('DialogChannel', () => {
       expect(scrollSpy).not.toHaveBeenCalled()
     })
 
-    // F6b: после успешного применения цели родитель должен получить сигнал —
-    // без него он никогда не сбросит scrollToDialogTarget, и она переживёт своё
-    // назначение (реплей скролла при повторном открытии того же диалога).
+    // F6b: после успешного применения цели родитель должен получить сигнал — без него он никогда не
+    // сбросит scrollToDialogTarget, и она переживёт своё назначение.
     test('F6: onTargetConsumed fires exactly once after a successful scroll', async () => {
       vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {})
       const entries = [{ id: 'q1', phase: 'planning', question: 'Q', answer: 'A' }]
@@ -1629,12 +1580,7 @@ describe('DialogChannel', () => {
       await waitFor(() => expect(onTargetConsumed).toHaveBeenCalledTimes(1))
     })
 
-    // R1: clearing retainedTarget after a successful targeted scroll re-runs the
-    // pending auto-jump effect (it lists retainedTarget in its deps), which now
-    // sees retainedTarget===null and schedules requestAnimationFrame(jumpToBottom)
-    // — undoing the targeted scroll one frame later. The old F5 test only checked
-    // the immediate frame and missed this; this test advances a FAKED rAF past
-    // that frame and asserts the undo never happens.
+    // Advance mocked rAF after targeted scrolling to prove a pending auto-jump cannot undo it.
     test('R1: clearing the target after a successful scroll does not schedule a delayed jump back to the pending question', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'],
@@ -1667,11 +1613,7 @@ describe('DialogChannel', () => {
       expect(centeredScrollCalls(scrollSpy)).toHaveLength(1)
     })
 
-    // R2: a same-stage target whose anchor never appears (the id doesn't exist
-    // in this stage's dialog) used to retain the target FOREVER — with R1 fixed
-    // via a ref, the pending auto-jump stays suppressed for every future pending
-    // question, and the parent never gets onTargetConsumed to clear its own
-    // target. A bounded give-up timer must release it.
+    // A missing anchor must time out, release its target, and restore pending-question auto-scroll.
     test('R2: a same-stage target whose anchor never appears is released after the give-up window, restoring normal auto-jump', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'],

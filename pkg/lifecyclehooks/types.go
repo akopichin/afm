@@ -1,6 +1,5 @@
-// Package lifecyclehooks реализует observer-only lifecycle-хуки AFM (Phase 1):
-// команды, получающие JSON-payload события в stdin. Ошибка хука никогда не
-// меняет FSM. Спека: docs/superpowers/specs/2026-09-18-lifecycle-hooks-design.md.
+// Package lifecyclehooks реализует observer-only lifecycle-хуки AFM: команды, получающие JSON-payload
+// события в stdin. Ошибка хука никогда не меняет FSM.
 package lifecyclehooks
 
 import (
@@ -105,10 +104,7 @@ func (s *EventSelector) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
-// SecretRef — ссылка на источник секрета для env-переменной хука: либо
-// "env:NAME" (взять из окружения afm-процесса), либо "file:PATH" (прочитать
-// файл). Существование источника не проверяется при парсинге/валидации
-// флоу — это Task 3 (резолв в рантайме).
+// SecretRef — ссылка на источник секрета для env-переменной хука: либо "env:NAME", либо "file:PATH".
 type SecretRef string
 
 // Hook — декларация lifecycle-хука (одинаковая для config/flow/stage слоёв).
@@ -119,17 +115,12 @@ type Hook struct {
 	Command    string        `yaml:"command"`
 	Timeout    time.Duration `yaml:"timeout,omitempty"` // 0 → DefaultHookTimeout в runner
 	Retries    int           `yaml:"retries,omitempty"` // 0 → одна попытка
-	// Env — дополнительные переменные окружения процесса хука: имя целевой
-	// переменной → ссылка на источник секрета. Существование источника
-	// проверяется при резолве (Task 3), не здесь.
+	// Env сопоставляет переменные хука ссылкам на секреты; наличие источника проверяется при резолве.
 	Env map[string]SecretRef `yaml:"env,omitempty"`
-	// InheritEnv — наследовать окружение afm-процесса целиком. Дефолт
-	// false = минимальное окружение (spec-дефолт): хук получает только Env
-	// плюс необходимый минимум (PATH и т.п., задаётся в runner).
+	// InheritEnv — наследовать окружение afm-процесса целиком.
 	InheritEnv bool `yaml:"inherit_env,omitempty"`
-	// ResolvedEnv — резолвнутые значения Env (targetVar→value), проставляются
-	// при сборке dispatcher (cmd/afm/run.go), только в памяти. Не
-	// сериализуется, не пишется в payload/логи.
+	// ResolvedEnv — резолвнутые значения Env (targetVar→value), проставляются при сборке dispatcher
+	// (cmd/afm/run.go), только в памяти. Не сериализуется, не пишется в payload/логи.
 	ResolvedEnv map[string]string `yaml:"-"`
 }
 
@@ -151,12 +142,8 @@ type Event struct {
 	Reason    string
 	Seq       uint64
 	Time      time.Time
-	// Key — необязательный дискриминатор для не-FSM stage-событий, которые
-	// внутри одной активации стадии могут повториться с разной семантикой
-	// (например, два разных auto-answered вопроса q1/q2 в одной фазе).
-	// Участвует в eventID (Dispatcher.eventID), чтобы такие события не
-	// схлопывались в один и тот же id. Пусто для FSM-переходов и
-	// flow-событий — там дискриминатор не нужен.
+	// Key — необязательный дискриминатор для не-FSM stage-событий, которые внутри одной активации стадии
+	// могут повториться с разной семантикой.
 	Key string
 }
 

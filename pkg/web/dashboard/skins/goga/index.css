@@ -1,9 +1,5 @@
-/* pkg/web/dashboard/public/skins/goga/index.css — Goga skin
-   Тёмная tech-тема по мотивам qarium.ru/goga: system sans-serif, плоские панели,
-   без неоновой декорации novacorps. Структура — из ../base/*.css.
-
-   Правила ниже (после @import) при равной специфичности с base побеждают за счёт
-   более позднего порядка в каскаде — .theme-goga-скоупинг больше не нужен. */
+/* pkg/web/dashboard/public/skins/goga/index.css — Goga skin Тёмная tech-тема по мотивам qarium.ru/goga:
+   system sans-serif, плоские панели, без неоновой декорации novacorps. */
 
 @import url("../base/tokens.css");
 @import url("../base/reset.css");
@@ -43,32 +39,23 @@
   --violet:    #3882F6;
   --coral:     #FF6B5A;
 
-  /* cost-ui increment2 (task-12): true violet for the token-mix bar's
-     cache-write segment — goga's own --violet is aliased to blue (matches
-     --amber), so it can't serve as a hue distinct from --accent-primary. */
+  /* cost-ui increment2: true violet for the token-mix bar's cache-write segment — goga's own --violet is
+     aliased to blue, so it can't serve as a hue distinct from --accent-primary. */
   --cost-cachewrite: #c084fc;
 
-  /* FIX 5 (codex#5, AA contrast): dedicated cost tokens, natively defined
-     rather than aliased to --text-muted/--attention (see tokens.css doc).
-     goga's own --ink-dim/--amber already clear AA here — this only makes the
-     dependency explicit, decoupled from unrelated future retuning.
-       --cost-rail        #A0AEC0 on --surface-raised #121830 → 7.76:1
-       --cost-rail-strong #FFFFFF on --surface-raised #121830 → 17.51:1
-       --cost-warning     #3882F6 on --surface-canvas #0A0E1A → 5.22:1 */
+  /* Dedicated cost tokens provide contrast on cost surfaces. */
   --cost-rail:        #A0AEC0;
   --cost-rail-strong: #FFFFFF;
   --cost-warning:     #3882F6;
 
-  /* dialog accents — goga их не переопределял и сегодня, сохраняем
-     дословные значения novacorps (текущее поведение — унаследованные через
-     старый @import — не меняется) */
+  /* dialog accents — goga их не переопределял и сегодня, сохраняем дословные значения novacorps (текущее
+     поведение — унаследованные через старый @import — не меняется) */
   --qa-answer:              #9fe0d8;
   --dialog-option-text:     #d4baff;
   --btn-cancel-dialog-text: #ff8a7a;
 
-  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет,
-     чёрная затемняющая вуаль, одинаковая во всех темах/скинах (не тонируется
-     под палитру, как --bg) */
+  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
+     одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
 
   /* status map */
@@ -114,10 +101,7 @@
   /* cost-ui increment2 (task-12): darkened for AA on white. */
   --cost-cachewrite: #9333ea;
 
-  /* FIX 5 (codex#5, AA contrast) — see the dark block above for rationale.
-       --cost-rail        #64748B on --surface-raised #FFFFFF → 4.76:1
-       --cost-rail-strong #0F172A on --surface-raised #FFFFFF → 17.85:1
-       --cost-warning     #2563EB on --surface-canvas #F7F9FC → 4.90:1 */
+  /* Cost tokens for the light theme. */
   --cost-rail:        #64748B;
   --cost-rail-strong: #0F172A;
   --cost-warning:     #2563EB;
@@ -150,18 +134,11 @@
   --text-dim: var(--ink-dim);
 }
 
-/* === goga-специфика поверх base ===
-   Base-партиалы импортированы выше — эти правила автоматически побеждают
-   одноимённые правила base (равная специфичность, более поздний порядок в
-   каскаде), без .theme-goga-скоупинга старой архитектуры. */
+/* === goga-специфика поверх base === Base-партиалы импортированы выше — эти правила автоматически
+   побеждают одноимённые правила base, без .theme-goga-скоупинга старой архитектуры. */
 
-/* Логотип-слово: goga показывает двухцветный wordmark «Goga» — «Go»
-   цветом --mint (teal/зелёный), «ga» цветом --ink (белый), системным sans-serif.
-   Текст .gh-wordmark («afm») скрыт (font-size:0); слово собирается из
-   ::before/::after, чтобы не делать React-компонент тема-зависимым.
-   Отрицательный margin-left прижимает слово ближе к логотипу-марке (в base
-   .gh-left держит gap:10px). (Редизайн: класс .gh-wordmark пришёл на смену
-   #header h1.) */
+/* Логотип-слово: goga показывает двухцветный wordmark «Goga» — «Go» цветом --mint, «ga» цветом --ink,
+   системным sans-serif. (Редизайн: класс .gh-wordmark пришёл на смену #header h1.) */
 .gh-wordmark {
   font-size: 0;
   letter-spacing: 0;
@@ -214,11 +191,8 @@
   color: var(--mint);
 }
 
-/* === Перекраска хардкодных novacorps low-alpha заливок под goga-палитру.
-   Эти оттенки не токенизированы в base/*.css (сознательное решение дизайна —
-   см. спек, "Что НЕ делаем"), поэтому goga переопределяет каждый селектор
-   явно. Nova Corps: rgba(111,212,204,X) = mint, rgba(229,212,66,X) = amber.
-   Goga:            rgba(32,212,191,X)  = mint, rgba(56,130,246,X)  = amber. */
+/* === Перекраска хардкодных novacorps low-alpha заливок под goga-палитру. Nova Corps: rgba(111,212,204,X)
+   = mint, rgba(229,212,66,X) = amber. */
 
 ::selection { background: rgba(56, 130, 246, 0.35); }
 
@@ -249,9 +223,8 @@
 .plan-section-wrapper.plan-section-assumptions { background: rgba(56, 130, 246, 0.05); }
 .plan-section-wrapper.plan-section-criteria { background: rgba(32, 212, 191, 0.05); }
 
-/* base/dialog-channel.css — .dialog-pending .dialog-custom's *background* is
-   already goga-correct via --panel-bg: var(--bg-elev) (set in the token
-   block above), only its hardcoded border-color still needs recoloring. */
+/* base/dialog-channel.css — .dialog-pending .dialog-custom's *background* is already goga-correct via
+   --panel-bg: var, only its hardcoded border-color still needs recoloring. */
 .dialog-history .qa { border-left-color: rgba(32, 212, 191, 0.2); }
 .phase-divider { border-bottom-color: rgba(32, 212, 191, 0.12); }
 .dialog-pending .dialog-custom { border-color: rgba(32, 212, 191, 0.2); }

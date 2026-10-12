@@ -31,11 +31,8 @@ func assistantTextLine(t *testing.T, text string) string {
 	return string(line)
 }
 
-// emitAssistantTextScript возвращает shell-фрагмент, печатающий text как
-// один финальный ассистентский stream-json блок. Heredoc с закавыченным
-// разделителем ('EOF') не подставляет ничего внутри — весь JSON уходит в
-// stdout буквально, без риска конфликта shell-экранирования с кавычками
-// внутри самого JSON (та же техника, что writeFakeCodex в codex_translator_test.go).
+// emitAssistantTextScript возвращает shell-фрагмент, печатающий text как один финальный ассистентский
+// stream-json блок.
 func emitAssistantTextScript(t *testing.T, text string) string {
 	t.Helper()
 	return "cat <<'EOF'\n" + assistantTextLine(t, text) + "\nEOF"
@@ -47,12 +44,6 @@ func resultSuccessLine() string {
 
 const validNeedsChangesJSON = `{"schema_version":1,"verdict":"needs_changes","summary":"found a real bug","findings":[{"blocking":true,"title":"nil deref","path":"pkg/x/y.go","line_start":10,"line_end":12,"requirement":"must not panic","evidence":"code dereferences p without a nil check","minimal_fix":"add a nil check"}]}`
 
-// TestRunVerifyAgent_FreshSessionNoResumeNoStageDir воспроизводит требование
-// V2b.2: верификатор — ВСЕГДА свежая сессия, независимо от того, что несёт
-// общий Config (унаследованный от автора --resume/session-id) и StageDir
-// (диалоговый протокол верификатору не положен, §7.3 плана). Command —
-// отдельный исполняемый скрипт-файл (не "bash -c"), чтобы захватить РЕАЛЬНЫЙ
-// argv процесса, а не позиционные параметры внутри -c script.
 func TestRunVerifyAgent_FreshSessionNoResumeNoStageDir(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "verify.log")
@@ -107,13 +98,6 @@ func TestRunVerifyAgent_FreshSessionNoResumeNoStageDir(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_SetsCodexVerifyEnv — регрессия на критическую находку
-// ревью: Config.VerifyMode сам по себе ничего не значит для дочернего
-// процесса, если run() не транслирует его в сигнал CODEX_VERIFY=1 в env.
-// Без этой связи codex verify-стадия реально исполнялась бы в обычном
-// danger-full-access режиме — полная противоположность фиче. Тест гоняет
-// RunVerifyAgent END-TO-END (не дёргает CODEX_VERIFY руками, как
-// codex_verify_test.go) и проверяет ПОЛНОЕ окружение дочернего процесса.
 func TestRunVerifyAgent_SetsCodexVerifyEnv(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "verify.log")
@@ -147,9 +131,6 @@ func TestRunVerifyAgent_SetsCodexVerifyEnv(t *testing.T) {
 	}
 }
 
-// TestRunAgent_DoesNotSetCodexVerifyEnv — зеркало предыдущего теста: обычный
-// (не-verify) запуск через RunAgent НЕ должен видеть CODEX_VERIFY вовсе, ни
-// унаследованным из окружения процесса afm, ни выставленным по ошибке.
 func TestRunAgent_DoesNotSetCodexVerifyEnv(t *testing.T) {
 	t.Setenv("CODEX_VERIFY", "1") // симулируем утечку из окружения afm-процесса
 
@@ -183,21 +164,11 @@ func TestRunAgent_DoesNotSetCodexVerifyEnv(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_StripsCrossAgentTransportSecrets — C2 код-ревью:
-// непроверенный верификатор (сторонняя модель, чей вывод afm ПЕРСИСТИТ как
-// raw-result/report) не должен унаследовать транспортные секреты ЧУЖИХ
-// агентов/хуков (AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_*) — иначе он
-// мог бы отразить их в своём JSON-ответе. Обычный (не-verify) агент по-прежнему
-// наследует их без изменений — см. зеркальный тест ниже.
 func TestRunVerifyAgent_StripsCrossAgentTransportSecrets(t *testing.T) {
 	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
 	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
 	t.Setenv("AFM_SYSPROMPT_GLM51", "leaked-system-prompt")
-	// Обычный env верификатора, не относящийся ни к транспортным секретам,
-	// ни к Claude-авторизации автора (см. отдельный тест F4 ниже,
-	// TestRunVerifyAgent_StripsClaudeAuthorCredentials, — ANTHROPIC_API_KEY и
-	// его соседи теперь тоже стрипаются в VerifyMode, так что здесь для
-	// "обычного, не трогаемого" env нужна переменная вне обоих списков).
+	// Обычный env верификатора, не относящийся ни к транспортным секретам, ни к Claude-авторизации автора.
 	t.Setenv("MY_OWN_TOOL_VAR", "own-legit-value")
 
 	dir := t.TempDir()
@@ -238,17 +209,6 @@ func TestRunVerifyAgent_StripsCrossAgentTransportSecrets(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_StripsClaudeAuthorCredentials — F4 (4-е код-ревью):
-// verify-mode env-санитизация раньше вырезала только AFM_SECRET_*/
-// AFM_HOOK_SECRET_*/AFM_SYSPROMPT_*, но оставляла Claude-авторизацию
-// АВТОРА, которую Docker forwards внутрь контейнера (CLAUDE_CODE_OAUTH_TOKEN/
-// ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL, см.
-// config.ClaudeAuthEnvVars + dockerForwardEnvVars в pkg/docker/launcher.go).
-// Read-only codex-верификатор в них не нуждается — своей аутентификации у
-// него нет (для codex — через смонтированный ~/.codex; для autoShim-recipe —
-// собственный AFM_SECRET_<CMD>, см. следующий тест) — и не должен иметь
-// возможность отразить чужие credentials автора в своём персистируемом
-// JSON-ответе.
 func TestRunVerifyAgent_StripsClaudeAuthorCredentials(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "leaked-oauth-token")
 	t.Setenv("ANTHROPIC_API_KEY", "leaked-api-key")
@@ -292,10 +252,6 @@ func TestRunVerifyAgent_StripsClaudeAuthorCredentials(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_KeepsOwnSecretButStripsClaudeAuthorCredentials — F4:
-// собственный recipe-секрет верификатора (D2b) должен выжить наравне со
-// стрипом Claude-авторизации автора — эти два фильтра независимы и не должны
-// друг другу мешать.
 func TestRunVerifyAgent_KeepsOwnSecretButStripsClaudeAuthorCredentials(t *testing.T) {
 	t.Setenv("AFM_SECRET_MYCODEX", "own-verifier-token")
 	t.Setenv("ANTHROPIC_API_KEY", "leaked-api-key")
@@ -338,9 +294,6 @@ func TestRunVerifyAgent_KeepsOwnSecretButStripsClaudeAuthorCredentials(t *testin
 	}
 }
 
-// TestRunAgent_KeepsClaudeAuthorCredentials — зеркало предыдущих тестов:
-// обычный (не-verify) запуск через RunAgent НЕ затрагивается F4-фильтром —
-// автор по-прежнему получает свои собственные credentials без изменений.
 func TestRunAgent_KeepsClaudeAuthorCredentials(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "own-oauth-token")
 	t.Setenv("ANTHROPIC_API_KEY", "own-api-key")
@@ -385,15 +338,6 @@ func TestRunAgent_KeepsClaudeAuthorCredentials(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_KeepsOwnRecipeSecretButStripsOthers — D2b код-ревью:
-// голый VerifyMode-strip (см. предыдущий тест) удалял ВСЕ AFM_SECRET_*
-// подряд, включая собственный секрет ЭТОГО ЖЕ верификатора, который его
-// сгенерированный autoShim-враппер (pkg/docker/wrapper.go) читает для
-// авторизации — аутентифицированный codex-recipe верификатор стартовал бы
-// без своего же токена. Command="mycodex" (алиас/recipe-ключ, резолвится
-// через WrapperDir — тот же приём, что TestRunAgentResolvesWrapperCommand) —
-// AFM_SECRET_MYCODEX должен выжить, а AFM_SECRET_OTHER/AFM_HOOK_SECRET_* —
-// по-прежнему нет.
 func TestRunVerifyAgent_KeepsOwnRecipeSecretButStripsOthers(t *testing.T) {
 	t.Setenv("AFM_SECRET_MYCODEX", "own-verifier-token")
 	t.Setenv("AFM_SECRET_OTHER", "someone-elses-token")
@@ -439,9 +383,6 @@ func TestRunVerifyAgent_KeepsOwnRecipeSecretButStripsOthers(t *testing.T) {
 	}
 }
 
-// TestRunAgent_KeepsCrossAgentTransportSecrets — зеркало предыдущего теста:
-// обычный (не-verify) запуск через RunAgent НЕ затрагивается C2-фильтром и
-// по-прежнему наследует все переменные процесса afm, как раньше.
 func TestRunAgent_KeepsCrossAgentTransportSecrets(t *testing.T) {
 	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
 	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
@@ -480,9 +421,8 @@ func TestRunAgent_KeepsCrossAgentTransportSecrets(t *testing.T) {
 	}
 }
 
-// envContainsLine проверяет наличие ТОЧНОЙ строки "key=value" в выводе `env`,
-// а не произвольную подстроку — иначе, например, "CODEX_VERIFY=10" ложно
-// засчитался бы как совпадение с "CODEX_VERIFY=1".
+// envContainsLine сравнивает полную key=value строку, исключая ложное совпадение CODEX_VERIFY=10 с
+// CODEX_VERIFY=1.
 func envContainsLine(env, line string) bool {
 	for _, l := range strings.Split(env, "\n") {
 		if strings.TrimSpace(l) == line {
@@ -492,9 +432,6 @@ func envContainsLine(env, line string) bool {
 	return false
 }
 
-// TestRunVerifyAgent_HappyPath проверяет, что валидный JSON, пришедший как
-// финальный ассистентский текстовый блок, декодируется в Result, а процесс
-// признаётся ProcessOK.
 func TestRunVerifyAgent_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "verify.log")
@@ -538,9 +475,6 @@ func TestRunVerifyAgent_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_ExitNonZeroAfterPass воспроизводит §5.4 плана: процесс
-// вывел "pass" в финальном тексте, но завершился с ненулевым кодом — такой
-// запуск НИКОГДА не считается пройденным.
 func TestRunVerifyAgent_ExitNonZeroAfterPass(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "verify.log")
@@ -564,9 +498,6 @@ func TestRunVerifyAgent_ExitNonZeroAfterPass(t *testing.T) {
 	}
 }
 
-// TestRunVerifyAgent_ProtocolErrOnEmptyFinalMessage — процесс завершился
-// штатно (exit 0), но не оставил финального ассистентского текста → ошибка
-// протокола, не "pass" по умолчанию.
 func TestRunVerifyAgent_ProtocolErrOnEmptyFinalMessage(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "verify.log")

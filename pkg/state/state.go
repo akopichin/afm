@@ -42,25 +42,18 @@ const (
 	StatusReady            StageStatus = "ready"
 	StatusRunning          StageStatus = "running"
 	StatusRetrying         StageStatus = "retrying"
-	// StatusPaused — стадия приостановлена: либо auto_run:false не дал ей
-	// стартовать (PausedFrom=pending), либо пользователь вручную поставил на
-	// паузу уже бегущую стадию (PausedFrom=running/planning/revising/retrying).
-	// См. StageState.PausedFrom и bus.EvPause/EvContinue.
+	// StatusPaused — стадия приостановлена: либо auto_run:false не дал ей стартовать, либо пользователь
+	// вручную поставил на паузу уже бегущую стадию.
 	StatusPaused            StageStatus = "paused"
 	StatusAwaitingUserInput StageStatus = "awaiting_user_input"
 	StatusDone              StageStatus = "done"
 	StatusFailed            StageStatus = "failed"
-	// StatusHookFailed — script_before exhausted its retries; the stage is
-	// blocked until the user retries or skips the hook via the dashboard.
-	// Non-terminal (see orchestrator.IsTerminal).
+	// StatusHookFailed — script_before exhausted its retries; the stage is blocked until the user retries or
+	// skips the hook via the dashboard. Non-terminal (see orchestrator.IsTerminal).
 	StatusHookFailed StageStatus = "hook_failed"
 )
 
-// AllStatuses returns every StageStatus in declaration order. This is the
-// single source of truth tools/genstagestatus reads to generate the
-// frontend's StageStatus TypeScript union — add a new status here (and to
-// the const block above) and both stay in sync automatically instead of
-// requiring a matching hand-edit in pkg/web/dashboard/src/types/stage.ts.
+// AllStatuses returns every StageStatus in declaration order.
 func AllStatuses() []StageStatus {
 	return []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
@@ -73,16 +66,12 @@ func AllStatuses() []StageStatus {
 type StageState struct {
 	Status    StageStatus `json:"status"`
 	UpdatedAt time.Time   `json:"updated_at"`
-	// PausedFrom — статус, из которого стадия ушла в paused. Заполняется один
-	// раз, при первом входе в paused, и НЕ очищается на выходе из paused
-	// (Continue) — это совмещает две роли: (1) пока стадия в paused — куда
-	// резюмиться; (2) после Continue — постоянная метка "эта стадия уже
-	// проходила цикл паузы хотя бы раз", которую auto_run-гейт (Task 5)
-	// использует, чтобы срабатывать только при самой первой активации.
+	// PausedFrom хранит исходный статус паузы и навсегда остаётся маркером пройденного pause-цикла для
+	// auto_run:false.
 	PausedFrom StageStatus `json:"paused_from,omitempty"`
 }
 
-// RunState is the top-level state persisted in state.json.
+// RunState is the snapshot cache; events.jsonl is authoritative.
 type RunState struct {
 	FlowName  string    `json:"flow_name"`
 	StartedAt time.Time `json:"started_at"`
@@ -97,21 +86,15 @@ type RunState struct {
 	// lifetime starts at RunStartedAt and is added on a terminal run event.
 	ElapsedAccumulatedMs int64    `json:"elapsed_accumulated_ms"`
 	StageOrder           []string `json:"stage_order"`
-	// StageNames maps stage id → human-readable name from the flow file.
-	// omitempty keeps old state.json files (without stage_names) compatible
-	// and only emits the field when it has been populated.
+	// StageNames maps stage id → human-readable name from the flow file. omitempty keeps old state.json files
+	// (without stage_names) compatible and only emits the field when it has been populated.
 	StageNames map[string]string     `json:"stage_names,omitempty"`
 	Stages     map[string]StageState `json:"stages"`
-	// LastSeq is the Seq of the last transition applied to this run,
-	// mirrored from the event log so consumers of the snapshot alone
-	// (e.g. UI) can detect staleness without replaying events.jsonl.
+	// LastSeq is the Seq of the last transition applied to this run, mirrored from the event log so consumers
+	// of the snapshot alone (e.g. UI) can detect staleness without replaying events.jsonl.
 	LastSeq uint64 `json:"last_seq"`
-	// IdleAccumulatedMs/BackoffAccumulatedMs — накопленное время простоя/бэкоффа
-	// на момент последнего примененного перехода. Текущий ОТКРЫТЫЙ эпизод (если
-	// флоу простаивает/стадия ретраится прямо сейчас) НЕ хранится отдельным
-	// полем — он добавляется при чтении через IdleSince()/BackoffOpenSince(),
-	// потому что момент его начала всегда совпадает с UpdatedAt той стадии,
-	// которая последней сменила статус (см. accountIdleAndBackoff).
+	// IdleAccumulatedMs/BackoffAccumulatedMs — накопленное время простоя/бэкоффа на момент последнего
+	// примененного перехода.
 	IdleAccumulatedMs    int64 `json:"idle_accumulated_ms"`
 	BackoffAccumulatedMs int64 `json:"backoff_accumulated_ms"`
 }
@@ -124,16 +107,8 @@ func NewRunState(stageIDs []string) *RunState {
 		Stages:     make(map[string]StageState, len(stageIDs)),
 	}
 	for _, id := range stageIDs {
-		// UpdatedAt остаётся нулевым (стадия ещё ни разу не переходила), а не
-		// time.Now(): maxUpdatedAt/accountIdleAndBackoff считает максимум
-		// UpdatedAt по ВСЕМ стадиям, включая нетронутые pending. Если бы тут
-		// стоял time.Now(), это было бы время конструирования RunState —
-		// разное на живом Open() (старт рана) и на replay-Open() при resume
-		// (момент повторного открытия, т.е. позже последней транзакции в
-		// логе), и максимум "ехал" бы вперёд только из-за replay, раздувая
-		// накопленный Idle. Нулевое время игнорируется maxUpdatedAt/isZero-
-		// проверкой в accountIdleAndBackoff — как и для стадий, ещё не
-		// получивших ни одной транзакции.
+		// UpdatedAt остаётся нулевым, а не time.Now: maxUpdatedAt/accountIdleAndBackoff считает максимум
+		// UpdatedAt по ВСЕМ стадиям, включая нетронутые pending.
 		rs.Stages[id] = StageState{Status: StatusPending}
 	}
 	return rs
@@ -144,10 +119,7 @@ func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
 	rs.SetStageStatusAt(stageID, status, time.Now())
 }
 
-// SetStageStatusAt updates a stage status, stamping it with the given time t
-// instead of time.Now(). Used when replaying events.jsonl (LoadRunState,
-// replayEvents) so a stage's UpdatedAt reflects the real transition time
-// (Transition.Time) rather than the moment of replay.
+// SetStageStatusAt updates a stage status, stamping it with the given time t instead of time.Now.
 func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
 	pausedFrom := rs.Stages[stageID].PausedFrom
 	if status == StatusPaused {
@@ -156,16 +128,7 @@ func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.
 	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t, PausedFrom: pausedFrom}
 }
 
-// isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое
-// состояние на весь флоу (в отличие от backoff, который считается по каждой
-// стадии отдельно, см. accountIdleAndBackoff). Порт isIdle() из
-// use-idle-time.ts (pkg/web/dashboard/src/hooks/use-idle-time/use-idle-time.ts):
-//
-//	idle = есть вопрос к пользователю на любой стадии (awaiting_user_input,
-//	       awaiting_approval), ИЛИ (есть failed-стадия И ни один агент не
-//	       активен: running/planning/revising). retrying намеренно не
-//	       считается «активной работой» — это пассивный бэкофф-таймер,
-//	       отдельная метрика (см. BackoffOpenSince).
+// isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое состояние на весь флоу.
 func isIdle(stages map[string]StageState) bool {
 	hasFailed := false
 	anyActive := false
@@ -184,10 +147,8 @@ func isIdle(stages map[string]StageState) bool {
 	return hasFailed && !anyActive
 }
 
-// maxUpdatedAt возвращает самый свежий UpdatedAt среди всех стадий — момент
-// последнего примененного во флоу перехода. Используется и как «время
-// предыдущего события» при накоплении Idle, и как idle_since для API (см.
-// RunState.IdleSince).
+// maxUpdatedAt возвращает самый свежий UpdatedAt среди всех стадий — момент последнего примененного во
+// флоу перехода.
 func maxUpdatedAt(stages map[string]StageState) time.Time {
 	var latest time.Time
 	for _, st := range stages {
@@ -216,9 +177,8 @@ func isRunEvent(event string) bool {
 func applyRunEvent(rs *RunState, event string, t time.Time) {
 	if event == runEventStarted {
 		if rs.EndedAt == nil {
-			// A previous process disappeared without a terminal event. Its exact
-			// exit time is unknowable; count only up to its last durable stage
-			// transition, excluding the offline gap before this resume.
+			// A previous process disappeared without a terminal event. Its exact exit time is unknowable; count
+			// only up to its last durable stage transition, excluding the offline gap before this resume.
 			previousStart := rs.RunStartedAt
 			if previousStart.IsZero() {
 				previousStart = rs.StartedAt // run created before run events existed
@@ -262,12 +222,8 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 	}
 }
 
-// accountIdleAndBackoff обновляет RunState.IdleAccumulatedMs/BackoffAccumulatedMs
-// ДО применения перехода {stageID, to, t} к rs — читает rs.Stages как оно было
-// ПЕРЕД этим переходом. Вызывается из ОБОИХ мест, применяющих переходы к
-// RunState (parseEventLog при replay и Store.Apply при живой работе), чтобы
-// восстановление после перезапуска (Store.Open → replayEvents → parseEventLog)
-// давало те же накопленные значения, что и живой прогон.
+// accountIdleAndBackoff обновляет таймеры ДО перехода; вызывается и из live Apply, и из replay
+// parseEventLog.
 func accountIdleAndBackoff(rs *RunState, stageID string, to StageStatus, t time.Time) {
 	if rs.EndedAt != nil {
 		return // offline CLI transitions must not reopen completed time intervals
@@ -308,10 +264,8 @@ func (rs *RunState) ElapsedSince() *time.Time {
 	return &t
 }
 
-// BackoffOpenSince возвращает момент входа в retrying для каждой стадии,
-// которая сейчас в этом статусе — параллельные эпизоды суммируются на чтении
-// (фронтенд), а не мёржатся здесь (осознанное упрощение, см.
-// use-status-duration.ts).
+// BackoffOpenSince возвращает момент входа в retrying для каждой стадии, которая сейчас в этом статусе —
+// параллельные эпизоды суммируются на чтении, а не мёржатся здесь.
 func (rs *RunState) BackoffOpenSince() []time.Time {
 	if rs.EndedAt != nil {
 		return nil
@@ -335,10 +289,7 @@ func (rs *RunState) AllDone() bool {
 	return true
 }
 
-// LoadRunState восстанавливает состояние run-директории из events.jsonl —
-// авторитетного источника. Snapshot (state.json) НЕ используется: он лишь
-// производный кэш и может отставать при сбое записи. Не берёт flock: путь
-// только для чтения (check, поиск run) и не должен блокироваться живым run.
+// LoadRunState восстанавливает состояние run-директории из events.jsonl — авторитетного источника.
 func LoadRunState(runDir string) (RunState, error) {
 	rs := RunState{Stages: map[string]StageState{}}
 	data, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
@@ -354,8 +305,6 @@ func LoadRunState(runDir string) (RunState, error) {
 }
 
 // splitLines разбивает данные на строки по \n, не включая сам разделитель.
-// Единственная реализация этого алгоритма в пакете — используется и при
-// восстановлении Store (replayEvents), и при read-only чтении LoadRunState.
 func splitLines(data []byte) [][]byte {
 	var out [][]byte
 	start := 0
@@ -381,8 +330,6 @@ type replayResult struct {
 }
 
 // parseEventLog — единственный парсер events.jsonl. Применяет переходы к rs.
-// Оборванный/незакоммиченный хвост (последняя строка без \n) усекается и НЕ
-// считается порчей. Битая полная строка в середине → corrupted=true.
 func parseEventLog(data []byte, rs *RunState) replayResult {
 	lines := splitLines(data)
 	endsWithNewline := len(data) > 0 && data[len(data)-1] == '\n'
@@ -404,13 +351,8 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 			res.corrupted = true
 			return res
 		}
-		// Восстанавливаем реальное начало рана из первого события лога.
-		// NewRunState штампует StartedAt = time.Now(), что на resume/restart-Open
-		// равно моменту повторного открытия, а не старту рана — без этой
-		// перезаписи STARTED/ELAPSED в дашборде скачком обнулялись после каждого
-		// рестарта afm (первое событие run_started, а у старых ранов — первый
-		// stage-переход). На свежем ране лог при Open пуст,
-		// сюда не заходим, и StartedAt остаётся временем Open ≈ реальному старту.
+		// Восстанавливаем реальное начало рана из первого события лога. На свежем ране лог при Open пуст, сюда
+		// не заходим, и StartedAt остаётся временем Open ≈ реальному старту.
 		if res.lastSeq == 0 && !t.Time.IsZero() {
 			rs.StartedAt = t.Time
 		}
@@ -430,10 +372,8 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 	return res
 }
 
-// FindLatestRunDir возвращает самую свежую run-директорию для flowName под base.
-// Имя run: "<flowName>-<timestamp>...". Чтобы "foo" не матчил "foo-bar", после
-// префикса требуется цифра (начало timestamp'а). Сортировка имён совпадает с
-// хронологией благодаря формату timestamp'а.
+// FindLatestRunDir возвращает самую свежую run-директорию для flowName под base. Чтобы "foo" не матчил
+// "foo-bar", после префикса требуется цифра (начало timestamp'а).
 func FindLatestRunDir(base, flowName string) (string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -454,21 +394,12 @@ func FindLatestRunDir(base, flowName string) (string, error) {
 	return filepath.Join(base, names[len(names)-1]), nil
 }
 
-// ErrNoRun означает, что под base не нашлось ни одной подходящей run-директории
-// для flowName (ни одной вообще, либо ни одной завершённой — см.
-// FindLatestCompletedRunDir).
+// ErrNoRun означает, что под base не нашлось ни одной подходящей run-директории для flowName (ни одной
+// вообще, либо ни одной завершённой — см. FindLatestCompletedRunDir).
 var ErrNoRun = errors.New("no matching run found")
 
-// FindLatestCompletedRunDir возвращает самую свежую run-директорию для
-// flowName, у которой множество стадий, дошедших до терминального статуса,
-// ТОЧНО совпадает с wantStages и все они в StatusDone. events.jsonl хранит
-// переходы только тех стадий, которые реально стартовали — поэтому run, где
-// ожидаемая стадия ни разу не появилась (никогда не запускалась), ЗАВЕРШЁННЫМ
-// не считается; пустой активный run — тоже; run с лишними/другими стадиями
-// пропускается (более новый, но с другой топологией run не затеняет более
-// старый подходящий). Читает events.jsonl (авторитетный источник), без flock.
-// Битый лог у подходящего по имени run всплывает наружу как ErrCorruptLog —
-// не прячется молча за более старый run.
+// FindLatestCompletedRunDir читает лог без flock и требует точное множество done-стадий; corrupt log
+// возвращает ошибку.
 func FindLatestCompletedRunDir(base, flowName string, wantStages []string) (string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -524,9 +455,7 @@ func stageSetAllDone(rs RunState, want map[string]bool) bool {
 	return true
 }
 
-// FindLatestRunForStage возвращает последнюю run-директорию, содержащую stageID,
-// и все её stage id. Состояние читается из events.jsonl (LoadRunState), не из
-// state.json, чтобы не доверять возможно устаревшему снапшоту.
+// FindLatestRunForStage возвращает последнюю run-директорию, содержащую stageID, и все её stage id.
 func FindLatestRunForStage(base, stageID string) (string, []string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -586,11 +515,8 @@ func SaveFeedback(stageDir, feedback string) error {
 	return nil
 }
 
-// SaveFeedbackOnce appends a feedback block tagged with opID, but only once:
-// if feedback.md already contains the operation sentinel it is a no-op. The
-// whole file is rewritten atomically so a crash yields either the old complete
-// file or the old file plus exactly one complete new block — never a partial or
-// sentinel-only block. Callers must serialize concurrent feedback writers.
+// SaveFeedbackOnce appends a feedback block tagged with opID, but only once: if feedback.md already
+// contains the operation sentinel it is a no-op.
 func SaveFeedbackOnce(stageDir, opID, feedback string) (bool, error) {
 	fbFile := filepath.Join(stageDir, "feedback.md")
 	sentinel := fmt.Sprintf("<!-- afm-review-op: %s -->", opID)
@@ -612,18 +538,11 @@ func SaveFeedbackOnce(stageDir, opID, feedback string) (bool, error) {
 	return true, nil
 }
 
-// preNoteFile — заметка, которую пользователь прикрепил к стадии, пока она ещё
-// была pending (до старта). В отличие от feedback.md (поправка по ходу работы,
-// дописывается с revision-разделителями), pre-note — одно редактируемое поле:
-// сохранение заменяет текст, сохранение пустого — удаляет файл. Оркестратор
-// вклеивает её в начальный контекст агента на первом старте стадии, см.
-// (*Orchestrator).preNoteBlock.
+// preNoteFile — заметка, которую пользователь прикрепил к стадии, пока она ещё была pending.
 const preNoteFile = "prenote.md"
 
-// SavePreNote атомарно (temp+rename) записывает pre-note стадии, либо удаляет
-// файл, когда note пустой/из одних пробелов (пользователь очистил поле =
-// «убрал заметку»). stageDir может ещё не существовать — pending-стадия часто
-// не имеет каталога на диске.
+// SavePreNote атомарно записывает pre-note стадии, либо удаляет файл, когда note пустой/из одних пробелов.
+// stageDir может ещё не существовать — pending-стадия часто не имеет каталога на диске.
 func SavePreNote(stageDir, note string) error {
 	path := filepath.Join(stageDir, preNoteFile)
 	if strings.TrimSpace(note) == "" {
@@ -674,9 +593,8 @@ func VersionPlan(stageDir string) (int, error) {
 	return n, nil
 }
 
-// LatestPlanVersion scans stageDir for plan.v{N}.md files and returns the
-// highest N found (0 if none) along with that file's content ("" if none).
-// Garbage names (non-numeric middle, wrong extension) are ignored, not errors.
+// LatestPlanVersion scans stageDir for plan.v{N}.md files and returns the highest N found along with that
+// file's content.
 func LatestPlanVersion(stageDir string) (version int, content string, err error) {
 	entries, err := os.ReadDir(stageDir)
 	if err != nil {
@@ -715,8 +633,7 @@ func FileContentSHA(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// atomicWriteFile writes data to path via a unique temp file, fsyncing the file
-// and the parent directory, then renaming into place. Durable + torn-read safe.
+// atomicWriteFile fsyncs a same-directory temp file, renames it, then fsyncs the parent directory.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dirName := filepath.Dir(path)
 	if err := os.MkdirAll(dirName, 0755); err != nil {

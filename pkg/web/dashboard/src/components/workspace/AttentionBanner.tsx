@@ -14,10 +14,8 @@ const COPY: Record<AttentionKind, { title: string; subtitle: string; glyph: stri
   hook_failed: { title: 'Hook failed', subtitle: 'A stage hook failed. Retry it or skip to continue.', glyph: '!' },
 }
 
-// AttentionBanner — шапка внутри контекстной вкладки (Approval/Question/…): большая
-// сияющая иконка + заголовок «что происходит» + подзаголовок. Тон определяется
-// видом attention (attention-жёлтый для approval/question/paused, danger для
-// failed/hook_failed). Данные не тянет — чистый презентационный компонент.
+// AttentionBanner — шапка внутри контекстной вкладки: большая сияющая иконка + заголовок «что происходит»
+// + подзаголовок. Данные не тянет — чистый презентационный компонент.
 export function AttentionBanner({ kind }: AttentionBannerProps): ReactElement {
   const copy = COPY[kind]
   const tone = kind === 'failed' || kind === 'hook_failed' ? 'danger' : 'attention'

@@ -5,21 +5,17 @@ type FileTreeProps = {
   root: string
   // Клик по строке файла — открыть предпросмотр (FILE-таб модалки).
   onOpenFile: (entry: TreeEntry) => void
-  // Клик по чекбоксу — переключить выбор (родитель сам решает, добавлять
-  // или убирать, и сам зовёт getReference перед добавлением — см. бриф
-  // Task 13: "checkbox first calls getReference... THEN adds/removes").
+  // Чекбокс переключает selection; перед добавлением родитель проверяет файл через getReference.
   onToggleSelect: (entry: TreeEntry) => void
   isSelected: (path: string) => boolean
   activePath: string | null
-  // Показывать чекбоксы выбора файлов. В режиме просмотра (открыт из шапки)
-  // их быть НЕ должно — только просмотр; в режиме attach (pickFiles) — нужны.
-  // По умолчанию true, чтобы изолированные тесты компонента вели себя как раньше.
+  // Показывать чекбоксы выбора файлов. В режиме просмотра (открыт из шапки) их быть НЕ должно — только
+  // просмотр; в режиме attach (pickFiles) — нужны.
   showCheckboxes?: boolean
 }
 
-// Состояние одной раскрытой директории: то, что реально пришло с бэкенда —
-// страницы конкатенируются по мере "Load more", nextCursor двигает то, что
-// запросить следующим.
+// Состояние одной раскрытой директории: то, что реально пришло с бэкенда — страницы конкатенируются по
+// мере "Load more", nextCursor двигает то, что запросить следующим.
 type DirState = {
   entries: TreeEntry[]
   nextCursor?: string
@@ -27,28 +23,16 @@ type DirState = {
   error: string | null
 }
 
-// Ленивое дерево файлов проекта: верхний уровень (path — '.') грузится сразу
-// при монтировании/смене root; поддиректории — только по клику на раскрытие,
-// и только один раз (повторный клик просто схлопывает/разворачивает уже
-// загруженное). Клавиатура: ArrowUp/ArrowDown двигают фокус по видимым
-// строкам (roving tabIndex), Enter открывает файл или раскрывает/схлопывает
-// директорию — символьные ссылки (kind: 'symlink') всегда лист, без чекбокса
-// и без предпросмотра (workspace.FS их read всё равно отклоняет).
+// Ленивое дерево файлов проекта: верхний уровень грузится сразу при монтировании/смене root; поддиректории
+// — только по клику на раскрытие, и только один раз.
 export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: FileTreeProps): ReactElement {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['.']))
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
-  // Номер "поколения" root'а — инкрементируется СИНХРОННО при смене root
-  // (в эффекте ниже, до первого await), а не читается из замыкания над
-  // проп root: loadDir захватывает текущее значение ДО своего await, и
-  // сравнивает с ним же после — так поздний ответ устаревшего root'а
-  // отбрасывается независимо от того, в каком порядке резолвятся промисы
-  // (старый может ответить и раньше, и позже нового). Сравнение по числу,
-  // а не по строке root — корректно и при переключении туда-обратно
-  // (A→B→A): второй заход на A получает новый номер и не совпадёт со
-  // старым, ещё летящим запросом первого захода.
+  // Generation инвалидирует запросы при каждой смене root, включая A→B→A; сравнение только root не
+  // различает повторные заходы.
   const rootGenerationRef = useRef(0)
 
   // Смена root — новое дерево с нуля: старое состояние (пути другого root'а)
@@ -84,11 +68,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
       if (generation !== rootGenerationRef.current) return
       setDirs((prev) => ({
         ...prev,
-        // nextCursor СОХРАНЯЕТСЯ (не сбрасывается в undefined): при ошибке
-        // "Load more" это курсор той же страницы, которую только что не
-        // удалось загрузить — Retry должен продолжить именно с него, а не
-        // спрятать кнопку и оставить остаток каталога недостижимым. Для
-        // самой первой (не пагинационной) загрузки курсора и так не было.
+        // Сохраняем nextCursor при ошибке Load more, чтобы Retry загрузил ту же страницу.
         [path]: {
           entries: prev[path]?.entries ?? [],
           nextCursor: prev[path]?.nextCursor,
@@ -125,11 +105,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
 
   const visible = flattenVisible(dirs, expanded)
 
-  // currentPath приходит из entry строки, которая ловит событие (замыкание
-  // renderEntry), а не из state focusedPath — так навигация корректна, даже
-  // если .focus() вызван программно (в т.ч. в тестах) без промежуточного
-  // рендера: onFocus и keydown могут случиться в одном синхронном тике,
-  // раньше, чем React применит setFocusedPath из предыдущего события.
+  // Берём currentPath из entry события, чтобы программный focus не зависел от устаревшего focusedPath.
   function moveFocus(currentPath: string, delta: 1 | -1): void {
     const index = visible.findIndex((v) => v.entry.path === currentPath)
     if (index === -1) return
@@ -223,12 +199,8 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
     )
   }
 
-  // Общая кнопка пагинации для каталога — используется и на верхнем уровне,
-  // и для любой раскрытой поддиректории (renderEntry выше). При ошибке
-  // предыдущей страницы (dirState.error) курсор уже сохранён вызывающей
-  // стороной (loadDir) — здесь просто меняем подпись на "Retry…", чтобы было
-  // явно видно, что это повторная попытка, а не следующая страница. onClick
-  // не меняется: тот же loadDir с тем же nextCursor.
+  // Общая кнопка пагинации для каталога — используется и на верхнем уровне, и для любой раскрытой
+  // поддиректории. onClick не меняется: тот же loadDir с тем же nextCursor.
   function renderLoadMore(path: string, dirState: DirState | undefined, paddingPx?: number): ReactNode {
     if (dirState?.nextCursor === undefined) return null
     const failed = dirState.error !== null && dirState.error !== undefined
@@ -259,10 +231,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
 
 type VisibleItem = { entry: TreeEntry; depth: number }
 
-// Плоский список видимых строк в порядке отображения — нужен только для
-// клавиатурной навигации (ArrowUp/ArrowDown должны знать "следующая видимая
-// строка", а не "следующий элемент массива" — раскрытые поддиректории
-// вклиниваются между родителем и его следующим соседом).
+// Плоский список видимых строк в порядке отображения — нужен только для клавиатурной навигации.
 function flattenVisible(dirs: Record<string, DirState>, expanded: Set<string>, path = '.', depth = 0): VisibleItem[] {
   const dir = dirs[path]
   if (dir === undefined) return []

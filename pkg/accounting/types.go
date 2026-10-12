@@ -1,6 +1,5 @@
-// Package accounting owns all vendor-usage parsing, token normalization,
-// pricing, money math, aggregation and formatting for afm. It imports no other
-// afm package (config/state/server/flow depend on it, never the reverse).
+// Package accounting owns all vendor-usage parsing, token normalization, pricing, money math, aggregation
+// and formatting for afm.
 package accounting
 
 // Schema identifies the vendor token-count convention a raw usage blob follows.
@@ -12,9 +11,8 @@ const (
 	SchemaOpenAIChat Schema = "openai_chat" // Chat Completions usage (inclusive prompt)
 )
 
-// Tokens is the normalized, provider-independent breakdown. All fields are
-// disjoint EXCEPT ReasoningOutput, which is a subset of Output (never summed on
-// top of it).
+// Tokens is the normalized, provider-independent breakdown. All fields are disjoint EXCEPT
+// ReasoningOutput, which is a subset of Output (never summed on top of it).
 type Tokens struct {
 	UncachedInput   uint64 `json:"uncached_input"`
 	CacheRead       uint64 `json:"cache_read"`

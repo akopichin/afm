@@ -15,9 +15,8 @@ func testPrompts() Prompts {
 }
 
 func TestBuildMemoryPrompt_Reflect(t *testing.T) {
-	// Sources — уже готовый, классифицированный SourceInventory список
-	// (agent-session сначала, затем supplemental): промпт должен назвать
-	// КАЖДЫЙ путь явно, не "прочитай директорию".
+	// Sources — уже готовый, классифицированный SourceInventory список (agent-session сначала, затем
+	// supplemental): промпт должен назвать КАЖДЫЙ путь явно, не "прочитай директорию".
 	got := BuildPrompt(testPrompts(), AgentSpec{
 		Kind: "reflect",
 		Sources: []string{

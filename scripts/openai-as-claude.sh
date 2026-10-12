@@ -1,21 +1,5 @@
 #!/usr/bin/env bash
-# openai-as-claude.sh — транслятор для OpenAI-совместимых провайдеров (cursor, deepseek, и т.д.)
-#
-# читает промпт из stdin, вызывает ${OPENAI_BASE_URL}/chat/completions (stream=true),
-# транслирует SSE-чанки в claude stream-json формат.
-#
-# переменные окружения (устанавливаются сгенерированным враппером autoShim):
-#   OPENAI_API_KEY   — токен авторизации (обязателен)
-#   OPENAI_BASE_URL  — базовый URL API (дефолт: https://api.openai.com/v1)
-#   OPENAI_MODEL     — модель (дефолт: gpt-4o)
-#
-# usage accounting: запрос идёт со stream_options:{include_usage:true}, поэтому
-# провайдер шлёт финальный SSE-чанк с .usage (и обычно .model). Числа токенов
-# из этого чанка (никогда не текст промпта/ответа) пробрасываются в synthetic
-# terminal result в форме, которую уже понимает Collector в pkg/accounting
-# (usage_contract_version:1, usage_schema:"openai_chat", channel:"openai-api"),
-# с вложенным prompt_tokens_details.cached_tokens, сплющенным в плоское поле
-# prompt_cached_tokens.
+# Переводит ответ OpenAI chat/completions в Claude stream-json; промпт читает из stdin.
 
 set -euo pipefail
 
@@ -47,19 +31,16 @@ if [[ -z "${OPENAI_API_KEY:-}" ]]; then
     exit 1
 fi
 
-# extract_image_blocks <text> -> JSON array of image_url content blocks for every
-# readable [Screenshot: <path>] reference in text (empty "[]" if none, or if none
-# were readable/recognized). Unreadable/unrecognized paths are skipped with a
-# stderr warning, not a hard failure.
+# extract_image_blocks <text> -> JSON array of image_url content blocks for every readable [Screenshot:
+# <path>] reference in text.
 extract_image_blocks() {
     local text="$1"
     local blocks='[]'
     local marker path
     while IFS= read -r marker; do
         [[ -z "$marker" ]] && continue
-        # marker уже включает скобки — обрезаем "[Screenshot: " и "]" в bash,
-        # чтобы обойтись POSIX-совместимым -E (без \K, который есть только в GNU/PCRE grep
-        # и отсутствует в BSD grep из macOS).
+        # marker уже включает скобки — обрезаем "[Screenshot: " и "]" в bash, чтобы обойтись POSIX-совместимым
+        # -E (без \K, который есть только в GNU/PCRE grep и отсутствует в BSD grep из macOS).
         path="${marker#\[Screenshot: }"
         path="${path%\]}"
         if [[ ! -r "$path" ]]; then
@@ -75,9 +56,8 @@ extract_image_blocks() {
             *) echo "warning: [Screenshot: $path] unrecognized image extension, skipping" >&2; continue ;;
         esac
         local b64
-        # base64 -w0 — GNU-only флаг (BSD base64 из macOS его не понимает и падает
-        # "invalid argument"). Портируемый вариант — читать файл через stdin (у обеих
-        # реализаций один и тот же вид вывода по умолчанию) и убрать переводы строк сами.
+        # base64 -w0 — GNU-only флаг. Портируемый вариант — читать файл через stdin (у обеих реализаций
+        # один и тот же вид вывода по умолчанию) и убрать переводы строк сами.
         b64=$(base64 <"$path" | tr -d '\n')
         blocks=$(printf '%s' "$b64" | jq -Rsc --slurpfile blocks <(printf '%s' "$blocks") --arg mime "$mime" \
             '$blocks[0] + [{type:"image_url", image_url:{url: ("data:" + $mime + ";base64," + .)}}]')
@@ -85,9 +65,8 @@ extract_image_blocks() {
     printf '%s' "$blocks"
 }
 
-# build_user_content <text> -> plain JSON string if no image was embedded, else a
-# [{type:"text",...}, image_url...] array with the [Screenshot: <path>] marker(s)
-# stripped from the text portion.
+# build_user_content <text> -> plain JSON string if no image was embedded, else a [{type:"text",...},
+# image_url...] array with the [Screenshot: <path>] marker stripped from the text portion.
 build_user_content() {
     local text="$1"
     local blocks
@@ -104,37 +83,22 @@ build_user_content() {
 # формируем тело запроса. stream_options.include_usage:true просит финальный
 # SSE-чанк с .usage (см. заголовок файла — нужен для accounting).
 content=$(build_user_content "$prompt")
-# Prompts, images and responses can exceed Linux's per-argument exec limit.
-# Keep payloads in stdin/files; only small configuration values go in argv.
-# --rawfile also avoids jq 1.7 corrupting UTF-8 at raw stdin buffer boundaries.
+# Keep large payloads in files/stdin to avoid argv limits; --rawfile also avoids jq 1.7 raw-stdin UTF-8
+# corruption.
 request_file=$(mktemp)
 trap 'rm -f "$request_file"' EXIT
 printf '%s' "$content" | jq -c --arg model "$OPENAI_MODEL" \
     '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: .}]}' > "$request_file"
 
-# вызываем API один раз, оставляем полный SSE-ответ в переменной — нужен для ДВУХ
-# независимых проходов: накопление текста (существующая логика ниже) и извлечение
-# .usage/.model из финального чанка (accounting, см. заголовок файла).
-#
-# || true — не падать при ошибке curl (документированное ограничение); даже при
-# сбое $response будет частичным/пустым, конверт всё равно эмитится.
+# Один SSE-ответ читаем для текста и usage/model; после сбоя curl всё равно эмитим частичный или пустой
+# конверт.
 response=$(curl -sS --no-buffer \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $OPENAI_API_KEY" \
     --data-binary "@$request_file" \
     "${OPENAI_BASE_URL}/chat/completions" 2>/dev/null || true)
 
-# накапливаем SSE-чанки, затем эмитим ОДИН assistant-конверт.
-# Важно: pkg/executor/parseStreamEvent парсит ТОЛЬКО {type:"assistant", message:{...}},
-# стриминговые content_block_delta им игнорируются — поэтому накапливаем текст целиком
-# и отдаём агрегированную форму, как делает claude в stream-json режиме.
-#
-# SSE формат ответа: "data: {...}" или "data: [DONE]".
-# Накопление делаем одним jq-конвейером: разбиваем текст на строки, отбрасываем всё
-# до "data: ", парсим JSON, конкатенируем delta.content. [DONE] не парсится (jq
-# выдаст null → пропустим). Финальный usage-чанк (stream_options.include_usage)
-# обычно приходит с пустым choices:[] — .choices[0] там null, delta.content
-# корректно сворачивается в "" и ничего не портит.
+# Собираем SSE-текст в один assistant-конверт: executor игнорирует content_block_delta.
 text=$(jq -njr --rawfile sse <(printf '%s' "$response") '
         $sse | split("\n")[] |
         sub("^data: ";"")                  # убрать префикс "data: " (если есть)
@@ -145,9 +109,7 @@ text=$(jq -njr --rawfile sse <(printf '%s' "$response") '
 # подстраховка: если что-то пошло не так и text не задан — пустая строка
 text="${text:-}"
 
-# usage/model: последний чанк с ненулевым .usage (stream_options.include_usage).
-# prompt_tokens_details.cached_tokens сплющивается в плоское prompt_cached_tokens —
-# это то имя поля, которое ждёт rawUsage в pkg/accounting/normalize.go.
+# Берём последний ненулевой usage; cached_tokens переводим в prompt_cached_tokens для accounting.
 usage_chunk=$(jq -nrc --rawfile sse <(printf '%s' "$response") '
         $sse | split("\n")[] |
         sub("^data: ";"")
@@ -177,9 +139,7 @@ fi
 # jq читает текст из файла, сохраняя JSON-экранирование без лимита argv.
 jq -nc --rawfile text <(printf '%s' "$text") '{type:"assistant", message:{content:[{type:"text", text:$text}]}}'
 
-# финальный result-ивент (claude executor ждёт его для завершения). Без
-# перехваченного usage эмитим голую строку, как раньше — Collector.Finish тогда
-# честно репортит "unmetered", а не выдуманный $0.
+# Эмитим terminal result; без usage оставляем accounting unmetered.
 if [[ -z "$usage_json" ]]; then
     echo '{"type":"result","subtype":"success"}'
 else

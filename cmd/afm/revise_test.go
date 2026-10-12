@@ -28,10 +28,7 @@ func chdirTemp(t *testing.T) string {
 	return dir
 }
 
-// makeRunState creates .afm/runs/{runName}/events.jsonl with a single
-// transition into status for stageID. events.jsonl (not state.json) is the
-// source LoadRunState/FindLatestRunForStage read from, so tests must seed it
-// directly rather than the legacy snapshot.
+// makeRunState creates .afm/runs/{runName}/events.jsonl with a single transition into status for stageID.
 func makeRunState(t *testing.T, runName, stageID string, status state.StageStatus) string {
 	t.Helper()
 	runDir := filepath.Join(".afm", "runs", runName)

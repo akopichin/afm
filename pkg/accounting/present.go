@@ -59,9 +59,8 @@ type CoverageIssue struct {
 	Count       int         `json:"count"`
 }
 
-// The two values CoverageIssue.Kind ever takes — exported so every consumer
-// (this package's own renderCoverage, cmd/afm's coverageNote) compares
-// against the same identifier instead of re-typing the literal.
+// The two values CoverageIssue.Kind ever takes — exported so every consumer compares against the same
+// identifier instead of re-typing the literal.
 const (
 	IssueKindUnmetered = "unmetered"
 	IssueKindUnpriced  = "unpriced"
@@ -80,9 +79,7 @@ func coverageOf(s Summary) Coverage {
 	}
 }
 
-// DisplayCost is the one cost string every surface renders. Full/partial reuse
-// FormatUSD's tiny-value handling for the priced sum; partial appends "+"; none
-// is the em dash (dashUnknown). Never gates on the money value.
+// DisplayCost is the one cost string every surface renders. Never gates on the money value.
 func DisplayCost(s Summary) string {
 	switch coverageOf(s) {
 	case CoverageFull:
@@ -94,10 +91,7 @@ func DisplayCost(s Summary) string {
 	}
 }
 
-// attributionOf maps a UsageRecord to its Attribution:
-// - if Scope == ScopeRunOverhead, return AttrRunOverhead
-// - else if StageID is non-empty, return AttrStage with that ID
-// - else return AttrUnknown
+// attributionOf prefers run overhead, then a nonempty stage ID, otherwise unknown.
 func attributionOf(r UsageRecord) Attribution {
 	if r.Scope == ScopeRunOverhead {
 		return Attribution{Kind: AttrRunOverhead}
@@ -108,10 +102,8 @@ func attributionOf(r UsageRecord) Attribution {
 	return Attribution{Kind: AttrUnknown}
 }
 
-// Label renders the Attribution as a display string:
-// - AttrRunOverhead → "run_overhead"
-// - AttrStage → the stage id
-// - AttrUnknown → dashUnknown ("—")
+// Label renders the Attribution as a display string: - AttrRunOverhead → "run_overhead" - AttrStage → the
+// stage id - AttrUnknown → dashUnknown ("—")
 func (a Attribution) Label() string {
 	switch a.Kind {
 	case AttrRunOverhead:
@@ -123,12 +115,8 @@ func (a Attribution) Label() string {
 	}
 }
 
-// aggregateIssues processes a slice of UsageRecords and returns a sorted list
-// of CoverageIssues. A record is an issue if it is unpriced (!Priced && Metered)
-// or unmetered (!Metered). Issues are grouped by a composite key
-// (attribution kind, stage id, phase, channel, model, reason), with counts
-// accumulated. The result is sorted by a stable total order:
-// attribution kind, stage id, phase, issue kind, channel, model, reason.
+// aggregateIssues processes a slice of UsageRecords and returns a sorted list of CoverageIssues. A record
+// is an issue if it is unpriced (!Priced && Metered) or unmetered (!Metered).
 func aggregateIssues(recs []UsageRecord) []CoverageIssue {
 	type issueKey struct {
 		attrKind  AttrKind

@@ -1,19 +1,7 @@
 package orchestrator_test
 
-// Сценарийный харнесс для интеграционных тестов оркестратора.
-//
-// Идея: вместо ручного написания mock-Runner + setup-кода для каждого нового
-// теста (см. rateLimitThenSuccessRunner, noDoneRunner в integration_retry_test.go)
-// — описать сценарий
-// декларативно (Scenario{Stages, Agents, Expect, ...}) и прогнать его через
-// единый runScenario. scriptedRunner — единственная реализация executor.Runner,
-// конфигурируемая картой AgentSpec на стадию.
-//
-// Task 1 закрыл неинтерактивный путь. Task 2 добавляет DIALOG seam:
-// writeSynthAgent генерирует bash-скрипт для stage.Command интерактивных
-// стадий (модель — TestFullDialogCycle/TestIntegration_MisplacedQuestionRelocated/
-// TestIntegration_MisprefixedQuestionNormalized из integration_interactive_test.go),
-// answerDialogs дожидается awaiting_user_input и отвечает через orch.NotifyAnswer.
+// Сценарийный харнесс для интеграционных тестов оркестратора. scriptedRunner — единственная реализация
+// executor.Runner, конфигурируемая картой AgentSpec на стадию.
 
 import (
 	"context"
@@ -40,16 +28,14 @@ type Injection int
 
 const (
 	InjectNone Injection = iota
-	// InjectRateLimitThenOK: первый вызов RunAgent для стадии возвращает
-	// retryable-ошибку (см. isRetryableError/Classify в retry.go/errors.go),
-	// все последующие — отрабатывают штатно.
+	// InjectRateLimitThenOK возвращает retryable-ошибку при первом RunAgent, затем выполняется штатно.
 	InjectRateLimitThenOK
 	// InjectNoDone: RunAgent "отрабатывает" без ошибки, но не создаёт артефакт
 	// завершения — имитирует агента, который вышел, не закончив работу.
 	InjectNoDone
 )
 
-// QuestionFault описывает неполадку с размещением question.json (Task 2).
+// QuestionFault задаёт неверное размещение question.json.
 type QuestionFault int
 
 const (
@@ -90,16 +76,12 @@ type Scenario struct {
 	Stages []flow.Stage
 	Agents map[string]AgentSpec
 	Expect Expectation
-	// PreSeedEventsLog, если не nil, записывается в runDir/events.jsonl ДО
-	// state.Open (Task 3) — используется для проверки path'а восстановления
-	// после порчи лога (corrupt-log-recovery): state.Open должен вернуть
-	// ErrCorruptLog, что уже покрывается веткой RunErrSubstr в runScenario.
+	// PreSeedEventsLog записывается до state.Open для проверки восстановления при corrupt log.
 	PreSeedEventsLog []byte
 }
 
-// scriptedRunner — единственный mock executor.Runner для всех сценариев.
-// Поведение конфигурируется картой agents (stageID → AgentSpec). Модель
-// поведения — rateLimitThenSuccessRunner, noDoneRunner из соседних *_test.go.
+// scriptedRunner — единственный mock executor.Runner для всех сценариев. Поведение конфигурируется картой
+// agents (stageID → AgentSpec).
 type scriptedRunner struct {
 	agents map[string]AgentSpec
 
@@ -123,9 +105,6 @@ func (r *scriptedRunner) RunPlanning(_ context.Context, _, _, outFile, _ string)
 }
 
 // RunAgent пишет артефакт завершения фазы, поддерживая инъекции неполадок.
-// stageID выводится из имени stageDir (filepath.Base(filepath.Dir(logFile))),
-// поскольку runAutonomousAgent/runImplementationAgent задают
-// logFile = <stageDir>/<phase>.log.
 func (r *scriptedRunner) RunAgent(_ context.Context, agentType, _, _, logFile string) error {
 	stageDir := filepath.Dir(logFile)
 	spec := r.agents[filepath.Base(stageDir)]
@@ -155,20 +134,7 @@ func (r *scriptedRunner) RunAgent(_ context.Context, agentType, _, _, logFile st
 // compile-time check that scriptedRunner satisfies executor.Runner.
 var _ executor.Runner = (*scriptedRunner)(nil)
 
-// writeSynthAgent генерирует bash-скрипт "синтетического агента" для
-// stage.Command интерактивной стадии. Модель — реальные проверенные тесты
-// TestFullDialogCycle / TestIntegration_MisplacedQuestionRelocated /
-// TestIntegration_MisprefixedQuestionNormalized (integration_interactive_test.go):
-// скрипт пишет question.json (по умолчанию в $AFM_STAGE_DIR, либо с
-// неполадкой размещения — см. QuestionFault), эмитит stream-json Write
-// tool_use событие с этим путём (чтобы поллер узнал о файле через
-// executor.WrittenFiles/<phase>.jsonl — как в model-тестах), затем поллит
-// answer по СВОЕМУ пути с ограничением по числу итераций (~20с), чтобы
-// Answer=="" (hung-dialog) не подвешивал субпроцесс навсегда — сценарий
-// должен завершиться через ctx-таймаут харнесса runScenario, а не через
-// зависший процесс. После ответа (или сразу, если Question==nil) пишет
-// completion-артефакт фазы в $AFM_STAGE_DIR (канонический stageDir, вне
-// зависимости от Fault — агент ошибается только в пути question/answer).
+// writeSynthAgent генерирует bash-скрипт "синтетического агента" для stage.Command интерактивной стадии.
 func writeSynthAgent(t *testing.T, spec AgentSpec) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -183,19 +149,14 @@ func writeSynthAgent(t *testing.T, spec AgentSpec) string {
 		var qExpr, aExpr string
 		switch q.Fault {
 		case FaultWrongPrefix:
-			// Префикс = имя каталога стадии (basename $AFM_STAGE_DIR) вместо
-			// канонической фазы — вычисляется в рантайме, т.к. writeSynthAgent
+			// Префикс = имя каталога стадии вместо канонической фазы — вычисляется в рантайме, т.к. writeSynthAgent
 			// не знает stageID (он известен только оркестратору по RunDir/ID).
 			b.WriteString(`STAGE_PREFIX="$(basename "$AFM_STAGE_DIR")"` + "\n")
 			qExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/$STAGE_PREFIX.%s.question.json"`, q.ID)
 			aExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/$STAGE_PREFIX.%s.answer.json"`, q.ID)
 		case FaultWrongFolder:
-			// Верхний уровень root_dir (= runDir харнесса, см. Options.RootDir в
-			// runScenarioUpToAssert) — как и предписывает дизайн
-			// relocateMisplacedQuestions (Task 2): скан root_dir идёт по его
-			// ВЕРХНЕМУ уровню без рекурсии, поэтому файл должен оказаться
-			// прямо в корне проекта ($AFM_STAGE_DIR/.. резолвится в runDir),
-			// а не в произвольной вложенной поддиректории.
+			// FaultWrongFolder размещает вопрос в корне root_dir: relocateMisplacedQuestions сканирует только
+			// верхний уровень.
 			qExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/../%s.%s.question.json"`, q.Phase, q.ID)
 			aExpr = fmt.Sprintf(`"$AFM_STAGE_DIR/../%s.%s.answer.json"`, q.Phase, q.ID)
 		default: // FaultNone
@@ -225,20 +186,8 @@ func writeSynthAgent(t *testing.T, spec AgentSpec) string {
 	return scriptPath
 }
 
-// synthCompletionScript возвращает bash-код, который завершает фазу в
-// $AFM_STAGE_DIR и эмитит финальные stream-json строки, как в мок-агентах из
-// integration_test.go/integration_interactive_test.go (mockPlanningScript и
-// соседние).
-//
-// Планирование — ОСОБЫЙ случай: executor.RunPlanning сама пишет outFile
-// (plan.md) из накопленного текста assistant-сообщений, ЕСЛИ агент не
-// сигнализировал Write tool_use на тот же путь (agentWroteOutFile). Если бы
-// мы одновременно писали plan.md напрямую (printf > plan.md) И эмитили любой
-// текст после этого, RunPlanning перезаписал бы наш валидный файл этим
-// текстом (agentWroteOutFile==false, textBuf непуст) — ровно так и
-// проявлялся баг при первой попытке реализации. Поэтому для planning мы НЕ
-// пишем файл напрямую — передаём валидный план как assistant text, и
-// RunPlanning сам сохраняет его в outFile.
+// synthCompletionScript передаёт planning как assistant text, чтобы RunPlanning сам сохранил план без
+// перезаписи прямой записи.
 func synthCompletionScript(phase string) string {
 	switch phase {
 	case "planning":
@@ -266,29 +215,14 @@ func runScenario(t *testing.T, sc Scenario) {
 	assertExpectation(t, orch, runDir, sc.Expect, reached)
 }
 
-// runScenarioUpToAssert выполняет весь сценарий (сборка Store+Orchestrator,
-// фоновый Run, обработка диалогов, ожидание завершения, проверка
-// RunErrSubstr) БЕЗ финальной проверки Expect через assertExpectation —
+// runScenarioUpToAssert выполняет весь сценарий БЕЗ финальной проверки Expect через assertExpectation —
 // оставляя её вызывающему коду.
-//
-// Вынесено из runScenario отдельной функцией ради
-// TestScenarioHarness_FailsOnWrongExpectation (Task 3, scenario_test.go):
-// негативному само-тесту харнесса нужен реально прошедший orch/runDir/reached
-// от штатного прогона, чтобы затем самостоятельно вызвать assertExpectation
-// с заведомо неверным Expectation и recordingT (а не настоящим *testing.T,
-// Errorf которого безусловно валит тестовый процесс) — так само-тест
-// доказывает, что assertExpectation реально детектирует расхождение, а не
-// является no-op.
-//
-// Возвращает (nil, "", nil), если state.Open вернул ошибку, ожидаемую через
-// sc.Expect.RunErrSubstr (corrupt-log сценарий) — дальше проверять нечего.
 func runScenarioUpToAssert(t *testing.T, sc Scenario) (*orchestrator.Orchestrator, string, map[string]bool) {
 	t.Helper()
 	runDir := t.TempDir()
 
-	// Предзасев events.jsonl ДО state.Open (Task 3): позволяет сценарию
-	// смоделировать восстановление с уже существующим (в т.ч. битым) логом,
-	// не трогая сам runScenario/scriptedRunner.
+	// Предзасев events.jsonl ДО state.Open (Task 3): позволяет сценарию смоделировать восстановление с уже
+	// существующим (в т.ч. битым) логом, не трогая сам runScenario/scriptedRunner.
 	if sc.PreSeedEventsLog != nil {
 		if err := os.WriteFile(filepath.Join(runDir, "events.jsonl"), sc.PreSeedEventsLog, 0644); err != nil {
 			t.Fatalf("pre-seed events.jsonl: %v", err)
@@ -327,16 +261,11 @@ func runScenarioUpToAssert(t *testing.T, sc Scenario) (*orchestrator.Orchestrato
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
 		Runner:  runner,
-		// RootDir — верхний уровень "root_dir" для FaultWrongFolder (Task 2):
-		// relocateMisplacedQuestions сканирует top-level root_dir только когда
-		// он задан, поэтому харнесс использует runDir как root_dir, соответствуя
-		// реальному использованию (root_dir — родитель stageDir).
+		// RootDir задаёт runDir для top-level поиска misplaced-вопросов.
 		RootDir: runDir,
 	})
 
-	// config.Default() задаёт 30-минутный idle-timeout — намного больше, чем
-	// нам нужно для теста, поэтому ограничителем служит ctx (30с), как и
-	// раньше: он же гарантирует, что hung-dialog не подвесит тест навсегда.
+	// 30s ctx ограничивает тест вместо дефолтного 30-минутного idle-timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
@@ -362,18 +291,8 @@ func runScenarioUpToAssert(t *testing.T, sc Scenario) (*orchestrator.Orchestrato
 	return orch, runDir, reached
 }
 
-// answerDialogs ждёт awaiting_user_input по каждой стадии с Question!=nil и
-// отвечает (Answer!=""), либо — для hung-dialog (Answer=="") — только
-// дожидается awaiting_user_input и фиксирует факт достижения (для
-// assertExpectation/ReachesAwaitingInput), не отвечая никогда.
-//
-// Ответ пишется по КАНОНИЧЕСКОМУ пути ($AFM_STAGE_DIR/<phase>.<id>.answer.json),
-// даже если вопрос был размещён с неполадкой (FaultWrongPrefix/FaultWrongFolder):
-// именно туда указывает dangling-симлинк, который relocateMisplacedQuestions
-// создаёт по (неверному) пути, который поллит агентский bash-скрипт — см.
-// dialog_poller.go. Канонической фазой при неполадке размещения тоже всегда
-// является q.Phase ("planning"), т.к. поллер публикует и триггерит FSM именно
-// по исправленной фазе (see correctPhaseForState).
+// answerDialogs ждёт awaiting_user_input и пишет ответ по каноническому пути; пустой Answer оставляет
+// вопрос без ответа.
 func answerDialogs(t *testing.T, orch *orchestrator.Orchestrator, runDir string, sc Scenario) map[string]bool {
 	t.Helper()
 	store := orchestrator.StoreFromOrch(orch)
@@ -403,9 +322,7 @@ func answerDialogs(t *testing.T, orch *orchestrator.Orchestrator, runDir string,
 	return reached
 }
 
-// waitAwaitingUserInput поллит store.Get(stageID) до state.StatusAwaitingUserInput
-// с дедлайном timeout. Возвращает false, если стадия не дошла до этого статуса
-// вовремя (не fatal — вызывающий код и assertExpectation репортуют отдельно).
+// waitAwaitingUserInput поллит store.Get до state.StatusAwaitingUserInput с дедлайном timeout.
 func waitAwaitingUserInput(store *state.Store, stageID string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -417,9 +334,8 @@ func waitAwaitingUserInput(store *state.Store, stageID string, timeout time.Dura
 	return store.Get(stageID) == state.StatusAwaitingUserInput
 }
 
-// writeCanonicalAnswer атомарно (tmp+rename) пишет answer.json по каноническому
-// пути стадии — так же, как это делает реальный HTTP-обработчик
-// (handleDialogAnswer, см. CLAUDE.md) и существующие интеграционные тесты.
+// writeCanonicalAnswer атомарно пишет answer.json по каноническому пути стадии — так же, как это делает
+// реальный HTTP-обработчик и существующие интеграционные тесты.
 func writeCanonicalAnswer(t *testing.T, runDir, stageID, phase, id, answer string) {
 	t.Helper()
 	stageDir := filepath.Join(runDir, stageID)
@@ -440,14 +356,7 @@ func writeCanonicalAnswer(t *testing.T, runDir, stageID, phase, id, answer strin
 	}
 }
 
-// expectationReporter — минимальный интерфейс, которого достаточно
-// assertExpectation. Реализуется *testing.T (штатный путь через runScenario)
-// и recordingT (TestScenarioHarness_FailsOnWrongExpectation, scenario_test.go):
-// в отличие от настоящего *testing.T, чей Errorf безусловно помечает
-// вызывающий тест проваленным, recordingT лишь собирает сообщения — это
-// позволяет само-тесту вызвать assertExpectation с заведомо неверным
-// Expectation и убедиться в наличии зафиксированных провалов, не заваливая
-// собственный тестовый процесс.
+// expectationReporter — минимальный интерфейс, которого достаточно assertExpectation.
 type expectationReporter interface {
 	Helper()
 	Errorf(format string, args ...any)

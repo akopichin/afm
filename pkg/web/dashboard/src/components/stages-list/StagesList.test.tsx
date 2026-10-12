@@ -117,15 +117,11 @@ describe('StagesList', () => {
     expect(item.querySelector('.dialog-badge')).not.toBeInTheDocument()
   })
 
-  // Регресс: .stage-item — грид из 3 колонок (18px 1fr auto). Бейдж и кебаб —
-  // это ДВА трейлинг-элемента; если оба лежат прямо в гриде, кебаб не влезает в
-  // третью (auto) колонку и переносится на новую неявную строку в 1-ю колонку —
-  // «кебаб съезжает вниз-влево». Чиним, группируя бейджи+кебаб в единый слот
-  // .stage-actions, чтобы у грида всегда было ровно 3 in-flow ребёнка.
+  // Регресс: .stage-item — грид из 3 колонок. Чиним, группируя бейджи+кебаб в единый слот .stage-actions,
+  // чтобы у грида всегда было ровно 3 in-flow ребёнка.
   test('badge and kebab share one .stage-actions slot (grid does not overflow)', () => {
-    // awaiting_approval с кастомной кнопкой: есть и approval-бейдж, и кебаб
-    // (кнопка стадии). Без кнопок у awaiting_approval кебаба нет — заметка
-    // живому агенту ушла в поле ленты, а Pause к нему неприменим.
+    // awaiting_approval с кастомной кнопкой: есть и approval-бейдж, и кебаб. Без кнопок у
+    // awaiting_approval кебаба нет — заметка живому агенту ушла в поле ленты, а Pause к нему неприменим.
     const stages: Stage[] = [
       { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
     ]
@@ -168,9 +164,8 @@ describe('StagesList', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
       { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      // awaiting_approval без кнопок: пункт «Add note for agent» убран (заметка —
-      // в поле ленты), Pause к нему неприменим, pre-note только для pending →
-      // кебаба нет вовсе.
+      // awaiting_approval без кнопок: пункт «Add note for agent» убран (заметка — в поле ленты), Pause к
+      // нему неприменим, pre-note только для pending → кебаба нет вовсе.
       { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
@@ -296,11 +291,8 @@ describe('StagesList', () => {
     expect(screen.queryByText('Pause')).not.toBeInTheDocument()
   })
 
-  // Регресс: раньше меню слушало скролл на window с capture:true и закрывалось
-  // от ЛЮБОГО скролла в документе — в т.ч. от автоскролла ленты событий вниз
-  // при новом событии (useStickToBottom дёргает scrollTop). Из-за этого меню
-  // пропадало сразу после открытия, как только в фиде появлялось событие.
-  // Скролл постороннего контейнера НЕ должен закрывать меню.
+  // Регресс: раньше меню слушало скролл на window с capture:true и закрывалось от ЛЮБОГО скролла в
+  // документе — в т.ч. Скролл постороннего контейнера НЕ должен закрывать меню.
   test('scrolling an unrelated container (e.g. the event feed auto-scroll) does NOT close the open kebab menu', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
@@ -428,9 +420,8 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
 
     const rail = screen.getByRole('listitem').querySelector('.stage-cost')
-    // Спиннер — не текст: старого «…» больше нет, но доступное предложение
-    // «Estimated cost pending» остаётся для скринридеров, а сам спиннер скрыт
-    // от них (aria-hidden), чтобы не озвучивался как отдельный узел.
+    // Спиннер — не текст: старого «…» больше нет, но доступное предложение «Estimated cost pending»
+    // остаётся для скринридеров, а сам спиннер скрыт от них, чтобы не озвучивался как отдельный узел.
     const spinner = rail?.querySelector('.stage-cost-spinner')
     expect(spinner).not.toBeNull()
     expect(spinner).toHaveAttribute('aria-hidden', 'true')
@@ -552,8 +543,7 @@ describe('StagesList', () => {
     expect(document.querySelector('.rail-foot')).toBeNull()
   })
 
-  // NOTE: jsdom does no layout, so this only proves the DOM ordering the pinning
-  // relies on (footer is the last child, after the .stages-scroll region). Actual
+  // NOTE: jsdom does no layout, so this only proves the DOM ordering the pinning relies on. Actual
   // bottom-pinning + scroll-above behaviour is verified in a live run, not here.
   test('version footer: is the LAST child of #stages-panel, after the scroll wrapper', () => {
     render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} version="dev" />)

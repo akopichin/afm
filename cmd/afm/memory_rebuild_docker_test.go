@@ -14,9 +14,7 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
-// dockerDisabledConfig — a config.Config with Docker mode explicitly off
-// (Enabled: false, not nil — nil would fall back to reading AFM_USE_DOCKER
-// from the real environment, which we don't want in a unit test).
+// dockerDisabledConfig — a config.Config with Docker mode explicitly off.
 func dockerDisabledConfig() config.Config {
 	cfg := config.Default()
 	cfg.Docker.Enabled = boolPtr(false)
@@ -57,16 +55,9 @@ func TestRebuildDockerReExec_SkippedWhenInDocker(t *testing.T) {
 
 // --- happy path: only the global command feeds mount/recipe computation -
 
-// TestRebuildDockerReExec_OnlyGlobalCommandFeedsMounts проверяет, что
-// rebuildDockerReExec монтирует ТОЛЬКО глобальную команду агента памяти
-// (cfg.Client.Command) — rebuild не выполняет стадий флоу, поэтому нет
-// *flow.Flow, из которого можно было бы (ошибочно) насканировать команды
-// стадий; docker.ScanCommands/UsedRecipes/UsesCodex вызываются с nil-флоу
-// (Task 13's nil-flow tolerance).
 func TestRebuildDockerReExec_OnlyGlobalCommandFeedsMounts(t *testing.T) {
-	// Hermeticity: this test exercises the host-only re-exec path, so container
-	// detection must report "not in a container" even when the suite itself runs
-	// inside afm's Docker image (AFM_IN_DOCKER=1 + a real /.dockerenv marker).
+	// Hermeticity: this test exercises the host-only re-exec path, so container detection must report "not in
+	// a container" even when the suite itself runs inside afm's Docker image.
 	t.Setenv("AFM_IN_DOCKER", "")
 	t.Cleanup(config.SwapContainerMarkerPresent(func() bool { return false }))
 
@@ -75,9 +66,7 @@ func TestRebuildDockerReExec_OnlyGlobalCommandFeedsMounts(t *testing.T) {
 	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	// A stub `docker` on PATH so ReExec's exec.LookPath("docker") succeeds even on
-	// a host (or container) without Docker installed; SetExecFunc intercepts the
-	// actual `docker run`, so this stub is resolved but never executed.
+	// Stub docker for LookPath; SetExecFunc intercepts execution.
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -130,17 +119,13 @@ func TestRebuildDockerReExec_OnlyGlobalCommandFeedsMounts(t *testing.T) {
 // TestRebuildDockerReExec_ClaudeCommandRequiresAuth — CheckClaudeDockerAuth
 // is invoked for the (default) "claude" client command, same as run.go.
 func TestRebuildDockerReExec_ClaudeCommandRequiresAuth(t *testing.T) {
-	// Герметичность: preflight считает «auth есть» по любому непустому
-	// CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_* из окружения. В интерактивном shell
-	// гонщика эти переменные экспортированы — без зачистки тест ложно падал
-	// («execFunc must not be called»). Пустое значение для проверки
-	// os.Getenv(key) != "" эквивалентно отсутствию переменной.
+	// Герметичность: preflight считает «auth есть» по любому непустому CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_* из
+	// окружения.
 	for _, key := range config.ClaudeAuthEnvVars {
 		t.Setenv(key, "")
 	}
-	// Hermeticity: reach the auth preflight (host-only path) even when the suite
-	// runs inside afm's Docker image — otherwise InContainer() short-circuits
-	// rebuildDockerReExec to a no-op and no auth error is produced.
+	// Hermeticity: reach the auth preflight even when the suite runs inside afm's Docker image — otherwise
+	// InContainer short-circuits rebuildDockerReExec to a no-op and no auth error is produced.
 	t.Setenv("AFM_IN_DOCKER", "")
 	t.Cleanup(config.SwapContainerMarkerPresent(func() bool { return false }))
 	docker.SetExecFunc(func(string, []string, []string) error {
@@ -216,23 +201,9 @@ func TestRebuildDockerPreflight_EmptyPathsSkipped(t *testing.T) {
 	}
 }
 
-// TestRebuildDockerPreflight_RelativePathUnderRootPasses reproduces the
-// critical bug: on the default invocation rootDir defaults to "." and
-// runDir = runsDir() = "<rootDir>/.afm/runs/<id>" is therefore RELATIVE,
-// while the reachable roots (projectDir/extra_mounts) are always absolute —
-// a raw string comparison between a relative and an absolute path always
-// fails containment, breaking `afm memory rebuild` under Docker for the
-// default case. rebuildDockerPreflight must normalize named paths to
-// absolute (relative to the same cwd absRoot was resolved from) before the
-// containment check.
 func TestRebuildDockerPreflight_RelativePathUnderRootPasses(t *testing.T) {
 	chdirTemp(t)
-	// os.Getwd() (not the raw t.TempDir() string) is the correct baseline
-	// here: filepath.Abs resolves a relative path against os.Getwd()
-	// internally, and on macOS t.TempDir() returns a "/var/folders/..."
-	// path that is itself a symlink to "/private/var/folders/..." — so
-	// filepath.Abs(dir) and filepath.Abs(relRunDir) would disagree unless
-	// both go through os.Getwd().
+	// Use os.Getwd for both baselines: macOS temp paths may contain /var → /private/var symlinks.
 	absRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -247,9 +218,6 @@ func TestRebuildDockerPreflight_RelativePathUnderRootPasses(t *testing.T) {
 	}
 }
 
-// TestRebuildDockerPreflight_RelativePathOutsideRootFails proves the Abs
-// normalization does not just always pass: a relative path that resolves
-// (against cwd) to somewhere outside the project root must still fail.
 func TestRebuildDockerPreflight_RelativePathOutsideRootFails(t *testing.T) {
 	chdirTemp(t)
 	absRoot, err := os.Getwd()
@@ -299,9 +267,8 @@ func TestRebuildDockerMemoryWritable_UnderProjectDir(t *testing.T) {
 }
 
 func TestRebuildDockerMemoryWritable_ExternalPathFailsEvenIfMounted(t *testing.T) {
-	// External memory.path — even if it happens to be reachable via a
-	// (read-only) extra_mounts entry, it can never be WRITTEN to from inside
-	// the container, because ReExec always mounts extra_mounts :ro.
+	// External memory.path — even if it happens to be reachable via a extra_mounts entry, it can never be
+	// WRITTEN to from inside the container, because ReExec always mounts extra_mounts :ro.
 	err := rebuildDockerMemoryWritable("/abs/root", "/external/memory")
 	if err == nil {
 		t.Fatal("expected an error for memory.path outside the project directory")
@@ -313,13 +280,6 @@ func TestRebuildDockerMemoryWritable_ExternalPathFailsEvenIfMounted(t *testing.T
 
 // --- end-to-end through rebuildHandler: AFM_IN_DOCKER=1 skips re-exec ----
 
-// TestRebuildHandler_DockerEnabled_SkipsReExecInsideContainer wires Docker
-// mode on through a REAL project-level .afm/config.yaml (loaded by
-// rebuildHandler itself via config.LoadFrom, not injected), then sets
-// AFM_IN_DOCKER=1 (as docker-entrypoint.sh would inside the container) and
-// asserts the whole handler runs to completion exactly as it would on the
-// host without Docker — proving rebuildDockerReExec's gate is actually
-// wired into rebuildHandler, not just correct in isolation.
 func TestRebuildHandler_DockerEnabled_SkipsReExecInsideContainer(t *testing.T) {
 	isolateHome(t)
 	withFakeMemoryPipeline(t)

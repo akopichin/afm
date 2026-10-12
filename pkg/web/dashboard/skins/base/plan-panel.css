@@ -191,19 +191,8 @@
   color: transparent;
 }
 
-/* PlanPanel — единственный потребитель PanelFrame, рендерящий больше одной
-   .section внутри .panel-frame-body одновременно (#plan-section + один из
-   #actions-section/#auto-approved-section/#retry-section/#hook-failed-section).
-   Общее правило .panel-frame-body > * (layout.css) даёт КАЖДОМУ прямому
-   ребёнку flex: 1 1 0 — для панелей с одним ребёнком (dialog/log/event-feed)
-   это безвредно (единственный ребёнок и так забирает 100%), но здесь делит
-   высоту 50/50 между планом и, например, крошечным баджем «Auto-approved» —
-   баг: в maximize-режиме (.maximize-overlay #plan-content снимает
-   max-height, ожидая занять весь оверлей) #plan-section получает только
-   половину доступной высоты, план обрезается вместо скролла на весь экран.
-   ID-селекторы ниже специфичнее .panel-frame-body > * (класс+универсальный),
-   поэтому переопределяют flex независимо от порядка файлов — #plan-section
-   остаётся единственной растущей секцией. */
+/* PlanPanel — единственный потребитель PanelFrame, рендерящий больше одной .section внутри
+   .panel-frame-body одновременно. */
 #actions-section,
 #auto-approved-section,
 #retry-section,
@@ -220,25 +209,19 @@
   overflow-y: auto;
 }
 
-/* Maximized-режим (портал Maximizable в <body>, см. .maximize-overlay в layout.css):
-   фиксированный потолок высоты снимается, план занимает всё доступное место
-   оверлея. */
+/* Maximized-режим (портал Maximizable в <body>, см. .maximize-overlay в layout.css): фиксированный потолок
+   высоты снимается, план занимает всё доступное место оверлея. */
 .maximize-overlay #plan-content {
   max-height: none;
   flex: 1;
   min-height: 0;
 }
 
-/* === Построчные комментарии поверх блочного markdown (data-line якоря) ===
-   Якорь — под-элемент внутри .md-блока (<li>/<tr>/<p>/heading/hr/fence-wrapper),
-   помеченный data-line. Гаттера номеров нет (осознанно) — «Line N» живёт в title
-   якоря на ховере и в шапке формы/индикатора. .line-commented — стабильный
-   ancestor-класс контейнера-владельца (нужен для специфичности табличных
-   состояний строго выше zebra). */
+/* === Построчные комментарии поверх блочного markdown === Якорь — под-элемент внутри .md-блока, помеченный
+   data-line. */
 
-/* Отступы между отдельными .md-блоками: каждый .md обнуляет собственные
-   first/last-child края (markdown.css), поэтому вертикальный ритм задаём на самой
-   обёртке блока. */
+/* Отступы между отдельными .md-блоками: каждый .md обнуляет собственные first/last-child края
+   (markdown.css), поэтому вертикальный ритм задаём на самой обёртке блока. */
 .line-commented .md { margin: 8px 0; }
 .line-commented .md:first-child { margin-top: 0; }
 
@@ -247,9 +230,8 @@
   transition: background 0.1s, box-shadow 0.15s;
   scroll-margin: 8px;
 }
-/* Порядок has-comment → is-hover → is-active: равная специфичность, позже
-   выигрывает. Фон-подсветка (без ::after-иконки — псевдоэлемент ломается на
-   tr/hr). */
+/* Порядок has-comment → is-hover → is-active: равная специфичность, позже выигрывает. Фон-подсветка (без
+   ::after-иконки — псевдоэлемент ломается на tr/hr). */
 .line-commented [data-line].has-comment {
   background: rgba(229, 212, 66, 0.07);
   box-shadow: inset 2px 0 0 var(--amber);
@@ -266,9 +248,8 @@
   outline-offset: 1px;
 }
 
-/* Табличные состояния — СТРОГО выше zebra (.md tr:nth-child(even) td = (0,2,2)):
-   ancestor-класс .line-commented поднимает специфичность до (0,3,2). Покрываем и
-   header-th, и чётную data-row. Порядок has-comment → is-hover → is-active. */
+/* Табличные состояния — СТРОГО выше zebra: ancestor-класс .line-commented поднимает специфичность до.
+   Покрываем и header-th, и чётную data-row. */
 .line-commented .md tr.has-comment > :is(th, td) { background: rgba(229, 212, 66, 0.12); }
 .line-commented .md tr.is-hover > :is(th, td) { background: rgba(111, 212, 204, 0.10); }
 .line-commented .md tr.is-active { box-shadow: none; }
@@ -437,9 +418,7 @@
   color: var(--accent-primary);
 }
 
-/* Крестик для быстрого удаления комментария прямо из его отображения,
-   без открытия формы редактирования. Контурный стиль как у .icon-btn;
-   coral на hover сигнализирует деструктивное действие (ср. .feed-msg.error). */
+/* Удаление комментария без открытия редактора. */
 .comment-remove {
   display: inline-flex;
   align-items: center;
@@ -555,10 +534,7 @@
   border: 1px solid var(--c-done);
 }
 
-/* .panel-frame-body > * (layout.css) даёт flex: 1 1 0 каждому прямому ребёнку —
-   верно для одно-child панелей (dialog/log), но у плана несколько соседей:
-   #plan-section должен забирать всё доступное место, а кнопки одобрения/ретрая —
-   оставаться на своей естественной высоте, а не делить место с планом поровну. */
+/* Let #plan-section fill remaining height while approval/retry actions keep their natural height. */
 #actions-section,
 #retry-section {
   flex: 0 0 auto;
@@ -593,24 +569,20 @@
   to { transform: translate(-50%, -50%) scale(30); opacity: 0; }
 }
 
-/* === Workspace document mode: Approval = wide document + bottom action bar ===
-   Scoped under .workspace-body so the boxed detail-panel styling above is left
-   untouched in every other context (e.g. the maximize overlay). The document
-   (#plan-section) scrolls; the action block is a fixed bottom bar. */
+/* === Workspace document mode: Approval = wide document + bottom action bar === Scoped under
+   .workspace-body so the boxed detail-panel styling above is left untouched in every other context. */
 .workspace-body #plan-section {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   margin-bottom: 0;
 }
-/* A comfortable readable measure, centered, with horizontal gutters. Drop the
-   boxed border/background/inner scroll — the section itself scrolls now. Long
-   code/tables keep their own overflow-x (see .md pre/table in markdown.css). */
+/* A comfortable readable measure, centered, with horizontal gutters. Drop the boxed
+   border/background/inner scroll — the section itself scrolls now. */
 .workspace-body #plan-section .markdown-body,
 .workspace-body #plan-section #plan-content {
-  /* На всю ширину воркспейса (было max-width:820px по центру — слева
-     оставался большой пустой блок). Читаемость держат горизонтальные
-     gutters, а не узкая мера. */
+  /* На всю ширину воркспейса (было max-width:820px по центру — слева оставался большой пустой блок).
+     Читаемость держат горизонтальные gutters, а не узкая мера. */
   max-width: none;
   margin-inline: 0;
   padding: 8px clamp(16px, 3vw, 40px) 24px;

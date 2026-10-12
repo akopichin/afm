@@ -1,17 +1,8 @@
-/* pkg/web/dashboard/skins/base/layout.css
-   Dashboard body shell: a non-resizable two-column grid — stage rail (left) and
-   a single tabbed workspace (right). Replaces the old three-column resizable
-   layout (dashboard-cols / detail-column / detail-rows / resize-handle) and the
-   removed footer. The panel-frame / maximizable-frame family is kept: the feed
-   and the plan/dialog detail panels still render inside those wrappers, just
-   hosted by the workspace instead of resizable panes. Semantic tokens only. */
+/* pkg/web/dashboard/skins/base/layout.css Dashboard body shell: a non-resizable two-column grid — stage
+   rail and a single tabbed workspace. Semantic tokens only. */
 
-/* Верхний уровень — flex-колонка на всю высоту вьюпорта: шапка и (когда видна)
-   review-баннер занимают натуральную высоту, #main забирает остаток. Finding #2
-   раунда 4: раньше #main жёстко брал calc(100vh - 61px) (только высота шапки),
-   поэтому при видимом ReviewBanner суммарная высота становилась 100vh + баннер и
-   возвращался page-scroll вопреки контракту «скроллим внутри колонок, не
-   страницу». Теперь высота баннера не считается вручную — layout сам раздаёт. */
+/* Верхний уровень — flex-колонка на всю высоту вьюпорта: шапка и review-баннер занимают натуральную
+   высоту, #main забирает остаток. */
 #root {
   display: flex;
   flex-direction: column;
@@ -29,10 +20,7 @@
   background-color: var(--surface-canvas);
 }
 
-/* === Dashboard body: rail + resizer + workspace ===
-   Ширина рейла — переменная --rail-width (задаётся из DashboardShell, персист в
-   localStorage). Делитель .rail-resizer абсолютно спозиционирован на границе
-   колонок, поэтому сетка остаётся двухколоночной. */
+/* === Dashboard body: rail + resizer + workspace === Ширина рейла — переменная --rail-width. */
 .dashboard-body {
   position: relative;
   display: grid;
@@ -70,9 +58,8 @@
   outline-offset: -2px;
   border-radius: var(--radius-sm);
 }
-/* Видимая ручка — маленькая вертикальная полоска ПО ЦЕНТРУ (не на всю высоту).
-   Едва заметна в покое (чтобы её можно было найти), подсвечивается акцентом и
-   вырастает при наведении/перетаскивании. */
+/* Видимая ручка — маленькая вертикальная полоска ПО ЦЕНТРУ. Едва заметна в покое (чтобы её можно было
+   найти), подсвечивается акцентом и вырастает при наведении/перетаскивании. */
 .rail-resizer-grip {
   width: 4px;
   height: 40px;
@@ -131,10 +118,7 @@
 .rail-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
 .rail-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
-/* Scrim behind the drawer — inert on desktop (the rail sits in-grid). Абсолютно
-   спозиционирован относительно .dashboard-body (внутри корректно посчитанного
-   #main), поэтому естественно начинается ПОД шапкой и review-баннером, без
-   хардкода top:61px (Finding #2 раунда 4). */
+/* Scrim behind the drawer — inert on desktop. */
 .rail-scrim {
   display: none;
   position: absolute;
@@ -193,10 +177,7 @@
   white-space: nowrap;
 }
 
-/* Full feed is pushed to the far RIGHT edge of the tab strip; every other tab
-   (Feed / detail / beacon / Cost) stays left-packed. .workspace-tabs is already
-   display:flex, so margin-left:auto on this one tab does it — no component change
-   (WorkspaceTabs already renders data-tab-id on each button). */
+/* Full feed is pushed to the far RIGHT edge of the tab strip; every other tab stays left-packed. */
 .workspace-tab[data-tab-id="full-feed"] {
   margin-left: auto;
 }
@@ -233,10 +214,8 @@
 .workspace-tab-attention[data-kind="hook_failed"] .attn-glyph { background: var(--danger); }
 .workspace-tab-attention[data-kind="paused"] .attn-glyph { background: var(--text-secondary); }
 
-/* .glow — the most prominent motion in the app: a low-frequency halo pulse on
-   the attention tab, themed by kind. A base (static) halo is always present so
-   that under prefers-reduced-motion (global gate freezes the animation) it
-   still reads as a highlighted tab. The concentric halo is a pseudo-element. */
+/* .glow — the most prominent motion in the app: a low-frequency halo pulse on the attention tab, themed by
+   kind. The concentric halo is a pseudo-element. */
 .workspace-tab.glow {
   --glow-rgb: var(--attention-rgb);
 }
@@ -340,11 +319,8 @@
   gap: 12px;
 }
 .detail-panels { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-/* Attention-баннер теперь рендерится ПЕРВЫМ ребёнком внутри скролл-области панели
-   (#plan-section / #dialog-scroll), а не как sibling над ней — поэтому уезжает
-   вместе с контентом и не занимает высоту постоянно (запрос: большие вопросы/
-   планы не должны терять место под шапкой). flex:none — чтобы в flex-колонке
-   скролл-контейнера баннер не сжимался; небольшой верхний отступ для воздуха. */
+/* Attention-баннер теперь рендерится ПЕРВЫМ ребёнком внутри скролл-области панели, а не как sibling над
+   ней — поэтому уезжает вместе с контентом и не занимает высоту постоянно. */
 #plan-section > .attention-banner,
 #dialog-scroll > .attention-banner {
   flex: none;
@@ -468,9 +444,8 @@
   flex-direction: column;
   overflow: auto;
 }
-/* Direct child of the body (the panel's outer wrapper — #feed-panel,
-   #dialog-section, …) fills the height and becomes a flex column, so the inner
-   scroll container gets a height instead of collapsing. */
+/* Direct child of the body fills the height and becomes a flex column, so the inner scroll container gets
+   a height instead of collapsing. */
 .panel-frame-body > * {
   flex: 1 1 0;
   min-height: 0;
@@ -478,9 +453,8 @@
   flex-direction: column;
 }
 
-/* Maximizable wrapper — always mounted in place; maximized swaps to a fixed
-   overlay (.maximize-overlay). Non-maximized it just forwards 100% height down
-   to .panel-frame so inner scroll containers don't collapse. */
+/* Maximizable wrapper — always mounted in place; maximized swaps to a fixed overlay. Non-maximized it just
+   forwards 100% height down to .panel-frame so inner scroll containers don't collapse. */
 .maximizable-frame {
   height: 100%;
   min-height: 0;
@@ -522,19 +496,14 @@
   min-height: 0;
 }
 
-/* Плавающая круглая иконка «вниз, к последнему»: sticky к низу скролл-контейнера,
-   прижата вправо. Непрозрачная surface-подложка + accent-обводка + тень делают её
-   похожей на FAB, читаемой поверх любого контента и в любой теме. */
+/* Плавающая круглая иконка «вниз, к последнему»: sticky к низу скролл-контейнера, прижата вправо. */
 .jump-latest {
   position: sticky;
   bottom: 10px;
   margin-left: auto;
   margin-right: 8px;
-  /* В .feed-scroll (display:flex; column) кнопка — flex-элемент: без align-self
-     родительский align-items:stretch растягивал её по ширине, и border-radius:50%
-     давал овал вместо круга. flex:none + align-self:flex-end фиксируют 34×34 и
-     прижимают вправо в любом контейнере (в блочном #dialog-scroll — игнор,
-     right-align через margin-left:auto). box-sizing — чтобы border не раздувал. */
+  /* В .feed-scroll кнопка — flex-элемент: без align-self родительский align-items:stretch растягивал её по
+     ширине, и border-radius:50% давал овал вместо круга. */
   flex: none;
   align-self: flex-end;
   box-sizing: border-box;
@@ -561,8 +530,7 @@
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
-/* В диалоге снизу залипает action-бар (.dialog-actions, sticky bottom:0,
-   ~60px высотой) — приподнимаем иконку над ним, чтобы не садилась на строку
+/* В диалоге снизу залипает action-бар — приподнимаем иконку над ним, чтобы не садилась на строку
    SEND/«AGENT IS WAITING». В ленте/логе такого бара нет (raised не ставится). */
 .jump-latest-raised { bottom: 74px; }
 
@@ -604,8 +572,7 @@
   color: var(--accent-primary);
 }
 
-/* === Attention signal ===
-   When a stage needs the user (awaiting_user_input / awaiting_approval) we
+/* === Attention signal === When a stage needs the user (awaiting_user_input / awaiting_approval) we
    highlight it in the rail row and the relevant panel frame. */
 @keyframes attentionPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0); }
@@ -626,12 +593,8 @@
   transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease;
 }
 
-/* === Workspace document mode: hide redundant panel chrome ===
-   Inside the workspace the panel-frame becomes a transparent flex column.
-   The WorkspaceHeader above already shows the stage name + status, so the
-   frame's own header (title + maximize icon) is redundant here. The strong
-   attention glow lives on the tab; inside the workspace we keep only a soft
-   top accent hairline as the attention affordance (no big border/glow). */
+/* === Workspace document mode: hide redundant panel chrome === Inside the workspace the panel-frame
+   becomes a transparent flex column. */
 .workspace-body .panel-frame {
   border: 0;
   background: transparent;
@@ -655,10 +618,8 @@
   flex: 1;
   min-height: 0;
 }
-/* Plan/dialog read as full-bleed documents: drop the body's inner padding so
-   the bottom action bar / sticky answer bar span the whole width (gutters come
-   from the document measure + the bar's own padding). The feed panel keeps its
-   padding — only the document workspaces are made edge-to-edge. */
+/* Plan/dialog read as full-bleed documents: drop the body's inner padding so the bottom action bar /
+   sticky answer bar span the whole width. */
 .workspace-body .panel-frame-body:has(#plan-section),
 .workspace-body .panel-frame-body:has(#dialog-section) {
   padding: 0;
@@ -710,10 +671,8 @@
   text-align: center;
 }
 
-/* === Narrow viewports: the stage rail becomes a slide-over drawer ===
-   Below 900px the two-column grid collapses to one; the rail leaves the flow and
-   slides over the workspace on demand (toggle ☰ / scrim / Escape / stage-pick).
-   The workspace then gets the full width instead of ~150px. */
+/* === Narrow viewports: the stage rail becomes a slide-over drawer === Below 900px the two-column grid
+   collapses to one; the rail leaves the flow and slides over the workspace on demand. */
 @media (max-width: 900px) {
   .dashboard-body { grid-template-columns: 1fr; }
 

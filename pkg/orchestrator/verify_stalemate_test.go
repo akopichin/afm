@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// TestWorkingTreeFingerprint_OversizedDiffNotOk — tracked-файл, перезаписанный
-// содержимым сверх maxGitOutputBytes, даёт git diff --binary больше капа →
-// ok=false (fail-safe, тот же консервативный исход, что и для untracked-капа;
-// защита от OOM-буферизации большого бинарного diff). Содержимое —
-// несжимаемое (random), иначе zlib внутри git diff --binary схлопнул бы его
-// обратно под кап.
 func TestWorkingTreeFingerprint_OversizedDiffNotOk(t *testing.T) {
 	dir := newGitRepoWithCommit(t)
 	big := make([]byte, maxGitOutputBytes+1)
@@ -27,9 +21,7 @@ func TestWorkingTreeFingerprint_OversizedDiffNotOk(t *testing.T) {
 	}
 }
 
-// newGitRepoWithCommit creates a temp git repo with one committed tracked file
-// and returns its path. Reuses the package-local runGit test helper
-// (reflection_test.go), setting a committer identity so commit does not fail.
+// newGitRepoWithCommit creates a temp git repo with one committed tracked file and returns its path.
 func newGitRepoWithCommit(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -80,10 +72,6 @@ func TestWorkingTreeFingerprint_TrackedEditDiffers(t *testing.T) {
 	}
 }
 
-// TestWorkingTreeFingerprint_UntrackedContentEditDiffers — правка СОДЕРЖИМОГО
-// untracked-файла на месте (имя не меняется) меняет хэш. Это ловит ловушку
-// path-only (git status --porcelain): plan-стадия редактирует untracked
-// ./dev-plan.md на месте — path-only отпечаток выглядел бы одинаково.
 func TestWorkingTreeFingerprint_UntrackedContentEditDiffers(t *testing.T) {
 	dir := newGitRepoWithCommit(t)
 	untracked := filepath.Join(dir, "dev-plan.md")
@@ -103,10 +91,6 @@ func TestWorkingTreeFingerprint_UntrackedContentEditDiffers(t *testing.T) {
 	}
 }
 
-// TestWorkingTreeFingerprint_StagedUnstagedCancellationDiffers — staged и
-// unstaged изменения, взаимно компенсирующие друг друга так, что worktree ==
-// HEAD, всё равно дают хэш, отличный от чистого дерева: индекс грязный.
-// Единый `git diff HEAD` схлопнул бы их и ложно сигналил "без изменений".
 func TestWorkingTreeFingerprint_StagedUnstagedCancellationDiffers(t *testing.T) {
 	dir := newGitRepoWithCommit(t)
 	clean, _ := fp(t, dir)
@@ -129,9 +113,6 @@ func TestWorkingTreeFingerprint_StagedUnstagedCancellationDiffers(t *testing.T) 
 	}
 }
 
-// TestWorkingTreeFingerprint_CommittedChangeDiffers — коммит между снимками
-// меняет HEAD, значит и хэш (HEAD входит в отпечаток). Без этого реально
-// закоммиченное изменение между двумя чистыми снимками выглядело бы неизменным.
 func TestWorkingTreeFingerprint_CommittedChangeDiffers(t *testing.T) {
 	dir := newGitRepoWithCommit(t)
 	before, _ := fp(t, dir)
@@ -149,9 +130,6 @@ func TestWorkingTreeFingerprint_CommittedChangeDiffers(t *testing.T) {
 	}
 }
 
-// TestWorkingTreeFingerprint_AfmChurnExcluded — запись в НЕ-игнорируемый .afm/
-// между снимками НЕ меняет хэш: afm переписывает свой state-tree каждый раунд,
-// иначе stalemate не сработал бы никогда.
 func TestWorkingTreeFingerprint_AfmChurnExcluded(t *testing.T) {
 	dir := newGitRepoWithCommit(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".afm", "runs", "r1"), 0755); err != nil {

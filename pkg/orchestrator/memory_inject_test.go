@@ -22,9 +22,6 @@ func TestMemoryBlockForStage_DisabledReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestMemoryBlockForStage_NoFilesReturnsEmpty — память включена, но ни
-// project-, ни stage-файла ещё нет на диске (первая стадия первого рана) —
-// сказать агенту нечего, блок должен остаться пустым.
 func TestMemoryBlockForStage_NoFilesReturnsEmpty(t *testing.T) {
 	o := newTestOrchestrator(t)
 	o.opts.MemoryDir = t.TempDir()
@@ -98,9 +95,6 @@ func TestMemoryBlockForStage_WriteOnlyModeDoesNotNameStageFile(t *testing.T) {
 	}
 }
 
-// TestMemoryBlockForStage_NonexistentStageFileNotNamed — mode:rw, но файл ещё
-// не создан на диске (первый запуск): не называть путь, которого нет смысла
-// читать.
 func TestMemoryBlockForStage_NonexistentStageFileNotNamed(t *testing.T) {
 	o := newTestOrchestrator(t)
 	dir := t.TempDir()

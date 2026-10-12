@@ -13,11 +13,6 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestAutoApprove_WinsOverRequireApproval verifies that a stage with
-// auto_approve: true is approved even when the whole run was started with
-// --require-approval (which would normally FailStage a headless run with no
-// dashboard attached, per the existing "Headless: нет дашборда" branch in
-// onAgentCompleted).
 func TestAutoApprove_WinsOverRequireApproval(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "ci-stage", Name: "CI Stage", Description: "auto approved in CI",
@@ -57,9 +52,6 @@ func TestAutoApprove_WinsOverRequireApproval(t *testing.T) {
 	}
 }
 
-// TestAutoApprove_DefaultFalse_RequireApprovalStillFails is the regression
-// guard: without auto_approve, --require-approval on a headless run must
-// still fail the stage exactly as before this feature existed.
 func TestAutoApprove_DefaultFalse_RequireApprovalStillFails(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "manual-stage", Name: "Manual Stage", Description: "needs a human",
@@ -99,13 +91,6 @@ func TestAutoApprove_DefaultFalse_RequireApprovalStillFails(t *testing.T) {
 	}
 }
 
-// TestAutoApprove_WithDashboardAttached_SkipsManualClick verifies auto_approve
-// fires even when a dashboard IS attached (SetDashboardURL), where the
-// existing headless branch would NOT have auto-approved anything — proving
-// auto_approve is independent of the headless/dashboard distinction. The
-// sibling "manual" stage (no auto_approve, no simulated dashboard click) is
-// used as a control: it must stay stuck at awaiting_approval forever in this
-// test, since nothing here ever approves it.
 func TestAutoApprove_WithDashboardAttached_SkipsManualClick(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "auto", Name: "Auto", Description: "auto approved",
@@ -146,12 +131,6 @@ func TestAutoApprove_WithDashboardAttached_SkipsManualClick(t *testing.T) {
 	}
 }
 
-// TestAutoApprove_RecoveryDefaultCase_NoBusHelperNeeded exercises the
-// recovery.go "default:" EvPlanReady site (crash with status=planning and
-// plan.md already on disk). Deliberately does NOT register a bus-based
-// auto-approver (unlike TestIntegration_ResumeFromPlanningWithExistingPlan) —
-// if this test passes, the recovery-path auto_approve check itself did the
-// approving, not a simulated dashboard click.
 func TestAutoApprove_RecoveryDefaultCase_NoBusHelperNeeded(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "planned-ci", Name: "Planned CI", Description: "already planned",
@@ -199,11 +178,6 @@ func TestAutoApprove_RecoveryDefaultCase_NoBusHelperNeeded(t *testing.T) {
 	}
 }
 
-// TestAutoApprove_RecoveryRetryingWithExistingPlan_NoBusHelperNeeded exercises
-// the recovery.go "case state.StatusRetrying:" EvPlanReady site (crash while
-// Retrying, with plan.md already on disk). Same "no bus helper" proof as
-// TestAutoApprove_RecoveryDefaultCase_NoBusHelperNeeded, targeting the sibling
-// code path.
 func TestAutoApprove_RecoveryRetryingWithExistingPlan_NoBusHelperNeeded(t *testing.T) {
 	stages := []flow.Stage{
 		{ID: "retry-ci", Name: "Retry CI", Description: "was retrying with a plan already on disk",

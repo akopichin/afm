@@ -8,9 +8,7 @@ function readInitialMode(): ThemeMode {
   return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
 }
 
-// Переключатель dark/light, независимый от активного скина (novacorps/goga/custom).
-// Начальное значение уже выставлено инлайн-скриптом в index.html (до отрисовки
-// CSS, без FOUC) — хук лишь читает его из data-theme и даёт toggle() для UI.
+// Переключатель dark/light, независимый от активного скина.
 export function useThemeMode(): { mode: ThemeMode; toggle: () => void } {
   const [mode, setMode] = useState<ThemeMode>(readInitialMode)
 
