@@ -54,6 +54,9 @@ const (
 	// EventVerifyResult fires right AFTER one AI-verify step's outcome is known —
 	// pass/needs_changes/inconclusive, or the step couldn't be evaluated at all.
 	EventVerifyResult EventType = "verify_result"
+	// EventVerifyRetry fires when a transient verify exec-failure is about to be retried after backoff.
+	// Non-FSM: published live + durable to notices.jsonl, like EventVerifyStarted/Result.
+	EventVerifyRetry EventType = "verify_retry"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

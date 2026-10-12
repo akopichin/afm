@@ -5,6 +5,29 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-12
 
+### Fix: a transient AI-verify crash no longer fails the stage
+
+An AI [`verify:`](https://github.com/akopichin/afm/blob/main/docs/verify.md) step
+whose reviewer *process* fails to execute — a flaky infra hiccup rather than a
+verdict — is now retried instead of immediately failing the stage. This covers any
+non-timeout, non-interrupted process-execution failure: the verifier failing to
+launch, its output stream breaking mid-run, or the verifier running and exiting
+non-zero. afm retries that step up to 2 times with an 8-second backoff, and the step
+passes as soon as a retry succeeds; only after the retries are exhausted is it a
+terminal "verify execution failed". The retry budget is fixed and is entirely
+separate from the
+[correction budget](https://github.com/akopichin/afm/blob/main/docs/verify.md#the-correction-budget-verifymax_failures),
+so a crash never consumes a correction. Everything else stays fail-fast (step
+timeout, idle-timeout, protocol error, Pause/Revise/cancel, and direct
+executor/storage errors are not retried), and the backoff wait is interruptible so
+pausing or revising during it is immediate.
+Each retry shows a `Verify retry N (step M)` warning line in the
+[dashboard](https://github.com/akopichin/afm/blob/main/docs/dashboard.md) Feed
+(durable, so late-connecting clients still see it), and a genuine failure now carries
+the tail of the verifier's stderr — including the codex adapter dumping its last
+output lines on a non-zero exit — so the reported reason shows why the verifier
+crashed rather than a bare "verify execution failed".
+
 ### Improvement: configure agent reasoning effort
 
 A new `client.reasoning` knob in

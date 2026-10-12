@@ -112,6 +112,16 @@ fi
 out_file=$(mktemp)
 trap 'rm -f "$out_file" "$last_msg_file"' EXIT
 
+# On failure, surface the tail of codex's raw stdout to stderr (inherited into the verify step's log) so
+# the real cause survives the EXIT trap deleting $out_file. Skip the markers if codex produced no stdout.
+dump_raw_output() {
+    if [[ -s "$out_file" ]]; then
+        echo "--- codex raw output (last 50 lines) ---" >&2
+        tail -n 50 "$out_file" >&2
+        echo "--- end codex raw output ---" >&2
+    fi
+}
+
 # Translate each completed item independently so malformed lines cannot stop the stream; normalize
 # reasoning text/summary shapes.
 XLATE='
@@ -205,6 +215,7 @@ if [[ "$CODEX_VERIFY" == "1" ]]; then
 
     if [[ "$codex_exit" -ne 0 ]]; then
         echo "error: codex exited with status $codex_exit" >&2
+        dump_raw_output
         jq -nc --arg t "$final_text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
         build_result_line "error_during_execution"
         exit "$codex_exit"
@@ -231,6 +242,7 @@ resolved_model=$(resolve_codex_model)
 
 if [[ "$codex_exit" -ne 0 ]]; then
     echo "error: codex exited with status $codex_exit" >&2
+    dump_raw_output
     # Items already streamed live; just emit the terminal result and propagate.
     build_result_line "error_during_execution"
     exit "$codex_exit"

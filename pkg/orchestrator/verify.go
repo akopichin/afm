@@ -39,6 +39,12 @@ const (
 // verifyTimedOutReason — общий текст ошибки step-таймаута и idle-таймаута verify.
 const verifyTimedOutReason = "verify timed out"
 
+// verifyExecMaxRetries/verifyExecBackoff — бюджет и пауза ретраев транзиентного инфра-сбоя verify-процесса
+// (v1, без конфига — YAGNI). verifyExecBackoff — var лишь затем, чтобы тесты могли сжать паузу.
+const verifyExecMaxRetries = 2
+
+var verifyExecBackoff = 8 * time.Second
+
 // Ключи payload'а observer-событий EventVerifyStarted/EventVerifyResult
 // (V5a.3) — единая точка вместо разбросанных строковых литералов.
 const (
@@ -50,6 +56,7 @@ const (
 	keyExecErrorKind  = "exec_error"
 	keyVerifyReason   = "reason"
 	keyReportPath     = "report_path"
+	keyAttempt        = "attempt"
 )
 
 // execErrorKindInterrupted обозначает Pause/Revise/cancel; exec_failure — прочие сбои проверки. Ненулевой
@@ -89,6 +96,43 @@ func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, co
 		data[keyReportPath] = reportPath
 	}
 	o.publishNotice(bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data})
+}
+
+// emitVerifyRetry публикует событие «транзиентный сбой verify-шага будет повторён после backoff» —
+// live + durable, как emitVerifyStarted/emitVerifyResult. attempt — 1-based номер предстоящей повторной попытки.
+func (o *Orchestrator) emitVerifyRetry(stageID, verID string, idx int, kind, command string, attempt int, reason string) {
+	o.publishNotice(bus.Event{Type: bus.EventVerifyRetry, StageID: stageID, Data: map[string]any{
+		keyVerificationID: verID, keyStep: idx, keyVerifyKind: kind,
+		keyVerifyCommand: command, keyAttempt: attempt, keyVerifyReason: reason,
+	}})
+}
+
+// verifyBackoffInterruptible спит d; возвращает false, если Pause/Revise/cancel оборвали ожидание.
+func (o *Orchestrator) verifyBackoffInterruptible(ctx context.Context, stageID string, d time.Duration) bool {
+	waitCtx, stop := o.pauseAwareVerifyCtx(ctx, stageID)
+	defer stop()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-waitCtx.Done():
+		return false
+	}
+}
+
+// enrichExecReason дочитывает хвост agent.stderr.log шага и подмешивает его в baseReason, чтобы причина
+// exec_failure несла реальный вывод процесса. Пустой/отсутствующий файл → baseReason без изменений.
+func enrichExecReason(stepDir, baseReason string) string {
+	data, err := os.ReadFile(filepath.Join(stepDir, "agent.stderr.log"))
+	if err != nil {
+		return baseReason
+	}
+	tail := stagefiles.TailOutput(string(data), verifyShellOutputLimit)
+	if tail == "" {
+		return baseReason
+	}
+	return baseReason + "\n--- stderr ---\n" + tail
 }
 
 // verifyReportPath возвращает абсолютный путь report.md для данного прохода —
@@ -179,7 +223,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		}
 
 		if st.Kind == flow.VerifyAgent {
-			result, alias, err := o.runVerifyAgentStep(stepCtx, s, st, idx, verID, prompts.VerifyInputs{
+			in := prompts.VerifyInputs{
 				Template:       o.opts.Prompts.Verify,
 				Stage:          s,
 				GlobalPrompt:   o.opts.GlobalPrompt,
@@ -190,13 +234,50 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				PassedSteps:    passedSteps.String(),
 				PreviousReport: prevReport,
 				VerifyPrompt:   st.Prompt,
-			})
+			}
+			// Транзиентный инфра-сбой verify-процесса ретраим с backoff; все прочие ошибки
+			// (timeout/interrupt/protocol/storage/детерминированный exec-сбой) — fail-fast.
+			var result verify.ModelResult
+			var alias string
+			var err error
+			for execAttempt := 0; ; execAttempt++ {
+				result, alias, err = o.runVerifyAgentStep(stepCtx, s, st, idx, verID, in)
+				if err == nil {
+					break
+				}
+				var ve *VerifyExecError
+				transient := errors.As(err, &ve) && ve.Transient
+				if !transient || execAttempt >= verifyExecMaxRetries || ctx.Err() != nil {
+					break
+				}
+				o.emitVerifyRetry(s.ID, verID, idx, kind, command, execAttempt+1, err.Error())
+				if !o.verifyBackoffInterruptible(stepCtx, s.ID, verifyExecBackoff) {
+					// Backoff погашен досрочно. Истёкший дедлайн шага (st.Timeout) — это ТАЙМАУТ verify-шага
+					// (терминальный exec_failure), а НЕ пользовательское прерывание: иначе runWithRetry по
+					// ErrUserInterrupted перезапустил бы автора, и при детерминированном сбое стадия зациклилась бы.
+					if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
+						err = &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+					} else {
+						err = executor.ErrUserInterrupted // Pause/Revise/отмена рана
+					}
+					break
+				}
+			}
 			if err != nil {
 				manifestSteps[i].Outcome = verifyManifestErrorOutcome(err)
 				_ = persistManifest()
 				execKind := execErrorKindExecFailure
 				if errors.Is(err, executor.ErrUserInterrupted) {
 					execKind = execErrorKindInterrupted
+				}
+				if execKind == execErrorKindExecFailure {
+					// Хвост agent.stderr.log подмешиваем ОДИН раз, уже после исчерпания ретраев;
+					// interrupted не обогащаем и identity ошибки не трогаем.
+					var ve *VerifyExecError
+					if errors.As(err, &ve) {
+						stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
+						ve.Reason = enrichExecReason(stepDir, ve.Reason)
+					}
 				}
 				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execKind, err.Error(), "")
 				return err
@@ -394,6 +475,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	}
 	if !outcome.ProcessOK {
 		reason := "verify execution failed"
+		transient := false
 		switch {
 		case outcome.TimedOut:
 			// executor'ский idle-timeout (независимая гарантия, см. §3.4
@@ -403,10 +485,11 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 			// Step-таймаут определяем по ctx: executor может вернуть ProcessOK=false без TimedOut/Interrupted.
 			reason = verifyTimedOutReason
 		default:
-			// Прочая инфраструктурная ошибка запуска (не idle-timeout, не
-			// наш step-timeout) — reason остаётся дефолтным.
+			// Прочая инфраструктурная ошибка запуска (не idle-timeout, не наш step-timeout) — reason остаётся
+			// дефолтным. ЕДИНСТВЕННЫЙ транзиентный случай: процесс стартовал и упал с ненулевым кодом.
+			transient = true
 		}
-		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: reason, Step: idx}
+		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: reason, Step: idx, Transient: transient}
 	}
 	if outcome.ProtocolErr != nil {
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify protocol error: " + outcome.ProtocolErr.Error(), Step: idx}

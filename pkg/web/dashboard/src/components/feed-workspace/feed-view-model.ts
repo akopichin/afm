@@ -176,6 +176,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
       return { actor: 'system', tone: 'warning', kind: 'status', text: `lifecycle hook ${str(obj.hook_id)} failed: ${str(obj.error)}`, mono: false }
     case 'verify_started':
     case 'verify_result':
+    case 'verify_retry':
       // Verify-события наблюдательные: рендерятся строкой в ленте (mapVerifyEvent), но не меняют FSM-статус стадии.
       return mapVerifyEvent(event.type, obj)
     case 'approved':
@@ -253,7 +254,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
 }
 
 // mapVerifyEvent — презентация AI-verify наблюдательных событий.
-function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<string, unknown>): Mapped {
+function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry', obj: Record<string, unknown>): Mapped {
   const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
   const command = str(obj.command)
   const verificationId = str(obj.verification_id)
@@ -261,6 +262,22 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result', obj: Record<st
 
   if (type === 'verify_started') {
     return { actor: 'system', tone: 'neutral', kind: 'status', text: `Verify step ${step} · ${command}`, mono: false, dedupeId }
+  }
+
+  if (type === 'verify_retry') {
+    // Транзиентный инфра-сбой verify-процесса, повторяемый после backoff: attempt нумерует повторную
+    // попытку запуска; dedupeId несёт attempt, чтобы разные попытки были отдельными строками, а повтор
+    // одной — не дублировался при reload-replay.
+    const attempt = typeof obj.attempt === 'number' ? obj.attempt : Number(str(obj.attempt))
+    const reason = str(obj.reason)
+    return {
+      actor: 'system',
+      tone: 'warning',
+      kind: 'status',
+      text: `Verify retry ${attempt} (step ${step}) · ${command}: ${reason}`,
+      mono: false,
+      dedupeId: `verify:${verificationId}:${step}:retry:${attempt}`,
+    }
   }
 
   const reason = str(obj.reason)

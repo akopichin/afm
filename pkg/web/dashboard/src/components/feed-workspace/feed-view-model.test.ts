@@ -185,6 +185,45 @@ describe('verify_started/verify_result — наблюдательные собы
   })
 })
 
+describe('verify_retry — наблюдательное предупреждение о повторном verify-проходе', () => {
+  it('renders as a system warning status row naming the step, command, attempt and reason', () => {
+    const items = toFeedItems([
+      ev(
+        'verify_retry',
+        { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', attempt: 1, reason: 'needs changes' },
+        's1',
+        '2026-07-10T10:00:00Z',
+      ),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toContain('2') // step
+    expect(items[0]?.text).toContain('codex') // command
+    expect(items[0]?.text).toContain('1') // attempt
+    expect(items[0]?.text).toContain('needs changes') // reason
+  })
+
+  it('keys a verify_retry row by verification_id+step+attempt so a reload replay never duplicates it', () => {
+    const retry = ev('verify_retry', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', attempt: 1, reason: 'x' }, 's1', '2026-07-10T10:00:00Z')
+    // Один и тот же attempt, прогнанный дважды — один и тот же стабильный ключ, не плодит дубликатов.
+    const first = toFeedItems([retry])
+    const again = toFeedItems([retry])
+    expect(first[0]?.key).toBe(`verify:v-1:1:retry:1`)
+    expect(again.map((i) => i.key)).toEqual(first.map((i) => i.key))
+  })
+
+  it('gives a different attempt a different key (distinct retry rows, not a collapse)', () => {
+    const items = toFeedItems([
+      ev('verify_retry', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', attempt: 1, reason: 'first' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_retry', { verification_id: 'v-1', step: 1, kind: 'agent', command: 'codex', attempt: 2, reason: 'second' }, 's1', '2026-07-10T10:00:01Z'),
+    ])
+    expect(items).toHaveLength(2)
+    expect(items[0]?.key).toBe('verify:v-1:1:retry:1')
+    expect(items[1]?.key).toBe('verify:v-1:1:retry:2')
+    expect(items[0]?.key).not.toBe(items[1]?.key)
+  })
+})
+
 describe('dialog_question/dialog_answer — реальный текст диалога, ask_user/user_answered вытеснены', () => {
   it('dialog_question maps to a navigable agent item carrying phase/id from the payload', () => {
     const items = toFeedItems([

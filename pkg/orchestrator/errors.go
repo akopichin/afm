@@ -68,8 +68,9 @@ func (e *VerifyRejectedError) Unwrap() error { return e.IncompleteWorkError }
 // VerifyExecError означает отсутствие вердикта и не запускает retry автора; Step — 1-based индекс, 0 для
 // ошибки всего прохода.
 type VerifyExecError struct {
-	Reason string
-	Step   int
+	Reason    string
+	Step      int
+	Transient bool // true ТОЛЬКО для транзиентного инфра-сбоя запуска/работы verify-процесса (ретраебельно)
 }
 
 func (e *VerifyExecError) Error() string {

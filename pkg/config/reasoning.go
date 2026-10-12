@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -72,7 +72,7 @@ func (c Config) ReasoningWarnings() []string {
 	for id := range c.Docker.Agents {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	for _, id := range ids {
 		recipe := c.Docker.Agents[id]
 		if recipe.Reasoning == "" {

@@ -205,6 +205,29 @@ A shell step's non-zero exit is treated the same as an AI `needs_changes` — it
 consumes the correction budget, giving the author a corrective retry, then
 `failed` once the budget is spent.
 
+### Transient verifier crashes are retried before failing
+
+Before an AI verifier's execution failure becomes a terminal "verify execution
+failed", afm retries the same verify step. The case that qualifies as **transient**
+is any AI verifier *process*-execution failure that is **not** a timeout and **not**
+an interrupt — this covers the verifier failing to launch, its output stream
+breaking mid-run, and the verifier running and exiting non-zero (the live-run
+scenario: a codex adapter that crashes on the first two attempts, then passes). afm
+retries that step up to **2 times** with an **8-second backoff** between attempts;
+if any retry succeeds the step passes normally. Only after the retries are exhausted
+is the step a terminal exec-failure.
+
+This retry budget is fixed (not configurable in v1) and is entirely separate from
+the [correction budget](#the-correction-budget-verifymax_failures) — a crash is not
+a verdict, so it never consumes a correction. Everything else is still **fail-fast,
+not retried**: a step timeout, the executor's idle-timeout, a protocol error, a
+Pause/Revise/cancel interrupt, and a direct executor/storage error (such as the
+verify agent hitting its own context deadline) all go straight to their terminal
+outcome. The backoff wait is itself interruptible, so pausing or revising during it
+does not have to wait out the 8 seconds. When a step does fail for real, its reason
+now carries the tail of the verifier process's stderr, so the dashboard and logs
+show why the verifier crashed rather than a bare "verify execution failed".
+
 `script:` stages cannot declare `verify` (there's no agent to correct). A
 planning-only stage (`agents: [planning]`, no implementation/review/autonomous
 execution) cannot declare `verify` either — verify is a gate on the result of doing
@@ -240,9 +263,11 @@ Only real verify rejections draw down the budget — an AI `needs_changes` or a
 shell step's non-zero exit. Two things it does **not** touch:
 
 - A verifier *execution* failure (`inconclusive`/timeout/non-zero verifier
-  exit/transport failure) still fails the stage immediately, as described under
+  exit/transport failure) fails the stage, as described under
   [Outcome semantics](#outcome-semantics) — a broken verifier is not evidence
-  the author's work is wrong, so it never consumes a correction.
+  the author's work is wrong, so it never consumes a correction. (A transient
+  process-execution failure is [retried with backoff](#transient-verifier-crashes-are-retried-before-failing)
+  first, but still never draws on the correction budget.)
 - Transport/rate-limit retries and plan-incomplete retries are counted
   **separately** and neither draws from the verify budget nor is drawn from by
   it.
@@ -346,6 +371,11 @@ The Feed shows a line for each step as it starts and finishes: `Verify step N ·
 or an execution error (danger) — with a **Show full report** link and the step's
 cost, alongside the stage's normal pause/retry/revise actions. Nothing about
 verify introduces a new stage status or a second progress bar.
+
+If a step hits a [transient verifier crash](#transient-verifier-crashes-are-retried-before-failing),
+the Feed shows a `Verify retry N (step M) · <alias>: <reason>` warning line for each
+retry before the step finally passes or fails. These lines are durable, so a client
+that connects after the retries still replays them.
 
 When [stalemate detection](#stalemate-detection-verifyreview_patience) accepts a
 stage, the Feed and the stage rail show a distinct **accepted (stalemate)** verify

@@ -39,12 +39,14 @@ func TestRunVerification_NonRetryOutcomesReleaseLeasePromptly(t *testing.T) {
 			wantNilErr: true,
 		},
 		{
+			// Детерминированный exec-сбой (ненулевой err от runVerifyAgent — executor-storage): НЕ транзиент,
+			// не ретраится — поэтому проверяет именно «немедленный релиз lease на не-retry исходе».
 			name:       "exec-error",
 			buildStage: func() flow.Stage { return verifyLeaseTestStage(0) },
 			runAgent: func(claudeSem concurrency.ChannelSemaphore) func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
 				return func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
 					steal(claudeSem)
-					return verify.RunOutcome{ProcessOK: false}, nil
+					return verify.RunOutcome{}, errors.New("verify execution failed: storage")
 				}
 			},
 		},

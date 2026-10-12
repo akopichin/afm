@@ -349,6 +349,74 @@ func TestCodexAsClaude_FailureStillEmitsGatheredUsage(t *testing.T) {
 	}
 }
 
+func TestCodexAsClaude_VerifyFailureDumpsRawOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	const rawMarker = "VERIFY_RAW_DETAIL_MARKER_7Q"
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"`+rawMarker+`"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 1)
+
+	out, err := runCodexScript(t, fakeCodex, "verify this", "CODEX_VERIFY=1")
+	if err == nil {
+		t.Fatalf("expected non-zero exit, got success. output:\n%s", out)
+	}
+	if !strings.Contains(out, "codex raw output") {
+		t.Errorf("verify failure must dump the raw codex output marker:\n%s", out)
+	}
+	if !strings.Contains(out, rawMarker) {
+		t.Errorf("verify failure must include the actual raw codex line text:\n%s", out)
+	}
+}
+
+func TestCodexAsClaude_NonVerifyFailureDumpsRawOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	const rawMarker = "NONVERIFY_RAW_DETAIL_MARKER_4K"
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"`+rawMarker+`"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 1)
+
+	out, err := runCodexScript(t, fakeCodex, "do work")
+	if err == nil {
+		t.Fatalf("expected non-zero exit, got success. output:\n%s", out)
+	}
+	if !strings.Contains(out, "codex raw output") {
+		t.Errorf("normal-mode failure must dump the raw codex output marker:\n%s", out)
+	}
+	if !strings.Contains(out, rawMarker) {
+		t.Errorf("normal-mode failure must include the actual raw codex line text:\n%s", out)
+	}
+}
+
+func TestCodexAsClaude_SuccessOmitsRawOutputDump(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+
+	fakeCodex := writeFakeCodex(t, `{"type":"item.completed","item":{"type":"agent_message","text":"all good"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`, 0)
+
+	out, err := runCodexScript(t, fakeCodex, "do work")
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, out)
+	}
+	if strings.Contains(out, "codex raw output") {
+		t.Errorf("success path must not dump the raw codex output:\n%s", out)
+	}
+}
+
 func TestCodexAsClaude_NonVerify_StreamsPerItemAndToolRows(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
