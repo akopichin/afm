@@ -98,9 +98,9 @@ func findGitDir(rh *rootHandle, clean string) (gitDir, repoRel string, ok bool) 
 		relDir = path.Dir(clean)
 	}
 	for {
-		relGit := ".git"
+		relGit := hiddenGitDir
 		if relDir != "." {
-			relGit = relDir + "/.git"
+			relGit = relDir + "/" + hiddenGitDir
 		}
 		isDir, isRegular, content, err := rh.gitEntry(relGit)
 		if err == nil {
@@ -131,7 +131,7 @@ func findGitDir(rh *rootHandle, clean string) (gitDir, repoRel string, ok bool) 
 // result to reside within rootPath. Anything else is refused.
 func gitDirFromEntry(rootPath, absDir string, isDir, isRegular bool, content []byte) (string, bool) {
 	if isDir {
-		return filepath.Join(absDir, ".git"), true
+		return filepath.Join(absDir, hiddenGitDir), true
 	}
 	if !isRegular {
 		return "", false
