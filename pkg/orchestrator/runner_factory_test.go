@@ -11,8 +11,41 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+func TestWillResume_NonInteractiveNeverResumes(t *testing.T) {
+	stageDir := t.TempDir()
+	phase := phaseImplementation
+	if _, err := stagefiles.LoadOrCreateSession(stageDir, phase); err != nil {
+		t.Fatal(err)
+	}
+	stage := flow.Stage{ID: "s1", Interactive: false}
+	if willResume(stage, stageDir, phase) {
+		t.Fatal("non-interactive stage must never resume, even with an existing session file")
+	}
+}
+
+func TestWillResume_InteractiveWithoutSession(t *testing.T) {
+	stageDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Interactive: true}
+	if willResume(stage, stageDir, phaseImplementation) {
+		t.Fatal("expected false: interactive stage with no session file yet does not resume")
+	}
+}
+
+func TestWillResume_InteractiveWithSession(t *testing.T) {
+	stageDir := t.TempDir()
+	phase := phaseImplementation
+	if _, err := stagefiles.LoadOrCreateSession(stageDir, phase); err != nil {
+		t.Fatal(err)
+	}
+	stage := flow.Stage{ID: "s1", Interactive: true}
+	if !willResume(stage, stageDir, phase) {
+		t.Fatal("expected true: interactive stage with an existing session resumes")
+	}
+}
 
 func TestRunnerForAttributesStageIDForDefaultCommand(t *testing.T) {
 	runDir := t.TempDir()

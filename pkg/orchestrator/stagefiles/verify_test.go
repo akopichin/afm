@@ -156,6 +156,30 @@ func TestNewPass_DoesNotOverwritePreviousPassDir(t *testing.T) {
 	}
 }
 
+func TestTruncateUTF8(t *testing.T) {
+	if got := TruncateUTF8("short", 100, "…marker"); got != "short" {
+		t.Fatalf("under-limit string must be returned unchanged, got %q", got)
+	}
+
+	// Multibyte rune must never be cut mid-sequence.
+	s := strings.Repeat("ё", 10) // 2 bytes per rune
+	got := TruncateUTF8(s, 7, "")
+	if !utf8.ValidString(got) {
+		t.Fatalf("TruncateUTF8 produced invalid UTF-8: %q", got)
+	}
+	if len(got) > 7 {
+		t.Fatalf("TruncateUTF8 exceeded limit: %d > 7 bytes", len(got))
+	}
+
+	withMarker := TruncateUTF8(strings.Repeat("a", 20), 10, "...")
+	if !strings.HasSuffix(withMarker, "...") {
+		t.Fatalf("truncated string must end with marker, got %q", withMarker)
+	}
+	if len(withMarker) > 10 {
+		t.Fatalf("TruncateUTF8 with marker exceeded limit: %d > 10 bytes", len(withMarker))
+	}
+}
+
 func TestWriteActiveFeedback_TruncatesToBudget(t *testing.T) {
 	stageDir := t.TempDir()
 	verID := "ver-big"

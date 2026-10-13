@@ -40,6 +40,9 @@ type VerifySpec struct {
 	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших рабочее дерево, допустить до
 	// принятия стадии.
 	ReviewPatience *int
+	// FreshCorrection — давать ли автору СВЕЖУЮ сессию (без --resume) на verify-коррекцию ДЛЯ ЭТОЙ стадии;
+	// переопределяет глобальный конфиг verify.fresh_correction; nil значит "наследовать".
+	FreshCorrection *bool
 	// fromScalar отмечает, что спека получена из legacy-скаляра — используется ТОЛЬКО для симметричной
 	// сериализации обратно в тот же вид. На валидацию и исполнение не влияет.
 	fromScalar bool
@@ -115,13 +118,14 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 // Ключи YAML-полей verify. Вынесены в константы, чтобы одни и те же имена
 // использовались и в разборе одиночного шага, и в разборе container-формы.
 const (
-	verifyKeyRun            = "run"
-	verifyKeyCommand        = "command"
-	verifyKeyPrompt         = "prompt"
-	verifyKeyTimeout        = "timeout"
-	verifyKeySteps          = "steps"
-	verifyKeyMaxFailures    = "max_failures"
-	verifyKeyReviewPatience = "review_patience"
+	verifyKeyRun             = "run"
+	verifyKeyCommand         = "command"
+	verifyKeyPrompt          = "prompt"
+	verifyKeyTimeout         = "timeout"
+	verifyKeySteps           = "steps"
+	verifyKeyMaxFailures     = "max_failures"
+	verifyKeyReviewPatience  = "review_patience"
+	verifyKeyFreshCorrection = "fresh_correction"
 )
 
 // verifyStepFromMapping декодирует один mapping-узел verify в VerifyStep.
@@ -175,6 +179,7 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 	var stepsNode *yaml.Node
 	var maxFailures *int
 	var reviewPatience *int
+	var freshCorrection *bool
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key := node.Content[i].Value
 		val := node.Content[i+1]
@@ -193,6 +198,12 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 				return fmt.Errorf("verify: invalid review_patience: %w", err)
 			}
 			reviewPatience = &n
+		case verifyKeyFreshCorrection:
+			var b bool
+			if err := val.Decode(&b); err != nil {
+				return fmt.Errorf("verify: invalid fresh_correction: %w", err)
+			}
+			freshCorrection = &b
 		case verifyKeyRun, verifyKeyCommand, verifyKeyPrompt, verifyKeyTimeout:
 			return fmt.Errorf("verify: %q cannot be combined with steps (move it inside a steps item)", key)
 		default:
@@ -216,7 +227,7 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 		}
 		steps = append(steps, step)
 	}
-	*s = VerifySpec{Steps: steps, MaxFailures: maxFailures, ReviewPatience: reviewPatience}
+	*s = VerifySpec{Steps: steps, MaxFailures: maxFailures, ReviewPatience: reviewPatience, FreshCorrection: freshCorrection}
 	return nil
 }
 
@@ -225,9 +236,9 @@ func (s VerifySpec) MarshalYAML() (any, error) {
 	if s.IsEmpty() {
 		return nil, nil
 	}
-	// Явно заданный max_failures/review_patience переводит спеку в container-форму
+	// Явно заданный max_failures/review_patience/fresh_correction переводит спеку в container-форму
 	// — иначе он бы потерялся при сериализации скаляром/одиночным шагом/списком.
-	if s.MaxFailures != nil || s.ReviewPatience != nil {
+	if s.MaxFailures != nil || s.ReviewPatience != nil || s.FreshCorrection != nil {
 		steps := make([]map[string]any, len(s.Steps))
 		for i, step := range s.Steps {
 			steps[i] = verifyStepToMap(step)
@@ -238,6 +249,9 @@ func (s VerifySpec) MarshalYAML() (any, error) {
 		}
 		if s.ReviewPatience != nil {
 			out["review_patience"] = *s.ReviewPatience
+		}
+		if s.FreshCorrection != nil {
+			out["fresh_correction"] = *s.FreshCorrection
 		}
 		return out, nil
 	}
@@ -306,6 +320,9 @@ func (s VerifySpec) validate(stageID string) error {
 		if *s.ReviewPatience < 0 {
 			return fmt.Errorf("stage %q: verify: review_patience must not be negative", stageID)
 		}
+	}
+	if s.FreshCorrection != nil && len(s.Steps) == 0 {
+		return fmt.Errorf("stage %q: verify: fresh_correction requires at least one step", stageID)
 	}
 	for i, step := range s.Steps {
 		idx := i + 1

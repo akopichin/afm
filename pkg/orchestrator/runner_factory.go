@@ -106,6 +106,14 @@ func dedupRoots(root, stageDir string) []string {
 	return out
 }
 
+// willResume reports whether the NEXT agent start for s/phase CONTINUES the previous session
+// (--resume) instead of starting a fresh one. Single source of truth for both the runner (which
+// sets executor.Config.Resume) and the retry loop (which reconstructs the context a fresh session
+// would otherwise lack).
+func willResume(s flow.Stage, stageDir, phase string) bool {
+	return s.Interactive && stagefiles.SessionExists(stageDir, phase)
+}
+
 // runnerFor returns the appropriate Runner for a stage's phase.
 func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	if !s.Interactive {
@@ -117,7 +125,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	}
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	resume := stagefiles.SessionExists(stageDir, phase)
+	resume := willResume(s, stageDir, phase)
 	sessionID, err := stagefiles.LoadOrCreateSession(stageDir, phase)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: interactive stage %q: session failed: %v; using non-interactive runner\n", s.ID, err)

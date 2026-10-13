@@ -1705,6 +1705,44 @@ func TestVerifyReviewPatience_NegativeRejected(t *testing.T) {
 	}
 }
 
+// TestVerify_ResolvedFreshCorrectionDefault — nil → true (fresh session on correction).
+func TestVerify_ResolvedFreshCorrectionDefault(t *testing.T) {
+	var v config.VerifyConfig // nil FreshCorrection
+	if got := v.ResolvedFreshCorrection(); !got {
+		t.Errorf("ResolvedFreshCorrection() = %v, want true (default)", got)
+	}
+}
+
+// TestVerify_ResolvedFreshCorrectionExplicitFalse — явный false отключает fresh-session.
+func TestVerify_ResolvedFreshCorrectionExplicitFalse(t *testing.T) {
+	f := false
+	v := config.VerifyConfig{FreshCorrection: &f}
+	if got := v.ResolvedFreshCorrection(); got {
+		t.Errorf("ResolvedFreshCorrection() = %v, want false (explicit)", got)
+	}
+}
+
+// TestVerifyFreshCorrectionMerge_ProjectOverGlobal — явный false в проектном слое
+// должен перекрыть глобальные true (указатель + != nil, а не bool + zero-value).
+func TestVerifyFreshCorrectionMerge_ProjectOverGlobal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "g"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, filepath.Join(dir, "g"), "config.yaml", "verify:\n  fresh_correction: true\n")
+	writeYAML(t, filepath.Join(dir, "p"), "config.yaml", "verify:\n  fresh_correction: false\n")
+	cfg, err := config.LoadFrom(filepath.Join(dir, "g"), filepath.Join(dir, "p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Verify.ResolvedFreshCorrection(); got {
+		t.Errorf("ResolvedFreshCorrection() = %v, want false (explicit project false overrides global true)", got)
+	}
+}
+
 func TestSideAgent_IsEnabled_Default(t *testing.T) {
 	tr, f := true, false
 	cases := []struct {

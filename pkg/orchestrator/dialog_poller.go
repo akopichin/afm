@@ -135,7 +135,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			}
 			// Write to dialog.jsonl for history. FindEntry reflects that re-opening, so the next tick sees an
 			// unanswered entry and does not append a duplicate.
-			dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
+			dialogPath := mcp.DialogPath(stageDir, q.Phase)
 			if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil || e.Answer != nil {
 				_ = mcp.AppendQuestion(dialogPath, mcp.Question{
 					ID:          q.ID,
@@ -318,7 +318,7 @@ func (o *Orchestrator) autoAnswerMalformed(stageID, stageDir string, q mcp.Quest
 	answer, fromOptions := mcp.PickAutoAnswer(mcp.QuestionFile{ID: q.ID, Phase: q.Phase})
 	// Оригинальный question.json так и не распарсился — реального текста вопроса нет.
 	syntheticQuestion := mcp.DialogSnippet(fmt.Sprintf("question %s (unreadable — invalid JSON)", q.ID))
-	dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
+	dialogPath := mcp.DialogPath(stageDir, q.Phase)
 	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
 		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: syntheticQuestion})
 	}
@@ -377,7 +377,7 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 		return
 	}
 
-	dialogPath := filepath.Join(stageDir, q.Phase+".dialog.jsonl")
+	dialogPath := mcp.DialogPath(stageDir, q.Phase)
 	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
 		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: explanation, AllowCustom: true})
 	}

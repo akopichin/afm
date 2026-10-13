@@ -518,6 +518,26 @@ func TestWriteAnswer_DuplicateReturnsExistsError(t *testing.T) {
 	}
 }
 
+func TestDialogPath(t *testing.T) {
+	if got, want := mcp.DialogPath("/s", "planning"), filepath.FromSlash("/s/planning.dialog.jsonl"); got != want {
+		t.Fatalf("DialogPath(%q, %q) = %q, want %q", "/s", "planning", got, want)
+	}
+
+	// Round-trip: the path DialogPath builds must be exactly what WriteAnswer writes to and ReadDialog reads
+	// from.
+	dir := t.TempDir()
+	if err := mcp.WriteAnswer(dir, "implementation", testQ1, answerYes, true, false); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := mcp.ReadDialog(mcp.DialogPath(dir, "implementation"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Answer == nil || *entries[0].Answer != answerYes {
+		t.Fatalf("dialog entry mismatch via DialogPath: %+v", entries)
+	}
+}
+
 func TestWriteAnswer_DialogAppendFailureStillWritesAnswerFile(t *testing.T) {
 	dir := t.TempDir()
 	// Make the dialog.jsonl path a directory so AppendAnswer fails internally.

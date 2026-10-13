@@ -31,7 +31,7 @@ verify: shell and/or AI, run in order
 verify: "go test ./..."
 ```
 
-Exactly the previous behavior: one shell step, run in the project directory after
+One shell step, run in the project directory after
 `.done`. A non-zero exit is treated as "not actually done" — the author gets a
 corrective retry with the command's output in the prompt, then `failed` once the
 correction budget is spent (default 1, configurable via
@@ -82,15 +82,15 @@ remaining steps are recorded as "not run", not "passed". After the author fixes
 the issue, the **whole list re-runs from the beginning** on the next attempt; a
 step that already passed is not cached across attempts.
 
-### 4. Container — steps plus `max_failures` / `review_patience`
+### 4. Container — steps plus correction settings
 
 To set a per-stage correction budget (how many `needs_changes` rejections the
 author may correct before the stage fails, see
 [The correction budget](#the-correction-budget-verifymax_failures) below) or a
 per-stage stalemate backstop (see
-[Stalemate detection](#stalemate-detection-verifyreview_patience) below), wrap
-the steps in an object with `steps:` plus `max_failures:` and/or
-`review_patience:`:
+[Stalemate detection](#stalemate-detection-verifyreview_patience) below), or
+[fresh correction sessions](#fresh-correction-sessions-verifyfresh_correction),
+wrap the steps in an object with `steps:` and the desired settings:
 
 ```yaml
 verify:
@@ -103,13 +103,15 @@ verify:
         Check acceptance criteria and backward compatibility.
   max_failures: 3          # optional; overrides the global verify.max_failures
   review_patience: 2       # optional; overrides the global verify.review_patience
+  fresh_correction: false  # optional; reuse the interactive author's session
 ```
 
-`steps` is the same list of step objects as form 3; both `max_failures` and
-`review_patience` are optional. Only this container form carries them — the
+`steps` is the same list of step objects as form 3; all three settings are optional.
+Only this container form carries them — the
 scalar, single-object, and list forms above use the global `verify.max_failures`
-(default 1) and `verify.review_patience` (default 0). No other top-level keys are
-allowed here: a step field (`run`/`command`/`prompt`/`timeout`) at the
+(default 1), `verify.review_patience` (default 0), and `verify.fresh_correction`
+(default `true`). No other top-level keys are allowed here: a step field
+(`run`/`command`/`prompt`/`timeout`) at the
 container's top level is a parse error (it belongs inside a `steps` item).
 
 ### Fields
@@ -233,6 +235,31 @@ planning-only stage (`agents: [planning]`, no implementation/review/autonomous
 execution) cannot declare `verify` either — verify is a gate on the result of doing
 the work, not on a plan.
 
+## Fresh correction sessions: `verify.fresh_correction`
+
+After a verify step rejects the work and a correction is allowed, afm starts an
+`interactive: true` author's next attempt in a new session by default, without
+resuming the rejected attempt. This applies to both AI `needs_changes` and a shell
+step's non-zero exit. The correction prompt still includes the verify failure and
+previous work context. When a retry attempt starts without resuming, afm also includes
+answered questions from that phase's dialog history, so earlier user decisions are
+available to the agent. The digest keeps the most recent answers within an 8 KiB
+limit. It is omitted when the agent resumes an existing session.
+
+Set `verify.fresh_correction: false` in `.afm/config.yaml` or
+`~/.afm/config.yaml` to retain the interactive session across verify corrections:
+
+```yaml
+verify:
+  fresh_correction: false
+```
+
+For one stage, use the [container form](#4-container-steps-plus-correction-settings)
+of its `verify:` field. Resolution is **stage `verify.fresh_correction` > project
+config > global config > default `true`**. This setting controls session renewal
+after verify rejection; it does not change the correction budget. Non-interactive
+agents already start without a resumable session.
+
 ## The correction budget: `verify.max_failures`
 
 When a verify step returns `needs_changes` (or a shell step exits non-zero), afm
@@ -255,7 +282,7 @@ verify:
   max_failures: 2
 ```
 
-or per stage with the [container form](#4-container-steps-plus-max_failures-review_patience) of
+or per stage with the [container form](#4-container-steps-plus-correction-settings) of
 the stage's `verify:` field. Resolution is **stage `verify.max_failures` >
 global `verify.max_failures` > default 1**.
 
@@ -299,7 +326,7 @@ wins the dispute once they have held their ground `review_patience` times in a r
 A negative value is rejected at config load / flow validation time.
 
 Set it globally with the top-level `verify:` block in `config.yaml`, or per stage
-with the [container form](#4-container-steps-plus-max_failures-review_patience)
+with the [container form](#4-container-steps-plus-correction-settings)
 of the stage's `verify:` field. Resolution is **stage `verify.review_patience` >
 global `verify.review_patience` > default 0**.
 

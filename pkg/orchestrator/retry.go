@@ -81,6 +81,26 @@ func (o *Orchestrator) verifyReviewPatience(s flow.Stage) int {
 	return n
 }
 
+// verifyFreshCorrection — давать ли автору после verify-reject чистую сессию. Per-stage override >
+// config > дефолт ON. Зеркалит verifyMaxFailures.
+func (o *Orchestrator) verifyFreshCorrection(s flow.Stage) bool {
+	if s.Verify.FreshCorrection != nil {
+		return *s.Verify.FreshCorrection
+	}
+	return o.opts.Config.Verify.ResolvedFreshCorrection()
+}
+
+// dropSessionForFreshCorrection, when enabled, drops the session file so the NEXT attempt starts a fresh
+// session instead of resuming one that defends its prior approach (anchoring) — the reconstruction (actions
+// + Q&A digest + verify/feedback.md + incompleteReason) covers the lost context. No-op for non-interactive
+// stages (no session file to drop) and when freshCorrection is disabled.
+func dropSessionForFreshCorrection(freshCorrection bool, stageDir, phase string) {
+	if !freshCorrection {
+		return
+	}
+	_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
+}
+
 // buildRetryContext reads the last N lines from the agent's raw stream-json
 // log and formats them as a continuation context for the retry prompt.
 func buildRetryContext(stageDir, phase string) string {
@@ -142,6 +162,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	// сбрасывается на resume — как и прежнее однократное поведение.
 	verifyFailures := 0
 	maxVerifyFailures := o.verifyMaxFailures(s)
+	freshCorrection := o.verifyFreshCorrection(s)
 	// B1 stalemate: reviewPatience = 0 → выключено. prevFingerprint/unchangedRejections — in-memory состояние
 	// ЭТОЙ горутины: сколько verify-отклонений ПОДРЯД оставили рабочее дерево неизменным.
 	reviewPatience := o.verifyReviewPatience(s)
@@ -158,6 +179,11 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			if incompleteReason != "" {
 				retryCtx += "\n\n## Completion check failed\n\n" + incompleteReason +
 					"\n\nFix the underlying problem and make the check pass before finishing.\n"
+			}
+			// Сессии не будет — агент не увидит прежние ответы пользователя в разговоре; дайджест их
+			// реконструирует. Resumed-агенту НЕ даём: он получил бы дубль того, что и так видит.
+			if !willResume(s, stageDir, phase) {
+				retryCtx += dialogDigestBlock(stageDir, phase)
 			}
 		}
 		resumeCtx = false // только самая первая попытка резюмируемого запуска получает его
@@ -238,6 +264,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 					}
 					if isVerifyReject {
 						verifyFailures++
+						dropSessionForFreshCorrection(freshCorrection, stageDir, phase)
 					}
 					incompleteReason = checkErr.Error()
 					// Раньше публиковалось как EventStageStatusChanged с Data- сообщением — фронт рисовал это пустым

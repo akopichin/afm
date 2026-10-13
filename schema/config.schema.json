@@ -101,6 +101,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many CONSECUTIVE verify rejections that left the working tree unchanged are tolerated before the stage is accepted as complete (reviewer/author stalemate). Default 0 = disabled. For this to engage, max_failures must be >= review_patience (otherwise the stage fails on the failure budget first and the setting is a silent no-op). A per-stage override lives inside the stage's verify block (container form)."
+        },
+        "fresh_correction": {
+          "type": "boolean",
+          "description": "Give the author a FRESH session (no --resume) when AI-verify returns needs_changes, reconstructing the lost context from the action log, the prior user Q&A and verify/feedback.md. Default true; false keeps the pre-existing resume-the-same-session behavior. A per-stage override lives inside the stage's verify block (container form)."
         }
       }
     },

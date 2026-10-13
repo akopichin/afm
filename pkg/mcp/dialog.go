@@ -372,13 +372,18 @@ func WriteAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error
 	return nil
 }
 
+// DialogPath returns the phase's dialog-history file inside a stage directory.
+func DialogPath(stageDir, phase string) string {
+	return filepath.Join(stageDir, phase+".dialog.jsonl")
+}
+
 // WriteAnswer atomically creates <stageDir>/<phase>.<id>.answer.json and best-effort appends the answer to
 // <phase>.dialog.jsonl for UI history.
 func WriteAnswer(stageDir, phase, id, answer string, fromOptions, autoAnswered bool) error {
 	if err := WriteAnswerFile(stageDir, phase, id, answer, fromOptions); err != nil {
 		return err
 	}
-	dialogPath := filepath.Join(stageDir, phase+".dialog.jsonl")
+	dialogPath := DialogPath(stageDir, phase)
 	if err := AppendAnswer(dialogPath, Answer{
 		ID: id, Answer: answer, FromOptions: fromOptions, AutoAnswered: autoAnswered,
 	}); err != nil {

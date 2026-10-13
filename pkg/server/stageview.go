@@ -9,6 +9,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -150,7 +151,7 @@ func stageIsAutonomous(runDir, stageID string) bool {
 
 func stageHasDialog(runDir, stageID string) bool {
 	for _, p := range flow.Phases() {
-		if _, err := os.Stat(filepath.Join(runDir, stageID, string(p)+".dialog.jsonl")); err == nil {
+		if _, err := os.Stat(mcp.DialogPath(filepath.Join(runDir, stageID), string(p))); err == nil {
 			return true
 		}
 	}

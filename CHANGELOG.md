@@ -3,6 +3,19 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-13
+
+### Improvement: fresh author sessions after verify rejection
+
+When a shell or AI verify step rejects an interactive stage, its correction now
+starts a new author session by default. The new attempt receives the rejection
+details and a digest of answered questions from that phase's dialog history, so
+earlier user decisions remain available. Set `verify.fresh_correction: false` in
+`config.yaml` or in a stage's `verify: {steps: [...], fresh_correction: false}`
+container to keep resuming the prior session. The default is `true`; stage config
+overrides project and global config. The dialog digest is included when a retry
+starts without resuming and answered dialog history exists.
+
 ## 2026-10-12
 
 ### Improvement: optional per-flow git worktrees

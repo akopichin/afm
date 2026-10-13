@@ -261,6 +261,7 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"verify container max_failures and review_patience", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - run: go test ./...\n        - command: codex\n      max_failures: 6\n      review_patience: 2\n", true},
 		{"verify container zero review_patience", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - command: codex\n      review_patience: 0\n", true},
 		{"verify container negative review_patience", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - command: codex\n      review_patience: -1\n", false},
+		{"verify container fresh_correction false", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - run: go test ./...\n      fresh_correction: false\n", true},
 		{"script mixed with buttons", "name: f\nstages:\n  - id: s\n    script: echo ok\n    buttons:\n      Retry: Try again\n", false},
 		{"empty button label", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      \"\": Try again\n", false},
 		{"empty button prompt", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      Retry: \"\"\n", false},

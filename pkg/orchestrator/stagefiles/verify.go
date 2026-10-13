@@ -202,7 +202,7 @@ const feedbackProvenancePrefix = "<!-- afm-verify verification_id="
 // human-заметки <stageDir>/feedback.md.
 func WriteActiveFeedback(stageDir, verID string, r verify.ModelResult, alias string, stepIdx int) error {
 	content := renderActiveFeedback(stageDir, verID, r, alias, stepIdx)
-	content = truncateUTF8(content, feedbackBudgetBytes, feedbackTruncationMarker)
+	content = TruncateUTF8(content, feedbackBudgetBytes, feedbackTruncationMarker)
 	path := filepath.Join(VerifyDir(stageDir), feedbackFileName)
 	return atomicWriteFile(path, []byte(content))
 }
@@ -237,9 +237,11 @@ func blockingFindings(fs []verify.Finding) []verify.Finding {
 	return out
 }
 
-// truncateUTF8 обрезает s до limit байт, никогда не разрывая многобайтовую руну посередине. Если s уже
-// укладывается в limit — возвращает s без изменений (marker не добавляется).
-func truncateUTF8(s string, limit int, marker string) string {
+// TruncateUTF8 обрезает s до limit байт, никогда не разрывая многобайтовую руну посередине. Если s уже
+// укладывается в limit — возвращает s без изменений (marker не добавляется). Экспортирована, чтобы другие
+// пакеты (например, дайджест Q&A при фрэш-коррекции) переиспользовали ровно эту логику, а не заводили
+// вторую копию.
+func TruncateUTF8(s string, limit int, marker string) string {
 	if len(s) <= limit {
 		return s
 	}

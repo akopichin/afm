@@ -468,3 +468,75 @@ func TestVerifySpec_ContainerReviewPatienceMarshalRoundTrip(t *testing.T) {
 		t.Errorf("round-trip MaxFailures = %v, want 6 (yaml: %s)", back.MaxFailures, out)
 	}
 }
+
+// TestVerifyContainer_FreshCorrectionFalse — container-форма с fresh_correction:
+// значение становится указателем, шаги разбираются как обычно.
+func TestVerifyContainer_FreshCorrectionFalse(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - run: \"x\"\n" +
+		"  fresh_correction: false\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(spec.Steps) != 1 || spec.Steps[0].Run != "x" {
+		t.Fatalf("Steps = %+v", spec.Steps)
+	}
+	if spec.FreshCorrection == nil || *spec.FreshCorrection {
+		t.Errorf("FreshCorrection = %v, want pointer to false", spec.FreshCorrection)
+	}
+}
+
+// TestVerifyContainer_FreshCorrectionAbsent — container-форма без fresh_correction:
+// поле остаётся nil (наследование из глобального config).
+func TestVerifyContainer_FreshCorrectionAbsent(t *testing.T) {
+	src := "verify:\n" +
+		"  steps:\n" +
+		"    - run: \"true\"\n"
+	spec, err := parseVerify(t, src, "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.FreshCorrection != nil {
+		t.Errorf("FreshCorrection = %v, want nil", spec.FreshCorrection)
+	}
+}
+
+// TestVerifySpec_MarshalRoundTripFreshCorrection — round-trip сохраняет
+// fresh_correction, даже если MaxFailures/ReviewPatience не заданы.
+func TestVerifySpec_MarshalRoundTripFreshCorrection(t *testing.T) {
+	f := false
+	spec := VerifySpec{
+		Steps:           []VerifyStep{{Kind: VerifyShell, Run: "true"}},
+		FreshCorrection: &f,
+	}
+	out, err := yaml.Marshal(verifyHolder{Verify: spec})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), "fresh_correction") {
+		t.Errorf("marshalled yaml = %q, want it to contain fresh_correction", out)
+	}
+	back, err := parseVerify(t, string(out), "s1")
+	if err != nil {
+		t.Fatalf("re-parse marshalled verify: %v (yaml: %s)", err, out)
+	}
+	if back.FreshCorrection == nil || *back.FreshCorrection {
+		t.Errorf("round-trip FreshCorrection = %v, want pointer to false (yaml: %s)", back.FreshCorrection, out)
+	}
+}
+
+// TestVerifyFreshCorrection_RequiresSteps — fresh_correction без steps
+// (одиночная форма) — неизвестное поле шага, а не оверрайд.
+func TestVerifyFreshCorrection_RequiresSteps(t *testing.T) {
+	f := false
+	spec := VerifySpec{FreshCorrection: &f}
+	err := spec.validate("s1")
+	if err == nil {
+		t.Fatal("expected error for fresh_correction without steps")
+	}
+	if !strings.Contains(err.Error(), "fresh_correction") {
+		t.Errorf("error = %q, want it to mention fresh_correction", err.Error())
+	}
+}

@@ -61,6 +61,10 @@ const defaultVerifyMaxFailures = 1
 // defaultVerifyReviewPatience — дефолт review_patience: 0 = ВЫКЛЮЧЕНО.
 const defaultVerifyReviewPatience = 0
 
+// defaultVerifyFreshCorrection — дефолт fresh_correction: true = автор получает свежую
+// сессию (без --resume) на verify-коррекции.
+const defaultVerifyFreshCorrection = true
+
 // VerifyConfig — глобальные настройки verify-гейта.
 type VerifyConfig struct {
 	// MaxFailures — сколько отклонений verify допускать до провала стадии. Указатель, чтобы отличить «не
@@ -69,6 +73,10 @@ type VerifyConfig struct {
 	// ReviewPatience — сколько ПОДРЯД идущих verify-отклонений, НЕ изменивших рабочее дерево, допустить,
 	// прежде чем принять стадию как завершённую.
 	ReviewPatience *int `yaml:"review_patience"`
+	// FreshCorrection — выдавать ли автору ФРЕШ-сессию на коррекции после verify-отклонения, вместо
+	// продолжения прежней (резюмированный автор склонен защищать свой прежний подход вместо правки по
+	// фидбэку). Указатель, чтобы отличить «не задано» (nil → true) от явного false.
+	FreshCorrection *bool `yaml:"fresh_correction"`
 }
 
 // ResolvedMaxFailures возвращает бюджет отклонений verify: значение из конфига,
@@ -87,6 +95,15 @@ func (c VerifyConfig) ResolvedReviewPatience() int {
 		return *c.ReviewPatience
 	}
 	return defaultVerifyReviewPatience
+}
+
+// ResolvedFreshCorrection возвращает, давать ли автору фреш-сессию на verify-коррекции:
+// значение из конфига, если задано, иначе дефолт true.
+func (c VerifyConfig) ResolvedFreshCorrection() bool {
+	if c.FreshCorrection != nil {
+		return *c.FreshCorrection
+	}
+	return defaultVerifyFreshCorrection
 }
 
 // ServerConfig configures the web dashboard server.
@@ -734,6 +751,9 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Verify.ReviewPatience != nil {
 		dst.Verify.ReviewPatience = overlay.Verify.ReviewPatience
+	}
+	if overlay.Verify.FreshCorrection != nil {
+		dst.Verify.FreshCorrection = overlay.Verify.FreshCorrection
 	}
 	if overlay.Browser.Enabled != nil {
 		dst.Browser.Enabled = overlay.Browser.Enabled

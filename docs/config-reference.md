@@ -60,6 +60,9 @@ verify:
                             # complete (reviewer/author stalemate). Default 0 = disabled.
                             # Needs max_failures >= review_patience to engage. Per-stage
                             # override: the container form of a stage's verify: field
+  fresh_correction: true    # start a new interactive author session after a verify
+                            # rejection (default true); false reuses the session.
+                            # Per-stage override: the container form of verify:
 
 docker:
   enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
@@ -112,8 +115,9 @@ See [Docker mode](docker.md) for the full `docker:` section,
 [Cost accounting](accounting.md) for the `pricing:` overrides key (rate
 cards, precedence, and what "estimated cost" means) and the `accounting:`
 display switches (`AFM_ACCOUNTING`, `AFM_ACCOUNTING_SHOW_MONEY`), and
-[AI-verify](verify.md) for the top-level `verify.max_failures` correction budget
-and `verify.review_patience` stalemate backstop.
+[AI-verify](verify.md) for the top-level `verify.max_failures` correction budget,
+`verify.review_patience` stalemate backstop, and `verify.fresh_correction` session
+setting.
 
 ## Settings priority
 

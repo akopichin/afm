@@ -482,7 +482,7 @@ type dialogUIEntry struct {
 func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 	var out []dialogUIEntry
 	for _, p := range flow.Phases() {
-		entries, err := mcp.ReadDialog(filepath.Join(stageDir, string(p)+".dialog.jsonl"))
+		entries, err := mcp.ReadDialog(mcp.DialogPath(stageDir, string(p)))
 		if err != nil || len(entries) == 0 {
 			continue
 		}
@@ -729,7 +729,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 
 	// The answer is authorized and durable on disk — now record it in the
 	// human-facing dialog history (best-effort, same as mcp.WriteAnswer does).
-	dialogPath := filepath.Join(stageDir, req.Phase+".dialog.jsonl")
+	dialogPath := mcp.DialogPath(stageDir, req.Phase)
 	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: req.ID, Answer: req.Answer, FromOptions: req.FromOptions}); err != nil {
 		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, req.Phase, req.ID, err) //nolint:gosec // G706: phase/id validated safe (flow.IsValidPhase/isValidDialogID) above
 	}
