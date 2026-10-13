@@ -43,6 +43,32 @@ describe('FileBrowserModal', () => {
     expect(aside.style.flexBasis).toBe('276px')
   })
 
+  test('the "vs base" view is hidden for a root without a linked worktree', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm', hasWorktrees: false }])
+    api.install()
+
+    renderModal()
+    await screen.findByRole('button', { name: 'afm' })
+    expect(screen.queryByRole('button', { name: 'vs base' })).toBeNull()
+  })
+
+  test('the "vs base" view appears for a worktree root and lists fork-based changes', async () => {
+    const api = new FilesApiMock()
+    api.setRoots([{ id: 'project', label: 'afm', hasWorktrees: true }])
+    api.setChanged('project', 'base', [
+      { name: 'foo.go', path: '.worktrees/myflow/pkg/foo.go', kind: 'file', status: 'modified', selectable: true },
+    ])
+    api.install()
+
+    renderModal()
+    await screen.findByRole('button', { name: 'afm' })
+    fireEvent.click(await screen.findByRole('button', { name: 'vs base' }))
+    // The fork-based change is listed under its worktree-relative path.
+    expect(await screen.findByText('foo.go')).toBeTruthy()
+    expect(screen.getByText('.worktrees/myflow/pkg/')).toBeTruthy()
+  })
+
   test('lazy-loads roots and tree, then highlights the selected file (escaped, hljs class present)', async () => {
     const api = new FilesApiMock()
     api.setRoots([{ id: 'project', label: 'afm' }])

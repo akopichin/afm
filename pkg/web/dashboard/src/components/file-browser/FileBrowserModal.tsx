@@ -72,7 +72,7 @@ function formatModifiedAt(modifiedAt: string): string | null {
 
 // FileBrowserModal владеет деревом и preview; FileBrowserProvider хранит selection между закрытиями
 // модалки.
-type ViewMode = 'all' | 'index' | 'head'
+type ViewMode = 'all' | 'index' | 'head' | 'base'
 
 export function FileBrowserModal({
   mode,
@@ -128,14 +128,21 @@ export function FileBrowserModal({
     prevTreeOpen.current = treeOpen
   }, [treeOpen, isNarrowModal])
 
-  // Переключатель вида левой панели: 'all' — дерево + поиск, 'index'/'head' — плоский список изменённых
-  // файлов.
+  // Переключатель вида левой панели: 'all' — дерево + поиск, 'index'/'head'/'base' — плоский список
+  // изменённых файлов ('base' — изменения ветки worktree от точки форка, только если корень их содержит).
   const [viewMode, setViewMode] = useState<ViewMode>('all')
   const [changesRevision, setChangesRevision] = useState(0)
   const [changes, setChanges] = useState<ChangeList | null>(null)
   const [changesLoading, setChangesLoading] = useState(false)
   const [changesError, setChangesError] = useState<string | null>(null)
   const changesGenRef = useRef(0)
+
+  // The "vs base" view exists only for a root that physically contains a linked git worktree.
+  const selectedRootHasWorktrees = roots.find((r) => r.id === selectedRoot)?.hasWorktrees ?? false
+  // If the selected root loses the capability (root switch), don't leave the view stuck on 'base'.
+  useEffect(() => {
+    if (viewMode === 'base' && !selectedRootHasWorktrees) setViewMode('all')
+  }, [viewMode, selectedRootHasWorktrees])
 
   const { content, contentLoading, contentError, diff, diffLoading, diffError, reloading, reloadError, reload: handleReload } = useFilePreview(activeFile, activeTab)
 
@@ -474,6 +481,17 @@ export function FileBrowserModal({
                 >
                   vs HEAD
                 </button>
+                {selectedRootHasWorktrees && (
+                  <button
+                    type="button"
+                    aria-pressed={viewMode === 'base'}
+                    title="Worktree branch vs its fork point; shows work already committed on the branch"
+                    className={`file-browser-viewbtn${viewMode === 'base' ? ' active' : ''}`}
+                    onClick={() => setViewMode('base')}
+                  >
+                    vs base
+                  </button>
+                )}
               </div>
               {viewMode !== 'all' && (
                 <button

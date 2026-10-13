@@ -65,9 +65,15 @@ func filesErrStatus(err error) (int, string) {
 	}
 }
 
-func (s *Server) filesRoots(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) filesRoots(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string][]workspace.RootView{"roots": s.workspace.Roots()})
+	roots := s.workspace.Roots()
+	// HasWorktrees runs a git subprocess per root; keep it out of Roots() (the hot-path guard) and resolve it
+	// here with the request context so the "vs base" view appears only where a linked worktree exists.
+	for i := range roots {
+		roots[i].HasWorktrees = s.workspace.HasWorktrees(r.Context(), roots[i].ID)
+	}
+	_ = json.NewEncoder(w).Encode(map[string][]workspace.RootView{"roots": roots})
 }
 
 func (s *Server) filesTree(w http.ResponseWriter, r *http.Request) {

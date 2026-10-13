@@ -1,7 +1,7 @@
 // Моки fetch для реального files-client; имя без .test.ts исключает обнаружение хелпера как теста Vitest.
 import { vi, type MockInstance } from 'vitest'
 
-type RootInput = { id: string; label: string; kind?: string; mountReadOnly?: boolean }
+type RootInput = { id: string; label: string; kind?: string; mountReadOnly?: boolean; hasWorktrees?: boolean }
 type TreeEntryInput = {
   name: string
   path: string
@@ -99,7 +99,7 @@ export class FilesApiMock {
 
       if (url.pathname === '/api/files/roots') {
         return jsonResponse({
-          roots: this.roots.map((r) => ({ id: r.id, label: r.label, kind: r.kind ?? 'project', mount_read_only: r.mountReadOnly ?? false })),
+          roots: this.roots.map((r) => ({ id: r.id, label: r.label, kind: r.kind ?? 'project', mount_read_only: r.mountReadOnly ?? false, has_worktrees: r.hasWorktrees ?? false })),
         })
       }
 

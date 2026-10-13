@@ -240,11 +240,16 @@ func aggregateChanges(tracked, untracked []Change) (entries []Change, truncated 
 	return entries, truncated
 }
 
-// Changes lists files that differ from the chosen baseline in rootID, plus untracked files. It works only
-// when rootID is itself a git repo root (findGitDir does not walk above the root).
+// Changes lists files that differ from the chosen baseline in rootID. For index/head modes that is the
+// root's own work tree vs the index/HEAD, plus untracked files. The base mode delegates to changesBase
+// (committed branch work of linked worktrees vs their fork point, no untracked). It works only when rootID
+// is itself a git repo root (findGitDir does not walk above the root).
 func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (ChangeList, error) {
 	if err := ctx.Err(); err != nil {
 		return ChangeList{}, err
+	}
+	if mode == ChangeModeBase {
+		return fs.changesBase(ctx, rootID)
 	}
 	if mode != ChangeModeIndex && mode != ChangeModeHead {
 		return ChangeList{}, ErrInvalidRootOrPath
@@ -314,6 +319,78 @@ func (fs *fsImpl) Changes(ctx context.Context, rootID string, mode ChangeMode) (
 
 	// Sort and cap before secure per-file opens so syscall count is bounded by maxChangesEntries.
 	entries, capTrun := aggregateChanges(tracked, untracked)
+	if err := fs.resolveSelectable(ctx, rh, entries); err != nil {
+		return ChangeList{}, err
+	}
+	return ChangeList{Entries: entries, Truncated: byteTrun || capTrun}, nil
+}
+
+// changesBase lists, for every linked git worktree under the root, the files its branch changed since the
+// fork point (merge-base of the worktree's committed HEAD with the main worktree's HEAD). Paths are rendered
+// under the worktree's RelDir (e.g. ".worktrees/myflow/pkg/foo.go") so they open the per-file diff, which
+// independently resolves the same fork baseline. Diffing by the captured HEAD sha (not a branch name) avoids
+// a concurrent commit/reset desyncing the listing; a worktree with no merge-base contributes nothing.
+func (fs *fsImpl) changesBase(ctx context.Context, rootID string) (ChangeList, error) {
+	rh, _, err := fs.resolve(rootID, ".")
+	if err != nil {
+		return ChangeList{}, err
+	}
+	gitDir, _, ok := findGitDir(rh, ".")
+	if !ok {
+		return ChangeList{}, ErrDiffUnavailable
+	}
+	workTree := rh.root.Path
+
+	mainOut, mainOK, err := runGit(ctx, gitDir, "rev-parse", "HEAD")
+	if err != nil {
+		return ChangeList{}, ErrReadFailed
+	}
+	if !mainOK {
+		return ChangeList{}, nil // unborn main HEAD → no base
+	}
+	mainRef := firstLine(string(mainOut))
+
+	wts, byteTrun, werr := enumerateLinkedWorktrees(ctx, gitDir, workTree, rh.root.Path)
+	if werr != nil {
+		return ChangeList{}, ErrReadFailed
+	}
+
+	var recs []nameStatusRec
+	for _, w := range wts {
+		// Bound total work across all worktrees: once the entry cap is reached, stop spawning git and flag
+		// truncation (aggregateChanges would cap the output anyway; this caps memory and process count too).
+		if len(recs) >= maxChangesEntries {
+			byteTrun = true
+			break
+		}
+		fork, ferr := forkPoint(ctx, gitDir, w.Head, mainRef)
+		if ferr != nil {
+			return ChangeList{}, ErrReadFailed
+		}
+		if fork == "" {
+			continue // no common ancestor → no base for this worktree
+		}
+		out, trun, derr := runGitChanges(ctx, gitDir, workTree,
+			"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-status", "-z", fork, w.Head, "--")
+		if derr != nil {
+			return ChangeList{}, derr
+		}
+		byteTrun = byteTrun || trun
+		wrecs, parseErr := parseNameStatusZ(out, trun)
+		if parseErr != nil {
+			return ChangeList{}, parseErr
+		}
+		for i := range wrecs {
+			wrecs[i].path = w.RelDir + "/" + wrecs[i].path
+		}
+		recs = append(recs, wrecs...)
+	}
+
+	tracked, err := fs.recsToChanges(ctx, recs)
+	if err != nil {
+		return ChangeList{}, err
+	}
+	entries, capTrun := aggregateChanges(tracked, nil)
 	if err := fs.resolveSelectable(ctx, rh, entries); err != nil {
 		return ChangeList{}, err
 	}

@@ -29,8 +29,9 @@ const (
 	statusClean    = "clean"
 )
 
-// Diff computes the unified diff of relPath against its HEAD baseline. Only then is the current content
-// read (fs.Read, itself openat-guarded).
+// Diff computes the unified diff of relPath against its baseline — HEAD for a normal repo, or the branch's
+// fork point inside a linked worktree (see diffBaselineRef). Only then is the current content read (fs.Read,
+// itself openat-guarded).
 func (fs *fsImpl) Diff(ctx context.Context, rootID, relPath string) (Diff, error) {
 	rh, clean, err := fs.resolve(rootID, relPath)
 	if err != nil {
@@ -44,9 +45,13 @@ func (fs *fsImpl) Diff(ctx context.Context, rootID, relPath string) (Diff, error
 		return Diff{}, ErrDiffUnavailable
 	}
 
+	// Inside a linked git worktree, baseline against the branch's fork point so work the agent has already
+	// committed on the worktree branch still shows. A normal repo (or any git hiccup) resolves to "HEAD".
+	baseRef := diffBaselineRef(ctx, gitDir, rh.root.Path)
+
 	cur, rerr := fs.Read(ctx, rootID, relPath)
 	if errors.Is(rerr, ErrBinary) {
-		tracked, gerr := gitTracked(ctx, gitDir, repoRel)
+		tracked, gerr := gitTracked(ctx, gitDir, baseRef, repoRel)
 		if gerr != nil {
 			return Diff{}, ErrReadFailed
 		}
@@ -54,20 +59,20 @@ func (fs *fsImpl) Diff(ctx context.Context, rootID, relPath string) (Diff, error
 		if tracked {
 			status = statusModified
 		}
-		return Diff{Path: clean, Baseline: "HEAD", Status: status, Binary: true}, nil
+		return Diff{Path: clean, Baseline: baseRef, Status: status, Binary: true}, nil
 	}
 	if rerr != nil {
 		return Diff{}, rerr
 	}
 
-	baseline, tracked, oversize, gerr := gitBaseline(ctx, gitDir, repoRel)
+	baseline, tracked, oversize, gerr := gitBaseline(ctx, gitDir, baseRef, repoRel)
 	if gerr != nil {
 		return Diff{}, ErrReadFailed
 	}
 	if oversize {
-		// The HEAD blob is larger than the max viewable file — an inline diff wouldn't be useful and buffering
-		// it risks OOM.
-		return Diff{Path: clean, Baseline: "HEAD", Status: statusModified, Truncated: true}, nil
+		// The baseline blob is larger than the max viewable file — an inline diff wouldn't be useful and
+		// buffering it risks OOM.
+		return Diff{Path: clean, Baseline: baseRef, Status: statusModified, Truncated: true}, nil
 	}
 
 	status := statusModified
@@ -75,18 +80,67 @@ func (fs *fsImpl) Diff(ctx context.Context, rootID, relPath string) (Diff, error
 	case !tracked:
 		status = statusAdded
 	case baseline == cur.Content:
-		return Diff{Path: clean, Baseline: "HEAD", Status: statusClean}, nil
+		return Diff{Path: clean, Baseline: baseRef, Status: statusClean}, nil
 	default:
 		// tracked and content differs → modified (already set).
 	}
 
-	body := udiff.Unified("HEAD:"+repoRel, repoRel, baseline, cur.Content)
+	body := udiff.Unified(baseRef+":"+repoRel, repoRel, baseline, cur.Content)
 	truncated := false
 	if len(body) > maxDiffBytes {
 		body = truncateOnLine(body, maxDiffBytes)
 		truncated = true
 	}
-	return Diff{Path: clean, Baseline: "HEAD", Status: status, Diff: body, Truncated: truncated}, nil
+	return Diff{Path: clean, Baseline: baseRef, Status: status, Diff: body, Truncated: truncated}, nil
+}
+
+// diffBaselineRef returns the ref to diff relPath against. For a file inside a linked git worktree it is
+// the branch's fork point — merge-base(worktree HEAD, main-worktree HEAD) — so committed branch work shows.
+// A normal repo, or any failure (missing merge-base / unresolvable paths / git error), returns "HEAD", which
+// keeps non-worktree behavior byte-for-byte unchanged.
+func diffBaselineRef(ctx context.Context, gitDir, rootAbs string) string {
+	const head = "HEAD"
+	common, ok, err := runGit(ctx, gitDir, "rev-parse", "--git-common-dir")
+	if err != nil || !ok {
+		return head
+	}
+	commonDir := strings.TrimSpace(string(common))
+	if commonDir == "" {
+		return head
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(gitDir, commonDir)
+	}
+	// Canonicalize BOTH sides before comparing: gitDir from a normal repo (a real ".git" dir) is not
+	// pre-resolved, so a repo reached through a symlinked root must not be mistaken for a linked worktree.
+	canonCommon, err := filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		return head
+	}
+	canonGit, err := filepath.EvalSymlinks(gitDir)
+	if err != nil {
+		return head
+	}
+	if canonCommon == canonGit {
+		return head // common dir == git dir → an ordinary repo, not a linked worktree
+	}
+	if _, contained := verifyContained(rootAbs, canonCommon); !contained {
+		return head // the common ".git" must live within the browse root
+	}
+	mainHead, ok, err := runGit(ctx, canonCommon, "rev-parse", "HEAD")
+	if err != nil || !ok {
+		return head
+	}
+	mainRef := strings.TrimSpace(string(mainHead))
+	if mainRef == "" {
+		return head
+	}
+	// No merge-base (unrelated histories) or a git error both degrade to HEAD — a single-file diff against
+	// HEAD is still useful, so there is nothing to surface to the client here.
+	if ref, ferr := forkPoint(ctx, gitDir, "HEAD", mainRef); ferr == nil && ref != "" {
+		return ref
+	}
+	return head
 }
 
 // findGitDir walks up from clean's directory to the root, locating a `.git` entry through the secure fd at
@@ -184,15 +238,15 @@ func repoRelPath(relDir, clean string) string {
 	return strings.TrimPrefix(clean, relDir+"/")
 }
 
-// gitBaseline reads the HEAD blob for repoRel out of the verified gitDir's object store, with an explicit
+// gitBaseline reads the baseRef blob for repoRel out of the verified gitDir's object store, with an explicit
 // --git-dir so git never re-discovers or re-follows `.git`.
-func gitBaseline(ctx context.Context, gitDir, repoRel string) (content string, tracked, oversize bool, err error) {
-	out, ok, err := runGit(ctx, gitDir, "cat-file", "-s", "HEAD:"+repoRel)
+func gitBaseline(ctx context.Context, gitDir, baseRef, repoRel string) (content string, tracked, oversize bool, err error) {
+	out, ok, err := runGit(ctx, gitDir, "cat-file", "-s", baseRef+":"+repoRel)
 	if err != nil {
 		return "", false, false, err
 	}
 	if !ok {
-		return "", false, false, nil // not in HEAD → untracked
+		return "", false, false, nil // not in baseRef → untracked
 	}
 	size, perr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 	if perr != nil {
@@ -201,7 +255,7 @@ func gitBaseline(ctx context.Context, gitDir, repoRel string) (content string, t
 	if size > maxContentBytes {
 		return "", true, true, nil
 	}
-	blob, ok, err := runGit(ctx, gitDir, "cat-file", "blob", "HEAD:"+repoRel)
+	blob, ok, err := runGit(ctx, gitDir, "cat-file", "blob", baseRef+":"+repoRel)
 	if err != nil {
 		return "", false, false, err
 	}
@@ -211,19 +265,21 @@ func gitBaseline(ctx context.Context, gitDir, repoRel string) (content string, t
 	return string(blob), true, false, nil
 }
 
-// gitTracked reports whether repoRel exists in HEAD, without reading its blob. Used for binary files,
+// gitTracked reports whether repoRel exists in baseRef, without reading its blob. Used for binary files,
 // where only tracked/untracked matters.
-func gitTracked(ctx context.Context, gitDir, repoRel string) (bool, error) {
-	_, ok, err := runGit(ctx, gitDir, "cat-file", "-e", "HEAD:"+repoRel)
+func gitTracked(ctx context.Context, gitDir, baseRef, repoRel string) (bool, error) {
+	_, ok, err := runGit(ctx, gitDir, "cat-file", "-e", baseRef+":"+repoRel)
 	if err != nil {
 		return false, err
 	}
 	return ok, nil
 }
 
-// runGit runs `git --git-dir=<gitDir> <args...>` bounded by gitTimeout and classifies the outcome into
-// three cases: ok=true; ok=false,err=nil; err!=nil.
-func runGit(ctx context.Context, gitDir string, args ...string) (out []byte, ok bool, err error) {
+// runGitExit runs `git --git-dir=<gitDir> <args...>` bounded by gitTimeout and returns stdout plus the
+// process exit code. err is non-nil ONLY when git could not be run at all (failed to start, or the context
+// deadline/cancellation fired); a non-zero exit is reported via code, not err, so a caller can distinguish
+// git's individual statuses (e.g. merge-base: 0 = base printed, 1 = no common ancestor, 128 = fatal).
+func runGitExit(ctx context.Context, gitDir string, args ...string) (out []byte, code int, err error) {
 	cctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	full := append([]string{"--git-dir=" + gitDir}, args...)
@@ -231,16 +287,27 @@ func runGit(ctx context.Context, gitDir string, args ...string) (out []byte, ok 
 	cmd.Env = gitcmd.SanitizeEnv(os.Environ())
 	out, err = cmd.Output()
 	if err == nil {
-		return out, true, nil
+		return out, 0, nil
 	}
 	if cerr := cctx.Err(); cerr != nil {
-		return nil, false, cerr // deadline / cancellation → infra failure
+		return nil, -1, cerr // deadline / cancellation → infra failure
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return nil, false, nil // git exited non-zero → benign (untracked)
+		return out, exitErr.ExitCode(), nil // git ran and exited non-zero → report the code
 	}
-	return nil, false, err // exec could not start git → infra failure
+	return nil, -1, err // exec could not start git → infra failure
+}
+
+// runGit is runGitExit collapsed to the common "ran cleanly?" question: ok=true on exit 0, ok=false on any
+// non-zero exit (benign, e.g. a path untracked), err only on an infra failure. Callers that must tell
+// non-zero exit codes apart use runGitExit directly (see forkPoint).
+func runGit(ctx context.Context, gitDir string, args ...string) (out []byte, ok bool, err error) {
+	out, code, err := runGitExit(ctx, gitDir, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, code == 0, nil
 }
 
 // truncateOnLine cuts s at the last newline at or before byte offset limit, so a truncated diff never

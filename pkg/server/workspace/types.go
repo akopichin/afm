@@ -11,12 +11,14 @@ type Root struct {
 	MountReadOnly         bool
 }
 
-// RootView is the wire representation of a Root returned to the frontend.
+// RootView is the wire representation of a Root returned to the frontend. HasWorktrees is filled in by the
+// roots handler (not Roots(), which stays git-free) and gates the frontend's "vs base" view.
 type RootView struct {
 	ID            string `json:"id"`
 	Label         string `json:"label"`
 	Kind          string `json:"kind"`
 	MountReadOnly bool   `json:"mount_read_only"`
+	HasWorktrees  bool   `json:"has_worktrees"`
 }
 
 // Entry is one file/directory/symlink listed inside a directory listing.

@@ -124,16 +124,24 @@ describe('files-client', () => {
     })
   })
 
-  test('getRoots maps mount_read_only to camelCase', async () => {
+  test('getRoots maps mount_read_only and has_worktrees to camelCase', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ roots: [{ id: 'project', label: 'Project', kind: 'workspace', mount_read_only: true }] }),
+      json: async () => ({
+        roots: [
+          { id: 'project', label: 'Project', kind: 'workspace', mount_read_only: true, has_worktrees: true },
+          { id: 'extra-1', label: 'Extra', kind: 'extra', mount_read_only: false },
+        ],
+      }),
     } as Response)
 
     const roots = await getRoots()
 
-    expect(roots).toEqual([{ id: 'project', label: 'Project', kind: 'workspace', mountReadOnly: true }])
+    expect(roots).toEqual([
+      { id: 'project', label: 'Project', kind: 'workspace', mountReadOnly: true, hasWorktrees: true },
+      { id: 'extra-1', label: 'Extra', kind: 'extra', mountReadOnly: false, hasWorktrees: false },
+    ])
   })
 
   test('getReference maps display_path to camelCase', async () => {

@@ -18,6 +18,8 @@ type fakeWorkspace struct {
 
 func (f *fakeWorkspace) Roots() []workspace.RootView { return nil }
 
+func (f *fakeWorkspace) HasWorktrees(context.Context, string) bool { return false }
+
 func (f *fakeWorkspace) List(context.Context, string, string, string) (workspace.Page, error) {
 	return workspace.Page{}, workspace.ErrNotFound
 }

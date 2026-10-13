@@ -11,11 +11,15 @@ type ChangeMode string
 const (
 	ChangeModeIndex ChangeMode = "index" // worktree vs index (+ untracked)
 	ChangeModeHead  ChangeMode = "head"  // worktree vs HEAD (+ untracked)
+	ChangeModeBase  ChangeMode = "base"  // linked worktree branches vs their fork point (committed work)
 )
 
 // FS is the secure-filesystem backend for the Docker project file browser.
 type FS interface {
 	Roots() []RootView
+	// HasWorktrees reports whether rootID physically contains at least one linked git worktree. It runs a
+	// git subprocess, so it takes a context and is called from the roots handler, never the hot path.
+	HasWorktrees(ctx context.Context, rootID string) bool
 	List(ctx context.Context, rootID, relPath, cursor string) (Page, error)
 	Reference(ctx context.Context, rootID, relPath string) (Reference, error)
 	Read(ctx context.Context, rootID, relPath string) (File, error)

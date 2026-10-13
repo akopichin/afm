@@ -20,24 +20,6 @@ func requireGit(t *testing.T) {
 	}
 }
 
-// diffLineCounts counts unified-diff content lines (added/removed), ignoring
-// the "+++"/"---" file-header lines.
-func diffLineCounts(diff string) (added, removed int) {
-	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
-			continue
-		case strings.HasPrefix(line, "+"):
-			added++
-		case strings.HasPrefix(line, "-"):
-			removed++
-		default:
-			// Context lines don't count toward either total.
-		}
-	}
-	return added, removed
-}
-
 // addWorktree runs `git -C root worktree add <rel> -b <branch>`, failing the
 // test on error.
 func addWorktree(t *testing.T, root, rel, branch string) {
@@ -74,23 +56,21 @@ func TestDiff_InsideLinkedWorktree(t *testing.T) {
 }
 
 // TestDiff_InsideLinkedWorktreeOnDivergedBranch commits an extra change ON the
-// worktree branch (diverging it from the main checkout's HEAD), then edits the
-// file again without committing. The baseline must be the worktree branch's
-// tip (which already contains the "marker" commit) — if Diff instead baselined
-// against the main checkout's HEAD (which never saw that commit), the diff
-// would also show the "func main() {}" body being replaced wholesale.
+// worktree branch, then edits the file again without committing. The baseline is
+// the branch's FORK POINT (merge-base with the main checkout), so BOTH the
+// committed "marker" change and the uncommitted "final" change show — this is the
+// "vs base" behavior: work the agent already committed on the branch stays visible.
 func TestDiff_InsideLinkedWorktreeOnDivergedBranch(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
 	gitInit(t, root)
 	writeFile(t, root, "main.go", "package main\n\nfunc main() {}\n")
-	gitCommitAll(t, root, "init")
+	gitCommitAll(t, root, "init") // the fork point
 
 	addWorktree(t, root, ".worktrees/myflow", "myflow")
 	wtDir := filepath.Join(root, ".worktrees", "myflow")
 
-	// Commit something extra ON the worktree branch — this is the commit the
-	// main checkout's HEAD never sees.
+	// Commit something extra ON the worktree branch — committed flow work.
 	writeFile(t, root, ".worktrees/myflow/main.go", "package main\n\nfunc main() {\n\tprintln(\"marker\")\n}\n")
 	gitCommitAll(t, wtDir, "marker on worktree branch")
 
@@ -107,13 +87,15 @@ func TestDiff_InsideLinkedWorktreeOnDivergedBranch(t *testing.T) {
 	if d.Status != statusModified {
 		t.Fatalf("status = %q, want %q; diff=%+v", d.Status, statusModified, d)
 	}
+	// Both the committed and the uncommitted branch work must appear (baseline = fork point).
+	if !strings.Contains(d.Diff, `println("marker")`) {
+		t.Fatalf("diff body missing the COMMITTED branch change (baseline should be the fork, not the branch tip): %q", d.Diff)
+	}
 	if !strings.Contains(d.Diff, `println("final")`) {
 		t.Fatalf("diff body missing the uncommitted edit: %q", d.Diff)
 	}
-	added, removed := diffLineCounts(d.Diff)
-	if removed != 0 || added != 1 {
-		t.Fatalf("baseline is not the worktree branch's tip: want 1 added/0 removed line (pure addition), got added=%d removed=%d; diff:\n%s",
-			added, removed, d.Diff)
+	if d.Baseline == "HEAD" || d.Baseline == "" {
+		t.Fatalf("baseline must be the worktree fork point, not %q", d.Baseline)
 	}
 }
 

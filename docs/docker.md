@@ -153,13 +153,20 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 - **What it does:** a lazy-loading source tree of the project mount and any
   `extra_mounts` explicitly opted in with `browse: true`; opens text files with syntax
   highlighting (Go, TypeScript/TSX, JavaScript/JSX, Python); shows a
-  `HEAD → working tree` diff per file; lets you select files and insert
+  `HEAD → working tree` diff per file — or, for a file inside a
+  [per-flow git worktree](flow-reference.md#per-flow-git-worktrees), a diff against the
+  branch's fork point, so work the agent has already committed on the worktree branch
+  still shows; lets you select files and insert
   `[AFM file: "<absolute container path>"]` references into a plan review comment or a
   pending-question comment — the agent reads the file with its own tools, nothing is
   copied into `feedback.md`/the answer.
-- **Changed-files view (All / Unstaged / vs HEAD).** A toolbar switches between the
-  full tree and two flat lists of changed files, each row showing an **M**/**A**/**D**
-  status badge. Available only when the browsed root is a git repository root.
+- **Changed-files view (All / Unstaged / vs HEAD / vs base).** A toolbar switches between
+  the full tree and flat lists of changed files, each row showing an **M**/**A**/**D**
+  status badge. Available only when the browsed root is a git repository root. The extra
+  **vs base** list appears only when the root contains a
+  [per-flow git worktree](flow-reference.md#per-flow-git-worktrees); it lists the files
+  the worktree branch changed since its fork point (work committed on the branch),
+  rendered under `.worktrees/<flow>/`.
 - **Review notes.** Clicking a file line while a flow is running lets you pause the
   whole flow and attach line-anchored comments — see
   [Dashboard → Review notes](dashboard.md#review-notes-pause-the-whole-flow-and-comment-on-files-docker-mode).

@@ -15,6 +15,7 @@ export type RootView = {
   label: string
   kind: string
   mountReadOnly: boolean
+  hasWorktrees: boolean
 }
 
 export type TreeEntryKind = 'file' | 'directory' | 'symlink'
@@ -102,6 +103,7 @@ function toRootView(raw: unknown): RootView | null {
     label: typeof raw.label === 'string' ? raw.label : '',
     kind: typeof raw.kind === 'string' ? raw.kind : '',
     mountReadOnly: raw.mount_read_only === true,
+    hasWorktrees: raw.has_worktrees === true,
   }
 }
 
@@ -211,9 +213,9 @@ function toChangeEntry(raw: unknown): ChangeEntry | null {
   }
 }
 
-// getChanged запрашивает GET /api/files/changed (git-статус относительно индекса или HEAD — переключатель
-// mode). signal — тот же паттерн отмены устаревшего запроса, что и у getSearch.
-export async function getChanged(root: string, mode: 'index' | 'head', signal?: AbortSignal): Promise<ChangeList> {
+// getChanged запрашивает GET /api/files/changed (git-статус относительно индекса/HEAD, либо — для linked
+// worktree — относительно точки форка ветки: mode 'base'). signal — тот же паттерн отмены, что и у getSearch.
+export async function getChanged(root: string, mode: 'index' | 'head' | 'base', signal?: AbortSignal): Promise<ChangeList> {
   const response = await fetchOk(`/api/files/changed${query({ root, mode })}`, signal ? { signal } : undefined)
   const data = (await response.json()) as { entries?: unknown; truncated?: unknown }
   const entries = Array.isArray(data.entries)

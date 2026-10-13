@@ -29,6 +29,8 @@ func (f fakeFS) Roots() []workspace.RootView {
 	return views
 }
 
+func (f fakeFS) HasWorktrees(context.Context, string) bool { return false }
+
 func (f fakeFS) List(context.Context, string, string, string) (workspace.Page, error) {
 	return workspace.Page{}, workspace.ErrNotFound
 }

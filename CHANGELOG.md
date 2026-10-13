@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-13
 
+### Improvement: file browser shows a worktree flow's committed work ("vs base")
+
+In Docker mode with [per-flow git worktrees](docs/flow-reference.md#per-flow-git-worktrees),
+the project file browser now baselines a per-file diff against the worktree branch's
+fork point (the merge-base with the main checkout) instead of `HEAD`, so changes the
+agent has already committed on the branch stay visible instead of showing an empty
+diff. A new **vs base** changed-files view — shown only when the browsed root contains
+a linked worktree — lists those committed-on-branch files under `.worktrees/<flow>/`.
+A plain (non-worktree) repository is unaffected: it still diffs against `HEAD`.
+
 ### Improvement: `verify:` accepts any agent command, not just codex
 
 A `verify:` agent step's `command` can now use a bare `claude`, a `docker.agents`
