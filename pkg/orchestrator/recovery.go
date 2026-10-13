@@ -99,7 +99,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		stageDir := filepath.Join(o.opts.RunDir, s.ID)
 		// After-hooks do not change stage status, so their recovery marker
 		// takes precedence over the status-based dispatch (including done).
-		if pending, ok := readHookPending(stageDir); ok && pending.Hook == "after" {
+		if pending, ok := readHookPending(stageDir); ok && pending.Hook == hookAfter {
 			o.resumeAfterHook(ctx, s)
 			continue
 		}

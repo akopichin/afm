@@ -124,6 +124,7 @@ const (
 	contentTypeToolUse = "tool_use"
 	toolNameBash       = "Bash"
 	toolNameWrite      = "Write"
+	eventTypeAssistant = "assistant"
 )
 
 // DefaultClaudeArgs returns the standard claude stream-json invocation flags. It also makes the stream
@@ -234,7 +235,7 @@ func parseStreamEvent(line string) (*streamEvent, bool) {
 	if json.Unmarshal([]byte(line), &ev) != nil {
 		return nil, false
 	}
-	if ev.Type != "assistant" || ev.Message == nil {
+	if ev.Type != eventTypeAssistant || ev.Message == nil {
 		return nil, false
 	}
 	return &ev, true
