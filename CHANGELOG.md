@@ -5,6 +5,12 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-13
 
+### Improvement: clearer entrance for new feed messages
+
+The newest feed message now slides and fades in over 420 ms with a brief glow in
+the active theme's accent color. The glow fades away completely, and reduced-motion
+settings make the entrance effectively instant. Older messages do not animate.
+
 ### Improvement: file browser shows a worktree flow's committed work ("vs base")
 
 In Docker mode with [per-flow git worktrees](docs/flow-reference.md#per-flow-git-worktrees),

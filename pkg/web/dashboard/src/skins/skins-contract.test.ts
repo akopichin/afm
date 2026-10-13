@@ -57,6 +57,25 @@ describe('skins CSS contract — feed item entrance (Task 4)', () => {
   it('.feed-item--enter animates via feedItemIn', () => {
     expect(feedWorkspaceCss).toMatch(/\.feed-item--enter\s*\{[\s\S]*?animation:\s*feedItemIn[\s\S]*?\}/)
   })
+  it('.feed-item--enter runs at --motion-slow (420ms, more visible than the base speed)', () => {
+    expect(feedWorkspaceCss).toMatch(
+      /\.feed-item--enter\s*\{[\s\S]*?animation:\s*feedItemIn\s+var\(--motion-slow\)[\s\S]*?\}/,
+    )
+  })
+  it('feedItemIn glows in via an accent box-shadow (no graphite-only -rgb)', () => {
+    const b = keyframe(tokens(), 'feedItemIn')
+    expect(b).toMatch(/color-mix\(in srgb, var\(--accent-primary\)/)
+    expect(b).not.toMatch(/--accent-primary-rgb/)
+  })
+  it('feedItemIn glow fades out completely (no lingering halo)', () => {
+    expect(keyframe(tokens(), 'feedItemIn')).toMatch(/box-shadow:\s*0 0 0 0 transparent/)
+  })
+  it('feedItemIn translate is strengthened to 10px', () => {
+    expect(keyframe(tokens(), 'feedItemIn')).toMatch(/translateY\(10px\)/)
+  })
+  it('feedItemIn never sets background (glow must stay box-shadow so it does not clobber tone-danger\'s own background)', () => {
+    expect(keyframe(tokens(), 'feedItemIn')).not.toMatch(/background/)
+  })
 })
 
 describe('skins CSS contract — reduced motion (Task 5)', () => {

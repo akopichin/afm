@@ -97,14 +97,23 @@
   100% { transform: scale(1) rotate(0); }
 }
 
-/* Feed item entrance — gentle slide+fade; small translate to not fight autoscroll. */
+/* Feed item entrance — slide+fade plus a short accent glow. The glow carries the visibility: the slide
+   competes with the feed autoscroll, so it stays small. Ends fully transparent — no lingering halo. */
 @keyframes feedItemIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 50%, transparent),
+                0 0 20px 3px color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  }
+  55% { opacity: 1; transform: none; }
+  100% { opacity: 1; transform: none; box-shadow: 0 0 0 0 transparent; }
 }
 
 /* reset.css already zeroes durations under reduced motion, which STILL fires animationend. Name the pure
-   mount-animation surfaces off explicitly (house convention) so they collapse to rest. */
+   mount-animation surfaces off explicitly (house convention) so they collapse to rest.
+   .feed-item--enter is deliberately NOT listed here: it relies on animationend firing to self-clear the
+   class (see feed-workspace.css), and reset.css's zeroed duration already makes it imperceptible. */
 @media (prefers-reduced-motion: reduce) {
   .feed-reply-chip,
   .feed-reply-chip-label,

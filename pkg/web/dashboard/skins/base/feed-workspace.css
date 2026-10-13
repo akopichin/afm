@@ -94,9 +94,10 @@
   line-height: 1.5;
   border-radius: var(--radius-sm);
 }
-/* The newest message only. The row clears this class on animationend so a later remount never replays. */
+/* The newest message only. The row clears this class on animationend so a later remount never replays.
+   Duration is --motion-slow (not -base) on purpose: the glow needs the extra time to read. */
 .feed-item--enter {
-  animation: feedItemIn var(--motion-base) var(--ease-out) backwards;
+  animation: feedItemIn var(--motion-slow) var(--ease-out) backwards;
 }
 .feed-item-text { min-width: 0; overflow-wrap: anywhere; }
 /* Колонка сегментов markdown-сообщения. .feed-item — flex-РЯД (текст/timestamp), поэтому несколько
