@@ -152,8 +152,8 @@ type Orchestrator struct {
 	// runVerifyShell — подменяемый запуск shell-verify шага для детерминированных тестов гонок.
 	runVerifyShell verifyShellRunner
 
-	// fingerprintFn — подменяемый отпечаток дерева для review_patience; вызывается только при включённой
-	// stalemate-детекции.
+	// fingerprintFn — подменяемый отпечаток дерева: используется review_patience (gated на reviewPatience>0 в
+	// retry.go) и наблюдательной проверкой verify_tree_modified (безусловно, на каждом AI-verify шаге).
 	fingerprintFn func(dir string) (string, bool)
 
 	// terminalFlow — финальное flow-событие, установленное одним из выходов Run; эмитится finalizeLifecycle

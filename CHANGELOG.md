@@ -5,6 +5,20 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-13
 
+### Improvement: `verify:` accepts any agent command, not just codex
+
+A `verify:` agent step's `command` can now use a bare `claude`, a `docker.agents`
+recipe, or a compatible custom binary instead of only `codex-as-claude`.
+Preflight still rejects text-only recipes (`type: openai`, `type: cursor`), which
+cannot guarantee the JSON verdict verify needs. A bare `claude` verifier keeps
+its Claude credentials; other verifier commands do not inherit them. A
+`type: codex` recipe is accepted without Docker autoShim, though afm generates
+its adapter wrapper only in Docker autoShim mode. Host `codex-as-claude` uses a
+read-only sandbox; inside Docker its wrapper uses full access. afm now emits a
+`verify_tree_modified` feed warning when Git fingerprints detect a working-tree
+change during any AI verify step. This best-effort warning does not change the verdict or fail
+the stage.
+
 ### Improvement: fresh author sessions after verify rejection
 
 When a shell or AI verify step rejects an interactive stage, its correction now

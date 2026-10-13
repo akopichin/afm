@@ -177,6 +177,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
     case 'verify_started':
     case 'verify_result':
     case 'verify_retry':
+    case 'verify_tree_modified':
       // Verify-события наблюдательные: рендерятся строкой в ленте (mapVerifyEvent), но не меняют FSM-статус стадии.
       return mapVerifyEvent(event.type, obj)
     case 'approved':
@@ -254,7 +255,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
 }
 
 // mapVerifyEvent — презентация AI-verify наблюдательных событий.
-function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry', obj: Record<string, unknown>): Mapped {
+function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry' | 'verify_tree_modified', obj: Record<string, unknown>): Mapped {
   const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
   const command = str(obj.command)
   const verificationId = str(obj.verification_id)
@@ -277,6 +278,20 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry
       text: `Verify retry ${attempt} (step ${step}) · ${command}: ${reason}`,
       mono: false,
       dedupeId: `verify:${verificationId}:${step}:retry:${attempt}`,
+    }
+  }
+
+  if (type === 'verify_tree_modified') {
+    // Ридонли-верифаер изменил рабочее дерево — это сбой изоляции самого верификатора, не вердикт по коду
+    // автора; в отличие от retry здесь нет поля вроде attempt, различающего повторы, поэтому suffix —
+    // фиксированный короткий `tree-modified` вместо `type`, просто для читаемости ключа.
+    return {
+      actor: 'system',
+      tone: 'warning',
+      kind: 'status',
+      text: `Verify step ${step} · ${command} modified the working tree (verifier must be read-only)`,
+      mono: false,
+      dedupeId: `verify:${verificationId}:${step}:tree-modified`,
     }
   }
 

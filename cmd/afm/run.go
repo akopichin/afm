@@ -69,10 +69,7 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("parse flow: %w", err)
 			}
 
-			// Recipe-based verification requires the read-only wrapper, both before
-			// Docker re-exec and inside the container that generates it.
-			shimmed := cfg.Docker.IsAutoShim() && (config.ReExecedIntoContainer() || cfg.Docker.IsDockerEnabled())
-			if err := config.ValidateVerifySpecs(f, cfg, shimmed); err != nil {
+			if err := config.ValidateVerifySpecs(f, cfg); err != nil {
 				return fmt.Errorf("verify: %w", err)
 			}
 			// Combine before re-exec: host and container must use identical secret indices.

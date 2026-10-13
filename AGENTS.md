@@ -404,12 +404,34 @@ hooks:
   exclusive`). `agent` отвергается как unknown-поле (подсказка использовать
   `command`). `verify` запрещён на `script:` и на planning-only стадии.
   `Stage.VerifyAgentCommands()` — дедуп alias'ов для docker-mount/shim discovery.
-- **v1 — только codex.** `config.SupportedVerifyCommand`/`ValidateVerifySpecs`
+- **Deny-list, не allowlist.** `config.VerifyCommandRejection`/`ValidateVerifySpecs`
   (`pkg/config/verify_resolve.go`) чекаются на preflight (`cmd/afm/run.go` до
-  старта стадий). Принимается `codex-as-claude` напрямую или `docker.agents`-рецепт
-  с `Type == RecipeTypeCodex` И `codexRecipesShimmed`. Голый `codex` (без рецепта)
-  и `claude` НЕ поддержаны: у них нет реального read-only режима, `VerifyMode`
-  ставит только `CODEX_VERIFY=1`, который claude игнорирует.
+  старта стадий). Разрешена ЛЮБАЯ команда, резолвящаяся как агент (голый `claude`,
+  `codex-as-claude`, любой `docker.agents`-рецепт, неизвестный бинарь из PATH) —
+  отвергаются только текст-онли рецепты (`RecipeTypeOpenAI`, `RecipeTypeCursor`): у
+  них нет tool-loop и строгого JSON-контракта, `DecodeModelResult` упал бы в конце
+  дорогого прохода. `codexRecipesShimmed`-требование снято: непошимленный
+  `type: codex` рецепт больше не ошибка preflight, а обычный untrusted-верификатор
+  (та же модель доверия, что у голого `claude`). `verify: { command: X }` в
+  `flow.yaml` — уже явный opt-in, отдельного флага-разрешителя нет.
+- **Claude-верификатор сохраняет claude-креды автора (неочевидный инвариант).**
+  `filterInheritedEnv` (`executor.go`) в `VerifyMode` срезает креды автора
+  (`isClaudeAuthorCredential`) ТОЛЬКО когда verify-команда САМА не claude
+  (`!isClaudeCommand(e.cfg.Command)`): правило F4 защищает от утечки чужому агенту,
+  а когда верификатор сам claude — «чужого» нет, и без кредов он не стартует (в
+  окружении один claude-токен, отдельной «личности верификатора» не существует).
+  Рецептный claude-верификатор (`type: claude` recipe) по-прежнему теряет креды
+  автора — у него свой `auth`/`AFM_SECRET_<CMD>`. Не-claude верификатор (codex) и
+  дальше теряет все четыре переменные без исключений.
+- **Не-codex верификатор не имеет ОС-гарантии read-only.** `executor.New` даёт ему
+  `--dangerously-skip-permissions` (`DefaultClaudeArgs`, т.к. `runnerForVerify` не
+  задаёт `ExtraArgs`) — read-only держится только промптом. `runVerifyAgentStep`
+  (`verify.go`) снимает отпечаток рабочего дерева (`fingerprintFn`,
+  `fingerprintDir()` — общий хелпер с B1 `review_patience`) ДО и ПОСЛЕ КАЖДОГО
+  AI-verify шага (без ветвления по команде — codex на хосте его никогда не
+  нарушит); при расхождении (и только если оба замера `ok==true`) эмитит
+  `verify_tree_modified` — наблюдение, не гейт: вердикт шага и исход стадии не
+  меняются.
 - **`(*Orchestrator).RunVerification`** (`pkg/orchestrator/verify.go`) — ОДИН
   fail-fast проход по `s.Verify.Steps`, без внутреннего цикла коррекции (коррекция
   — через существующий incomplete-retry путь вызывающего). Подключён через
@@ -474,10 +496,12 @@ hooks:
   substring-`Classify` (свободный текст summary с «rate limit» не должен принять
   за transport-retryable).
 - **Observability — non-FSM, live + durable.** `emitVerifyStarted`/
-  `emitVerifyResult` публикуют `bus.EventVerifyStarted`/`EventVerifyResult`
-  (`"verify_started"`/`"verify_result"`) через `publishNotice` live + durable в
-  `notices.jsonl`. Cost-accounting помечается `verifyExecutionLabel = "verify"`,
-  но verify НЕ в `flow.Phases()` (это ортогональный проход, не фаза).
+  `emitVerifyResult`/`emitVerifyTreeModified` публикуют
+  `bus.EventVerifyStarted`/`EventVerifyResult`/`EventVerifyTreeModified`
+  (`"verify_started"`/`"verify_result"`/`"verify_tree_modified"`) через
+  `publishNotice` live + durable в `notices.jsonl`. Cost-accounting помечается
+  `verifyExecutionLabel = "verify"`, но verify НЕ в `flow.Phases()` (это
+  ортогональный проход, не фаза).
 - **Инварианты перед правкой:** (1) verify никогда сам не зовёт `EvComplete`/не
   активирует зависимые — только нормальное завершение после `RunVerification()==nil`;
   (2) протухший step-timeout не должен пройти как pass — `verifyStepDeadlineRace`

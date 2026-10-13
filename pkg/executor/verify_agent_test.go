@@ -383,6 +383,190 @@ func TestRunVerifyAgent_KeepsOwnRecipeSecretButStripsOthers(t *testing.T) {
 	}
 }
 
+// TestVerifyEnv_ClaudeVerifierKeepsClaudeCredentials проверяет, что когда сам verify-агент — claude
+// (Command == "claude"), фильтр НЕ срезает Claude author credentials: это не "чужой" агент, а единственная
+// доступная claude-идентичность в этом окружении, и без неё верификатор вообще не сможет стартовать.
+func TestVerifyEnv_ClaudeVerifierKeepsClaudeCredentials(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "own-oauth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "own-api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "own-auth-token")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://own.example.com")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "claude")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     "claude",
+		WrapperDir:  dir,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "claude", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, kept := range []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=own-oauth-token",
+		"ANTHROPIC_API_KEY=own-api-key",
+		"ANTHROPIC_AUTH_TOKEN=own-auth-token",
+		"ANTHROPIC_BASE_URL=https://own.example.com",
+	} {
+		if !envContainsLine(got, kept) {
+			t.Errorf("claude verifier must keep its own Claude credentials, missing %q, got:\n%s", kept, got)
+		}
+	}
+}
+
+// TestVerifyEnv_CodexVerifierStillStripsClaudeCredentials is a regression check: the default codex verifier
+// (not claude) must still have the author's Claude credentials stripped.
+func TestVerifyEnv_CodexVerifierStillStripsClaudeCredentials(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "leaked-oauth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "leaked-api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "leaked-auth-token")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://leaked.example.com")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "codex-as-claude")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     scriptPath,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "codex-as-claude", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, leaked := range []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=", "ANTHROPIC_API_KEY=", "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_BASE_URL=",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("codex-as-claude verifier env must not contain Claude author credential %q, got:\n%s", leaked, got)
+		}
+	}
+}
+
+// TestVerifyEnv_RecipeVerifierStillStripsClaudeCredentials is a regression check: a non-claude docker.agents
+// recipe verifier must still have the author's Claude credentials stripped, while keeping its own recipe
+// secret.
+func TestVerifyEnv_RecipeVerifierStillStripsClaudeCredentials(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "leaked-api-key")
+	t.Setenv("AFM_SECRET_MYCLAUDERECIPE", "own-verifier-token")
+
+	wrapDir := t.TempDir()
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(wrapDir, "myclauderecipe")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     "myclauderecipe", // алиас — резолвится через WrapperDir, не абсолютный путь
+		WrapperDir:  wrapDir,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "myclauderecipe", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	if strings.Contains(got, "ANTHROPIC_API_KEY=") {
+		t.Errorf("recipe verifier env must not contain the Claude author credential ANTHROPIC_API_KEY, got:\n%s", got)
+	}
+	if !envContainsLine(got, "AFM_SECRET_MYCLAUDERECIPE=own-verifier-token") {
+		t.Errorf("recipe verifier's own secret AFM_SECRET_MYCLAUDERECIPE must survive, got:\n%s", got)
+	}
+}
+
+// TestVerifyEnv_CrossAgentSecretsStrippedForClaudeVerifier проверяет, что при ослаблении правила для
+// claude-верификатора прочие правила фильтрации (чужие AFM_SECRET_*/AFM_HOOK_SECRET_*/AFM_SYSPROMPT_*)
+// продолжают работать как раньше — ослабляется ровно одно правило, не все.
+func TestVerifyEnv_CrossAgentSecretsStrippedForClaudeVerifier(t *testing.T) {
+	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
+	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")
+	t.Setenv("AFM_SYSPROMPT_GLM51", "leaked-system-prompt")
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "verify.log")
+	resultFile := filepath.Join(dir, "result.json")
+	envFile := filepath.Join(dir, "env.txt")
+
+	script := "#!/bin/bash\n" +
+		`env > ` + envFile + "\n" +
+		emitAssistantTextScript(t, validNeedsChangesJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "claude")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := executor.New(executor.Config{
+		Command:     "claude",
+		WrapperDir:  dir,
+		IdleTimeout: 5 * time.Second,
+	})
+
+	if _, err := ex.RunVerifyAgent(context.Background(), "claude", "s1", "verify the stage", logFile, resultFile); err != nil {
+		t.Fatalf("RunVerifyAgent: %v", err)
+	}
+
+	envData, rErr := os.ReadFile(envFile)
+	if rErr != nil {
+		t.Fatalf("read env: %v", rErr)
+	}
+	got := string(envData)
+	for _, leaked := range []string{"AFM_SECRET_GLM51=", "AFM_HOOK_SECRET_0_0=", "AFM_SYSPROMPT_GLM51="} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("claude verifier env must still not contain foreign transport secret %q, got:\n%s", leaked, got)
+		}
+	}
+}
+
 func TestRunAgent_KeepsCrossAgentTransportSecrets(t *testing.T) {
 	t.Setenv("AFM_SECRET_GLM51", "leaked-agent-token")
 	t.Setenv("AFM_HOOK_SECRET_0_0", "leaked-hook-token")

@@ -25,13 +25,21 @@ func ResolveAgentCommand(cmd string, cfg Config) (resolved string, supported boo
 	return cmd, false
 }
 
-// SupportedVerifyCommand сообщает, поддерживается ли алиас как verify-адаптер в V1.
-func SupportedVerifyCommand(cmd string, cfg Config) bool {
+// VerifyCommandRejection returns a non-empty reason if cmd provably cannot act as a verify adapter, and ""
+// if it can. We reject only text-only recipes: they don't guarantee strict JSON, and DecodeModelResult
+// would fail at the end of an expensive pass.
+func VerifyCommandRejection(cmd string, cfg Config) string {
 	resolved, _ := ResolveAgentCommand(cmd, cfg)
-	if recipe, ok := cfg.Docker.Agents[resolved]; ok {
-		return recipe.Type == RecipeTypeCodex
+	recipe, ok := cfg.Docker.Agents[resolved]
+	if !ok {
+		return ""
 	}
-	return resolved == codexAdapterCommand
+	switch recipe.Type {
+	case RecipeTypeOpenAI, RecipeTypeCursor:
+		return fmt.Sprintf("recipe type %q is text-only (no tool loop, no guaranteed JSON output)", recipe.Type)
+	default:
+		return ""
+	}
 }
 
 // IsCodexCommand reports whether a command resolves to the codex read-only adapter — the bare shim name
@@ -46,18 +54,14 @@ func (c Config) IsCodexCommand(cmd string) bool {
 
 // ValidateVerifySpecs проверяет ДО старта рана, что каждый агентский verify-шаг резолвится в
 // поддерживаемый verify-адаптер. Shell-шаги (Kind==VerifyShell) не резолвятся вовсе.
-func ValidateVerifySpecs(f *flow.Flow, cfg Config, codexRecipesShimmed bool) error {
+func ValidateVerifySpecs(f *flow.Flow, cfg Config) error {
 	for _, s := range f.Stages {
 		for i, step := range s.Verify.Steps {
 			if step.Kind != flow.VerifyAgent {
 				continue
 			}
-			if !SupportedVerifyCommand(step.Command, cfg) {
-				return fmt.Errorf("stage %q: verify[%d]: command %q is not a supported verify adapter (v1 supports codex-as-claude only)", s.ID, i+1, step.Command)
-			}
-			resolved, _ := ResolveAgentCommand(step.Command, cfg)
-			if recipe, ok := cfg.Docker.Agents[resolved]; ok && recipe.Type == RecipeTypeCodex && !codexRecipesShimmed {
-				return fmt.Errorf("stage %q: verify[%d]: command %q: codex recipe requires docker autoShim to enforce read-only; use codex-as-claude on host", s.ID, i+1, step.Command)
+			if reason := VerifyCommandRejection(step.Command, cfg); reason != "" {
+				return fmt.Errorf("stage %q: verify[%d]: command %q cannot act as a verify adapter: %s", s.ID, i+1, step.Command, reason)
 			}
 		}
 	}

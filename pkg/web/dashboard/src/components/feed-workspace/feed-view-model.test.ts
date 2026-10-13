@@ -224,6 +224,26 @@ describe('verify_retry — наблюдательное предупрежден
   })
 })
 
+describe('verify_tree_modified — предупреждение о нарушении read-only изоляции верификатора', () => {
+  it('verify_tree_modified renders as a warning row naming the step and command', () => {
+    const items = toFeedItems([
+      ev('verify_tree_modified', { verification_id: 'v-1', step: 2, command: 'claude' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toContain('2') // step
+    expect(items[0]?.text).toContain('claude') // command
+  })
+
+  it('keys a verify_tree_modified row by verification_id+step so a reload replay never duplicates it', () => {
+    const modified = ev('verify_tree_modified', { verification_id: 'v-1', step: 1, command: 'claude' }, 's1', '2026-07-10T10:00:00Z')
+    const first = toFeedItems([modified])
+    const again = toFeedItems([modified])
+    expect(first[0]?.key).toBe('verify:v-1:1:tree-modified')
+    expect(again.map((i) => i.key)).toEqual(first.map((i) => i.key))
+  })
+})
+
 describe('dialog_question/dialog_answer — реальный текст диалога, ask_user/user_answered вытеснены', () => {
   it('dialog_question maps to a navigable agent item carrying phase/id from the payload', () => {
     const items = toFeedItems([

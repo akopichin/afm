@@ -57,6 +57,11 @@ const (
 	// EventVerifyRetry fires when a transient verify exec-failure is about to be retried after backoff.
 	// Non-FSM: published live + durable to notices.jsonl, like EventVerifyStarted/Result.
 	EventVerifyRetry EventType = "verify_retry"
+	// EventVerifyTreeModified fires when a working-tree fingerprint taken right before an AI-verify agent
+	// step differs from the one taken right after it — the verifier (supposed to be read-only) touched the
+	// tree. Purely observational: never changes the step's verdict or the stage outcome. Non-FSM: published
+	// live + durable to notices.jsonl, like EventVerifyStarted/Result.
+	EventVerifyTreeModified EventType = "verify_tree_modified"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

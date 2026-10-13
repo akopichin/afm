@@ -168,10 +168,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	reviewPatience := o.verifyReviewPatience(s)
 	prevFingerprint := ""
 	unchangedRejections := 0
-	fingerprintDir := o.opts.RootDir
-	if fingerprintDir == "" {
-		fingerprintDir = "."
-	}
+	fingerprintDir := o.fingerprintDir()
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 || resumeCtx {

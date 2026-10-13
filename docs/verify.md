@@ -4,8 +4,8 @@
 and the usual file-probe passes (`.done`/declared artifacts, or a non-empty
 `execution_summary.md` for `agents: [auto]`), afm runs the declared verify steps
 before the stage is actually marked done. A step can be a plain shell command (the
-long-standing behavior) or a dedicated **read-only AI reviewer** that inspects the
-result and reports back structured findings.
+long-standing behavior) or a dedicated **AI reviewer** instructed to inspect the
+result without editing it and report back structured findings.
 
 It is not a new stage, not a new `agents` phase, and not a rename of `review`.
 Verify never publishes `EvComplete` itself and never activates dependent stages —
@@ -31,7 +31,7 @@ verify: shell and/or AI, run in order
 verify: "go test ./..."
 ```
 
-One shell step, run in the project directory after
+One shell step, run in the afm-root directory after
 `.done`. A non-zero exit is treated as "not actually done" — the author gets a
 corrective retry with the command's output in the prompt, then `failed` once the
 correction budget is spent (default 1, configurable via
@@ -47,11 +47,11 @@ verify:
   timeout: 5m           # optional
 ```
 
-Or an AI step — a dedicated read-only reviewer:
+Or an AI step — a dedicated reviewer instructed to be read-only:
 
 ```yaml
 verify:
-  command: codex-as-claude   # host; see "Configuring the codex verifier" below
+  command: codex-as-claude   # host; see "Choosing a verifier" below
   timeout: 15m
   prompt: |
     Check the result against the stage's acceptance criteria. Block only
@@ -119,22 +119,29 @@ container's top level is a parse error (it belongs inside a `steps` item).
 | Field | Where valid | Rule |
 |-------|-------------|------|
 | `run` | shell step | non-empty shell command; mutually exclusive with `command`/`prompt` |
-| `command` | AI step | required — an agent alias, resolved by the **same** command/recipe mechanism as `stage.command`. Must resolve to a supported verify adapter (v1: codex only, see below) |
+| `command` | AI step | required — an agent alias, resolved by the **same** command/recipe mechanism as `stage.command`. Text-only recipes are rejected at preflight; the command must support the agent CLI output protocol (see below) |
 | `prompt` | AI step only | additional review criteria; optional |
 | `timeout` | either | optional step duration; bounds both waiting for a free command slot and the step's own execution. The executor's independent idle-timeout still applies — whichever limit is hit first wins |
 
 A `verify:` field is unset by default — a flow that never mentions it has zero
 behavior change: no extra runs, no extra files, no new defaults.
 
-## Configuring the codex verifier
+## Choosing a verifier
 
-Only a **codex** adapter is a supported verify adapter in v1 — it's the only one
-with a real, enforced read-only mode. Any other alias (`claude`, `openai`,
-`cursor`, or a bare `codex` binary) is rejected at **preflight**, before the flow
-even starts, with an error naming the stage and step index — afm refuses to pretend
-a verifier is safe when it can't actually guarantee read-only.
+Any command that runs as an agent can act as a verify adapter — a bare
+`claude`, `codex-as-claude`, a `docker.agents` recipe, or a compatible custom binary
+on `PATH`. The only agent commands rejected at preflight are **text-only recipes**
+(`type: openai`, `type: cursor`): they have no tool loop or guaranteed-JSON
+contract. `DecodeModelResult` would fail at the end of an expensive verify pass.
+Rejection happens at **preflight**, before the flow even starts, with an error
+naming the stage, step index, and recipe type. Other commands must produce the
+expected agent output and a valid JSON verdict when run; preflight does not
+probe their behavior.
 
-**On the host** (no Docker), point `command` at the real read-only shim:
+Three working options:
+
+**`codex-as-claude`** — the only verifier with an OS-level read-only guarantee on
+the host:
 
 ```yaml
 verify:
@@ -142,35 +149,52 @@ verify:
 ```
 
 `codex-as-claude` (`scripts/codex-as-claude.sh`) understands a dedicated
-`CODEX_VERIFY=1` mode: it never passes `--dangerously-bypass-approvals-and-sandbox`
-or any full-access flag, always requests the CLI's explicit `-s read-only` sandbox,
-never escalates on error, uses a fresh session (never resumes the author's), and
-captures exactly the final structured answer (`--output-last-message` when the
-installed codex CLI supports it) rather than a mix of intermediate tool output.
+`CODEX_VERIFY=1` mode. On the host, it omits bypass/full-access flags and requests
+the CLI's explicit `-s read-only` sandbox without escalation. Inside afm's Docker
+container, the same adapter uses full access because the codex sandbox cannot
+create its namespace there. It uses a fresh session (never resumes the author's)
+and captures the final structured answer (`--output-last-message` when the
+installed codex CLI supports it) rather than intermediate tool output.
+A `type: codex` recipe alias is also accepted at preflight without Docker
+autoShim. Its generated `codex-as-claude` wrapper is available when Docker
+autoShim runs; without that wrapper, the alias must resolve to a compatible
+installed command, and afm cannot guarantee read-only execution.
 
-**In Docker with autoShim**, use a `type: codex` recipe alias instead of the bare
-name:
+**A `docker.agents` recipe** — in Docker autoShim mode, review with a different
+account, model, or provider than the stage's own author:
 
 ```yaml
 docker:
   autoShim: true
   agents:
-    codex:
-      type: codex
-      model: gpt-5-codex   # optional
+    reviewer:
+      type: claude
+      model: claude-sonnet-5
+      auth: { from: "file:~/.afm/secrets/reviewer-token", to: "env:CLAUDE_CODE_OAUTH_TOKEN" }
 ```
 
 ```yaml
 # flow.yaml
 verify:
-  command: codex
+  command: reviewer
 ```
 
-autoShim generates the read-only wrapper for you. A `type: codex` recipe alias is
-only accepted as a verify adapter when this run will actually generate that
-wrapper (autoShim enabled) — otherwise afm would silently fall back to running a
-raw `codex` binary that doesn't understand `CODEX_VERIFY` or read-only mode at all,
-and the preflight check rejects it instead.
+**A bare `claude`** — reuses the author's own account:
+
+```yaml
+verify:
+  command: claude
+```
+
+**Trust note.** Without the `codex-as-claude` read-only wrapper on the host,
+afm does not enforce filesystem isolation. Other verifiers receive the usual
+agent arguments, including `--dangerously-skip-permissions`, and rely on the
+verify prompt to stay read-only. afm compares Git working-tree fingerprints
+before and after each AI step and warns in the feed if they differ. This check
+is best-effort: it needs a readable Git tree and excludes `.afm/`; a warning
+does not change the step's verdict. A bare `claude` verifier keeps its Claude
+credentials (it needs them to authenticate); a recipe verifier carries its
+own `auth` and does not inherit the author's Claude credentials.
 
 ## Outcome semantics
 
@@ -409,11 +433,19 @@ stage, the Feed and the stage rail show a distinct **accepted (stalemate)** veri
 badge (its own accent colour, separate from a clean pass or an error) so it's clear
 the stage was accepted after unchanged rounds rather than by a passing verdict.
 
+If the Git working-tree fingerprint changes during any AI verify step, the Feed
+shows a `Verify step N · <alias> modified the working tree (verifier must be
+read-only)` warning line (see the [trust note](#choosing-a-verifier)). This is
+purely informational — the step's verdict and the stage outcome are unaffected.
+
 ## Limitations (v1)
 
-- **Codex-only.** Only the codex adapter is a supported verify agent in v1 — it's
-  the only one with a real, checkable read-only contract. Other providers may gain
-  verify support later without changing the YAML shape.
+- **Only the codex adapter has a checkable read-only contract.** Any compatible
+  agent command can act as a verify adapter (see [Choosing a verifier](#choosing-a-verifier)),
+  but only `codex-as-claude` on the host requests an enforced read-only sandbox.
+  In Docker, even the generated codex wrapper uses full access inside the
+  container. Other verifiers rely on the prompt; the Git fingerprint warning
+  is best-effort, not a sandbox.
 - **Shell verify runs with CWD `"."`** (the afm-root), matching the pre-existing
   legacy contract — **not** `flow.root_dir`. In a split deployment (e.g. Docker
   with sources mounted elsewhere), a shell verify step can see a different
@@ -428,9 +460,9 @@ the stage was accepted after unchanged rounds rather than by a passing verdict.
   retries. The counter is **not durable**: it lives only for the current run and
   resets if the run is resumed after a restart. Verify corrections still ride the
   overall retry loop, so the effective ceiling is `min(max_failures, 15)`.
-- **Read-only is a policy boundary, not a sandbox.** It prevents accidental edits
-  and over-broad model actions from the verifier itself; it is not a defense
-  against a malicious local process running under the same OS user.
+- **Read-only is not a security boundary against local processes.** Even the
+  codex sandbox is not a defense against a malicious process running under the
+  same OS user.
 - **`report.md` is per verification pass, not per step.** In the rare case of a
   multi-step, all-agent-pass config, an earlier step's report link in the feed
   points at the same file as the last step's report (the latest one). Per-step

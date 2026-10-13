@@ -753,8 +753,11 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 		case e.cfg.VerifyMode && IsCrossAgentTransportSecret(kv):
 			// C2: a read-only verifier must not inherit OTHER agents'/hooks'
 			// transport secrets (it could reflect them in its persisted JSON).
-		case e.cfg.VerifyMode && isClaudeAuthorCredential(kv):
-			// F4: the author's forwarded Claude auth must not reach the verifier.
+		case e.cfg.VerifyMode && !isClaudeCommand(e.cfg.Command) && isClaudeAuthorCredential(kv):
+			// F4: the author's forwarded Claude auth must not reach a FOREIGN verify agent. When the
+			// verifier itself is claude (isClaudeCommand), there is no foreign agent to protect against —
+			// there's only one claude identity in this environment, and the verifier needs these
+			// credentials just to start.
 		default:
 			filtered = append(filtered, kv)
 		}

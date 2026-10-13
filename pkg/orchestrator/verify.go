@@ -107,6 +107,26 @@ func (o *Orchestrator) emitVerifyRetry(stageID, verID string, idx int, kind, com
 	}})
 }
 
+// emitVerifyTreeModified публикует наблюдательное событие "verify-агент поменял рабочее дерево" — AI-verify
+// обязан быть read-only ревьюером, поэтому факт правки фиксируется как WARN-сигнал, но НИКОГДА не меняет
+// вердикт шага и не валит стадию. Live + durable, как emitVerifyStarted/emitVerifyResult/emitVerifyRetry.
+func (o *Orchestrator) emitVerifyTreeModified(stageID, verID string, idx int, command string) {
+	o.publishNotice(bus.Event{Type: bus.EventVerifyTreeModified, StageID: stageID, Data: map[string]any{
+		keyVerificationID: verID, keyStep: idx, keyVerifyCommand: command,
+	}})
+}
+
+// verifyTreeFingerprint берёт отпечаток рабочего дерева через подменяемый o.fingerprintFn. Нулевой seam
+// (Orchestrator собран напрямую структурным литералом, в обход New(), как это делают многие тестовые
+// фикстуры) fail-open расценивается так же, как и неопределённость внутри самого workingTreeFingerprint —
+// ok=false, никакого паникующего поведения.
+func (o *Orchestrator) verifyTreeFingerprint() (string, bool) {
+	if o.fingerprintFn == nil {
+		return "", false
+	}
+	return o.fingerprintFn(o.fingerprintDir())
+}
+
 // verifyBackoffInterruptible спит d; возвращает false, если Pause/Revise/cancel оборвали ожидание.
 func (o *Orchestrator) verifyBackoffInterruptible(ctx context.Context, stageID string, d time.Duration) bool {
 	waitCtx, stop := o.pauseAwareVerifyCtx(ctx, stageID)
@@ -462,7 +482,14 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	rawResult := filepath.Join(stepDir, "raw-result.json")
 
 	prompt := prompts.BuildVerify(in)
+	// Наблюдательная проверка read-only инварианта AI-verify: отпечаток дерева ДО и ПОСЛЕ subprocess'а, вне
+	// зависимости от исхода (pass/reject/exec-error). Чисто побочный эффект — ни на result, ни на err не
+	// влияет.
+	beforeFP, beforeOK := o.verifyTreeFingerprint()
 	outcome, err := o.runVerifyAgent(ctx, s, st.Command, prompt, agentLog, rawResult)
+	if afterFP, afterOK := o.verifyTreeFingerprint(); beforeOK && afterOK && beforeFP != afterFP {
+		o.emitVerifyTreeModified(s.ID, verID, idx, st.Command)
+	}
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}

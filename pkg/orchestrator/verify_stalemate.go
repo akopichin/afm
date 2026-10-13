@@ -82,6 +82,16 @@ func workingTreeFingerprint(dir string) (string, bool) {
 	return hex.EncodeToString(h.Sum(nil)), true
 }
 
+// fingerprintDir — каталог для отпечатка рабочего дерева: project root, либо CWD, если root не задан.
+// Общий хелпер для B1 (review_patience) и наблюдательного verify_tree_modified — оба меряют отпечаток одного
+// и того же дерева.
+func (o *Orchestrator) fingerprintDir() string {
+	if o.opts.RootDir != "" {
+		return o.opts.RootDir
+	}
+	return "."
+}
+
 // gitCapture запускает git -C dir <args> с общим таймаутом отпечатка.
 func gitCapture(parent context.Context, dir string, args ...string) (string, bool) {
 	ctx, cancel := context.WithCancel(parent)
