@@ -7,6 +7,8 @@ import planPanelCss from '../../skins/base/plan-panel.css?raw'
 const tokens = () => tokensCss
 const keyframe = (css: string, name: string) =>
   css.match(new RegExp(`@keyframes\\s+${name}\\s*\\{[\\s\\S]*?\\n\\}`))?.[0] ?? ''
+const rule = (css: string, sel: string) =>
+  css.match(new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{[\\s\\S]*?\\}`))?.[0] ?? ''
 
 describe('skins CSS contract — motion layer (Task 1)', () => {
   it('defines the motion tokens', () => {
@@ -34,8 +36,6 @@ describe('skins CSS contract — motion layer (Task 1)', () => {
 })
 
 describe('skins CSS contract — reply-to-thought chip (Task 2)', () => {
-  const rule = (css: string, sel: string) =>
-    css.match(new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{[\\s\\S]*?\\}`))?.[0] ?? ''
   it('.feed-reply-chip glows in via quoteChipIn', () => {
     expect(rule(feedWorkspaceCss, '.feed-reply-chip')).toMatch(/animation:\s*quoteChipIn/)
   })
@@ -89,5 +89,17 @@ describe('skins CSS contract — reduced motion (Task 5)', () => {
   })
   it('does NOT disable .feed-item--enter (it needs animationend to self-clear)', () => {
     expect(rmBlock()).not.toMatch(/\.feed-item--enter/)
+  })
+})
+
+describe('skins CSS contract — composer options bar', () => {
+  it('.composer-opts pins the single toggle to the right edge', () => {
+    const r = rule(feedWorkspaceCss, '.composer-opts')
+    expect(r).toMatch(/justify-content:\s*flex-end/)
+    // space-between с ОДНИМ ребёнком прижало бы тумблер влево — это и был баг.
+    expect(r).not.toMatch(/space-between/)
+  })
+  it('drops the orphaned-hint rule along with the span it styled', () => {
+    expect(feedWorkspaceCss).not.toMatch(/\.composer-opts-hint/)
   })
 })

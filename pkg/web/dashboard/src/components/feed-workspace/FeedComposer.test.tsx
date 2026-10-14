@@ -182,10 +182,28 @@ describe('FeedComposer', () => {
           onTogglePauseOnFocus={onToggle}
         />,
       )
-      const toggle = screen.getByRole('checkbox', { name: /pause on focus/i })
+      const toggle = screen.getByRole('checkbox', { name: /hold the agent while you type/i })
       expect(toggle).not.toBeChecked()
       fireEvent.click(toggle)
       expect(onToggle).toHaveBeenCalledWith(true)
+    })
+
+    it('labels the toggle with a single phrase — no separate orphaned hint', () => {
+      const { container } = render(
+        <FeedComposer
+          stageId="s1"
+          onSend={vi.fn()}
+          pauseOnFocusEnabled={false}
+          onTogglePauseOnFocus={vi.fn()}
+        />,
+      )
+      // Один текст, и он — подпись самого тумблера (внутри <label>), поэтому
+      // связь с переключателем очевидна и глазу, и скринридеру.
+      expect(container.querySelector('.composer-opts-hint')).toBeNull()
+      expect(screen.queryByText(/pause on focus/i)).toBeNull()
+      expect(
+        screen.getByText(/hold the agent while you type/i).closest('label.switch'),
+      ).not.toBeNull()
     })
 
     it('shows the paused banner when paused', () => {

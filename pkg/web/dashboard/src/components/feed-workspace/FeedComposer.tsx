@@ -116,10 +116,9 @@ export function FeedComposer({
           </button>
         </div>
       )}
-      {/* Полоса опций над строкой ввода: подсказка слева, toggle справа. */}
+      {/* Полоса опций над строкой ввода: тумблер с подписью, прижат вправо. */}
       {onTogglePauseOnFocus !== undefined && (
         <div className="composer-opts">
-          <span className="composer-opts-hint">Pause the agent while you type</span>
           <label className="switch">
             <input
               type="checkbox"
@@ -127,7 +126,7 @@ export function FeedComposer({
               onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
             />
             <span className="track" aria-hidden="true" />
-            <span className="switch-label">Pause on focus</span>
+            <span className="switch-label">Hold the agent while you type</span>
           </label>
         </div>
       )}
