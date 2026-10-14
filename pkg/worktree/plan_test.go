@@ -69,3 +69,32 @@ func TestPlanFor_AcceptsRealisticNames(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateName_RejectsUnsafeNames(t *testing.T) {
+	names := []string{"", ".", "..", "a/b", "-lead", ".lead", "trail.lock", "has space", ".."}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateName(name)
+			if err == nil {
+				t.Fatalf("ValidateName(%q) succeeded, want error", name)
+			}
+			if !strings.Contains(err.Error(), "worktree name") {
+				t.Errorf("error %q does not mention 'worktree name'", err.Error())
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not mention rejected name %q verbatim", err.Error(), name)
+			}
+		})
+	}
+}
+
+func TestValidateName_AcceptsRealisticNames(t *testing.T) {
+	names := []string{"dev-pipeline", "feature_x", "v1.2", "AFM-123"}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateName(name); err != nil {
+				t.Errorf("ValidateName(%q) returned error: %v", name, err)
+			}
+		})
+	}
+}

@@ -80,6 +80,16 @@ func TestParseCommitFlags_MutualExclusionStillFires(t *testing.T) {
 	}
 }
 
+func TestMemoryRebuildCmd_HasWorktreeFlag(t *testing.T) {
+	f := newMemoryRebuildCmd().Flags().Lookup("worktree")
+	if f == nil {
+		t.Fatal("newMemoryRebuildCmd: expected a --worktree flag")
+	}
+	if f.DefValue != "" {
+		t.Errorf("--worktree default = %q, want empty", f.DefValue)
+	}
+}
+
 func TestResolveExplicitRunDir(t *testing.T) {
 	base := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(base, "flow-20260101-000000-aaaa"), 0755); err != nil {
@@ -467,6 +477,83 @@ func TestRebuildHandler_PersistentDirResolvesRunsDir(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("expected exactly one manifest under custom --dir run, got %v", matches)
+	}
+}
+
+// --- --worktree finds the run and resolves memory under .worktrees/<name> --
+
+func TestRebuildHandler_WorktreeMissingFails(t *testing.T) {
+	isolateHome(t)
+	withFakeMemoryPipeline(t)
+	dir := chdirTemp(t)
+	flowPath := writeFlowFile(t, dir, "flow.yaml", singleStageFlowYAML)
+
+	err := rebuildHandler(context.Background(), rebuildOptions{FlowArg: flowPath, Worktree: "feature-x", DryRun: true})
+	if err == nil {
+		t.Fatal("rebuildHandler: expected an error for a missing worktree, got nil")
+	}
+	if !strings.Contains(err.Error(), "feature-x") {
+		t.Errorf("error should name the worktree, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Join(dir, ".worktrees", "feature-x")) {
+		t.Errorf("error should name the expected path, got: %v", err)
+	}
+	// No manifest written anywhere under .afm/runs — the failure happened before any run was even looked up.
+	matches, _ := filepath.Glob(filepath.Join(dir, ".afm", "runs", "*", "memory-rebuild", "*", "manifest.json"))
+	if len(matches) != 0 {
+		t.Errorf("expected no manifest to be written, got %v", matches)
+	}
+}
+
+func TestRebuildHandler_WorktreeUsesWorktreeRunsAndMemoryDir(t *testing.T) {
+	isolateHome(t)
+	withFakeMemoryPipeline(t)
+	dir := chdirTemp(t)
+	flowPath := writeFlowFile(t, dir, "flow.yaml", singleStageFlowYAML)
+
+	wtPath := filepath.Join(dir, ".worktrees", "feature-x")
+	if err := os.MkdirAll(wtPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A plain-flow-name run (must NOT be picked when --worktree is given) and a feature-x run (must be).
+	plainRunDir := mkRunCLI(t, filepath.Join(dir, ".afm", "runs"), "testflow-20260101-000000-aaaa",
+		map[string]state.StageStatus{"s1": state.StatusDone})
+	writeStageSession(t, plainRunDir, "s1")
+	wtRunDir := mkRunCLI(t, filepath.Join(dir, ".afm", "runs"), "feature-x-20260102-000000-bbbb",
+		map[string]state.StageStatus{"s1": state.StatusDone})
+	writeStageSession(t, wtRunDir, "s1")
+
+	if err := rebuildHandler(context.Background(), rebuildOptions{FlowArg: flowPath, Worktree: "feature-x", DryRun: true}); err != nil {
+		t.Fatalf("rebuildHandler: %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(wtRunDir, "memory-rebuild", "*", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one manifest under the feature-x run, got %v", matches)
+	}
+	manifest, err := memorypipeline.LoadManifest(matches[0])
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if manifest.RunID != filepath.Base(wtRunDir) {
+		t.Errorf("manifest RunID = %q, want %q", manifest.RunID, filepath.Base(wtRunDir))
+	}
+	if manifest.RootDir != wtPath {
+		t.Errorf("manifest RootDir = %q, want %q", manifest.RootDir, wtPath)
+	}
+	wantMemDir := filepath.Join(wtPath, "memory")
+	if manifest.MemoryDir != wantMemDir {
+		t.Errorf("manifest MemoryDir = %q, want %q", manifest.MemoryDir, wantMemDir)
+	}
+
+	// Control: no manifest was ever written under the plain-flow-name run.
+	plainMatches, _ := filepath.Glob(filepath.Join(plainRunDir, "memory-rebuild", "*", "manifest.json"))
+	if len(plainMatches) != 0 {
+		t.Errorf("expected no manifest under the plain-flow-name run, got %v", plainMatches)
 	}
 }
 

@@ -24,8 +24,9 @@ This is what makes long runs reliable:
   corrupt *complete* line in the middle of the log is quarantined into
   `events.jsonl.corrupt-<ts>` rather than overwritten — afm never destructively
   truncates the log.
-- **Unique run ids.** `<flow>-<timestamp>-<rand4hex>` — no collisions even within the
-  same second.
+- **Unique run ids.** `<run-name>-<timestamp>-<rand4hex>`, where `<run-name>` is
+  the `--worktree` name when supplied and the flow name otherwise. The random suffix
+  avoids collisions even within the same second.
 
 Because everything an agent received and did is on disk (prompts under `--debug`, tool
 actions in `<phase>.jsonl`/`.log`, transitions in `events.jsonl`), a run is fully

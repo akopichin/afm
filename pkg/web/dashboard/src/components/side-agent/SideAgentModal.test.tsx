@@ -86,6 +86,20 @@ describe('SideAgentModal', () => {
     expect(document.activeElement).toBe(screen.getByRole('textbox'))
   })
 
+  it('clears inert before focusing the composer (real browsers refuse focus inside inert)', () => {
+    const api = fakeApi({ isOpen: false })
+    const { rerender } = render(<SideAgentModal api={api} />)
+    act(() => {})
+    const overlay = document.querySelector('.side-agent-overlay') as HTMLElement
+    const ta = overlay.querySelector('.side-agent-textarea') as HTMLTextAreaElement
+    let inertAtFocus: boolean | null = null
+    const spy = vi.spyOn(ta, 'focus').mockImplementation(() => { inertAtFocus = overlay.inert })
+    act(() => { rerender(<SideAgentModal api={{ ...api, isOpen: true }} />) })
+    expect(spy).toHaveBeenCalled()
+    expect(inertAtFocus).toBe(false)
+    spy.mockRestore()
+  })
+
   it('restores focus to the opener after it fully closes', () => {
     const opener = document.createElement('button')
     document.body.appendChild(opener)

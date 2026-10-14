@@ -63,8 +63,9 @@ project, or run a quick command-style exchange *without* touching the run.
 
 - **Open it** with the **Side agent** button in the header, or press **Cmd/Ctrl+`**
   (the backquote key, recognised physically so keyboard layout doesn't matter).
-  Opening the window by itself does not call the model; **Escape** closes it. The
-  header button carries a small indicator — it lights while a reply is in flight and
+  Focus moves to the message field when it opens. Opening the window by itself
+  does not call the model; **Escape** closes it. The header button carries a
+  small indicator — it lights while a reply is in flight and
   flags an unseen result once one arrives while the window is closed.
 - **One conversation per run, one request at a time.** The chat keeps a single
   conversation tied to the run; you can't fire a second message while one is still

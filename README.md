@@ -77,7 +77,8 @@ See more in [`examples/`](examples/), and every field in the
 
 To give a flow its own branch and working directory, set `worktrees: true` at the
 top of `flow.yaml`. afm runs its stages in `<project-root>/.worktrees/<flow-name>`
-and keeps run state in the original `.afm/`. See
+and keeps run state in the original `.afm/`. Use `afm run --worktree <name>` to
+choose a different branch and worktree for a run. See
 [per-flow git worktrees](https://akopichin.github.io/afm/flow-reference/#per-flow-git-worktrees)
 for configuration and reset options.
 

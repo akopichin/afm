@@ -26,13 +26,14 @@ import (
 	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/pkg/worktree"
 )
 
 // rebuildOptions — параметры `afm memory rebuild`, собранные из флагов команды.
 type rebuildOptions struct {
-	FlowArg, RunID       string
-	DryRun, ForceReflect bool
-	CommitSet, Commit    bool
+	FlowArg, RunID, Worktree string
+	DryRun, ForceReflect     bool
+	CommitSet, Commit        bool
 }
 
 // newRebuildPipeline — seam over memorypipeline.New: тесты подменяют её на memorypipeline.New(p, a,
@@ -78,17 +79,35 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	if err != nil {
 		return err
 	}
+	// --worktree переносит и агентский корень, и поиск рана внутрь ворктри — без флага rebuild искал бы раны
+	// по имени флоу (нашёл бы `<flow>-...` в основном чекауте, не `<worktree>-...`) и считал бы memory.path от
+	// основного agentRoot, а не от ворктри, где эта память реально писалась.
+	if o.Worktree != "" {
+		base, err := worktreeBase(rootDir, f) // тот же анкор, что у `afm run`
+		if err != nil {
+			return err
+		}
+		p, err := worktree.PlanFor(base, o.Worktree)
+		if err != nil {
+			return err
+		}
+		if _, statErr := os.Stat(p.Path); statErr != nil {
+			return fmt.Errorf("worktree %q not found at %s: %w", o.Worktree, p.Path, statErr)
+		}
+		agentRoot = p.Path
+	}
 	memDir, err := resolveMemoryDir(rootDir, agentRoot, f)
 	if err != nil {
 		return err
 	}
 
+	runName := runNameFor(o.Worktree, f.Name)
 	stageIDs := stageIDsOf(f)
 	var runDir string
 	if o.RunID != "" {
-		runDir, err = resolveExplicitRunDir(runsDir(), f.Name, o.RunID)
+		runDir, err = resolveExplicitRunDir(runsDir(), runName, o.RunID)
 	} else {
-		runDir, err = state.FindLatestCompletedRunDir(runsDir(), f.Name, stageIDs)
+		runDir, err = state.FindLatestCompletedRunDir(runsDir(), runName, stageIDs)
 	}
 	if err != nil {
 		return err
@@ -491,6 +510,7 @@ func newMemoryRebuildCmd() *cobra.Command {
 			o.DryRun, _ = cmd.Flags().GetBool("dry-run")
 			o.ForceReflect, _ = cmd.Flags().GetBool("force-reflect")
 			o.RunID, _ = cmd.Flags().GetString("run")
+			o.Worktree, _ = cmd.Flags().GetString("worktree")
 			if len(args) == 1 {
 				o.FlowArg = args[0]
 			}
@@ -502,19 +522,19 @@ func newMemoryRebuildCmd() *cobra.Command {
 	cmd.Flags().Bool("force-reflect", false, "regenerate reflect datasets from logs")
 	cmd.Flags().Bool("commit", false, "git-commit changed memory files")
 	cmd.Flags().Bool("no-commit", false, "do not git-commit even if the flow enables it")
+	cmd.Flags().String("worktree", "", "worktree/branch name (default: flow name); finds the run and resolves memory.path under .worktrees/<name>")
 	return cmd
 }
 
 // resolveExplicitRunDir проверяет id, явно переданный через --run, и возвращает путь к его run-директории
-// под runsBase.
-func resolveExplicitRunDir(runsBase, flowName, id string) (string, error) {
+// под runsBase. name — тот же runName, что ищет resolveRun: имя флоу по умолчанию, либо значение --worktree.
+func resolveExplicitRunDir(runsBase, name, id string) (string, error) {
 	if id == "" || filepath.Base(id) != id || id == "." || id == parentDir ||
 		strings.ContainsAny(id, `/\`) {
 		return "", fmt.Errorf("invalid run id %q: must be a bare run directory name", id)
 	}
-	prefix := flowName + "-"
-	if len(id) <= len(prefix) || id[:len(prefix)] != prefix || id[len(prefix)] < '0' || id[len(prefix)] > '9' {
-		return "", fmt.Errorf("run id %q does not belong to flow %q", id, flowName)
+	if !state.RunIDBelongsTo(id, name) {
+		return "", fmt.Errorf("run id %q does not belong to %q", id, name)
 	}
 	dir := filepath.Join(runsBase, id)
 	info, err := os.Lstat(dir) // Отклоняем симлинкованную run-директорию.

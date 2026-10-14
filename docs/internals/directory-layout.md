@@ -4,8 +4,9 @@
 .afm/
   flows/           # flow.yaml files
   runs/
-    .worktree-locks/  # one run-lifetime lock per flow when worktrees are enabled
-    <flow>-<ts>-<rand>/    # data for a single run (rand — avoids collisions)
+    .worktree-locks/
+      <run-name>.worktree.lock  # run-lifetime lock for this worktree when enabled
+    <run-name>-<ts>-<rand>/    # data for a single run (rand — avoids collisions)
       events.jsonl   # event log of transitions — SOURCE OF TRUTH (append + fsync)
       state.json     # derived status snapshot (cache; readers take the truth from the log)
       .lock          # flock of the active afm run
@@ -27,14 +28,18 @@
         <phase>.q<N>.answer.json     # user's answer
         <phase>.dialog.jsonl         # dialog history for the UI
   side-agent/
-    <flow>-<ts>-<rand>/    # dashboard side-agent chat, keyed by run id (separate from the flow)
+    <run-name>-<ts>-<rand>/    # dashboard side-agent chat, keyed by run id
       chat.jsonl     # side conversation journal — its own seq, not part of events.jsonl
       usage.jsonl    # side-agent cost accounting
       .lock          # flock of the active side-agent writer
   config.yaml      # project config (optional)
 ```
 
-When enabled, a flow's git worktree lives at `<project-root>/.worktrees/<flow>`;
+`<run-name>` is the flow name by default, or the name passed to `afm run
+--worktree <name>`. The run ID is `<run-name>-<ts>-<rand>`; the side-agent
+directory uses that same ID.
+
+When enabled, the git worktree lives at `<project-root>/.worktrees/<run-name>`;
 `<project-root>` is `flow.root_dir` if set, otherwise the parent of `.afm/`.
 The worktree contains the source checkout, while run records stay under `.afm/`.
 

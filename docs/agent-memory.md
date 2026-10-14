@@ -163,6 +163,7 @@ editing the prompts, or for recovering from a failed/aborted live reflection.
 afm memory rebuild                       # rebuild for the flow in .afm/flows (or the only one present)
 afm memory rebuild flow.yaml             # explicit flow file
 afm memory rebuild --run my-flow-20260910-153000-ab12   # a specific historical run, not just the latest
+afm memory rebuild --worktree my-feature flow.yaml         # rebuild a run in .worktrees/my-feature
 afm memory rebuild --dry-run             # show what would change, write nothing
 afm memory rebuild --force-reflect       # regenerate every reflect_dataset.yaml from raw logs
 afm memory rebuild --commit              # force a git commit of changed files, overriding flow.yaml
@@ -172,6 +173,7 @@ afm memory rebuild --no-commit           # force NO commit, overriding memory.co
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--run <id>` | latest completed run | Explicit run directory name (bare basename) to rebuild from, instead of auto-selecting the latest completed one. |
+| `--worktree <name>` | unset | Select runs prefixed by `<name>` and resolve relative `memory.path` inside `<project-root>/.worktrees/<name>`. The worktree must already exist. |
 | `--dry-run` | `false` | Compute and print the diff for every target that would change; write nothing and never commit. |
 | `--force-reflect` | `false` | Ignore any existing `reflect_dataset.yaml` and regenerate it from the stage's raw session logs. |
 | `--commit` | — | Commit changed memory files at the end, regardless of `memory.commit`. Mutually exclusive with `--no-commit`. |
@@ -186,8 +188,12 @@ Key behaviors:
   `--run`, afm scans runs newest-first and picks the first one that is fully done AND
   whose stage set exactly matches the current flow's stage IDs. A newer completed run
   whose topology has since drifted is silently skipped — so the command may end up
-  analyzing a substantially older run. Check the run id printed to stdout. An explicit
-  `--run <id>` bypasses this filter (a stage-set mismatch there is a hard error).
+  analyzing a substantially older run. Without `--worktree`, only runs prefixed by
+  the flow name are considered. For a run made in a worktree, pass `--worktree`
+  with that worktree's name, even when it matches the flow name, so rebuild also
+  uses the worktree as its memory root. Check the run id printed to stdout. An
+  explicit `--run <id>` must match the selected run prefix and bypasses the
+  completed-run filter (an incomplete run or stage-set mismatch is a hard error).
 - **"Current YAML + current prompts, historical logs."** Rebuild always uses your
   current `flow.yaml` and current prompt templates — only the session logs being
   distilled come from the past. That's what makes backfill useful.
@@ -201,8 +207,9 @@ Key behaviors:
 - **Docker mode** is honored exactly like `afm run`: if Docker is enabled it re-execs
   into the container before taking any locks.
 
-> **Note on `memory.path` resolution.** With no `root_dir` set, `afm run` resolves a
-> relative `memory.path` against `--dir`/`AFM_DIR`, while `afm memory rebuild` resolves
-> it against its own current working directory. To guarantee both target the same
-> directory, set an explicit `root_dir`, make `memory.path` absolute, or run both from
-> the same directory.
+> **Note on `memory.path` resolution.** With `--worktree`, rebuild resolves a relative
+> `memory.path` inside that worktree, as `afm run` does. Without `--worktree` and with
+> no `root_dir` set, `afm run` resolves it against `--dir`/`AFM_DIR`, while rebuild
+> resolves it against its own current working directory. To guarantee both target
+> the same directory, set an explicit `root_dir`, make `memory.path` absolute, or
+> run both from the same directory.

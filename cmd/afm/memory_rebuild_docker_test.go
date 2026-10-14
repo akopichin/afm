@@ -170,6 +170,16 @@ func TestRebuildDockerArgs_CommitTrue(t *testing.T) {
 	}
 }
 
+// TestRebuildDockerArgs_ForwardsWorktree proves --worktree reaches the in-container afm invocation — the
+// container otherwise has no way to know which worktree to resolve the run/memory dir under.
+func TestRebuildDockerArgs_ForwardsWorktree(t *testing.T) {
+	got := rebuildDockerArgs(rebuildOptions{Worktree: "feature-x"}, "/abs/flow.yaml", "/abs/root")
+	want := []string{"memory", "rebuild", "--worktree", "feature-x", "/abs/flow.yaml", "--dir=/abs/root"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 func TestRebuildDockerArgs_MinimalOptions(t *testing.T) {
 	got := rebuildDockerArgs(rebuildOptions{}, "/abs/flow.yaml", "/abs/root")
 	want := []string{"memory", "rebuild", "/abs/flow.yaml", "--dir=/abs/root"}

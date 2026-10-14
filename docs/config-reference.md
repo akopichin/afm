@@ -106,7 +106,8 @@ Non-claude agents configured as Docker recipes take their own per-recipe
 Set `worktrees.enabled: true` in `.afm/config.yaml` (or globally in
 `~/.afm/config.yaml`) to opt in. `AFM_WORKTREES=1` enables and
 `AFM_WORKTREES=0` disables it for a run. A top-level `worktrees: true|false` in
-`flow.yaml` takes priority over both. The default is off. See
+`flow.yaml` takes priority over both; `afm run --worktree <name>` enables a named
+worktree regardless of those settings. The default is off. See
 [Per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) for paths,
 reuse, and the `--worktree-clear` flags.
 

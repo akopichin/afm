@@ -95,6 +95,9 @@ func rebuildDockerArgs(o rebuildOptions, absFlowPath, absRoot string) []string {
 			args = append(args, "--no-commit")
 		}
 	}
+	if o.Worktree != "" {
+		args = append(args, "--worktree", o.Worktree)
+	}
 	args = append(args, absFlowPath)
 	// --dir должен быть абсолютным: относительный путь внутри контейнера
 	// резолвился бы относительно -w (absRoot) и мог бы задвоить вложенность.

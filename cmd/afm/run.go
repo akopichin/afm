@@ -31,6 +31,7 @@ type runOptions struct {
 	requireApproval bool
 	worktreeDir     string // "" = agents run in the main checkout
 	forceNewRun     bool   // set by the clear flags: never resume
+	runName         string // run directory prefix; f.Name when --worktree was not given
 }
 
 func newRunCmd() *cobra.Command {
@@ -40,6 +41,7 @@ func newRunCmd() *cobra.Command {
 	var requireApproval bool
 	var worktreeClear bool
 	var worktreeClearForce bool
+	var worktreeName string
 
 	cmd := &cobra.Command{
 		Use:   "run [flow.yaml]",
@@ -75,11 +77,20 @@ func newRunCmd() *cobra.Command {
 			// Combine before re-exec: host and container must use identical secret indices.
 			hooks := combineRunHooks(cfg, f)
 
+			// Fail fast before anything is created — the name becomes part of a run directory even when
+			// worktrees themselves end up unused in-container (resolveWorktree's ReExecedIntoContainer
+			// branch never reaches worktree.PlanFor to validate it there).
+			if worktreeName != "" {
+				if err := worktree.ValidateName(worktreeName); err != nil {
+					return err
+				}
+			}
+
 			mode, err := clearModeFromFlags(worktreeClear, worktreeClearForce)
 			if err != nil {
 				return err
 			}
-			wtDir, wtLock, err := resolveWorktree(context.Background(), rootDir, f, cfg, mode)
+			wtDir, wtLock, err := resolveWorktree(context.Background(), rootDir, f, cfg, mode, worktreeName)
 			if err != nil {
 				return err // resolveWorktree's own errors already carry a "worktree: " prefix
 			}
@@ -96,8 +107,7 @@ func newRunCmd() *cobra.Command {
 			// reaches this point a second time (resolveWorktree's ReExecedIntoContainer branch just
 			// reads the transport env) — skip the print there so it isn't shown twice.
 			if wtDir != "" && !config.ReExecedIntoContainer() {
-				// Plan.Branch is always the flow name; no need to return it separately.
-				fmt.Printf("afm: worktree %s (branch %s)\n", wtDir, f.Name)
+				fmt.Printf("afm: worktree %s (branch %s)\n", wtDir, runNameFor(worktreeName, f.Name))
 			}
 
 			if cfg.Docker.IsDockerEnabled() {
@@ -119,6 +129,7 @@ func newRunCmd() *cobra.Command {
 				requireApproval: requireApproval,
 				worktreeDir:     wtDir,
 				forceNewRun:     mode != worktree.ClearNone,
+				runName:         runNameFor(worktreeName, f.Name),
 			})
 		},
 	}
@@ -128,6 +139,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "fail if a stage plan needs approval but no dashboard is running")
 	cmd.Flags().BoolVar(&worktreeClear, "worktree-clear", false, "recreate the flow worktree, discarding uncommitted changes but keeping its branch and commits; also starts a fresh run")
 	cmd.Flags().BoolVar(&worktreeClearForce, "worktree-clear-force", false, "recreate the flow worktree AND its branch from HEAD, discarding the branch's commits; also starts a fresh run")
+	cmd.Flags().StringVar(&worktreeName, "worktree", "", "worktree/branch name (default: flow name); implies worktrees are enabled and isolates this run under .afm/runs/<name>-…")
 	return cmd
 }
 
@@ -137,7 +149,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	if err != nil {
 		return err
 	}
-	runDir, store, err := resolveRun(f, opts.forceNewRun)
+	runDir, store, err := resolveRun(f, opts.runName, opts.forceNewRun)
 	if err != nil {
 		return err
 	}
@@ -312,9 +324,10 @@ func resolveFlowPath(args []string) (string, error) {
 	return "", fmt.Errorf("multiple flow files found; specify one: %v", yamls)
 }
 
-// resolveRun opens the latest resumable run for f, unless forceNew is set — the clear flags imply a fresh
-// worktree, which has no business resuming a run that may reference the previous checkout's state.
-func resolveRun(f *flow.Flow, forceNew bool) (runDir string, store *state.Store, err error) {
+// resolveRun opens the latest resumable run under runName (the flow name by default, or an explicit
+// --worktree override — see runNameFor), unless forceNew is set — the clear flags imply a fresh worktree,
+// which has no business resuming a run that may reference the previous checkout's state.
+func resolveRun(f *flow.Flow, runName string, forceNew bool) (runDir string, store *state.Store, err error) {
 	base := runsDir()
 
 	stageIDs := make([]string, len(f.Stages))
@@ -323,7 +336,7 @@ func resolveRun(f *flow.Flow, forceNew bool) (runDir string, store *state.Store,
 	}
 
 	if !forceNew {
-		existing, lookErr := state.FindLatestRunDir(base, f.Name)
+		existing, lookErr := state.FindLatestRunDir(base, runName)
 		if lookErr == nil {
 			store, err = state.Open(existing, stageIDs)
 			if err == nil {
@@ -341,7 +354,7 @@ func resolveRun(f *flow.Flow, forceNew bool) (runDir string, store *state.Store,
 		}
 	}
 
-	runDir = filepath.Join(base, newRunID(f.Name))
+	runDir = filepath.Join(base, newRunID(runName))
 	if err = os.MkdirAll(runDir, 0755); err != nil {
 		return
 	}
@@ -351,11 +364,11 @@ func resolveRun(f *flow.Flow, forceNew bool) (runDir string, store *state.Store,
 
 // newRunID строит уникальный id run: timestamp секундной гранулярности плюс короткий случайный суффикс,
 // чтобы два запуска в одну секунду не делили одну директорию и один events.jsonl.
-func newRunID(flowName string) string {
+func newRunID(runName string) string {
 	ts := time.Now().Format("20060102-150405")
 	b := make([]byte, 2)
 	_, _ = rand.Read(b)
-	return fmt.Sprintf("%s-%s-%s", flowName, ts, hex.EncodeToString(b))
+	return fmt.Sprintf("%s-%s-%s", runName, ts, hex.EncodeToString(b))
 }
 
 func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {

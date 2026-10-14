@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -372,20 +373,36 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 	return res
 }
 
+// runIDSuffixRe matches newRunID's shape (cmd/afm/run.go): an 8-digit date, a 6-digit time, and an
+// optional hex suffix (optional because test fixtures across this package commonly omit it). Requiring the
+// FULL shape — not just "the next byte is a digit" — is what lets RunIDBelongsTo tell
+// "sprint-20260101-100000-aaaa" (a run of "sprint") apart from "sprint-2-20260101-100000-aaaa" (a run of
+// the sibling name "sprint-2"): both have a digit right after "sprint-", but only the former's remainder is
+// actually a timestamp.
+var runIDSuffixRe = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}(-[0-9a-f]+)?$`)
+
+// RunIDBelongsTo reports whether id is a run directory name for name: id must start with "name-" and the
+// remainder must look like a full newRunID timestamp suffix, not merely start with a digit.
+func RunIDBelongsTo(id, name string) bool {
+	prefix := name + "-"
+	if len(id) <= len(prefix) || id[:len(prefix)] != prefix {
+		return false
+	}
+	return runIDSuffixRe.MatchString(id[len(prefix):])
+}
+
 // findAllRunDirs возвращает ВСЕ run-директории для flowName под base, отсортированные по возрастанию
-// (старые первыми). Чтобы "foo" не матчил "foo-bar", после префикса требуется цифра (начало timestamp'а).
-// Several run dirs for one flow can coexist: resolveRun creates a fresh dir whenever the latest one is
-// locked by a still-live `afm run`.
+// (старые первыми). Several run dirs for one flow can coexist: resolveRun creates a fresh dir whenever the
+// latest one is locked by a still-live `afm run`.
 func findAllRunDirs(base, flowName string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return nil, fmt.Errorf("read runs dir: %w", err)
 	}
-	prefix := flowName + "-"
 	var names []string
 	for _, e := range entries {
 		n := e.Name()
-		if e.IsDir() && len(n) > len(prefix) && n[:len(prefix)] == prefix && n[len(prefix)] >= '0' && n[len(prefix)] <= '9' {
+		if e.IsDir() && RunIDBelongsTo(n, flowName) {
 			names = append(names, n)
 		}
 	}
@@ -427,17 +444,12 @@ func FindLatestCompletedRunDir(base, flowName string, wantStages []string) (stri
 	for _, s := range wantStages {
 		want[s] = true
 	}
-	prefix := flowName + "-"
 	var names []string
 	for _, e := range entries {
 		n := e.Name()
-		if !e.IsDir() || len(n) <= len(prefix) || n[:len(prefix)] != prefix {
-			continue
+		if e.IsDir() && RunIDBelongsTo(n, flowName) {
+			names = append(names, n)
 		}
-		if c := n[len(prefix)]; c < '0' || c > '9' {
-			continue
-		}
-		names = append(names, n)
 	}
 	slices.SortFunc(names, func(a, b string) int { return strings.Compare(b, a) }) // новые первыми
 	for _, n := range names {

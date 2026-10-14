@@ -19,6 +19,7 @@ func TestWorktreesEnabled_Precedence(t *testing.T) {
 	tr, fl := true, false
 	cases := []struct {
 		name string
+		wt   string // --worktree value, "" = not set
 		flow *bool  // flow.Worktrees
 		cfg  *bool  // cfg.Worktrees.Enabled
 		env  string // "" = unset
@@ -29,6 +30,7 @@ func TestWorktreesEnabled_Precedence(t *testing.T) {
 		{name: "env off overrides config on", flow: nil, cfg: &tr, env: "0", want: false},
 		{name: "flow on overrides env off", flow: &tr, cfg: nil, env: "0", want: true},
 		{name: "flow off overrides env on", flow: &fl, cfg: nil, env: "1", want: false},
+		{name: "--worktree beats flow off, env off, config off", wt: "feature-x", flow: &fl, cfg: &fl, env: "0", want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,10 +40,19 @@ func TestWorktreesEnabled_Precedence(t *testing.T) {
 			if tc.flow != nil {
 				f = &flow.Flow{Worktrees: tc.flow}
 			}
-			if got := worktreesEnabled(cfg, f); got != tc.want {
+			if got := worktreesEnabled(tc.wt, cfg, f); got != tc.want {
 				t.Errorf("worktreesEnabled: got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunNameFor(t *testing.T) {
+	if got := runNameFor("feature-x", "flow"); got != "feature-x" {
+		t.Errorf("runNameFor(%q, %q) = %q, want %q", "feature-x", "flow", got, "feature-x")
+	}
+	if got := runNameFor("", "flow"); got != "flow" {
+		t.Errorf("runNameFor(%q, %q) = %q, want %q", "", "flow", got, "flow")
 	}
 }
 
@@ -99,7 +110,7 @@ func TestResolveWorktree_DisabledReturnsEmpty(t *testing.T) {
 	f := &flow.Flow{Name: "myflow"}
 	cfg := config.Config{} // worktrees off by default
 
-	got, lock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearNone)
+	got, lock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearNone, "")
 	if err != nil {
 		t.Fatalf("resolveWorktree: %v", err)
 	}
@@ -121,7 +132,7 @@ func TestResolveWorktree_ClearWithoutWorktreesIsAnError(t *testing.T) {
 	f := &flow.Flow{Name: "myflow"}
 	cfg := config.Config{} // worktrees off by default
 
-	_, _, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree)
+	_, _, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, "")
 	if err == nil {
 		t.Fatal("resolveWorktree: expected an error, got nil")
 	}
@@ -177,7 +188,7 @@ func TestResolveWorktree_InContainerReadsTransportEnv(t *testing.T) {
 	f := &flow.Flow{Name: "myflow"}
 	cfg := config.Config{}
 
-	got, lock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearNone)
+	got, lock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearNone, "")
 	if err != nil {
 		t.Fatalf("resolveWorktree: %v", err)
 	}
@@ -196,6 +207,132 @@ func TestResolveWorktree_InContainerReadsTransportEnv(t *testing.T) {
 	}
 }
 
+// TestResolveWorktree_CustomNameCreatesNamedWorktree proves --worktree=<name> names the branch/directory
+// after the flag, not the flow — the flow keeps its own name (f.Name) for lifecycle payloads/memory/etc.
+func TestResolveWorktree_CustomNameCreatesNamedWorktree(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "")
+	chdirTemp(t)
+
+	repo := initGitRepoWithCommit(t)
+	f := &flow.Flow{Name: "flow"}
+	cfg := config.Config{}
+
+	got, lock, err := resolveWorktree(context.Background(), repo, f, cfg, worktree.ClearNone, "feature-x")
+	if err != nil {
+		t.Fatalf("resolveWorktree: %v", err)
+	}
+	defer lock.Close() //nolint:errcheck
+	if lock == nil {
+		t.Fatal("resolveWorktree: expected a non-nil lock")
+	}
+	want := filepath.Join(repo, ".worktrees", "feature-x")
+	if got != want {
+		t.Errorf("resolveWorktree: got %q, want %q", got, want)
+	}
+
+	cmd := exec.Command("git", "rev-parse", "--verify", "refs/heads/feature-x")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("branch feature-x was not created: %v: %s", err, out)
+	}
+	cmd = exec.Command("git", "rev-parse", "--verify", "refs/heads/flow")
+	cmd.Dir = repo
+	if err := cmd.Run(); err == nil {
+		t.Error("branch 'flow' (the flow name) should not exist when --worktree overrides it")
+	}
+}
+
+// TestResolveWorktree_LocksByWorktreeNameNotFlowName proves the flow lock key tracks the worktree's
+// effective name (the --worktree override), not f.Name — two flags on the same flow that pick different
+// names must not contend with each other, and the same name must still serialize.
+func TestResolveWorktree_LocksByWorktreeNameNotFlowName(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "")
+	chdirTemp(t)
+
+	held, err := worktree.TryLockFlow(flowLocksDir(), "feature-x")
+	if err != nil {
+		t.Fatalf("TryLockFlow: %v", err)
+	}
+	defer held.Close() //nolint:errcheck
+
+	repo := initGitRepoWithCommit(t)
+	f := &flow.Flow{Name: "flow"}
+	cfg := config.Config{}
+
+	if _, _, err := resolveWorktree(context.Background(), repo, f, cfg, worktree.ClearNone, "feature-x"); err == nil {
+		t.Fatal("resolveWorktree: expected an error while feature-x's lock is held, got nil")
+	} else if !strings.Contains(err.Error(), "feature-x") {
+		t.Errorf("resolveWorktree error should name the worktree, got: %v", err)
+	}
+
+	got, lock, err := resolveWorktree(context.Background(), repo, f, cfg, worktree.ClearNone, "feature-y")
+	if err != nil {
+		t.Fatalf("resolveWorktree (different name): %v", err)
+	}
+	defer lock.Close() //nolint:errcheck
+	if got == "" {
+		t.Error("resolveWorktree (different name): expected a non-empty path")
+	}
+}
+
+func TestResolveWorktree_RejectsInvalidName(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "")
+	chdirTemp(t)
+
+	repo := initGitRepoWithCommit(t)
+	f := &flow.Flow{Name: "flow"}
+	cfg := config.Config{}
+
+	if _, _, err := resolveWorktree(context.Background(), repo, f, cfg, worktree.ClearNone, "../evil"); err == nil {
+		t.Fatal("resolveWorktree: expected an error for an unsafe --worktree name, got nil")
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, ".worktrees")); !os.IsNotExist(statErr) {
+		t.Errorf("resolveWorktree: .worktrees was created despite the invalid name (stat err: %v)", statErr)
+	}
+}
+
+// TestResolveRun_WorktreeNameIsolatesRuns proves a run started with --worktree=<name> gets its own run
+// directory prefix and never resumes a run started under the plain flow name (or vice versa) — the two
+// are isolated exactly like renaming `name:` in flow.yaml would isolate them today.
+func TestResolveRun_WorktreeNameIsolatesRuns(t *testing.T) {
+	chdirTemp(t)
+
+	oldRunDir := makeRunState(t, "flow-20260101-100000", "stage1", state.StatusAwaitingApproval)
+
+	f := &flow.Flow{Name: "flow", Stages: []flow.Stage{{ID: "stage1"}}}
+
+	runDir, store, err := resolveRun(f, "feature-x", false)
+	if err != nil {
+		t.Fatalf("resolveRun: %v", err)
+	}
+	store.Close()
+	if runDir == oldRunDir {
+		t.Error("resolveRun(worktree=feature-x): reused the plain-flow-name run dir, want an isolated one")
+	}
+	if !strings.HasPrefix(filepath.Base(runDir), "feature-x-") {
+		t.Errorf("resolveRun(worktree=feature-x): run dir %q does not have the feature-x- prefix", runDir)
+	}
+
+	resumedDir, store2, err := resolveRun(f, "flow", false)
+	if err != nil {
+		t.Fatalf("resolveRun: %v", err)
+	}
+	store2.Close()
+	if resumedDir != oldRunDir {
+		t.Errorf("resolveRun(worktree=flow): got %q, want it to resume %q", resumedDir, oldRunDir)
+	}
+}
+
+func TestRunCmd_HasWorktreeFlag(t *testing.T) {
+	f := newRunCmd().Flags().Lookup("worktree")
+	if f == nil {
+		t.Fatal("newRunCmd: expected a --worktree flag")
+	}
+	if f.DefValue != "" {
+		t.Errorf("--worktree default = %q, want empty", f.DefValue)
+	}
+}
+
 func TestResolveRun_ForceNewSkipsResume(t *testing.T) {
 	chdirTemp(t)
 
@@ -207,7 +344,7 @@ func TestResolveRun_ForceNewSkipsResume(t *testing.T) {
 
 	f := &flow.Flow{Name: "flow", Stages: []flow.Stage{{ID: "stage1"}}}
 
-	runDir, store, err := resolveRun(f, true)
+	runDir, store, err := resolveRun(f, "", true)
 	if err != nil {
 		t.Fatalf("resolveRun: %v", err)
 	}
@@ -268,7 +405,7 @@ func TestResolveWorktree_RefusesOutsideProjectDirUnderDocker(t *testing.T) {
 	f := &flow.Flow{Name: "flow", RootDir: outside, Worktrees: &tr}
 
 	dockerOn := config.Config{Docker: config.DockerConfig{Enabled: &tr}}
-	_, _, err := resolveWorktree(context.Background(), afmRoot, f, dockerOn, worktree.ClearNone)
+	_, _, err := resolveWorktree(context.Background(), afmRoot, f, dockerOn, worktree.ClearNone, "")
 	if err == nil {
 		t.Fatal("resolveWorktree: expected an error for root_dir outside afm-root under Docker, got nil")
 	}
@@ -280,7 +417,7 @@ func TestResolveWorktree_RefusesOutsideProjectDirUnderDocker(t *testing.T) {
 	}
 
 	dockerOff := config.Config{}
-	got, lock, err := resolveWorktree(context.Background(), afmRoot, f, dockerOff, worktree.ClearNone)
+	got, lock, err := resolveWorktree(context.Background(), afmRoot, f, dockerOff, worktree.ClearNone, "")
 	if err != nil {
 		t.Fatalf("resolveWorktree (Docker off): %v", err)
 	}
@@ -312,7 +449,7 @@ func TestResolveWorktree_RefusesClearWhileFlowLockHeld(t *testing.T) {
 	f := &flow.Flow{Name: "myflow", RootDir: afmRoot, Worktrees: &tr}
 	cfg := config.Config{}
 
-	_, _, err = resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree)
+	_, _, err = resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, "")
 	if err == nil {
 		t.Fatal("resolveWorktree: expected an error while the flow's lock is held, got nil")
 	}
@@ -327,7 +464,7 @@ func TestResolveWorktree_RefusesClearWhileFlowLockHeld(t *testing.T) {
 	if err := held.Close(); err != nil {
 		t.Fatalf("held.Close: %v", err)
 	}
-	got, _, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree)
+	got, _, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, "")
 	if err != nil {
 		t.Fatalf("resolveWorktree after lock release: %v", err)
 	}
@@ -352,7 +489,7 @@ func TestResolveWorktree_RefusesClearWhileNewRunStarts(t *testing.T) {
 
 	// Simulates a plain `afm run myflow.yaml` starting: resolveWorktree returns a lock the caller must
 	// hold for the run's lifetime.
-	runPath, runLock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearNone)
+	runPath, runLock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearNone, "")
 	if err != nil {
 		t.Fatalf("resolveWorktree (normal run start): %v", err)
 	}
@@ -362,7 +499,7 @@ func TestResolveWorktree_RefusesClearWhileNewRunStarts(t *testing.T) {
 	defer runLock.Close() //nolint:errcheck
 
 	// The "run" is still live (its lock is still held) when a clear is attempted for the same flow.
-	_, _, err = resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree)
+	_, _, err = resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, "")
 	if err == nil {
 		t.Fatal("resolveWorktree(ClearWorktree): expected an error while the new run is still active, got nil")
 	}
@@ -378,7 +515,7 @@ func TestResolveWorktree_RefusesClearWhileNewRunStarts(t *testing.T) {
 	if err := runLock.Close(); err != nil {
 		t.Fatalf("runLock.Close: %v", err)
 	}
-	if _, _, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree); err != nil {
+	if _, _, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, ""); err != nil {
 		t.Fatalf("resolveWorktree(ClearWorktree) after run finished: %v", err)
 	}
 }
@@ -399,7 +536,7 @@ func TestResolveWorktree_ClearHoldsLockForSubsequentRun(t *testing.T) {
 
 	// Simulates `afm run myflow.yaml --worktree-clear`: the clear succeeds, and resolveWorktree must
 	// return a lock for the run that RunE starts right after, not nil.
-	clearedPath, clearLock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree)
+	clearedPath, clearLock, err := resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, "")
 	if err != nil {
 		t.Fatalf("resolveWorktree(ClearWorktree): %v", err)
 	}
@@ -410,7 +547,7 @@ func TestResolveWorktree_ClearHoldsLockForSubsequentRun(t *testing.T) {
 
 	// A second, unrelated clear attempt (e.g. a user running --worktree-clear in another terminal) must
 	// be refused while the first clear's own subsequent run is still "live".
-	_, _, err = resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree)
+	_, _, err = resolveWorktree(context.Background(), afmRoot, f, cfg, worktree.ClearWorktree, "")
 	if err == nil {
 		t.Fatal("resolveWorktree(ClearWorktree) #2: expected an error while the first clear's run is still active, got nil")
 	}

@@ -5,6 +5,19 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-14
 
+### Improvement: choose a worktree per run and rebuild its memory
+
+`afm run --worktree <name>` enables worktrees for that invocation and uses the
+name for the branch, `.worktrees/<name>` directory, and run directory prefix.
+`afm memory rebuild --worktree <name>` selects that worktree's completed run and
+resolves relative `memory.path` inside it. Pass the flag to rebuild worktree runs
+even when the worktree name matches the flow name.
+
+### Fix: focus the Side agent message field on open
+
+Opening the Side agent modal now moves keyboard focus to its message field in
+the browser, including after closing and reopening it.
+
 ### Improvement: clearer pause toggle in the note composer
 
 The note composer now shows one right-aligned toggle labelled **Hold the agent

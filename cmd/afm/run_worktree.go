@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,14 +25,26 @@ func flowLocksDir() string {
 	return filepath.Join(runsDir(), ".worktree-locks")
 }
 
-// worktreesEnabled resolves the effective git-worktree toggle: flow (if set) > env AFM_WORKTREES > config
-// worktrees.enabled > default OFF. Mirrors sideAgentEnabled's shape, but the default is inverted (worktrees
-// are opt-in, the side agent is opt-out).
-func worktreesEnabled(cfg config.Config, f *flow.Flow) bool {
+// worktreesEnabled resolves the effective git-worktree toggle: --worktree=<name> (if non-empty) > flow (if
+// set) > env AFM_WORKTREES > config worktrees.enabled > default OFF. An explicit --worktree is an explicit
+// opt-in that outranks every other layer, including a flow that turned worktrees off. Otherwise mirrors
+// sideAgentEnabled's shape, but the default is inverted (worktrees are opt-in, the side agent is opt-out).
+func worktreesEnabled(worktreeName string, cfg config.Config, f *flow.Flow) bool {
+	if worktreeName != "" {
+		return true
+	}
 	if f != nil && f.Worktrees != nil {
 		return *f.Worktrees
 	}
 	return cfg.Worktrees.IsEnabled()
+}
+
+// runNameFor resolves the run directory prefix / flow-lock key: an explicit --worktree name when given,
+// otherwise the flow's own name. f.Name itself is never changed by --worktree — the flow still shows up
+// under its real name in lifecycle payloads, the dashboard, and memory config; this only decides the
+// prefix of .afm/runs/<name>-... and the worktree's branch/directory name.
+func runNameFor(worktreeName, flowName string) string {
+	return cmp.Or(worktreeName, flowName)
 }
 
 // worktreeBase returns the project root the worktree anchors to: flow.root_dir resolved against afmRoot
@@ -86,11 +99,11 @@ func clearModeFromFlags(wantClear, clearForce bool) (worktree.ClearMode, error) 
 // re-exec'd container's own call to this function (ReExecedIntoContainer branch) must NOT acquire the
 // lock again: the host already holds it for the container's whole lifetime, and a second exclusive
 // attempt on the same underlying (bind-mounted) lock file would deadlock against the host's own hold.
-func resolveWorktree(ctx context.Context, afmRoot string, f *flow.Flow, cfg config.Config, mode worktree.ClearMode) (string, *worktree.FlowLock, error) {
+func resolveWorktree(ctx context.Context, afmRoot string, f *flow.Flow, cfg config.Config, mode worktree.ClearMode, worktreeName string) (string, *worktree.FlowLock, error) {
 	if config.ReExecedIntoContainer() {
 		return os.Getenv(docker.WorktreeEnvVar), nil, nil
 	}
-	if !worktreesEnabled(cfg, f) {
+	if !worktreesEnabled(worktreeName, cfg, f) {
 		if mode != worktree.ClearNone {
 			return "", nil, errors.New("worktree: --worktree-clear requires worktrees to be enabled (set worktrees: true in flow.yaml, AFM_WORKTREES=1, or worktrees.enabled in config)")
 		}
@@ -116,16 +129,18 @@ func resolveWorktree(ctx context.Context, afmRoot string, f *flow.Flow, cfg conf
 		}
 	}
 
-	p, err := worktree.PlanFor(base, f.Name)
+	p, err := worktree.PlanFor(base, runNameFor(worktreeName, f.Name))
 	if err != nil {
 		return "", nil, err
 	}
 
 	// Acquired here, right before the first mutating git call, and held by the caller for the run that
-	// follows — whether Ensure reused the worktree as-is or cleared it first.
-	runLock, err := worktree.TryLockFlow(flowLocksDir(), f.Name)
+	// follows — whether Ensure reused the worktree as-is or cleared it first. Keyed by p.Branch (the
+	// worktree's effective name), the same source the error below names it from, so the lock and the
+	// message it produces can never disagree.
+	runLock, err := worktree.TryLockFlow(flowLocksDir(), p.Branch)
 	if err != nil {
-		return "", nil, flowLockError(err, f.Name)
+		return "", nil, flowLockError(err, p.Branch)
 	}
 	if err := worktree.Ensure(ctx, p, mode); err != nil {
 		runLock.Close() //nolint:errcheck
@@ -134,11 +149,12 @@ func resolveWorktree(ctx context.Context, afmRoot string, f *flow.Flow, cfg conf
 	return p.Path, runLock, nil
 }
 
-// flowLockError turns worktree.ErrFlowLockBusy into an actionable message naming the flow; any other
-// error (e.g. failure to create the lock directory) passes through unwrapped.
-func flowLockError(err error, flowName string) error {
+// flowLockError turns worktree.ErrFlowLockBusy into an actionable message naming the worktree (the flow
+// name by default, or an explicit --worktree override); any other error (e.g. failure to create the lock
+// directory) passes through unwrapped.
+func flowLockError(err error, name string) error {
 	if errors.Is(err, worktree.ErrFlowLockBusy) {
-		return fmt.Errorf("worktree: flow %q's worktree is in use by another `afm run` or `--worktree-clear`; wait a moment and retry", flowName)
+		return fmt.Errorf("worktree: %q's worktree is in use by another `afm run` or `--worktree-clear`; wait a moment and retry", name)
 	}
 	return err
 }

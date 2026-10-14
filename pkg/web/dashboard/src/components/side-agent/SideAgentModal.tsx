@@ -56,22 +56,16 @@ export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModal
     })
   }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Начальный фокус в поле ввода при открытии + возврат фокуса инициатору при
-  // полном закрытии.
+  // inert снимается ДО фокуса: focus() внутри inert-поддерева в браузере no-op
+  // (jsdom это не соблюдает, поэтому порядок проверяется отдельным тестом).
   useEffect(() => {
+    const el = overlayRef.current
+    if (el !== null) el.inert = phase !== 'open'
     if (phase === 'open') {
       modalRef.current?.querySelector<HTMLTextAreaElement>('.side-agent-textarea')?.focus()
     } else if (phase === 'closed') {
       openerRef.current?.focus?.()
     }
-  }, [phase])
-
-  // inert/hidden, пока окно не полностью открыто: закрытое и закрывающееся окно не
-  // должно ловить клики/таб/скринридер.
-  useEffect(() => {
-    const el = overlayRef.current
-    if (el === null) return
-    el.inert = phase !== 'open'
   }, [phase])
 
   useEffect(

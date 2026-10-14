@@ -129,7 +129,9 @@ stages run inside that worktree.
 
 Set `worktrees: true` at the top of a flow to run its stages in a dedicated git
 worktree. This is off by default. A flow setting overrides `AFM_WORKTREES` and
-`config.yaml`'s `worktrees.enabled` in either direction.
+`config.yaml`'s `worktrees.enabled` in either direction. Pass
+`afm run --worktree <name>` to use a named worktree for this invocation; the flag
+enables worktrees even if the flow or config disables them.
 
 ```yaml
 name: my-feature
@@ -140,9 +142,11 @@ stages: ...
 The project root is `root_dir` when set (relative paths resolve from `--dir`),
 otherwise the parent of `.afm/`. It must be a git repository. afm creates
 `<project-root>/.worktrees/my-feature` on branch `my-feature`, starting at the
-project root's current `HEAD`. The flow name must be a single safe path component
-and git branch name (letters, digits, `.`, `_`, `-`; it cannot start with `.` or
-`-`, end with `.` or `.lock`, or contain `..`). Existing matching worktrees are
+project root's current `HEAD`. With `--worktree <name>`, that name replaces
+`my-feature` in both the worktree path and branch. The effective worktree name
+must be a single safe path component and git branch name (letters, digits,
+`.`, `_`, `-`; it cannot start with `.` or `-`, end with `.` or `.lock`, or
+contain `..`). Existing matching worktrees are
 reused, including their uncommitted changes. If the branch is checked out
 elsewhere, the target path belongs to another worktree, or the branch exists
 without its worktree, afm stops with an error instead of overwriting it.
@@ -150,14 +154,17 @@ without its worktree, afm stops with an error instead of overwriting it.
 Agents and script stages use the worktree as their project root. Run state and
 dialog files remain under the original `.afm/`; afm adds `.worktrees/` to the
 repository's local `.git/info/exclude` when possible. Repeating `afm run` can
-resume the latest unfinished run against the same worktree.
+resume the latest unfinished run against the same worktree. Run directories use
+the effective worktree name as their prefix (`.afm/runs/<name>-…`); the flow's
+name in the dashboard and lifecycle events does not change.
 
 To reset a flow's worktree, run `afm run --worktree-clear` to discard uncommitted
 changes while keeping its branch and commits. Use
 `afm run --worktree-clear-force` to discard the branch and its commits too, then
 create it again from the project root's current `HEAD`. Both flags start a fresh
-run, require worktrees to be enabled, and cannot be combined. If another
-`afm run` is already using this flow's worktree, the new invocation exits with
+run, require worktrees to be enabled, and cannot be combined. Combine either
+flag with `--worktree <name>` to reset that named worktree. If another
+`afm run` is already using the same worktree, the new invocation exits with
 a lock error; retry after the active run finishes.
 
 With automatic Docker mode, afm prepares the worktree on the host and passes its

@@ -127,6 +127,17 @@ func TestFindLatestCompletedRunDir_AnchoredPrefix(t *testing.T) {
 	}
 }
 
+// Mirrors TestFindLatestRunDir_AnchorsPrefix_RejectsNumericSuffixSibling for the completed-run lookup used
+// by `afm memory rebuild`.
+func TestFindLatestCompletedRunDir_RejectsNumericSuffixSibling(t *testing.T) {
+	base := t.TempDir()
+	mkRun(t, base, "sprint-2-20260101-100000-aaaa", map[string]StageStatus{"a": StatusDone})
+	_, err := FindLatestCompletedRunDir(base, "sprint", []string{"a"})
+	if !errors.Is(err, ErrNoRun) {
+		t.Fatalf("want ErrNoRun, got %v", err)
+	}
+}
+
 func TestFindLatestCompletedRunDir_CorruptNewestNotHidden(t *testing.T) {
 	base := t.TempDir()
 	mkRun(t, base, "flow-20260101-000000-aaaa", map[string]StageStatus{"a": StatusDone, "b": StatusDone})
