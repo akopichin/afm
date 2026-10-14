@@ -12,11 +12,17 @@ export type SideAgentComposerProps = {
   // Прервать активный turn (кнопка Stop показывается только во время running).
   onStop: () => void
   running: boolean
+  // quote — приложенные file-comments (file-browser "Without pause" → "Send to side agent"). Чип
+  // рендерится только когда не null; сама цитата не делает сообщение отправляемым — draft всё равно
+  // должен быть непустым.
+  quote?: string | null
+  // onCancelQuote — снять приложенную цитату (✕ на чипе).
+  onCancelQuote?: () => void
 }
 
 // SideAgentComposer — свой композер беседы. Поле редактируемо и во время работы агента; отправка
 // следующего сообщения возможна только когда текущий turn завершён (Send disabled при running).
-export function SideAgentComposer({ draft, onDraftChange, onSend, onStop, running }: SideAgentComposerProps): ReactElement {
+export function SideAgentComposer({ draft, onDraftChange, onSend, onStop, running, quote = null, onCancelQuote }: SideAgentComposerProps): ReactElement {
   const textareaRef = useAutoGrowTextarea(draft, MAX_TEXTAREA_HEIGHT)
   const canSend = !running && draft.trim() !== ''
 
@@ -34,6 +40,20 @@ export function SideAgentComposer({ draft, onDraftChange, onSend, onStop, runnin
 
   return (
     <div className="side-agent-composer">
+      {quote !== null && (
+        <div className="side-agent-quote-chip">
+          <span className="side-agent-quote-chip-label">↩ File comments</span>
+          <button
+            type="button"
+            className="side-agent-quote-chip-cancel"
+            aria-label="Cancel attached file comments"
+            onClick={onCancelQuote}
+          >
+            ✕
+          </button>
+          <pre className="side-agent-quote-chip-body">{quote}</pre>
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         className="side-agent-textarea"

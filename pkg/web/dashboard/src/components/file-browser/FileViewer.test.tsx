@@ -1,8 +1,19 @@
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
 import type { FileContent } from '../../api/files-client'
 import { FlowApiError } from '../../api/run-client'
-import { FileViewer } from './FileViewer'
+import { FileViewer, type NoPauseAnnotations } from './FileViewer'
+import type { DraftComment } from './draft-comments'
+
+function makeNoPause(overrides: Partial<NoPauseAnnotations> = {}): NoPauseAnnotations {
+  return {
+    active: false,
+    start: vi.fn(),
+    comments: {},
+    save: vi.fn(),
+    ...overrides,
+  }
+}
 
 function makeContent(overrides: Partial<FileContent> = {}): FileContent {
   return {
@@ -223,6 +234,40 @@ describe('FileViewer', () => {
     expect(screen.getByText('Save')).toBeInTheDocument()
   })
 
+  test('a flowPauseState flicker (paused → resuming) does not discard an in-progress SERVER-path draft (no noPause involved)', () => {
+    const addNote = vi.fn()
+    const { rerender } = render(
+      <FileViewer
+        content={makeContent({ content: 'line one\nline two' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPauseState="paused"
+        addNote={addNote}
+        contentSha="sha256:x"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('file-line-2'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'still typing this review note' } })
+
+    // flowPauseState drops out of 'paused' transiently (e.g. a resume is in flight) — this form was never
+    // opened under no-pause mode, so the fix for the "Clear" bug must not touch it.
+    rerender(
+      <FileViewer
+        content={makeContent({ content: 'line one\nline two' })}
+        loading={false}
+        error={null}
+        root="project"
+        flowPauseState="resuming"
+        addNote={addNote}
+        contentSha="sha256:x"
+      />,
+    )
+
+    expect(screen.getByRole('textbox')).toHaveValue('still typing this review note')
+  })
+
   test('clicking the same line again closes the editor without saving', () => {
     const addNote = vi.fn()
     render(
@@ -330,5 +375,363 @@ describe('FileViewer', () => {
 
     expect(screen.queryByText(/pausing the flow/i)).toBeNull()
     expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
+  describe('no-pause side-agent annotations', () => {
+    test('without a noPause prop, the gate confirm shows only Pause and Cancel', () => {
+      const pauseFlow = vi.fn()
+      render(
+        <FileViewer
+          content={makeContent({ content: 'a\nb' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          pauseFlow={pauseFlow}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.getByText('Cancel')).toBeInTheDocument()
+      expect(screen.queryByText('Without pause')).toBeNull()
+    })
+
+    test('with noPause inactive, the gate confirm shows a third "Without pause" button', () => {
+      const pauseFlow = vi.fn()
+      render(
+        <FileViewer
+          content={makeContent({ content: 'a\nb' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          pauseFlow={pauseFlow}
+          noPause={makeNoPause({ active: false })}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.getByText('Cancel')).toBeInTheDocument()
+      expect(screen.getByText('Without pause')).toBeInTheDocument()
+    })
+
+    test('clicking "Without pause" calls noPause.start()', () => {
+      const pauseFlow = vi.fn()
+      const noPause = makeNoPause({ active: false })
+      render(
+        <FileViewer
+          content={makeContent({ content: 'a\nb' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          pauseFlow={pauseFlow}
+          noPause={noPause}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.click(screen.getByText('Without pause'))
+      expect(noPause.start).toHaveBeenCalledTimes(1)
+    })
+
+    test('once the parent flips noPause.active to true, the editor opens for the originally-clicked line', () => {
+      const pauseFlow = vi.fn()
+      const noPause = makeNoPause({ active: false })
+      const { rerender } = render(
+        <FileViewer
+          content={makeContent({ content: 'a\nb' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          pauseFlow={pauseFlow}
+          noPause={noPause}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.click(screen.getByText('Without pause'))
+
+      rerender(
+        <FileViewer
+          content={makeContent({ content: 'a\nb' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          pauseFlow={pauseFlow}
+          noPause={makeNoPause({ ...noPause, active: true })}
+        />,
+      )
+
+      expect(screen.queryByText(/pausing the flow/i)).toBeNull()
+      const textbox = screen.getByRole('textbox')
+      expect(textbox).toBeInTheDocument()
+      expect(screen.getByText('Comment on line 2')).toBeInTheDocument()
+    })
+
+    test('active no-pause: Save calls noPause.save with a full DraftComment (raw source line, not HTML) and does not call addNote', async () => {
+      const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
+      const save = vi.fn()
+      const content = makeContent({
+        content: 'line one\nline two',
+        path: 'a.go',
+        displayPath: 'project/a.go',
+        reference: '[AFM file: "/w/afm/a.go"]',
+      })
+      render(
+        <FileViewer
+          content={content}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={addNote}
+          flowPauseState="none"
+          noPause={makeNoPause({ active: true, save })}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+      fireEvent.click(screen.getByText('Save'))
+
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+      expect(save).toHaveBeenCalledWith({
+        root: 'project',
+        path: 'a.go',
+        displayPath: 'project/a.go',
+        reference: '[AFM file: "/w/afm/a.go"]',
+        line: 2,
+        origLineText: 'line two',
+        text: 'fix this',
+      } satisfies DraftComment)
+      expect(addNote).not.toHaveBeenCalled()
+    })
+
+    test('active no-pause: an existing comment marks the line has-comment and prefills the editor', () => {
+      render(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two\nline three' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          noPause={makeNoPause({ active: true, comments: { 3: 'x' } })}
+        />,
+      )
+
+      expect(screen.getByTestId('file-line-3').className).toContain('has-comment')
+      fireEvent.click(screen.getByTestId('file-line-3'))
+      expect(screen.getByRole('textbox')).toHaveValue('x')
+    })
+
+    test('active no-pause: clicking a line opens the editor immediately, no pause confirm', () => {
+      render(
+        <FileViewer
+          content={makeContent({ content: 'a\nb' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={vi.fn()}
+          flowPauseState="none"
+          pauseFlow={vi.fn()}
+          noPause={makeNoPause({ active: true })}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      expect(screen.queryByText(/pausing the flow/i)).toBeNull()
+      expect(screen.getByRole('textbox')).toBeInTheDocument()
+    })
+
+    test('regression: paused flow + noPause inactive still uses addNote', async () => {
+      const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
+      const save = vi.fn()
+      render(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two' })}
+          loading={false}
+          error={null}
+          root="project"
+          flowPauseState="paused"
+          addNote={addNote}
+          contentSha="sha256:x"
+          noPause={makeNoPause({ active: false, save })}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+      fireEvent.click(screen.getByText('Save'))
+
+      await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1))
+      expect(save).not.toHaveBeenCalled()
+    })
+
+    test('regression: paused flow + noPause active still routes Save to noPause.save (user-chosen mode wins)', async () => {
+      const addNote = vi.fn().mockResolvedValue({ note: {}, rev: 1 })
+      const save = vi.fn()
+      render(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two' })}
+          loading={false}
+          error={null}
+          root="project"
+          flowPauseState="paused"
+          addNote={addNote}
+          contentSha="sha256:x"
+          noPause={makeNoPause({ active: true, save })}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+      fireEvent.click(screen.getByText('Save'))
+
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+      expect(addNote).not.toHaveBeenCalled()
+    })
+
+    describe('with crypto.subtle unavailable', () => {
+      afterEach(() => {
+        vi.unstubAllGlobals()
+      })
+
+      test('sha === null does not block no-pause saving (button + Cmd+Enter)', async () => {
+        vi.stubGlobal('crypto', { subtle: { digest: () => Promise.reject(new Error('no subtle')) } })
+        const save = vi.fn()
+        render(
+          <FileViewer
+            content={makeContent({ content: 'line one\nline two' })}
+            loading={false}
+            error={null}
+            root="project"
+            addNote={vi.fn()}
+            flowPauseState="none"
+            noPause={makeNoPause({ active: true, save })}
+          />,
+        )
+
+        fireEvent.click(screen.getByTestId('file-line-2'))
+        fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+
+        expect(screen.getByText('Save')).not.toBeDisabled()
+        fireEvent.click(screen.getByText('Save'))
+        await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+
+        // The editor closed after the save; reopen it to exercise the Cmd+Enter path too.
+        fireEvent.click(screen.getByTestId('file-line-2'))
+        fireEvent.change(screen.getByRole('textbox'), { target: { value: 'again' } })
+        fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true })
+        await waitFor(() => expect(save).toHaveBeenCalledTimes(2))
+      })
+
+      test('regression: paused flow without noPause still requires sha — Save stays disabled', async () => {
+        vi.stubGlobal('crypto', { subtle: { digest: () => Promise.reject(new Error('no subtle')) } })
+        render(
+          <FileViewer
+            content={makeContent({ content: 'line one\nline two' })}
+            loading={false}
+            error={null}
+            root="project"
+            flowPauseState="paused"
+            addNote={vi.fn()}
+          />,
+        )
+
+        fireEvent.click(screen.getByTestId('file-line-2'))
+        fireEvent.change(screen.getByRole('textbox'), { target: { value: 'fix this' } })
+        // Let the rejected crypto.subtle.digest() settle (computedSha stays null) before asserting.
+        await waitFor(() => expect(screen.getByText('Save')).toBeDisabled())
+      })
+    })
+
+    test('turning off noPause.active while a draft form is open (e.g. "Clear") closes the stale form instead of letting Save fall through to addNote', () => {
+      const addNote = vi.fn()
+      const noPause = makeNoPause({ active: true })
+      const { rerender } = render(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={addNote}
+          flowPauseState="none"
+          contentSha="sha256:x"
+          noPause={noPause}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unsaved draft' } })
+      expect(screen.getByRole('textbox')).toBeInTheDocument()
+
+      // The notes bar's "Clear" turns off no-pause mode without closing the modal — the open editor must
+      // not survive this with its noPauseActive branch silently disabled.
+      rerender(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={addNote}
+          flowPauseState="none"
+          contentSha="sha256:x"
+          noPause={{ ...noPause, active: false }}
+        />,
+      )
+
+      expect(screen.queryByRole('textbox')).toBeNull()
+      expect(addNote).not.toHaveBeenCalled()
+    })
+
+    test('regression: Clear closes a no-pause draft even while flowPauseState is independently "paused" (annotating stays true)', () => {
+      // A real review-pause can start (e.g. the stage finished) while the user is mid no-pause draft —
+      // canAnnotate/annotating stay true after Clear turns noPauseActive off, which must not keep the
+      // no-pause draft open for Save to route into the server-side addNote instead of the side agent.
+      const addNote = vi.fn()
+      const noPause = makeNoPause({ active: true })
+      const { rerender } = render(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={addNote}
+          flowPauseState="paused"
+          contentSha="sha256:x"
+          noPause={noPause}
+        />,
+      )
+
+      fireEvent.click(screen.getByTestId('file-line-2'))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'meant for the side agent' } })
+      expect(screen.getByRole('textbox')).toBeInTheDocument()
+
+      rerender(
+        <FileViewer
+          content={makeContent({ content: 'line one\nline two' })}
+          loading={false}
+          error={null}
+          root="project"
+          addNote={addNote}
+          flowPauseState="paused"
+          contentSha="sha256:x"
+          noPause={{ ...noPause, active: false }}
+        />,
+      )
+
+      expect(screen.queryByRole('textbox')).toBeNull()
+      expect(addNote).not.toHaveBeenCalled()
+    })
   })
 })

@@ -4,6 +4,7 @@ import { useSideAgent, type SideAgentDeps, type StreamHandlers } from './use-sid
 import type { ConversationResponse } from '../../api/side-agent-client'
 import { SideAgentApiError } from '../../api/side-agent-client'
 import type { SideAgentEvent } from '../../types/side-agent'
+import { buildReplyBody } from '../../lib/quote'
 
 // Готовый parsed-event (camelCase) для ответа getConversation.
 function parsed(seq: number, type: SideAgentEvent['type'], data: unknown, turnId = 't1'): SideAgentEvent {
@@ -315,5 +316,131 @@ describe('useSideAgent', () => {
     await act(async () => { result.current.close() })
     expect(close).toHaveBeenCalled()
     expect(result.current.events).toHaveLength(1) // state survives close
+  })
+
+  // quote — file comments attached from the file browser without pausing the flow.
+  describe('quote', () => {
+    it('starts as null', () => {
+      const { deps } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      expect(result.current.quote).toBeNull()
+    })
+
+    it('openWith(quote) behaves like open() plus setting the quote', () => {
+      const { deps } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q') })
+      expect(result.current.isOpen).toBe(true)
+      expect(result.current.quote).toBe('Q')
+      expect(result.current.unseenResult).toBe(false)
+    })
+
+    it('openWith replaces an already-set quote', () => {
+      const { deps } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q1') })
+      act(() => { result.current.openWith('Q2') })
+      expect(result.current.quote).toBe('Q2')
+    })
+
+    it('send() while a quote is set transmits buildReplyBody(quote, text) as the second argument', async () => {
+      const { deps, sendMessage } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q') })
+      await act(async () => { await result.current.send('hi') })
+      expect(sendMessage).toHaveBeenCalledTimes(1)
+      expect(sendMessage.mock.calls[0]?.[1]).toBe(buildReplyBody('Q', 'hi'))
+      expect(sendMessage.mock.calls[0]?.[1]).toBe('> Q\n\nhi')
+    })
+
+    it('clears the quote and the draft after a successful send', async () => {
+      const { deps } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q') })
+      act(() => { result.current.setDraft('hi') })
+      await act(async () => { await result.current.send('hi') })
+      expect(result.current.quote).toBeNull()
+      expect(result.current.draft).toBe('')
+    })
+
+    it('preserves the quote and draft when send() throws', async () => {
+      const { deps, sendMessage } = makeDeps()
+      sendMessage.mockRejectedValueOnce(new SideAgentApiError(413, 'message_too_large'))
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q') })
+      act(() => { result.current.setDraft('hi') })
+      await act(async () => { await result.current.send('hi') })
+      expect(result.current.quote).toBe('Q')
+      expect(result.current.draft).toBe('hi')
+    })
+
+    it('does not touch the quote on the early busy return', async () => {
+      const { deps, sendMessage } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      await act(async () => { await result.current.send('first') }) // goes running (no quote yet, clears to null)
+      act(() => { result.current.openWith('Q') }) // attach a quote while a request is already in flight
+      sendMessage.mockClear()
+      await act(async () => { await result.current.send('second') }) // busy early-exit
+      expect(sendMessage).not.toHaveBeenCalled()
+      expect(result.current.quote).toBe('Q')
+    })
+
+    it('clearQuote() clears the quote without changing isOpen', () => {
+      const { deps } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q') })
+      act(() => { result.current.clearQuote() })
+      expect(result.current.quote).toBeNull()
+      expect(result.current.isOpen).toBe(true)
+    })
+
+    it('does not wipe a quote attached while an earlier send is still in flight', async () => {
+      const { deps, sendMessage } = makeDeps()
+      let resolveSend: (v: { turnId: string; state: 'running'; cursor: number }) => void = () => {}
+      sendMessage.mockImplementationOnce(() => new Promise((resolve) => { resolveSend = resolve }))
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('Q1') })
+      act(() => { result.current.setDraft('hi') })
+      let sendPromise: Promise<void> = Promise.resolve()
+      act(() => { sendPromise = result.current.send('hi') })
+      // A second batch of file comments is attached while the first send (carrying Q1) is still awaiting
+      // its response.
+      act(() => { result.current.openWith('Q2') })
+      await act(async () => {
+        resolveSend({ turnId: 't1', state: 'running', cursor: 1 })
+        await sendPromise
+      })
+      expect(result.current.quote).toBe('Q2')
+    })
+
+    it('does not wipe a freshly-attached quote even when it is textually identical to the one that was sent', async () => {
+      // Guards against comparing quotes by string value instead of by attachment identity/generation: a
+      // second openWith() carrying the exact same text as the in-flight one must still survive.
+      const { deps, sendMessage } = makeDeps()
+      let resolveSend: (v: { turnId: string; state: 'running'; cursor: number }) => void = () => {}
+      sendMessage.mockImplementationOnce(() => new Promise((resolve) => { resolveSend = resolve }))
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      act(() => { result.current.openWith('same text') })
+      act(() => { result.current.setDraft('hi') })
+      let sendPromise: Promise<void> = Promise.resolve()
+      act(() => { sendPromise = result.current.send('hi') })
+      act(() => { result.current.openWith('same text') })
+      await act(async () => {
+        resolveSend({ turnId: 't1', state: 'running', cursor: 1 })
+        await sendPromise
+      })
+      expect(result.current.quote).toBe('same text')
+    })
+
+    it('a run_id change resets the quote to null', () => {
+      const { deps } = makeDeps()
+      const { result, rerender } = renderHook(({ runId }) => useSideAgent(runId, true, deps), {
+        initialProps: { runId: 'r1' },
+      })
+      act(() => { result.current.openWith('Q') })
+      expect(result.current.quote).toBe('Q')
+      rerender({ runId: 'r2' })
+      expect(result.current.quote).toBeNull()
+    })
   })
 })

@@ -1,29 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useMemo, type ReactElement, type ReactNode } from 'react'
 import { useSideAgent, type SideAgentDeps } from '../../hooks/use-side-agent'
 import { useSideAgentShortcut } from '../../hooks/use-side-agent-shortcut'
 import { SideAgentModal } from './SideAgentModal'
+import { SideAgentContext, useSideAgentContext, type SideAgentContextValue } from './side-agent-context'
 
-// Контекст для шапки/оболочки: показать ли кнопку, открыть беседу, есть ли непросмотренный результат и
-// идёт ли запрос. Дефолт — всё выключено (capability off / провайдер не смонтирован).
-export type SideAgentContextValue = {
-  enabled: boolean
-  isOpen: boolean
-  open: () => void
-  unseenResult: boolean
-  active: boolean
-}
-
-const SideAgentContext = createContext<SideAgentContextValue>({
-  enabled: false,
-  isOpen: false,
-  open: () => {},
-  unseenResult: false,
-  active: false,
-})
-
-export function useSideAgentContext(): SideAgentContextValue {
-  return useContext(SideAgentContext)
-}
+// Контекст вынесен в листовой модуль side-agent-context.ts (см. комментарий там) — здесь только
+// ре-экспорт, чтобы существующие импортёры (index.ts, GlobalHeader и т.п.) не менялись.
+export { useSideAgentContext, type SideAgentContextValue }
 
 export type SideAgentProviderProps = {
   // run_id текущего прогона (поколение беседы: смена run_id инвалидирует старую).
@@ -65,8 +48,8 @@ export function SideAgentProvider({ runId, enabled, blocked = false, onOpenChang
   }, [enabled, isOpen, onOpenChange])
 
   const value = useMemo<SideAgentContextValue>(
-    () => ({ enabled, isOpen, open, unseenResult: api.unseenResult, active: api.requestState === 'running' }),
-    [enabled, isOpen, open, api.unseenResult, api.requestState],
+    () => ({ enabled, isOpen, open, openWith: api.openWith, unseenResult: api.unseenResult, active: api.requestState === 'running' }),
+    [enabled, isOpen, open, api.openWith, api.unseenResult, api.requestState],
   )
 
   return (

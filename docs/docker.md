@@ -170,6 +170,10 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 - **Review notes.** Clicking a file line while a flow is running lets you pause the
   whole flow and attach line-anchored comments — see
   [Dashboard → Review notes](dashboard.md#review-notes-pause-the-whole-flow-and-comment-on-files-docker-mode).
+- **Comments without pausing.** With the Side agent enabled, choose **Without pause**
+  at the file-line prompt to collect draft comments and attach them to a Side agent
+  message while the flow keeps running — see
+  [Dashboard → File comments without pausing](dashboard.md#file-comments-without-pausing-docker-mode).
 - **Strictly read-only.** `.git` and `.afm` are always hidden. No create/edit/rename/
   delete. File content is capped at 2 MiB, diffs at 4 MiB; symlinks are listed but not
   opened.

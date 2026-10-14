@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
+import { buildReplyBody } from '../../lib/quote'
 
 type FeedComposerProps = {
   // Стадия, живому агенту которой уйдёт заметка.
@@ -31,19 +32,6 @@ type FeedComposerProps = {
   onBlur?: (hasDraft: boolean) => void
   // «Resume now» на баннере — снять паузу немедленно, не отправляя заметку.
   onResumeNow?: () => void
-}
-
-// buildReplyBody собирает тело Revise для ответа на мысль: цитата целиком как Markdown-blockquote, затем
-// пустая строка и комментарий пользователя.
-export function buildReplyBody(quote: string | null, comment: string): string {
-  const c = comment.trim()
-  if (quote === null) return c
-  const q = quote
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((l) => `> ${l}`)
-    .join('\n')
-  return `${q}\n\n${c}`
 }
 
 // FeedComposer — messenger-поле ввода заметки живому агенту, прибитое к низу ленты. Доставка идёт через

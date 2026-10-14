@@ -382,8 +382,12 @@ export function App(): ReactElement {
   }
 
   return (
-    <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
-      <SideAgentProvider runId={runId} enabled={capabilities.sideAgent} blocked={otherModalsOpen} onOpenChange={setSideAgentOpen} attentionShortcut={attentionShortcut}>
+    // SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
+    // useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
+    // needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
+    // compile error, no runtime error, just a default/no-op context.
+    <SideAgentProvider runId={runId} enabled={capabilities.sideAgent} blocked={otherModalsOpen} onOpenChange={setSideAgentOpen} attentionShortcut={attentionShortcut}>
+      <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
       <GlobalHeader
         flowName={flowName}
         description={description}
@@ -547,8 +551,8 @@ export function App(): ReactElement {
       {reviewModalOpen && (
         <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} attentionShortcut={attentionShortcut} />
       )}
-      </SideAgentProvider>
-    </FileBrowserProvider>
+      </FileBrowserProvider>
+    </SideAgentProvider>
   )
 }
 

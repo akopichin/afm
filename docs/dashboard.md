@@ -83,6 +83,10 @@ project, or run a quick command-style exchange *without* touching the run.
   native resume. The assembled prompt has a hard byte budget — exceeding it is a
   `context_limit` error (your history and draft are preserved), never a silent drop of
   older turns.
+- **File comments can be attached from the Docker file browser.** Choose
+  **Without pause** while commenting on a file, then **Send to side agent** to open
+  this chat with the comments attached. Write a message and send it to deliver both
+  the comments and your request. See [File comments without pausing](#file-comments-without-pausing-docker-mode).
 
 The side agent is on by default whenever the dashboard is up. Disable it with a
 toggle resolved **flow `side_agent` > env `AFM_SIDEAGENT` > config
@@ -262,6 +266,23 @@ the agent's context on its **first** start, as part of the original task (unlike
 note to a running stage, which restarts an already-running agent). Use "Add note
 (before start)" in the kebab menu of a pending stage; a 📝 indicator marks a stage
 that has one.
+
+## File comments without pausing (Docker mode)
+
+When the Side agent is enabled, clicking a file line while the flow is running
+offers **Without pause** alongside **Pause** and **Cancel**. Choose it to open the
+line comment editor while the flow keeps running. Save comments on multiple lines
+or files; the bar at the bottom of the file browser shows the draft count. Use
+**Clear** to discard all drafts, or **Send to side agent** to open the Side agent
+with the comments attached above its message field. The handoff clears the file
+browser drafts. Type a message and press **Send** to deliver the comments with your
+request; an attachment alone cannot be sent. You can remove the attachment with
+its ✕ button before sending.
+
+These drafts live only in the browser: closing and reopening the file browser
+keeps them for the same run, but reloading the page or switching runs clears them.
+They are not saved as review notes or delivered to a flow stage. **Without pause**
+is hidden when the Side agent is disabled.
 
 ## Review notes — pause the whole flow and comment on files (Docker mode)
 

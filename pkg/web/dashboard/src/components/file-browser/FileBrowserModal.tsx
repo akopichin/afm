@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import {
   getChanged,
   getRoots,
@@ -10,15 +10,27 @@ import {
 } from '../../api/files-client'
 import { addNote, listNotes, pauseFlow, type AddNoteRequest } from '../../api/run-client'
 import type { ReviewNote } from '../../types'
+import type { DraftComment } from './draft-comments'
 import { ChangedFilesList } from './ChangedFilesList'
 import { DiffViewer } from './DiffViewer'
 import { FileSearchResults } from './FileSearchResults'
 import { FileTree } from './FileTree'
-import { FileViewer } from './FileViewer'
+import { FileViewer, type NoPauseAnnotations } from './FileViewer'
 import { useFilePreview, type ActiveFile, type PreviewTab } from './use-file-preview'
 import { visibleFocusables } from '../../lib/focus-trap'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
+
+// NoPauseNotes — the whole-session no-pause drafts, owned by FileBrowserProvider (survives modal
+// close/reopen). undefined ⇒ the side agent capability is off, so the "Without pause" path doesn't exist.
+export type NoPauseNotes = {
+  active: boolean // the mode is on for this file-browser session
+  start: () => void // user clicked "Without pause"
+  comments: DraftComment[] // ALL drafts, across every file touched this session
+  save: (comment: DraftComment) => void // upsert a draft (delegated to FileViewer's noPause.save)
+  clear: () => void // drop every draft and turn the mode off again (does NOT close the modal)
+  send: () => void // render drafts to text, close the browser, open the side agent with that text as a quote
+}
 
 // sameLine matches the backend's note-dedup key semantics: two line pointers denote the same note iff both
 // are file-level or both the same number.
@@ -42,6 +54,9 @@ export type FileBrowserModalProps = {
   attentionShortcut?: { label: string; onActivate: () => void } | null
   // flowPauseState разрешает аннотации только на review-паузе; по умолчанию none.
   flowPauseState?: FlowPauseState
+  // Whole-session no-pause drafts owned by FileBrowserProvider. undefined ⇒ side agent capability off —
+  // no "Without pause" button, no drafts bar.
+  noPauseNotes?: NoPauseNotes
 }
 
 // Resizable left panel: the file list/tree column can be dragged wider/narrower via the divider between it
@@ -83,6 +98,7 @@ export function FileBrowserModal({
   onSubmit,
   attentionShortcut = null,
   flowPauseState = 'none',
+  noPauseNotes,
 }: FileBrowserModalProps): ReactElement {
   const [roots, setRoots] = useState<RootView[]>([])
   const [rootsError, setRootsError] = useState<string | null>(null)
@@ -145,6 +161,32 @@ export function FileBrowserModal({
   }, [viewMode, selectedRootHasWorktrees])
 
   const { content, contentLoading, contentError, diff, diffLoading, diffError, reloading, reloadError, reload: handleReload } = useFilePreview(activeFile, activeTab)
+
+  // Per-active-file slice of the whole-session drafts — FileViewer only ever needs to know about the
+  // comments on the file it's currently showing.
+  const fileDrafts = useMemo(() => {
+    const m: Record<number, string> = {}
+    if (content === null || activeFile === null) return m
+    for (const c of noPauseNotes?.comments ?? []) {
+      if (c.root === activeFile.root && c.path === content.path) m[c.line] = c.text
+    }
+    return m
+  }, [noPauseNotes?.comments, activeFile, content])
+
+  const noPause: NoPauseAnnotations | undefined = useMemo(
+    () =>
+      noPauseNotes === undefined
+        ? undefined
+        : { active: noPauseNotes.active, start: noPauseNotes.start, comments: fileDrafts, save: noPauseNotes.save },
+    [noPauseNotes, fileDrafts],
+  )
+
+  // Distinct files represented in the whole-session drafts, for the "N comments in M files" bar text —
+  // counted by displayPath (the human-facing label), not root+path.
+  const noteFileCount = useMemo(
+    () => (noPauseNotes === undefined ? 0 : new Set(noPauseNotes.comments.map((c) => c.displayPath)).size),
+    [noPauseNotes],
+  )
 
   // Optimistic-concurrency rev для FileViewer's addNote: flow-wide, а не per-file — тот же rev, что
   // ReviewNotesModal читает/пишет через listNotes/addNote/updateNote/deleteNote.
@@ -644,6 +686,7 @@ export function FileBrowserModal({
                   addNote={handleAddNote}
                   expectedRev={notesRev}
                   savedNotes={notes}
+                  noPause={noPause}
                 />
               ) : (
                 <DiffViewer diff={diff} loading={diffLoading} error={diffError} />
@@ -651,6 +694,24 @@ export function FileBrowserModal({
             </div>
           </section>
         </div>
+
+        {/* Бар черновиков "Without pause" — независим от режима модалки (picker/browse) и от mode:
+            накопленные комменты из любого файла этой сессии браузера, пока их не отправили или не
+            очистили. */}
+        {noPauseNotes !== undefined && noPauseNotes.comments.length > 0 && (
+          <div className="file-browser-notes-bar">
+            <span>
+              {noPauseNotes.comments.length} comment{noPauseNotes.comments.length === 1 ? '' : 's'} in {noteFileCount} file
+              {noteFileCount === 1 ? '' : 's'}
+            </span>
+            <button type="button" className="btn btn-cancel" onClick={noPauseNotes.clear}>
+              Clear
+            </button>
+            <button type="button" className="btn btn-approve" onClick={noPauseNotes.send}>
+              Send to side agent
+            </button>
+          </div>
+        )}
 
         {/* Футер с выбором (чипы + «Insert/Copy references») — только в режиме
             attach (picker). В режиме просмотра (открыт из шапки) файлы не

@@ -1,6 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { getReference, type TreeEntry } from '../../api/files-client'
-import { FileBrowserModal, type SelectedFile } from './FileBrowserModal'
+import type { DraftComment } from './draft-comments'
+import { draftKey, renderDraftComments } from './draft-comments'
+import { FileBrowserModal, type NoPauseNotes, type SelectedFile } from './FileBrowserModal'
+// Строго листовой модуль, НЕ барабан '../side-agent' — иначе цикл file-browser → side-agent/SideAgentProvider
+// → SideAgentModal → SideAgentHistory → feed-workspace → FeedComposer → pasteable-textarea → file-browser
+// barrel → FileBrowserProvider.
+import { useSideAgentContext } from '../side-agent/side-agent-context'
 
 type FileBrowserMode = 'browse' | 'picker'
 
@@ -68,6 +74,12 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const onInsertRef = useRef<((references: string[]) => void) | null>(null)
 
+  // "Without pause" drafts — whole file-browser session, survives modal close/reopen (same lifetime as
+  // selection above). sideAgent gates whether the feature is visible at all (capabilities.sideAgent).
+  const [noPauseActive, setNoPauseActive] = useState(false)
+  const [drafts, setDrafts] = useState<Map<string, DraftComment>>(new Map())
+  const sideAgent = useSideAgentContext()
+
   // Finding 7: генерация "эпохи" selection'а — счётчик, а не boolean, потому что за время жизни провайдера
   // таких эпох может смениться сколько угодно.
   const generationRef = useRef(0)
@@ -97,6 +109,8 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     setSelection(new Map())
     setSelectionError(null)
     onInsertRef.current = null
+    setNoPauseActive(false)
+    setDrafts(new Map())
     restoreOpener() // no-op на маунте (opener пуст) и когда кнопка уже исчезла
   }, [flowName, startedAt])
 
@@ -178,6 +192,42 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     })
   }, [])
 
+  const startNoPause = useCallback(() => setNoPauseActive(true), [])
+
+  const saveDraft = useCallback((c: DraftComment) => {
+    setDrafts((prev) => {
+      const next = new Map(prev)
+      next.set(draftKey(c.root, c.path, c.line), c)
+      return next
+    })
+  }, [])
+
+  const clearDrafts = useCallback(() => {
+    setDrafts(new Map())
+    setNoPauseActive(false)
+  }, [])
+
+  // send() renders the accumulated drafts, resets the no-pause session, closes the browser, returns focus
+  // to its opener — then hands off to the side agent (which remembers the just-restored focus as ITS own
+  // opener), carrying the rendered text as a quote.
+  const sendDrafts = useCallback(() => {
+    const text = renderDraftComments(Array.from(drafts.values()))
+    setDrafts(new Map())
+    setNoPauseActive(false)
+    setOpen(false)
+    restoreOpener()
+    sideAgent.openWith(text)
+  }, [drafts, sideAgent])
+
+  // Feature invisible whenever the side agent capability is off — drafts can only ever be sent there.
+  const noPauseNotes: NoPauseNotes | undefined = useMemo(
+    () =>
+      sideAgent.enabled
+        ? { active: noPauseActive, start: startNoPause, comments: Array.from(drafts.values()), save: saveDraft, clear: clearDrafts, send: sendDrafts }
+        : undefined,
+    [sideAgent.enabled, noPauseActive, drafts, startNoPause, saveDraft, clearDrafts, sendDrafts],
+  )
+
   function submit(): void {
     const references = Array.from(selection.values()).map((f) => f.reference)
     if (mode === 'picker') {
@@ -204,6 +254,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
           onSubmit={submit}
           attentionShortcut={attentionShortcut}
           flowPauseState={flowPauseState}
+          noPauseNotes={noPauseNotes}
         />
       )}
       {selectionError !== null && (

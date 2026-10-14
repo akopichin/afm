@@ -1,8 +1,34 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { TreeEntry } from '../../api/files-client'
-import { FileBrowserModal, type SelectedFile } from './FileBrowserModal'
+import type { DraftComment } from './draft-comments'
+import { FileBrowserModal, type NoPauseNotes, type SelectedFile } from './FileBrowserModal'
 import { errorResponse, FilesApiMock, jsonResponse } from './test-support'
+
+function makeDraft(overrides: Partial<DraftComment> = {}): DraftComment {
+  return {
+    root: 'project',
+    path: 'a.go',
+    displayPath: 'afm/a.go',
+    reference: '[AFM file: "/w/afm/a.go"]',
+    line: 1,
+    origLineText: 'package a',
+    text: 'fix this',
+    ...overrides,
+  }
+}
+
+function makeNoPauseNotes(overrides: Partial<NoPauseNotes> = {}): NoPauseNotes {
+  return {
+    active: false,
+    start: vi.fn(),
+    comments: [],
+    save: vi.fn(),
+    clear: vi.fn(),
+    send: vi.fn(),
+    ...overrides,
+  }
+}
 
 function renderModal(overrides: Partial<React.ComponentProps<typeof FileBrowserModal>> = {}) {
   const props: React.ComponentProps<typeof FileBrowserModal> = {
@@ -664,5 +690,118 @@ describe('FileBrowserModal', () => {
     } finally {
       window.matchMedia = prevMM
     }
+  })
+
+  describe('no-pause notes bar', () => {
+    test('noPauseNotes undefined: no drafts bar (host-run / side agent disabled regression)', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+
+      const { container } = renderModal()
+      await screen.findByRole('button', { name: 'afm' })
+
+      expect(container.querySelector('.file-browser-notes-bar')).toBeNull()
+    })
+
+    test('noPauseNotes with an empty comments list: still no bar', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+
+      const { container } = renderModal({ noPauseNotes: makeNoPauseNotes({ comments: [] }) })
+      await screen.findByRole('button', { name: 'afm' })
+
+      expect(container.querySelector('.file-browser-notes-bar')).toBeNull()
+    })
+
+    test('bar text pluralizes comments and files independently', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+
+      // 1 comment, 1 file.
+      const { container, rerender } = renderModal({
+        noPauseNotes: makeNoPauseNotes({ comments: [makeDraft({ displayPath: 'afm/a.go', line: 1 })] }),
+      })
+      await screen.findByRole('button', { name: 'afm' })
+      expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('1 comment in 1 file')
+
+      // 2 comments, 2 different files.
+      rerender(
+        <FileBrowserModal
+          mode="browse"
+          selection={[]}
+          onToggleSelect={vi.fn()}
+          onRemoveSelect={vi.fn()}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+          noPauseNotes={makeNoPauseNotes({
+            comments: [makeDraft({ displayPath: 'afm/a.go', line: 1 }), makeDraft({ displayPath: 'afm/b.go', line: 1 })],
+          })}
+        />,
+      )
+      expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files')
+
+      // 2 comments, same file (different lines).
+      rerender(
+        <FileBrowserModal
+          mode="browse"
+          selection={[]}
+          onToggleSelect={vi.fn()}
+          onRemoveSelect={vi.fn()}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+          noPauseNotes={makeNoPauseNotes({
+            comments: [makeDraft({ displayPath: 'afm/a.go', line: 1 }), makeDraft({ displayPath: 'afm/a.go', line: 2 })],
+          })}
+        />,
+      )
+      expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 1 file')
+    })
+
+    test('Send to side agent calls send; Clear calls clear', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.install()
+      const send = vi.fn()
+      const clear = vi.fn()
+
+      renderModal({ noPauseNotes: makeNoPauseNotes({ comments: [makeDraft()], send, clear }) })
+      await screen.findByRole('button', { name: 'afm' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send to side agent' }))
+      expect(send).toHaveBeenCalledTimes(1)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+      expect(clear).toHaveBeenCalledTimes(1)
+    })
+
+    test('FileViewer only receives drafts for the currently active file', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.setTree('project', '.', [
+        { name: 'a.go', path: 'a.go', kind: 'file', language: 'go' },
+        { name: 'b.go', path: 'b.go', kind: 'file', language: 'go' },
+      ])
+      api.setContent('project', 'a.go', { language: 'go', content: 'line one\nline two' })
+      api.setContent('project', 'b.go', { language: 'go', content: 'line one\nline two' })
+      api.install()
+
+      renderModal({
+        noPauseNotes: makeNoPauseNotes({
+          active: true,
+          comments: [makeDraft({ root: 'project', path: 'a.go', displayPath: 'afm/a.go', line: 1 })],
+        }),
+      })
+
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      fireEvent.click(await screen.findByText('a.go'))
+      await waitFor(() => expect(screen.getByTestId('file-line-1').className).toContain('has-comment'))
+
+      fireEvent.click(screen.getByText('b.go'))
+      await waitFor(() => expect(screen.getByTestId('file-line-1')).toBeInTheDocument())
+      expect(screen.getByTestId('file-line-1').className).not.toContain('has-comment')
+    })
   })
 })

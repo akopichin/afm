@@ -1909,4 +1909,21 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
+
+  // SideAgentProvider оборачивает FileBrowserProvider (не наоборот) — проверяем, что оба провайдера
+  // смонтированы и видны их кнопки в шапке, когда обе capability включены.
+  test('renders both the Files and Side agent header buttons when both capabilities are on', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'running')],
+      capabilities: { file_browser: true, side_agent: true },
+    }))
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /open project files/i })).toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: /open side agent/i })).toBeInTheDocument()
+  })
 })

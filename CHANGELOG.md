@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-14
 
+### Improvement: send file comments to the Side agent without pausing the flow
+
+The Docker file browser now offers **Without pause** when you click a file line
+while the flow is running and the Side agent is enabled. Save comments across
+lines and files, then use **Send to side agent** to attach them to a chat message.
+The comments reach the Side agent when you type and send that message. Drafts stay
+in the browser across closing and reopening the file browser, but are cleared by
+**Clear**, a page reload, or a run change. The existing paused review-notes
+workflow still delivers notes to a chosen stage.
+
 ### Improvement: choose a worktree per run and rebuild its memory
 
 `afm run --worktree <name>` enables worktrees for that invocation and uses the

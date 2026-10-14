@@ -18,6 +18,9 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
     error: null,
     send: vi.fn().mockResolvedValue(undefined),
     interrupt: vi.fn(),
+    quote: null,
+    openWith: vi.fn(),
+    clearQuote: vi.fn(),
     ...over,
   }
 }
@@ -183,5 +186,18 @@ describe('SideAgentModal', () => {
     renderModal({ isOpen: true, draft: 'ping', send })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(send).toHaveBeenCalledWith('ping')
+  })
+
+  it('passes api.quote through to the composer as a visible chip', () => {
+    renderModal({ isOpen: true, quote: 'quoted file comments' })
+    expect(document.querySelector('.side-agent-quote-chip')).toBeInTheDocument()
+    expect(screen.getByText('quoted file comments')).toBeInTheDocument()
+  })
+
+  it('cancelling the quote chip calls api.clearQuote', () => {
+    const clearQuote = vi.fn()
+    renderModal({ isOpen: true, quote: 'quoted file comments', clearQuote })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel attached file comments' }))
+    expect(clearQuote).toHaveBeenCalledTimes(1)
   })
 })

@@ -467,9 +467,12 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
-/* Pause confirmation sits outside .line-comment-form and needs its own button gap. */
+/* Pause confirmation sits outside .line-comment-form and needs its own button gap.
+   flex-wrap: wrap — the "no pause" mode adds a third button (Pause/Cancel/Without
+   pause) here; at narrow modal widths three buttons no longer fit on one line. */
 .file-line .review-pause-confirm .comment-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -575,6 +578,27 @@
 }
 .file-browser-footer .btn-approve:disabled {
   opacity: 0.5;
+}
+
+/* === Бар черновиков комментариев ("без паузы" → сайд-агент) ===
+   Markup is flat (span + btn-cancel + btn-approve, no wrapper — see
+   FileBrowserModal.tsx), so the counter label gets flex: 1 to hug the left
+   edge and push both buttons together against the right edge; .file-browser-footer
+   does the same thing with .file-browser-chips flex: 1 next to its single button. */
+.file-browser-notes-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  flex: 0 0 auto;
+}
+.file-browser-notes-bar span {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .file-browser-toast {

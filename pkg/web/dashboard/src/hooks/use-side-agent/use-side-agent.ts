@@ -14,6 +14,7 @@ import {
   parseSideAgentEvent,
   type SideAgentEvent,
 } from '../../types/side-agent'
+import { buildReplyBody } from '../../lib/quote'
 
 // StreamHandlers/StreamHandle/StreamOpener — SSE-подписка за инъектируемой функцией: прод открывает
 // EventSource, тесты подставляют управляемый опенер и «присылают» события вручную.
@@ -70,6 +71,9 @@ export type SideAgentApi = {
   error: string | null
   send: (text: string) => Promise<void>
   interrupt: () => void
+  quote: string | null
+  openWith: (quote: string) => void
+  clearQuote: () => void
 }
 
 function newClientMessageId(): string {
@@ -89,6 +93,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   const [isOpen, setIsOpen] = useState(false)
   const [unseenResult, setUnseenResult] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [quote, setQuote] = useState<string | null>(null)
 
   const cursorRef = useRef(0)
   const genRef = useRef(0)
@@ -108,6 +113,13 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   isOpenRef.current = isOpen
   const requestStateRef = useRef(requestState)
   requestStateRef.current = requestState
+  const quoteRef = useRef(quote)
+  quoteRef.current = quote
+  // quoteGenRef — bumped on every quote change (attach/clear/reset). send() compares THIS, not the quote
+  // string itself, before clearing it on success: two different attachments can carry byte-identical text
+  // (e.g. the same single-line comment re-sent), so a value comparison alone could wrongly clear a fresh
+  // attachment that just happens to match the one that was actually sent.
+  const quoteGenRef = useRef(0)
 
   // Смена run_id = другой прогон → другой разговор. layout-эффект (а не passive) — чтобы инвалидация
   // случилась ДО connection-эффекта ниже.
@@ -127,6 +139,8 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     setDraft('')
     setUnseenResult(false)
     setError(null)
+    setQuote(null)
+    quoteGenRef.current += 1
   }, [runId])
 
   // ingest — применяет пачку событий с дедупом по монотонному seq.
@@ -212,8 +226,14 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
       const clientMessageId = inflightIdRef.current ?? newClientMessageId()
       inflightIdRef.current = clientMessageId
       setError(null)
+      // Снимок цитаты (и её поколения) на момент ОТПРАВКИ: если за время await пользователь прикрепит
+      // новую (напр. ещё один батч file-comments из файл-браузера), успешный ответ ДОЛЖЕН снять только ту
+      // цитату, что реально ушла с этим запросом — не свежеприкреплённую.
+      const sentQuote = quoteRef.current
+      const sentQuoteGen = quoteGenRef.current
       try {
-        const resp = await depsRef.current.sendMessage(clientMessageId, text)
+        const body = buildReplyBody(sentQuote, text)
+        const resp = await depsRef.current.sendMessage(clientMessageId, body)
         if (gen !== genRef.current) return
         // Принятый send — новейшая операция: поднимаем op, чтобы любой ещё
         // летящий догон истории (начатый до этого send) не применил свой снапшот.
@@ -226,6 +246,10 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
         // Чистим ТОЛЬКО черновик, равный отправленному: если пользователь успел напечатать следующее
         // сообщение, пока 202 был в полёте, его текст сохраняется (поле редактируемо во время работы агента).
         setDraft((cur) => (cur === text ? '' : cur))
+        // Снимаем цитату, только если её поколение не изменилось с момента отправки — иначе успешный
+        // ответ стёр бы свежеприкреплённую (гонка с openWith/clearQuote, вызванными, пока этот send ещё в
+        // полёте), в том числе когда новая цитата текстуально совпадает со старой.
+        if (quoteGenRef.current === sentQuoteGen) setQuote(null)
         // Состояние берём ИЗ ОТВЕТА, не форсируя running: идемпотентный повтор уже ЗАВЕРШЁННОГО хода
         // возвращает state:'idle' — агент не запускался, нового терминального события не будет.
         setRequestState(resp.state)
@@ -268,6 +292,20 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     setIsOpen(false)
   }, [])
 
+  const openWith = useCallback(
+    (q: string): void => {
+      quoteGenRef.current += 1
+      setQuote(q)
+      open()
+    },
+    [open],
+  )
+
+  const clearQuote = useCallback((): void => {
+    quoteGenRef.current += 1
+    setQuote(null)
+  }, [])
+
   return {
     events,
     requestState,
@@ -282,5 +320,8 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     error,
     send,
     interrupt: interruptTurn,
+    quote,
+    openWith,
+    clearQuote,
   }
 }

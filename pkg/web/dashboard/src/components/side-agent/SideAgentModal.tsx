@@ -21,7 +21,7 @@ export type SideAgentModalProps = {
 // SideAgentModal — центрированная модалка беседы поверх дашборда. Крестик = только скрытие (работа агента
 // продолжается под ctx менеджера на бэкенде).
 export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModalProps): ReactElement {
-  const { isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, error, unavailable } = api
+  const { isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, error, unavailable, quote, clearQuote } = api
 
   // phase: closed → open → closing → closed. Разведение open/closing нужно, чтобы закрытие доигрывалось,
   // но окно сразу переставало быть интерактивным.
@@ -165,6 +165,8 @@ export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModal
           onSend={() => void send(draft)}
           onStop={interrupt}
           running={running}
+          quote={quote}
+          onCancelQuote={clearQuote}
         />
       </div>
     </div>,

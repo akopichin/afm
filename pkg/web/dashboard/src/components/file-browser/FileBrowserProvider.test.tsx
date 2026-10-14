@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import type { DraftComment } from './draft-comments'
+import { renderDraftComments } from './draft-comments'
 import { FileBrowserProvider, useFileBrowser } from './FileBrowserProvider'
+import { SideAgentContext, type SideAgentContextValue } from '../side-agent/side-agent-context'
 import { FilesApiMock, errorResponse, jsonResponse } from './test-support'
 
 function BrowseHarness() {
@@ -10,6 +13,69 @@ function BrowseHarness() {
       Open browser
     </button>
   )
+}
+
+function sideAgentValue(overrides: Partial<SideAgentContextValue> = {}): SideAgentContextValue {
+  return {
+    enabled: false,
+    isOpen: false,
+    open: vi.fn(),
+    openWith: vi.fn(),
+    unseenResult: false,
+    active: false,
+    ...overrides,
+  }
+}
+
+// renderEnabled wraps FileBrowserProvider in an enabled SideAgentContext — supplied via the leaf module
+// `side-agent-context.ts` that SideAgentContext/useSideAgentContext live in, specifically to avoid
+// FileBrowserProvider needing to import the real SideAgentProvider (module cycle). A directly-supplied
+// context value is the least invasive way to exercise the enabled path from this test file.
+function renderEnabled(openWith: (quote: string) => void = vi.fn()) {
+  return render(
+    <SideAgentContext.Provider value={sideAgentValue({ enabled: true, openWith })}>
+      <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <BrowseHarness />
+      </FileBrowserProvider>
+    </SideAgentContext.Provider>,
+  )
+}
+
+function installOneFile(api: FilesApiMock = new FilesApiMock()): FilesApiMock {
+  api.setRoots([{ id: 'project', label: 'afm' }])
+  api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+  api.setContent('project', 'a.go', { language: 'go', content: 'alpha one\nalpha two' })
+  api.install()
+  return api
+}
+
+function installTwoFiles(api: FilesApiMock = new FilesApiMock()): FilesApiMock {
+  api.setRoots([{ id: 'project', label: 'afm' }])
+  api.setTree('project', '.', [
+    { name: 'a.go', path: 'a.go', kind: 'file', language: 'go' },
+    { name: 'b.go', path: 'b.go', kind: 'file', language: 'go' },
+  ])
+  api.setContent('project', 'a.go', { language: 'go', content: 'alpha one\nalpha two' })
+  api.setContent('project', 'b.go', { language: 'go', content: 'beta one\nbeta two' })
+  api.install()
+  return api
+}
+
+async function openBrowseFile(name: string): Promise<void> {
+  fireEvent.click(await screen.findByText(name))
+}
+
+async function startNoPauseOnLine(line: number): Promise<void> {
+  const el = await screen.findByTestId(`file-line-${line}`)
+  fireEvent.click(el)
+  fireEvent.click(screen.getByText('Without pause'))
+}
+
+async function typeAndSave(text: string): Promise<void> {
+  // Scoped by placeholder, not role: the modal's own file-search input is also an (ambiguous) "textbox".
+  const textbox = await screen.findByPlaceholderText(/comment on line/i)
+  fireEvent.change(textbox, { target: { value: text } })
+  fireEvent.click(screen.queryByText('Save') ?? screen.getByText('Update'))
 }
 
 function PickHarness({ onInsert }: { onInsert: (refs: string[]) => void }) {
@@ -351,6 +417,173 @@ describe('FileBrowserProvider', () => {
     await act(async () => {
       resolveReference?.(jsonResponse({ path: 'a.go', display_path: 'afm/a.go', reference: '[AFM file: "/w/afm/a.go"]' }))
       await Promise.resolve()
+    })
+  })
+
+  describe('no-pause drafts → side agent', () => {
+    test('without any side-agent context (default disabled): no "Without pause" button — the feature is invisible', async () => {
+      installOneFile()
+      render(
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          <BrowseHarness />
+        </FileBrowserProvider>,
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      fireEvent.click(await screen.findByTestId('file-line-1'))
+
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.getByText('Cancel')).toBeInTheDocument()
+      expect(screen.queryByText('Without pause')).toBeNull()
+    })
+
+    test('with an enabled side-agent context: the "Without pause" button appears, and the mode starts inactive', async () => {
+      installOneFile()
+      renderEnabled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      fireEvent.click(await screen.findByTestId('file-line-1'))
+
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.getByText('Cancel')).toBeInTheDocument()
+      expect(screen.getByText('Without pause')).toBeInTheDocument()
+      // Mode is still inactive: the gate confirm is showing, not the editor.
+      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
+    })
+
+    test('start(): clicking "Without pause" flips active to true and opens the editor for the clicked line', async () => {
+      installOneFile()
+      renderEnabled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      await startNoPauseOnLine(1)
+
+      expect(screen.queryByText(/pausing the flow/i)).toBeNull()
+      expect(screen.getByPlaceholderText(/comment on line/i)).toBeInTheDocument()
+      expect(screen.getByText('Comment on line 1')).toBeInTheDocument()
+    })
+
+    test('save(): drafts accumulate across files, and saving the same root/path/line again replaces rather than duplicates', async () => {
+      installTwoFiles()
+      const { container } = renderEnabled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      await startNoPauseOnLine(1)
+      await typeAndSave('first')
+      await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('1 comment in 1 file'))
+
+      // noPauseActive is already true session-wide — switching files and clicking a line opens the editor
+      // directly, no gate confirm this time.
+      await openBrowseFile('b.go')
+      fireEvent.click(await screen.findByTestId('file-line-1'))
+      await typeAndSave('second')
+      await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files'))
+
+      // Re-open a.go and overwrite the same line's draft — must replace, not add a third entry.
+      await openBrowseFile('a.go')
+      fireEvent.click(await screen.findByTestId('file-line-1'))
+      await typeAndSave('first-edited')
+      await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files'))
+    })
+
+    test('send(): renders the drafts to text, closes the modal, resets the session, and calls the side agent\'s openWith with that text', async () => {
+      installTwoFiles()
+      const openWith = vi.fn()
+      renderEnabled(openWith)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      await startNoPauseOnLine(1)
+      await typeAndSave('first')
+      await openBrowseFile('b.go')
+      fireEvent.click(await screen.findByTestId('file-line-1'))
+      await typeAndSave('second')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send to side agent' }))
+
+      const expectedDrafts: DraftComment[] = [
+        { root: 'project', path: 'a.go', displayPath: 'afm/a.go', reference: '[AFM file: "project/a.go"]', line: 1, origLineText: 'alpha one', text: 'first' },
+        { root: 'project', path: 'b.go', displayPath: 'afm/b.go', reference: '[AFM file: "project/b.go"]', line: 1, origLineText: 'beta one', text: 'second' },
+      ]
+      expect(openWith).toHaveBeenCalledTimes(1)
+      expect(openWith).toHaveBeenCalledWith(renderDraftComments(expectedDrafts))
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+      // Reopening starts a clean session: drafts and the no-pause mode are both reset.
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      const line1 = await screen.findByTestId('file-line-1')
+      expect(line1.className).not.toContain('has-comment')
+      fireEvent.click(line1)
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
+    })
+
+    test('clear(): drops drafts and turns the mode off, but does not close the modal', async () => {
+      installOneFile()
+      renderEnabled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      await startNoPauseOnLine(1)
+      await typeAndSave('first')
+      expect(await screen.findByText(/1 comment in 1 file/)).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.queryByText(/comment in/)).toBeNull()
+
+      // Mode is off again: the now comment-less line re-asks the pause gate instead of opening the editor.
+      const line1 = screen.getByTestId('file-line-1')
+      expect(line1.className).not.toContain('has-comment')
+      fireEvent.click(line1)
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
+    })
+
+    test('changing flowName/startedAt resets drafts and the no-pause mode (same effect that resets selection)', async () => {
+      installTwoFiles()
+      const { rerender } = renderEnabled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      await startNoPauseOnLine(1)
+      await typeAndSave('first')
+      expect(await screen.findByText(/1 comment in 1 file/)).toBeInTheDocument()
+
+      // New run — the flow footer would report a different startedAt.
+      rerender(
+        <SideAgentContext.Provider value={sideAgentValue({ enabled: true })}>
+          <FileBrowserProvider flowName="flow1" startedAt="t2">
+            <BrowseHarness />
+          </FileBrowserProvider>
+        </SideAgentContext.Provider>,
+      )
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openBrowseFile('a.go')
+      const line1 = await screen.findByTestId('file-line-1')
+      expect(line1.className).not.toContain('has-comment')
+      fireEvent.click(line1)
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
     })
   })
 })

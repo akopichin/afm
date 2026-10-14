@@ -26,6 +26,16 @@ function Consumer(): React.ReactElement {
   )
 }
 
+// OpenWithConsumer — потребитель, зовущий openWith('Q') (как FileBrowserProvider's "Send to side agent").
+function OpenWithConsumer(): React.ReactElement {
+  const { openWith } = useSideAgentContext()
+  return (
+    <button type="button" onClick={() => openWith('Q')}>
+      send-to-side-agent
+    </button>
+  )
+}
+
 function press(init: KeyboardEventInit): void {
   act(() => {
     document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }))
@@ -78,5 +88,30 @@ describe('SideAgentProvider (App-level wiring)', () => {
     )
     press({ code: 'Backquote', key: '`', metaKey: true })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('openWith() from a consumer opens the modal and shows the quote chip', async () => {
+    render(
+      <SideAgentProvider runId="r1" enabled deps={fakeDeps()}>
+        <OpenWithConsumer />
+      </SideAgentProvider>,
+    )
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'send-to-side-agent' })) })
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(document.querySelector('.side-agent-quote-chip')).toBeInTheDocument()
+    expect(screen.getByText('Q')).toBeInTheDocument()
+  })
+
+  it('a consumer rendered outside the provider gets the default (disabled) context; openWith is a safe no-op', () => {
+    expect(() => {
+      render(<OpenWithConsumer />)
+      fireEvent.click(screen.getByRole('button', { name: 'send-to-side-agent' }))
+    }).not.toThrow()
+  })
+
+  it('default context (no provider) reports enabled: false', () => {
+    render(<Consumer />)
+    expect(screen.getByRole('button', { name: 'side-agent' })).toHaveAttribute('data-enabled', 'false')
   })
 })

@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import tokensCss from '../../skins/base/tokens.css?raw'
 import feedWorkspaceCss from '../../skins/base/feed-workspace.css?raw'
 import planPanelCss from '../../skins/base/plan-panel.css?raw'
+import sideAgentCss from '../../public/side-agent.css?raw'
 
 const tokens = () => tokensCss
 const keyframe = (css: string, name: string) =>
@@ -41,6 +42,15 @@ describe('skins CSS contract — reply-to-thought chip (Task 2)', () => {
   })
   it('.feed-reply-chip-label springs its mark via quoteMarkPop', () => {
     expect(rule(feedWorkspaceCss, '.feed-reply-chip-label')).toMatch(/animation:\s*quoteMarkPop/)
+  })
+})
+
+describe('skins CSS contract — side-agent quote chip (Task 5)', () => {
+  it('.side-agent-quote-chip glows in via quoteChipIn', () => {
+    expect(rule(sideAgentCss, '.side-agent-quote-chip')).toMatch(/animation:\s*quoteChipIn/)
+  })
+  it('.side-agent-quote-chip-label springs its mark via quoteMarkPop', () => {
+    expect(rule(sideAgentCss, '.side-agent-quote-chip-label')).toMatch(/animation:\s*quoteMarkPop/)
   })
 })
 

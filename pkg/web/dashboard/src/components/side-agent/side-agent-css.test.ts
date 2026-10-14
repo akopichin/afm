@@ -51,3 +51,46 @@ describe('side-agent.css visibility contract', () => {
     actions.remove()
   })
 })
+
+describe('side-agent.css quote chip contract', () => {
+  let style: HTMLStyleElement
+  let body: HTMLPreElement
+
+  beforeEach(() => {
+    style = document.createElement('style')
+    style.textContent = sideAgentCss
+    document.head.appendChild(style)
+
+    body = document.createElement('pre')
+    body.className = 'side-agent-quote-chip-body'
+    document.body.appendChild(body)
+  })
+
+  afterEach(() => {
+    body.remove()
+    style.remove()
+  })
+
+  it('scrolls a long multi-line quote instead of clamping it', () => {
+    const computed = getComputedStyle(body)
+    expect(computed.overflowY).toBe('auto')
+    expect(computed.maxHeight).not.toBe('none')
+    expect(parseFloat(computed.maxHeight)).toBeGreaterThan(0)
+  })
+
+  it('puts the chip on its own full-width line above the input instead of beside it', () => {
+    // A long comment used to grow the chip inside the composer row and squeeze the
+    // textarea into a sliver. The composer wraps and the chip takes a whole line.
+    const composer = document.createElement('div')
+    composer.className = 'side-agent-composer'
+    const chip = document.createElement('div')
+    chip.className = 'side-agent-quote-chip'
+    composer.appendChild(chip)
+    document.body.appendChild(composer)
+
+    expect(getComputedStyle(composer).flexWrap).toBe('wrap')
+    expect(getComputedStyle(chip).flexBasis).toBe('100%')
+
+    composer.remove()
+  })
+})

@@ -188,6 +188,7 @@
 .side-agent-composer {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 10px;
   padding: 12px 16px;
@@ -265,4 +266,60 @@
     padding: 0;
     justify-content: center;
   }
+}
+
+/* --- Цитата-чип (прикреплённые file-browser комменты) ---
+   Тот же визуальный язык, что .feed-reply-chip (skins/base/feed-workspace.css),
+   но блочный layout: подпись + ✕ в строке сверху, тело (может быть многострочным
+   дампом комментов по нескольким файлам) — ниже, со скроллом вместо клампа.
+   flex-basis:100% кладёт чип на отдельную строку НАД полем ввода (композер —
+   flex-wrap), иначе длинный коммент съедал бы ширину строки и сплющивал textarea. */
+.side-agent-quote-chip {
+  position: relative;
+  flex: 0 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 28px 8px 10px;
+  background: var(--surface-hover);
+  border-left: 2px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  animation: quoteChipIn var(--motion-base) var(--ease-out) backwards;
+}
+.side-agent-quote-chip-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-primary);
+  display: inline-block;
+  animation: quoteMarkPop var(--motion-slow) var(--ease-spring) backwards;
+  transform-origin: left center;
+}
+.side-agent-quote-chip-cancel {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.side-agent-quote-chip-cancel:hover { color: var(--text-primary); background: var(--surface-hover); }
+.side-agent-quote-chip-cancel:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-agent-quote-chip-body {
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 0;
 }
