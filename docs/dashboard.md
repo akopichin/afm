@@ -36,12 +36,12 @@ right (there is no three-column layout or bottom progress bar).
   active view at a time, filling the whole area. When several stages await
   action, prev/next navigation steps through the queue. If an action arrives
   while you're mid-task — typing in a note field, with an overlay open, or while
-  a **Pause on focus** operation is in flight — the workspace does **not** steal
-  focus: the contextual tab appears and glows as a beacon, and the action opens
+  the **Hold the agent while you type** pause is in flight — the workspace does
+  **not** steal focus: the contextual tab appears and glows as a beacon, and the action opens
   automatically the moment you finish (blur the field, close the overlay), as long
   as it's still current. It is never silently dropped. Merely focusing a checkbox
-  (such as the **Pause on focus** toggle) does not count as typing, so a question
-  arriving then opens right away.
+  (such as the **Hold the agent while you type** toggle) does not count as typing,
+  so a question arriving then opens right away.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.
@@ -187,10 +187,11 @@ bottom of its **Feed** — the same input you'd expect in a chat app:
 4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
    the agent's own messages (it is not clickable — it's a record of what you sent).
 
-### Pause on focus — freeze the stage while you write
+### Hold the agent while you type
 
 A running agent can finish (or move on) before you're done typing a note. The
-composer has a **Pause on focus** toggle (top-right of the note input) for this:
+composer has a **Hold the agent while you type** toggle above the note input,
+aligned to the right, for this:
 
 - With it **on**, clicking into the note field pauses the running stage — the agent
   is put on hold and a banner shows *"Stage paused — it'll resume when you send."*

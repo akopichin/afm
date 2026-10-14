@@ -3,6 +3,14 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-14
+
+### Improvement: clearer pause toggle in the note composer
+
+The note composer now shows one right-aligned toggle labelled **Hold the agent
+while you type**. Its label is clickable, and the separate hint above the input
+has been removed. Pausing and resuming behavior is unchanged.
+
 ## 2026-10-13
 
 ### Improvement: clearer entrance for new feed messages
