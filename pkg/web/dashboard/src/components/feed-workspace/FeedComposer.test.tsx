@@ -206,6 +206,20 @@ describe('FeedComposer', () => {
       ).not.toBeNull()
     })
 
+    it('clicking the label text (not just the checkbox) toggles it — the whole phrase is the hit target', () => {
+      const onToggle = vi.fn()
+      render(
+        <FeedComposer
+          stageId="s1"
+          onSend={vi.fn()}
+          pauseOnFocusEnabled={false}
+          onTogglePauseOnFocus={onToggle}
+        />,
+      )
+      fireEvent.click(screen.getByText(/hold the agent while you type/i))
+      expect(onToggle).toHaveBeenCalledWith(true)
+    })
+
     it('shows the paused banner when paused', () => {
       render(<FeedComposer stageId="s1" onSend={vi.fn()} paused />)
       expect(screen.getByText(/agent is on hold/i)).toBeInTheDocument()

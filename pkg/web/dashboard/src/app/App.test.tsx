@@ -1774,7 +1774,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    // Фокус на checkbox `Pause on focus` — клик сам по себе фокус в jsdom не
+    // Фокус на checkbox тумблера паузы — клик сам по себе фокус в jsdom не
     // гарантирует, поэтому .focus() + assert activeElement (denylist → не editing).
     const checkbox = screen.getByRole('checkbox')
     act(() => checkbox.focus())
