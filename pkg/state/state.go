@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // StageStatus represents the lifecycle state of a single stage.
@@ -51,6 +53,12 @@ const (
 	// StatusHookFailed — script_before exhausted its retries; the stage is blocked until the user retries or
 	// skips the hook via the dashboard. Non-terminal (see orchestrator.IsTerminal).
 	StatusHookFailed StageStatus = "hook_failed"
+	// StatusAwaitingAssistants — Этап 7 (T7.1): the stage's main executor has finished its own part (and, if
+	// configured, already passed the independent verify gate), but at least one REQUIRED helper task under it
+	// has not yet closed its gate (pkg/assistants.ModeRequired + Verdict.ClosesGate). Entered only from
+	// main-executor completion; the process that was running the stage has already exited (see
+	// AGENTS.md "Durable completion barrier"). Non-terminal; exits to done/failed/revising/paused.
+	StatusAwaitingAssistants StageStatus = "awaiting_assistants"
 )
 
 // AllStatuses returns every StageStatus in declaration order.
@@ -58,7 +66,7 @@ func AllStatuses() []StageStatus {
 	return []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
-		StatusDone, StatusFailed, StatusHookFailed,
+		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants,
 	}
 }
 
@@ -134,13 +142,24 @@ func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.
 }
 
 // isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое состояние на весь флоу.
-func isIdle(stages map[string]StageState) bool {
+//
+// awaiting_assistants (T7.7, §5.6) — особый случай: сам по себе статус НЕ пользовательский Idle (работающий
+// помощник — машинная работа), но если durable-гейт сейчас блокирован required-задачей, которая требует
+// решения человека (needs_changes/inconclusive-вердикт, failed/cancelled-задача или ручная пауза задачи) —
+// это пользовательское ожидание, как и needs_changes/approval/pause у самой стадии. Классификация считается
+// по rs.Assistants (durable projection), не по наличию WebSocket — одинаково и в live, и при replay.
+func isIdle(rs *RunState) bool {
 	hasFailed := false
 	anyActive := false
-	for _, st := range stages {
+	for stageID, st := range rs.Stages {
 		switch st.Status {
 		case StatusAwaitingUserInput, StatusAwaitingApproval, StatusPaused, StatusHookFailed:
 			return true
+		case StatusAwaitingAssistants:
+			if assistantsBlockerNeedsDecision(rs.Assistants, stageID) {
+				return true
+			}
+			anyActive = true // машинная работа помощника — как running/planning/revising
 		case StatusFailed:
 			hasFailed = true
 		case StatusRunning, StatusPlanning, StatusRevising:
@@ -150,6 +169,27 @@ func isIdle(stages map[string]StageState) bool {
 		}
 	}
 	return hasFailed && !anyActive
+}
+
+// assistantsBlockerNeedsDecision сообщает, требует ли текущий блокирующий required-гейт стадии stageID
+// решения человека, а не просто ждёт, пока помощник доработает (T7.7, §5.6). ok=false у RequiredBlocker
+// (гейт уже удовлетворён, либо требуемых задач вовсе нет) трактуется как "не ждём решения" — это гонка между
+// статусом стадии и проекцией, не постоянное состояние.
+func assistantsBlockerNeedsDecision(as AssistantsState, stageID string) bool {
+	blocker, ok := as.RequiredBlocker(stageID)
+	if !ok {
+		return false
+	}
+	switch blocker.Status {
+	case assistants.StatusFailed, assistants.StatusCancelled, assistants.StatusPaused:
+		return true
+	case assistants.StatusCompleted:
+		return blocker.LastVerdict != assistants.VerdictPass
+	default:
+		// waiting_parent/queued/running/waiting_children/watching — помощник ещё активен или вот-вот будет
+		// подхвачен планировщиком; это машинная работа, не пользовательский Idle.
+		return false
+	}
 }
 
 // maxUpdatedAt возвращает самый свежий UpdatedAt среди всех стадий — момент последнего примененного во
@@ -201,7 +241,7 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 		if !rs.RunStartedAt.IsZero() && t.After(rs.RunStartedAt) {
 			rs.ElapsedAccumulatedMs += t.Sub(rs.RunStartedAt).Milliseconds()
 		}
-		if isIdle(rs.Stages) {
+		if isIdle(rs) {
 			if since := openSince(rs, maxUpdatedAt(rs.Stages)); !since.IsZero() && t.After(since) {
 				rs.IdleAccumulatedMs += t.Sub(since).Milliseconds()
 			}
@@ -233,7 +273,7 @@ func accountIdleAndBackoff(rs *RunState, stageID string, to StageStatus, t time.
 	if rs.EndedAt != nil {
 		return // offline CLI transitions must not reopen completed time intervals
 	}
-	if isIdle(rs.Stages) {
+	if isIdle(rs) {
 		if prev := openSince(rs, maxUpdatedAt(rs.Stages)); !prev.IsZero() && t.After(prev) {
 			rs.IdleAccumulatedMs += t.Sub(prev).Milliseconds()
 		}
@@ -251,7 +291,7 @@ func (rs *RunState) IdleSince() *time.Time {
 	if rs.EndedAt != nil {
 		return nil
 	}
-	if !isIdle(rs.Stages) {
+	if !isIdle(rs) {
 		return nil
 	}
 	t := openSince(rs, maxUpdatedAt(rs.Stages))

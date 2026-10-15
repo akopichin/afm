@@ -120,6 +120,76 @@ func TestTaskStatus_TerminalSet(t *testing.T) {
 	}
 }
 
+func TestTaskGate_CancelIsNotPass(t *testing.T) {
+	if TaskGateClosed(StatusCancelled, "", false) {
+		t.Fatal("TaskGateClosed(cancelled) = true, want false — cancellation must never close a required gate")
+	}
+	if TaskGateClosed(StatusFailed, "", false) {
+		t.Fatal("TaskGateClosed(failed) = true, want false")
+	}
+}
+
+func TestTaskGate_NegativeVerdictCanFinishTurnButNotSatisfyParent(t *testing.T) {
+	// The task's own TURN finishes (Status: Completed) with a valid negative verdict — that's a legitimate
+	// terminal outcome for the CHECK itself, but it must not satisfy the required gate (§5.3).
+	for _, v := range []Verdict{VerdictNeedsChanges, VerdictInconclusive} {
+		if TaskGateClosed(StatusCompleted, v, true) {
+			t.Fatalf("TaskGateClosed(completed, %q) = true, want false", v)
+		}
+	}
+	if !TaskGateClosed(StatusCompleted, VerdictPass, true) {
+		t.Fatal("TaskGateClosed(completed, pass) = false, want true")
+	}
+	if TaskGateClosed(StatusCompleted, VerdictPass, false) {
+		t.Fatal("TaskGateClosed(completed, pass, hasVerdict=false) = true, want false (fail-closed on missing result)")
+	}
+}
+
+func TestChain_RequiredRequiredBlocksStage(t *testing.T) {
+	aID := TaskID("a")
+	a := Task{ID: aID, Mode: ModeRequired, Status: StatusCompleted} // A itself already closed...
+	b := Task{ID: "b", Mode: ModeRequired, ParentTaskID: &aID, Status: StatusRunning}
+	closed := func(t Task) bool { return TaskGateClosed(t.Status, VerdictPass, t.Status == StatusCompleted) }
+	children := func(t Task) []Task {
+		if t.ID == aID {
+			return []Task{b}
+		}
+		return nil
+	}
+
+	// stage -> required A (closed) -> required B (still running): the chain still blocks the stage on B.
+	open, blocker := RequiredGateOpen([]Task{a}, children, closed)
+	if !open || blocker == nil || blocker.ID != b.ID {
+		t.Fatalf("RequiredGateOpen = (%v, %v), want (true, B) — required B still open under closed required A", open, blocker)
+	}
+
+	// Once B also closes, the whole chain is satisfied.
+	b.Status = StatusCompleted
+	open, _ = RequiredGateOpen([]Task{a}, children, closed)
+	if open {
+		t.Fatal("RequiredGateOpen = true after both A and B closed, want false")
+	}
+}
+
+func TestChain_AdvisoryRequiredDoesNotBlockStage(t *testing.T) {
+	aID := TaskID("a")
+	a := Task{ID: aID, Mode: ModeAdvisory, Status: StatusRunning}
+	b := Task{ID: "b", Mode: ModeRequired, ParentTaskID: &aID, Status: StatusRunning}
+	closed := func(t Task) bool { return TaskGateClosed(t.Status, VerdictPass, t.Status == StatusCompleted) }
+	children := func(t Task) []Task {
+		if t.ID == aID {
+			return []Task{b}
+		}
+		return nil
+	}
+
+	// §4.3: advisory A must not escalate required B into blocking the stage — the walk never descends past A.
+	open, blocker := RequiredGateOpen([]Task{a}, children, closed)
+	if open {
+		t.Fatalf("RequiredGateOpen = (true, %v), want (false, nil) — advisory A must not escalate required B", blocker)
+	}
+}
+
 func TestVerdict_SuccessOnlyForPass(t *testing.T) {
 	if !VerdictPass.ClosesGate() {
 		t.Error("VerdictPass.ClosesGate() = false, want true")

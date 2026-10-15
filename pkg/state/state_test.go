@@ -12,7 +12,7 @@ func TestAllStatuses_MatchesConsts(t *testing.T) {
 	want := []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
-		StatusDone, StatusFailed, StatusHookFailed,
+		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants,
 	}
 	got := AllStatuses()
 	if len(got) != len(want) {
@@ -269,12 +269,18 @@ func TestLatestPlanVersion(t *testing.T) {
 	})
 }
 
+// rsWithStages builds a minimal *RunState wrapping stages — a test helper so isIdle's many unit tests don't
+// need to construct a full RunState by hand.
+func rsWithStages(stages map[string]StageState) *RunState {
+	return &RunState{Stages: stages, Assistants: newAssistantsState()}
+}
+
 func TestIsIdle_QuestionStatusAlwaysIdle(t *testing.T) {
 	stages := map[string]StageState{
 		"a": {Status: StatusRunning},
 		"b": {Status: StatusAwaitingApproval},
 	}
-	if !isIdle(stages) {
+	if !isIdle(rsWithStages(stages)) {
 		t.Error("want idle=true when any stage is awaiting_approval, regardless of another running stage")
 	}
 }
@@ -283,7 +289,7 @@ func TestIsIdle_FailedAloneIsIdle(t *testing.T) {
 	stages := map[string]StageState{
 		"a": {Status: StatusFailed},
 	}
-	if !isIdle(stages) {
+	if !isIdle(rsWithStages(stages)) {
 		t.Error("want idle=true when a stage is failed and nothing else is active")
 	}
 }
@@ -295,7 +301,7 @@ func TestIsIdle_FailedWhileAnotherRunningIsNotIdle(t *testing.T) {
 		"a": {Status: StatusRunning},
 		"b": {Status: StatusFailed},
 	}
-	if isIdle(stages) {
+	if isIdle(rsWithStages(stages)) {
 		t.Error("want idle=false when a stage is failed but another is running")
 	}
 }
@@ -306,7 +312,7 @@ func TestIsIdle_RetryingAloneIsNotIdle(t *testing.T) {
 	stages := map[string]StageState{
 		"a": {Status: StatusRetrying},
 	}
-	if isIdle(stages) {
+	if isIdle(rsWithStages(stages)) {
 		t.Error("want idle=false for a lone retrying stage")
 	}
 }
@@ -443,7 +449,7 @@ func TestIsIdle_PausedIsIdle(t *testing.T) {
 	stages := map[string]StageState{
 		"a": {Status: StatusPaused},
 	}
-	if !isIdle(stages) {
+	if !isIdle(rsWithStages(stages)) {
 		t.Error("want idle=true for a lone paused stage")
 	}
 }

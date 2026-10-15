@@ -45,6 +45,13 @@ type TaskState struct {
 	// mere presence does NOT imply a concurrency slot is held: pkg/state has no notion of slots at all
 	// (those live in pkg/orchestrator/concurrency and are always empty right after a restart).
 	Continuation *assistants.Continuation `json:"continuation,omitempty"`
+	// LastVerdict (Этап 7, T7.2/T7.4/T7.7) is the Verdict from the most recently projected task_result control
+	// record for this task — "" if none was ever recorded. Unlike the rest of the result (summary/findings/
+	// evidence), the verdict alone is promoted into the durable, replay-restored projection because the
+	// required-completion gate (AssistantsState.RequiredBlocker) and the Idle/Backoff classification
+	// (state.go's isIdle) both need it WITHOUT file I/O, identically live and after a restart — see
+	// applyTaskResult's doc comment for why the rest of Result still lives only in the control stream.
+	LastVerdict assistants.Verdict `json:"last_verdict,omitempty"`
 }
 
 // Paused reports whether this task itself carries at least one hold (does not look at ancestors — see
@@ -621,19 +628,26 @@ func applyTaskHoldCleared(as *AssistantsState, c *Control, dryRun bool) error {
 }
 
 // applyTaskResult validates a task_result effect's target task exists and its payload decodes as an
-// assistants.Result — but, unlike every other task_* kind, never mutates TaskState. The result's content has
-// nowhere to live in the projection (no field for it); it is carried durably only in the control stream
-// itself, which Store.TaskEvents already returns verbatim per target task_id — exactly what the dashboard's
-// per-task event-history page (GET /api/assistants/{id}/events) reads.
+// assistants.Result. Unlike every other task_* kind it does not mutate the bulk of TaskState — the full
+// result's content (summary/findings/evidence/...) has nowhere to live in the projection; it is carried
+// durably only in the control stream itself, which Store.TaskEvents already returns verbatim per target
+// task_id — exactly what the dashboard's per-task event-history page (GET /api/assistants/{id}/events) reads.
+// It DOES project one field, TaskState.LastVerdict (Этап 7) — see that field's doc comment for why the
+// verdict specifically needs a durable, file-I/O-free home.
 func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 	id := assistants.TaskID(c.Target.TaskID)
-	if _, ok := as.Tasks[id]; !ok {
+	t, ok := as.Tasks[id]
+	if !ok {
 		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
 	}
 	var p assistants.Result
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("task %s: decode task_result payload: %w", id, err)
 	}
+	if dryRun {
+		return nil
+	}
+	t.LastVerdict = p.Verdict
 	return nil
 }
 

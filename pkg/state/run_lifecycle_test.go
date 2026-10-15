@@ -160,7 +160,7 @@ func TestStoreRunEventsAreDurableAndExcludedFromStageHistory(t *testing.T) {
 }
 
 func TestHookFailedCountsAsIdle(t *testing.T) {
-	if !isIdle(map[string]StageState{"a": {Status: StatusHookFailed}}) {
+	if !isIdle(rsWithStages(map[string]StageState{"a": {Status: StatusHookFailed}})) {
 		t.Fatal("hook_failed waits for user action and must count as idle")
 	}
 }

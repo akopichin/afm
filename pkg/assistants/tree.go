@@ -108,3 +108,37 @@ func BlocksRootCompletion(t Task, lookup func(TaskID) (Task, bool)) bool {
 		cur = parent
 	}
 }
+
+// TaskGateClosed сообщает, закрыла ли задача свой собственный required-гейт: статус обязан быть
+// StatusCompleted (failed/cancelled — никогда не закрывает, см. TestTaskGate_CancelIsNotPass), и последний
+// зафиксированный вердикт обязан быть VerdictPass (hasVerdict=false — для Completed-задачи без
+// зафиксированного результата — fail-closed, т.е. гейт остаётся открытым, а не считается выполненным по
+// умолчанию).
+func TaskGateClosed(status TaskStatus, verdict Verdict, hasVerdict bool) bool {
+	if status != StatusCompleted {
+		return false
+	}
+	return hasVerdict && verdict.ClosesGate()
+}
+
+// RequiredGateOpen обходит ТЕКУЩЕЕ поддерево required-цепочки, начиная с roots (прямые дети стадии текущего
+// поколения — фильтрация по поколению остаётся на вызывающем, у pkg/assistants нет понятия "поколение"), и
+// возвращает первую задачу, чей required-гейт ещё не закрыт. В advisory-ветку обход НЕ заходит (§4.3: одно
+// advisory-звено размыкает блокировку для всего, что ниже) — advisory-узел просто пропускается без рекурсии
+// в его детей. Обход внутри required-узла продолжается НЕЗАВИСИМО от того, закрыт ли сам узел: даже если он
+// уже закрыт, его required-дети могли остаться открытыми и всё ещё блокируют стадию.
+func RequiredGateOpen(roots []Task, children func(Task) []Task, closed func(Task) bool) (bool, *Task) {
+	for _, t := range roots {
+		if t.Mode != ModeRequired {
+			continue
+		}
+		if !closed(t) {
+			blocker := t
+			return true, &blocker
+		}
+		if open, blocker := RequiredGateOpen(children(t), children, closed); open {
+			return true, blocker
+		}
+	}
+	return false, nil
+}
