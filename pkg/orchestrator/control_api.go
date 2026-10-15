@@ -120,43 +120,60 @@ func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
 }
 
 // Revise durably saves feedback and EvRevise before returning; running agents restart after interruption.
-// Returns applied and transition seq.
+// Returns applied and transition seq. This is the SAME shared path feedback_intent.go's proposal-driven
+// delivery uses for the running/awaiting_approval cases (reviseRunning/reviseAwaitingApproval below) — T6.5's
+// "не создавать второй независимый способ перезапуска основного агента": manual notes and stage buttons keep
+// calling this exact function, unchanged.
 func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) (applied bool, seq uint64, err error) {
 	if err := o.rejectIfReviewPaused(); err != nil {
 		return false, 0, err
 	}
 	current := o.currentStatus(stageID)
-	if current != state.StatusAwaitingApproval && current != state.StatusRunning {
+	save := func(stageDir string) error { return state.SaveFeedback(stageDir, feedback) }
+	switch current {
+	case state.StatusRunning:
+		return o.reviseRunning(stageID, feedback, save)
+	case state.StatusAwaitingApproval:
+		return o.reviseAwaitingApproval(reqCtx, stageID, feedback, save)
+	default:
 		return false, 0, nil
 	}
+}
 
+// reviseRunning is Revise's StatusRunning branch, factored out so feedback_intent.go's proposal-driven
+// delivery can reuse the EXACT same durable-transition + interrupt-signal mechanics with a different (and
+// idempotent, T6.6) way of writing the feedback file. reason is recorded on the EvRevise transition itself;
+// save actually writes the stage's feedback.md.
+func (o *Orchestrator) reviseRunning(stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
-
-	if current == state.StatusRunning {
-		_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, feedback)
-		if !ok {
-			return false, 0, nil
-		}
-		if err := state.SaveFeedback(stageDir, feedback); err != nil {
-			return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
-		}
-		if ch, ok := o.interruptChans.Load(stageID); ok {
-			select {
-			case ch.(chan struct{}) <- struct{}{}:
-			default: // канал уже сигнализирован (двойной клик) — не блокируемся
-			}
-		}
-		return true, seq, nil
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, reason)
+	if !ok {
+		return false, 0, nil
 	}
+	if err := save(stageDir); err != nil {
+		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
+	}
+	if ch, ok := o.interruptChans.Load(stageID); ok {
+		select {
+		case ch.(chan struct{}) <- struct{}{}:
+		default: // канал уже сигнализирован (двойной клик) — не блокируемся
+		}
+	}
+	return true, seq, nil
+}
 
-	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, feedback)
+// reviseAwaitingApproval is Revise's StatusAwaitingApproval branch, factored out for the same reuse reason as
+// reviseRunning above.
+func (o *Orchestrator) reviseAwaitingApproval(reqCtx context.Context, stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
+	stageDir := filepath.Join(o.opts.RunDir, stageID)
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, reason)
 	if !ok {
 		return false, 0, nil
 	}
 	if _, err := state.VersionPlan(stageDir); err != nil {
 		return false, 0, fmt.Errorf("version plan for %s: %w", stageID, err)
 	}
-	if err := state.SaveFeedback(stageDir, feedback); err != nil {
+	if err := save(stageDir); err != nil {
 		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
 	}
 

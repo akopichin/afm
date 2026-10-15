@@ -262,6 +262,58 @@ func (s *Store) History() ([]Transition, error) {
 	return out, nil
 }
 
+// stageGenerationEvent is the FSM event whose Transition.Seq this build treats as "a fresh attempt of the
+// stage's main agent began" — a plain string literal (not bus.FSMEvent) to avoid an import cycle (pkg/state
+// cannot import pkg/orchestrator/bus), but it is the exact wire value of bus.EvStartRun.
+const stageGenerationEvent = "start_run"
+
+// StageGeneration returns stageID's current generation (T6.4/T6.5): the Seq of the LATEST transition that
+// started a fresh run of the stage's main agent (bus.EvStartRun — ready/revising -> running), or 0 if the
+// stage has never actually started running yet. A Proposal/FeedbackIntent captures this value when it is
+// computed; a later mismatch means the stage has since moved on to a different attempt (accepted a different
+// Revise, was retried, ...) and the proposal/intent is stale — TestProposal_StaleWhenGenerationChanged,
+// TestDeferredIntent_RevalidatedBeforeExecution.
+func (s *Store) StageGeneration(stageID string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stageGenerationLocked(stageID)
+}
+
+// stageGenerationLocked is StageGeneration's body, callable by code that ALREADY holds s.mu (e.g.
+// applyRunOperationLocked's precondition check) without re-acquiring the (non-reentrant) lock.
+func (s *Store) stageGenerationLocked(stageID string) uint64 {
+	var gen uint64
+	for _, tr := range s.history {
+		if tr.StageID == stageID && tr.Event == stageGenerationEvent && tr.Seq > gen {
+			gen = tr.Seq
+		}
+	}
+	return gen
+}
+
+// stageReviseEvent is the FSM event (bus.EvRevise's wire value) LastReviseReason scans for.
+const stageReviseEvent = "revise"
+
+// LastReviseReason returns the Reason recorded on stageID's MOST RECENT EvRevise transition, or "" if none
+// ever happened. Used by pkg/orchestrator's FeedbackIntent delivery (T6.5/T6.6) to tell apart "this stage's
+// generation moved on because OF THIS VERY intent's own (crash-interrupted) delivery attempt resuming" from
+// "a genuinely different revise/attempt happened in the meantime" — reviseRunning/reviseAwaitingApproval stamp
+// the intent id into the reason, so a resumed stage whose last revise reason still names this intent is not
+// treated as stale even though Store.StageGeneration moved on.
+func (s *Store) LastReviseReason(stageID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var reason string
+	var lastSeq uint64
+	for _, tr := range s.history {
+		if tr.StageID == stageID && tr.Event == stageReviseEvent && tr.Seq >= lastSeq {
+			lastSeq = tr.Seq
+			reason = tr.Reason
+		}
+	}
+	return reason
+}
+
 // TaskEvent is one durable effect ever committed against a single task — the per-task projection of the
 // "operation_committed" control stream. ApplyRunOperation (T2.4) bundles every Effect of one caller-intent
 // operation (Attach/PauseTask/ContinueTask/CancelTask/the scheduler's own transitions) into ONE Control

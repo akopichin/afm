@@ -1,3 +1,5 @@
 export { AssistantBreadcrumb } from './AssistantBreadcrumb'
 export { AssistantTaskRow } from './AssistantTaskRow'
 export { AssistantTaskView } from './AssistantTaskView'
+export { StageDiscussion, type DiscussionMessage } from './StageDiscussion'
+export { ProposalCard, type ProposalCardProposal } from './ProposalCard'

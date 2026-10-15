@@ -231,6 +231,13 @@ type Orchestrator struct {
 	// Pause/Continue.
 	pauseGen sync.Map
 
+	// inFlightFeedbackIntents (T6.5/T6.6) guards attemptFeedbackDelivery against re-entering itself for the
+	// SAME intent id: delivering to a "running" stage triggers a NESTED EvRevise transition
+	// (reviseRunning->triggerWithSeq), whose own post-transition hook would otherwise see the SAME
+	// still-"accepted" intent and recurse into attemptFeedbackDelivery again before the outer call ever gets a
+	// chance to mark it delivered.
+	inFlightFeedbackIntents sync.Map
+
 	// runnerKind хранит, каким раннером сейчас активирована стадия — stageID -> одна из констант
 	// kindPlanning/kindImplementation/kindReview/kindAutonomous.
 	runnerKind sync.Map
@@ -500,6 +507,13 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail {
 			o.finalizeWatchersForStage(stageID, ev)
 		}
+		// T6.5/T6.6: a stage settling into ANY new status may be exactly what a deferred FeedbackIntent
+		// (planning/revising/retrying/paused/awaiting_user_input/hook_failed -> now interruptible or terminal)
+		// was waiting for — same additive "single funnel" choice as finalizeWatchersForStage above, just for
+		// every transition rather than only completion/failure.
+		if o.opts.AssistantsEnabled {
+			o.redeliverPendingFeedbackIntents(o.runContext(context.Background()), stageID)
+		}
 	}
 	return to, seq, ok
 }
@@ -563,6 +577,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	if !poisoned {
 		o.startPlanningForPending(ctx)
 		o.recoverAssistants(ctx)
+		o.recoverFeedbackIntents(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
 	if o.opts.AssistantsEnabled {

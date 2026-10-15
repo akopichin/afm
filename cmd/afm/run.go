@@ -287,6 +287,8 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		AssistantProfiles: collab.service(),
 		AssistantActions:  collab.actions(orch),
 		AssistantsReader:  collab.reader(orch),
+		DiscussionService: collab.discussionService(orch),
+		ProposalActions:   collab.proposalActions(orch),
 	}, orch)
 	if err != nil {
 		return err

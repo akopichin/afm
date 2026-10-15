@@ -72,6 +72,20 @@ const (
 	// fingerprint taken before/after the helper's turn differed. Purely observational — never changes the
 	// task's verdict.
 	EventHelperTreeModified EventType = "helper_tree_modified"
+	// EventDiscussionMessage fires once a discussion_message control record is durably committed (T6.1).
+	// Never an FSM transition — a discussion message never changes the root stage's status
+	// (TestDiscussion_UserMessageIsNotAutoRevise).
+	EventDiscussionMessage EventType = "discussion_message"
+	// EventProposalCreated/EventProposalStatus fire on proposal_created/proposal_status_changed control
+	// records (T6.4). Non-FSM.
+	EventProposalCreated EventType = "proposal_created"
+	EventProposalStatus  EventType = "proposal_status"
+	// EventFeedbackDelivered fires once an accepted proposal's (or a plain user note's) FeedbackIntent is
+	// actually projected into the stage's real execution path (T6.5/T6.6). Data always carries "origin"
+	// ("user" | "assistant_proposal") and, for a forwarded proposal, "participants" — the feed must render a
+	// forwarded proposal as "user forwarded a proposal from @X", never as raw AI text passed off as the human's
+	// own words (TestFeedUI_ShowsUserForwardedProposal).
+	EventFeedbackDelivered EventType = "feedback_delivered"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

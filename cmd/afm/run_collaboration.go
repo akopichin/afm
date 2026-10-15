@@ -242,3 +242,82 @@ func (r collaborationReader) TaskEvents(taskID string, cursor uint64, limit int)
 	}
 	return out, next, hasMore, nil
 }
+
+// discussionService/proposalActions (T6.7) — same nil-gated adapter pattern as actions()/reader() above, wired
+// AFTER orch is constructed since both wrap the real *orchestrator.Orchestrator.
+
+func (r *collaborationRuntime) discussionService(orch *orchestrator.Orchestrator) server.DiscussionService {
+	if r == nil || !r.policy.Enabled {
+		return nil
+	}
+	return collaborationDiscussion{orch}
+}
+
+func (r *collaborationRuntime) proposalActions(orch *orchestrator.Orchestrator) server.ProposalActions {
+	if r == nil || !r.policy.Enabled {
+		return nil
+	}
+	return collaborationProposals{orch}
+}
+
+// collaborationDiscussion adapts *orchestrator.Orchestrator to server.DiscussionService.
+type collaborationDiscussion struct{ orch *orchestrator.Orchestrator }
+
+func (d collaborationDiscussion) Messages(stageID string, cursor uint64, limit int) ([]server.DiscussionMessageView, uint64, bool, error) {
+	all := d.orch.DiscussionMessages(stageID)
+	start := int(cursor)
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	out := make([]server.DiscussionMessageView, 0, end-start)
+	for _, m := range all[start:end] {
+		out = append(out, server.DiscussionMessageView{
+			ID: m.ID, AuthorKind: string(m.Author.Kind), AuthorID: m.Author.ID, Role: m.Role,
+			Executor: m.Executor, Round: m.Round, ParentMessageID: m.ParentMessageID,
+			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, CreatedAt: m.CreatedAt,
+		})
+	}
+	return out, uint64(end), end < len(all), nil
+}
+
+func (d collaborationDiscussion) PostMessage(ctx context.Context, stageID, requestID, body string) (string, error) {
+	return d.orch.PostDiscussionMessage(ctx, orchestrator.PostMessageRequest{
+		OperationID: requestID, StageID: stageID, AuthorKind: assistants.AuthorHuman,
+		Round: assistants.RoundFreeform, Body: body, Actor: state.Actor{Kind: "user"},
+	})
+}
+
+// collaborationProposals adapts *orchestrator.Orchestrator to server.ProposalActions.
+type collaborationProposals struct{ orch *orchestrator.Orchestrator }
+
+func (p collaborationProposals) Proposals(stageID string) ([]server.ProposalView, error) {
+	props := p.orch.Proposals(stageID)
+	out := make([]server.ProposalView, 0, len(props))
+	for _, pr := range props {
+		authors := make([]string, 0, len(pr.Authors))
+		for _, a := range pr.Authors {
+			if a.ID != "" {
+				authors = append(authors, a.ID)
+			}
+		}
+		out = append(out, server.ProposalView{
+			ID: pr.ID, StageID: pr.StageID, TaskID: pr.TaskID, Type: string(pr.Type), Title: pr.Title,
+			Rationale: pr.Rationale, Authors: authors, SourceMessageIDs: pr.SourceMessageIDs,
+			SourceFindingIDs: pr.SourceFindingIDs, ExpectedStageGeneration: pr.ExpectedStageGeneration,
+			Status: string(pr.Status), CreatedAt: pr.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (p collaborationProposals) Accept(ctx context.Context, proposalID, requestID string) error {
+	return p.orch.AcceptProposal(ctx, proposalID, requestID, state.Actor{Kind: "user"})
+}
+
+func (p collaborationProposals) Dismiss(ctx context.Context, proposalID, requestID, reason string) error {
+	return p.orch.DismissProposal(ctx, proposalID, requestID, reason, state.Actor{Kind: "user"})
+}

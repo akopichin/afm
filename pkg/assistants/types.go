@@ -209,16 +209,5 @@ type Continuation struct {
 	Note string `json:"note,omitempty"`
 }
 
-// Proposal — предложение изменения, которое требует явного подтверждения
-// человеком перед применением. В отличие от Finding (наблюдение), Proposal —
-// предлагаемое действие; его используют advisory-помощники, которые не могут
-// редактировать дерево/рабочую копию напрямую.
-type Proposal struct {
-	ID      string
-	Summary string
-	// Diff — предлагаемое изменение в текстовом виде (например, unified diff).
-	Diff string
-	// RequiresAck — true, если предложение не считается отклонённым молчанием:
-	// нужен явный ответ человека (accept/reject), а не только прочтение.
-	RequiresAck bool
-}
+// Proposal's full definition (type/status lifecycle/payload/etc.) lives in proposal.go (T6.4) — this file
+// originally carried a narrow, uncalled placeholder of the same name; proposal.go supersedes it entirely.

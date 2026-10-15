@@ -96,6 +96,8 @@ type Server struct {
 	assistantProfiles AssistantProfilesService  // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
 	assistantActions  AssistantActions          // write-команды задач помощников; nil = capability off (POST/pause/continue/cancel 404)
 	assistantsReader  AssistantsReader          // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
+	discussionService DiscussionService         // обсуждение стадии (T6.7); nil = capability off (GET|POST .../discussion 404)
+	proposalActions   ProposalActions           // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
 	theme             string                    // "goga" или "" (default graphite)
 	version           string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
 	indexBytes        []byte                    // предподготовленный index.html (с заменами скина/favicon)
@@ -155,7 +157,10 @@ type Config struct {
 	// AssistantActions/AssistantsReader — write/read стороны задач помощников; nil = capability off.
 	AssistantActions AssistantActions
 	AssistantsReader AssistantsReader
-	Theme            string
+	// DiscussionService/ProposalActions — обсуждения и предложения (T6.7); nil = capability off.
+	DiscussionService DiscussionService
+	ProposalActions   ProposalActions
+	Theme             string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
 	SkinDir string
@@ -197,6 +202,8 @@ func New(cfg Config) *Server {
 		assistantProfiles: cfg.AssistantProfiles,
 		assistantActions:  cfg.AssistantActions,
 		assistantsReader:  cfg.AssistantsReader,
+		discussionService: cfg.DiscussionService,
+		proposalActions:   cfg.ProposalActions,
 		theme:             cfg.Theme,
 		version:           cfg.Version,
 		wsPongWait:        pongWait,
@@ -282,6 +289,12 @@ func New(cfg Config) *Server {
 	// actions/events) gets its own mux entry, same conditional-registration convention as side-agent above.
 	if s.assistantActions != nil || s.assistantsReader != nil {
 		mux.HandleFunc("/api/assistants/", s.routeAssistants)
+	}
+	// /api/stages/{id}/discussion and /api/stages/{id}/proposals are handled inside routeStages (always
+	// registered) — capability-off is checked per-handler, same as /assistants above. /api/proposals/{id}/
+	// {accept|dismiss} gets its own mux entry, same conditional-registration convention as side-agent/assistants.
+	if s.proposalActions != nil {
+		mux.HandleFunc("/api/proposals/", s.routeProposals)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {
@@ -410,6 +423,10 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handleDialogCancel(w, r)
 	case strings.HasSuffix(path, "/assistants") && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 		s.routeStageAssistants(w, r, extractStageID(path, "/api/stages/", "/assistants"))
+	case strings.HasSuffix(path, "/discussion") && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		s.routeStageDiscussion(w, r, extractStageID(path, "/api/stages/", "/discussion"))
+	case strings.HasSuffix(path, "/proposals") && r.Method == http.MethodGet:
+		s.routeStageProposals(w, r, extractStageID(path, "/api/stages/", "/proposals"))
 	default:
 		http.NotFound(w, r)
 	}

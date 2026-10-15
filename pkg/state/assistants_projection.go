@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
 )
@@ -74,6 +75,73 @@ type AssistantsState struct {
 	// from this counter's CURRENT value at task_created time and never rewritten — see
 	// kindRootGenerationBumped's doc comment in record.go.
 	RootGenerations map[string]uint64 `json:"root_generations,omitempty"`
+	// Discussions (T6.1) is the durable per-stage discussion log projection.
+	Discussions DiscussionState `json:"discussions,omitempty"`
+	// Proposals (T6.4) is the durable proposal board projection.
+	Proposals ProposalBoard `json:"proposals,omitempty"`
+	// FeedbackIntents (T6.5/T6.6) is the durable idempotent-delivery pipeline state, keyed by intent id.
+	FeedbackIntents map[string]*FeedbackIntent `json:"feedback_intents,omitempty"`
+}
+
+// DiscussionState is the normalized, replay-restored discussion-log projection for one run (T6.1). Messages
+// are held by reference (id), with a per-stage ordered id index — same "map + ordered id slice" shape as
+// Tasks/ByRootStage, so order is always restored from the id list (append/commit order), never re-derived
+// from any message's own timestamp.
+type DiscussionState struct {
+	Messages map[string]*assistants.DiscussionMessage `json:"messages,omitempty"`
+	ByStage  map[string][]string                      `json:"by_stage,omitempty"`
+}
+
+// ProposalBoard is the normalized, replay-restored proposal-lifecycle projection for one run (T6.4).
+type ProposalBoard struct {
+	Proposals map[string]*assistants.Proposal `json:"proposals,omitempty"`
+	ByStage   map[string][]string             `json:"by_stage,omitempty"`
+}
+
+// FeedbackIntentOrigin names who/what is behind one FeedbackIntent (T6.5) — carried all the way to the feed so
+// a forwarded proposal is never rendered as if the human typed it directly (TestFeedUI_ShowsUserForwardedProposal).
+type FeedbackIntentOrigin string
+
+const (
+	FeedbackOriginUser     FeedbackIntentOrigin = "user"
+	FeedbackOriginProposal FeedbackIntentOrigin = "assistant_proposal"
+)
+
+// FeedbackIntentStatus is one state of the idempotent delivery pipeline (T6.6).
+type FeedbackIntentStatus string
+
+const (
+	// FeedbackIntentAccepted — durably recorded, not yet delivered (or re-delivery is still pending because the
+	// parent stage was not in an immediately-interruptible status).
+	FeedbackIntentAccepted FeedbackIntentStatus = "accepted"
+	// FeedbackIntentDelivered — the feedback was durably projected into the stage's real execution path
+	// (feedback.md / pre-note) and, where applicable, the stage was signaled/spawned. This does NOT claim the
+	// underlying issue was fixed — only that AFM committed the correction into the right path exactly once.
+	FeedbackIntentDelivered FeedbackIntentStatus = "delivered"
+	// FeedbackIntentRejected — delivery will never happen automatically (stage reached done/failed, or the
+	// intent went stale before it could be delivered). Requires an explicit human action (Retry/new stage) to
+	// reopen, never a silent reinterpretation.
+	FeedbackIntentRejected FeedbackIntentStatus = "rejected"
+)
+
+// FeedbackIntent is the durable record of "this feedback must reach the stage's agent exactly once" (T6.5/T6.6).
+type FeedbackIntent struct {
+	ID       string               `json:"id"`
+	StageID  string               `json:"stage_id"`
+	Feedback string               `json:"feedback"`
+	Origin   FeedbackIntentOrigin `json:"origin"`
+	// ProposalID is set when Origin == FeedbackOriginProposal.
+	ProposalID string `json:"proposal_id,omitempty"`
+	// Participants names who stands behind this feedback for feed-provenance purposes (e.g. "@qaEngineer") —
+	// never collapsed into a plain user message.
+	Participants []string `json:"participants,omitempty"`
+	// ExpectedStageGeneration is the stage attempt this intent was computed against — re-checked immediately
+	// before every delivery attempt, not just once at accept time (TestDeferredIntent_RevalidatedBeforeExecution).
+	ExpectedStageGeneration uint64               `json:"expected_stage_generation"`
+	Status                  FeedbackIntentStatus `json:"status"`
+	Reason                  string               `json:"reason,omitempty"`
+	CreatedAt               time.Time            `json:"created_at"`
+	ConsumedAt              time.Time            `json:"consumed_at,omitempty"`
 }
 
 // PolicyState is the durable record of the effective delegation-depth policy for this run (T2.6) — mirrors
@@ -92,6 +160,15 @@ func newAssistantsState() AssistantsState {
 		ByParent:        map[assistants.TaskID][]assistants.TaskID{},
 		OperationIndex:  map[string]uint64{},
 		RootGenerations: map[string]uint64{},
+		Discussions: DiscussionState{
+			Messages: map[string]*assistants.DiscussionMessage{},
+			ByStage:  map[string][]string{},
+		},
+		Proposals: ProposalBoard{
+			Proposals: map[string]*assistants.Proposal{},
+			ByStage:   map[string][]string{},
+		},
+		FeedbackIntents: map[string]*FeedbackIntent{},
 	}
 }
 
@@ -114,6 +191,21 @@ func (as AssistantsState) Clone() AssistantsState {
 	}
 	for stage, gen := range as.RootGenerations {
 		out.RootGenerations[stage] = gen
+	}
+	for id, m := range as.Discussions.Messages {
+		out.Discussions.Messages[id] = m
+	}
+	for stage, ids := range as.Discussions.ByStage {
+		out.Discussions.ByStage[stage] = append([]string(nil), ids...)
+	}
+	for id, p := range as.Proposals.Proposals {
+		out.Proposals.Proposals[id] = p
+	}
+	for stage, ids := range as.Proposals.ByStage {
+		out.Proposals.ByStage[stage] = append([]string(nil), ids...)
+	}
+	for id, fi := range as.FeedbackIntents {
+		out.FeedbackIntents[id] = fi
 	}
 	out.Policy = as.Policy
 	out.QuotaReserved = as.QuotaReserved
@@ -141,6 +233,19 @@ func (as AssistantsState) deepClone() AssistantsState {
 			nt.Continuation = &cont
 		}
 		out.Tasks[id] = &nt
+	}
+	// Proposals/FeedbackIntents mutate Status/History/Reason IN PLACE (same convention as TaskState.Status
+	// above) — a batched operation that touches one of these needs a genuinely independent copy too, not a
+	// shared pointer. DiscussionMessage is immutable once created (no in-place mutation path exists), so
+	// Clone()'s shallow pointer copy already suffices for it.
+	for id, p := range as.Proposals.Proposals {
+		np := *p
+		np.History = append([]assistants.ProposalDecision(nil), p.History...)
+		out.Proposals.Proposals[id] = &np
+	}
+	for id, fi := range as.FeedbackIntents {
+		nfi := *fi
+		out.FeedbackIntents[id] = &nfi
 	}
 	return out
 }
@@ -358,6 +463,16 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyRootGenerationBumped(as, c, dryRun)
 	case kindOperationCommitted:
 		return applyOperationCommitted(as, c, dryRun)
+	case kindDiscussionMessage:
+		return applyDiscussionMessage(as, c, dryRun)
+	case kindProposalCreated:
+		return applyProposalCreated(as, c, dryRun)
+	case kindProposalStatusChanged:
+		return applyProposalStatusChanged(as, c, dryRun)
+	case kindFeedbackIntentCreated:
+		return applyFeedbackIntentCreated(as, c, dryRun)
+	case kindFeedbackIntentConsumed:
+		return applyFeedbackIntentConsumed(as, c, dryRun)
 	default:
 		// controlKinds already rejected anything not listed above during decodeLine — reaching here would
 		// be a registry/switch drift, not a journal problem.

@@ -1,0 +1,147 @@
+// Package orchestrator (this file, T6.4/T6.7): the Proposal board. CreateProposal is the durable commit a
+// bounded synthesizer run (T6.3) is meant to call once it produces a real Proposal (wiring an actual
+// synthesizer AGENT invocation is out of Этап 6's scope — see dev-plan.md's Review decisions; this entry
+// point is what that future wiring, and today's tests, drive). DismissProposal/Proposals are the read/dismiss
+// halves of the HTTP API (T6.7). Accepting a proposal — the one path that actually touches the main agent —
+// lives in feedback_intent.go, never here.
+package orchestrator
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/state"
+)
+
+// deriveProposalID computes a deterministic, path-safe proposal id from a CreateProposal operation id —
+// mirrors deriveTaskID/deriveMessageID.
+func deriveProposalID(operationID string) string {
+	sum := sha256.Sum256([]byte("proposal|" + operationID))
+	return "prop-" + hex.EncodeToString(sum[:])[:20]
+}
+
+// CreateProposalRequest is everything needed to durably record one synthesized Proposal.
+type CreateProposalRequest struct {
+	OperationID             string
+	StageID                 string
+	TaskID                  string
+	Type                    assistants.ProposalType
+	Title                   string
+	Rationale               string
+	Payload                 json.RawMessage
+	Authors                 []assistants.MessageAuthor
+	SourceMessageIDs        []string
+	SourceFindingIDs        []string
+	ExpectedStageGeneration uint64
+	Actor                   state.Actor
+}
+
+func proposalCreatedEffect(stageID, proposalID string, p state.ProposalCreatedPayload) (state.Effect, error) {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return state.Effect{}, fmt.Errorf("marshal proposal_created payload: %w", err)
+	}
+	return state.Effect{Kind: "proposal_created", Target: state.Target{StageID: stageID, ProposalID: proposalID}, Payload: raw}, nil
+}
+
+func proposalStatusEffect(proposalID string, p state.ProposalStatusChangedPayload) (state.Effect, error) {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return state.Effect{}, fmt.Errorf("marshal proposal_status_changed payload: %w", err)
+	}
+	return state.Effect{Kind: "proposal_status_changed", Target: state.Target{ProposalID: proposalID}, Payload: raw}, nil
+}
+
+// CreateProposal durably commits one new Proposal in "pending" status. OperationID is the idempotency key —
+// the SAME OperationID always resolves to the SAME proposal id.
+func (o *Orchestrator) CreateProposal(ctx context.Context, req CreateProposalRequest) (string, error) {
+	if !o.opts.AssistantsEnabled {
+		return "", &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
+	}
+	if req.OperationID == "" {
+		return "", errors.New("assistants: operation id is required")
+	}
+	if o.graph.Stage(req.StageID) == nil {
+		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
+	}
+
+	proposalID := deriveProposalID(req.OperationID)
+	eff, err := proposalCreatedEffect(req.StageID, proposalID, state.ProposalCreatedPayload{
+		TaskID: req.TaskID, Type: string(req.Type), Title: req.Title, Rationale: req.Rationale,
+		Payload: req.Payload, Authors: req.Authors, SourceMessageIDs: req.SourceMessageIDs,
+		SourceFindingIDs: req.SourceFindingIDs, ExpectedStageGeneration: req.ExpectedStageGeneration,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	op := state.Operation{ID: req.OperationID, Kind: "create_proposal", Actor: req.Actor, Effects: []state.Effect{eff}}
+	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.publishNotice(bus.Event{Type: bus.EventProposalCreated, StageID: req.StageID, Data: map[string]any{
+			"proposal_id": proposalID, "type": string(req.Type), "title": req.Title,
+		}})
+	})
+	if err != nil {
+		return "", err
+	}
+	return proposalID, nil
+}
+
+// Proposals returns stageID's proposals in commit order.
+func (o *Orchestrator) Proposals(stageID string) []assistants.Proposal {
+	rs := o.opts.Store.Snapshot()
+	ids := rs.Assistants.Proposals.ByStage[stageID]
+	out := make([]assistants.Proposal, 0, len(ids))
+	for _, id := range ids {
+		if p, ok := rs.Assistants.Proposals.Proposals[id]; ok && p != nil {
+			out = append(out, *p)
+		}
+	}
+	return out
+}
+
+// Proposal returns one proposal by id.
+func (o *Orchestrator) Proposal(id string) (assistants.Proposal, bool) {
+	rs := o.opts.Store.Snapshot()
+	p, ok := rs.Assistants.Proposals.Proposals[id]
+	if !ok || p == nil {
+		return assistants.Proposal{}, false
+	}
+	return *p, true
+}
+
+// ErrProposalNotFound is returned by DismissProposal/AcceptProposal for an unknown proposal id.
+var ErrProposalNotFound = errors.New("assistants: proposal not found")
+
+// DismissProposal durably marks a pending proposal dismissed. Dismissal never touches the main agent in any
+// way (TestProposal_DismissedDoesNotAffectMainAgent) — it is a pure proposal_status_changed commit.
+func (o *Orchestrator) DismissProposal(ctx context.Context, proposalID, requestID, reason string, actor state.Actor) error {
+	if !o.opts.AssistantsEnabled {
+		return &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
+	}
+	p, ok := o.Proposal(proposalID)
+	if !ok {
+		return ErrProposalNotFound
+	}
+	eff, err := proposalStatusEffect(proposalID, state.ProposalStatusChangedPayload{Status: string(assistants.ProposalDismissed), Reason: reason, Actor: string(actor.Kind)})
+	if err != nil {
+		return err
+	}
+	op := state.Operation{
+		ID: requestID, Kind: "dismiss_proposal", Actor: actor,
+		Expect:  state.Preconditions{ProposalStatus: map[string]assistants.ProposalStatus{proposalID: assistants.ProposalPending}},
+		Effects: []state.Effect{eff},
+	}
+	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.publishNotice(bus.Event{Type: bus.EventProposalStatus, StageID: p.StageID, Data: map[string]any{
+			"proposal_id": proposalID, "status": string(assistants.ProposalDismissed),
+		}})
+	})
+	return err
+}

@@ -343,3 +343,127 @@
 .assistant-task-finding-detail {
   color: var(--text-primary);
 }
+
+/* === Stage discussion (T6.1/T6.8): messages between helper assistants/the human/AFM about one context
+   version — a bounded review protocol, not a free-wheeling chat. === */
+.stage-discussion {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+}
+.stage-discussion-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+}
+.stage-discussion-message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stage-discussion-message-author {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.stage-discussion-message-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border: 1px solid var(--separator-subtle);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.stage-discussion-message-evidence {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+.stage-discussion-evidence-item {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+
+/* === Proposal card (T6.4/T6.8): a synthesized change request awaiting explicit human confirmation.
+   DELIBERATELY never shares a selector/class prefix with a user-authored feed message — accepting it is the
+   one confirmation gate before anything reaches the main agent. === */
+.proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--accent-primary);
+}
+.proposal-card-badge {
+  align-self: flex-start;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.proposal-card-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.proposal-card-rationale .md {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.proposal-card-authors {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.proposal-card-actions {
+  display: flex;
+  gap: 8px;
+}
+.proposal-card-accept,
+.proposal-card-refresh {
+  background: var(--accent-primary);
+  color: var(--surface-base, #fff);
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.proposal-card-accept:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.proposal-card-dismiss {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.proposal-card-dismiss:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.proposal-card-refresh {
+  background: var(--attention);
+}

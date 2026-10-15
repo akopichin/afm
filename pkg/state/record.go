@@ -25,11 +25,18 @@ type Actor struct {
 }
 
 // Target называет основную сущность, которой адресована control-запись (задача помощника и/или её корневая
-// стадия). Оба поля опциональны — у flow-уровневых записей (например policy_set) может не быть ни задачи,
-// ни конкретной стадии.
+// стадия). Поля опциональны — у flow-уровневых записей (например policy_set) может не быть ни задачи,
+// ни конкретной стадии. MessageID/ProposalID/IntentID (T6.1/T6.4/T6.6) следуют тому же соглашению, что и
+// TaskID: это СОБСТВЕННЫЙ id сущности, которую создаёт/меняет эта запись, а не произвольная ссылка.
 type Target struct {
 	TaskID  string `json:"task_id,omitempty"`
 	StageID string `json:"stage_id,omitempty"`
+	// MessageID — id обсуждения (discussion_message), T6.1.
+	MessageID string `json:"message_id,omitempty"`
+	// ProposalID — id предложения (proposal_created/proposal_status_changed), T6.4.
+	ProposalID string `json:"proposal_id,omitempty"`
+	// IntentID — id FeedbackIntent (feedback_intent_created/feedback_intent_consumed), T6.5/T6.6.
+	IntentID string `json:"intent_id,omitempty"`
 }
 
 // Control — управляющая запись нового формата журнала (помощники/задачи/политика/квоты). Отличается от
@@ -75,23 +82,43 @@ const (
 	// which is always this fixed wrapper string so decodeLine/controlKinds only need to know ONE kind for
 	// the whole operation machinery, regardless of how many different op.Kind values callers invent.
 	kindOperationCommitted = "operation_committed"
+	// kindDiscussionMessage (T6.1) — one durable entry in a stage's discussion log. Round-limit enforcement
+	// (at most one independent + one discussion round, plus a separately-bounded synthesis "round") happens
+	// INSIDE applyDiscussionMessage, so a record that would exceed the budget never reaches the journal at
+	// all (same validate-before-write discipline as applyTaskCreated's whole-tree check).
+	kindDiscussionMessage = "discussion_message"
+	// kindProposalCreated/kindProposalStatusChanged (T6.4) — a Proposal's creation and every lifecycle
+	// transition thereafter. Illegal transitions (assistants.Proposal.CanTransition) are rejected the same
+	// fail-closed way.
+	kindProposalCreated       = "proposal_created"
+	kindProposalStatusChanged = "proposal_status_changed"
+	// kindFeedbackIntentCreated/kindFeedbackIntentConsumed (T6.5/T6.6) — the durable FeedbackIntent pipeline
+	// that carries an accepted proposal's (or a plain user note's) feedback to the general Revise path exactly
+	// once, surviving a crash at any point.
+	kindFeedbackIntentCreated  = "feedback_intent_created"
+	kindFeedbackIntentConsumed = "feedback_intent_consumed"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
 // задач (T2.3 заводит task_*, T2.6 — policy_set/quota_reserved). Неизвестный kind — не ошибка на будущее,
 // а гарантия того, что лог, записанный более новой версией afm, не будет молча неверно понят более старой.
 var controlKinds = map[string]bool{
-	kindTaskCreated:           true,
-	kindTaskStatusChanged:     true,
-	kindTaskHoldSet:           true,
-	kindTaskHoldCleared:       true,
-	kindTaskContinuationSaved: true,
-	kindPolicySet:             true,
-	kindQuotaReserved:         true,
-	kindTaskResult:            true,
-	kindTaskGenerationBumped:  true,
-	kindRootGenerationBumped:  true,
-	kindOperationCommitted:    true,
+	kindTaskCreated:            true,
+	kindTaskStatusChanged:      true,
+	kindTaskHoldSet:            true,
+	kindTaskHoldCleared:        true,
+	kindTaskContinuationSaved:  true,
+	kindPolicySet:              true,
+	kindQuotaReserved:          true,
+	kindTaskResult:             true,
+	kindTaskGenerationBumped:   true,
+	kindRootGenerationBumped:   true,
+	kindOperationCommitted:     true,
+	kindDiscussionMessage:      true,
+	kindProposalCreated:        true,
+	kindProposalStatusChanged:  true,
+	kindFeedbackIntentCreated:  true,
+	kindFeedbackIntentConsumed: true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

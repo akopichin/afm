@@ -60,6 +60,15 @@ type Preconditions struct {
 	// MaxQuota, if non-nil, is the whole-tree quota ceiling this operation's own quota_reserved effects (if
 	// any) must not push the running total past — budget_exceeded otherwise. See T2.6's QuotaReserved.
 	MaxQuota *int
+	// ProposalStatus, if non-empty, maps proposalID -> the assistants.ProposalStatus that proposal is expected
+	// to currently hold — stale_revision otherwise. Optimistic-concurrency guard for AcceptProposal/
+	// DismissProposal (T6.6/T6.7): the SAME precondition-under-lock discipline as TaskStatus above is what
+	// makes a double-click/two-tabs race on the same proposal resolve to exactly one winner.
+	ProposalStatus map[string]assistants.ProposalStatus
+	// StageGeneration, if non-empty, maps stageID -> the Store.StageGeneration that stage is expected to
+	// currently be at — stale_revision otherwise (T6.4/T6.5: "ожидаемые stage_generation"). Checked against
+	// the store's OWN history under the SAME lock as the write, never a value read earlier.
+	StageGeneration map[string]uint64
 }
 
 // Operation is a single caller-intent: ApplyRunOperation either durably commits ALL of its Effects as one
@@ -140,7 +149,7 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 	}
 
 	// Step 2: check Expect against the snapshot, UNDER LOCK.
-	if err := checkPreconditions(s.snapshot, op); err != nil {
+	if err := s.checkPreconditionsLocked(s.snapshot, op); err != nil {
 		return OperationResult{}, err
 	}
 
@@ -169,10 +178,12 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 	return res, nil
 }
 
-// checkPreconditions validates op.Expect against rs's CURRENT projection and, for MaxQuota, against this
-// SAME operation's own quota_reserved effects (so the ceiling check and the reservation are atomic under one
-// lock acquisition — see TestQuota_ReservedAtomicallyForChildGroup).
-func checkPreconditions(rs *RunState, op Operation) error {
+// checkPreconditionsLocked validates op.Expect against rs's CURRENT projection and, for MaxQuota, against
+// this SAME operation's own quota_reserved effects (so the ceiling check and the reservation are atomic under
+// one lock acquisition — see TestQuota_ReservedAtomicallyForChildGroup). Method on *Store (not a free
+// function) ONLY so StageGeneration's check can reach s.stageGenerationLocked without re-acquiring s.mu —
+// caller MUST already hold s.mu.
+func (s *Store) checkPreconditionsLocked(rs *RunState, op Operation) error {
 	exp := op.Expect
 	if exp.PolicyRevision != "" && rs.Assistants.Policy.Revision != exp.PolicyRevision {
 		return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: "policy revision changed"}
@@ -181,6 +192,17 @@ func checkPreconditions(rs *RunState, op Operation) error {
 		t, ok := rs.Assistants.Tasks[assistants.TaskID(id)]
 		if !ok || t.Status != want {
 			return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("task %s status changed", id)}
+		}
+	}
+	for id, want := range exp.ProposalStatus {
+		p, ok := rs.Assistants.Proposals.Proposals[id]
+		if !ok || p.Status != want {
+			return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("proposal %s status changed", id)}
+		}
+	}
+	for stageID, want := range exp.StageGeneration {
+		if got := s.stageGenerationLocked(stageID); got != want {
+			return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("stage %s generation changed (expected %d, got %d)", stageID, want, got)}
 		}
 	}
 	if exp.MaxQuota != nil {
