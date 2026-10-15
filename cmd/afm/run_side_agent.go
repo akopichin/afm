@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -48,8 +49,9 @@ type sideAgentRuntime struct {
 }
 
 // startSideAgent хранит беседу под afm-root независимо от root_dir; сбой открытия отключает боковой агент,
-// не роняя флоу.
-func startSideAgent(runID string, cfg config.Config, env runEnvironment) (*sideAgentRuntime, error) {
+// не роняя флоу. registry — реестр профилей помощников (T4.1/T4.3's Config.MentionResolve): nil (collaboration
+// выключена) безопасен — assistants.Registry.Resolve на nil-ресивере просто никогда не резолвит ничего.
+func startSideAgent(runID string, cfg config.Config, env runEnvironment, registry *assistants.Registry) (*sideAgentRuntime, error) {
 	store, err := sideagent.Open(fmDir(), runID)
 	if err != nil && store == nil {
 		return nil, err
@@ -84,6 +86,15 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment) (*sideA
 		Context:     sideagent.ContextBuilder{ByteLimit: sideAgentContextByteLimit},
 		Secrets:     func() []string { return protected },
 		OnUsage:     onUsage,
+		MentionResolve: func(word string) (string, bool) {
+			id, ok := registry.Resolve(word)
+			return string(id), ok
+		},
+		// KnownActionType (T4.4) is gated the same way as MentionResolve above: an action draft proposes
+		// creating a helper task, which is meaningless with collaboration off — nil registry means that.
+		KnownActionType: func(typ string) bool {
+			return registry != nil && assistants.KnownActionType(typ)
+		},
 	})
 	return &sideAgentRuntime{manager: mgr, store: store, acct: acct}, nil
 }

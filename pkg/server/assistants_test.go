@@ -17,21 +17,31 @@ import (
 // fakeAssistantActions/fakeAssistantsReader back the HTTP layer under test with an in-memory, idempotent
 // implementation good enough to exercise the handlers without a real orchestrator.
 type fakeAssistantActions struct {
-	mu          sync.Mutex
-	byRequestID map[string]string // request_id -> task_id (idempotency)
-	nextID      int
-	lastAttach  AttachRequest
-	lastStage   string
-	attachErr   error
-	paused      []string
-	continued   []string
-	cancelled   []string
-	actionErr   error
+	mu             sync.Mutex
+	byRequestID    map[string]string // request_id -> task_id (idempotency)
+	nextID         int
+	lastAttach     AttachRequest
+	lastStage      string
+	attachErr      error
+	attachCalls    int
+	paused         []string
+	continued      []string
+	cancelled      []string
+	actionErr      error
+	policyRevision string
+	maxDepth       int
+}
+
+func (f *fakeAssistantActions) PolicyRevision() (string, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.policyRevision, f.maxDepth
 }
 
 func (f *fakeAssistantActions) Attach(ctx context.Context, stageID string, req AttachRequest) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attachCalls++
 	f.lastAttach = req
 	f.lastStage = stageID
 	if f.attachErr != nil {
@@ -273,6 +283,36 @@ func TestAttach_OriginCheckedForBrowserMutations(t *testing.T) {
 	srv.Handler().ServeHTTP(w2, req2)
 	if w2.Code != http.StatusForbidden {
 		t.Fatalf("missing origin: HTTP %d, want 403", w2.Code)
+	}
+}
+
+// TestList_DepthPassesThrough is a regression test for T4a.8's breadcrumb wiring: the dashboard needs each
+// task's Depth (1 for top-level, parent.Depth+1 for each delegated level) to compute "depth N of max_depth" —
+// this must survive the HTTP round trip unchanged, not get dropped by the view's JSON tags.
+func TestList_DepthPassesThrough(t *testing.T) {
+	reader := &fakeAssistantsReader{tree: []AssistantTaskView{
+		{ID: "t-1", ProfileID: "reviewer", Status: "completed", Depth: 1},
+		{ID: "t-2", ParentTaskID: "t-1", ProfileID: "security", Status: "running", Depth: 2},
+	}}
+	srv := newTestServer(t, Config{AssistantsReader: reader})
+	req := httptest.NewRequest(http.MethodGet, "/api/stages/"+testStageID+"/assistants", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Tasks []AssistantTaskView `json:"tasks"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]AssistantTaskView{}
+	for _, tk := range resp.Tasks {
+		byID[tk.ID] = tk
+	}
+	if byID["t-1"].Depth != 1 || byID["t-2"].Depth != 2 {
+		t.Fatalf("depths = %+v, want t-1:1 t-2:2", byID)
 	}
 }
 

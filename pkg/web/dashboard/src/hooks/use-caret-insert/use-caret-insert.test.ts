@@ -27,4 +27,20 @@ describe('useCaretInsert', () => {
 
     expect(onChange).toHaveBeenCalledWith('hello world')
   })
+
+  it('replaceRange replaces an explicit range, independent of the textarea live selection', () => {
+    const onChange = vi.fn()
+    const { result } = renderHook(() => useCaretInsert('hi @fro there', onChange))
+
+    // Deliberately stale selection (e.g. a mouse click elsewhere moved focus) — replaceRange must ignore it
+    // and use the explicit [start, end) it was given, unlike insertAtCaret.
+    const el = { selectionStart: 0 } as HTMLTextAreaElement
+    result.current.nodeRef.current = el
+
+    act(() => {
+      result.current.replaceRange(3, 7, '@frontendDeveloper ')
+    })
+
+    expect(onChange).toHaveBeenCalledWith('hi @frontendDeveloper  there')
+  })
 })

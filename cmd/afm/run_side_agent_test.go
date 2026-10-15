@@ -61,7 +61,7 @@ func newRuntimeWithRunner(t *testing.T, r *blockingRunner) *sideAgentRuntime {
 
 func sendAndWaitStarted(t *testing.T, rt *sideAgentRuntime, r *blockingRunner) {
 	t.Helper()
-	if _, err := rt.manager.Send("m1", "hi"); err != nil {
+	if _, err := rt.manager.Send("m1", "hi", sideagent.TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	select {
@@ -94,7 +94,7 @@ func TestShutdownNormal_ClosesAdmissionAndDoesNotInterrupt(t *testing.T) {
 	// Send быстро начинает отвергаться shutting_down.
 	deadline := time.After(2 * time.Second)
 	for {
-		_, err := rt.manager.Send("m2", "second")
+		_, err := rt.manager.Send("m2", "second", sideagent.TurnTarget{})
 		var se *sideagent.Error
 		if ok := asSideErr(err, &se); ok && se.Code == sideagent.ErrCodeShuttingDown {
 			break

@@ -79,13 +79,16 @@ export function normalizeConversation(raw: unknown): ConversationResponse {
   }
 }
 
-// sendMessage отправляет сообщение пользователя. Клиент управляет ТОЛЬКО client_message_id и text —
-// команда/CWD задаются сервером.
-export async function sendMessage(clientMessageId: string, text: string): Promise<SendResponse> {
+// sendMessage отправляет сообщение пользователя. Клиент управляет client_message_id, text и опционально
+// stageId — какой стадии касается сообщение (T4.3, для отображения «Context: …»; пусто → не отправляется
+// вовсе, тот же body, что и раньше). Команда/CWD/depth/root_stage_id по-прежнему задаются сервером.
+export async function sendMessage(clientMessageId: string, text: string, stageId = ''): Promise<SendResponse> {
+  const reqBody: Record<string, string> = { client_message_id: clientMessageId, text }
+  if (stageId !== '') reqBody.stage_id = stageId
   const response = await fetch('/api/side-agent/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ client_message_id: clientMessageId, text }),
+    body: JSON.stringify(reqBody),
   })
   if (!response.ok) throw new SideAgentApiError(response.status, await readErrorCode(response))
   const body = (await response.json()) as { turn_id?: unknown; state?: unknown; cursor?: unknown }

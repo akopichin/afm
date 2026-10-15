@@ -61,6 +61,14 @@ const (
 	// TaskState — the durable control stream (Store.TaskEvents) IS the read path the dashboard's per-task
 	// event-history page (GET /api/assistants/{id}/events) consumes.
 	kindTaskResult = "task_result"
+	// kindTaskGenerationBumped/kindRootGenerationBumped (T4a.6): a task's own TaskGeneration, or a root
+	// stage's whole-tree RootGeneration counter, incremented by one. Used to mark everything created BEFORE
+	// the bump (a child's ParentGeneration/RootGeneration, stamped once at task_created time and never
+	// rewritten) as belonging to a superseded attempt — see assistants.Task's own field doc comments and
+	// pkg/orchestrator's requiredChildOpen/tryResumeParent/collectChildResultsJSON, which all skip a child
+	// whose ParentGeneration no longer matches its parent's CURRENT TaskGeneration.
+	kindTaskGenerationBumped = "task_generation_bumped"
+	kindRootGenerationBumped = "root_generation_bumped"
 	// kindOperationCommitted — the single wrapper kind ApplyRunOperation (T2.4) writes: one Control record
 	// bundling every Effect of one caller-intent operation, applied all-or-nothing. Its payload's kind is
 	// op.Kind (the caller's semantic name, e.g. "create_children") — distinct from the Control's own Kind,
@@ -81,6 +89,8 @@ var controlKinds = map[string]bool{
 	kindPolicySet:             true,
 	kindQuotaReserved:         true,
 	kindTaskResult:            true,
+	kindTaskGenerationBumped:  true,
+	kindRootGenerationBumped:  true,
 	kindOperationCommitted:    true,
 }
 

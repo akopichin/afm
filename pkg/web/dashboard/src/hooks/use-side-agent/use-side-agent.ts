@@ -27,7 +27,7 @@ export type StreamOpener = (afterSeq: number, handlers: StreamHandlers) => Strea
 
 export type SideAgentDeps = {
   getConversation: (afterSeq?: number, limit?: number) => Promise<ConversationResponse>
-  sendMessage: (clientMessageId: string, text: string) => Promise<SendResponse>
+  sendMessage: (clientMessageId: string, text: string, stageId?: string) => Promise<SendResponse>
   interrupt: (turnId: string) => Promise<void>
   openStream: StreamOpener
 }
@@ -74,6 +74,12 @@ export type SideAgentApi = {
   quote: string | null
   openWith: (quote: string) => void
   clearQuote: () => void
+  // contextStageId — which stage this conversation is "about" right now (T4.3): shown as "Context: …" in
+  // the modal header. Defaults to currentStageId (the caller's ambient "currently selected stage", e.g. the
+  // dashboard rail selection) and can be overridden via setContextStageId before sending; the override is
+  // forgotten once the window closes, so reopening defaults back to the current selection.
+  contextStageId: string
+  setContextStageId: (stageId: string) => void
 }
 
 function newClientMessageId(): string {
@@ -83,8 +89,9 @@ function newClientMessageId(): string {
 }
 
 // useSideAgent — app-level source of truth для «бокового» разговора. Ленивое соединение: SSE живёт, пока
-// окно открыто ИЛИ идёт запрос.
-export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDeps = DEFAULT_DEPS): SideAgentApi {
+// окно открыто ИЛИ идёт запрос. currentStageId — ambient "currently selected stage" (e.g. the dashboard
+// rail selection), used as contextStageId's default (T4.3).
+export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDeps = DEFAULT_DEPS, currentStageId = ''): SideAgentApi {
   const [events, setEvents] = useState<SideAgentEvent[]>([])
   const [requestState, setRequestState] = useState<'idle' | 'running'>('idle')
   const [unavailable, setUnavailable] = useState(false)
@@ -94,6 +101,9 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   const [unseenResult, setUnseenResult] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [quote, setQuote] = useState<string | null>(null)
+  // contextOverride — explicit choice made in the modal (setContextStageId), null = "follow currentStageId".
+  // Cleared whenever the window closes so a later reopen defaults back to the ambient current stage.
+  const [contextOverride, setContextOverride] = useState<string | null>(null)
 
   const cursorRef = useRef(0)
   const genRef = useRef(0)
@@ -120,6 +130,22 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   // (e.g. the same single-line comment re-sent), so a value comparison alone could wrongly clear a fresh
   // attachment that just happens to match the one that was actually sent.
   const quoteGenRef = useRef(0)
+
+  // contextStageId — derived, not its own piece of independent state: defaults to the ambient
+  // currentStageId, overridden only by an explicit setContextStageId call. contextStageIdRef mirrors it so
+  // send() can snapshot the value synchronously before its await — the same "freeze at the moment of the
+  // call" pattern quoteRef/quoteGenRef use just above, needed so a currentStageId change that arrives WHILE
+  // a send is in flight cannot retroactively change what that already-dispatched request carries
+  // (dev-plan.md T4.3's TestTurn_TargetFrozenAtSend).
+  const contextStageId = contextOverride ?? currentStageId
+  const contextStageIdRef = useRef(contextStageId)
+  contextStageIdRef.current = contextStageId
+
+  // Closing the window forgets any explicit override — reopening later defaults back to whatever is
+  // currently selected in the dashboard, rather than a stale choice from a previous conversation.
+  useEffect(() => {
+    if (!isOpen) setContextOverride(null)
+  }, [isOpen])
 
   // Смена run_id = другой прогон → другой разговор. layout-эффект (а не passive) — чтобы инвалидация
   // случилась ДО connection-эффекта ниже.
@@ -231,9 +257,11 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
       // цитату, что реально ушла с этим запросом — не свежеприкреплённую.
       const sentQuote = quoteRef.current
       const sentQuoteGen = quoteGenRef.current
+      // Snapshot BEFORE the await — see contextStageIdRef's doc comment above.
+      const sentStageId = contextStageIdRef.current
       try {
         const body = buildReplyBody(sentQuote, text)
-        const resp = await depsRef.current.sendMessage(clientMessageId, body)
+        const resp = await depsRef.current.sendMessage(clientMessageId, body, sentStageId)
         if (gen !== genRef.current) return
         // Принятый send — новейшая операция: поднимаем op, чтобы любой ещё
         // летящий догон истории (начатый до этого send) не применил свой снапшот.
@@ -323,5 +351,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     quote,
     openWith,
     clearQuote,
+    contextStageId,
+    setContextStageId: setContextOverride,
   }
 }

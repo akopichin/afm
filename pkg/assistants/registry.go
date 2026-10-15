@@ -3,6 +3,7 @@ package assistants
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // ReadonlyEnforcement records which read-only guarantee was backing a profile's availability at the moment
@@ -42,6 +43,10 @@ type ProfileView struct {
 // unknown/unavailable command marks a profile unavailable without failing the whole build.
 type Registry struct {
 	entries map[ProfileID]registryEntry
+	// byLower indexes every profile id by its lowercased form, for case-insensitive `@mention` resolution
+	// (T4.1). Built once in BuildRegistry, which also rejects a config where two DIFFERENT ids collide once
+	// lowercased — that config would make `@mention` resolution ambiguous.
+	byLower map[string]ProfileID
 }
 
 type registryEntry struct {
@@ -99,7 +104,31 @@ func BuildRegistry(builtin, global, project []Profile, defaultCommand string, av
 			}
 		}
 	}
+
+	byLower := make(map[string]ProfileID, len(reg.entries))
+	for id := range reg.entries {
+		lower := strings.ToLower(string(id))
+		if existing, collide := byLower[lower]; collide && existing != id {
+			return nil, fmt.Errorf("assistants: profile ids %q and %q collide once case-normalized — @mention resolution would be ambiguous", existing, id)
+		}
+		byLower[lower] = id
+	}
+	reg.byLower = byLower
 	return reg, nil
+}
+
+// Resolve looks up a profile by a case-insensitive id, used to turn `@mention` text into a profile: a
+// mention addresses a ROLE, never a running task instance (addressing an already-running task is by
+// task_id — see dev-plan.md T4.7, Этап 4). An unrecognized mention is not an error: ok=false lets the
+// caller leave the text untouched (dev-plan.md §4.1). nil-safe — a nil *Registry (collaboration capability
+// off, same "nil-receiver → off" convention as cmd/afm/run_side_agent.go's service()) just never resolves
+// anything, so callers (e.g. sideagent.Config.MentionResolve) don't need their own nil check.
+func (r *Registry) Resolve(mention string) (ProfileID, bool) {
+	if r == nil {
+		return "", false
+	}
+	id, ok := r.byLower[strings.ToLower(mention)]
+	return id, ok
 }
 
 // List returns every registered profile's view, sorted by id for a stable, deterministic order (map

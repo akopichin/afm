@@ -76,8 +76,14 @@
     "collaborationLimits": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Delegation/quota limits for the collaboration feature. Empty today; filled in by later stages (admission depth/actor/generation/quota, required-subtask budgets).",
-      "properties": {}
+      "description": "Delegation/quota limits for the collaboration feature.",
+      "properties": {
+        "max_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Whole-run ceiling on the total number of helper tasks (top-level attaches plus every delegated descendant). Unset = unlimited."
+        }
+      }
     },
     "sideAgent": {
       "type": "object",

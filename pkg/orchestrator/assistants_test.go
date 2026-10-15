@@ -24,12 +24,20 @@ const assistantsTestStageID = "impl"
 
 // newAssistantsTestOrchestrator builds a minimal, real (non-mocked) Store + graph + concurrency Manager —
 // enough to exercise Attach/the task lifecycle end-to-end, with a fake runHelperAgent standing in for a real
-// subprocess (same seam pattern as newVerifyTestOrchestrator/o.runVerifyAgent).
-func newAssistantsTestOrchestrator(t *testing.T, enabled bool) (*Orchestrator, *state.Store) {
+// subprocess (same seam pattern as newVerifyTestOrchestrator/o.runVerifyAgent). extraStages (optional) are
+// additional stages initialized in the SAME store/graph alongside assistantsTestStageID — needed by any test
+// that must attach watchers rooted at more than one stage (e.g. TestLoop_ChildNotAutoSubscribedToAncestors):
+// state.Open must know about a stage id up front, or that stage's own EvReady/EvStartRun has no record to
+// apply against.
+func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...flow.Stage) (*Orchestrator, *state.Store) {
 	t.Helper()
 	dir := t.TempDir()
-	stage := flow.Stage{ID: assistantsTestStageID, Command: "claude"}
-	store, err := state.Open(dir, []string{assistantsTestStageID})
+	stages := append([]flow.Stage{{ID: assistantsTestStageID, Command: "claude"}}, extraStages...)
+	stageIDs := make([]string, len(stages))
+	for i, s := range stages {
+		stageIDs[i] = s.ID
+	}
+	store, err := state.Open(dir, stageIDs)
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -39,7 +47,7 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool) (*Orchestrator, *
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
 
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}}}, nil, "claude",
 		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
 			return true, "", assistants.ReadonlyEnforcementOS
 		})
@@ -47,7 +55,6 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool) (*Orchestrator, *
 		t.Fatalf("BuildRegistry: %v", err)
 	}
 
-	stages := []flow.Stage{stage}
 	o := &Orchestrator{
 		opts: Options{
 			RunDir: dir, Stages: stages, Store: store, RunID: "run1",
@@ -392,6 +399,188 @@ func TestPause_StopsTurnAndBlocksNewTriggers(t *testing.T) {
 	}
 }
 
+// TestPause_RunningTaskRequeuesForResumeInsteadOfFailing is the companion to
+// TestPause_StopsTurnAndBlocksNewTriggers: that test pauses a task still queued behind the command semaphore
+// (subprocess never started); this one pauses a task whose helper subprocess is ALREADY running. PauseTask
+// cancels runHelperTask's runCtx directly (not via executor's InterruptCh), which pkg/executor/hardening.go's
+// RunHelperAgent surfaces as a bare !ProcessOK outcome (no Interrupted/TimedOut flag — those are InterruptCh-
+// only). Before the fix, runHelperTask's switch had no way to tell that apart from a genuine crash and always
+// finished the task as "failed", discarding the pause/resume contract entirely.
+func TestPause_RunningTaskRequeuesForResumeInsteadOfFailing(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	var calls atomic.Int32
+	started := make(chan struct{}, 1)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if calls.Add(1) == 1 {
+			started <- struct{}{}
+			<-ctx.Done()
+			// Mirrors the real executor's default branch for a plain ctx cancellation: no Interrupted, no
+			// TimedOut, just a process that did not finish cleanly.
+			return executor.HelperOutcome{}, nil
+		}
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	<-started
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	if err := o.PauseTask(context.Background(), taskID); err != nil {
+		t.Fatalf("PauseTask: %v", err)
+	}
+
+	// Must land back in "queued" (resumable), never "failed".
+	waitForTaskStatus(t, store, taskID, assistants.StatusQueued, 2*time.Second)
+
+	if err := o.ContinueTask(context.Background(), taskID); err != nil {
+		t.Fatalf("ContinueTask: %v", err)
+	}
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+}
+
+// TestPause_ImmediateContinueBeforeClassificationStillRequeues is a regression test for a race codex's verify
+// gate found: TestPause_RunningTaskRequeuesForResumeInsteadOfFailing only calls ContinueTask AFTER waiting for
+// the requeue to "queued" — it never exercises an immediate Continue that races ahead of runHelperTask's own
+// classification of the cancelled subprocess. PauseTask's hold is the ONLY signal that branch reads
+// (o.taskHeld); if ContinueTask clears it (and its own now-too-early scheduling attempt sees status still
+// "running" and silently no-ops, same as TestLostWakeup_ContinueDuringRequeueStillSchedules) before
+// classification runs, taskHeld reads false there and the switch falls through to "failed" — mistaking a
+// deliberate pause for a genuine crash.
+//
+// The fake runHelperAgent calls ContinueTask itself, synchronously, right after <-ctx.Done() and before
+// returning — since runHelperTask calls o.runHelperAgent inline (no separate goroutine), this deterministically
+// forces ContinueTask's hold-clear to land before the switch below it ever runs, with no sleep/timing
+// assumption needed.
+func TestPause_ImmediateContinueBeforeClassificationStillRequeues(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	var calls atomic.Int32
+	started := make(chan struct{}, 1)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if calls.Add(1) == 1 {
+			started <- struct{}{}
+			<-ctx.Done()
+			if err := o.ContinueTask(context.Background(), assistants.TaskID(taskID)); err != nil {
+				t.Errorf("ContinueTask: %v", err)
+			}
+			return executor.HelperOutcome{}, nil
+		}
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	<-started
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	if err := o.PauseTask(context.Background(), taskID); err != nil {
+		t.Fatalf("PauseTask: %v", err)
+	}
+
+	// Must reach "completed" (the retried second attempt) — never "failed": an immediate Continue racing ahead
+	// of classification must not turn a deliberate pause into a false crash report.
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+}
+
+// TestPauseTask_SurvivesImmediateRequeueRace is a regression test for a race codex's verify gate found.
+// PauseTask alone does NOT reach this race — it sets a hold before cancelling, and runHelperTask's own
+// `if !o.taskHeld(taskID) { maybeScheduleTask(...) }` branch is gated on that same hold being already clear.
+// The real trigger (mirroring TestPause_ImmediateContinueBeforeClassificationStillRequeues) is an IMMEDIATE
+// ContinueTask that races ahead of classification and clears the hold before the switch below reads it: that
+// makes runHelperTask's own requeue branch SYNCHRONOUSLY (same goroutine, before this attempt's own defer
+// runs) reschedule a NEW attempt via maybeScheduleTask → spawnTask → SpawnOwned. With a command semaphore
+// that allows two concurrent attempts (e.g. max_parallel >= 2), the NEW attempt's runHelperTask can acquire
+// its lease and store ITS OWN entry in o.taskCancels before the OLD attempt's defer runs — a blind
+// "taskCancels.Delete(taskID)" would then erase the NEW attempt's entry, leaving a later PauseTask with
+// nothing to cancel even though a process is still actually running. The fix: o.taskCancels stores a
+// per-attempt *taskCancelEntry, and the defer does CompareAndDelete(taskID, its own entry) — a no-op once a
+// newer attempt has already overwritten it.
+//
+// The exact interleaving is forced deterministically via o.taskRequeuePreDeferHook (test-only seam): the OLD
+// attempt blocks right after scheduling the NEW attempt and right before its own defer runs, and is only
+// released once the NEW attempt's runHelperTask has already stored its own entry.
+func TestPauseTask_SurvivesImmediateRequeueRace(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	// Two concurrent slots for "helper-cmd" — the NEW (requeued) attempt must be able to acquire its lease
+	// WITHOUT waiting for the OLD attempt to release its own (see this test's doc comment).
+	o.concurrency = concurrency.NewWithSemaphores(bus.NewCriticalBus(16), map[string]concurrency.Semaphore{"helper-cmd": concurrency.ChannelSemaphore(make(chan struct{}, 2))}, "claude")
+
+	var calls atomic.Int32
+	oldStarted := make(chan struct{}, 1)
+	// attempt2Started is CLOSED (not sent-once) so both the hook below and this test's main goroutine can each
+	// observe it independently — by the time it closes, the NEW attempt has already stored its OWN entry in
+	// o.taskCancels (Store happens before runHelperTask ever calls o.runHelperAgent).
+	attempt2Started := make(chan struct{})
+	newCtxDone := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		switch calls.Add(1) {
+		case 1:
+			oldStarted <- struct{}{}
+			<-ctx.Done()
+			// Forces ContinueTask to race ahead of this goroutine's own classification, clearing the hold
+			// BEFORE the switch below reads o.taskHeld — the precondition for its "!taskHeld" branch to
+			// actually call maybeScheduleTask synchronously, in THIS goroutine (same trick as
+			// TestPause_ImmediateContinueBeforeClassificationStillRequeues).
+			if err := o.ContinueTask(context.Background(), assistants.TaskID(taskID)); err != nil {
+				t.Errorf("ContinueTask: %v", err)
+			}
+			return executor.HelperOutcome{}, nil
+		case 2:
+			close(attempt2Started)
+			<-ctx.Done()
+			close(newCtxDone)
+			return executor.HelperOutcome{}, nil
+		default:
+			return passResultOutcome(), nil
+		}
+	}
+
+	releaseOld := make(chan struct{})
+	o.taskRequeuePreDeferHook = func(assistants.TaskID) {
+		<-attempt2Started
+		<-releaseOld
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	<-oldStarted
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	if err := o.PauseTask(context.Background(), taskID); err != nil {
+		t.Fatalf("PauseTask: %v", err)
+	}
+
+	// Wait for the NEW attempt to have actually started (and thus stored its own entry) BEFORE letting the OLD
+	// attempt's defer run — otherwise a plain "entry present" check could trivially pass on the OLD attempt's
+	// own (not-yet-cleaned-up) entry instead of exercising the race at all.
+	select {
+	case <-attempt2Started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the NEW (requeued) attempt never started — maybeScheduleTask did not reschedule it")
+	}
+	close(releaseOld) // let the OLD attempt's defer run now that the NEW attempt's entry is already in place
+
+	// The NEW attempt's entry must have survived the OLD attempt's defer.
+	waitForTrue(t, func() bool {
+		_, ok := o.taskCancels.Load(taskID)
+		return ok
+	}, 2*time.Second, "the NEW attempt's cancel entry must survive the OLD attempt's defer")
+
+	// A second PauseTask must actually reach the NEW (requeued) attempt's subprocess, not silently find
+	// nothing to cancel.
+	if err := o.PauseTask(context.Background(), taskID); err != nil {
+		t.Fatalf("second PauseTask: %v", err)
+	}
+	select {
+	case <-newCtxDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the NEW (requeued) attempt's subprocess was never actually cancelled — its cancel entry was lost")
+	}
+}
+
 func TestCancel_KeepsHistory(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
@@ -592,17 +781,68 @@ func TestTaskEvents_PaginatesInSeqOrderAfterCursor(t *testing.T) {
 		t.Fatalf("next cursor = %d, want %d (last event's seq)", next, all[len(all)-1].Seq)
 	}
 
-	// limit smaller than the full history must set hasMore.
+	// limit smaller than the full history must set hasMore. The first two events (task_created +
+	// task_status_changed-to-"queued") share one Seq (same Attach operation/bundle), so a limit of 1 cannot
+	// stop between them — the page must grow to include the whole Seq group, or the sibling would be
+	// unreachable on the next page (cursor == that shared Seq filters it out as "already consumed").
+	if all[0].Seq != all[1].Seq {
+		t.Fatalf("test assumes the first two events share a Seq (Attach's same-operation bundle), got %+v", all[:2])
+	}
 	firstPage, _, hasMoreLimited, err := o.TaskEvents(taskID, 0, 1)
 	if err != nil {
 		t.Fatalf("TaskEvents with limit=1: %v", err)
 	}
-	if len(firstPage) != 1 || !hasMoreLimited {
-		t.Fatalf("limited page = %+v hasMore=%v, want exactly 1 event and hasMore=true", firstPage, hasMoreLimited)
+	if len(firstPage) != 2 || firstPage[0].Seq != firstPage[1].Seq {
+		t.Fatalf("limited page = %+v, want both events sharing the first Seq kept together", firstPage)
+	}
+	if !hasMoreLimited {
+		t.Fatal("hasMore must still be true: events remain beyond the widened page")
 	}
 
 	if events, _, _, err := o.TaskEvents("unknown-task", 0, 100); err != nil || len(events) != 0 {
 		t.Fatalf("TaskEvents for an unknown task = %+v, %v, want empty/no error", events, err)
+	}
+}
+
+// TestTaskEvents_SameSeqSiblingNeverLostAcrossPages walks the task's full event history one event at a time
+// (limit=1) and asserts every page boundary — even when it falls across events sharing one Seq — reproduces
+// the exact same set as a single unbounded fetch, with no event skipped and none repeated.
+func TestTaskEvents_SameSeqSiblingNeverLostAcrossPages(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+
+	want, _, _, err := o.TaskEvents(taskID, 0, 100)
+	if err != nil {
+		t.Fatalf("TaskEvents: %v", err)
+	}
+
+	var got []state.TaskEvent
+	cursor := uint64(0)
+	for i := 0; i < 100; i++ {
+		page, next, hasMore, err := o.TaskEvents(taskID, cursor, 1)
+		if err != nil {
+			t.Fatalf("TaskEvents(cursor=%d, limit=1): %v", cursor, err)
+		}
+		got = append(got, page...)
+		cursor = next
+		if !hasMore {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("walked %d events via limit=1 pagination, want %d (full set): got=%+v want=%+v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i].Seq != want[i].Seq || got[i].Kind != want[i].Kind {
+			t.Fatalf("event %d mismatch: got %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 

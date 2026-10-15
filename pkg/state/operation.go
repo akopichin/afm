@@ -189,7 +189,7 @@ func checkPreconditions(rs *RunState, op Operation) error {
 			if e.Kind != kindQuotaReserved {
 				continue
 			}
-			var p quotaReservedPayload
+			var p QuotaReservedPayload
 			if err := decodePayload(e.Payload, &p); err != nil {
 				return fmt.Errorf("decode quota_reserved effect: %w", err)
 			}

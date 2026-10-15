@@ -69,6 +69,11 @@ type AssistantsState struct {
 	// QuotaReserved is the whole-tree reservation total (T2.6): a budget belongs to the whole delegation
 	// tree, not to any one level, so it is a single running total rather than per-depth counters.
 	QuotaReserved int `json:"quota_reserved,omitempty"`
+	// RootGenerations (T4a.6) counts how many times EACH root stage's whole task tree has been invalidated
+	// (keyed by root stage id, absent/0 = never bumped). A task's own RootGeneration field is stamped ONCE
+	// from this counter's CURRENT value at task_created time and never rewritten — see
+	// kindRootGenerationBumped's doc comment in record.go.
+	RootGenerations map[string]uint64 `json:"root_generations,omitempty"`
 }
 
 // PolicyState is the durable record of the effective delegation-depth policy for this run (T2.6) — mirrors
@@ -82,10 +87,11 @@ type PolicyState struct {
 // newAssistantsState returns an AssistantsState with initialized (non-nil) maps.
 func newAssistantsState() AssistantsState {
 	return AssistantsState{
-		Tasks:          map[assistants.TaskID]*TaskState{},
-		ByRootStage:    map[string][]assistants.TaskID{},
-		ByParent:       map[assistants.TaskID][]assistants.TaskID{},
-		OperationIndex: map[string]uint64{},
+		Tasks:           map[assistants.TaskID]*TaskState{},
+		ByRootStage:     map[string][]assistants.TaskID{},
+		ByParent:        map[assistants.TaskID][]assistants.TaskID{},
+		OperationIndex:  map[string]uint64{},
+		RootGenerations: map[string]uint64{},
 	}
 }
 
@@ -105,6 +111,9 @@ func (as AssistantsState) Clone() AssistantsState {
 	}
 	for op, seq := range as.OperationIndex {
 		out.OperationIndex[op] = seq
+	}
+	for stage, gen := range as.RootGenerations {
+		out.RootGenerations[stage] = gen
 	}
 	out.Policy = as.Policy
 	out.QuotaReserved = as.QuotaReserved
@@ -256,6 +265,13 @@ type TaskCreatedPayload struct {
 	PolicyRev        string             `json:"policy_rev"`
 	MaxDepthAtCreate int                `json:"max_depth_at_create"`
 	CreatedBy        string             `json:"created_by"`
+	// ParentGenerationAtCreate/RootGenerationAtCreate (T4a.6) freeze the parent task's TaskGeneration and the
+	// root stage's RootGenerations counter at the moment this task was created — same "stamp once, never
+	// recompute" convention as PolicyRev/MaxDepthAtCreate above. A task with no parent gets
+	// ParentGenerationAtCreate 0 (meaningless/unused: a top-level task is never "stale relative to its
+	// parent").
+	ParentGenerationAtCreate uint64 `json:"parent_generation_at_create,omitempty"`
+	RootGenerationAtCreate   uint64 `json:"root_generation_at_create,omitempty"`
 }
 
 // TaskStatusChangedPayload is the task_status_changed control record's payload — decoded here by
@@ -336,6 +352,10 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyQuotaReserved(as, c, dryRun)
 	case kindTaskResult:
 		return applyTaskResult(as, c, dryRun)
+	case kindTaskGenerationBumped:
+		return applyTaskGenerationBumped(as, c, dryRun)
+	case kindRootGenerationBumped:
+		return applyRootGenerationBumped(as, c, dryRun)
 	case kindOperationCommitted:
 		return applyOperationCommitted(as, c, dryRun)
 	default:
@@ -374,6 +394,8 @@ func applyTaskCreated(as *AssistantsState, c *Control, dryRun bool) error {
 		MaxDepthAtCreate: p.MaxDepthAtCreate,
 		CreatedBy:        assistants.Origin(p.CreatedBy),
 		CreatedAt:        c.Time,
+		ParentGeneration: p.ParentGenerationAtCreate,
+		RootGeneration:   p.RootGenerationAtCreate,
 	}
 	if p.ParentTaskID != nil {
 		pid := assistants.TaskID(*p.ParentTaskID)
@@ -521,7 +543,12 @@ func applyPolicySet(as *AssistantsState, c *Control, dryRun bool) error {
 	return nil
 }
 
-type quotaReservedPayload struct {
+// QuotaReservedPayload is the quota_reserved control record's payload — decoded here by applyQuotaReserved,
+// encoded by pkg/orchestrator's quotaReservedEffect (T4a.2). Exported for the same reason
+// TaskCreatedPayload/TaskStatusChangedPayload/TaskHoldPayload above are: pkg/orchestrator builds this shape
+// too (a delegation group's admission reserves quota atomically with creating its children), and sharing the
+// type keeps the json tag defined in exactly one place.
+type QuotaReservedPayload struct {
 	Amount int `json:"amount"`
 }
 
@@ -529,7 +556,7 @@ type quotaReservedPayload struct {
 // single running total across the whole run), not reset per delegation level — T2.6's
 // TestQuota_NotResetPerDelegation.
 func applyQuotaReserved(as *AssistantsState, c *Control, dryRun bool) error {
-	var p quotaReservedPayload
+	var p QuotaReservedPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode quota_reserved payload: %w", err)
 	}
@@ -544,6 +571,40 @@ func applyQuotaReserved(as *AssistantsState, c *Control, dryRun bool) error {
 // MaxDepth) — used to mark existing deep tasks policy_blocked after a lowered limit, without touching their
 // stored Depth/ParentTaskID (TestPolicy_LoweredLimitKeepsExistingTree).
 func (p PolicyState) Blocks(depth int) bool { return depth > p.MaxDepth }
+
+// applyTaskGenerationBumped increments taskID's own TaskGeneration by one (T4a.6) — RetryTask's effect.
+// Existing descendants' ParentGeneration (stamped at THEIR creation time, never rewritten) is what becomes
+// stale relative to this new value; this function itself never touches any other task.
+func applyTaskGenerationBumped(as *AssistantsState, c *Control, dryRun bool) error {
+	id := assistants.TaskID(c.Target.TaskID)
+	t, ok := as.Tasks[id]
+	if !ok {
+		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
+	}
+	if dryRun {
+		return nil
+	}
+	t.TaskGeneration++
+	return nil
+}
+
+// applyRootGenerationBumped increments one root stage's whole-tree RootGenerations counter by one (T4a.6).
+// Existing tasks' RootGeneration (stamped at task_created time) is left untouched — exactly like
+// applyPolicySet's lowered max_depth, invalidation is a READ-time comparison (a task's own RootGeneration
+// vs. this counter's CURRENT value), never a rewrite of history.
+func applyRootGenerationBumped(as *AssistantsState, c *Control, dryRun bool) error {
+	if c.Target.StageID == "" {
+		return errors.New("root_generation_bumped: empty target stage_id")
+	}
+	if dryRun {
+		return nil
+	}
+	if as.RootGenerations == nil {
+		as.RootGenerations = map[string]uint64{}
+	}
+	as.RootGenerations[c.Target.StageID]++
+	return nil
+}
 
 func applyTaskContinuationSaved(as *AssistantsState, c *Control, dryRun bool) error {
 	id := assistants.TaskID(c.Target.TaskID)

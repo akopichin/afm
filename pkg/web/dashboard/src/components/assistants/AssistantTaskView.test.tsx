@@ -6,7 +6,8 @@ import type { AssistantTask } from '../../types/assistant-task'
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
     id: 't1', parentTaskId: null, profileId: 'reviewer', title: 'Reviewer', mode: 'advisory',
-    trigger: 'one_shot', status: 'running', statusReason: '', ...overrides,
+    trigger: 'one_shot', status: 'running', statusReason: '', depth: 1,
+    watchPasses: null, watchLastCheckpointSeq: null, ...overrides,
   }
 }
 
@@ -93,5 +94,24 @@ describe('AssistantTaskView', () => {
   test('required vs advisory mode is shown as text, not only as a data attribute', () => {
     render(<AssistantTaskView task={makeTask({ mode: 'required' })} />)
     expect(screen.getByText('Required')).toBeInTheDocument()
+  })
+
+  // T5.6: a checkpoints/on_completion watcher task surfaces trigger kind + pass count + last processed
+  // checkpoint — a plain one_shot task (the default makeTask()) shows none of this.
+  test('watcher task shows trigger kind, pass count, and last processed checkpoint', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    render(
+      <AssistantTaskView
+        task={makeTask({ status: 'watching', trigger: 'checkpoints', watchPasses: 3, watchLastCheckpointSeq: 42 })}
+      />,
+    )
+    expect(screen.getByText('Watches: checkpoints')).toBeInTheDocument()
+    expect(screen.getByText('Passes: 3')).toBeInTheDocument()
+    expect(screen.getByText('Last checkpoint: #42')).toBeInTheDocument()
+  })
+
+  test('a plain one_shot task shows no watcher status line', () => {
+    render(<AssistantTaskView task={makeTask({ trigger: 'one_shot' })} />)
+    expect(screen.queryByText(/^Watches:/)).not.toBeInTheDocument()
   })
 })

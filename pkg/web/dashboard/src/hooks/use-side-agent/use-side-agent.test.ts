@@ -205,6 +205,62 @@ describe('useSideAgent', () => {
     expect(result.current.draft).toBe('second message') // НЕ затёрт
   })
 
+  // --- T4.3: per-turn stage context ---
+
+  it('defaults contextStageId to the ambient currentStageId', () => {
+    const { deps } = makeDeps()
+    const { result } = renderHook(() => useSideAgent('r1', true, deps, 'frontend'))
+    expect(result.current.contextStageId).toBe('frontend')
+  })
+
+  it('setContextStageId overrides the default before sending', () => {
+    const { deps } = makeDeps()
+    const { result } = renderHook(() => useSideAgent('r1', true, deps, 'frontend'))
+    act(() => { result.current.setContextStageId('backend') })
+    expect(result.current.contextStageId).toBe('backend')
+  })
+
+  it('closing the window forgets an explicit override — reopening defaults back to the current stage', async () => {
+    const { deps } = makeDeps()
+    const { result } = renderHook(() => useSideAgent('r1', true, deps, 'frontend'))
+    await act(async () => { result.current.open() })
+    act(() => { result.current.setContextStageId('backend') })
+    expect(result.current.contextStageId).toBe('backend')
+    act(() => { result.current.close() })
+    expect(result.current.contextStageId).toBe('frontend')
+  })
+
+  it('send() transmits the current contextStageId as the stage of the outgoing turn', async () => {
+    const { deps, sendMessage } = makeDeps()
+    const { result } = renderHook(() => useSideAgent('r1', true, deps, 'frontend'))
+    await act(async () => { await result.current.send('hello') })
+    expect(sendMessage).toHaveBeenCalledWith(expect.any(String), 'hello', 'frontend')
+  })
+
+  // TestTurn_TargetFrozenAtSend — changing the dashboard's selected stage WHILE a send is in flight must not
+  // retroactively change what that already-dispatched request carries.
+  it('freezes the target at the moment of send: a later currentStageId change does not affect the in-flight request', async () => {
+    const { deps, sendMessage } = makeDeps()
+    let resolveSend!: (v: { turnId: string; state: 'running'; cursor: number }) => void
+    sendMessage.mockReturnValueOnce(new Promise((res) => { resolveSend = res }))
+    const { result, rerender } = renderHook(
+      ({ stageId }: { stageId: string }) => useSideAgent('r1', true, deps, stageId),
+      { initialProps: { stageId: 'frontend' } },
+    )
+
+    let sendPromise!: Promise<void>
+    act(() => { sendPromise = result.current.send('hello') })
+    // The dashboard's selection changes WHILE the POST is in flight.
+    rerender({ stageId: 'backend' })
+    expect(result.current.contextStageId).toBe('backend') // UI reflects the new ambient selection...
+    await act(async () => {
+      resolveSend({ turnId: 't1', state: 'running', cursor: 1 })
+      await sendPromise
+    })
+    // ...but the request that was already dispatched still carries the stage id captured at send-time.
+    expect(sendMessage).toHaveBeenCalledWith(expect.any(String), 'hello', 'frontend')
+  })
+
   it('an idle idempotent response (completed turn, window closed) applies idle state and catches up history', async () => {
     // Повтор уже завершённого хода: POST отвечает state:'idle', нового SSE терминала не будет. Окно
     // закрыто (keepAlive=false) → connection-эффект не бежит; догон должен сделать сам send.

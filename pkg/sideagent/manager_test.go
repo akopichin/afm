@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -197,6 +198,50 @@ func TestManager_ConstructionDoesNotLaunch(t *testing.T) {
 	}
 }
 
+// TestManager_SendRecordsTargetAndResolvesMentions — T4.3: the caller-supplied TurnTarget (stage_id,
+// assistant_task_id) lands verbatim in the durable turn_accepted record, and mentions are derived by the
+// Manager itself from the message text via Config.MentionResolve — never accepted as a field from the
+// caller (TurnTarget has no Mentions field at all).
+func TestManager_SendRecordsTargetAndResolvesMentions(t *testing.T) {
+	ff := &fakeFactory{fakes: []*fakeRunner{{actions: []fakeAction{{"text", "ok"}}}}}
+	store := newTestStore(t)
+	m := New(Config{
+		Store:       store,
+		Command:     "claude",
+		Context:     ContextBuilder{},
+		NewExecutor: ff.make,
+		MentionResolve: func(word string) (string, bool) {
+			if word == "qaEngineer" {
+				return "qaEngineer", true
+			}
+			return "", false
+		},
+	})
+
+	if _, err := m.Send("c1", "please @qaEngineer check this, cc @unknownRole", TurnTarget{StageID: "frontend", AssistantTaskID: "task-1"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if !m.Drain(ctxWithTimeout(t, time.Second)) {
+		t.Fatal("Drain")
+	}
+
+	history := store.History()
+	if len(history) == 0 || history[0].Type != EventTurnAccepted {
+		t.Fatalf("history = %+v, want first event turn_accepted", history)
+	}
+	var d TurnAcceptedData
+	mustDecode(t, history[0], &d)
+	if d.StageID != "frontend" {
+		t.Errorf("StageID = %q, want %q", d.StageID, "frontend")
+	}
+	if d.AssistantTaskID != "task-1" {
+		t.Errorf("AssistantTaskID = %q, want %q", d.AssistantTaskID, "task-1")
+	}
+	if !reflect.DeepEqual(d.Mentions, []string{"qaEngineer"}) {
+		t.Errorf("Mentions = %v, want [qaEngineer] (unknownRole must be dropped)", d.Mentions)
+	}
+}
+
 func TestManager_SendCompletesAndDelivers(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{
 		actions: []fakeAction{{"text", "ответ агента"}},
@@ -205,7 +250,7 @@ func TestManager_SendCompletesAndDelivers(t *testing.T) {
 	ch, cancel := m.Subscribe()
 	defer cancel()
 
-	turnID, err := m.Send("c1", "привет")
+	turnID, err := m.Send("c1", "привет", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -242,13 +287,13 @@ func TestManager_IdempotentRepeatWhileRunning(t *testing.T) {
 	}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	id1, err := m.Send("c1", "привет")
+	id1, err := m.Send("c1", "привет", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send1: %v", err)
 	}
 	<-ff.fakes[0].started
 
-	id2, err := m.Send("c1", "привет")
+	id2, err := m.Send("c1", "привет", TurnTarget{})
 	if err != nil {
 		t.Fatalf("повтор Send: %v", err)
 	}
@@ -269,7 +314,7 @@ func TestManager_IdempotentRepeatAfterCompletion(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{actions: []fakeAction{{"text", "ok"}}}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	id1, err := m.Send("c1", "привет")
+	id1, err := m.Send("c1", "привет", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send1: %v", err)
 	}
@@ -277,7 +322,7 @@ func TestManager_IdempotentRepeatAfterCompletion(t *testing.T) {
 		t.Fatal("Drain")
 	}
 
-	id2, err := m.Send("c1", "привет")
+	id2, err := m.Send("c1", "привет", TurnTarget{})
 	if err != nil {
 		t.Fatalf("повтор после завершения: %v", err)
 	}
@@ -294,12 +339,12 @@ func TestManager_SameIDDifferentTextIsConflict(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{started: make(chan struct{}), block: block}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	if _, err := m.Send("c1", "первый"); err != nil {
+	if _, err := m.Send("c1", "первый", TurnTarget{}); err != nil {
 		t.Fatalf("Send1: %v", err)
 	}
 	<-ff.fakes[0].started
 
-	_, err := m.Send("c1", "ДРУГОЙ текст")
+	_, err := m.Send("c1", "ДРУГОЙ текст", TurnTarget{})
 	if code := codeOf(t, err); code != ErrCodeBusy {
 		t.Fatalf("code = %q, want %q", code, ErrCodeBusy)
 	}
@@ -313,13 +358,13 @@ func TestManager_SecondRequestWhileRunningBusyNoHistory(t *testing.T) {
 	store := newTestStore(t)
 	m := newManager(t, store, ff, ContextBuilder{})
 
-	if _, err := m.Send("c1", "первый"); err != nil {
+	if _, err := m.Send("c1", "первый", TurnTarget{}); err != nil {
 		t.Fatalf("Send1: %v", err)
 	}
 	<-ff.fakes[0].started
 	before := len(store.History())
 
-	_, err := m.Send("c2", "второй")
+	_, err := m.Send("c2", "второй", TurnTarget{})
 	if code := codeOf(t, err); code != ErrCodeBusy {
 		t.Fatalf("code = %q, want %q", code, ErrCodeBusy)
 	}
@@ -340,7 +385,7 @@ func TestManager_StopSpecificTurnPersistsPartialAndInterrupted(t *testing.T) {
 	store := newTestStore(t)
 	m := newManager(t, store, ff, ContextBuilder{})
 
-	id, err := m.Send("c1", "привет")
+	id, err := m.Send("c1", "привет", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -373,7 +418,7 @@ func TestManager_StopStaleIDDoesNotInterruptNextTurn(t *testing.T) {
 	}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	id1, err := m.Send("c1", "первый")
+	id1, err := m.Send("c1", "первый", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send1: %v", err)
 	}
@@ -381,7 +426,7 @@ func TestManager_StopStaleIDDoesNotInterruptNextTurn(t *testing.T) {
 		t.Fatal("Drain1")
 	}
 
-	id2, err := m.Send("c2", "второй")
+	id2, err := m.Send("c2", "второй", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send2: %v", err)
 	}
@@ -418,7 +463,7 @@ func TestManager_AgentRunsUnderManagerCtxNotRequest(t *testing.T) {
 	reqCtx, reqCancel := context.WithCancel(context.Background())
 	reqCancel()
 
-	if _, err := m.Send("c1", "привет"); err != nil {
+	if _, err := m.Send("c1", "привет", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	<-ff.fakes[0].started
@@ -438,7 +483,7 @@ func TestManager_SuccessWithNoAnswerIsProtocolError(t *testing.T) {
 	store := newTestStore(t)
 	m := newManager(t, store, ff, ContextBuilder{})
 
-	if _, err := m.Send("c1", "привет"); err != nil {
+	if _, err := m.Send("c1", "привет", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if !m.Drain(ctxWithTimeout(t, time.Second)) {
@@ -460,7 +505,7 @@ func TestManager_GoroutineRegisteredBeforeAdmissionUnlock(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{block: block}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	if _, err := m.Send("c1", "привет"); err != nil {
+	if _, err := m.Send("c1", "привет", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	// Сразу после возврата Send горутина уже учтена в WaitGroup: Drain с уже
@@ -495,7 +540,7 @@ func TestManager_RedactionAcrossUserEvents(t *testing.T) {
 	ch, cancel := m.Subscribe()
 	defer cancel()
 
-	if _, err := m.Send("c1", "привет"); err != nil {
+	if _, err := m.Send("c1", "привет", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	delivered := drainUntilTerminal(t, ch)
@@ -526,7 +571,7 @@ func TestManager_ContextLimitFailsBeforeAccept(t *testing.T) {
 	store := newTestStore(t)
 	m := newManager(t, store, ff, ContextBuilder{ByteLimit: 8}) // заведомо мало
 
-	_, err := m.Send("c1", "это сообщение заведомо длиннее восьми байт")
+	_, err := m.Send("c1", "это сообщение заведомо длиннее восьми байт", TurnTarget{})
 	if code := codeOf(t, err); code != ErrCodeContextLimit {
 		t.Fatalf("code = %q, want %q", code, ErrCodeContextLimit)
 	}
@@ -541,7 +586,7 @@ func TestManager_ContextLimitFailsBeforeAccept(t *testing.T) {
 func TestManager_StorageUnavailable(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{}}}
 	m := newManager(t, newCorruptStore(t), ff, ContextBuilder{})
-	_, err := m.Send("c1", "привет")
+	_, err := m.Send("c1", "привет", TurnTarget{})
 	if code := codeOf(t, err); code != ErrCodeStorageUnavailable {
 		t.Fatalf("code = %q, want %q", code, ErrCodeStorageUnavailable)
 	}
@@ -554,7 +599,7 @@ func TestManager_ShuttingDownRejectsSend(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 	m.Shutdown()
-	_, err := m.Send("c1", "привет")
+	_, err := m.Send("c1", "привет", TurnTarget{})
 	if code := codeOf(t, err); code != ErrCodeShuttingDown {
 		t.Fatalf("code = %q, want %q", code, ErrCodeShuttingDown)
 	}
@@ -565,7 +610,7 @@ func TestManager_DrainTrueAndFalse(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{block: block}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	if _, err := m.Send("c1", "привет"); err != nil {
+	if _, err := m.Send("c1", "привет", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if m.Drain(ctxWithTimeout(t, 100*time.Millisecond)) {
@@ -589,7 +634,7 @@ func TestManager_SlowSubscriberDropped(t *testing.T) {
 	ch, cancel := m.Subscribe()
 	defer cancel()
 
-	if _, err := m.Send("c1", "привет"); err != nil {
+	if _, err := m.Send("c1", "привет", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	// Медленный подписчик не должен заблокировать агента: ход завершается.
@@ -615,17 +660,17 @@ func TestManager_ValidationErrors(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{}, {}, {}}}
 	m := newManager(t, newTestStore(t), ff, ContextBuilder{})
 
-	if _, err := m.Send("c1", "   "); codeOf(t, err) != ErrCodeInvalidMessage {
+	if _, err := m.Send("c1", "   ", TurnTarget{}); codeOf(t, err) != ErrCodeInvalidMessage {
 		t.Fatalf("пустой текст: code = %q", codeOf(t, err))
 	}
-	if _, err := m.Send("", "привет"); codeOf(t, err) != ErrCodeInvalidMessage {
+	if _, err := m.Send("", "привет", TurnTarget{}); codeOf(t, err) != ErrCodeInvalidMessage {
 		t.Fatalf("пустой client_message_id: code = %q", codeOf(t, err))
 	}
 	big := make([]byte, MaxMessageBytes+1)
 	for i := range big {
 		big[i] = 'a'
 	}
-	if _, err := m.Send("c1", string(big)); codeOf(t, err) != ErrCodeMessageTooLarge {
+	if _, err := m.Send("c1", string(big), TurnTarget{}); codeOf(t, err) != ErrCodeMessageTooLarge {
 		t.Fatalf("слишком большой текст: code = %q", codeOf(t, err))
 	}
 	if ff.count() != 0 {
@@ -657,14 +702,14 @@ func TestManager_IdempotencyIsConversationWideAndDurable(t *testing.T) {
 	}}
 	m := newManager(t, store, ff, ContextBuilder{ByteLimit: 1 << 20})
 
-	id1, err := m.Send("c1", "a")
+	id1, err := m.Send("c1", "a", TurnTarget{})
 	if err != nil {
 		t.Fatalf("Send c1: %v", err)
 	}
 	if !m.Drain(context.Background()) {
 		t.Fatal("turn1 не завершился")
 	}
-	if _, err := m.Send("c2", "b"); err != nil {
+	if _, err := m.Send("c2", "b", TurnTarget{}); err != nil {
 		t.Fatalf("Send c2: %v", err)
 	}
 	if !m.Drain(context.Background()) {
@@ -672,7 +717,7 @@ func TestManager_IdempotencyIsConversationWideAndDurable(t *testing.T) {
 	}
 
 	// Повтор c1 ПОСЛЕ промежуточного хода c2 — тот же ход, без нового запуска.
-	again, err := m.Send("c1", "a")
+	again, err := m.Send("c1", "a", TurnTarget{})
 	if err != nil {
 		t.Fatalf("repeat c1: %v", err)
 	}
@@ -685,7 +730,7 @@ func TestManager_IdempotencyIsConversationWideAndDurable(t *testing.T) {
 
 	// «Рестарт»: новый Manager над тем же журналом восстанавливает идемпотентность.
 	m2 := newManager(t, store, ff, ContextBuilder{ByteLimit: 1 << 20})
-	r, err := m2.Send("c1", "a")
+	r, err := m2.Send("c1", "a", TurnTarget{})
 	if err != nil {
 		t.Fatalf("repeat c1 after restart: %v", err)
 	}
@@ -705,7 +750,7 @@ func TestManager_StorageFailureMidTurnStopsAgent(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{fr}}
 	m := newManager(t, store, ff, ContextBuilder{ByteLimit: 1 << 20})
 
-	if _, err := m.Send("c1", "hi"); err != nil {
+	if _, err := m.Send("c1", "hi", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

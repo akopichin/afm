@@ -143,3 +143,56 @@ func TestRegistry_GetUnknownIDReturnsFalse(t *testing.T) {
 		t.Error("Get(unknown) ok = true, want false")
 	}
 }
+
+// TestMentionNormalize_CaseInsensitiveUniqueIds — T4.1: a mention addresses a ROLE by id, and the match must
+// be case-insensitive (`@QAEngineer` and `@qaengineer` both reach the one profile "QAEngineer"). Two
+// DIFFERENT ids that collide once lowercased is a registry build error, not a silent pick of one of them —
+// such a config is ambiguous for every future `@mention` and must fail loudly at startup, not at mention time.
+func TestMentionNormalize_CaseInsensitiveUniqueIds(t *testing.T) {
+	global := []assistants.Profile{{ID: "QAEngineer", Command: "claude"}}
+	reg, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mention := range []string{"QAEngineer", "qaengineer", "QAENGINEER", "qaEngineer"} {
+		id, ok := reg.Resolve(mention)
+		if !ok || id != "QAEngineer" {
+			t.Errorf("Resolve(%q) = (%q, %v), want (QAEngineer, true)", mention, id, ok)
+		}
+	}
+
+	collidingGlobal := []assistants.Profile{{ID: "QAEngineer", Command: "claude"}, {ID: "qaengineer", Command: "claude"}}
+	if _, err := assistants.BuildRegistry(nil, collidingGlobal, nil, "claude", alwaysAvailable); err == nil {
+		t.Fatal("expected an error for two ids colliding once lowercased within one layer")
+	}
+
+	// Collision can also span layers: a later layer does not exactly match the earlier id (different case),
+	// so it does NOT replace it — it silently introduces an ambiguous second entry unless rejected.
+	builtin := []assistants.Profile{{ID: "QAEngineer", Command: "claude"}}
+	project := []assistants.Profile{{ID: "qaengineer", Command: "claude"}}
+	if _, err := assistants.BuildRegistry(builtin, nil, project, "claude", alwaysAvailable); err == nil {
+		t.Fatal("expected an error for ids colliding once lowercased across layers")
+	}
+}
+
+// TestRegistry_ResolveNilSafe — a nil *Registry (collaboration off) must not panic: Resolve always reports
+// "not found" instead, matching the codebase's "nil-receiver → capability off" convention.
+func TestRegistry_ResolveNilSafe(t *testing.T) {
+	var reg *assistants.Registry
+	if id, ok := reg.Resolve("anything"); ok {
+		t.Errorf("nil registry Resolve() = (%q, true), want ok=false", id)
+	}
+}
+
+// TestMentionNormalize_UnknownMentionIsNotAnError — an unrecognized `@word` is not an error anywhere in the
+// mention path: it stays plain text and never triggers anything (dev-plan.md §4.1 acceptance).
+func TestMentionNormalize_UnknownMentionIsNotAnError(t *testing.T) {
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "frontendDeveloper", Command: "claude"}}, nil, "claude", alwaysAvailable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, ok := reg.Resolve("totallyUnknownRole")
+	if ok {
+		t.Errorf("Resolve(unknown) = (%q, true), want ok=false", id)
+	}
+}

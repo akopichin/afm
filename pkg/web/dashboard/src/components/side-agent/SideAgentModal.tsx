@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { SideAgentHistory } from './SideAgentHistory'
 import { SideAgentComposer } from './SideAgentComposer'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
+import type { AssistantProfile } from '../../types/assistant-profile'
 import { visibleFocusables } from '../../lib/focus-trap'
 
 // Таймер, после которого закрывающееся окно уходит из hit-testing/a11y. 220 оставляет запас, чтобы фолбэк
@@ -16,12 +17,20 @@ export type SideAgentModalProps = {
   // attentionShortcut — ждущее действие стадии: кнопка в шапке СНАЧАЛА скрывает Side agent, затем
   // открывает нужный attention-воркспейс. null → нет ожидания.
   attentionShortcut?: { label: string; onActivate: () => void } | null
+  // stages — известные пары id/title стадий, для селектора «Context: …» (T4.3). Пусто/не передано → адресат
+  // показывается как есть (raw stage id), без выпадающего списка — ровно то, что известно на этот момент.
+  stages?: { id: string; title: string }[]
+  // assistantProfiles — роли, доступные для @mention в композере (T4.2). Пусто → меню недостижимо.
+  assistantProfiles?: AssistantProfile[]
 }
 
 // SideAgentModal — центрированная модалка беседы поверх дашборда. Крестик = только скрытие (работа агента
 // продолжается под ctx менеджера на бэкенде).
-export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModalProps): ReactElement {
-  const { isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, error, unavailable, quote, clearQuote } = api
+export function SideAgentModal({ api, attentionShortcut = null, stages = [], assistantProfiles = [] }: SideAgentModalProps): ReactElement {
+  const {
+    isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, error, unavailable,
+    quote, clearQuote, contextStageId, setContextStageId,
+  } = api
 
   // phase: closed → open → closing → closed. Разведение open/closing нужно, чтобы закрытие доигрывалось,
   // но окно сразу переставало быть интерактивным.
@@ -144,6 +153,30 @@ export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModal
           </div>
         </header>
 
+        {/* Адресат хода (T4.3): видно, какой стадии касается сообщение, и можно сменить ДО отправки — после
+            Send это уже не изменит отправленный ход (см. use-side-agent.ts's contextStageIdRef). Рендерится,
+            только если есть что показывать: либо уже есть адресат, либо есть из чего выбирать. */}
+        {(contextStageId !== '' || stages.length > 0) && (
+          <div className="side-agent-context-row">
+            <span className="side-agent-context-label">Context:</span>
+            {stages.length > 0 ? (
+              <select
+                className="side-agent-context-select"
+                aria-label="Conversation context stage"
+                value={contextStageId}
+                onChange={(e) => setContextStageId(e.target.value)}
+              >
+                <option value="">No stage</option>
+                {stages.map((s) => (
+                  <option key={s.id} value={s.id}>{s.title}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="side-agent-context-value">{contextStageId}</span>
+            )}
+          </div>
+        )}
+
         {unavailable && (
           <div className="side-agent-banner side-agent-banner-warning" role="status">
             The conversation store is unavailable; new messages are paused.
@@ -167,6 +200,7 @@ export function SideAgentModal({ api, attentionShortcut = null }: SideAgentModal
           running={running}
           quote={quote}
           onCancelQuote={clearQuote}
+          assistantProfiles={assistantProfiles}
         />
       </div>
     </div>,

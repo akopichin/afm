@@ -39,6 +39,14 @@ func (o *Orchestrator) TaskTree(stageID string) ([]assistants.Task, error) {
 	return out, nil
 }
 
+// AssistantsPolicyRevision returns the run's current effective collaboration depth-policy revision and max
+// depth (T4.5: the live values an action draft's ExpectedRevision must still match before the draft-confirm
+// HTTP path proceeds to Attach).
+func (o *Orchestrator) AssistantsPolicyRevision() (revision string, maxDepth int) {
+	rs := o.opts.Store.Snapshot()
+	return rs.Assistants.Policy.Revision, rs.Assistants.Policy.MaxDepth
+}
+
 // TaskEvents returns a bounded page of taskID's durable event history strictly after cursor, in increasing
 // Seq order, plus the cursor for the next page and whether more are available. Backs GET
 // /api/assistants/{id}/events. An unknown taskID is not an error — it simply has no events (mirrors
@@ -54,8 +62,16 @@ func (o *Orchestrator) TaskEvents(taskID assistants.TaskID, cursor uint64, limit
 	page := filtered
 	hasMore := false
 	if limit > 0 && len(filtered) > limit {
-		page = filtered[:limit]
-		hasMore = true
+		// Never cut a page in the middle of a Seq group: one ApplyRunOperation can commit several TaskEvents
+		// atomically (e.g. finishTaskFrom's status+result pair), and the cursor returned below IS a Seq value —
+		// if the page ended between two events sharing that Seq, the sibling would be filtered out as "already
+		// consumed" (e.Seq > cursor) on the very next page and lost forever. Grow the page past limit instead.
+		cut := limit
+		for cut < len(filtered) && filtered[cut].Seq == filtered[cut-1].Seq {
+			cut++
+		}
+		page = filtered[:cut]
+		hasMore = cut < len(filtered)
 	}
 	next := cursor
 	if len(page) > 0 {

@@ -15,7 +15,7 @@ func TestManager_ForwardsReasoningToExecutor(t *testing.T) {
 	})
 	ch, cancel := m.Subscribe()
 	defer cancel()
-	if _, err := m.Send("c1", "hi"); err != nil {
+	if _, err := m.Send("c1", "hi", TurnTarget{}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	drainUntilTerminal(t, ch)

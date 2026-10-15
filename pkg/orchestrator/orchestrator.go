@@ -24,6 +24,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/pkg/watch"
 )
 
 // Имена фаз выполнения — единый источник в pkg/flow. Локальные строковые алиасы оставлены, т.к. по коду
@@ -166,9 +167,28 @@ type Orchestrator struct {
 	// runHelperAgent — подменяемый запуск одного хода помощника (T3.4), продакшн — execHelperAgent. Тесты
 	// подставляют фейковый раннер (см. assistants_test.go) — тот же seam-паттерн, что и runVerifyAgent выше.
 	runHelperAgent helperAgentRunner
-	// taskCancels хранит context.CancelFunc активного прогона задачи на время её выполнения — Pause/Cancel
+	// taskCancels хранит *taskCancelEntry активного прогона задачи на время её выполнения — Pause/Cancel
 	// используют его, чтобы прервать уже стартовавший helper-процесс немедленно (ключ — assistants.TaskID).
+	// Значение — указатель (не голый context.CancelFunc), чтобы runHelperTask's defer мог CompareAndDelete
+	// СВОЙ СОБСТВЕННЫЙ entry по identity, а не слепой Delete: requeue-ветка runHelperTask синхронно зовёт
+	// maybeScheduleTask → spawnTask → SpawnOwned, который стартует СЛЕДУЮЩУЮ попытку в новой горутине ДО того,
+	// как эта (старая) горутина дойдёт до своего defer; если новая попытка успевает сделать свой Store раньше
+	// — голый Delete по ключу стёр бы чужой (уже актуальный) cancel, и Pause/Cancel больше не находили бы
+	// способа остановить реально бегущий процесс (см. TestPauseTask_SurvivesImmediateRequeueRace).
 	taskCancels sync.Map
+	// taskClarifyPending отмечает задачу, чья текущая попытка отменена через StopAndClarify (T4.7), а не
+	// PauseTask — установлена ДО cancel(), потребляется ОДИН РАЗ через LoadAndDelete внутри runHelperTask'а
+	// (та же горутина, что решает исход прогона), а не отдельным "clear"-шагом извне: отдельный шаг гонялся
+	// бы с этой самой проверкой (окно, где сигнал уже снят, а runHelperTask ещё не успел его увидеть, —
+	// задача ошибочно помечается failed вместо requeue). Ключ — assistants.TaskID.
+	taskClarifyPending sync.Map
+	// taskPausePending — тот же one-shot сигнал, что taskClarifyPending, но для PauseTask/ContinueTask:
+	// установлен ДО cancel(), потребляется ОДИН РАЗ через LoadAndDelete в том же месте runHelperTask's switch.
+	// Без него классификация опиралась бы ТОЛЬКО на o.taskHeld (живое состояние hold) — а немедленный
+	// ContinueTask, обогнавший классификацию, успевает снять hold ДО того, как эта горутина дойдёт до проверки,
+	// из-за чего отменённая по Pause попытка ошибочно помечается failed вместо requeue (см.
+	// TestPause_ImmediateContinueBeforeClassificationStillRequeues).
+	taskPausePending sync.Map
 
 	// terminalFlow — финальное flow-событие, установленное одним из выходов Run; эмитится finalizeLifecycle
 	// ПОСЛЕ остановки продюсеров.
@@ -232,6 +252,12 @@ type Orchestrator struct {
 	// детерминированно воспроизвести lost-wakeup гонку PauseTask/ContinueTask вокруг этого окна (см.
 	// spawnTask's doc comment).
 	taskRequeueBarrier func(taskID assistants.TaskID)
+	// taskRequeuePreDeferHook — тест-сейм: вызывается в runHelperTask's requeue-while-running ветке СРАЗУ
+	// после синхронного maybeScheduleTask (который уже мог успеть застартовать СЛЕДУЮЩУЮ попытку в новой
+	// горутине под тем же taskID), но ДО того, как ЭТА (старая) горутина дойдёт до своего defer
+	// (CompareAndDelete в o.taskCancels). Позволяет тесту детерминированно воспроизвести гонку, где новая
+	// попытка успевает сохранить свой cancel-entry раньше старой (см. TestPauseTask_SurvivesImmediateRequeueRace).
+	taskRequeuePreDeferHook func(taskID assistants.TaskID)
 
 	// flowPauseMu защищает составные решения PauseFlow; отдельные поля activationHeld/finalizing/reviewMarker
 	// читаются атомарно.
@@ -256,6 +282,22 @@ type Orchestrator struct {
 	// testClearReviewArtifacts подменяет очистку review-файлов для проверки fail-closed поведения при ошибке
 	// удаления.
 	testClearReviewArtifacts func() error
+
+	// --- Этап 5: watcher helper tasks (checkpoints/on_completion-triggered observation of the main agent) ---
+
+	// watchMu guards watchByStage/watchByTask — rare, admission-time/poll-time mutation, not a hot path, so a
+	// plain mutex (not sync.Map) keeps the fan-out-by-stage slice simple to maintain.
+	watchMu      sync.Mutex
+	watchByStage map[string][]*watcherBinding
+	watchByTask  map[assistants.TaskID]*watcherBinding
+	// taskFinalPass marks a taskID whose NEXT completed turn must land in the terminal "completed" status
+	// instead of the resting "watching" one — consumed exactly once (LoadAndDelete) by runHelperTask's success
+	// tail, mirroring taskPausePending/taskClarifyPending's one-shot signal pattern above.
+	taskFinalPass sync.Map
+	// watchClock — injectable Clock for watch.NewCollector (test seam, mirrors fingerprintFn); nil = real time.
+	watchClock watch.Clock
+	// watchPollInterval overrides the watcher poll ticker period in tests; 0 = production default.
+	watchPollInterval time.Duration
 }
 
 // bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле
@@ -452,6 +494,12 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail || ev == bus.EvAskUser {
 			o.clearRunnerKind(stageID)
 		}
+		// Этап 5 T5.4: a single funnel for "this stage's own result is ready/failed" regardless of which of the
+		// ~60 call sites triggered it — see finalizeWatchersForStage's doc comment for why hooking here (rather
+		// than completeStage/each EvFail call site individually) is the safe, additive choice.
+		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail {
+			o.finalizeWatchersForStage(stageID, ev)
+		}
 	}
 	return to, seq, ok
 }
@@ -514,8 +562,12 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	}
 	if !poisoned {
 		o.startPlanningForPending(ctx)
+		o.recoverAssistants(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
+	if o.opts.AssistantsEnabled {
+		o.startWatchPoller(ctx) // Этап 5: checkpoints/on_completion watcher firing
+	}
 
 	for {
 		select {

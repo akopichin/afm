@@ -45,6 +45,11 @@ type AttachRequest struct {
 // site with a concern most stages never use.
 type AssistantActions interface {
 	Attach(ctx context.Context, stageID string, req AttachRequest) (string, error)
+	// PolicyRevision returns the run's CURRENT effective collaboration depth-policy revision and max depth —
+	// the draft-confirm path (T4.5) compares an action draft's own ExpectedRevision against this live value
+	// BEFORE calling Attach, rejecting a stale draft instead of letting Attach's own internal CAS silently
+	// succeed against whatever the policy happens to be now.
+	PolicyRevision() (revision string, maxDepth int)
 	PauseTask(ctx context.Context, taskID string) error
 	ContinueTask(ctx context.Context, taskID string) error
 	CancelTask(ctx context.Context, taskID string) error

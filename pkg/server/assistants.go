@@ -26,11 +26,22 @@ type AssistantTaskView struct {
 	Trigger      string `json:"trigger"`
 	Status       string `json:"status"`
 	StatusReason string `json:"status_reason,omitempty"`
+	// Depth (T4a.8) — 1 for a top-level task, parent.Depth+1 for each delegated level below it
+	// (assistants.ComputeDepth). The dashboard's breadcrumb uses this plus the run's max_depth (already
+	// surfaced separately by GET /api/assistant-profiles) to show "depth N of max_depth".
+	Depth int `json:"depth"`
 	// ReadonlyEnforcement — which read-only guarantee (assistants.ReadonlyEnforcement: "os"/"none") was
 	// backing this task's profile at the moment it was admitted (frozen into ProfileSnapshot by
 	// orchestrator.Attach, see pkg/assistants/types.go's Profile.ReadonlyEnforcement) — not the profile's
 	// CURRENT availability, which may have since changed.
 	ReadonlyEnforcement string `json:"readonly_enforcement,omitempty"`
+	// WatchPasses/WatchLastCheckpointSeq (T5.6) — only set for a checkpoints/on_completion watcher task
+	// (Trigger). nil for a plain one_shot task: it was never bound as a watcher, so there is nothing to show.
+	// WatchPasses is how many turns the watcher's collector has fired so far (0 before its first checkpoint).
+	// WatchLastCheckpointSeq is the durable cursor's "processed up to" position (pkg/watch.CheckpointStore) —
+	// absent until the FIRST checkpoint is actually committed, never a fabricated value.
+	WatchPasses            *int `json:"watch_passes,omitempty"`
+	WatchLastCheckpointSeq *int `json:"watch_last_checkpoint_seq,omitempty"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.

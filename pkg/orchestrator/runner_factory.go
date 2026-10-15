@@ -158,6 +158,8 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		OnUsage:        o.recordUsage(s.ID, phase, ""),
 		BrowserMCP:     o.browserForStage(s, cmd),
 		Reasoning:      o.opts.Config.Client.Reasoning,
+		RunID:          o.opts.RunID,
+		OnObservation:  o.observationSink(s.ID),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
@@ -189,12 +191,14 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		StageID:        s.ID,
 		// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or skill that uses the file-based
 		// dialog protocol always has somewhere to write question.json — the poller auto-answers it.
-		StageDir:   filepath.Join(o.opts.RunDir, s.ID),
-		Phase:      phase,
-		UsageHint:  o.usageHintFor(cmd),
-		OnUsage:    o.recordUsage(s.ID, phase, ""),
-		BrowserMCP: o.browserForStage(s, cmd),
-		Reasoning:  o.opts.Config.Client.Reasoning,
+		StageDir:      filepath.Join(o.opts.RunDir, s.ID),
+		Phase:         phase,
+		UsageHint:     o.usageHintFor(cmd),
+		OnUsage:       o.recordUsage(s.ID, phase, ""),
+		BrowserMCP:    o.browserForStage(s, cmd),
+		Reasoning:     o.opts.Config.Client.Reasoning,
+		RunID:         o.opts.RunID,
+		OnObservation: o.observationSink(s.ID),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})

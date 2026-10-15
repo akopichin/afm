@@ -57,10 +57,15 @@ type ProfileConfig struct {
 	Instructions string `yaml:"instructions,omitempty"`
 }
 
-// CollaborationLimits will carry delegation/quota limits once later stages need them (T4a admission
-// depth/actor/generation/quota, T7 required-subtask budgets). Deliberately empty today — no speculative
-// fields ahead of the stage that defines them.
-type CollaborationLimits struct{}
+// CollaborationLimits carries delegation/quota limits (T4a.2 admission). MaxTasks is a whole-RUN ceiling —
+// state.Preconditions.MaxQuota/AssistantsState.QuotaReserved are already whole-tree (not per-level, T2.6),
+// so this is the one number admission needs; nil means unlimited (back-compat with the empty struct this
+// replaces). Further limits (T7 required-subtask budgets) are added when that stage needs them.
+type CollaborationLimits struct {
+	// MaxTasks caps the total number of helper tasks (top-level attaches plus every delegated descendant)
+	// created over the lifetime of one run. nil/absent = unlimited.
+	MaxTasks *int `yaml:"max_tasks,omitempty"`
+}
 
 // validateCollaborationMaxDepth rejects a negative collaboration.max_depth for one config layer, naming
 // both the layer ("global"/"project") and the key path in the error — unlike validateVerify's post-merge
@@ -69,6 +74,16 @@ type CollaborationLimits struct{}
 func validateCollaborationMaxDepth(layer string, v *int) error {
 	if v != nil && *v < 0 {
 		return fmt.Errorf("%s config: collaboration.max_depth: must not be negative, got %d", layer, *v)
+	}
+	return nil
+}
+
+// validateCollaborationMaxTasks rejects a negative collaboration.limits.max_tasks for one config layer —
+// mirrors validateCollaborationMaxDepth above. 0 is legal (same meaning as max_depth:0: no helpers at all,
+// just reached via the task-count ceiling instead of the depth one).
+func validateCollaborationMaxTasks(layer string, v *int) error {
+	if v != nil && *v < 0 {
+		return fmt.Errorf("%s config: collaboration.limits.max_tasks: must not be negative, got %d", layer, *v)
 	}
 	return nil
 }

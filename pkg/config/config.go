@@ -730,6 +730,12 @@ func mergeFile(dst *Config, path string, layer string) error {
 			dst.Collaboration.Profiles[id] = p // per-id overlay: later layer replaces the WHOLE profile definition
 		}
 	}
+	if overlay.Collaboration.Limits.MaxTasks != nil {
+		if err := validateCollaborationMaxTasks(layer, overlay.Collaboration.Limits.MaxTasks); err != nil {
+			return err
+		}
+		dst.Collaboration.Limits.MaxTasks = overlay.Collaboration.Limits.MaxTasks
+	}
 	if overlay.Docker.AutoShim != nil {
 		dst.Docker.AutoShim = overlay.Docker.AutoShim
 	}

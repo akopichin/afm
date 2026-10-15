@@ -3,9 +3,41 @@ package sideagent
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
+
+// TestExtractMentions_ResolvesDedupesAndIgnoresUnknown — T4.1/T4.3: only recognized "@word" tokens survive,
+// in first-seen order, each exactly once even if mentioned twice; an unresolved "@word" is silently dropped
+// (never an error — mentions are opt-in text annotations, not a required protocol element).
+func TestExtractMentions_ResolvesDedupesAndIgnoresUnknown(t *testing.T) {
+	resolve := func(word string) (string, bool) {
+		switch word {
+		case "qaEngineer":
+			return "qaEngineer", true
+		case "frontendDeveloper":
+			return "frontendDeveloper", true
+		default:
+			return "", false
+		}
+	}
+	got := extractMentions("ask @frontendDeveloper and @qaEngineer, then again @qaEngineer, also @unknownRole", resolve)
+	want := []string{"frontendDeveloper", "qaEngineer"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractMentions = %v, want %v", got, want)
+	}
+}
+
+// TestExtractMentions_NilResolverRecordsNothing — mentions recording is opt-in (nil MentionResolve, e.g.
+// collaboration capability off): extractMentions must not panic and must return no mentions at all, not an
+// empty-but-non-nil slice that happens to look the same — callers (e.g. TurnAcceptedData.Mentions via
+// omitempty) rely on nil to mean "not recorded".
+func TestExtractMentions_NilResolverRecordsNothing(t *testing.T) {
+	if got := extractMentions("@anything here", nil); got != nil {
+		t.Fatalf("extractMentions with nil resolver = %v, want nil", got)
+	}
+}
 
 // Каждый тип события должен пережить сериализацию/десериализацию конверта вместе
 // со своей типизированной data-нагрузкой без потерь.
@@ -15,11 +47,14 @@ func TestEvent_RoundTripAllTypes(t *testing.T) {
 		typ  EventType
 		data any
 	}{
-		{EventTurnAccepted, TurnAcceptedData{Message: "привет", ClientMessageID: "cm-1"}},
+		{EventTurnAccepted, TurnAcceptedData{Message: "привет", ClientMessageID: "cm-1", StageID: "frontend", AssistantTaskID: "a-1", Mentions: []string{"qaEngineer"}}},
 		{EventTurnStarted, TurnStartedData{Command: "claude", ContextFormatVersion: "v1"}},
 		{EventAssistantText, AssistantTextData{Text: "ответ агента"}},
 		{EventToolAction, ToolActionData{Tool: "Bash", Detail: "ls -la", LogRef: "turns/t1/agent.log"}},
-		{EventTurnCompleted, TurnCompletedData{}},
+		{EventTurnCompleted, TurnCompletedData{ActionDrafts: []ActionDraft{{
+			Type: "attach_assistant", Target: json.RawMessage(`{"profile_id":"qaEngineer"}`),
+			Payload: json.RawMessage(`{"instruction":"look at this"}`), ExpectedRevision: "3",
+		}}}},
 		{EventTurnFailed, TurnFailedData{Code: ErrCodeContextLimit, Message: "too big"}},
 		{EventTurnInterrupted, TurnInterruptedData{Reason: "shutdown"}},
 	}
@@ -53,9 +88,10 @@ func TestEvent_RoundTripAllTypes(t *testing.T) {
 			// data восстанавливается в тот же типизированный вид
 			switch want := c.data.(type) {
 			case TurnAcceptedData:
+				// TurnAcceptedData now carries a slice (Mentions, T4.3) — no longer comparable with !=.
 				var d TurnAcceptedData
 				mustDecode(t, got, &d)
-				if d != want {
+				if !reflect.DeepEqual(d, want) {
 					t.Fatalf("data mismatch: got %+v want %+v", d, want)
 				}
 			case TurnStartedData:
@@ -88,8 +124,15 @@ func TestEvent_RoundTripAllTypes(t *testing.T) {
 				if d != want {
 					t.Fatalf("data mismatch: got %+v want %+v", d, want)
 				}
+			case TurnCompletedData:
+				// Now carries a slice (ActionDrafts, T4.4) — no longer comparable with !=.
+				var d TurnCompletedData
+				mustDecode(t, got, &d)
+				if !reflect.DeepEqual(d, want) {
+					t.Fatalf("data mismatch: got %+v want %+v", d, want)
+				}
 			default:
-				// TurnCompletedData — пустая нагрузка, сверять нечего.
+				// Unreachable: every case in `cases` above has an explicit branch.
 			}
 		})
 	}

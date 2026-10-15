@@ -17,6 +17,7 @@ import { SideAgentProvider } from '../components/side-agent'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
+import { useAssistantMaxDepth } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -149,10 +150,14 @@ export function App(): ReactElement {
   // assistantsByStage — дерево задач помощников КАЖДОЙ стадии, из ОТДЕЛЬНОГО поллинга (useStageAssistants),
   // а не из /api/status (AGENTS.md: статус не раздувается). Капабилити выключена → хук не делает запросов.
   const assistantsByStage = useStageAssistants(stages.map((s) => s.id), capabilities.collaboration)
+  const selectedTaskStageTasks = selection?.kind === 'assistant' ? assistantsByStage[selection.stageId]?.tasks ?? [] : []
   const selectedTask =
     selection?.kind === 'assistant'
-      ? assistantsByStage[selection.stageId]?.tasks.find((t) => t.id === selection.taskId) ?? null
+      ? selectedTaskStageTasks.find((t) => t.id === selection.taskId) ?? null
       : null
+  // assistantMaxDepth — the run's effective delegation-depth ceiling (T4a.8's breadcrumb "depth N of max_depth"),
+  // independent of assistantsByStage's own per-stage poll (a run-wide, rarely-changing number).
+  const assistantMaxDepth = useAssistantMaxDepth(capabilities.collaboration)
 
   // Защита: если collaboration выключена на бэкенде, а вид застрял на 'assistant' — уводим в Feed (тот же
   // паттерн, что и у accounting/'cost' ниже).
@@ -416,7 +421,16 @@ export function App(): ReactElement {
     // useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
     // needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
     // compile error, no runtime error, just a default/no-op context.
-    <SideAgentProvider runId={runId} enabled={capabilities.sideAgent} blocked={otherModalsOpen} onOpenChange={setSideAgentOpen} attentionShortcut={attentionShortcut}>
+    <SideAgentProvider
+      runId={runId}
+      enabled={capabilities.sideAgent}
+      blocked={otherModalsOpen}
+      onOpenChange={setSideAgentOpen}
+      attentionShortcut={attentionShortcut}
+      currentStageId={selectedStageId ?? ''}
+      stages={stages.map((s) => ({ id: s.id, title: s.name }))}
+      mentionsEnabled={capabilities.collaboration}
+    >
       <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
       <GlobalHeader
         flowName={flowName}
@@ -528,7 +542,7 @@ export function App(): ReactElement {
                     }
                   />
                 ) : wsState.view === 'assistant' ? (
-                  <AssistantTaskView task={selectedTask} />
+                  <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

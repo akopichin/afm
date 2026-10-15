@@ -19,6 +19,12 @@ const MaxResultBytes = 256 * 1024
 // "const": 1 в схеме.
 const SupportedSchemaVersion = 1
 
+// MaxDelegateChildren — верхняя граница числа детей в одном kind:"delegate" ответе (T4a.1). Никакого
+// явного числа в спеке нет; 8 — консервативный предел одного delegation-хода (держит admission-группу
+// (T4a.2) маленькой и проверяемой атомарно), держи в синхроне с schema/assistant-result.schema.json's
+// delegateChild maxItems.
+const MaxDelegateChildren = 8
+
 // Kind — обязательный дискриминатор ответа помощника. "result" и "delegate"
 // структурно различны (verdict/findings против children/continuation) и
 // сознательно НЕ различаются по одному лишь наличию полей — единственный
@@ -47,6 +53,15 @@ type Envelope struct {
 	Kind          Kind
 	Result        *Result
 	Delegate      *Delegate
+}
+
+// ClosesRequiredGate reports whether this envelope represents a turn that can close a required-mode gate
+// (BlocksRootCompletion, tree.go): only kind:"result" with verdict:"pass" can. kind:"delegate" never does —
+// it has no verdict field at all, so there is no "did the model actually mean pass" text to misread; the
+// orchestrator must call this instead of re-deriving the same check inline wherever it decides whether a
+// turn's outcome is eligible to satisfy a required dependent.
+func (e Envelope) ClosesRequiredGate() bool {
+	return e.Kind == KindResult && e.Result != nil && e.Result.Verdict.ClosesGate()
 }
 
 // resultEnvelope — JSON-форма kind:"result" (зеркало definitions.result схемы).
@@ -176,6 +191,9 @@ func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
 	}
 	if len(e.Children) == 0 {
 		return Envelope{}, errors.New(`assistant result with kind:"delegate" requires at least one child in "children"`)
+	}
+	if len(e.Children) > MaxDelegateChildren {
+		return Envelope{}, fmt.Errorf("assistant result with kind:\"delegate\" requests %d children, exceeding the cap of %d", len(e.Children), MaxDelegateChildren)
 	}
 
 	delegate := &Delegate{Summary: e.Summary, Children: e.Children, Continuation: e.Continuation}

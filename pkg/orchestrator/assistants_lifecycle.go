@@ -103,6 +103,12 @@ func (o *Orchestrator) persistTaskCache(dir string, task assistants.Task) {
 	_ = memory.AtomicWrite(filepath.Join(dir, "task.json"), raw)
 }
 
+// taskCancelEntry is one attempt's own identity in o.taskCancels — see that field's doc comment (orchestrator.go)
+// for why a pointer (compared by identity via CompareAndDelete) is required instead of a bare context.CancelFunc.
+type taskCancelEntry struct {
+	cancel context.CancelFunc
+}
+
 // runHelperTask is the body of one task's turn: build the prompt, fingerprint the tree before/after (reusing
 // the EXISTING o.fingerprintFn/o.fingerprintDir seam — never a second implementation), run the helper agent,
 // and classify its outcome into a terminal task status. Never calls Trigger/completeStage — a helper task's
@@ -120,10 +126,19 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	o.taskCancels.Store(taskID, cancel)
+	// entry is THIS attempt's own identity in the map — CompareAndDelete below only ever removes it if it is
+	// still the current value, never whatever a newer, already-rescheduled attempt stored in the meantime
+	// (see taskCancels's doc comment on orchestrator.go for the race this closes).
+	entry := &taskCancelEntry{cancel: cancel}
+	o.taskCancels.Store(taskID, entry)
 	defer func() {
-		o.taskCancels.Delete(taskID)
+		o.taskCancels.CompareAndDelete(taskID, entry)
+		o.taskPausePending.Delete(taskID) // in case this attempt finished via a path that never consumed it
 		cancel()
+		// Этап 5: settle this watcher's binding regardless of which exit path was taken (success→watching,
+		// success→completed, failed, cancelled, or requeued) — a no-op for a plain one_shot task, which was
+		// never bound in the first place (see bindWatcher's isWatcherTrigger guard).
+		o.settleWatcherBinding(taskID)
 	}()
 
 	dir := o.taskDir(taskID)
@@ -190,6 +205,32 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
 		return
 	case !outcome.ProcessOK:
+		// A PauseTask (or StopAndClarify, T4.7) on an ALREADY-RUNNING task cancels runCtx directly (not via
+		// executor's InterruptCh), which RunHelperAgent's default branch (pkg/executor/hardening.go) surfaces
+		// as a bare !ProcessOK outcome — indistinguishable at this point from a genuine crash. CancelTask
+		// already returned above via finalizedByOther, so reaching here with ANY signal set below can only mean
+		// a deliberate pause/clarify, never a real crash:
+		//   - taskPausePending (LoadAndDelete, consumed exactly once HERE): PauseTask's signal, set BEFORE
+		//     cancel() — NOT the live hold state, which an immediate ContinueTask can already have cleared by
+		//     the time this goroutine reaches this check (see its doc comment on orchestrator.go).
+		//   - taskClarifyPending (LoadAndDelete, consumed exactly once HERE): StopAndClarify's signal — it has
+		//     no separate "clear" step precisely to avoid racing THIS check (see its doc comment).
+		//   - taskHeld: belt-and-suspenders fallback for the (non-racy) case where Continue has not run yet.
+		// Requeue either way, with the same post-commit lost-wakeup retry as spawnTask's pre-start pause path
+		// (a concurrent ContinueTask may have cleared the hold and tried to reschedule before this requeue
+		// committed, in which case it saw status still "running" and silently no-op'd).
+		_, pausedBeforeClassification := o.taskPausePending.LoadAndDelete(taskID)
+		_, clarifying := o.taskClarifyPending.LoadAndDelete(taskID)
+		if pausedBeforeClassification || clarifying || o.taskHeld(taskID) {
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
+			if !o.taskHeld(taskID) {
+				o.maybeScheduleTask(ctx, taskID)
+			}
+			if o.taskRequeuePreDeferHook != nil {
+				o.taskRequeuePreDeferHook(taskID)
+			}
+			return
+		}
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "helper execution failed")
 		return
 	case outcome.ProtocolErr != nil:
@@ -204,10 +245,22 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
 		return
 	}
+	if env.Kind == assistants.KindDelegate {
+		// T4a.3: admit the requested children and move this task to waiting_children — never treated as a
+		// completed check (assistants.Envelope.ClosesRequiredGate is false for kind:"delegate" by
+		// construction, T4a.1).
+		o.handleDelegate(ctx, taskID, tc.Version, *env.Delegate)
+		return
+	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
-		// Этап 3 scope: kind:"delegate" (recursive delegation) lands in Этап 4a. Treat it as a protocol error
-		// here rather than silently accepting a response shape this stage can't act on yet.
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind in Этап 3 scope")
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind")
+		return
+	}
+	if env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
+		// dev-plan.md's TestResult_ConsistencyWithRequiredChildren: a required child that has not (yet, or
+		// ever will) reached verdict:"pass" keeps this gate closed — the model's own claimed "pass" text does
+		// not override it.
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: verdict:\"pass\" with an unresolved required child")
 		return
 	}
 
@@ -227,6 +280,20 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	if eerr != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
 		return
+	}
+
+	// Этап 5 (T5.4): a checkpoints/on_completion watcher's successful turn lands in the non-terminal
+	// "watching" resting state — unless this was explicitly marked as its FINAL pass (on_completion's single
+	// turn, a required watcher's guaranteed last word once its root stage is done, or the collector itself
+	// reporting MaxPasses reached — see watch_tasks.go's commitAndFire/finalizeWatcherOnCompletion, both of
+	// which Store the taskFinalPass signal strictly BEFORE this turn's own completion can observe it). A plain
+	// one_shot task never reaches this branch non-final (isWatcherTrigger is false for it).
+	if isWatcherTrigger(task.Trigger) {
+		_, final := o.taskFinalPass.LoadAndDelete(taskID)
+		if !final {
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWatching, "", resultEff)
+			return
+		}
 	}
 	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
 }

@@ -21,7 +21,7 @@ type fakeSideAgent struct {
 	convID      string
 	unavailable bool
 
-	sendFn func(clientMessageID, text string) (string, error)
+	sendFn func(clientMessageID, text string, target sideagent.TurnTarget) (string, error)
 	stopFn func(turnID string) error
 
 	// subCh — канал, который возвращает Subscribe. Тест заполняет/закрывает его,
@@ -32,6 +32,7 @@ type fakeSideAgent struct {
 	cancelCalled bool
 	sentCMID     string
 	sentText     string
+	sentTarget   sideagent.TurnTarget
 }
 
 func (f *fakeSideAgent) record(name string) {
@@ -45,13 +46,14 @@ func (f *fakeSideAgent) History() []sideagent.Event {
 	return f.history
 }
 
-func (f *fakeSideAgent) Send(clientMessageID, text string) (string, error) {
+func (f *fakeSideAgent) Send(clientMessageID, text string, target sideagent.TurnTarget) (string, error) {
 	f.mu.Lock()
 	f.sentCMID = clientMessageID
 	f.sentText = text
+	f.sentTarget = target
 	f.mu.Unlock()
 	if f.sendFn != nil {
-		return f.sendFn(clientMessageID, text)
+		return f.sendFn(clientMessageID, text, target)
 	}
 	return "t-1", nil
 }
@@ -134,7 +136,7 @@ func TestSideAgent_ErrorCodeMapping(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(string(tc.code), func(t *testing.T) {
 			fake := &fakeSideAgent{
-				sendFn: func(_, _ string) (string, error) {
+				sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) {
 					return "", &sideagent.Error{Code: tc.code, Message: "boom"}
 				},
 			}
@@ -162,7 +164,7 @@ func TestSideAgent_SendSuccessAndIdempotent(t *testing.T) {
 	// Fake returns the same turn id for a repeated client_message_id — handler
 	// just forwards it; a repeat POST is safe and yields the same turn.
 	fake := &fakeSideAgent{
-		sendFn: func(cmid, _ string) (string, error) { return "turn-for-" + cmid, nil },
+		sendFn: func(cmid, _ string, _ sideagent.TurnTarget) (string, error) { return "turn-for-" + cmid, nil },
 	}
 	srv := newTestServer(t, Config{SideAgent: fake})
 	post := func() (int, map[string]any) {
@@ -213,7 +215,7 @@ func TestSideAgent_SendStateReflectsReturnedTurn(t *testing.T) {
 			ev(sideagent.EventTurnStarted, "t1", 2),
 			ev(sideagent.EventTurnCompleted, "t1", 3),
 		},
-		sendFn: func(_, _ string) (string, error) { return "t1", nil },
+		sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) { return "t1", nil },
 	}
 	if got := post(completed); got != "idle" {
 		t.Errorf("повтор завершённого хода: state=%q, want idle", got)
@@ -225,7 +227,7 @@ func TestSideAgent_SendStateReflectsReturnedTurn(t *testing.T) {
 			ev(sideagent.EventTurnAccepted, "t2", 1),
 			ev(sideagent.EventTurnStarted, "t2", 2),
 		},
-		sendFn: func(_, _ string) (string, error) { return "t2", nil },
+		sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) { return "t2", nil },
 	}
 	if got := post(running); got != "running" {
 		t.Errorf("активный ход: state=%q, want running", got)
@@ -236,7 +238,7 @@ func TestSideAgent_SendStateReflectsReturnedTurn(t *testing.T) {
 // не 400 invalid_body: сообщение слишком велико, а не битый JSON.
 func TestSideAgent_OversizeBodyIsMessageTooLarge(t *testing.T) {
 	sendCalled := false
-	fake := &fakeSideAgent{sendFn: func(_, _ string) (string, error) { sendCalled = true; return "t", nil }}
+	fake := &fakeSideAgent{sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) { sendCalled = true; return "t", nil }}
 	srv := newTestServer(t, Config{SideAgent: fake})
 
 	huge := strings.Repeat("x", int(maxSideAgentBodyBytes)+4096)

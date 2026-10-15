@@ -58,11 +58,39 @@ export type AssistantTask = {
   trigger: string
   status: AssistantTaskStatus
   statusReason: string
+  // depth — 1 для задачи верхнего уровня, depth родителя + 1 для каждого делегированного уровня ниже
+  // (Этап 4a, зеркало assistants.Task.Depth). Используется breadcrumb'ом (AssistantBreadcrumb) вместе с
+  // max_depth, который приходит отдельно (GET /api/assistant-profiles, уже не меняется по ходу рана).
+  depth: number
+  // watchPasses/watchLastCheckpointSeq (Этап 5, T5.6) — только для checkpoints/on_completion watcher-задачи
+  // (зеркало server.AssistantTaskView.WatchPasses/WatchLastCheckpointSeq). null для обычной one_shot задачи —
+  // она никогда не была привязана как наблюдатель, показывать нечего.
+  watchPasses: number | null
+  watchLastCheckpointSeq: number | null
 }
 
 // AssistantTaskNode — AssistantTask плюс дети по дереву (ByParent-проекция). Глубина не ограничена данными —
 // только визуальный отступ капается на отрисовке (StagesList/AssistantTaskRow).
 export type AssistantTaskNode = AssistantTask & { children: AssistantTaskNode[] }
+
+// buildBreadcrumbChain walks taskId's parentTaskId chain UP to its root and returns it root-first
+// (dev-plan.md T4a.8: "Frontend → QA → Mobile" — the whole chain including the task itself, not just its
+// ancestors). A dangling/missing parent id (should never happen server-side, ValidateTree rejects it, but
+// the dashboard reads a possibly-stale poll snapshot) stops the walk there rather than throwing — a partial
+// chain is better than a crashed breadcrumb. visited guards against an accidental cycle in bad data for the
+// same reason: render SOMETHING, never hang.
+export function buildBreadcrumbChain(tasks: AssistantTask[], taskId: string): AssistantTask[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const chain: AssistantTask[] = []
+  const visited = new Set<string>()
+  let current: AssistantTask | undefined = byId.get(taskId)
+  while (current !== undefined && !visited.has(current.id)) {
+    chain.push(current)
+    visited.add(current.id)
+    current = current.parentTaskId !== null ? byId.get(current.parentTaskId) : undefined
+  }
+  return chain.reverse()
+}
 
 // Verdict — зеркало assistants.Verdict (pkg/assistants/types.go).
 export const ASSISTANT_VERDICTS = ['pass', 'needs_changes', 'inconclusive'] as const

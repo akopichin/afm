@@ -110,6 +110,24 @@ describe('side-agent-client', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ client_message_id: 'c-7', text: 'do a thing' })
   })
 
+  test('sendMessage includes stage_id only when a non-empty stage context is given', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ turn_id: 't-8', state: 'running', cursor: 1 }),
+    } as Response)
+
+    await sendMessage('c-8', 'hi', 'frontend')
+    expect(JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string)).toEqual({
+      client_message_id: 'c-8',
+      text: 'hi',
+      stage_id: 'frontend',
+    })
+
+    await sendMessage('c-9', 'hi', '')
+    expect(JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string)).toEqual({ client_message_id: 'c-9', text: 'hi' })
+  })
+
   test('sendMessage surfaces the typed error code (e.g. busy)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,

@@ -1,4 +1,5 @@
 import type { ReviewNote } from '../types'
+import { toAssistantProfile, type AssistantProfile, type AssistantProfileWire } from '../types/assistant-profile'
 
 // Мутирующие команды дашборда к afm-серверу. Вынесено из PlanPanel/DialogChannel/App, которые раньше
 // дублировали один и тот же postJson-паттерн по месту использования.
@@ -207,6 +208,11 @@ export type AssistantTaskWire = {
   trigger: string
   status: string
   status_reason?: string
+  // depth — 1 for a top-level task, parent.depth+1 for each delegated level (T4a.8's breadcrumb).
+  depth?: number
+  // watch_passes/watch_last_checkpoint_seq (T5.6) — present only for a checkpoints/on_completion watcher task.
+  watch_passes?: number
+  watch_last_checkpoint_seq?: number
 }
 
 // listStageAssistants reads one stage's task tree (flat, parent-linked) — GET /api/stages/{id}/assistants.
@@ -220,6 +226,32 @@ export async function listStageAssistants(stageId: string): Promise<{ tasks: Ass
   }
   const body = (await response.json()) as { tasks?: AssistantTaskWire[] | null }
   return { tasks: body.tasks ?? [] }
+}
+
+// listAssistantProfiles reads the configured helper roles and the effective delegation depth — GET
+// /api/assistant-profiles (404 when the collaboration capability is off; callers degrade to an empty list,
+// same posture as listStageAssistants).
+export async function listAssistantProfiles(): Promise<{ profiles: AssistantProfile[]; maxDepth: number; maxDepthSource: string }> {
+  const url = '/api/assistant-profiles'
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new FlowApiError(url, response.status, await readErrorCode(response))
+  }
+  const body = (await response.json()) as { profiles?: AssistantProfileWire[] | null; max_depth?: number; max_depth_source?: string }
+  return {
+    profiles: (body.profiles ?? []).map(toAssistantProfile),
+    maxDepth: body.max_depth ?? 0,
+    maxDepthSource: body.max_depth_source ?? 'default',
+  }
+}
+
+// confirmActionDraft executes one action draft a side-agent turn proposed (T4.5/T4.6) — POST
+// /api/side-agent/drafts/confirm. The server reads the draft's actual content from durable history by
+// (turnId, index); this call sends nothing else. Repeat calls for the SAME (turnId, index) are idempotent
+// (same operation id server-side) — resolve to the same taskId, never a second task.
+export async function confirmActionDraft(turnId: string, index: number): Promise<{ taskId: string }> {
+  const body = await jsonRequest<{ task_id: string }>('/api/side-agent/drafts/confirm', 'POST', { turn_id: turnId, index })
+  return { taskId: body.task_id }
 }
 
 export type AssistantEventWire = { seq: number; type: string; data?: unknown }

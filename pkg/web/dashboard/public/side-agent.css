@@ -126,6 +126,33 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* --- Адресат хода (T4.3) --- */
+.side-agent-context-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+}
+.side-agent-context-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.side-agent-context-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+.side-agent-context-select {
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm, 6px);
+  padding: 2px 6px;
+}
 .side-agent-attention-shortcut {
   display: inline-flex;
   align-items: center;
@@ -195,8 +222,17 @@
   border-top: 1px solid var(--separator-subtle);
   background: var(--surface-raised);
 }
-.side-agent-textarea {
+/* side-agent-textarea-wrap — positioning context for the @mention menu (T4.2), which anchors above the
+   textarea via `position: absolute`. Takes over the flex slot the textarea used to occupy directly in
+   .side-agent-composer's row. */
+.side-agent-textarea-wrap {
+  position: relative;
   flex: 1 1 auto;
+  min-width: 0;
+}
+.side-agent-textarea {
+  display: block;
+  width: 100%;
   resize: none;
   min-height: 38px;
   padding: 9px 12px;

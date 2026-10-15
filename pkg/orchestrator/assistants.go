@@ -141,6 +141,17 @@ func (o *Orchestrator) taskHeld(taskID assistants.TaskID) bool {
 	return held
 }
 
+// taskParent reads a task's parent id from the current projection — ("", false) for a top-level task or an
+// unknown task id.
+func (o *Orchestrator) taskParent(taskID assistants.TaskID) (assistants.TaskID, bool) {
+	rs := o.opts.Store.Snapshot()
+	t, ok := rs.Assistants.Tasks[taskID]
+	if !ok || t.ParentTaskID == nil {
+		return "", false
+	}
+	return *t.ParentTaskID, true
+}
+
 // taskTerminal reports whether taskID's CURRENT projected status is already terminal — an unknown task id
 // reports false (nothing to be terminal about yet). Used by runHelperTask at two points: before doing any
 // file I/O at all (a CancelTask that raced ahead of this goroutine's very first instruction may have already
@@ -171,9 +182,10 @@ func (o *Orchestrator) handleTaskOperationErr(err error) {
 
 // Attach creates one new top-level helper task for a stage: capability + stage + profile + delegation-depth
 // checks, then a single durable ApplyRunOperation — task_created alone (parent stage still pending: nothing
-// to run yet, task stays "waiting_parent"), or task_created PLUS task_status_changed-to-"queued" in the SAME
-// atomic batch when the parent stage is already active (TestAttach_ToPendingStageStaysWaitingParent /
-// TestLifecycle_HappyPath).
+// to run yet, task stays "waiting_parent"), or task_created PLUS a status transition in the SAME atomic batch
+// when the parent stage is already active: to "queued" (immediately scheduled) for a plain one_shot task
+// (TestAttach_ToPendingStageStaysWaitingParent/TestLifecycle_HappyPath), or to "watching" (NOT scheduled —
+// see startsWatching below) for a checkpoints/on_completion watcher (T5.4).
 //
 // Known Этап-3 scope limit: a task attached while the stage is pending is never automatically promoted when
 // that stage later starts — Этап 3 is the one-shot, non-recursive MVP, and wiring that promotion means
@@ -229,15 +241,16 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	}
 
 	created, err := taskCreatedEffect(taskID, req.StageID, state.TaskCreatedPayload{
-		ProfileID:        string(req.ProfileID),
-		ProfileSnapshot:  profile,
-		Title:            req.Title,
-		Instruction:      req.Instruction,
-		Mode:             string(mode),
-		Trigger:          string(trigger),
-		PolicyRev:        rs.Assistants.Policy.Revision,
-		MaxDepthAtCreate: rs.Assistants.Policy.MaxDepth,
-		CreatedBy:        string(req.Actor.Kind),
+		ProfileID:              string(req.ProfileID),
+		ProfileSnapshot:        profile,
+		Title:                  req.Title,
+		Instruction:            req.Instruction,
+		Mode:                   string(mode),
+		Trigger:                string(trigger),
+		PolicyRev:              rs.Assistants.Policy.Revision,
+		MaxDepthAtCreate:       rs.Assistants.Policy.MaxDepth,
+		CreatedBy:              string(req.Actor.Kind),
+		RootGenerationAtCreate: rs.Assistants.RootGenerations[req.StageID],
 	})
 	if err != nil {
 		return "", err
@@ -245,12 +258,23 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	effects := []state.Effect{created}
 
 	parentActive := o.currentStatus(req.StageID) != state.StatusPending
+	// startsWatching (T5.4): a checkpoints/on_completion watcher's first turn must be driven by the SAME
+	// mechanism as every later one — the collector's own Ready() decision, or finalizeWatcherOnCompletion once
+	// the root stage's result is known — never an unconditional "run right now" the way a plain one_shot task
+	// does. Landing it directly in the resting "watching" state (instead of "queued") means fireWatcherTask's
+	// existing watching->queued->running transition is the ONLY path that ever starts its first, or any later,
+	// turn (TestTrigger_OnCompletionRunsAtStageResultReady/TestTrigger_RequiredWatcherHasFinalBoundedPass).
+	startsWatching := parentActive && isWatcherTrigger(trigger)
 	if parentActive {
-		queuedEffect, qerr := taskStatusEffect(taskID, assistants.StatusQueued, "")
+		initialStatus := assistants.StatusQueued
+		if startsWatching {
+			initialStatus = assistants.StatusWatching
+		}
+		statusEffect, qerr := taskStatusEffect(taskID, initialStatus, "")
 		if qerr != nil {
 			return "", qerr
 		}
-		effects = append(effects, queuedEffect)
+		effects = append(effects, statusEffect)
 	}
 
 	op := state.Operation{
@@ -265,7 +289,14 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: req.StageID, Data: map[string]any{
 			"task_id": string(taskID), "profile_id": string(req.ProfileID),
 		}})
-		if parentActive {
+		if isWatcherTrigger(trigger) {
+			// bindWatcher only needs the identity fields (RootStageID/Trigger) — read back the just-committed
+			// task rather than constructing a partial assistants.Task by hand here.
+			if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
+				o.bindWatcher(taskID, t.Task)
+			}
+		}
+		if parentActive && !startsWatching {
 			o.maybeScheduleTask(runCtx, taskID)
 		}
 	})
@@ -288,14 +319,21 @@ func (o *Orchestrator) PauseTask(ctx context.Context, taskID assistants.TaskID) 
 		o.handleTaskOperationErr(err)
 		return err
 	}
-	if cancel, ok := o.taskCancels.Load(taskID); ok {
-		cancel.(context.CancelFunc)()
+	// T4a.6: the hold itself (above) already blocks the WHOLE subtree from starting/restarting via
+	// EffectivelyHeld's ancestor-walk — but an ALREADY-RUNNING descendant has no reason to notice a hold on
+	// an ancestor it never polls; interruptLiveTask across the whole subtree is what actually stops it
+	// (TestPause_CascadesToSubtree), not just a future one.
+	o.interruptLiveTask(taskID)
+	for _, id := range o.descendantIDs(taskID) {
+		o.interruptLiveTask(id)
 	}
 	return nil
 }
 
-// ContinueTask clears a manual hold and, if the task is still eligible (queued), attempts to schedule it —
-// a no-op if the hold was the only thing blocking an already-finished or already-running task.
+// ContinueTask clears a manual hold and, if the task (or any of its descendants, T4a.6) is still eligible
+// (queued), attempts to schedule it — a no-op for anything the hold was not the only thing blocking. Only
+// taskID's OWN "manual" hold is cleared (TestContinue_DoesNotClearOtherHolds) — a descendant separately
+// PauseTask'd in its own right keeps ITS OWN hold entry untouched and stays paused.
 func (o *Orchestrator) ContinueTask(ctx context.Context, taskID assistants.TaskID) error {
 	eff, err := taskHoldEffect("task_hold_cleared", taskID, holdOwnerManual, "")
 	if err != nil {
@@ -303,29 +341,34 @@ func (o *Orchestrator) ContinueTask(ctx context.Context, taskID assistants.TaskI
 	}
 	op := state.Operation{ID: "task-continue:" + string(taskID) + ":" + randomOpSuffix(), Kind: "continue_task", Effects: []state.Effect{eff}}
 	runCtx := o.runContext(ctx)
+	descendants := o.descendantIDs(taskID)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.maybeScheduleTask(runCtx, taskID)
+		// A descendant held ONLY through the ancestor chain (no hold entry of its own) is now eligible again,
+		// but nothing else will ever re-trigger its scheduling — maybeScheduleTask's own "queued" precondition
+		// makes a redundant call here (a still-held or already-running descendant) a safe no-op.
+		for _, id := range descendants {
+			o.maybeScheduleTask(runCtx, id)
+		}
 	})
 	o.handleTaskOperationErr(err)
 	return err
 }
 
-// CancelTask stops a non-terminal task immediately (cancelling its in-flight subprocess, if any) and marks
-// it cancelled. A task that already reached a terminal status is left untouched — its history (including any
-// partial result already persisted) is never erased (TestCancel_KeepsHistory).
+// CancelTask stops a non-terminal task immediately (cancelling its in-flight subprocess, if any), marks it
+// cancelled, and cascades the SAME to its whole subtree (T4a.6) — a cancelled branch must not leave orphaned
+// descendants still running against a parent that will never read their result. A task (or descendant) that
+// already reached a terminal status is left untouched — its history (including any partial result already
+// persisted) is never erased (TestCancel_KeepsHistory/TestCancel_CascadesAndKeepsHistory).
 func (o *Orchestrator) CancelTask(ctx context.Context, taskID assistants.TaskID) error {
 	rs := o.opts.Store.Snapshot()
-	t, ok := rs.Assistants.Tasks[taskID]
-	if !ok {
+	if _, ok := rs.Assistants.Tasks[taskID]; !ok {
 		return fmt.Errorf("assistants: unknown task %q", taskID)
 	}
-	if t.Status.Terminal() {
-		return nil
+	o.cancelOneTask(taskID)
+	for _, id := range o.descendantIDs(taskID) {
+		o.cancelOneTask(id)
 	}
-	if cancel, ok := o.taskCancels.Load(taskID); ok {
-		cancel.(context.CancelFunc)()
-	}
-	o.finishTaskFrom(taskID, t.Status, assistants.StatusCancelled, "cancelled by user")
 	return nil
 }
 
@@ -427,10 +470,18 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 		Effects: effects,
 	}
 	rootStage := o.taskRootStage(taskID)
+	parentID, hasParent := o.taskParent(taskID)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 			"task_id": string(taskID), "status": string(to), "reason": reason,
 		}})
+		// T4a.5: a terminal child (pass, needs_changes, failure, or cancel — ANY terminal outcome, see
+		// TestWaitingChildren_FailedChildDelivered) is the ONLY trigger that re-checks whether its parent's
+		// whole waiting_children group just became ready. tryResumeParent's own CAS (not this check) is what
+		// makes a resume happen exactly once even when several siblings finish at the same time.
+		if to.Terminal() && hasParent {
+			o.tryResumeParent(o.runContext(context.Background()), parentID)
+		}
 	})
 	o.handleTaskOperationErr(err)
 }

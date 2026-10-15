@@ -11,7 +11,8 @@ function wire(overrides: Partial<AssistantTaskWire> = {}): AssistantTaskWire {
 function task(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
     id: 't1', parentTaskId: null, profileId: 'reviewer', title: '', mode: 'advisory',
-    trigger: 'one_shot', status: 'running', statusReason: '', ...overrides,
+    trigger: 'one_shot', status: 'running', statusReason: '', depth: 1,
+    watchPasses: null, watchLastCheckpointSeq: null, ...overrides,
   }
 }
 
@@ -91,5 +92,48 @@ describe('useStageAssistants', () => {
       await Promise.resolve()
     })
     expect(result.current.s1?.count).toBe(1)
+  })
+
+  // TestTree_NotRebuiltOnEveryPoll (T4a.8, dev-plan.md §19.4): a poll tick whose response is byte-identical
+  // to the one before it must not rebuild the tree — the SAME StageAssistantsSummary object (and its `roots`
+  // array) comes back out, so a memoized consumer downstream would not re-render either. Fake timers are
+  // installed BEFORE renderHook (not after, like the pre-existing "transient fetch error" test above) and
+  // advanced with advanceTimersByTimeAsync — the SAME pattern use-status.test.ts already relies on — so the
+  // poll's own setInterval is actually under fake-timer control and genuinely fires a second time.
+  it('reuses the SAME summary object when a poll tick changes nothing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ tasks: [wire({ id: 't1', status: 'running' })] }))
+
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.s1).toBeDefined()
+    const first = result.current.s1
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(result.current.s1).toBe(first) // same reference — not rebuilt
+  })
+
+  it('DOES rebuild when the poll tick actually changes something', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let status: 'running' | 'completed' = 'running'
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse({ tasks: [wire({ id: 't1', status })] }))
+
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    const first = result.current.s1
+    expect(first).toBeDefined()
+
+    status = 'completed'
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(result.current.s1).not.toBe(first)
+    expect(result.current.s1?.tasks[0]?.status).toBe('completed')
   })
 })

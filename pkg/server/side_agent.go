@@ -14,7 +14,7 @@ import (
 // *sideagent.Manager.
 type SideAgentService interface {
 	History() []sideagent.Event
-	Send(clientMessageID, text string) (string, error)
+	Send(clientMessageID, text string, target sideagent.TurnTarget) (string, error)
 	Stop(turnID string) error
 	Subscribe() (<-chan sideagent.Event, func())
 	ConversationID() string
@@ -65,6 +65,8 @@ func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
 		s.handleSideAgentInterrupt(w, r)
 	case r.URL.Path == "/api/side-agent/stream" && r.Method == http.MethodGet:
 		s.handleSideAgentStream(w, r)
+	case r.URL.Path == "/api/side-agent/drafts/confirm" && r.Method == http.MethodPost:
+		s.handleConfirmActionDraft(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -109,8 +111,11 @@ func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleSideAgentSend принимает сообщение пользователя. Клиент управляет ТОЛЬКО client_message_id и text —
-// команда/аргументы/CWD задаются сервером (D1), тело их не содержит и не читается.
+// handleSideAgentSend принимает сообщение пользователя. Клиент управляет client_message_id, text и
+// (опционально) stage_id — какой стадии касается сообщение, для отображения «Context: …» (T4.3). Команда/
+// аргументы/CWD по-прежнему задаются сервером (D1). Любое другое поле (в частности depth/root_stage_id/
+// mentions) тут читать НЕКУДА — у структуры запроса нет для них поля, они всегда вычисляются сервером
+// (TestTurn_DepthAndRootDerivedServerSide, mentions — sideagent.Manager.Send через Config.MentionResolve).
 func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		writeSideAgentErrCode(w, http.StatusForbidden, "forbidden_origin")
@@ -119,6 +124,7 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClientMessageID string `json:"client_message_id"`
 		Text            string `json:"text"`
+		StageID         string `json:"stage_id"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSideAgentBodyBytes)).Decode(&req); err != nil {
 		// Тело превысило HTTP-кап (MaxBytesReader) — это сообщение, которое слишком велико: типизированный 413
@@ -131,7 +137,7 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 		writeSideAgentErrCode(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	turnID, err := s.sideAgent.Send(req.ClientMessageID, req.Text)
+	turnID, err := s.sideAgent.Send(req.ClientMessageID, req.Text, sideagent.TurnTarget{StageID: req.StageID})
 	if err != nil {
 		writeSideAgentError(w, err)
 		return

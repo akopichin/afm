@@ -75,6 +75,15 @@ type Config struct {
 	Context ContextBuilder
 	// Secrets — поставщик значений секретов для редакции пользовательского текста. nil → без редакции.
 	Secrets func() []string
+	// MentionResolve — резолвит "@word", извлечённое из текста сообщения, в нормализованный id профиля
+	// помощника (narrow-функция вместо *assistants.Registry — pkg/sideagent не импортирует pkg/assistants,
+	// тот же приём, что Secrets/OnUsage ниже). nil → mentions никогда не записываются (T4.1/T4.3 — opt-in).
+	MentionResolve func(word string) (profileID string, ok bool)
+	// KnownActionType reports whether an action draft's Type (extracted from the turn's final narration,
+	// T4.4) is recognized — narrow function instead of importing pkg/assistants, same injection pattern as
+	// MentionResolve above. nil fails CLOSED: no action draft is ever recorded (extractActionDrafts's own
+	// nil-predicate convention).
+	KnownActionType func(typ string) bool
 	// OnUsage — приёмник учёта стоимости одного хода. nil → учёт выключен.
 	OnUsage func(accounting.Observation)
 	// NewExecutor — фабрика AgentRunner из executor.Config (тест-шов). nil →
@@ -99,17 +108,19 @@ type turnRecord struct {
 // Manager владеет единственным активным ходом бокового разговора: durable-first приём, запуск агента под
 // ПРОЦЕССНЫМ ctx, доставку событий подписчикам и ограниченный Drain для shutdown.
 type Manager struct {
-	store       *Store
-	command     string
-	args        []string
-	dir         string
-	wrapperDir  string
-	idleTimeout time.Duration
-	reasoning   string
-	ctxBuilder  ContextBuilder
-	secrets     func() []string
-	onUsage     func(accounting.Observation)
-	newExecutor func(executor.Config) AgentRunner
+	store           *Store
+	command         string
+	args            []string
+	dir             string
+	wrapperDir      string
+	idleTimeout     time.Duration
+	reasoning       string
+	ctxBuilder      ContextBuilder
+	secrets         func() []string
+	onUsage         func(accounting.Observation)
+	mentionResolve  func(string) (string, bool)
+	knownActionType func(string) bool
+	newExecutor     func(executor.Config) AgentRunner
 
 	// ctx — процессный контекст агентских горутин. Отмена запроса (POST/SSE) на
 	// него НЕ влияет: ход прерывается только через Stop/Shutdown (InterruptCh).
@@ -144,20 +155,22 @@ func New(cfg Config) *Manager {
 		nx = NewExecutorRunner
 	}
 	return &Manager{
-		store:       cfg.Store,
-		command:     cfg.Command,
-		args:        cfg.ExtraArgs,
-		dir:         cfg.Dir,
-		wrapperDir:  cfg.WrapperDir,
-		idleTimeout: cfg.IdleTimeout,
-		reasoning:   cfg.Reasoning,
-		ctxBuilder:  cfg.Context,
-		secrets:     cfg.Secrets,
-		onUsage:     cfg.OnUsage,
-		newExecutor: nx,
-		ctx:         context.Background(),
-		idem:        rebuildIdempotency(cfg.Store.History()),
-		subs:        make(map[int]chan Event),
+		store:           cfg.Store,
+		command:         cfg.Command,
+		args:            cfg.ExtraArgs,
+		dir:             cfg.Dir,
+		wrapperDir:      cfg.WrapperDir,
+		idleTimeout:     cfg.IdleTimeout,
+		reasoning:       cfg.Reasoning,
+		ctxBuilder:      cfg.Context,
+		secrets:         cfg.Secrets,
+		onUsage:         cfg.OnUsage,
+		mentionResolve:  cfg.MentionResolve,
+		knownActionType: cfg.KnownActionType,
+		newExecutor:     nx,
+		ctx:             context.Background(),
+		idem:            rebuildIdempotency(cfg.Store.History()),
+		subs:            make(map[int]chan Event),
 	}
 }
 
@@ -195,7 +208,12 @@ func (m *Manager) Unavailable() bool { return m.store.Unavailable() }
 
 // Send принимает ход разговора. Durable-first: turn_accepted фиксируется в журнале (fsync) ДО
 // резервирования активного хода и возврата turnID.
-func (m *Manager) Send(clientMessageID, text string) (string, error) {
+//
+// target — адресат, фиксируемый НАВСЕГДА в этой записи (T4.3): после возврата Send ничто (включая смену
+// выбранной стадии в дашборде) не может задним числом поменять то, что уже ушло в durable-журнал. Mentions
+// в target не передаются — Send сам извлекает их из text через Config.MentionResolve (клиент не может
+// заявить, что упомянул роль, которую не упоминал).
+func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string, error) {
 	// Шаг 1: валидация без блокировок.
 	if clientMessageID == "" {
 		return "", newErr(ErrCodeInvalidMessage, "client_message_id required")
@@ -240,7 +258,14 @@ func (m *Manager) Send(clientMessageID, text string) (string, error) {
 
 	// Шаг 4: turn_accepted (fsync) → резерв активного хода → учёт горутины.
 	turnID := newTurnID()
-	if _, err := m.record(EventTurnAccepted, turnID, TurnAcceptedData{Message: text, ClientMessageID: clientMessageID}); err != nil {
+	accepted := TurnAcceptedData{
+		Message:         text,
+		ClientMessageID: clientMessageID,
+		StageID:         target.StageID,
+		AssistantTaskID: target.AssistantTaskID,
+		Mentions:        extractMentions(text, m.mentionResolve),
+	}
+	if _, err := m.record(EventTurnAccepted, turnID, accepted); err != nil {
 		return "", newErr(ErrCodeStorageUnavailable, err.Error())
 	}
 	at := &activeTurn{turnID: turnID, interrupt: make(chan struct{}, 1)}
@@ -273,6 +298,11 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeAgentError, Message: m.redactErr(err)}) //nolint:errcheck
 		return
 	}
+
+	// lastText — последний видимый блок прозы агента в этом ходе (перезаписывается, не накапливается —
+	// T4.4 читает action_drafts ТОЛЬКО из финальной прозы, не из вывода инструментов и не из более ранних
+	// блоков прозы того же хода).
+	var lastText string
 
 	// Шаг 6: каждое действие агента → редакция → durable-запись → доставка.
 	cfg := executor.Config{
@@ -307,6 +337,7 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 			// «успех без видимого ответа» не отличить от «ответ был, но не сохранён».
 			if typ == EventAssistantText {
 				at.answered.Store(true)
+				lastText = data.(AssistantTextData).Text
 			}
 		},
 	}
@@ -327,7 +358,8 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 		// Штатный выход без видимого ответа — протокольная ошибка, не «успех».
 		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeNoAnswer, Message: "agent produced no visible answer"}) //nolint:errcheck
 	default:
-		m.record(EventTurnCompleted, at.turnID, TurnCompletedData{}) //nolint:errcheck
+		drafts := extractActionDrafts(lastText, m.knownActionType)
+		m.record(EventTurnCompleted, at.turnID, TurnCompletedData{ActionDrafts: drafts}) //nolint:errcheck
 	}
 }
 

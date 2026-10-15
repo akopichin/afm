@@ -176,6 +176,10 @@ func (a collaborationActions) Attach(ctx context.Context, stageID string, req se
 	return string(taskID), err
 }
 
+func (a collaborationActions) PolicyRevision() (string, int) {
+	return a.orch.AssistantsPolicyRevision()
+}
+
 func (a collaborationActions) PauseTask(ctx context.Context, taskID string) error {
 	return a.orch.PauseTask(ctx, assistants.TaskID(taskID))
 }
@@ -209,9 +213,18 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 			Status:              string(t.Status),
 			StatusReason:        t.StatusReason,
 			ReadonlyEnforcement: string(t.ProfileSnapshot.ReadonlyEnforcement),
+			Depth:               t.Depth,
 		}
 		if t.ParentTaskID != nil {
 			view.ParentTaskID = string(*t.ParentTaskID)
+		}
+		// T5.6: surface a watcher's own progress (trigger kind is already view.Trigger above) — ok is false for
+		// a plain one_shot task (never bound), leaving both pointers nil/omitted.
+		if passes, lastSeq, hasLast, ok := r.orch.WatcherStatus(t.ID); ok {
+			view.WatchPasses = &passes
+			if hasLast {
+				view.WatchLastCheckpointSeq = &lastSeq
+			}
 		}
 		out = append(out, view)
 	}

@@ -90,6 +90,36 @@ func TestProfiles_ReturnsConfiguredProfiles(t *testing.T) {
 	}
 }
 
+// TestProfiles_UnavailableShownWithReason — T4.1 acceptance: a role without a working provider is still
+// visible in GET /api/assistant-profiles (not dropped from the list), carrying available:false and a
+// non-empty reason — so the `@mention` menu (T4.2) can show it as unavailable instead of silently hiding it.
+func TestProfiles_UnavailableShownWithReason(t *testing.T) {
+	svc := fakeAssistantProfiles{
+		profiles: []assistants.ProfileView{
+			{ID: "ghost", Title: "Ghost", Command: "claude", Available: false, UnavailableReason: "no verifiable read-only policy for command \"claude\" on the host"},
+		},
+		maxDepth:       3,
+		maxDepthSource: "default",
+	}
+	srv := newTestServer(t, Config{AssistantProfiles: svc})
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant-profiles", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	var resp assistantProfilesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Profiles) != 1 {
+		t.Fatalf("Profiles = %d entries, want 1 (unavailable role must still be listed)", len(resp.Profiles))
+	}
+	if resp.Profiles[0].Available {
+		t.Error("Available = true, want false")
+	}
+	if resp.Profiles[0].UnavailableReason == "" {
+		t.Error("UnavailableReason is empty, want a non-empty reason")
+	}
+}
+
 func TestProfiles_DoesNotLeakCommandPathOrSecrets(t *testing.T) {
 	svc := fakeAssistantProfiles{
 		profiles: []assistants.ProfileView{

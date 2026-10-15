@@ -3,12 +3,14 @@ import { getAssistantTaskEvents, type AssistantEventWire } from '../../api/run-c
 import {
   ASSISTANT_TASK_STATUS_LABELS,
   ASSISTANT_TASK_TERMINAL,
+  buildBreadcrumbChain,
   parseAssistantResult,
   verdictGlyph,
   verdictLabel,
   type AssistantResult,
   type AssistantTask,
 } from '../../types/assistant-task'
+import { AssistantBreadcrumb } from './AssistantBreadcrumb'
 import { MarkdownRenderer } from '../plan-panel'
 
 const POLL_INTERVAL_MS = 3000
@@ -69,13 +71,21 @@ type AssistantTaskViewProps = {
   // task — the selected AssistantTask, looked up by the caller from useStageAssistants' summary (this
   // component does not fetch the task list itself — its own concern is one task's result feed).
   task: AssistantTask | null
+  // allTasks (T4a.8) — the SAME stage's full flat task list task was looked up from, used ONLY to walk its
+  // ancestor chain for the breadcrumb (buildBreadcrumbChain) — defaults to just [task] (a chain of 1, so the
+  // breadcrumb renders nothing) when the caller has no reason to pass more (e.g. every pre-4a.8 call site/test).
+  allTasks?: AssistantTask[]
+  // maxDepth (T4a.8) — the run's effective delegation-depth ceiling, from GET /api/assistant-profiles
+  // (resolved once per run). null = unknown/collaboration off — the breadcrumb still shows the chain and
+  // current depth, just not "of N".
+  maxDepth?: number | null
 }
 
 // AssistantTaskView — the workspace body for the 'assistant' WorkspaceView (T3.10): one helper task's
 // current state. Three states, exactly as dev-plan.md's T3.10 tests enumerate: empty (no task selected, or
 // still running with nothing to show yet), error (failed/cancelled), and completed-with-result (rendered
 // through the SAME safe markdown renderer the plan panel uses — never a second dangerouslySetInnerHTML).
-export function AssistantTaskView({ task }: AssistantTaskViewProps): ReactElement {
+export function AssistantTaskView({ task, allTasks, maxDepth = null }: AssistantTaskViewProps): ReactElement {
   const result = useTaskResult(task?.id ?? null)
 
   if (task === null) {
@@ -90,9 +100,15 @@ export function AssistantTaskView({ task }: AssistantTaskViewProps): ReactElemen
   const isError = task.status === 'failed' || task.status === 'cancelled'
   const isTerminal = ASSISTANT_TASK_TERMINAL.has(task.status)
   const title = task.title !== '' ? task.title : task.profileId
+  const chain = buildBreadcrumbChain(allTasks ?? [task], task.id)
+  // isWatcher (T5.6) — a checkpoints/on_completion task is a standing OBSERVER of the stage's own main-agent
+  // output (Этап 5), not a one-shot advisory check — trigger kind + how many turns it has fired + the last
+  // checkpoint it processed are shown here, nowhere else (not a parallel display surface).
+  const isWatcher = task.trigger === 'checkpoints' || task.trigger === 'on_completion'
 
   return (
     <div className="assistant-task-view">
+      <AssistantBreadcrumb chain={chain} maxDepth={maxDepth} />
       <div className="assistant-task-view-header">
         <span className="assistant-task-view-title">{title}</span>
         {/* Required/advisory is text, not just color — same accessibility rule as the rail row. */}
@@ -101,6 +117,19 @@ export function AssistantTaskView({ task }: AssistantTaskViewProps): ReactElemen
         </span>
         <span className="assistant-task-view-status" data-status={task.status}>{label}</span>
       </div>
+      {isWatcher && (
+        <div className="assistant-task-view-watch" data-trigger={task.trigger}>
+          <span className="assistant-task-view-watch-trigger">
+            {task.trigger === 'on_completion' ? 'Watches: on completion' : 'Watches: checkpoints'}
+          </span>
+          <span className="assistant-task-view-watch-passes">
+            {task.watchPasses !== null ? `Passes: ${task.watchPasses}` : 'Passes: 0'}
+          </span>
+          {task.watchLastCheckpointSeq !== null && (
+            <span className="assistant-task-view-watch-checkpoint">Last checkpoint: #{task.watchLastCheckpointSeq}</span>
+          )}
+        </div>
+      )}
 
       {isError ? (
         <div className="assistant-task-view-error" role="alert">

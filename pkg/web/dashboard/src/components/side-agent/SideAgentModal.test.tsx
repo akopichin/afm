@@ -21,6 +21,8 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
     quote: null,
     openWith: vi.fn(),
     clearQuote: vi.fn(),
+    contextStageId: '',
+    setContextStageId: vi.fn(),
     ...over,
   }
 }
@@ -199,5 +201,36 @@ describe('SideAgentModal', () => {
     renderModal({ isOpen: true, quote: 'quoted file comments', clearQuote })
     fireEvent.click(screen.getByRole('button', { name: 'Cancel attached file comments' }))
     expect(clearQuote).toHaveBeenCalledTimes(1)
+  })
+
+  // --- T4.3: "Context: …" row ---
+
+  it('shows no context row when there is no contextStageId and no known stages', () => {
+    renderModal({ isOpen: true, contextStageId: '' })
+    expect(screen.queryByText('Context:')).toBeNull()
+  })
+
+  it('TestTurn_ContextHeaderShowsStage — shows the context as plain text when no stage list is known', () => {
+    renderModal({ isOpen: true, contextStageId: 'frontend' })
+    expect(screen.getByText('Context:')).toBeInTheDocument()
+    expect(screen.getByText('frontend')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
+  it('offers a selector to change the context before sending when stages are known', () => {
+    const setContextStageId = vi.fn()
+    let utils!: ReturnType<typeof render>
+    act(() => {
+      utils = render(
+        <SideAgentModal
+          api={fakeApi({ isOpen: true, contextStageId: 'frontend', setContextStageId })}
+          stages={[{ id: 'frontend', title: 'Frontend' }, { id: 'backend', title: 'Backend' }]}
+        />,
+      )
+    })
+    const select = utils.getByRole('combobox', { name: 'Conversation context stage' })
+    expect(select).toHaveValue('frontend')
+    fireEvent.change(select, { target: { value: 'backend' } })
+    expect(setContextStageId).toHaveBeenCalledWith('backend')
   })
 })

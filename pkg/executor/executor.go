@@ -79,19 +79,29 @@ type Config struct {
 	Command        string
 	ExtraArgs      []string
 	IdleTimeout    time.Duration
-	TruncateOutput int                          // 0 = no truncation; max chars for Bash-command/tool detail (agent text narrative is never truncated)
-	OnAction       func(tool, detail string)    // called for each parsed agent action (may be nil)
-	SessionID      string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume         bool                         // if true, --resume <SessionID> is used instead of --session-id
-	StageDir       string                       // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	WrapperDir     string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
-	Dir            string                       // if set, agent runs with this working directory (project root from flow.root_dir)
-	Debug          bool                         // if true, log the exact agent input (prompt) to debug logs
-	RunDir         string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
-	StageID        string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
-	Phase          string                       // phase label for the accounting Observation this invocation produces
-	UsageHint      accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
-	OnUsage        func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
+	TruncateOutput int                       // 0 = no truncation; max chars for Bash-command/tool detail (agent text narrative is never truncated)
+	OnAction       func(tool, detail string) // called for each parsed agent action (may be nil)
+	// RunID identifies the current afm run — stamped onto every Observation this invocation produces (see
+	// Observation.RunID). Purely a labelling field: directory scoping (RunDir) already separates runs, so an
+	// empty RunID is harmless (Observation.ID stays unique within the run regardless).
+	RunID string
+	// OnObservation, if set, is called synchronously — same goroutine, same call site as OnAction — for every
+	// normalized Observation produced by RunPlanning/RunAgent (the MAIN/author agent calls only; RunVerifyAgent
+	// and RunHelperAgent deliberately do not wire it — see dev-plan.md Этап 5 T5.1/T5.5's "a helper's own
+	// message is not main-agent output"). Synchronous and never selected/dropped — unlike bus.UIBus, there is
+	// no channel here to overflow (TestObservation_UIBusDropDoesNotAffectObservations).
+	OnObservation func(Observation)
+	SessionID     string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume        bool                         // if true, --resume <SessionID> is used instead of --session-id
+	StageDir      string                       // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	WrapperDir    string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir           string                       // if set, agent runs with this working directory (project root from flow.root_dir)
+	Debug         bool                         // if true, log the exact agent input (prompt) to debug logs
+	RunDir        string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
+	StageID       string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	Phase         string                       // phase label for the accounting Observation this invocation produces
+	UsageHint     accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
+	OnUsage       func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
 	// InterruptCh, if set, is watched during RunAgent: a signal on this channel sends SIGINT to the
 	// subprocess — graceful, user-requested interrupt, distinct from idle timeout / full-run shutdown.
 	InterruptCh <-chan struct{}
@@ -127,6 +137,10 @@ const (
 	contentTypeToolUse = "tool_use"
 	toolNameBash       = "Bash"
 	toolNameWrite      = "Write"
+	toolNameEdit       = "Edit"
+	toolNameRead       = "Read"
+	toolNameGlob       = "Glob"
+	toolNameGrep       = "Grep"
 	eventTypeAssistant = "assistant"
 )
 
@@ -282,7 +296,7 @@ func contentToAction(c streamContent, limit int) (toolName, detail string, ok bo
 			fp = inp.Pattern
 		}
 		switch c.Name {
-		case toolNameWrite, "Edit", "Read", "Glob", "Grep":
+		case toolNameWrite, toolNameEdit, toolNameRead, toolNameGlob, toolNameGrep:
 			return c.Name, fp, true
 		case toolNameBash:
 			cmd := inp.Command
@@ -378,12 +392,22 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	var firstErr string
 	var agentWroteOutFile bool
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	obsMeta := observationMeta{runID: e.cfg.RunID, stageID: e.cfg.StageID, executionID: NewExecutionID(e.cfg.StageID, logFile), actor: e.cfg.StageID + "/" + phase}
+	obsSeq := 0
+	if e.cfg.OnObservation != nil {
+		obsSeq = countExistingObservations(obsMeta, jsonlFile)
+	}
 	collector := accounting.NewCollector(e.cfg.UsageHint)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
+			if e.cfg.OnObservation != nil {
+				if o, torn := incompleteObservation(obsMeta, line, &obsSeq); torn {
+					e.cfg.OnObservation(o)
+				}
+			}
 			if isErrorLine(line) {
 				lg.LogAction("error", line)
 				if firstErr == "" {
@@ -392,18 +416,23 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 			}
 			return
 		}
-		for _, c := range ev.Message.Content {
-			if c.Type == contentTypeText {
-				textBuf.WriteString(c.Text)
+		for _, o := range buildObservationsFromEvent(obsMeta, ev, &obsSeq) {
+			if e.cfg.OnObservation != nil {
+				e.cfg.OnObservation(o)
 			}
-			if c.Type == contentTypeToolUse && c.Name == toolNameWrite {
-				var inp toolInput
-				json.Unmarshal(c.Input, &inp) //nolint:errcheck
-				if abs, absErr := filepath.Abs(inp.FilePath); inp.FilePath != "" && absErr == nil && abs == absOut {
+			if o.Type == ObservationAssistantMessage {
+				textBuf.WriteString(o.Content)
+			}
+			if o.Type == ObservationToolAction && o.Tool == toolNameWrite {
+				if abs, absErr := filepath.Abs(o.Content); o.Content != "" && absErr == nil && abs == absOut {
 					agentWroteOutFile = true
 				}
 			}
-			if tool, detail, actionOK := contentToAction(c, e.cfg.TruncateOutput); actionOK {
+			// .log and OnAction must see the SAME (tool, detail) pair — derived once from ObservationToAction,
+			// which applies TruncateOutput — never the raw, full Observation.Content: only OnObservation (above)
+			// is entitled to the untruncated text (TestIntegration_RetryContextSurvivesTruncation's regression:
+			// .log must stay bounded by TruncateOutput exactly as it did before Observation existed).
+			if tool, detail, actionOK := ObservationToAction(o, e.cfg.TruncateOutput); actionOK {
 				lg.LogAction(tool, detail)
 				if e.cfg.OnAction != nil {
 					e.cfg.OnAction(tool, detail)
@@ -487,12 +516,22 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
+	obsMeta := observationMeta{runID: e.cfg.RunID, stageID: e.cfg.StageID, executionID: NewExecutionID(e.cfg.StageID, logFile), actor: e.cfg.StageID + "/" + phase}
+	obsSeq := 0
+	if e.cfg.OnObservation != nil {
+		obsSeq = countExistingObservations(obsMeta, jsonlFile)
+	}
 	collector := accounting.NewCollector(e.cfg.UsageHint)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
+			if e.cfg.OnObservation != nil {
+				if o, torn := incompleteObservation(obsMeta, line, &obsSeq); torn {
+					e.cfg.OnObservation(o)
+				}
+			}
 			if isErrorLine(line) {
 				lg.LogAction("error", line)
 				if firstErr == "" {
@@ -501,8 +540,15 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 			}
 			return
 		}
-		for _, c := range ev.Message.Content {
-			if tool, detail, actionOK := contentToAction(c, e.cfg.TruncateOutput); actionOK {
+		for _, o := range buildObservationsFromEvent(obsMeta, ev, &obsSeq) {
+			if e.cfg.OnObservation != nil {
+				e.cfg.OnObservation(o)
+			}
+			// .log and OnAction must see the SAME (tool, detail) pair — derived once from ObservationToAction,
+			// which applies TruncateOutput — never the raw, full Observation.Content: only OnObservation (above)
+			// is entitled to the untruncated text (TestIntegration_RetryContextSurvivesTruncation's regression:
+			// .log must stay bounded by TruncateOutput exactly as it did before Observation existed).
+			if tool, detail, actionOK := ObservationToAction(o, e.cfg.TruncateOutput); actionOK {
 				lg.LogAction(tool, detail)
 				if e.cfg.OnAction != nil {
 					e.cfg.OnAction(tool, detail)
