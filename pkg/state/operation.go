@@ -69,6 +69,13 @@ type Preconditions struct {
 	// currently be at — stale_revision otherwise (T6.4/T6.5: "ожидаемые stage_generation"). Checked against
 	// the store's OWN history under the SAME lock as the write, never a value read earlier.
 	StageGeneration map[string]uint64
+	// StageNotTerminal, if non-empty, lists stage ids that must NOT currently be done/failed — invalid_status
+	// otherwise. Этап 7 (T7.3): closes the TOCTOU window between an early, non-authoritative status read (e.g.
+	// Attach's own convenience check) and the actual commit — admitting a new required task AFTER its root
+	// stage has already reached done/failed would create a requirement nothing will ever re-evaluate again
+	// (TestAttachRequiredRacesWithComplete). Checked under the SAME lock as the write, like every other
+	// precondition here.
+	StageNotTerminal []string
 }
 
 // Operation is a single caller-intent: ApplyRunOperation either durably commits ALL of its Effects as one
@@ -203,6 +210,11 @@ func (s *Store) checkPreconditionsLocked(rs *RunState, op Operation) error {
 	for stageID, want := range exp.StageGeneration {
 		if got := s.stageGenerationLocked(stageID); got != want {
 			return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("stage %s generation changed (expected %d, got %d)", stageID, want, got)}
+		}
+	}
+	for _, stageID := range exp.StageNotTerminal {
+		if st := rs.Stages[stageID].Status; st == StatusDone || st == StatusFailed {
+			return &OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %s already %s", stageID, st)}
 		}
 	}
 	if exp.MaxQuota != nil {

@@ -28,4 +28,7 @@ const (
 	// CodeAncestorInactive — предок задачи уже не активен (завершён/отменён), создавать
 	// от его имени потомков нельзя.
 	CodeAncestorInactive ErrorCode = "ancestor_inactive"
+	// CodeActorNotAllowed — операция требует конкретного происхождения actor'а (например, T7.6's waiver:
+	// только человек, никогда результат самой модели).
+	CodeActorNotAllowed ErrorCode = "actor_not_allowed"
 )

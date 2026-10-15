@@ -420,6 +420,69 @@ func TestFSM_Apply_VerifyFail_LegalFromActiveStatuses(t *testing.T) {
 	}
 }
 
+func TestFSM_EnterAwaitingAssistantsOnlyFromAllowedStates(t *testing.T) {
+	for _, from := range []state.StageStatus{
+		state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput,
+	} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		_, to, _, ok, err := fsm.Apply("a", EvAwaitAssistants, GuardCtx{}, "required task open")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if !ok || to != state.StatusAwaitingAssistants {
+			t.Errorf("%s->awaiting_assistants: got (%v, %v), want (awaiting_assistants, true)", from, to, ok)
+		}
+	}
+
+	// Planning/AwaitingApproval belong to planning-only completion, which the barrier never touches
+	// (TestPlanningOnlyStageUnaffected) — must stay illegal.
+	for _, from := range []state.StageStatus{
+		state.StatusPending, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusReady,
+		state.StatusRevising, state.StatusPaused, state.StatusDone, state.StatusFailed, state.StatusHookFailed,
+	} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		_, to, _, ok, err := fsm.Apply("a", EvAwaitAssistants, GuardCtx{}, "required task open")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if ok {
+			t.Errorf("await_assistants from %s: ok = true, want false", from)
+		}
+		if to != from {
+			t.Errorf("await_assistants from %s: to = %v, want unchanged %v", from, to, from)
+		}
+	}
+}
+
+// TestFSM_CasRejectsStaleTransition mirrors EvVerifyFail's own race-closing test (fsm.go's doc comment): From
+// is an explicit allowlist, not nil — a concurrent Pause/Revise that already moved the stage away from one of
+// EvAwaitAssistants's legal source statuses must win, and the rejected Apply must report the CURRENT status
+// unchanged, never a stale "to".
+func TestFSM_CasRejectsStaleTransition(t *testing.T) {
+	for _, from := range []state.StageStatus{state.StatusPaused, state.StatusRevising} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+
+		_, to, _, ok, err := fsm.Apply("a", EvAwaitAssistants, GuardCtx{}, "stale: already paused/revising")
+		store.Close()
+		if err != nil {
+			t.Fatalf("%s: Apply: %v", from, err)
+		}
+		if ok {
+			t.Errorf("await_assistants from %s: ok = true, want false (a concurrent pause/revise must win)", from)
+		}
+		if to != from {
+			t.Errorf("await_assistants from %s: to = %v, want unchanged %v", from, to, from)
+		}
+	}
+}
+
 func TestFSM_Apply_VerifyFail_IllegalFromPausedOrRevising(t *testing.T) {
 	for _, from := range []state.StageStatus{state.StatusPaused, state.StatusRevising} {
 		fsm, store := newTestFSM(t, []string{"a"})

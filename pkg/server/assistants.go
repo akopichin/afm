@@ -42,6 +42,14 @@ type AssistantTaskView struct {
 	// absent until the FIRST checkpoint is actually committed, never a fabricated value.
 	WatchPasses            *int `json:"watch_passes,omitempty"`
 	WatchLastCheckpointSeq *int `json:"watch_last_checkpoint_seq,omitempty"`
+	// BlocksRootCompletion (Этап 7, T7.5) — whether an UNRESOLVED instance of this task would block the ROOT
+	// STAGE's own completion (assistants.BlocksRootCompletion: true only if every edge from this task up to the
+	// stage is "required" — one advisory link anywhere in the chain breaks it for everything below). A task
+	// with Mode=="required" and BlocksRootCompletion==false blocks only its immediate parent helper
+	// (ParentTaskID), never the stage directly — the dashboard renders "blocks stage" vs "blocks helper <X>"
+	// from this plus Mode/ParentTaskID (§4.3). Purely structural (mode-chain only) — does not account for a
+	// stale/old task-tree generation, which the durable barrier (RequiredBlocker) already excludes on its own.
+	BlocksRootCompletion bool `json:"blocks_root_completion"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.
@@ -159,6 +167,9 @@ const (
 	taskActionPause    = "pause"
 	taskActionContinue = "continue"
 	taskActionCancel   = "cancel"
+	// taskActionWaive (Этап 7, T7.6) is the ONE task action with a JSON body ({"reason":"..."}) — routed
+	// separately below since the other three take no body at all.
+	taskActionWaive = "waive"
 )
 
 // routeAssistants handles /api/assistants/{id}/{pause|continue|cancel|events}.
@@ -178,6 +189,8 @@ func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case action == "events" && r.Method == http.MethodGet:
 		s.handleAssistantEvents(w, r, taskID)
+	case action == taskActionWaive && r.Method == http.MethodPost:
+		s.handleWaiveTask(w, r, taskID)
 	case action == taskActionPause && r.Method == http.MethodPost,
 		action == taskActionContinue && r.Method == http.MethodPost,
 		action == taskActionCancel && r.Method == http.MethodPost:
@@ -191,6 +204,42 @@ func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleWaiveTask (Этап 7, T7.6) is routed separately from pause/continue/cancel because it is the one task
+// action that takes a JSON body ({"reason":"..."}) — the actor is NEVER read from that body (only the
+// authenticated dashboard operator can waive, stamped by the adapter; see collaborationActions.WaiveTask).
+func (s *Server) handleWaiveTask(w http.ResponseWriter, r *http.Request, taskID string) {
+	if s.assistantActions == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !sameOriginOK(r) {
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAttachBodyBytes)).Decode(&body); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeAssistantErrCode(w, http.StatusRequestEntityTooLarge, "request_too_large")
+			return
+		}
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_request_body")
+		return
+	}
+	if strings.TrimSpace(body.Reason) == "" {
+		writeAssistantErrCode(w, http.StatusBadRequest, "reason_required")
+		return
+	}
+	if err := s.assistantActions.WaiveTask(r.Context(), taskID, body.Reason); err != nil {
+		writeAssistantError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"})
 }
 
 func (s *Server) handleAssistantTaskAction(w http.ResponseWriter, r *http.Request, taskID, action string) {
@@ -276,6 +325,8 @@ func assistantErrStatus(code assistants.ErrorCode) int {
 		return http.StatusServiceUnavailable
 	case assistants.CodeCapabilityUnavailable, assistants.CodeDelegationDepthExceeded, assistants.CodeInvalidParent, assistants.CodeAncestorInactive:
 		return http.StatusUnprocessableEntity
+	case assistants.CodeActorNotAllowed:
+		return http.StatusForbidden
 	default:
 		return http.StatusInternalServerError
 	}

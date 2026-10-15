@@ -1,8 +1,11 @@
 // Package orchestrator (this file, T3.4): admission ("Attach") and the small amount of state-mutation
 // plumbing a helper task needs — the actual turn execution + lifecycle transitions live in
-// assistants_lifecycle.go. Advisory helper tasks are observational: nothing in either file ever calls
-// Trigger/completeStage — a task's outcome never changes its root stage's FSM status (dev-plan's Этап 3
-// acceptance criterion).
+// assistants_lifecycle.go. Advisory helper tasks remain observational: an advisory task's own outcome never
+// changes its root stage's FSM status. Этап 7 (T7.2) adds the ONE exception for REQUIRED tasks: finishTaskFrom
+// calls maybeCompleteAfterAssistants after every terminal transition, which re-attempts completeStage — but
+// that is a correct no-op unless the stage is CURRENTLY awaiting_assistants (entered only once its own main
+// executor already finished), so an advisory task's completion still never moves a stage that never left
+// running/retrying in the first place.
 package orchestrator
 
 import (
@@ -206,6 +209,14 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if st.IsScript() {
 		return "", fmt.Errorf("assistants: stage %q is a script stage — helpers are not supported there", req.StageID)
 	}
+	// Этап 7 (T7.3): a stage already in its terminal status will never again be checked by
+	// maybeCompleteAfterAssistants (that hook is a no-op once the stage isn't awaiting_assistants) — admitting
+	// a NEW required task here would silently create a requirement nothing will ever re-evaluate, rather than
+	// the race being cleanly won by whichever of Attach/completeStage's CAS committed first
+	// (TestAttachRequiredRacesWithComplete).
+	if cur := o.currentStatus(req.StageID); cur == state.StatusDone || cur == state.StatusFailed {
+		return "", &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %q already reached %s", req.StageID, cur)}
+	}
 	if o.opts.AssistantsRegistry == nil {
 		return "", &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "no assistant profiles configured"}
 	}
@@ -278,10 +289,14 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	}
 
 	op := state.Operation{
-		ID:      req.OperationID,
-		Kind:    "attach_task",
-		Actor:   req.Actor,
-		Expect:  state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision},
+		ID:    req.OperationID,
+		Kind:  "attach_task",
+		Actor: req.Actor,
+		// StageNotTerminal closes the TOCTOU window between the early o.currentStatus check above and this
+		// commit: if the stage reaches done/failed (e.g. a concurrent completeStage) in between, THIS CAS
+		// rejects atomically under the same lock as the write, rather than racing to admit a requirement
+		// nothing will ever check again (TestAttachRequiredRacesWithComplete).
+		Expect:  state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, StageNotTerminal: []string{req.StageID}},
 		Effects: effects,
 	}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
@@ -481,6 +496,13 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 		// makes a resume happen exactly once even when several siblings finish at the same time.
 		if to.Terminal() && hasParent {
 			o.tryResumeParent(o.runContext(context.Background()), parentID)
+		}
+		// Этап 7 (T7.2): ANY task reaching a terminal status could be exactly what just closed its root stage's
+		// required-completion barrier (directly, or transitively once tryResumeParent above settles an
+		// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
+		// no-op for a stage that isn't currently awaiting_assistants.
+		if to.Terminal() {
+			o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
 		}
 	})
 	o.handleTaskOperationErr(err)

@@ -53,6 +53,10 @@ type AssistantActions interface {
 	PauseTask(ctx context.Context, taskID string) error
 	ContinueTask(ctx context.Context, taskID string) error
 	CancelTask(ctx context.Context, taskID string) error
+	// WaiveTask (Этап 7, T7.6) records a human decision to accept the risk of taskID never closing its own
+	// required gate. The actor is always the authenticated dashboard operator — stamped by the adapter, never
+	// taken from the request body (a model's own task result can never waive itself, §19.5).
+	WaiveTask(ctx context.Context, taskID string, reason string) error
 }
 
 // FlowActions controls review-pause and notes. Mutations serialize under flowPauseMu and require paused;

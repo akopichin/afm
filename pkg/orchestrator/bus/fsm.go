@@ -40,6 +40,12 @@ const (
 	// EvVerifyFail — H1: АТОМАРНЫЙ аналог EvFail для verify-driven исходов. Не трогает существующий From:nil
 	// у EvFail — другие call site'ы EvFail сознательно должны срабатывать из любого статуса.
 	EvVerifyFail FSMEvent = "verify_fail"
+	// EvAwaitAssistants — Этап 7 (T7.1/T7.2): основной исполнитель стадии закончил свою часть (file-проба и,
+	// если задан, независимый verify уже пройдены), но durable completion barrier обнаружил хотя бы одну
+	// незакрытую required-задачу помощника. Намеренно зеркалит ТОЛЬКО ту часть From-набора EvComplete, из
+	// которой реально стартует completeStage (Running/Retrying/AwaitingUserInput) — Planning/AwaitingApproval
+	// принадлежат planning-only завершению, которое барьер не трогает (TestPlanningOnlyStageUnaffected).
+	EvAwaitAssistants FSMEvent = "await_assistants"
 )
 
 type GuardCtx struct {
@@ -81,14 +87,20 @@ func NewFSM(store *state.Store) *FSM {
 			// завершить planning.
 			EvPlanReady: {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingApproval)},
 			EvApprove:   {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
-			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused}, To: to(state.StatusRevising)},
+			// awaiting_assistants добавлен для T7.8: старый процесс УЖЕ вышел (main executor done), Revise там —
+			// явный запуск исполнения с feedback, а не прерывание живого агента.
+			EvRevise: {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused, state.StatusAwaitingAssistants}, To: to(state.StatusRevising)},
 			// Revising тоже разрешён здесь: run<Phase>WithFeedback переводит стадию обратно в Running этим же
 			// событием ПЕРЕД повторным runWithRetry — без этого стадия застревала бы в Revising навсегда.
 			EvStartRun: {From: []state.StageStatus{state.StatusReady, state.StatusRevising}, To: to(state.StatusRunning)},
 			// Разрешаем completion из AwaitingUserInput: поллер мог обнаружить брошенный вопрос до завершения
-			// живого агента.
-			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusDone)},
+			// живого агента. AwaitingAssistants добавлен для T7.2: единственный путь ТУДА — через EvAwaitAssistants
+			// ниже, единственный путь ОБРАТНО в Done — сюда, после того как барьер подтвердит гейт закрытым.
+			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingAssistants}, To: to(state.StatusDone)},
 			EvFail:     {From: nil, To: to(state.StatusFailed)},
+			// EvAwaitAssistants мирно повторяет подмножество From у EvComplete, из которого реально стартует
+			// completeStage (orchestrator.go) — см. его собственный doc comment.
+			EvAwaitAssistants: {From: []state.StageStatus{state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingAssistants)},
 			// EvVerifyFail — намеренно ЗЕРКАЛИТ From-набор EvComplete, но НЕ включает Paused/Revising: если стадия
 			// уже там, её владеет конкурентный Pause/Revise, а не устаревший verify-исход.
 			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusFailed)},
@@ -104,7 +116,9 @@ func NewFSM(store *state.Store) *FSM {
 			EvReady:            {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
 			EvHookFailed:       {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
 			EvHookResolved:     {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
-			EvPause:            {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying}, To: to(state.StatusPaused)},
+			// awaiting_assistants добавлен в T7.1's чеклист (выход в paused допустим: пользователь может
+			// вручную поставить на паузу стадию, пока она ждёт помощников).
+			EvPause: {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants}, To: to(state.StatusPaused)},
 			EvContinue:         {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}

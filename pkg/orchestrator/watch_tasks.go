@@ -228,13 +228,17 @@ func (o *Orchestrator) fireWatcherTask(ctx context.Context, taskID assistants.Ta
 }
 
 // finalizeWatchersForStage is the single funnel (called from triggerWithSeq, orchestrator.go) for "this
-// stage's own result is now known" — regardless of which of the many EvFail/EvComplete call sites produced
-// it. T5.4's two remaining trigger rules live here:
+// stage's own result is now known (or now gated on required assistants)" — regardless of which of the many
+// EvFail/EvComplete/EvAwaitAssistants call sites produced it. T5.4's two remaining trigger rules live here:
 //   - EvFail/EvVerifyFail: TestTrigger_ParentFailedStopsNewPasses — stop issuing new passes; whatever the
 //     watcher already recorded (its own result.json / task_result events from earlier passes) is untouched.
-//   - EvComplete: TestTrigger_OnCompletionRunsAtStageResultReady / TestTrigger_RequiredWatcherHasFinalBoundedPass
-//     — an on_completion watcher gets its one turn now; a required watcher (any trigger) is guaranteed one
-//     final, bounded pass rather than being left "watching" forever once its root stage is itself done.
+//   - EvComplete/EvAwaitAssistants: TestTrigger_OnCompletionRunsAtStageResultReady /
+//     TestTrigger_RequiredWatcherHasFinalBoundedPass — an on_completion watcher gets its one turn now; a
+//     required watcher (any trigger) is guaranteed one final, bounded pass rather than being left "watching"
+//     forever. T7.2 moved the moment this fires from "after the stage is already Done" to "the instant the
+//     main executor's own part is done" (EvAwaitAssistants when the barrier is open, EvComplete when it
+//     wasn't) — the whole point of the barrier is that this final pass's own verdict must still be able to
+//     gate completion, which is impossible if it only ever runs once the stage is already marked done.
 func (o *Orchestrator) finalizeWatchersForStage(stageID string, ev bus.FSMEvent) {
 	o.watchMu.Lock()
 	bindings := append([]*watcherBinding{}, o.watchByStage[stageID]...)
@@ -243,11 +247,12 @@ func (o *Orchestrator) finalizeWatchersForStage(stageID string, ev bus.FSMEvent)
 		switch ev {
 		case bus.EvFail, bus.EvVerifyFail:
 			b.coll.Stop()
-		case bus.EvComplete:
+		case bus.EvComplete, bus.EvAwaitAssistants:
 			o.finalizeWatcherOnCompletion(context.Background(), b)
 		default:
-			// Unreachable: triggerWithSeq only calls this for EvComplete/EvFail/EvVerifyFail (see its own call
-			// site's doc comment) — fail closed (do nothing) rather than silently assume a new caller's intent.
+			// Unreachable: triggerWithSeq only calls this for EvComplete/EvFail/EvVerifyFail/EvAwaitAssistants
+			// (see its own call site's doc comment) — fail closed (do nothing) rather than silently assume a
+			// new caller's intent.
 		}
 	}
 }

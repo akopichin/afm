@@ -97,6 +97,11 @@ const (
 	// once, surviving a crash at any point.
 	kindFeedbackIntentCreated  = "feedback_intent_created"
 	kindFeedbackIntentConsumed = "feedback_intent_consumed"
+	// kindTaskWaived (Этап 7, T7.6) — a human explicitly accepted the risk of this required task never
+	// closing its own gate (failed/cancelled/needs_changes, or simply never run). A SEPARATE, explicitly-
+	// audited operation — never a side effect of cancel/retry/any task_result — Actor is checked at admission
+	// (pkg/orchestrator's WaiveTask) to be a human, never a model's own result (§13.2/§19.5).
+	kindTaskWaived = "task_waived"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
@@ -119,6 +124,7 @@ var controlKinds = map[string]bool{
 	kindProposalStatusChanged:  true,
 	kindFeedbackIntentCreated:  true,
 	kindFeedbackIntentConsumed: true,
+	kindTaskWaived:             true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

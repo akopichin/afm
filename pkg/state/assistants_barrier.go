@@ -48,11 +48,16 @@ func (as AssistantsState) tasksFor(ids []assistants.TaskID) []assistants.Task {
 }
 
 // taskGateClosed reports whether task id has durably closed its own required gate (assistants.TaskGateClosed),
-// reading LastVerdict from the projection — never a file.
+// reading LastVerdict from the projection — never a file. A WAIVED task (Этап 7, T7.6 — a separate, audited
+// human decision) always counts as closed, regardless of its actual Status/LastVerdict: that is the whole
+// point of a waiver — accepting the risk of a task that will never otherwise close its gate.
 func (as AssistantsState) taskGateClosed(id assistants.TaskID) bool {
 	t, ok := as.Tasks[id]
 	if !ok {
 		return false
+	}
+	if t.Waived {
+		return true
 	}
 	return assistants.TaskGateClosed(t.Status, t.LastVerdict, t.LastVerdict != "")
 }

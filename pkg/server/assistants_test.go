@@ -17,19 +17,21 @@ import (
 // fakeAssistantActions/fakeAssistantsReader back the HTTP layer under test with an in-memory, idempotent
 // implementation good enough to exercise the handlers without a real orchestrator.
 type fakeAssistantActions struct {
-	mu             sync.Mutex
-	byRequestID    map[string]string // request_id -> task_id (idempotency)
-	nextID         int
-	lastAttach     AttachRequest
-	lastStage      string
-	attachErr      error
-	attachCalls    int
-	paused         []string
-	continued      []string
-	cancelled      []string
-	actionErr      error
-	policyRevision string
-	maxDepth       int
+	mu              sync.Mutex
+	byRequestID     map[string]string // request_id -> task_id (idempotency)
+	nextID          int
+	lastAttach      AttachRequest
+	lastStage       string
+	attachErr       error
+	attachCalls     int
+	paused          []string
+	continued       []string
+	cancelled       []string
+	waived          []string
+	lastWaiveReason string
+	actionErr       error
+	policyRevision  string
+	maxDepth        int
 }
 
 func (f *fakeAssistantActions) PolicyRevision() (string, int) {
@@ -86,6 +88,17 @@ func (f *fakeAssistantActions) CancelTask(ctx context.Context, taskID string) er
 		return f.actionErr
 	}
 	f.cancelled = append(f.cancelled, taskID)
+	return nil
+}
+
+func (f *fakeAssistantActions) WaiveTask(ctx context.Context, taskID string, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.waived = append(f.waived, taskID)
+	f.lastWaiveReason = reason
 	return nil
 }
 

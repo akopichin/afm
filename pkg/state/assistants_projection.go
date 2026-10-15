@@ -52,6 +52,14 @@ type TaskState struct {
 	// (state.go's isIdle) both need it WITHOUT file I/O, identically live and after a restart — see
 	// applyTaskResult's doc comment for why the rest of Result still lives only in the control stream.
 	LastVerdict assistants.Verdict `json:"last_verdict,omitempty"`
+	// Waived/WaiverReason/WaivedBy/WaivedAt (Этап 7, T7.6) record a human's explicit decision to accept the
+	// risk of this required task never closing its own gate — a SEPARATE, audited operation (kindTaskWaived),
+	// never a side effect of cancel/retry/any task_result. Once Waived, RequiredBlocker treats this task's
+	// gate as closed regardless of its actual Status/LastVerdict (see taskGateClosed, assistants_barrier.go).
+	Waived       bool      `json:"waived,omitempty"`
+	WaiverReason string    `json:"waiver_reason,omitempty"`
+	WaivedBy     Actor     `json:"waived_by,omitempty"`
+	WaivedAt     time.Time `json:"waived_at,omitempty"`
 }
 
 // Paused reports whether this task itself carries at least one hold (does not look at ancestors — see
@@ -275,7 +283,10 @@ func applyOperationCommitted(as *AssistantsState, c *Control, dryRun bool) error
 		if e.Kind == kindOperationCommitted {
 			return fmt.Errorf("operation effect %d: nested operation_committed is not allowed", i)
 		}
-		synthetic := &Control{Kind: e.Kind, Time: c.Time, Target: e.Target, Payload: e.Payload}
+		// Actor is carried through from the outer operation_committed record (Этап 7, T7.6: applyTaskWaived is
+		// the first per-effect handler that actually reads it — WaivedBy must record who durably accepted the
+		// risk, not a zero-value Actor).
+		synthetic := &Control{Kind: e.Kind, Time: c.Time, Actor: c.Actor, Target: e.Target, Payload: e.Payload}
 		if err := dispatchControlKind(&scratch, synthetic, false); err != nil {
 			return fmt.Errorf("operation effect %d (%s): %w", i, e.Kind, err)
 		}
@@ -480,6 +491,8 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyFeedbackIntentCreated(as, c, dryRun)
 	case kindFeedbackIntentConsumed:
 		return applyFeedbackIntentConsumed(as, c, dryRun)
+	case kindTaskWaived:
+		return applyTaskWaived(as, c, dryRun)
 	default:
 		// controlKinds already rejected anything not listed above during decodeLine — reaching here would
 		// be a registry/switch drift, not a journal problem.
@@ -648,6 +661,36 @@ func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	t.LastVerdict = p.Verdict
+	return nil
+}
+
+// TaskWaivedPayload is the task_waived control record's payload (Этап 7, T7.6) — decoded here by
+// applyTaskWaived, encoded by pkg/orchestrator's taskWaivedEffect.
+type TaskWaivedPayload struct {
+	Reason string `json:"reason"`
+}
+
+// applyTaskWaived projects a human's explicit decision to accept the risk of this required task never
+// closing its own gate. Idempotent at the projection level (re-applying only refreshes Reason/At) — the
+// actual "only once meaningfully" guarantee is WaiveTask's own early return for an already-waived task, same
+// posture as every other task_* kind here.
+func applyTaskWaived(as *AssistantsState, c *Control, dryRun bool) error {
+	id := assistants.TaskID(c.Target.TaskID)
+	t, ok := as.Tasks[id]
+	if !ok {
+		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
+	}
+	var p TaskWaivedPayload
+	if err := decodePayload(c.Payload, &p); err != nil {
+		return fmt.Errorf("task %s: decode task_waived payload: %w", id, err)
+	}
+	if dryRun {
+		return nil
+	}
+	t.Waived = true
+	t.WaiverReason = p.Reason
+	t.WaivedBy = c.Actor
+	t.WaivedAt = c.Time
 	return nil
 }
 

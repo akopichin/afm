@@ -188,6 +188,12 @@ func (a collaborationActions) ContinueTask(ctx context.Context, taskID string) e
 	return a.orch.ContinueTask(ctx, assistants.TaskID(taskID))
 }
 
+// WaiveTask (Этап 7, T7.6) stamps the actor as the authenticated dashboard operator — never taken from the
+// request body, so a crafted payload can never impersonate a human waiver (§19.5: only a human may waive).
+func (a collaborationActions) WaiveTask(ctx context.Context, taskID string, reason string) error {
+	return a.orch.WaiveTask(ctx, assistants.TaskID(taskID), state.Actor{Kind: string(assistants.OriginUser)}, reason)
+}
+
 func (a collaborationActions) CancelTask(ctx context.Context, taskID string) error {
 	return a.orch.CancelTask(ctx, assistants.TaskID(taskID))
 }
@@ -202,18 +208,27 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 	if err != nil {
 		return nil, err
 	}
+	// Этап 7 (T7.5): a local-only lookup over this SAME flat tree backs BlocksRootCompletion below — no store
+	// access needed beyond what TaskTree already returned.
+	byID := make(map[assistants.TaskID]assistants.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	lookup := func(id assistants.TaskID) (assistants.Task, bool) { t, ok := byID[id]; return t, ok }
+
 	out := make([]server.AssistantTaskView, 0, len(tasks))
 	for _, t := range tasks {
 		view := server.AssistantTaskView{
-			ID:                  string(t.ID),
-			ProfileID:           string(t.ProfileID),
-			Title:               t.Title,
-			Mode:                string(t.Mode),
-			Trigger:             string(t.Trigger),
-			Status:              string(t.Status),
-			StatusReason:        t.StatusReason,
-			ReadonlyEnforcement: string(t.ProfileSnapshot.ReadonlyEnforcement),
-			Depth:               t.Depth,
+			ID:                   string(t.ID),
+			ProfileID:            string(t.ProfileID),
+			Title:                t.Title,
+			Mode:                 string(t.Mode),
+			Trigger:              string(t.Trigger),
+			Status:               string(t.Status),
+			StatusReason:         t.StatusReason,
+			ReadonlyEnforcement:  string(t.ProfileSnapshot.ReadonlyEnforcement),
+			Depth:                t.Depth,
+			BlocksRootCompletion: assistants.BlocksRootCompletion(t, lookup),
 		}
 		if t.ParentTaskID != nil {
 			view.ParentTaskID = string(*t.ParentTaskID)

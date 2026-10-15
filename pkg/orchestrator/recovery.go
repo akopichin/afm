@@ -114,6 +114,14 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		switch current {
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused:
 			continue
+		case state.StatusAwaitingAssistants:
+			// Этап 7 (T7.2/T7.3): without this case the stage would fall into `default` below and be
+			// mishandled as a plannable/pending-like stage (activatePrePlannedStage/EvStartPlanning — both
+			// FSM-rejected from this status, but still the wrong intent). The main executor already finished;
+			// nothing to (re)plan or (re)run here — just re-check the durable barrier in case the blocking
+			// required task resolved right before the process went down (TestBarrier_RestoredAfterRestart).
+			o.maybeCompleteAfterAssistants(ctx, s.ID)
+			continue
 		case state.StatusAwaitingUserInput:
 			// These continuations may reach verify; both must register a lease.
 			o.spawnAgentLeased(ctx, s, o.resumeInteractiveAgent)
@@ -122,10 +130,12 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusRetrying:
 			if !s.NeedsPlanning() {
 				// Restart the execution path through ready, including its before-hook.
-				// A completion marker alone cannot bypass a configured verify gate.
+				// A completion marker alone cannot bypass a configured verify gate OR the required-assistants
+				// barrier (Этап 7, T7.3: completeStage — not a bare Trigger(EvComplete) — checks
+				// RequiredBlocker and diverts to awaiting_assistants exactly like the live completion path
+				// would have; TestResumeByDoneMarkerDoesNotBypassBarrier).
 				if s.Verify.IsEmpty() && stagefiles.CheckCompletion(stageDir, ".", s) == nil {
-					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-					o.maybeRunAfterHook(ctx, s.ID)
+					o.completeStage(ctx, s.ID, state.StatusRetrying, "recovered .done")
 				} else {
 					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
 				}
@@ -209,6 +219,11 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 		default:
 			o.spawnKind(ctx, s, kindPlanning, o.runPlanningWithFeedback)
 		}
+	case state.StatusAwaitingAssistants:
+		// Shared by startup (startPlanningForPending) and Continue (PausedFrom == AwaitingAssistants, restored
+		// by the FSM's EvContinue table itself before this is reached) — re-check the durable barrier, it may
+		// have resolved while the process was down or the stage was paused.
+		o.maybeCompleteAfterAssistants(ctx, s.ID)
 	default:
 		// Other statuses either wait for a decision or use normal scheduling.
 	}

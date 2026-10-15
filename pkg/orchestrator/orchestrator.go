@@ -496,15 +496,19 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
 		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)
-		// runnerKind больше не актуален: стадия завершилась, провалилась или ушла ждать пользователя — во всех
-		// случаях раннер, который её вёл, для неё закончил работу.
-		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail || ev == bus.EvAskUser {
+		// runnerKind больше не актуален: стадия завершилась, провалилась, ушла ждать пользователя или ушла
+		// ждать помощников — во всех случаях раннер, который её вёл, для неё закончил работу (awaiting_assistants
+		// is entered only once the main executor's own process has already exited, T7.2).
+		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail || ev == bus.EvAskUser || ev == bus.EvAwaitAssistants {
 			o.clearRunnerKind(stageID)
 		}
-		// Этап 5 T5.4: a single funnel for "this stage's own result is ready/failed" regardless of which of the
-		// ~60 call sites triggered it — see finalizeWatchersForStage's doc comment for why hooking here (rather
-		// than completeStage/each EvFail call site individually) is the safe, additive choice.
-		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail {
+		// Этап 5 T5.4 / Этап 7 T7.2: a single funnel for "this stage's own result is ready/failed/now waiting on
+		// required assistants" regardless of which of the ~60 call sites triggered it — see
+		// finalizeWatchersForStage's doc comment for why hooking here (rather than completeStage/each EvFail
+		// call site individually) is the safe, additive choice. EvAwaitAssistants forces any orphaned
+		// checkpoints/on_completion watcher into its bounded final pass the moment there is no more main-agent
+		// output coming — otherwise a required watcher could be left "watching" forever.
+		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail || ev == bus.EvAwaitAssistants {
 			o.finalizeWatchersForStage(stageID, ev)
 		}
 		// T6.5/T6.6: a stage settling into ANY new status may be exactly what a deferred FeedbackIntent
@@ -747,9 +751,34 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 	return nil
 }
 
-// completeStage finalizes a stage that genuinely reached done.
+// completeStage finalizes a stage whose main executor reached done — UNLESS Этап 7's durable completion
+// barrier (T7.2) finds at least one open required helper task under it, in which case the stage instead
+// settles into awaiting_assistants and this function returns WITHOUT running any completion side effect
+// (after-hook/reflection/cascade): those only ever run once EvComplete itself actually fires, whether that
+// happens right here or later via maybeCompleteAfterAssistants once the blocking task resolves.
+//
+// Order (§5.3's "durable completion barrier"): (1) the caller already ran the main executor's own file-probe
+// AND the independent verify gate (gateWithVerify/RunVerification) before ever reaching this function — the
+// barrier below is a SEPARATE, ADDITIONAL gate, it does not replace verify; (2) the required-task check below
+// runs regardless of o.opts.AssistantsEnabled, because that flag only controls whether NEW tasks may be
+// created/scheduled — an EXISTING durable requirement from before the flag was flipped off must still be
+// honored (TestCollaborationDisabledBeforeResumeDoesNotSkipRequirement), and RequiredBlocker is a cheap,
+// file-I/O-free read that is a correct no-op when no task was ever attached.
 func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus, reason string) {
-	if current != state.StatusRunning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput {
+	if current != state.StatusRunning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput && current != state.StatusAwaitingAssistants {
+		return
+	}
+	if blocker, open := o.opts.Store.Snapshot().Assistants.RequiredBlocker(stageID); open {
+		if current != state.StatusAwaitingAssistants {
+			// First time the main executor finishes: commit the barrier durably. triggerWithSeq's own funnel
+			// (orchestrator.go) forces any orphaned checkpoints/on_completion watcher into its bounded final
+			// pass right after this commits — see finalizeWatchersForStage's EvAwaitAssistants case — so a
+			// required watcher can never be left "watching" forever once there is no more main-agent output to
+			// wait for.
+			o.Trigger(stageID, bus.EvAwaitAssistants, bus.GuardCtx{}, "awaiting required assistant: "+string(blocker.ID))
+		}
+		// Already in awaiting_assistants and still open: nothing to do until the blocking task resolves — see
+		// maybeCompleteAfterAssistants, called from finishTaskFrom's terminal-transition hook.
 		return
 	}
 	// current — снимок статуса, прочитанный вызывающим ДО этого момента: между чтением и CAS сюда мог влезть
@@ -764,6 +793,18 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	o.startPlanningForUnblocked(ctx)
 	o.startReadyStages(ctx)
 	o.tryActivatePrePlanned(ctx)
+}
+
+// maybeCompleteAfterAssistants re-attempts completeStage for stageID if (and only if) it is currently
+// awaiting_assistants — the counterpart to the barrier commit above, called whenever a task's terminal
+// transition COULD have just closed a stage's required gate (finishTaskFrom). A stage not in
+// awaiting_assistants is a correct, cheap no-op (most task completions have nothing to do with any stage
+// sitting in that status).
+func (o *Orchestrator) maybeCompleteAfterAssistants(ctx context.Context, stageID string) {
+	if o.currentStatus(stageID) != state.StatusAwaitingAssistants {
+		return
+	}
+	o.completeStage(ctx, stageID, state.StatusAwaitingAssistants, "required assistants satisfied")
 }
 
 // onUserAnswered resumes a stage that was paused on awaiting_user_input. If the agent exited before the
