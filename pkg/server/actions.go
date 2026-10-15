@@ -27,6 +27,29 @@ type SecondaryActions interface {
 	CancelDialog(stageID string) error
 }
 
+// AttachRequest is the HTTP body shape for POST /api/stages/{id}/assistants. The client supplies ONLY
+// profile_id/title/instruction/mode/trigger/request_id — depth, parent task id, and
+// command/args/env/cwd are NEVER taken from the request body (dev-plan §4.1): the server derives/validates
+// all of that itself from the already-configured profile registry and the current policy.
+type AttachRequest struct {
+	RequestID   string
+	ProfileID   string
+	Title       string
+	Instruction string
+	Mode        string
+	Trigger     string
+}
+
+// AssistantActions are the collaboration (helper-task) write commands the dashboard can trigger. A
+// separate, narrow interface — NOT folded into StageActions, which would bloat every stage-control call
+// site with a concern most stages never use.
+type AssistantActions interface {
+	Attach(ctx context.Context, stageID string, req AttachRequest) (string, error)
+	PauseTask(ctx context.Context, taskID string) error
+	ContinueTask(ctx context.Context, taskID string) error
+	CancelTask(ctx context.Context, taskID string) error
+}
+
 // FlowActions controls review-pause and notes. Mutations serialize under flowPauseMu and require paused;
 // ListNotes is lock-free.
 type FlowActions interface {

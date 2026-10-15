@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
@@ -91,6 +92,12 @@ type Options struct {
 	Hooks    *lifecyclehooks.Dispatcher
 	// BrowserDescriptor — managed Chrome DevTools capability for this run.
 	BrowserDescriptor *browser.Descriptor
+	// AssistantsEnabled/AssistantsRegistry — the collaboration capability for this run (T3.4). Resolved ONCE
+	// by cmd/afm before Orchestrator.New (mirrors resolveCollaboration/startCollaboration) — disabled or a nil
+	// registry both mean "capability off": Attach rejects immediately, nothing here ever spawns a model on
+	// its own (Инвариант 9).
+	AssistantsEnabled  bool
+	AssistantsRegistry *assistants.Registry
 }
 
 // ResolvedFile описывает файл review-ноты: путь, ссылку, текущий SHA и, для построчной ноты, текст строки
@@ -155,6 +162,13 @@ type Orchestrator struct {
 	// fingerprintFn — подменяемый отпечаток дерева: используется review_patience (gated на reviewPatience>0 в
 	// retry.go) и наблюдательной проверкой verify_tree_modified (безусловно, на каждом AI-verify шаге).
 	fingerprintFn func(dir string) (string, bool)
+
+	// runHelperAgent — подменяемый запуск одного хода помощника (T3.4), продакшн — execHelperAgent. Тесты
+	// подставляют фейковый раннер (см. assistants_test.go) — тот же seam-паттерн, что и runVerifyAgent выше.
+	runHelperAgent helperAgentRunner
+	// taskCancels хранит context.CancelFunc активного прогона задачи на время её выполнения — Pause/Cancel
+	// используют его, чтобы прервать уже стартовавший helper-процесс немедленно (ключ — assistants.TaskID).
+	taskCancels sync.Map
 
 	// terminalFlow — финальное flow-событие, установленное одним из выходов Run; эмитится finalizeLifecycle
 	// ПОСЛЕ остановки продюсеров.
@@ -365,6 +379,7 @@ func New(opts Options) *Orchestrator {
 	o.runVerifyAgent = o.execVerifyAgent
 	o.runVerifyShell = runVerifyShellCommand
 	o.fingerprintFn = workingTreeFingerprint
+	o.runHelperAgent = o.execHelperAgent
 	o.mem = memorypipeline.New(memorypipeline.Prompts{
 		Reflect:    opts.Prompts.Reflect,
 		Aggregate:  opts.Prompts.Aggregate,

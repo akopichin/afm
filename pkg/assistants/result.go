@@ -5,8 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+
+	"github.com/akopichin/afm/pkg/jsonstrict"
 )
+
+// MaxResultBytes — верхняя граница размера сырого JSON-ответа помощника, проверяется на ПОЛНОМ входе до
+// любого парсинга (jsonstrict.EnforceMaxBytes) — то же правило и тот же порядок, что у
+// verify.MaxResultBytes.
+const MaxResultBytes = 256 * 1024
 
 // SupportedSchemaVersion — единственная поддерживаемая версия envelope-схемы
 // ответа помощника (schema/assistant-result.schema.json). Держи в синхроне с
@@ -71,15 +77,52 @@ type discriminator struct {
 	Kind Kind `json:"kind"`
 }
 
-// DecodeEnvelope строго разбирает сырой JSON-ответ помощника: отвергает
-// неизвестные поля, хвостовой контент после документа, неподдерживаемую
-// schema_version, отсутствующий/неизвестный kind и несогласованность
-// verdict/findings. Держи правила в синхроне со
-// schema/assistant-result.schema.json — оба описывают один и тот же контракт.
+// DecodeResult строго разбирает сырой JSON-ответ помощника через общие транспортные примитивы
+// pkg/jsonstrict (кап размера — на ПОЛНОМ входе до парсинга, markdown-fence, дубли ключей на любой глубине,
+// хвостовой контент, узкий ремонт сырых переводов строк), поверх которых лежит собственная схема этого
+// пакета: обязательный дискриминатор kind, неподдерживаемая schema_version и согласованность
+// verdict/findings. Держи правила в синхроне со schema/assistant-result.schema.json — оба описывают один и
+// тот же контракт.
+func DecodeResult(raw []byte) (Envelope, error) {
+	if err := jsonstrict.EnforceMaxBytes(raw, MaxResultBytes); err != nil {
+		return Envelope{}, fmt.Errorf("assistant result exceeds %d byte limit (got %d)", MaxResultBytes, len(raw))
+	}
+
+	trimmed := bytes.TrimSpace(raw)
+	if err := jsonstrict.RejectFence(trimmed); err != nil {
+		return Envelope{}, errors.New("assistant result is wrapped in a markdown code fence; expected bare JSON")
+	}
+
+	env, err := decodeEnvelopeStrict(trimmed)
+	if err == nil {
+		return env, nil
+	}
+
+	// Тот же узкий ремонт, что verify.DecodeModelResult: сырые управляющие символы ВНУТРИ строкового
+	// литерала (например, многострочная цитата кода в summary/detail без экранирования).
+	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed {
+		if env2, err2 := decodeEnvelopeStrict(repaired); err2 == nil {
+			return env2, nil
+		}
+	}
+	return Envelope{}, err
+}
+
+// DecodeEnvelope — back-compat alias of DecodeResult (T3.2 extraction); existing callers/tests keep this
+// name.
 func DecodeEnvelope(raw []byte) (Envelope, error) {
+	return DecodeResult(raw)
+}
+
+// decodeEnvelopeStrict разбирает уже прошедший размер/fence-проверки документ: дискриминатор kind, дубли
+// ключей на любой глубине, затем доменная схема конкретного kind.
+func decodeEnvelopeStrict(raw []byte) (Envelope, error) {
 	var disc discriminator
 	if err := json.Unmarshal(raw, &disc); err != nil {
 		return Envelope{}, fmt.Errorf("parse assistant result JSON: %w", err)
+	}
+	if err := jsonstrict.DecodeNoDuplicates(raw); err != nil {
+		return Envelope{}, fmt.Errorf("duplicate key in assistant result JSON: %w", err)
 	}
 
 	switch disc.Kind {
@@ -141,15 +184,13 @@ func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
 
 // strictDecode разбирает ОДИН JSON-документ без неизвестных полей и без
 // хвостового контента после него (например, лишнего текста или второго
-// документа).
+// документа) — тонкая обёртка над jsonstrict.DecodeDisallowUnknown.
 func strictDecode(raw []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	if err := jsonstrict.DecodeDisallowUnknown(raw, v); err != nil {
+		if errors.Is(err, jsonstrict.ErrTrailingContent) {
+			return errors.New("trailing content after JSON document in assistant result")
+		}
 		return fmt.Errorf("parse assistant result JSON: %w", err)
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return errors.New("trailing content after JSON document in assistant result")
 	}
 	return nil
 }

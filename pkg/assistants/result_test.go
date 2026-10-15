@@ -10,6 +10,69 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
+// TestAssistantResult_RequiresKindDiscriminator — "kind" absent must be rejected, not silently guessed from
+// shape (structural overlap between result/delegate is possible — only kind disambiguates).
+func TestAssistantResult_RequiresKindDiscriminator(t *testing.T) {
+	_, err := assistants.DecodeResult([]byte(`{"schema_version":1,"verdict":"pass","summary":"ok"}`))
+	if err == nil {
+		t.Fatal("DecodeResult with no kind: want rejection, got nil error")
+	}
+}
+
+func TestAssistantResult_RejectsUnsupportedSchemaVersion(t *testing.T) {
+	_, err := assistants.DecodeResult([]byte(`{"schema_version":2,"kind":"result","verdict":"pass","summary":"ok"}`))
+	if err == nil {
+		t.Fatal("DecodeResult with schema_version:2: want rejection, got nil error")
+	}
+}
+
+func TestAssistantResult_VerdictFindingsConsistency(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok","findings":[` +
+		`{"id":"f1","severity":"blocker","detail":"actually not fine"}]}`
+	_, err := assistants.DecodeResult([]byte(raw))
+	if err == nil {
+		t.Fatal(`DecodeResult with verdict:"pass" + a blocker finding: want rejection, got nil error`)
+	}
+}
+
+// TestAssistantResult_SizeCapCheckedOnFullInput proves the cap is enforced on the RAW input BEFORE any
+// parsing — a huge document must be rejected even though it never reaches json.Unmarshal.
+func TestAssistantResult_SizeCapCheckedOnFullInput(t *testing.T) {
+	huge := strings.Repeat("a", assistants.MaxResultBytes+1)
+	_, err := assistants.DecodeResult([]byte(huge))
+	if err == nil {
+		t.Fatal("DecodeResult with an oversized, non-JSON input: want rejection (size cap before parse), got nil error")
+	}
+	if !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("error %q does not mention the byte limit", err.Error())
+	}
+}
+
+// TestAssistantResult_DetectsDuplicateKeysAtAnyDepth — jsonstrict.DecodeNoDuplicates wired through
+// DecodeResult, same as verify's.
+func TestAssistantResult_DetectsDuplicateKeysAtAnyDepth(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"ok","findings":[` +
+		`{"id":"f1","id":"f2","severity":"blocker","detail":"d"}]}`
+	_, err := assistants.DecodeResult([]byte(raw))
+	if err == nil {
+		t.Fatal("DecodeResult with a duplicate key nested in a finding: want rejection, got nil error")
+	}
+}
+
+// TestAssistantResult_RepairsBareNewline mirrors verify's narrow raw-newline repair, now shared via
+// pkg/jsonstrict.
+func TestAssistantResult_RepairsBareNewline(t *testing.T) {
+	raw := "{\"schema_version\":1,\"kind\":\"result\",\"verdict\":\"needs_changes\",\"summary\":\"ok\"," +
+		"\"findings\":[{\"id\":\"f1\",\"severity\":\"blocker\",\"detail\":\"line1\nline2\"}]}"
+	env, err := assistants.DecodeResult([]byte(raw))
+	if err != nil {
+		t.Fatalf("expected repair to accept the result, got error: %v", err)
+	}
+	if env.Result.Findings[0].Detail != "line1\nline2" {
+		t.Fatalf("detail = %q, want %q", env.Result.Findings[0].Detail, "line1\nline2")
+	}
+}
+
 const assistantResultSchemaPath = "../../schema/assistant-result.schema.json"
 
 func compileAssistantResultSchema(t *testing.T) *jsonschema.Schema {

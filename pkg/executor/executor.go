@@ -106,6 +106,9 @@ type Config struct {
 	// BrowserMCP, if set, injects the managed Chrome DevTools MCP for this author runner: a per-invocation
 	// descriptor file + --mcp-config, plus the non-secret AFM_BROWSER_* env.
 	BrowserMCP *BrowserMCP
+	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
+	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
+	runMode RunMode
 }
 
 // ErrUserInterrupted signals that the agent process was stopped because the user requested an interrupt —
@@ -737,6 +740,7 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 // filterInheritedEnv strips control/browser vars and, for verify, foreign credentials. Callers re-add
 // allowed invocation vars.
 func (e *Executor) filterInheritedEnv(ambient []string) []string {
+	mode := e.cfg.effectiveMode()
 	filtered := make([]string, 0, len(ambient)+3)
 	for _, kv := range ambient {
 		switch {
@@ -745,20 +749,20 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
 			// always strip inherited; re-added by caller only if cfg.StageDir != ""
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
-			// always strip inherited; re-added by caller only if cfg.VerifyMode
+			// always strip inherited; re-added by caller only if mode.isolated()
 		case IsBrowserTransportEnv(kv):
 			// Strip AFM_BROWSER_* from all children; only author runners re-add non-secret browser vars.
-		case e.cfg.VerifyMode && isVerifierOwnSecret(kv, e.cfg.Command):
-			// D2b: the verifier's OWN secret (AFM_SECRET_<verifyCommand>) survives.
+		case mode.isolated() && isVerifierOwnSecret(kv, e.cfg.Command):
+			// D2b: the verifier's/helper's OWN secret (AFM_SECRET_<command>) survives.
 			filtered = append(filtered, kv)
-		case e.cfg.VerifyMode && IsCrossAgentTransportSecret(kv):
-			// C2: a read-only verifier must not inherit OTHER agents'/hooks'
+		case mode.isolated() && IsCrossAgentTransportSecret(kv):
+			// C2: a read-only verifier/helper must not inherit OTHER agents'/hooks'
 			// transport secrets (it could reflect them in its persisted JSON).
-		case e.cfg.VerifyMode && !isClaudeCommand(e.cfg.Command) && isClaudeAuthorCredential(kv):
-			// F4: the author's forwarded Claude auth must not reach a FOREIGN verify agent. When the
-			// verifier itself is claude (isClaudeCommand), there is no foreign agent to protect against —
-			// there's only one claude identity in this environment, and the verifier needs these
-			// credentials just to start.
+		case mode.isolated() && !isClaudeCommand(e.cfg.Command) && isClaudeAuthorCredential(kv):
+			// F4: the author's forwarded Claude auth must not reach a FOREIGN verify/helper agent. When the
+			// verifier/helper itself is claude (isClaudeCommand), there is no foreign agent to protect
+			// against — there's only one claude identity in this environment, and it needs these credentials
+			// just to start.
 		default:
 			filtered = append(filtered, kv)
 		}
@@ -820,8 +824,11 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
 	}
-	if e.cfg.VerifyMode {
-		// CODEX_VERIFY сообщает адаптеру о verify-режиме; одного поля Config.VerifyMode недостаточно.
+	if e.cfg.effectiveMode().isolated() {
+		// CODEX_VERIFY сообщает адаптеру о verify/helper-режиме; одного поля Config.VerifyMode недостаточно.
+		// Helper на хосте допускается admission-гейтом (T1.5/T3.4) ТОЛЬКО для codex-команды, так что это то
+		// же самое -s read-only; в контейнере адаптер сам переключается на danger-full-access (см.
+		// scripts/codex-as-claude.sh) независимо от этого флага.
 		filtered = append(filtered, "CODEX_VERIFY=1")
 	}
 	// Re-add only the non-secret browser env for author runners (the token lives

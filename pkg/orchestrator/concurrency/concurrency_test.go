@@ -185,3 +185,161 @@ func TestWakeEventLoop_PublishesToBus(t *testing.T) {
 		t.Fatal("WakeEventLoop should publish to critical bus")
 	}
 }
+
+// ---- T3.3: SpawnOwned ----
+
+func TestSpawnOwned_TwoTasksSameStageBothTracked(t *testing.T) {
+	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
+	release1 := make(chan struct{})
+	release2 := make(chan struct{})
+	started1 := make(chan struct{})
+	started2 := make(chan struct{})
+
+	// Distinct commands: this test is about owner-key tracking, not about command-semaphore sharing (that's
+	// TestSpawnOwned_SharesCommandSemaphoreWithStages) — same command would serialize the two on purpose.
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t1"), "cmd-a", nil, func(ctx context.Context, lease *Lease) {
+		close(started1)
+		<-release1
+	})
+	<-started1
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t2"), "cmd-b", nil, func(ctx context.Context, lease *Lease) {
+		close(started2)
+		<-release2
+	})
+	<-started2
+
+	if _, ok := m.activeAgents.Load(TaskOwnerKey("t1")); !ok {
+		t.Error("task t1 should be tracked active while its run is in flight")
+	}
+	if _, ok := m.activeAgents.Load(TaskOwnerKey("t2")); !ok {
+		t.Error("task t2 should be tracked active — it must not clobber t1's entry")
+	}
+	close(release1)
+	close(release2)
+	m.WaitAgents()
+	if _, ok := m.activeAgents.Load(TaskOwnerKey("t1")); ok {
+		t.Error("task t1 should no longer be tracked after it finishes")
+	}
+}
+
+func TestSpawnOwned_SharesCommandSemaphoreWithStages(t *testing.T) {
+	blockSem := ChannelSemaphore(make(chan struct{}, 1))
+	blockSem <- struct{}{} // occupied, as a running stage on "cmd" would hold it
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"cmd": blockSem}, "cmd")
+
+	var ran atomic.Bool
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t1"), "cmd", nil, func(ctx context.Context, lease *Lease) {
+		ran.Store(true)
+	})
+	time.Sleep(20 * time.Millisecond)
+	if ran.Load() {
+		t.Fatal("helper task must wait behind the SAME command semaphore a running stage holds")
+	}
+	<-blockSem // release — as if the stage finished
+	m.WaitAgents()
+	if !ran.Load() {
+		t.Fatal("helper task should run once the command slot is released")
+	}
+}
+
+func TestSpawnOwned_ShouldRunCheckedAfterAcquire(t *testing.T) {
+	blockSem := ChannelSemaphore(make(chan struct{}, 1))
+	blockSem <- struct{}{}
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"cmd": blockSem}, "cmd")
+	var paused atomic.Bool
+	shouldRun := func() bool { return !paused.Load() }
+
+	var ran atomic.Bool
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t1"), "cmd", shouldRun, func(ctx context.Context, lease *Lease) {
+		ran.Store(true)
+	})
+	time.Sleep(20 * time.Millisecond) // goroutine now queued on the semaphore
+	paused.Store(true)                // task paused while still queued
+	<-blockSem
+	m.WaitAgents()
+
+	if ran.Load() {
+		t.Fatal("run must be skipped — shouldRun flipped false while queued behind the semaphore")
+	}
+}
+
+func TestSpawnOwned_CountedInDrain(t *testing.T) {
+	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var finished atomic.Bool
+
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t1"), "", nil, func(ctx context.Context, lease *Lease) {
+		close(started)
+		<-release
+		finished.Store(true)
+	})
+	<-started
+
+	done := make(chan struct{})
+	go func() {
+		m.WaitAgents()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("WaitAgents returned before the helper task finished")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	<-done
+	if !finished.Load() {
+		t.Fatal("helper task body never ran to completion")
+	}
+}
+
+func TestSpawnOwned_UnknownCommandDoesNotGetNoopSemaphore(t *testing.T) {
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{}, "")
+
+	started1 := make(chan struct{})
+	release1 := make(chan struct{})
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t1"), "mystery-cmd", nil, func(ctx context.Context, lease *Lease) {
+		close(started1)
+		<-release1
+	})
+	<-started1
+
+	var ran2 atomic.Bool
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t2"), "mystery-cmd", nil, func(ctx context.Context, lease *Lease) {
+		ran2.Store(true)
+	})
+	time.Sleep(20 * time.Millisecond)
+	if ran2.Load() {
+		t.Fatal("an unknown command must still cap concurrency — a 2nd task on it ran in parallel with the 1st (unbounded noop semaphore)")
+	}
+	close(release1)
+	m.WaitAgents()
+	if !ran2.Load() {
+		t.Fatal("2nd task on the unknown command should run after the 1st releases its slot")
+	}
+}
+
+func TestIsActive_StageSemanticsUnchanged(t *testing.T) {
+	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
+	done := make(chan struct{})
+	release := make(chan struct{})
+	m.SpawnAgent(context.Background(), flow.Stage{ID: "a"}, func(ctx context.Context, s flow.Stage) {
+		if !m.IsActive("a") {
+			t.Error("IsActive(stage) should be true while the stage's agent runs")
+		}
+		close(done)
+		<-release
+	})
+	<-done
+	// A helper task on an unrelated owner key must never make IsActive report true for a stage id that
+	// merely shares the same string.
+	m.SpawnOwned(context.Background(), TaskOwnerKey("a"), "", nil, func(ctx context.Context, lease *Lease) {})
+	if !m.IsActive("a") {
+		t.Fatal("IsActive(\"a\") must still be true — a task owner key sharing the string must not clobber it")
+	}
+	close(release)
+	m.WaitAgents()
+	if m.IsActive("a") {
+		t.Fatal("IsActive(\"a\") should be false once the stage agent finished")
+	}
+}

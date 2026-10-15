@@ -4,11 +4,11 @@ package verify
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
+
+	"github.com/akopichin/afm/pkg/jsonstrict"
 )
 
 // Verdict — итоговое решение верификатора по стадии.
@@ -53,14 +53,14 @@ const SupportedSchemaVersion = 1
 // DecodeModelResult строго разбирает сырой JSON-ответ верификатора и проверяет его внутреннюю
 // согласованность.
 func DecodeModelResult(raw []byte) (ModelResult, error) {
-	if len(raw) > MaxResultBytes {
+	if err := jsonstrict.EnforceMaxBytes(raw, MaxResultBytes); err != nil {
 		return ModelResult{}, fmt.Errorf("verification result exceeds %d byte limit (got %d)", MaxResultBytes, len(raw))
 	}
 
 	trimmed := bytes.TrimSpace(raw)
 	// Markdown-fence отклоняем до любого ремонта: это намеренная строгость (модель обязана отдавать голый
 	// JSON), а jsonrepair умеет снимать fence и тем самым обошёл бы это правило.
-	if bytes.HasPrefix(trimmed, []byte("```")) {
+	if err := jsonstrict.RejectFence(trimmed); err != nil {
 		return ModelResult{}, errors.New("verification result is wrapped in a markdown code fence; expected bare JSON")
 	}
 
@@ -71,7 +71,7 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 
 	// Ремонтируем ТОЛЬКО одну узкую поломку: сырые управляющие символы ВНУТРИ строкового литерала JSON —
 	// именно это выдают ревьюеры, вписывая многострочную цитату кода в поле evidence.
-	if repaired, changed := escapeRawControlCharsInStrings(trimmed); changed {
+	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed {
 		if r2, err2 := decodeStrict(repaired); err2 == nil {
 			return r2, nil
 		}
@@ -79,69 +79,17 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 	return ModelResult{}, err
 }
 
-// escapeRawControlCharsInStrings экранирует сырые control-байты только внутри JSON-строк; возвращает байты
-// и признак замены.
-func escapeRawControlCharsInStrings(data []byte) ([]byte, bool) {
-	const hexdigits = "0123456789abcdef"
-	out := make([]byte, 0, len(data)+8)
-	inString := false
-	escaped := false
-	changed := false
-	for _, b := range data {
-		if inString {
-			if escaped { // предыдущий байт был '\' — текущий уже экранирован
-				out = append(out, b)
-				escaped = false
-				continue
-			}
-			switch {
-			case b == '\\':
-				escaped = true
-			case b == '"':
-				inString = false
-			case b < 0x20: // сырой управляющий символ внутри строки недопустим — экранируем
-				switch b {
-				case '\n':
-					out = append(out, '\\', 'n')
-				case '\r':
-					out = append(out, '\\', 'r')
-				case '\t':
-					out = append(out, '\\', 't')
-				default:
-					out = append(out, '\\', 'u', '0', '0', hexdigits[b>>4], hexdigits[b&0xf])
-				}
-				changed = true
-				continue
-			default:
-				// обычный байт строки — добавляется ниже без изменений
-			}
-			out = append(out, b)
-			continue
-		}
-		if b == '"' {
-			inString = true
-		}
-		out = append(out, b)
-	}
-	if !changed {
-		return data, false
-	}
-	return out, true
-}
-
 // decodeStrict — строгий конвейер разбора ОДНОГО JSON-документа без репейра.
 func decodeStrict(trimmed []byte) (ModelResult, error) {
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	dec.DisallowUnknownFields()
 	var r ModelResult
-	if err := dec.Decode(&r); err != nil {
+	if err := jsonstrict.DecodeDisallowUnknown(trimmed, &r); err != nil {
+		if errors.Is(err, jsonstrict.ErrTrailingContent) {
+			return ModelResult{}, errors.New("trailing content after JSON document in verification result (extra data or multiple documents)")
+		}
 		return ModelResult{}, fmt.Errorf("failed to parse verification result JSON: %w", err)
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return ModelResult{}, errors.New("trailing content after JSON document in verification result (extra data or multiple documents)")
-	}
 
-	if err := detectDuplicateKeys(trimmed); err != nil {
+	if err := jsonstrict.DecodeNoDuplicates(trimmed); err != nil {
 		return ModelResult{}, fmt.Errorf("duplicate key in verification result JSON: %w", err)
 	}
 
@@ -196,52 +144,9 @@ func validateVerdictConsistency(r ModelResult) error {
 	return nil
 }
 
-// detectDuplicateKeys проходит JSON токен за токеном и ищет повторяющиеся ключи внутри одного объекта на
-// любой глубине вложенности.
-func detectDuplicateKeys(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	return checkDuplicateValue(dec)
-}
-
-// checkDuplicateValue разбирает одно JSON-значение (объект, массив или
-// скаляр), рекурсивно проверяя дубликаты ключей в каждом вложенном объекте.
-func checkDuplicateValue(dec *json.Decoder) error {
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return nil // скаляр (строка/число/bool/null) — дубликатов ключей внутри нет
-	}
-
-	switch delim {
-	case '{':
-		seen := make(map[string]struct{})
-		for dec.More() {
-			keyTok, err := dec.Token()
-			if err != nil {
-				return err
-			}
-			key, _ := keyTok.(string)
-			if _, dup := seen[key]; dup {
-				return fmt.Errorf("key %q appears more than once in the same object", key)
-			}
-			seen[key] = struct{}{}
-			if err := checkDuplicateValue(dec); err != nil {
-				return err
-			}
-		}
-		_, err := dec.Token() // закрывающая '}'
-		return err
-	case '[':
-		for dec.More() {
-			if err := checkDuplicateValue(dec); err != nil {
-				return err
-			}
-		}
-		_, err := dec.Token() // закрывающая ']'
-		return err
-	}
-	return nil
+// escapeRawControlCharsInStrings is a thin back-compat forward to jsonstrict.RepairRawNewlines (T3.2
+// extracted the actual implementation into pkg/jsonstrict, shared with pkg/assistants' decoder) — kept so
+// this package's own white-box test of the narrow repair keeps working unmodified.
+func escapeRawControlCharsInStrings(data []byte) ([]byte, bool) {
+	return jsonstrict.RepairRawNewlines(data)
 }

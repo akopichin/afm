@@ -114,6 +114,22 @@ func loadLedger(path string) (*Ledger, error) {
 // Append writes and fsyncs usage before updating the ledger. Write failures disable accounting and must
 // not fail the stage.
 func (s *Store) Append(obs Observation, stageID, phase, scope string) error {
+	return s.appendRecord(BuildRecord(s.r, obs, stageID, phase, scope))
+}
+
+// AppendTask is Append plus task-cost attribution (T3.8): the SAME pricing logic (BuildRecord), with
+// task_id/root_stage_id/parent_task_id/profile_id folded on afterward via BuildTaskRecord. A task's usage
+// lands in the SAME flat ledger as every other record — there is no separate "task ledger" to keep in sync,
+// which is what lets RunSummary/SummaryByStage keep counting every invocation exactly once without any
+// task-specific special-casing.
+func (s *Store) AppendTask(obs Observation, meta TaskMeta, phase, scope string) error {
+	return s.appendRecord(BuildTaskRecord(s.r, obs, meta, phase, scope))
+}
+
+// appendRecord is the single writer both Append and AppendTask funnel through: stamp timestamps, marshal,
+// write+fsync, then update the in-memory ledger. Write failures disable accounting and must not fail the
+// stage/task that triggered them.
+func (s *Store) appendRecord(rec UsageRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,7 +137,6 @@ func (s *Store) Append(obs Observation, stageID, phase, scope string) error {
 		return s.lastErr
 	}
 
-	rec := BuildRecord(s.r, obs, stageID, phase, scope)
 	now := time.Now().UTC().Format(time.RFC3339)
 	if rec.StartedAt == "" {
 		rec.StartedAt = now

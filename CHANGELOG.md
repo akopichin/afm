@@ -5,6 +5,23 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-15
 
+### Improvement: one advisory helper-agent, end to end (backend only)
+
+Backend plumbing for attaching a single one-shot advisory helper agent to a
+stage: a shared hardening layer for isolated subprocess runs
+(`executor.RunHelperAgent`, same env-filtering/fresh-session discipline as
+AI-verify, plus a shared `pkg/jsonstrict` strict-JSON decoder reused by both
+verify and the assistants envelope), owner-keyed concurrency so helper tasks
+share the command semaphore with stages instead of bypassing `max_parallel`,
+task admission/lifecycle (`Attach`/`PauseTask`/`ContinueTask`/`CancelTask`) with
+a reproducible server-built context (`ContextVersion`, redacted, byte-capped)
+and its own file namespace under `.afm/runs/<run_id>/assistants/<task_id>/`, a
+narrow HTTP API (`/api/stages/{id}/assistants`, `/api/assistants/{id}/...`), and
+cost attribution (`task_id`/`profile_id`/`root_stage_id` on usage records, with
+own/subtree cost computed without double-counting). A helper task never affects
+its root stage's status — advisory only. Still not wired into `afm run` itself
+(no dashboard UI yet) — that lands with the frontend follow-up.
+
 ### Improvement: collaboration feature switch and assistant profile registry (backend only)
 
 Added the `collaboration` config block (`collaboration.enabled`/`AFM_COLLABORATION`,

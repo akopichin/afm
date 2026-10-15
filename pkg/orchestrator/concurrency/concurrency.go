@@ -73,7 +73,28 @@ type Manager struct {
 	// shouldRun — единая точка входа для пред-запускной проверки стадии. nil означает "всегда запускать"
 	// (используется тестами, которым эта проверка не нужна).
 	shouldRun func(stageID string) bool
+
+	// dynMu/dynSems guard a SMALL, lazily-grown set of semaphores for commands NOT known at construction time
+	// (New/NewWithSemaphores build m.sems once from stage.Command/VerifyAgentCommands and never mutate it
+	// afterward — that map stays lock-free to read). A helper task's profile command (T3.3/T3.4) may name a
+	// command no stage ever declared; semForCmd must still cap its concurrency rather than silently falling
+	// back to an unlimited noopSemaphore (§7.2 — "an unknown command must not get an unbounded run").
+	dynMu   sync.Mutex
+	dynSems map[string]Semaphore
 }
+
+// OwnerKey is the activeAgents key for one concurrently-running agent goroutine. Two different owners must
+// never collide in the shared sync.Map: "stage:<id>" for a stage's own runner (stageOwnerKey — the pre-T3.3
+// behavior, preserved byte-for-byte via markActive/markDone/IsActive), "task:<id>" for a helper task
+// (taskOwnerKey, T3.3/T3.4) — so two helper tasks on the SAME root stage, or a helper and its root stage
+// itself, each get their own independent activity marker instead of clobbering one shared stageID key.
+type OwnerKey string
+
+func stageOwnerKey(stageID string) OwnerKey { return OwnerKey("stage:" + stageID) }
+
+// TaskOwnerKey returns the owner key for a helper task — exported so orchestrator-level callers (T3.4) can
+// pass it to SpawnOwned without this package needing to know anything about assistants.TaskID.
+func TaskOwnerKey(taskID string) OwnerKey { return OwnerKey("task:" + taskID) }
 
 // New строит Manager с семафорами на команду из конфигурации стадий: per-stage MaxParallel имеет приоритет
 // над globalMaxParallel; MaxParallel<=0 означает отсутствие ограничения.
@@ -116,15 +137,15 @@ func NewWithSemaphores(critical *bus.CriticalBus, sems map[string]Semaphore, def
 	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand}
 }
 
-// markActive/markDone остаются приватными методами — вызываются только
-// изнутри SpawnAgentLease.
+// markActiveKey/markDoneKey are called only from SpawnOwned (SpawnAgentLease/SpawnAgent go through it too —
+// see stageOwnerKey's doc comment for the "stage:"+id key shape that preserves pre-T3.3 IsActive semantics).
+func (m *Manager) markActiveKey(k OwnerKey) { m.activeAgents.Store(k, struct{}{}) }
+func (m *Manager) markDoneKey(k OwnerKey)   { m.activeAgents.Delete(k) }
 
-func (m *Manager) markActive(stageID string) { m.activeAgents.Store(stageID, struct{}{}) }
-func (m *Manager) markDone(stageID string)   { m.activeAgents.Delete(stageID) }
-
-// IsActive сообщает, выполняется ли сейчас агентская горутина для стадии.
+// IsActive сообщает, выполняется ли сейчас агентская горутина для стадии. Смотрит ТОЛЬКО ключи "stage:" —
+// задачи помощников (taskOwnerKey) никогда не отвечают на этот вопрос, даже если их root-стадия совпадает.
 func (m *Manager) IsActive(stageID string) bool {
-	_, ok := m.activeAgents.Load(stageID)
+	_, ok := m.activeAgents.Load(stageOwnerKey(stageID))
 	return ok
 }
 
@@ -137,36 +158,68 @@ func (m *Manager) resolveCmd(cmd string) string {
 	return cmd
 }
 
-// semForCmd выбирает семафор команды для Lease; без заданного лимита возвращает noopSemaphore.
+// semForCmd выбирает семафор команды для Lease. Известная (зарегистрированная в New/NewWithSemaphores)
+// команда — её собственный семафор (возможно noopSemaphore, если у неё явно нет лимита). Команда, которую
+// Manager никогда не видел (ни одна стадия её не объявляла) — НЕ unlimited noop: лениво заводим для неё
+// консервативный single-flight семафор (capacity 1), кешируем в dynSems под dynMu, и дальше отдаём тот же
+// инстанс каждому вызову с тем же именем команды — иначе два конкурентных помощника с одним и тем же
+// неизвестным profile-командой получили бы КАЖДЫЙ свой независимый лимит=1 вместо общего.
 func (m *Manager) semForCmd(cmd string) Semaphore {
-	if sem, ok := m.sems[m.resolveCmd(cmd)]; ok {
+	resolved := m.resolveCmd(cmd)
+	if sem, ok := m.sems[resolved]; ok {
 		return sem
 	}
-	return noopSemaphore{}
+	return m.dynamicSemForCmd(resolved)
 }
 
-// SpawnAgentLease runs an agent with one transferable command-slot lease. Cancellation while waiting
-// prevents startup.
-func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(ctx context.Context, s flow.Stage, lease *Lease)) {
+func (m *Manager) dynamicSemForCmd(cmd string) Semaphore {
+	m.dynMu.Lock()
+	defer m.dynMu.Unlock()
+	if sem, ok := m.dynSems[cmd]; ok {
+		return sem
+	}
+	if m.dynSems == nil {
+		m.dynSems = map[string]Semaphore{}
+	}
+	sem := ChannelSemaphore(make(chan struct{}, 1))
+	m.dynSems[cmd] = sem
+	return sem
+}
+
+// SpawnOwned runs one agent goroutine under cmd's command-slot semaphore, marking owner active for the
+// duration — the general primitive behind both SpawnAgentLease (stage owner) and T3.4's helper-task spawn
+// (task owner): takes the semaphore, marks owner active, participates in agentWG/drain, and re-checks
+// shouldRun IMMEDIATELY AFTER acquiring the semaphore (the goroutine may have queued for an arbitrary amount
+// of time, during which the owner could have been paused/cancelled) — same ordering as SpawnAgentLease used
+// to inline before this extraction. shouldRun==nil means "always run".
+func (m *Manager) SpawnOwned(ctx context.Context, owner OwnerKey, cmd string, shouldRun func() bool, run func(context.Context, *Lease)) {
 	m.agentWG.Add(1)
 	go func() {
 		defer m.agentWG.Done()
-		lease, err := m.AcquireLease(ctx, s.Command)
+		lease, err := m.AcquireLease(ctx, cmd)
 		if err != nil {
 			return
 		}
-		m.markActive(s.ID)
+		m.markActiveKey(owner)
 		defer func() {
-			m.markDone(s.ID)
+			m.markDoneKey(owner)
 			lease.Release()
 		}()
-		// Re-check right before run: the goroutine may have queued on sem for an arbitrary amount of time,
-		// during which the stage could have been paused.
-		if m.shouldRun != nil && !m.shouldRun(s.ID) {
+		if shouldRun != nil && !shouldRun() {
 			return
 		}
-		run(ctx, s, lease)
+		run(ctx, lease)
 	}()
+}
+
+// SpawnAgentLease runs an agent with one transferable command-slot lease. Cancellation while waiting
+// prevents startup. Thin wrapper over SpawnOwned with the stage owner key — kept as its own method since
+// callers pass/receive flow.Stage, not a bare OwnerKey/command.
+func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(ctx context.Context, s flow.Stage, lease *Lease)) {
+	shouldRun := func() bool { return m.shouldRun == nil || m.shouldRun(s.ID) }
+	m.SpawnOwned(ctx, stageOwnerKey(s.ID), s.Command, shouldRun, func(ctx context.Context, lease *Lease) {
+		run(ctx, s, lease)
+	})
 }
 
 // SpawnAgent запускает агентскую горутину под семафором команды, помечает стадию активной и учитывает

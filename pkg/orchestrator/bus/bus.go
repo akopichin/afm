@@ -62,6 +62,16 @@ const (
 	// tree. Purely observational: never changes the step's verdict or the stage outcome. Non-FSM: published
 	// live + durable to notices.jsonl, like EventVerifyStarted/Result.
 	EventVerifyTreeModified EventType = "verify_tree_modified"
+	// EventAssistantTaskCreated fires once a helper task is durably created (task_created control record
+	// committed) — non-FSM, never changes the root stage's status.
+	EventAssistantTaskCreated EventType = "assistant_task_created"
+	// EventAssistantTaskStatus fires on every durable task_status_changed for a helper task (queued, running,
+	// completed, failed, cancelled, ...) — the task's own lifecycle, orthogonal to stage FSM.
+	EventAssistantTaskStatus EventType = "assistant_task_status"
+	// EventHelperTreeModified mirrors EventVerifyTreeModified for a helper task's run: a working-tree
+	// fingerprint taken before/after the helper's turn differed. Purely observational — never changes the
+	// task's verdict.
+	EventHelperTreeModified EventType = "helper_tree_modified"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"
