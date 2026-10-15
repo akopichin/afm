@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -131,4 +133,98 @@ func (s collaborationService) Profiles() []assistants.ProfileView { return s.r.r
 
 func (s collaborationService) MaxDepth() (depth int, source string) {
 	return s.r.policy.Depth.MaxDepth, string(s.r.policy.Depth.Source)
+}
+
+// actions returns the server-facing write-adapter for the collaboration HTTP API (T3.7's AssistantActions:
+// Attach/pause/continue/cancel one helper task), nil when the capability is off (same gate as service()
+// above). Must be called AFTER orch is constructed (orchestrator.New) — unlike service(), which only needs
+// the registry, this wraps the real *orchestrator.Orchestrator whose Attach/PauseTask/ContinueTask/CancelTask
+// methods do the actual admission/lifecycle work (pkg/orchestrator/assistants.go, T3.4).
+func (r *collaborationRuntime) actions(orch *orchestrator.Orchestrator) server.AssistantActions {
+	if r == nil || !r.policy.Enabled || r.registry == nil {
+		return nil
+	}
+	return collaborationActions{orch}
+}
+
+// reader returns the server-facing read-adapter (T3.7's AssistantsReader: a stage's task tree, one task's
+// event-history page), nil under the same gate as actions() above.
+func (r *collaborationRuntime) reader(orch *orchestrator.Orchestrator) server.AssistantsReader {
+	if r == nil || !r.policy.Enabled || r.registry == nil {
+		return nil
+	}
+	return collaborationReader{orch}
+}
+
+// collaborationActions adapts *orchestrator.Orchestrator to server.AssistantActions: translates the HTTP
+// layer's server.AttachRequest/string ids into the orchestrator's own orchestrator.AttachRequest/
+// assistants.TaskID shapes. Every mutation here originates from the dashboard, so Actor is always "user" —
+// mirrors the convention pkg/orchestrator/assistants_test.go's attachTestTask already uses.
+type collaborationActions struct{ orch *orchestrator.Orchestrator }
+
+func (a collaborationActions) Attach(ctx context.Context, stageID string, req server.AttachRequest) (string, error) {
+	taskID, err := a.orch.Attach(ctx, orchestrator.AttachRequest{
+		OperationID: req.RequestID,
+		StageID:     stageID,
+		ProfileID:   assistants.ProfileID(req.ProfileID),
+		Title:       req.Title,
+		Instruction: req.Instruction,
+		Mode:        assistants.Mode(req.Mode),
+		Trigger:     assistants.Trigger(req.Trigger),
+		Actor:       state.Actor{Kind: "user"},
+	})
+	return string(taskID), err
+}
+
+func (a collaborationActions) PauseTask(ctx context.Context, taskID string) error {
+	return a.orch.PauseTask(ctx, assistants.TaskID(taskID))
+}
+
+func (a collaborationActions) ContinueTask(ctx context.Context, taskID string) error {
+	return a.orch.ContinueTask(ctx, assistants.TaskID(taskID))
+}
+
+func (a collaborationActions) CancelTask(ctx context.Context, taskID string) error {
+	return a.orch.CancelTask(ctx, assistants.TaskID(taskID))
+}
+
+// collaborationReader adapts *orchestrator.Orchestrator to server.AssistantsReader: converts the
+// orchestrator/assistants domain types (assistants.Task, state.TaskEvent) into the server package's own
+// dashboard-facing view shapes.
+type collaborationReader struct{ orch *orchestrator.Orchestrator }
+
+func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskView, error) {
+	tasks, err := r.orch.TaskTree(stageID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]server.AssistantTaskView, 0, len(tasks))
+	for _, t := range tasks {
+		view := server.AssistantTaskView{
+			ID:           string(t.ID),
+			ProfileID:    string(t.ProfileID),
+			Title:        t.Title,
+			Mode:         string(t.Mode),
+			Trigger:      string(t.Trigger),
+			Status:       string(t.Status),
+			StatusReason: t.StatusReason,
+		}
+		if t.ParentTaskID != nil {
+			view.ParentTaskID = string(*t.ParentTaskID)
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+func (r collaborationReader) TaskEvents(taskID string, cursor uint64, limit int) ([]server.AssistantEventView, uint64, bool, error) {
+	events, next, hasMore, err := r.orch.TaskEvents(assistants.TaskID(taskID), cursor, limit)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	out := make([]server.AssistantEventView, 0, len(events))
+	for _, e := range events {
+		out = append(out, server.AssistantEventView{Seq: e.Seq, Type: e.Kind, Data: e.Payload})
+	}
+	return out, next, hasMore, nil
 }

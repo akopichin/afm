@@ -339,6 +339,10 @@ type replayResult struct {
 	// seqOffsets maps a control record's seq -> the byte offset where its line STARTS (T2.5's direct
 	// single-record journal read by seq, without scanning).
 	seqOffsets map[uint64]int64
+	// controls accumulates every control record in file order — the replay-time half of Store.controlHistory
+	// (appendControlLocked appends the live half). Backs Store.TaskEvents' durable per-task event page; kept
+	// here rather than re-derived from rs.Assistants (which only holds CURRENT projected state, not history).
+	controls []Control
 }
 
 // parseEventLog — единственный парсер events.jsonl. Применяет переходы (и, начиная с T2.3, control-записи)
@@ -385,6 +389,7 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 				res.seqOffsets = map[uint64]int64{}
 			}
 			res.seqOffsets[c.Seq] = lineStart
+			res.controls = append(res.controls, *c)
 			res.lastSeq = c.Seq
 			goodOffset = offset
 			continue

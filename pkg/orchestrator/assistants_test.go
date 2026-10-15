@@ -390,3 +390,91 @@ func TestShutdown_NoWritesAfterStoreClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+// ---- Read side: TaskTree / TaskEvents (cmd/afm's AssistantsReader wiring reads through these) ----
+
+func TestTaskTree_ListsTasksRootedAtStage(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+
+	tree, err := o.TaskTree(assistantsTestStageID)
+	if err != nil {
+		t.Fatalf("TaskTree: %v", err)
+	}
+	if len(tree) != 1 || tree[0].ID != taskID {
+		t.Fatalf("TaskTree = %+v, want exactly the one attached task %s", tree, taskID)
+	}
+	if tree[0].Status != assistants.StatusCompleted {
+		t.Fatalf("TaskTree status = %s, want completed", tree[0].Status)
+	}
+
+	if _, err := o.TaskTree("does-not-exist"); err == nil {
+		t.Fatal("TaskTree for an unknown stage must error")
+	}
+}
+
+func TestTaskEvents_PaginatesInSeqOrderAfterCursor(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+
+	all, _, hasMore, err := o.TaskEvents(taskID, 0, 100)
+	if err != nil {
+		t.Fatalf("TaskEvents: %v", err)
+	}
+	if hasMore {
+		t.Fatal("hasMore must be false when the page holds every event")
+	}
+	if len(all) < 2 {
+		t.Fatalf("expected at least task_created + a terminal task_status_changed, got %d: %+v", len(all), all)
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i].Seq < all[i-1].Seq {
+			t.Fatalf("events out of Seq order: %+v", all)
+		}
+	}
+
+	// Pagination: cursor on the first event's Seq must exclude every event AT that Seq (Attach bundles
+	// task_created + task_status_changed-to-"queued" into the SAME operation/Seq when the stage is already
+	// active — see Attach's parentActive branch — so "strictly after cursor" can drop more than one event).
+	wantAfterFirstSeq := 0
+	for _, e := range all {
+		if e.Seq > all[0].Seq {
+			wantAfterFirstSeq++
+		}
+	}
+	rest, next, _, err := o.TaskEvents(taskID, all[0].Seq, 100)
+	if err != nil {
+		t.Fatalf("TaskEvents with cursor: %v", err)
+	}
+	if len(rest) != wantAfterFirstSeq {
+		t.Fatalf("page after cursor = %d events, want %d", len(rest), wantAfterFirstSeq)
+	}
+	if next != all[len(all)-1].Seq {
+		t.Fatalf("next cursor = %d, want %d (last event's seq)", next, all[len(all)-1].Seq)
+	}
+
+	// limit smaller than the full history must set hasMore.
+	firstPage, _, hasMoreLimited, err := o.TaskEvents(taskID, 0, 1)
+	if err != nil {
+		t.Fatalf("TaskEvents with limit=1: %v", err)
+	}
+	if len(firstPage) != 1 || !hasMoreLimited {
+		t.Fatalf("limited page = %+v hasMore=%v, want exactly 1 event and hasMore=true", firstPage, hasMoreLimited)
+	}
+
+	if events, _, _, err := o.TaskEvents("unknown-task", 0, 100); err != nil || len(events) != 0 {
+		t.Fatalf("TaskEvents for an unknown task = %+v, %v, want empty/no error", events, err)
+	}
+}

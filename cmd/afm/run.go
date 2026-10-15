@@ -225,25 +225,27 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 
 	ws := openRunWorkspace(cfg.Server.GetPort() > 0)
 	orchOpts := orchestrator.Options{
-		RunDir:            runDir,
-		Stages:            stages,
-		Store:             store,
-		Config:            cfg,
-		Prompts:           prompts,
-		WrapperDir:        env.WrapperDir,
-		GeneratedAgents:   env.GeneratedAgents,
-		GlobalPrompt:      f.Prompt,
-		RootDir:           env.RootDir,
-		RequireApproval:   opts.requireApproval,
-		Debug:             debugEnabled,
-		Memory:            f.Memory,
-		MemoryDir:         env.MemoryDir,
-		Accounting:        acct,
-		FlowName:          f.Name,
-		RunID:             runID,
-		Resumed:           resumed,
-		Hooks:             hooksDisp,
-		BrowserDescriptor: browserDesc,
+		RunDir:             runDir,
+		Stages:             stages,
+		Store:              store,
+		Config:             cfg,
+		Prompts:            prompts,
+		WrapperDir:         env.WrapperDir,
+		GeneratedAgents:    env.GeneratedAgents,
+		GlobalPrompt:       f.Prompt,
+		RootDir:            env.RootDir,
+		RequireApproval:    opts.requireApproval,
+		Debug:              debugEnabled,
+		Memory:             f.Memory,
+		MemoryDir:          env.MemoryDir,
+		Accounting:         acct,
+		FlowName:           f.Name,
+		RunID:              runID,
+		Resumed:            resumed,
+		Hooks:              hooksDisp,
+		BrowserDescriptor:  browserDesc,
+		AssistantsEnabled:  collab.policy.Enabled,
+		AssistantsRegistry: collab.registry,
 	}
 	if ws != nil {
 		orchOpts.ResolveFile = workspaceResolveFile(ws)
@@ -283,6 +285,8 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		Accounting:        serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
 		SideAgent:         side.service(),
 		AssistantProfiles: collab.service(),
+		AssistantActions:  collab.actions(orch),
+		AssistantsReader:  collab.reader(orch),
 	}, orch)
 	if err != nil {
 		return err

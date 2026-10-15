@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/progress"
 )
 
@@ -43,8 +44,14 @@ type Store struct {
 	snapshot  *RunState
 	lastSeq   uint64
 	history   []Transition
-	lock      *progress.Lock
-	mu        sync.Mutex
+	// controlHistory accumulates every control record committed during this run (replay + live), in
+	// increasing Seq order — mirrors history above but for Control records rather than Transitions. Backs
+	// TaskEvents' durable per-task event page (pkg/orchestrator's read side for GET
+	// /api/assistants/{id}/events); unlike rs.Assistants (the CURRENT projected task-tree state), this is the
+	// append-only record of every effect ever committed.
+	controlHistory []Control
+	lock           *progress.Lock
+	mu             sync.Mutex
 
 	// writeOffset is the byte offset in events.jsonl where the NEXT write will land — always the current
 	// end of file, since every write is a sequential append. Seeded from replay's lastGoodOffset in Open.
@@ -94,7 +101,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		}
 	}
 
-	history, lastSeq, lastGoodOffset, corrupted, unsupported, seqOffsets, err := replayEvents(eventsPath, rs)
+	history, controls, lastSeq, lastGoodOffset, corrupted, unsupported, seqOffsets, err := replayEvents(eventsPath, rs)
 	if err != nil {
 		return nil, fmt.Errorf("replay: %w", err)
 	}
@@ -128,15 +135,16 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		seqOffsets = map[uint64]int64{}
 	}
 	s := &Store{
-		runDir:      runDir,
-		eventsLog:   f,
-		snapshot:    rs,
-		lastSeq:     lastSeq,
-		history:     history,
-		lock:        lock,
-		writeOffset: lastGoodOffset,
-		seqOffsets:  seqOffsets,
-		opCache:     newOpResultCache(opResultCacheCapacity()),
+		runDir:         runDir,
+		eventsLog:      f,
+		snapshot:       rs,
+		lastSeq:        lastSeq,
+		history:        history,
+		controlHistory: controls,
+		lock:           lock,
+		writeOffset:    lastGoodOffset,
+		seqOffsets:     seqOffsets,
+		opCache:        newOpResultCache(opResultCacheCapacity()),
 	}
 
 	// if started from legacy fallback — write synthetic events
@@ -186,16 +194,16 @@ func loadLegacyState(path string) (*RunState, error) {
 	return &rs, nil
 }
 
-func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint64, lastGoodOffset int64, corrupted bool, unsupported error, seqOffsets map[uint64]int64, err error) {
+func replayEvents(path string, rs *RunState) (history []Transition, controls []Control, lastSeq uint64, lastGoodOffset int64, corrupted bool, unsupported error, seqOffsets map[uint64]int64, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, 0, 0, false, nil, nil, nil
+			return nil, nil, 0, 0, false, nil, nil, nil
 		}
-		return nil, 0, 0, false, nil, nil, err
+		return nil, nil, 0, 0, false, nil, nil, err
 	}
 	res := parseEventLog(data, rs)
-	return res.history, res.lastSeq, res.goodOffset, res.corrupted, res.unsupported, res.seqOffsets, nil
+	return res.history, res.controls, res.lastSeq, res.goodOffset, res.corrupted, res.unsupported, res.seqOffsets, nil
 }
 
 func (s *Store) Get(stageID string) StageStatus {
@@ -252,6 +260,43 @@ func (s *Store) History() ([]Transition, error) {
 	out := make([]Transition, len(s.history))
 	copy(out, s.history)
 	return out, nil
+}
+
+// TaskEvent is one durable effect ever committed against a single task — the per-task projection of the
+// "operation_committed" control stream. ApplyRunOperation (T2.4) bundles every Effect of one caller-intent
+// operation (Attach/PauseTask/ContinueTask/CancelTask/the scheduler's own transitions) into ONE Control
+// record, so several TaskEvents can share one Seq when more than one Effect of the same operation targets the
+// same task (e.g. Attach's task_created plus an immediate task_status_changed to "queued"). This is the
+// durable, authoritative source behind the dashboard's per-task event-history page (GET
+// /api/assistants/{id}/events) — distinct from the live, best-effort notices.jsonl (AGENTS.md's "забыть
+// durable-копию" gotcha does not apply here: these ARE the durable journal records, not a UI notice).
+type TaskEvent struct {
+	Seq     uint64          `json:"seq"`
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// TaskEvents returns every TaskEvent ever committed against taskID, across both replay and live writes, in
+// increasing Seq order.
+func (s *Store) TaskEvents(taskID assistants.TaskID) []TaskEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []TaskEvent
+	for _, c := range s.controlHistory {
+		if c.Kind != kindOperationCommitted {
+			continue
+		}
+		var p operationCommittedPayload
+		if decodePayload(c.Payload, &p) != nil {
+			continue
+		}
+		for _, e := range p.Effects {
+			if e.Target.TaskID == string(taskID) {
+				out = append(out, TaskEvent{Seq: c.Seq, Kind: e.Kind, Payload: e.Payload})
+			}
+		}
+	}
+	return out
 }
 
 // SetStageNames stores the display name for each stage. Empty values are stored as-is; the UI handles them
@@ -480,6 +525,7 @@ func (s *Store) appendControlLocked(c *Control) error {
 	}
 	s.writeOffset += int64(len(data))
 	s.seqOffsets[c.Seq] = offset
+	s.controlHistory = append(s.controlHistory, *c)
 
 	appendControlHookMu.Lock()
 	hook := appendControlHook

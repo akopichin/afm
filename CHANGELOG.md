@@ -19,8 +19,12 @@ and its own file namespace under `.afm/runs/<run_id>/assistants/<task_id>/`, a
 narrow HTTP API (`/api/stages/{id}/assistants`, `/api/assistants/{id}/...`), and
 cost attribution (`task_id`/`profile_id`/`root_stage_id` on usage records, with
 own/subtree cost computed without double-counting). A helper task never affects
-its root stage's status — advisory only. Still not wired into `afm run` itself
-(no dashboard UI yet) — that lands with the frontend follow-up.
+its root stage's status — advisory only. Now wired into `afm run` itself: with
+`collaboration.enabled` and at least one usable profile, `POST /api/stages/{id}/assistants`
+attaches a real task and `GET /api/stages/{id}/assistants` / `GET /api/assistants/{id}/events`
+read its status and durable history back — still no dashboard UI (the read-side
+only reports status/reason, not the decoded verdict/summary) — that lands with
+the frontend follow-up.
 
 ### Improvement: collaboration feature switch and assistant profile registry (backend only)
 
