@@ -55,6 +55,12 @@ type AssistantsReader interface {
 const defaultAssistantEventsLimit = 100
 const maxAssistantEventsLimit = 500
 
+// maxAttachBodyBytes bounds the Attach request body — same discipline as the side-agent/flow-notes free-text
+// endpoints (pkg/server/side_agent.go's maxSideAgentBodyBytes, pkg/server/flow_handlers.go's
+// maxNoteBodyBytes): title/instruction are free text, so an unbounded body would let a client force an
+// arbitrarily large read/allocation before validation ever runs.
+const maxAttachBodyBytes = 64 << 10
+
 // routeStageAssistants handles GET|POST /api/stages/{id}/assistants, dispatched from routeStages.
 func (s *Server) routeStageAssistants(w http.ResponseWriter, r *http.Request, stageID string) {
 	switch r.Method {
@@ -110,7 +116,12 @@ func (s *Server) handleAttachAssistant(w http.ResponseWriter, r *http.Request, s
 		Mode        string `json:"mode"`
 		Trigger     string `json:"trigger"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAttachBodyBytes)).Decode(&body); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeAssistantErrCode(w, http.StatusRequestEntityTooLarge, "request_too_large")
+			return
+		}
 		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_request_body")
 		return
 	}

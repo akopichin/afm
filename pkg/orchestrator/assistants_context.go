@@ -83,7 +83,7 @@ func writeFencedSection(b *strings.Builder, title, body string) {
 }
 
 // stageGeneration is a cheap, always-available proxy for "how fresh is this context relative to the stage's
-// own lifecycle": the stage's last FSM UpdatedAt. Git HEAD alone is NOT a sufhicient generation marker — the
+// own lifecycle": the stage's last FSM UpdatedAt. Git HEAD alone is NOT a sufficient generation marker — the
 // primary agent routinely has uncommitted changes — so ContextVersion is built from actual content hashes
 // (below) with this timestamp folded in only as an additional, cheap differentiator between two turns whose
 // file content happens to be identical but which happened at different points in the stage's lifecycle.

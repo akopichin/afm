@@ -135,6 +135,23 @@ func TestAttach_RequiresRequestId(t *testing.T) {
 	}
 }
 
+func TestAttach_RejectsOversizedBody(t *testing.T) {
+	fake := &fakeAssistantActions{}
+	srv := newTestServer(t, Config{AssistantActions: fake})
+	huge := make([]byte, maxAttachBodyBytes+1024)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	body, _ := json.Marshal(map[string]string{"request_id": "req-1", "profile_id": "reviewer", "instruction": string(huge)})
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/assistants", bytes.NewReader(body))
+	req.Header.Set("Origin", "http://"+req.Host)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("HTTP %d, want 413 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
 func TestAttach_DuplicateRequestIdReturnsSameTask(t *testing.T) {
 	fake := &fakeAssistantActions{}
 	srv := newTestServer(t, Config{AssistantActions: fake})
