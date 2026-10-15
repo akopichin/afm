@@ -105,3 +105,26 @@ describe('a new child task appearing does not steal the current selection', () =
     expect(result.current[0]).toEqual(before)
   })
 })
+
+describe('regression: manually clicking back onto a stage after detouring through a task must not auto-advance', () => {
+  it('does not yank the selection away once the user clicks back onto the stage that finished while a task view was open', () => {
+    const { result, rerender } = renderHook(({ stages }: { stages: Stage[] }) => useSelectedStage(stages, null), {
+      initialProps: { stages: [stage('a', 'running'), stage('b', 'pending')] },
+    })
+    // Watching stage 'a' live sets wasLive.current = true for it.
+    expect(result.current[0]).toEqual({ kind: 'stage', stageId: 'a' })
+
+    // User opens a helper task nested under still-running 'a'.
+    act(() => result.current[1]({ kind: 'assistant', stageId: 'a', taskId: 't1' }))
+
+    // 'a' finishes and 'b' starts in the background while the task view stays open (simulates a poll tick).
+    rerender({ stages: [stage('a', 'done'), stage('b', 'running')] })
+    expect(result.current[0]).toEqual({ kind: 'assistant', stageId: 'a', taskId: 't1' })
+
+    // User manually clicks back onto stage 'a' (now done).
+    act(() => result.current[1]({ kind: 'stage', stageId: 'a' }))
+    // A subsequent render (e.g. the next poll tick) must not auto-advance away from the manual click.
+    rerender({ stages: [stage('a', 'done'), stage('b', 'running')] })
+    expect(result.current[0]).toEqual({ kind: 'stage', stageId: 'a' })
+  })
+})

@@ -329,6 +329,21 @@ func (s *Store) Close() error {
 	return err
 }
 
+// CloseEventsLogForTest closes the underlying journal file descriptor directly, WITHOUT nil-ing s.eventsLog
+// or releasing the run lock (unlike Close) — simulates a real OS-level write/fsync failure on the NEXT
+// Apply/AppendControl/ApplyRunOperation call (a closed *os.File still looks non-nil to those methods, so they
+// attempt the write, which fails and is wrapped as *StorageError — never the "run store is closed" plain
+// error Close() itself would produce). Modeled on record_test.go/journal_regression_test.go's in-package
+// `store.eventsLog.Close()` trick; exported only so pkg/orchestrator (a different package) can inject the
+// same failure from its own tests. Production code MUST NOT call this.
+func (s *Store) CloseEventsLogForTest() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.eventsLog != nil {
+		_ = s.eventsLog.Close()
+	}
+}
+
 // BeginRun and EndRun persist process-lifetime boundaries in events.jsonl.
 // These records share its sequence but are excluded from stage History().
 func (s *Store) BeginRun() error {

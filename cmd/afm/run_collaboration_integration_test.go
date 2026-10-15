@@ -122,6 +122,7 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 	// --- Poll the REAL HTTP read-side until the task reaches a terminal status. ---
 	deadline := time.Now().Add(15 * time.Second)
 	var finalStatus string
+	var finalReadonlyEnforcement string
 	for time.Now().Before(deadline) {
 		var out struct {
 			Tasks []server.AssistantTaskView `json:"tasks"`
@@ -130,6 +131,7 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 		for _, tv := range out.Tasks {
 			if tv.ID == taskID {
 				finalStatus = tv.Status
+				finalReadonlyEnforcement = tv.ReadonlyEnforcement
 			}
 		}
 		if finalStatus == string(assistants.StatusCompleted) || finalStatus == string(assistants.StatusFailed) {
@@ -139,6 +141,24 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 	}
 	if finalStatus != string(assistants.StatusCompleted) {
 		t.Fatalf("task final status (via HTTP) = %q, want %q", finalStatus, assistants.StatusCompleted)
+	}
+
+	// The dashboard-facing AssistantTaskView must carry the SAME read-only-enforcement verdict the registry's
+	// availability check reported for "codex-as-claude" at admission time — frozen into ProfileSnapshot by
+	// orchestrator.Attach (pkg/orchestrator/assistants.go), surfaced here by collaborationReader.TaskTree
+	// (cmd/afm/run_collaboration.go). Computed from the SAME config.HelperReadonlyEnforcement the production
+	// `available` closure in startCollaboration calls, rather than hardcoding "os"/"none", so this assertion
+	// stays correct whether the test happens to run on a bare host or inside a container (config.InContainer()
+	// changes the answer — see pkg/config/verify_resolve.go).
+	wantEnforcement := config.HelperReadonlyEnforcement("codex-as-claude", cfg)
+	if wantEnforcement == "" {
+		t.Fatal("test setup: config.HelperReadonlyEnforcement(\"codex-as-claude\", cfg) returned empty — test cannot assert a meaningful expectation")
+	}
+	if finalReadonlyEnforcement == "" {
+		t.Fatal("AssistantTaskView.ReadonlyEnforcement (via HTTP) is empty — the audit trail's read-only guarantee was never wired through")
+	}
+	if finalReadonlyEnforcement != wantEnforcement {
+		t.Fatalf("AssistantTaskView.ReadonlyEnforcement (via HTTP) = %q, want %q", finalReadonlyEnforcement, wantEnforcement)
 	}
 
 	// --- The durable per-task event history is also readable back over HTTP. ---

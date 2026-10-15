@@ -218,6 +218,27 @@ func TestAttach_404WhenCapabilityOff(t *testing.T) {
 	}
 }
 
+// TestPauseTask_404WhenActionsOffButReaderOn is a regression test: AssistantsReader wired but AssistantActions
+// nil (read-only collaboration) is an explicitly valid, already-tested config (see TestAttach_404WhenCapabilityOff's
+// analog on the attach path) — a POST to pause/continue/cancel under exactly this config must 404, not panic.
+// Before the fix, routeAssistants formed the method value `s.assistantActions.PauseTask` (etc.) BEFORE
+// handleAssistantTaskAction's nil check ever ran: in Go, forming a method value on a nil interface panics
+// immediately at the point of formation, not when called — so this config crashed the handler instead of
+// reporting 404 as documented.
+func TestPauseTask_404WhenActionsOffButReaderOn(t *testing.T) {
+	srv := newTestServer(t, Config{AssistantsReader: &fakeAssistantsReader{}}) // reader on, actions off
+
+	for _, action := range []string{"pause", "continue", "cancel"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/assistants/t-1/"+action, nil)
+		req.Header.Set("Origin", "http://"+req.Host)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("POST .../%s with AssistantActions=nil: HTTP %d, want 404", action, w.Code)
+		}
+	}
+}
+
 func TestAttach_OriginCheckedForBrowserMutations(t *testing.T) {
 	fake := &fakeAssistantActions{}
 	srv := newTestServer(t, Config{AssistantActions: fake})

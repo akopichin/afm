@@ -107,11 +107,13 @@ export type AssistantFinding = {
 }
 
 // AssistantResult — зеркало assistants.Result (pkg/assistants/types.go), декодированный ход помощника с
-// kind:"result". Сегодняшний бэкенд (T3.7/T3.8) не публикует это как отдельное событие в
-// GET /api/assistants/{id}/events — задача пишет result.json только на диск (T3.6). parseAssistantResult
-// читает его defensively из ЛЮБОГО события журнала, чьи данные уже соответствуют этой форме: ничего не
-// сломается сегодня (такого события ещё нет), но лента готова к моменту, когда оно появится, не требуя
-// второго парсера.
+// kind:"result". С коммита 419753b бэкенд публикует это как отдельное "task_result" событие в
+// GET /api/assistants/{id}/events (runHelperTask бандлит task_result-эффект в тот же ApplyRunOperation, что
+// и переход в completed, см. pkg/orchestrator/assistants.go's taskResultEffect/assistants_lifecycle.go) — в
+// дополнение к result.json на диске (T3.6), не вместо него. parseAssistantResult читает событие defensively
+// из ЛЮБОГО события журнала, чьи данные уже соответствуют этой форме: это живой путь чтения (см.
+// AssistantTaskView.tsx's latestResult), подтверждённый сквозным
+// cmd/afm/run_collaboration_integration_test.go, а не форвард-совместимый мёртвый код.
 export type AssistantResult = {
   verdict: AssistantVerdict
   summary: string

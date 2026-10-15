@@ -227,6 +227,12 @@ type Orchestrator struct {
 	// атомарным Trigger — т.е. ПОСЛЕ дешёвого fast-path чтения, но ДО самого CAS.
 	verifyOutcomeGuardHook func(stageID string)
 
+	// taskRequeueBarrier — тест-сейм: вызывается в spawnTask's run body СРАЗУ после того, как taskHeld
+	// вернул true (held), но ДО finishTaskFrom's requeue-commit (running->queued) — позволяет тесту
+	// детерминированно воспроизвести lost-wakeup гонку PauseTask/ContinueTask вокруг этого окна (см.
+	// spawnTask's doc comment).
+	taskRequeueBarrier func(taskID assistants.TaskID)
+
 	// flowPauseMu защищает составные решения PauseFlow; отдельные поля activationHeld/finalizing/reviewMarker
 	// читаются атомарно.
 	flowPauseMu sync.Mutex

@@ -236,8 +236,16 @@ func (as AssistantsState) EffectivelyHeld(id assistants.TaskID) (bool, []Hold) {
 }
 
 // ---- control-record payload shapes (T2.3) ----
+//
+// These three are exported (unlike the other, smaller payload shapes further down this file) because
+// pkg/orchestrator's task-admission/lifecycle code (assistants.go's taskCreatedEffect/taskStatusEffect/
+// taskHoldEffect) builds Effect.Payload values of exactly these shapes — it imports pkg/state already, so
+// sharing the type here is a plain rename, not a new dependency, and keeps the json tags defined in exactly
+// one place instead of two hand-kept-in-sync copies.
 
-type taskCreatedPayload struct {
+// TaskCreatedPayload is the task_created control record's payload — decoded here by applyTaskCreated,
+// encoded by pkg/orchestrator's taskCreatedEffect.
+type TaskCreatedPayload struct {
 	ParentTaskID     *string            `json:"parent_task_id,omitempty"`
 	ProfileID        string             `json:"profile_id"`
 	ProfileSnapshot  assistants.Profile `json:"profile_snapshot"`
@@ -250,12 +258,16 @@ type taskCreatedPayload struct {
 	CreatedBy        string             `json:"created_by"`
 }
 
-type taskStatusChangedPayload struct {
+// TaskStatusChangedPayload is the task_status_changed control record's payload — decoded here by
+// applyTaskStatusChanged, encoded by pkg/orchestrator's taskStatusEffect.
+type TaskStatusChangedPayload struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
 }
 
-type taskHoldPayload struct {
+// TaskHoldPayload is the task_hold_set/task_hold_cleared control records' shared payload — decoded here by
+// applyTaskHoldSet/applyTaskHoldCleared, encoded by pkg/orchestrator's taskHoldEffect.
+type TaskHoldPayload struct {
 	Owner  string `json:"owner"`
 	Reason string `json:"reason,omitempty"`
 }
@@ -334,7 +346,7 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 }
 
 func applyTaskCreated(as *AssistantsState, c *Control, dryRun bool) error {
-	var p taskCreatedPayload
+	var p TaskCreatedPayload
 	if len(c.Payload) > 0 {
 		if err := decodePayload(c.Payload, &p); err != nil {
 			return fmt.Errorf("task %s: decode task_created payload: %w", c.Target.TaskID, err)
@@ -412,7 +424,7 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	if !ok {
 		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
 	}
-	var p taskStatusChangedPayload
+	var p TaskStatusChangedPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("task %s: decode task_status_changed payload: %w", id, err)
 	}
@@ -437,7 +449,7 @@ func applyTaskHoldSet(as *AssistantsState, c *Control, dryRun bool) error {
 	if !ok {
 		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
 	}
-	var p taskHoldPayload
+	var p TaskHoldPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("task %s: decode task_hold_set payload: %w", id, err)
 	}
@@ -460,7 +472,7 @@ func applyTaskHoldCleared(as *AssistantsState, c *Control, dryRun bool) error {
 	if !ok {
 		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
 	}
-	var p taskHoldPayload
+	var p TaskHoldPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("task %s: decode task_hold_cleared payload: %w", id, err)
 	}

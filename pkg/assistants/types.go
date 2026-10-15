@@ -26,6 +26,12 @@ type Profile struct {
 	Command      string
 	Instructions string
 	Capabilities Capabilities
+	// ReadonlyEnforcement — какая read-only-гарантия действовала для этой команды в момент, когда профиль
+	// был разрешён к использованию (T1.5's AvailabilityCheck). Пусто у "сырого" Profile, возвращаемого
+	// Registry.Get — заполняется вызывающим (Attach, T3.4) из ProfileView.ReadonlyEnforcement ПЕРЕД тем как
+	// профиль замораживается в Task.ProfileSnapshot, чтобы история задачи навсегда помнила гарантию,
+	// действовавшую на момент прогона, а не ту, что действует сейчас (dev-plan.md Этап 1 T1.5).
+	ReadonlyEnforcement ReadonlyEnforcement
 }
 
 // Capabilities — что разрешено помощнику этого профиля.

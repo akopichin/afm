@@ -37,19 +37,19 @@ func TestReplay_TaskCreatedThenStatusChanges(t *testing.T) {
 	}
 
 	created := taskCreatedControl("op-1", "t1", "a", nil)
-	created.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "reviewer", Title: "Review"})
+	created.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "reviewer", Title: "Review"})
 	if err := store.AppendControl(created); err != nil {
 		t.Fatalf("AppendControl(created): %v", err)
 	}
 
 	running := &Control{Kind: "task_status_changed", SchemaVersion: ControlSchemaVersion,
-		Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, taskStatusChangedPayload{Status: "running"})}
+		Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, TaskStatusChangedPayload{Status: "running"})}
 	if err := store.AppendControl(running); err != nil {
 		t.Fatalf("AppendControl(running): %v", err)
 	}
 
 	done := &Control{Kind: "task_status_changed", SchemaVersion: ControlSchemaVersion,
-		Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, taskStatusChangedPayload{Status: "completed", Reason: "ok"})}
+		Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, TaskStatusChangedPayload{Status: "completed", Reason: "ok"})}
 	if err := store.AppendControl(done); err != nil {
 		t.Fatalf("AppendControl(done): %v", err)
 	}
@@ -85,7 +85,7 @@ func TestReplay_ComputesDepthFromParent(t *testing.T) {
 	}
 
 	root := taskCreatedControl("op-1", "t1", "a", nil)
-	root.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p"})
+	root.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p"})
 	if err := store.AppendControl(root); err != nil {
 		t.Fatalf("AppendControl(root): %v", err)
 	}
@@ -95,14 +95,14 @@ func TestReplay_ComputesDepthFromParent(t *testing.T) {
 	// The payload claims a bogus depth-adjacent hint via a completely different (wrong) parent — but since
 	// there is no "depth" field in the payload at all, there is nothing for an untrusted model to lie about;
 	// this test instead confirms depth is derived, not copied from anywhere in payload.
-	child.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p", ParentTaskID: &parentID})
+	child.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p", ParentTaskID: &parentID})
 	if err := store.AppendControl(child); err != nil {
 		t.Fatalf("AppendControl(child): %v", err)
 	}
 
 	grandparentID := "t2"
 	grandchild := taskCreatedControl("op-3", "t3", "a", &grandparentID)
-	grandchild.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p", ParentTaskID: &grandparentID})
+	grandchild.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p", ParentTaskID: &grandparentID})
 	if err := store.AppendControl(grandchild); err != nil {
 		t.Fatalf("AppendControl(grandchild): %v", err)
 	}
@@ -133,7 +133,7 @@ func TestReplay_RejectsCycle(t *testing.T) {
 
 	selfID := "t1"
 	c := taskCreatedControl("op-1", "t1", "a", &selfID)
-	c.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p", ParentTaskID: &selfID})
+	c.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p", ParentTaskID: &selfID})
 	err = store.AppendControl(c)
 	if err == nil {
 		t.Fatal("AppendControl with self-referencing parent: want error, got nil")
@@ -153,7 +153,7 @@ func TestReplay_RejectsMissingParent(t *testing.T) {
 
 	missing := "does-not-exist"
 	c := taskCreatedControl("op-1", "t1", "a", &missing)
-	c.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p", ParentTaskID: &missing})
+	c.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p", ParentTaskID: &missing})
 	err = store.AppendControl(c)
 	if err == nil {
 		t.Fatal("AppendControl with a missing parent: want error, got nil")
@@ -174,21 +174,21 @@ func TestReplay_HoldsRestored(t *testing.T) {
 
 	parentID := "parent"
 	root := taskCreatedControl("op-1", "parent", "a", nil)
-	root.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p"})
+	root.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p"})
 	_ = store.AppendControl(root)
 	child := taskCreatedControl("op-2", "child", "a", &parentID)
-	child.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p", ParentTaskID: &parentID})
+	child.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p", ParentTaskID: &parentID})
 	_ = store.AppendControl(child)
 
 	// Pause the child directly (owner "manual") AND the parent directly (owner "manual") — two separate
 	// tasks, each with its own independent hold.
 	holdChild := &Control{Kind: "task_hold_set", SchemaVersion: ControlSchemaVersion,
-		Target: Target{TaskID: "child"}, Payload: mustMarshal(t, taskHoldPayload{Owner: "manual", Reason: "user paused child"})}
+		Target: Target{TaskID: "child"}, Payload: mustMarshal(t, TaskHoldPayload{Owner: "manual", Reason: "user paused child"})}
 	if err := store.AppendControl(holdChild); err != nil {
 		t.Fatalf("AppendControl(holdChild): %v", err)
 	}
 	holdParent := &Control{Kind: "task_hold_set", SchemaVersion: ControlSchemaVersion,
-		Target: Target{TaskID: "parent"}, Payload: mustMarshal(t, taskHoldPayload{Owner: "manual", Reason: "user paused parent"})}
+		Target: Target{TaskID: "parent"}, Payload: mustMarshal(t, TaskHoldPayload{Owner: "manual", Reason: "user paused parent"})}
 	if err := store.AppendControl(holdParent); err != nil {
 		t.Fatalf("AppendControl(holdParent): %v", err)
 	}
@@ -216,7 +216,7 @@ func TestReplay_HoldsRestored(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	clearChild := &Control{Kind: "task_hold_cleared", SchemaVersion: ControlSchemaVersion,
-		Target: Target{TaskID: "child"}, Payload: mustMarshal(t, taskHoldPayload{Owner: "manual"})}
+		Target: Target{TaskID: "child"}, Payload: mustMarshal(t, TaskHoldPayload{Owner: "manual"})}
 	if err := store2.AppendControl(clearChild); err != nil {
 		t.Fatalf("AppendControl(clearChild): %v", err)
 	}
@@ -249,11 +249,11 @@ func TestReplay_ContinuationRestored(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	c := taskCreatedControl("op-1", "t1", "a", nil)
-	c.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p"})
+	c.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p"})
 	_ = store.AppendControl(c)
 
 	waiting := &Control{Kind: "task_status_changed", SchemaVersion: ControlSchemaVersion,
-		Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, taskStatusChangedPayload{Status: "waiting_children"})}
+		Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, TaskStatusChangedPayload{Status: "waiting_children"})}
 	if err := store.AppendControl(waiting); err != nil {
 		t.Fatalf("AppendControl(waiting): %v", err)
 	}
@@ -288,7 +288,7 @@ func TestReplay_IdempotencyIndexRestored(t *testing.T) {
 	}
 
 	first := taskCreatedControl("op-first", "t1", "a", nil)
-	first.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p"})
+	first.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p"})
 	if err := store.AppendControl(first); err != nil {
 		t.Fatalf("AppendControl(first): %v", err)
 	}
@@ -297,14 +297,14 @@ func TestReplay_IdempotencyIndexRestored(t *testing.T) {
 	// Several unrelated records in between (spread across the log, not clustered at the end).
 	for i := 0; i < 5; i++ {
 		status := &Control{Kind: "task_status_changed", SchemaVersion: ControlSchemaVersion,
-			Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, taskStatusChangedPayload{Status: "queued"})}
+			Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, TaskStatusChangedPayload{Status: "queued"})}
 		if err := store.AppendControl(status); err != nil {
 			t.Fatalf("AppendControl(status %d): %v", i, err)
 		}
 	}
 
 	last := taskCreatedControl("op-last", "t2", "a", nil)
-	last.Payload = mustMarshal(t, taskCreatedPayload{ProfileID: "p"})
+	last.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "p"})
 	if err := store.AppendControl(last); err != nil {
 		t.Fatalf("AppendControl(last): %v", err)
 	}

@@ -201,13 +201,14 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 	out := make([]server.AssistantTaskView, 0, len(tasks))
 	for _, t := range tasks {
 		view := server.AssistantTaskView{
-			ID:           string(t.ID),
-			ProfileID:    string(t.ProfileID),
-			Title:        t.Title,
-			Mode:         string(t.Mode),
-			Trigger:      string(t.Trigger),
-			Status:       string(t.Status),
-			StatusReason: t.StatusReason,
+			ID:                  string(t.ID),
+			ProfileID:           string(t.ProfileID),
+			Title:               t.Title,
+			Mode:                string(t.Mode),
+			Trigger:             string(t.Trigger),
+			Status:              string(t.Status),
+			StatusReason:        t.StatusReason,
+			ReadonlyEnforcement: string(t.ProfileSnapshot.ReadonlyEnforcement),
 		}
 		if t.ParentTaskID != nil {
 			view.ParentTaskID = string(*t.ParentTaskID)

@@ -14,13 +14,12 @@ import { MarkdownRenderer } from '../plan-panel'
 const POLL_INTERVAL_MS = 3000
 
 // latestResult scans a task's event page, newest first, for the latest entry whose payload already matches
-// assistants.Result's shape (verdict + summary, see pkg/assistants/types.go). Today's committed backend
-// (T3.7/T3.8) never actually emits such a payload over GET /api/assistants/{id}/events — a completed task's
-// structured result (verdict/summary/findings) is persisted to result.json on disk, not published as a
-// durable task event (see pkg/orchestrator/assistants_lifecycle.go's persistTaskResult). This stays a no-op
-// against the real backend today, but the feed is ready the moment a future change starts including it,
-// without a second parser to write then — and it's exactly what lets this view's "completed result" rendering
-// be driven honestly in tests right now.
+// assistants.Result's shape (verdict + summary, see pkg/assistants/types.go). Since commit 419753b the
+// backend DOES emit such a payload over GET /api/assistants/{id}/events: runHelperTask bundles a "task_result"
+// effect into the SAME ApplyRunOperation call as the task_status_changed-to-"completed" transition (see
+// pkg/orchestrator/assistants.go's taskResultEffect / assistants_lifecycle.go), in addition to (not instead
+// of) the result.json persisted to disk. This is the live consumer of that event, end-to-end verified by
+// cmd/afm/run_collaboration_integration_test.go — not forward-compatible dead code.
 function latestResult(events: AssistantEventWire[]): AssistantResult | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const parsed = parseAssistantResult(events[i]?.data)

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -36,41 +37,18 @@ type AttachRequest struct {
 	Actor       state.Actor
 }
 
-// taskCreatedPayload/taskStatusChangedPayload/taskHoldPayload mirror — field-for-field, identical json tags
-// — the UNEXPORTED payload shapes pkg/state's applyTaskCreated/applyTaskStatusChanged/applyTaskHoldSet
-// decode (pkg/state/assistants_projection.go). An Effect's Payload is just json.RawMessage; building the
-// same JSON shape here instead of pkg/state exporting its internal type is the same pattern
-// pkg/state/operation_test.go's own taskCreatedEffect test helper already uses — keep these three structs in
-// sync with pkg/state if its shapes ever change.
-type taskCreatedPayload struct {
-	ParentTaskID     *string            `json:"parent_task_id,omitempty"`
-	ProfileID        string             `json:"profile_id"`
-	ProfileSnapshot  assistants.Profile `json:"profile_snapshot"`
-	Title            string             `json:"title"`
-	Instruction      string             `json:"instruction"`
-	Mode             string             `json:"mode"`
-	Trigger          string             `json:"trigger"`
-	PolicyRev        string             `json:"policy_rev"`
-	MaxDepthAtCreate int                `json:"max_depth_at_create"`
-	CreatedBy        string             `json:"created_by"`
-}
-
-type taskStatusChangedPayload struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
-}
-
-type taskHoldPayload struct {
-	Owner  string `json:"owner"`
-	Reason string `json:"reason,omitempty"`
-}
-
 // holdOwnerManual is the hold owner key used by PauseTask/ContinueTask — mirrors the stage-level manual
 // pause concept (AGENTS.md's "Manual pause"), reusing the SAME hold mechanism (task_hold_set/cleared,
 // pkg/state/assistants_projection.go) rather than inventing a second one (dev-plan's explicit instruction).
 const holdOwnerManual = "manual"
 
-func taskCreatedEffect(taskID assistants.TaskID, stageID string, p taskCreatedPayload) (state.Effect, error) {
+// taskCreatedEffect/taskStatusEffect/taskHoldEffect build an Effect whose Payload is one of pkg/state's
+// EXPORTED payload shapes (state.TaskCreatedPayload/TaskStatusChangedPayload/TaskHoldPayload,
+// pkg/state/assistants_projection.go) — the SAME struct pkg/state's own applyTaskCreated/
+// applyTaskStatusChanged/applyTaskHoldSet/applyTaskHoldCleared decode, not a hand-kept-in-sync mirror. This
+// package already imports pkg/state for state.Effect/state.Target/state.Operation, so sharing the type adds
+// no new dependency.
+func taskCreatedEffect(taskID assistants.TaskID, stageID string, p state.TaskCreatedPayload) (state.Effect, error) {
 	raw, err := json.Marshal(p)
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_created payload: %w", err)
@@ -79,7 +57,7 @@ func taskCreatedEffect(taskID assistants.TaskID, stageID string, p taskCreatedPa
 }
 
 func taskStatusEffect(taskID assistants.TaskID, status assistants.TaskStatus, reason string) (state.Effect, error) {
-	raw, err := json.Marshal(taskStatusChangedPayload{Status: string(status), Reason: reason})
+	raw, err := json.Marshal(state.TaskStatusChangedPayload{Status: string(status), Reason: reason})
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_status_changed payload: %w", err)
 	}
@@ -87,7 +65,7 @@ func taskStatusEffect(taskID assistants.TaskID, status assistants.TaskStatus, re
 }
 
 func taskHoldEffect(kind string, taskID assistants.TaskID, owner, reason string) (state.Effect, error) {
-	raw, err := json.Marshal(taskHoldPayload{Owner: owner, Reason: reason})
+	raw, err := json.Marshal(state.TaskHoldPayload{Owner: owner, Reason: reason})
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal %s payload: %w", kind, err)
 	}
@@ -99,7 +77,7 @@ func taskHoldEffect(kind string, taskID assistants.TaskID, owner, reason string)
 // finishTaskFrom's extra parameter and runHelperTask's call site) so both commit in one atomic control
 // record. assistants.Result's own json tags ARE the wire shape (verdict/summary/findings/evidence/
 // context_version/suggested_change/limitations) — no mirror payload struct needed, unlike
-// taskCreatedPayload/taskStatusChangedPayload/taskHoldPayload above, since pkg/state's applyTaskResult
+// state.TaskCreatedPayload/TaskStatusChangedPayload/TaskHoldPayload above, since pkg/state's applyTaskResult
 // decodes directly into assistants.Result too.
 func taskResultEffect(taskID assistants.TaskID, result assistants.Result) (state.Effect, error) {
 	raw, err := json.Marshal(result)
@@ -174,6 +152,23 @@ func (o *Orchestrator) taskTerminal(taskID assistants.TaskID) bool {
 	return ok && t.Status.Terminal()
 }
 
+// handleTaskOperationErr classifies an ApplyRunOperation failure for the task lifecycle: a *state.StorageError
+// means the authoritative journal write itself failed — the run cannot safely continue making decisions
+// against a broken log, so it ends the run (dev-plan.md invariant #5), mirroring triggerWithSeq's existing
+// treatment of bus.StorageError for stage FSM transitions. Any other error (a CAS/precondition miss — the op
+// simply lost a race, e.g. task already terminal/held/cancelled) is a benign no-op: the caller that actually
+// won already did whatever this one was trying to do.
+func (o *Orchestrator) handleTaskOperationErr(err error) {
+	if err == nil {
+		return
+	}
+	var se *state.StorageError
+	if errors.As(err, &se) {
+		log.Printf("FATAL: storage failure in assistants task operation: %v", err)
+		o.setFatal(err)
+	}
+}
+
 // Attach creates one new top-level helper task for a stage: capability + stage + profile + delegation-depth
 // checks, then a single durable ApplyRunOperation — task_created alone (parent stage still pending: nothing
 // to run yet, task stays "waiting_parent"), or task_created PLUS task_status_changed-to-"queued" in the SAME
@@ -210,6 +205,12 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if !view.Available {
 		return "", &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: view.UnavailableReason}
 	}
+	// Freeze the availability check's CURRENT read-only verdict onto the local copy of the profile BEFORE it
+	// is handed to taskCreatedEffect below — same pattern as PolicyRev/MaxDepthAtCreate (also captured at
+	// admission time, not re-derived later): a task's durable ProfileSnapshot must remember the guarantee
+	// that actually backed it when it ran, even if the profile's config (or its live availability) changes
+	// afterward.
+	profile.ReadonlyEnforcement = view.ReadonlyEnforcement
 
 	rs := o.opts.Store.Snapshot()
 	depth := assistants.ComputeDepth(nil) // top-level: Этап 3 scope has no parent task
@@ -227,7 +228,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		trigger = assistants.TriggerOneShot
 	}
 
-	created, err := taskCreatedEffect(taskID, req.StageID, taskCreatedPayload{
+	created, err := taskCreatedEffect(taskID, req.StageID, state.TaskCreatedPayload{
 		ProfileID:        string(req.ProfileID),
 		ProfileSnapshot:  profile,
 		Title:            req.Title,
@@ -284,6 +285,7 @@ func (o *Orchestrator) PauseTask(ctx context.Context, taskID assistants.TaskID) 
 	}
 	op := state.Operation{ID: "task-pause:" + string(taskID) + ":" + randomOpSuffix(), Kind: "pause_task", Effects: []state.Effect{eff}}
 	if _, err := o.opts.Store.ApplyRunOperation(op, nil); err != nil {
+		o.handleTaskOperationErr(err)
 		return err
 	}
 	if cancel, ok := o.taskCancels.Load(taskID); ok {
@@ -304,6 +306,7 @@ func (o *Orchestrator) ContinueTask(ctx context.Context, taskID assistants.TaskI
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.maybeScheduleTask(runCtx, taskID)
 	})
+	o.handleTaskOperationErr(err)
 	return err
 }
 
@@ -360,7 +363,10 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 		o.spawnTask(ctx, taskID, task)
 	}); err != nil {
 		// Lost the CAS race (already running/cancelled/held by the time we tried), or the task simply isn't
-		// queued anymore — not an error: whoever actually won already spawned it, or it's no longer eligible.
+		// queued anymore — not an error in the benign case: whoever actually won already spawned it, or it's
+		// no longer eligible. handleTaskOperationErr still classifies it — a genuine *state.StorageError here
+		// must end the run, not be treated the same as a lost CAS race.
+		o.handleTaskOperationErr(err)
 		return
 	}
 }
@@ -370,12 +376,29 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 // gets held while queued behind a full command semaphore can be put visibly BACK to "queued" instead of
 // being left stuck in "running" with no process ever having started (SpawnOwned's shouldRun-false path is
 // silent/fire-and-forget by design — fine for stages, which have no equivalent requeue state machine, but
-// wrong for tasks, which do).
+// wrong for tasks, which do). After the requeue commits, a not-held re-check retries maybeScheduleTask once —
+// closing a lost-wakeup window where a concurrent ContinueTask's own reschedule attempt landed too early
+// (status still "running") and silently no-op'd, leaving the task stuck in "queued" with the hold already
+// cleared and nothing left to wake it (see the finish-queue block below for the full trace).
 func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, task assistants.Task) {
 	cmd := task.ProfileSnapshot.Command
 	o.concurrency.SpawnOwned(ctx, concurrency.TaskOwnerKey(string(taskID)), cmd, nil, func(runCtx context.Context, lease *concurrency.Lease) {
 		if o.taskHeld(taskID) {
+			if o.taskRequeueBarrier != nil {
+				o.taskRequeueBarrier(taskID)
+			}
 			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused before start")
+			// A concurrent ContinueTask may have already cleared the hold and attempted to reschedule BEFORE
+			// this requeue committed (it would have seen status still "running" and silently no-op'd, per
+			// maybeScheduleTask's CAS precondition) — retry scheduling now that the task is actually "queued"
+			// again, closing that lost-wakeup window. Use the OUTER ctx (spawnTask's own parameter), not
+			// runCtx: runCtx belongs to the subprocess invocation that never actually started on this path.
+			// Safe to call unconditionally when not held: maybeScheduleTask's own queued-only CAS precondition
+			// means a redundant call here is always a safe no-op if someone else already won the
+			// queued->running transition in the meantime.
+			if !o.taskHeld(taskID) {
+				o.maybeScheduleTask(ctx, taskID)
+			}
 			return
 		}
 		o.runHelperTask(runCtx, taskID, task)
@@ -404,9 +427,10 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 		Effects: effects,
 	}
 	rootStage := o.taskRootStage(taskID)
-	_, _ = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 			"task_id": string(taskID), "status": string(to), "reason": reason,
 		}})
 	})
+	o.handleTaskOperationErr(err)
 }

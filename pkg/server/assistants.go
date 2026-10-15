@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -27,6 +26,11 @@ type AssistantTaskView struct {
 	Trigger      string `json:"trigger"`
 	Status       string `json:"status"`
 	StatusReason string `json:"status_reason,omitempty"`
+	// ReadonlyEnforcement — which read-only guarantee (assistants.ReadonlyEnforcement: "os"/"none") was
+	// backing this task's profile at the moment it was admitted (frozen into ProfileSnapshot by
+	// orchestrator.Attach, see pkg/assistants/types.go's Profile.ReadonlyEnforcement) — not the profile's
+	// CURRENT availability, which may have since changed.
+	ReadonlyEnforcement string `json:"readonly_enforcement,omitempty"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.
@@ -59,7 +63,7 @@ func (s *Server) routeStageAssistants(w http.ResponseWriter, r *http.Request, st
 	case http.MethodPost:
 		s.handleAttachAssistant(w, r, stageID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeAssistantErrCode(w, http.StatusMethodNotAllowed, "method_not_allowed")
 	}
 }
 
@@ -69,7 +73,7 @@ func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request, st
 		return
 	}
 	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_stage_id")
 		return
 	}
 	tree, err := s.assistantsReader.TaskTree(stageID)
@@ -87,11 +91,11 @@ func (s *Server) handleAttachAssistant(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	if !sameOriginOK(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
 		return
 	}
 	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_stage_id")
 		return
 	}
 
@@ -107,11 +111,11 @@ func (s *Server) handleAttachAssistant(w http.ResponseWriter, r *http.Request, s
 		Trigger     string `json:"trigger"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_request_body")
 		return
 	}
 	if body.RequestID == "" {
-		http.Error(w, "request_id is required", http.StatusBadRequest)
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
 		return
 	}
 
@@ -127,6 +131,14 @@ func (s *Server) handleAttachAssistant(w http.ResponseWriter, r *http.Request, s
 	_ = json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
 }
 
+// Task action names — shared between routeAssistants' routing switch and handleAssistantTaskAction's
+// dispatch switch, so the two can never silently drift apart.
+const (
+	taskActionPause    = "pause"
+	taskActionContinue = "continue"
+	taskActionCancel   = "cancel"
+)
+
 // routeAssistants handles /api/assistants/{id}/{pause|continue|cancel|events}.
 func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/assistants/")
@@ -137,34 +149,53 @@ func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID, action := segs[0], segs[1]
 	if !isValidStageID(taskID) { // same safe-path-component charset as a stage id
-		http.Error(w, "invalid task id", http.StatusBadRequest)
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_task_id")
 		return
 	}
 
 	switch {
 	case action == "events" && r.Method == http.MethodGet:
 		s.handleAssistantEvents(w, r, taskID)
-	case action == "pause" && r.Method == http.MethodPost:
-		s.handleAssistantTaskAction(w, r, taskID, s.assistantActions.PauseTask)
-	case action == "continue" && r.Method == http.MethodPost:
-		s.handleAssistantTaskAction(w, r, taskID, s.assistantActions.ContinueTask)
-	case action == "cancel" && r.Method == http.MethodPost:
-		s.handleAssistantTaskAction(w, r, taskID, s.assistantActions.CancelTask)
+	case action == taskActionPause && r.Method == http.MethodPost,
+		action == taskActionContinue && r.Method == http.MethodPost,
+		action == taskActionCancel && r.Method == http.MethodPost:
+		// Dispatch by NAME, not by forming a method value on s.assistantActions here: in Go, forming a
+		// method value on a nil interface (e.g. `s.assistantActions.PauseTask` when assistantActions is
+		// nil) panics IMMEDIATELY at the point of formation, before handleAssistantTaskAction ever gets a
+		// chance to run its own nil check. AssistantsReader-wired-but-AssistantActions-nil (read-only
+		// collaboration) is an explicitly valid, tested configuration (TestPauseTask_404WhenActionsOffButReaderOn)
+		// — it must 404, not crash the handler.
+		s.handleAssistantTaskAction(w, r, taskID, action)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-func (s *Server) handleAssistantTaskAction(w http.ResponseWriter, r *http.Request, taskID string, action func(ctx context.Context, taskID string) error) {
+func (s *Server) handleAssistantTaskAction(w http.ResponseWriter, r *http.Request, taskID, action string) {
 	if s.assistantActions == nil {
 		http.NotFound(w, r)
 		return
 	}
 	if !sameOriginOK(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
 		return
 	}
-	if err := action(r.Context(), taskID); err != nil {
+	var err error
+	switch action {
+	case taskActionPause:
+		err = s.assistantActions.PauseTask(r.Context(), taskID)
+	case taskActionContinue:
+		err = s.assistantActions.ContinueTask(r.Context(), taskID)
+	case taskActionCancel:
+		err = s.assistantActions.CancelTask(r.Context(), taskID)
+	default:
+		// Unreachable in production: routeAssistants only calls this with one of the three names above,
+		// already validated against r.Method there. Fail closed rather than silently report "ok" with a
+		// nil err for some future action name a routing change might introduce without updating this switch.
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
 		writeAssistantError(w, err)
 		return
 	}

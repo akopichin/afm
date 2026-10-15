@@ -13,7 +13,7 @@ import (
 // notion of "orchestrator" to order against.
 
 func statusChangedCtl(taskID, status string) *Control {
-	payload, _ := json.Marshal(taskStatusChangedPayload{Status: status})
+	payload, _ := json.Marshal(TaskStatusChangedPayload{Status: status})
 	return &Control{Kind: "task_status_changed", SchemaVersion: ControlSchemaVersion, Target: Target{TaskID: taskID}, Payload: payload}
 }
 

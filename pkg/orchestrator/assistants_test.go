@@ -125,6 +125,28 @@ func TestAttach_ToPendingStageStaysWaitingParent(t *testing.T) {
 	}
 }
 
+// TestAttach_FreezesReadonlyEnforcementIntoSnapshot is a regression test for the ReadonlyEnforcement wiring
+// gap: Attach must copy the registry's CURRENT availability-check verdict (ProfileView.ReadonlyEnforcement)
+// onto the frozen ProfileSnapshot it durably records — otherwise a task's journal/dashboard history can never
+// say which read-only guarantee (OS-enforced vs container-only) was actually in effect when THAT task ran.
+// newAssistantsTestOrchestrator's registry is built with an availability check that reports
+// assistants.ReadonlyEnforcementOS (see its `func(cmd string) (...)` literal above) — the snapshot must carry
+// exactly that, not the zero value a plain Registry.Get would hand back.
+func TestAttach_FreezesReadonlyEnforcementIntoSnapshot(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+
+	rs := store.Snapshot()
+	tk, ok := rs.Assistants.Tasks[taskID]
+	if !ok {
+		t.Fatal("task not found in projection")
+	}
+	if tk.ProfileSnapshot.ReadonlyEnforcement != assistants.ReadonlyEnforcementOS {
+		t.Fatalf("ProfileSnapshot.ReadonlyEnforcement = %q, want %q (the registry's availability check at admission time)",
+			tk.ProfileSnapshot.ReadonlyEnforcement, assistants.ReadonlyEnforcementOS)
+	}
+}
+
 func TestAttach_RejectedWhenDisabled(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, false)
 	_, err := o.Attach(context.Background(), AttachRequest{
@@ -582,4 +604,108 @@ func TestTaskEvents_PaginatesInSeqOrderAfterCursor(t *testing.T) {
 	if events, _, _, err := o.TaskEvents("unknown-task", 0, 100); err != nil || len(events) != 0 {
 		t.Fatalf("TaskEvents for an unknown task = %+v, %v, want empty/no error", events, err)
 	}
+}
+
+// ---- Review-round fixes: storage-fatal propagation + requeue lost-wakeup ----
+
+// TestFinishTaskFrom_StorageErrorSetsFatal is a regression test for the task lifecycle silently discarding
+// ApplyRunOperation's error (AGENTS.md invariant "storage-fatal ends the run", mirrored by triggerWithSeq for
+// the stage FSM but, until this fix, NOT by finishTaskFrom/maybeScheduleTask/PauseTask/ContinueTask).
+// store.CloseEventsLogForTest() closes the journal's underlying file descriptor directly (the SAME trick
+// pkg/state's own TestAppendControl_StorageErrorIsTyped/TestStorageFatalEndsRun use in-package, exported here
+// so this cross-package test can trigger a real OS-level write failure) — the next ApplyRunOperation call
+// returns a *state.StorageError, which finishTaskFrom must now classify via handleTaskOperationErr and feed
+// into o.setFatal, instead of swallowing it with `_, _ = ...`.
+func TestFinishTaskFrom_StorageErrorSetsFatal(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	release := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		<-release
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	if got := o.loadFatal(); got != nil {
+		t.Fatalf("loadFatal() before any storage failure = %v, want nil", got)
+	}
+
+	store.CloseEventsLogForTest() // simulate a real OS-level journal write failure
+
+	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "simulated storage failure")
+
+	fatal := o.loadFatal()
+	var se *state.StorageError
+	if !errors.As(fatal, &se) {
+		t.Fatalf("loadFatal() = %v (%T), want it to wrap a *state.StorageError — finishTaskFrom must end the run on a real journal write failure, not silently discard it", fatal, fatal)
+	}
+
+	// Let the blocked fake runner return so its goroutine doesn't leak past the test — its own finishTaskFrom
+	// call will hit the same closed journal and re-classify the same way (setFatal keeps the FIRST error).
+	close(release)
+	o.concurrency.WaitAgents()
+}
+
+// TestLostWakeup_ContinueDuringRequeueStillSchedules is a deterministic regression test for the lost-wakeup
+// race described in the review finding: a task held (PauseTask) while its SpawnOwned goroutine is still
+// queued behind a full command semaphore gets requeued ("running"->"queued") by spawnTask's run body once
+// the semaphore frees up. If a concurrent ContinueTask clears the hold and calls maybeScheduleTask BEFORE
+// that requeue commits, it reads the task's status as still "running" and silently no-ops (maybeScheduleTask's
+// own CAS precondition only fires on "queued") — without spawnTask's post-requeue retry, the task would then
+// sit in "queued" forever: the hold is already cleared and nothing else is left to reschedule it.
+//
+// o.taskRequeueBarrier (test-only hook, nil in production) is invoked by spawnTask's run body AFTER
+// confirming the task is held but BEFORE finishTaskFrom's requeue commits. Running ContinueTask SYNCHRONOUSLY
+// from inside the hook forces the exact interleaving the race depends on — at that point in spawnTask's run
+// body the requeue has provably not committed yet, so the task's projected status is guaranteed "running",
+// and ContinueTask's own reschedule attempt is guaranteed to see it and no-op. No sleep/timing assumption is
+// needed to force the race itself; only the FINAL assertion uses a bounded poll (waitForTaskStatus), which
+// fails loudly on a timeout rather than hanging if the lost-wakeup bug were to return.
+func TestLostWakeup_ContinueDuringRequeueStillSchedules(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	// Saturate the helper's command semaphore BEFORE Attach so spawnTask's SpawnOwned goroutine queues behind
+	// it instead of running immediately (same setup as TestPause_StopsTurnAndBlocksNewTriggers).
+	blockSem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
+	blockSem <- struct{}{}
+	o.concurrency = concurrency.NewWithSemaphores(bus.NewCriticalBus(16), map[string]concurrency.Semaphore{"helper-cmd": blockSem}, "claude")
+
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+
+	if err := o.PauseTask(context.Background(), taskID); err != nil {
+		t.Fatalf("PauseTask: %v", err)
+	}
+
+	barrierHit := make(chan struct{})
+	o.taskRequeueBarrier = func(id assistants.TaskID) {
+		close(barrierHit)
+		// finishTaskFrom's requeue commit has NOT happened yet at this point (we are still inside spawnTask's
+		// `if o.taskHeld` branch, before that call) — the task's projected status is therefore guaranteed to
+		// still be "running", so ContinueTask's own maybeScheduleTask attempt is guaranteed to no-op here,
+		// exactly reproducing the race's precondition deterministically.
+		if err := o.ContinueTask(context.Background(), id); err != nil {
+			t.Errorf("ContinueTask: %v", err)
+		}
+	}
+
+	<-blockSem // free the slot the queued goroutine is waiting on; spawnTask's run body now executes
+
+	select {
+	case <-barrierHit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskRequeueBarrier was never invoked — spawnTask did not observe the hold")
+	}
+
+	// Without the post-requeue retry (Fix B), the task would be stuck in "queued" forever: the hold is
+	// already cleared and ContinueTask's own reschedule attempt already came and went (as a no-op) before the
+	// requeue committed. waitForTaskStatus's bounded timeout turns that hang into a clean test failure.
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
 }

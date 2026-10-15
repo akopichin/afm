@@ -134,7 +134,7 @@ func TestSnapshotWriteFailureNotFatal(t *testing.T) {
 	if err := store.Apply(&Transition{StageID: "a", From: StatusPlanning, To: StatusAwaitingApproval, Event: "plan_ready"}); err != nil {
 		t.Fatalf("Apply with a broken snapshot path: %v, want nil (snapshot failure must not be fatal)", err)
 	}
-	payload, err := json.Marshal(taskStatusChangedPayload{Status: "running"})
+	payload, err := json.Marshal(TaskStatusChangedPayload{Status: "running"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}

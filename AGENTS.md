@@ -831,7 +831,8 @@ Docker-only, строго **read-only** файл-браузер в дашбор�
 `routeFiles` (`files_handlers.go`, `mux.HandleFunc("/api/files/")`): не-GET или
 nil/zero-root workspace → `404`; `X-Content-Type-Options: nosniff`; диспатчит
 `roots`/`tree`/`reference`/`content`/`diff`. Ошибки через `writeFilesError` →
-`{"error":<code>}` (единственное отклонение от plain-text-конвенции сервера);
+`{"error":<code>}` (вместе с `pkg/server/assistants.go` — второе отклонение от
+plain-text-конвенции сервера);
 `filesErrStatus` мапит sentinel'ы (400/404/409/413/415/422/500). Тела ошибок
 никогда не несут абс. путь / raw git stderr; `filesRoots` отдаёт `RootView` без
 `Path`. `content` поддерживает `If-None-Match` → `304`.

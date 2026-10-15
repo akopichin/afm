@@ -59,7 +59,11 @@ describe('AssistantTaskView', () => {
       eventsResponse([
         {
           seq: 1,
-          type: 'task_result_recorded',
+          // The real wire shape (pkg/server/assistants.go's AssistantEventView.Type) is literally the
+          // string "task_result" — a different literal here would silently defeat this test's purpose: it
+          // would still pass even if the Go side's event Kind were renamed out from under it, since
+          // parseAssistantResult does not look at `type` at all (see latestResult's doc comment).
+          type: 'task_result',
           data: {
             verdict: 'needs_changes',
             summary: '# Found an issue\n\nThe **retry loop** never backs off.',
